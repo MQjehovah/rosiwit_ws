@@ -1,0 +1,60 @@
+# FAST-LIO2 SLAM - Livox Avia Configuration
+
+## ==================== IMU 参数 ====================
+imu:
+  acc_noise: 0.1
+  gyro_noise: 0.01
+  acc_bias_noise: 0.0001
+  gyro_bias_noise: 0.00001
+  gravity: 9.81
+
+## ==================== LiDAR 参数 ====================
+lidar:
+  scan_line: 6          # Livox Avia 6线
+  scan_period: 0.1
+  max_range: 450.0      # Livox Avia 最大450米
+  min_range: 0.5
+  max_angle: 70.0       # Livox 70度扫描范围
+  voxel_size: 0.2
+
+## ==================== 外参 ====================
+extrinsic:
+  translation: [0.040, 0.0, 0.028]   # Livox Avia官方外参
+  rotation: [0.0, 0.0, 0.0]
+
+## ==================== IEKF 参数 ====================
+iekf:
+  max_iterations: 5
+  converge_threshold: 0.001
+  position_noise: 0.01
+  rotation_noise: 0.01
+
+## ==================== ROS2 参数 ====================
+ros:
+  # 输入话题 - 匹配 Ouster 数据集 (rosbag2_2024_05_23-15_43_25)
+  lidar_topic: "/ouster/points"      # Ouster LiDAR点云话题
+  imu_topic: "/ouster/imu"           # Ouster IMU数据话题
+  odom_topic: "/odom"
+
+  # 输出话题
+  odom_output_topic: "/odom_estimated"
+  path_topic: "/path_estimated"
+  map_topic: "/cloud_map"
+  keyframe_topic: "/keyframe_cloud"
+
+  # 坐标系 - Ouster 传感器坐标系
+  world_frame: "world"
+  map_frame: "map"
+  odom_frame: "odom"
+  base_frame: "base_link"
+  lidar_frame: "os_sensor"           # Ouster LiDAR坐标系
+  imu_frame: "os_imu"                # Ouster IMU坐标系
+
+  # 发布参数
+  map_publish_rate: 2.0              # 地图发布频率 (Hz)
+  path_publish_rate: 20.0            # 路径发布频率 (Hz)
+  map_max_points: 1000000            # 地图最大点数
+
+  # TF
+  publish_tf: true
+  tf_publish_rate: 50.0

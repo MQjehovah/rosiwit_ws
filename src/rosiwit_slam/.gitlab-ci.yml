@@ -1,0 +1,229 @@
+# ============================================================
+# rosiwit_slam - GitLab CI/CD Pipeline
+# Stages: lint → build → test → deploy
+# Security-hardened per security_report.md findings
+# ============================================================
+# Fix: SEC-005 (removed --privileged from Docker build)
+# ============================================================
+
+stages:
+  - lint
+  - build
+  - test
+  - deploy
+
+variables:
+  ROS_DISTRO: "humble"
+  DOCKER_IMAGE: "ros:humble-ros-base-jammy"
+  DOCKER_DRIVER: overlay2
+  # SEC-004: Non-default domain
+  ROS_DOMAIN_ID: "42"
+  RMW_IMPLEMENTATION: "rmw_cyclonedds_cpp"
+
+# Default settings for all jobs
+default:
+  image: ${DOCKER_IMAGE}
+  before_script:
+    - source /opt/ros/${ROS_DISTRO}/setup.bash
+
+# ==================== Stage 1: Lint ====================
+lint:cmake:
+  stage: lint
+  script:
+    - echo "Linting CMakeLists.txt..."
+    - cmake -B /tmp/lint-check -S .
+        -DCMAKE_BUILD_TYPE=Release
+        -Werror=dev
+        2>&1 | tee cmake-lint.log || true
+    - echo "CMake lint completed"
+  allow_failure: true
+  artifacts:
+    paths:
+      - cmake-lint.log
+    expire_in: 1 day
+
+lint:python:
+  stage: lint
+  before_script:
+    - pip3 install flake8
+  script:
+    - echo "Linting Python files..."
+    - find . -name "*.py" -not -path "./build/*" -not -path "./install/*" | xargs flake8 --max-line-length=120 --ignore=E501,W503
+  allow_failure: true
+
+lint:cpp:
+  stage: lint
+  before_script:
+    - apt-get update && apt-get install -y clang-format-14
+  script:
+    - echo "Checking C++ formatting..."
+    - find include src -name "*.h" -o -name "*.cpp" -o -name "*.hpp" | while read f; do
+        diff <(clang-format-14 "$f") "$f" || echo "FORMAT ERROR: $f";
+      done
+  allow_failure: true
+
+# ==================== Stage 2: Build ====================
+build:colcon:
+  stage: build
+  script:
+    - echo "Building rosiwit_slam..."
+    - apt-get update && apt-get install -y --no-install-recommends
+        libeigen3-dev
+        libpcl-dev
+        libyaml-cpp-dev
+        libboost-all-dev
+        ros-humble-pcl-conversions
+        ros-humble-pcl-ros
+        ros-humble-tf2-ros
+        ros-humble-tf2-eigen
+        ros-humble-tf2-geometry-msgs
+        ros-humble-tf2-sensor-msgs
+        ros-humble-message-filters
+    - |
+      if [ -d /usr/local/include/sophus ]; then
+        echo "Sophus already installed"
+      else
+        git clone https://github.com/strasdat/Sophus.git /tmp/Sophus &&
+        cd /tmp/Sophus &&
+        git checkout a79ba54d07b13f58105c6e3f4e472d4968a3e728 &&
+        mkdir build && cd build &&
+        cmake .. -DCMAKE_BUILD_TYPE=Release &&
+        make -j$(nproc) && make install &&
+        cd ${CI_PROJECT_DIR}
+      fi
+    - mkdir -p /tmp/ws/src
+    - cp -r . /tmp/ws/src/rosiwit_slam
+    - cd /tmp/ws
+    - colcon build
+        --packages-select rosiwit_slam
+        --cmake-args
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+        --parallel-workers $(nproc)
+  artifacts:
+    paths:
+      - build/
+      - install/
+    expire_in: 1 day
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}-build"
+    paths:
+      - build/
+      - install/
+
+build:docker:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script:
+    - echo "Building Docker image..."
+  script:
+    # SEC-005 fix: No --privileged flag
+    - docker build
+        -f docker/Dockerfile
+        -t rosiwit-slam:${CI_COMMIT_SHORT_SHA}
+        --build-arg BUILDKIT_INLINE_CACHE=1
+        .
+    - docker tag rosiwit-slam:${CI_COMMIT_SHORT_SHA} rosiwit-slam:humble-2.0
+    - docker save rosiwit-slam:humble-2.0 > rosiwit-slam-image.tar
+  artifacts:
+    paths:
+      - rosiwit-slam-image.tar
+    expire_in: 1 day
+  only:
+    - main
+    - tags
+
+# ==================== Stage 3: Test ====================
+test:unit:
+  stage: test
+  needs: ["build:colcon"]
+  script:
+    - echo "Running unit tests..."
+    - apt-get update && apt-get install -y --no-install-recommends
+        libeigen3-dev libpcl-dev libyaml-cpp-dev libboost-all-dev
+        ros-humble-pcl-conversions ros-humble-pcl-ros
+        ros-humble-tf2-ros ros-humble-message-filters
+        ros-humble-ament-cmake-gtest
+    - cd /tmp/ws
+    - colcon build
+        --packages-select rosiwit_slam
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+    - colcon test --packages-select rosiwit_slam
+        --event-handlers console_direct+
+    - colcon test-result --verbose
+  artifacts:
+    reports:
+      junit: build/rosiwit_slam/test_results/**/gtest-*.xml
+    expire_in: 7 days
+  allow_failure: true
+
+test:docker:
+  stage: test
+  needs: ["build:docker"]
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script:
+    - docker load < rosiwit-slam-image.tar
+  script:
+    # Verify image runs with non-root user (SEC-001 verification)
+    - |
+      docker run --rm rosiwit-slam:humble-2.0 whoami | grep -q slam_user || {
+        echo "FAIL: Container not running as slam_user"
+        exit 1
+      }
+    # Verify ROS2 environment is sourced
+    - |
+      docker run --rm --entrypoint /bin/bash rosiwit-slam:humble-2.0 -c \
+        "source /opt/ros/humble/setup.bash && echo \$ROS_DISTRO" | grep -q humble || {
+        echo "FAIL: ROS2 environment not properly configured"
+        exit 1
+      }
+    # Verify health check command is valid
+    - |
+      docker run --rm --entrypoint /bin/bash rosiwit-slam:humble-2.0 -c \
+        "which ros2" || {
+        echo "FAIL: ros2 command not found"
+        exit 1
+      }
+    - echo "Docker image verification passed ✅"
+  only:
+    - main
+    - tags
+
+# ==================== Stage 4: Deploy ====================
+deploy:staging:
+  stage: deploy
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script: []
+  script:
+    - docker load < rosiwit-slam-image.tar
+    - docker tag rosiwit-slam:humble-2.0 ${REGISTRY:-registry.example.com}/rosiwit-slam:staging
+    - docker push ${REGISTRY:-registry.example.com}/rosiwit-slam:staging
+  environment:
+    name: staging
+  only:
+    - main
+  when: manual
+
+deploy:production:
+  stage: deploy
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script: []
+  script:
+    - docker load < rosiwit-slam-image.tar
+    - docker tag rosiwit-slam:humble-2.0 ${REGISTRY:-registry.example.com}/rosiwit-slam:${CI_COMMIT_TAG}
+    - docker tag rosiwit-slam:humble-2.0 ${REGISTRY:-registry.example.com}/rosiwit-slam:latest
+    - docker push ${REGISTRY:-registry.example.com}/rosiwit-slam:${CI_COMMIT_TAG}
+    - docker push ${REGISTRY:-registry.example.com}/rosiwit-slam:latest
+  environment:
+    name: production
+  only:
+    - tags
+  when: manual

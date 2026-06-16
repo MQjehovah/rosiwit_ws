@@ -1,0 +1,52 @@
+# ============================================================
+# rosiwit_navigation - .gitignore
+# ============================================================
+
+# Build artifacts
+build/
+install/
+log/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Compiled Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+
+# colcon test results
+test_results/
+lcov/
+coverage.info
+*.gcda
+*.gcno
+
+# ccache
+.ccache/
+
+# Virtual environments
+venv/
+.venv/
+
+# Core dumps
+core
+core.*
+
+# Package lock files (ROS2 uses rosdep)
+package-lock.json
+yarn.lock

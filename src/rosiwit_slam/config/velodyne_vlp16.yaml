@@ -1,0 +1,52 @@
+# FAST-LIO2 SLAM - Velodyne VLP-16 Configuration
+
+## ==================== IMU 参数 ====================
+imu:
+  acc_noise: 1.0
+  gyro_noise: 0.1
+  gravity: 9.81
+
+## ==================== LiDAR 参数 ====================
+lidar:
+  scan_line: 16         # VLP-16 16线
+  scan_period: 0.1      # 10Hz
+  max_range: 100.0
+  min_range: 0.5
+  max_angle: 30.0       # ±15度
+  voxel_size: 0.2
+
+## ==================== 外参 ====================
+extrinsic:
+  translation: [0.0, 0.0, 0.0]
+  rotation: [0.0, 0.0, 0.0]
+
+## ==================== IEKF 参数 ====================
+iekf:
+  max_iterations: 5
+  position_noise: 0.1
+  rotation_noise: 0.01
+
+## ==================== ROS2 参数 ====================
+ros:
+  lidar_topic: "/velodyne_points"
+  imu_topic: "/imu"
+
+  world_frame: "world"
+  base_frame: "base_link"
+  lidar_frame: "velodyne_link"
+
+  publish_tf: true
+
+  # 服务
+  save_map_service: "/save_map"
+  load_map_service: "/load_map"
+  save_pcd_service: "/save_pcd"
+
+## ==================== 地图参数 ====================
+map:
+  resolution: 0.2
+  submap_size: 50.0
+  max_submap_points: 50000
+  map_path: "/tmp/rosiwit_sim_map"
+  enable_pcd_save: true
+  enable_submap: true

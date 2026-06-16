@@ -1,0 +1,55 @@
+# ============================================================
+# Diffbot Navigation - 规划器参数配置
+# ============================================================
+
+planner_server:
+  ros__parameters:
+    planner_plugins: ["GridBased"]
+    
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      
+      # 容差
+      tolerance: 0.5
+      
+      # 是否使用A*
+      use_astar: false
+      
+      # 是否允许未知区域
+      allow_unknown: true
+      
+      # 规划器服务名称
+      planner_service_type: "nav2_msgs::srv::GetPlan"
+
+# 行为树配置
+behavior_server:
+  ros__parameters:
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    
+    # 行为超时
+    spin_time: 5.0
+    backup_time: 5.0
+
+# 平滑器配置
+smoother_server:
+  ros__parameters:
+    smoother_plugins: ["simple_smoother"]
+    
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      
+      # 平滑参数
+      tolerance: 1.0e-10
+      max_its: 1000
+      
+      # 是否细化路径
+      do_refinement: true

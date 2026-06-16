@@ -1,0 +1,78 @@
+cmake_minimum_required(VERSION 3.8)
+project(fast_lio2_slam_standalone_test VERSION 1.0.0 LANGUAGES CXX)
+
+# ==================== 编译设置 ====================
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_BUILD_TYPE Release)
+
+# ==================== 第三方库依赖 ====================
+find_package(Eigen3 REQUIRED)
+find_package(PCL REQUIRED COMPONENTS common io filters kdtree)
+
+# ==================== GTest ====================
+find_package(GTest REQUIRED)
+include_directories(${GTEST_INCLUDE_DIRS})
+
+# ==================== 包含目录 ====================
+include_directories(
+    ${PROJECT_SOURCE_DIR}/../include
+    ${EIGEN3_INCLUDE_DIRS}
+    ${PCL_INCLUDE_DIRS}
+)
+
+# ==================== Sophus Header-Only 支持 ====================
+# 检查系统中是否有Sophus
+find_package(Sophus QUIET)
+if(Sophus_FOUND)
+    include_directories(${Sophus_INCLUDE_DIRS})
+    message(STATUS "Found Sophus package: ${Sophus_INCLUDE_DIRS}")
+else()
+    # 尝试多种可能的Sophus位置
+    set(SOPHUS_SEARCH_PATHS
+        /usr/include
+        /usr/local/include
+        /tmp/Sophus
+        ${PROJECT_SOURCE_DIR}/../../Sophus
+        ${PROJECT_SOURCE_DIR}/../third_party/Sophus
+    )
+    
+    foreach(search_path ${SOPHUS_SEARCH_PATHS})
+        if(EXISTS "${search_path}/sophus/se3.hpp")
+            include_directories(${search_path})
+            message(STATUS "Found Sophus headers at: ${search_path}/sophus")
+            set(SOPHUS_FOUND TRUE)
+            break()
+        endif()
+    endforeach()
+    
+    if(NOT SOPHUS_FOUND)
+        message(WARNING "Sophus headers not found. Download with: git clone https://github.com/strasdat/Sophus.git /tmp/Sophus")
+    endif()
+endif()
+
+# ==================== 测试目标 ====================
+
+# MapManager测试
+add_executable(test_map_manager test/map_manager/test_map_manager.cpp)
+target_include_directories(test_map_manager PRIVATE
+    ${PROJECT_SOURCE_DIR}/../include
+    ${EIGEN3_INCLUDE_DIRS}
+    ${PCL_INCLUDE_DIRS}
+    ${GTEST_INCLUDE_DIRS}
+)
+target_link_libraries(test_map_manager 
+    ${PCL_LIBRARIES} 
+    GTest::gtest 
+    GTest::gtest_main
+)
+if(Sophus_FOUND)
+    target_link_libraries(test_map_manager Sophus::Sophus)
+endif()
+
+target_compile_definitions(test_map_manager PRIVATE EIGEN_MPL2_ONLY)
+
+# ==================== 测试命令 ====================
+enable_testing()
+add_test(NAME test_map_manager COMMAND test_map_manager)

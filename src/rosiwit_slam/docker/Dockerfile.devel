@@ -1,0 +1,152 @@
+# ============================================================
+# rosiwit_slam Development Dockerfile
+# Includes build tools, debug utilities, and testing frameworks
+# Security-hardened per security_report.md findings
+# ============================================================
+
+# ==================== Stage 1: Base Image ====================
+FROM ros:humble-ros-base-jammy AS base
+
+LABEL maintainer="AI Development Team <ai_dev_team@example.com>"
+LABEL version="2.0.0-devel"
+LABEL description="rosiwit_slam - FAST-LIO2 SLAM Development Environment (ROS2 Humble)"
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Set timezone
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# Install all build dependencies + development tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    gdb \
+    valgrind \
+    clang-format \
+    python3-pip \
+    python3-colcon-common-extensions \
+    python3-rosdep \
+    libeigen3-dev \
+    libpcl-dev \
+    libpcl-common-dev \
+    libpcl-io-dev \
+    libpcl-filters-dev \
+    libpcl-kdtree-dev \
+    libpcl-features-dev \
+    libpcl-segmentation-dev \
+    libpcl-surface-dev \
+    libpcl-registration-dev \
+    libpcl-visualization-dev \
+    libpcl-sample-consensus-dev \
+    libpcl-search-dev \
+    libpcl-outofcore-dev \
+    libpcl-stereo-dev \
+    pcl-tools \
+    libyaml-cpp-dev \
+    libboost-all-dev \
+    libceres-dev \
+    libtbb-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Sophus (pinned to commit hash — SEC-008)
+RUN git clone https://github.com/strasdat/Sophus.git /tmp/Sophus && \
+    cd /tmp/Sophus && \
+    git checkout a79ba54d07b13f58105c6e3f4e472d4968a3e728 && \
+    mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/Sophus
+
+# Install GTSAM (pinned to commit hash — SEC-008)
+RUN git clone https://github.com/borglab/gtsam.git /tmp/gtsam && \
+    cd /tmp/gtsam && \
+    git checkout 316c4b40f4f26a7e4b0d89cc8d1f6a4fc3a0f40e && \
+    mkdir build && cd build && \
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DGTSAM_BUILD_EXAMPLES=OFF \
+        -DGTSAM_BUILD_TESTS=OFF \
+        -DGTSAM_WITH_TBB=ON \
+        -DGTSAM_USE_SYSTEM_EIGEN=ON && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/gtsam
+
+# Install ROS2 dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-pcl-conversions \
+    ros-humble-pcl-ros \
+    ros-humble-tf2 \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-eigen \
+    ros-humble-tf2-geometry-msgs \
+    ros-humble-tf2-sensor-msgs \
+    ros-humble-sensor-msgs \
+    ros-humble-nav-msgs \
+    ros-humble-geometry-msgs \
+    ros-humble-std-srvs \
+    ros-humble-message-filters \
+    ros-humble-cv-bridge \
+    ros-humble-image-transport \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install testing tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-ament-cmake-gtest \
+    ros-humble-ament-cmake-pytest \
+    ros-humble-launch-testing-ament-cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python development dependencies
+RUN pip3 install --no-cache-dir \
+    pytest \
+    pytest-cov \
+    flake8 \
+    mypy \
+    black
+
+# Create non-root user (SEC-001 fix)
+RUN groupadd -g 1000 slam_user && \
+    useradd -u 1000 -g slam_user -m -s /bin/bash slam_user && \
+    usermod -aG plugdev slam_user
+
+# Create workspace
+ENV ROS_WS=/ros2_ws
+RUN mkdir -p ${ROS_WS}/src && \
+    chown -R slam_user:slam_user ${ROS_WS}
+
+# Create data directories
+RUN mkdir -p /data/maps /data/bags /config && \
+    chown -R slam_user:slam_user /data /config
+
+# Copy entrypoint
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Environment (SEC-004 fix)
+ENV ROS_DOMAIN_ID=42
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ENV ROS_LOG_LEVEL=DEBUG
+
+# Source ROS2 setup for user
+RUN echo "source /opt/ros/humble/setup.bash" >> /home/slam_user/.bashrc
+
+# Narrow DDS discovery ports (SEC-010 fix)
+EXPOSE 7400/udp 7401/udp 7402/udp 7403/udp
+EXPOSE 7400/tcp 7401/tcp 7402/tcp 7403/tcp
+
+WORKDIR /ros2_ws
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=30s \
+    CMD test -f /opt/ros/humble/setup.bash || exit 1
+
+# Switch to non-root user (SEC-001 fix)
+USER slam_user
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/bin/bash"]

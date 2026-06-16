@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>diffbot_navigation</name>
+  <version>0.1.0</version>
+  <description>
+    ROS2 package for differential drive robot navigation with smooth single-point navigation,
+    obstacle avoidance, and narrow passage traversal capabilities.
+
+    Supports standalone compilation without Nav2 for core functionality.
+  </description>
+  <maintainer email="ai-dev-team@example.com">AI Development Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <url type="website">https://github.com/ai-dev-team/diffbot_navigation</url>
+  <url type="bugtracker">https://github.com/ai-dev-team/diffbot_navigation/issues</url>
+  <url type="repository">https://github.com/ai-dev-team/diffbot_navigation</url>
+
+  <author email="ai-dev-team@example.com">AI Development Team</author>
+
+  <!-- Build dependencies -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <!-- Core dependencies (required) -->
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>ament_index_cpp</depend>
+
+  <!-- Navigation2 dependencies (optional - for full Nav2 integration) -->
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_common</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_msgs</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_util</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_core</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_costmap_2d</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_behavior_tree</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_planner</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_controller</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">nav2_smoother</exec_depend>
+
+  <!-- Planning and control (optional) -->
+  <exec_depend condition="$NAV2_ENABLED == 1">dwb_core</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">dwb_msgs</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">dwb_critics</exec_depend>
+  <exec_depend condition="$NAV2_ENABLED == 1">dwb_plugins</exec_depend>
+
+  <!-- SLAM (optional) -->
+  <exec_depend condition="$NAV2_ENABLED == 1">slam_toolbox</exec_depend>
+
+  <!-- Plugin system (optional) -->
+  <exec_depend condition="$NAV2_ENABLED == 1">pluginlib</exec_depend>
+
+  <!-- Test dependencies -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>launch_testing</test_depend>
+
+  <!-- Exec dependencies -->
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

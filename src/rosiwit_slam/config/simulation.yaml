@@ -1,0 +1,88 @@
+## ==================== rosiwit_slam 仿真建图配置 ====================
+## 用于 rosiwit_simulator Gazebo 仿真环境
+## 订阅话题: /velodyne_points (3D LiDAR), /imu (IMU), /odom (里程计)
+
+## ==================== 传感器配置 ====================
+sensor:
+  lidar:
+    point_type: "velodyne"            # 仿真使用 Velodyne VLP16
+    num_channels: 16
+    scan_rate: 10.0
+    max_range: 20.0
+    min_range: 0.1
+    angle_range:
+      horizontal: 360.0
+      vertical: 30.0
+    noise_sigma: 0.01                 # 仿真噪声较小
+    time_offset: 0.0
+    gravity: 9.81
+
+  imu:
+    frequency: 100.0
+    noise_sigma:
+      acc: 0.01                       # 加速度计噪声
+      gyro: 0.001                     # 陀螺仪噪声
+      acc_bias: 0.0001                # 加速度计偏置
+      gyro_bias: 0.00001              # 陀螺仪偏置
+    gravity: 9.81
+
+## ==================== 算法配置 ====================
+algorithm:
+  # IKD-Tree 配置
+  ikd_tree:
+    max_points: 150000
+    box_size: 30.0
+    delete_param: 0.5
+    balance_param: 0.6
+
+  # 特征提取
+  feature_extraction:
+    method: "curvature"              # 曲率方法
+    edge_threshold: 1.0
+    surf_threshold: 0.1
+    min_features: 100
+
+  # 点云配准 (ICP)
+  registration:
+    method: "icp"
+    max_iterations: 5
+    position_noise: 0.01
+    rotation_noise: 0.01
+
+## ==================== ROS2 参数 ====================
+ros:
+  # 输入话题（与 Gazebo 仿真器匹配）
+  lidar_topic: "/velodyne_points"
+  imu_topic: "/imu"
+  odom_topic: "/odom"
+
+  # 输出话题
+  odom_output_topic: "/odom_estimated"
+  path_topic: "/path_estimated"
+  map_topic: "/cloud_map"
+
+  # TF 帧
+  world_frame: "odom"
+  base_frame: "base_footprint"
+  lidar_frame: "velodyne_link"
+  imu_frame: "imu_link"
+
+  # 建图配置
+  publish_map: true
+  map_publish_interval: 5.0          # 每5秒发布一次地图
+  publish_path: true
+  path_publish_interval: 0.5
+  publish_odom_tf: true              # 发布 odom→base TF
+
+## ==================== 建图配置 ====================
+mapping:
+  # 地图保存
+  save_map: true
+  map_format: "pcd"                  # pcd 格式保存点云地图
+  map_resolution: 0.05
+  map_save_path: "/tmp/rosiwit_sim_map"
+
+  # 下采样
+  voxel_filter:
+    enabled: true
+    leaf_size: 0.1

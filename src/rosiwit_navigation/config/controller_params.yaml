@@ -1,0 +1,67 @@
+# ============================================================
+# Diffbot Navigation - 控制器参数配置 (DWB Controller)
+# ============================================================
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    controller_plugins: ["FollowPath"]
+    
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      
+      # 轨迹生成参数
+      min_vel_x: -0.5
+      max_vel_x: 0.5
+      max_vel_y: 0.0
+      min_vel_y: 0.0
+      max_vel_theta: 1.0
+      min_vel_theta: -1.0
+      
+      # 加速度限制
+      acc_lim_x: 0.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 1.0
+      
+      # 减速度限制
+      deceleration_lim_x: -0.5
+      deceleration_lim_y: 0.0
+      deceleration_lim_theta: -1.0
+      
+      # 速度采样参数
+      vx_samples: 20
+      vy_samples: 0
+      vtheta_samples: 40
+      
+      # 轨迹模拟时间
+      sim_time: 1.5
+      sim_granularity: 0.025
+      
+      # 前向模拟距离
+      path_distance_bias: 32.0
+      goal_distance_bias: 24.0
+      occdist_scale: 0.01
+      
+      # 停止条件
+      xy_goal_tolerance: 0.1
+      yaw_goal_tolerance: 0.1
+      latch_xy_goal_tolerance: false
+      
+      # 旋转时的速度限制
+      min_speed_xy: 0.0
+      max_speed_xy: 0.5
+      min_speed_theta: 0.0
+      
+      # 批评函数配置
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 1.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0

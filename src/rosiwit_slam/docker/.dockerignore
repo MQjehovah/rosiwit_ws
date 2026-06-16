@@ -1,0 +1,54 @@
+# ============================================================
+# rosiwit_slam - .dockerignore
+# Minimizes Docker build context size
+# ============================================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Build directories
+build/
+install/
+log/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker files (avoid recursive copy)
+docker/Dockerfile
+docker/Dockerfile.devel
+docker/docker-compose.yml
+docker/build.sh
+docker/run.sh
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Test artifacts
+tests/
+test_report.md
+test_results/
+
+# CI/CD
+.gitlab-ci.yml
+Jenkinsfile
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Temporary files
+*.tmp
+*.bak
+*.log

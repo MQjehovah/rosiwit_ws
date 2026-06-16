@@ -1,0 +1,16 @@
+# GetLocalizationStatus.srv
+# 获取定位状态服务
+
+# 请求
+# 空请求
+
+---
+# 响应
+uint8 state                   # 定位状态 (0: UNINITIALIZED, 1: LOCALIZING, 2: LOCALIZED, 3: LOST)
+geometry_msgs/Pose current_pose  # 当前位姿
+float64 position_covariance   # 位置协方差
+float64 orientation_covariance  # 姿态协方差
+int64 matched_keyframe_id     # 匹配的关键帧ID
+float64 fitness_score         # 最新定位得分
+float64 last_localization_time  # 最后定位时间戳
+string message               # 状态消息
