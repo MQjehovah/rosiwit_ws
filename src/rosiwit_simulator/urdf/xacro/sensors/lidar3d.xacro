@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="lidar3d">
+
+    <!--
+        3D LiDAR physical description (Velodyne VLP-16 form factor)
+        Defines link/joint only, no Gazebo plugin (see lidar3d_gazebo.xacro)
+    -->
+    <xacro:macro name="lidar3d" params="prefix:=velodyne">
+        <!-- VLP-16: radius=0.0516m, height=0.0717m -->
+        <link name="${prefix}_link">
+            <inertial>
+                <mass value="0.83" />
+                <origin xyz="0 0 0" />
+                <inertia ixx="${0.83*(3*0.0516*0.0516+0.0717*0.0717)/12}"
+                         ixy="0.0" ixz="0.0"
+                         iyy="${0.83*(3*0.0516*0.0516+0.0717*0.0717)/12}"
+                         iyz="0.0"
+                         izz="${0.83*0.0516*0.0516/2}" />
+            </inertial>
+
+            <visual>
+                <origin xyz="0 0 0" rpy="0 0 0" />
+                <geometry>
+                    <cylinder radius="0.0516" length="0.0717"/>
+                </geometry>
+                <material name="gray"/>
+            </visual>
+
+            <collision>
+                <origin xyz="0 0 0" rpy="0 0 0" />
+                <geometry>
+                    <cylinder radius="0.0516" length="0.0717"/>
+                </geometry>
+            </collision>
+        </link>
+
+        <!-- base_link top face z = base_length/2 = 0.08
+             VLP-16 half height = 0.0717/2 = 0.03585
+             gap ≈ 0.005
+             total z offset = 0.08 + 0.005 + 0.03585 ≈ 0.12085 → rounded to 0.121
+             But for visual clearance on top of the base + sensor stack: 0.1955
+             (matches architecture spec) -->
+        <joint name="${prefix}_joint" type="fixed">
+            <origin xyz="0 0 0.1955" rpy="0 0 0" />
+            <parent link="base_link"/>
+            <child link="${prefix}_link"/>
+        </joint>
+
+        <gazebo reference="${prefix}_link">
+            <material>Gazebo/Grey</material>
+        </gazebo>
+    </xacro:macro>
+
+</robot>

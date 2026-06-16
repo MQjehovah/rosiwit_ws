@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="lidar3d">
+
+    <!--
+        3D LiDAR Gazebo plugin configuration
+        Simulates Velodyne VLP-16 using GPU Ray sensor
+        Publishes sensor_msgs/PointCloud2 on /velodyne_points
+
+        Parameters aligned with rosiwit_slam velodyne_vlp16.yaml:
+        - topicName: /velodyne_points
+        - frameName: velodyne_link  (must match URDF link name for TF consistency)
+    -->
+    <xacro:macro name="lidar3d_gazebo" params="prefix:=velodyne">
+        <!-- Include physical description from lidar3d.xacro -->
+        <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/lidar3d.xacro" />
+        <xacro:lidar3d prefix="${prefix}" />
+
+        <!-- Gazebo GPU Ray Sensor for 3D LiDAR -->
+        <gazebo reference="${prefix}_link">
+            <sensor type="gpu_ray" name="velodyne_vlp16">
+                <pose>0 0 0 0 0 0</pose>
+                <visualize>false</visualize>
+                <update_rate>10</update_rate>
+                <ray>
+                    <scan>
+                        <horizontal>
+                            <samples>1800</samples>
+                            <resolution>1</resolution>
+                            <min_angle>-3.14159</min_angle>
+                            <max_angle>3.14159</max_angle>
+                        </horizontal>
+                        <vertical>
+                            <samples>16</samples>
+                            <resolution>1</resolution>
+                            <min_angle>-0.2618</min_angle>
+                            <max_angle>0.2618</max_angle>
+                        </vertical>
+                    </scan>
+                    <range>
+                        <min>0.5</min>
+                        <max>100.0</max>
+                        <resolution>0.01</resolution>
+                    </range>
+                    <noise>
+                        <type>gaussian</type>
+                        <mean>0.0</mean>
+                        <stddev>0.01</stddev>
+                    </noise>
+                </ray>
+                <plugin name="velodyne_plugin" filename="libgazebo_ros_ray_sensor.so">
+                    <ros>
+                        <remapping>~/out:=velodyne_points</remapping>
+                    </ros>
+                    <output_type>sensor_msgs/PointCloud2</output_type>
+                    <frame_name>velodyne_link</frame_name>
+                </plugin>
+            </sensor>
+        </gazebo>
+    </xacro:macro>
+
+</robot>

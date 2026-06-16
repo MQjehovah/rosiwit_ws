@@ -1,0 +1,149 @@
+# ROS2 Coverage Planner Configuration
+#
+# This file contains default parameters for the coverage planner node.
+# Parameters can be overridden via launch arguments or runtime parameter updates.
+
+/**:
+  ros__parameters:
+    # Coverage Planning Mode
+    # Options: 'zigzag' (弓字形) or 'spiral' (回字形)
+    # Default: zigzag (recommended for most open spaces)
+    coverage_mode: 'zigzag'
+    
+    # Robot Parameters
+    # Robot radius for obstacle inflation (in meters)
+    # Typical values: 0.15 (small robots), 0.3 (medium robots), 0.5 (large robots)
+    robot_radius: 0.3
+    
+    # Inflation radius for obstacle avoidance (in meters)
+    # Should be slightly larger than robot_radius for safety margin
+    inflation_radius: 0.25
+    
+    # Coverage Path Parameters
+    # Resolution of the coverage path (in meters)
+    # Lower values = denser coverage, higher computation
+    # Typical values: 0.05-0.2
+    coverage_resolution: 0.1
+    
+    # Path Optimization
+    # Enable path simplification to reduce redundant points
+    enable_optimization: true
+    
+    # Scan Direction Optimization
+    # 0: Horizontal scanning (left-right)
+    # 1: Vertical scanning (top-bottom)
+    # 2: Auto-select (chooses direction with fewer turns)
+    # 3: PCA-based selection (uses principal direction analysis)
+    # 4: Long-edge priority (uses aspect ratio and PCA combined)
+    direction_optimization: 4
+    
+    # Frame ID
+    # Reference frame for the coverage path
+    # Typically 'map' for global coverage planning
+    frame_id: 'map'
+    
+    # Simulation Time
+    # Use simulation time if running in a simulator
+    use_sim_time: false
+    
+    # ==================== P0 Optimization Parameters ====================
+    # These parameters control the P0 optimization modules
+    
+    # Map Preprocessing Parameters
+    # Enable map preprocessing (morphology operations, noise removal)
+    enable_map_preprocessing: true
+    
+    # Morphology kernel size (1-7 recommended)
+    morphology_kernel_size: 3
+    
+    # Opening iterations (noise removal)
+    # Higher values remove more noise but may alter map structure
+    opening_iterations: 1
+    
+    # Closing iterations (hole filling)
+    # Higher values fill more holes but may merge obstacles
+    closing_iterations: 1
+    
+    # Minimum obstacle size to keep (pixels)
+    # Smaller obstacles will be removed (treated as noise)
+    min_obstacle_size: 3
+    
+    # Zone Decomposition Parameters
+    # Enable zone-based coverage planning
+    # Decomposes complex maps into multiple simple zones
+    enable_zone_decomposition: false
+    
+    # Minimum zone area threshold (pixels)
+    # Smaller areas will be merged with neighboring zones
+    zone_min_area: 100
+    
+    # Maximum number of zones to decompose into
+    # Higher values allow finer decomposition
+    zone_max_count: 20
+    
+    # Zone merge threshold (ratio of shared boundary)
+    # Zones with boundary overlap above this threshold will be merged
+    zone_merge_threshold: 0.2
+    
+    # Connection channel search radius (pixels)
+    # Radius for searching connections between zones
+    connection_search_radius: 5
+    
+    # Scan Direction Optimizer Parameters
+    # Enable PCA-based direction analysis
+    enable_pca_direction: true
+    
+    # Enable minimum bounding rectangle analysis
+    enable_mbr_direction: true
+    
+    # Aspect ratio threshold for long-edge priority
+    # Areas with aspect ratio above this will use long-edge priority
+    aspect_ratio_threshold: 2.0
+    
+    # Turn Optimizer Parameters
+    # Enable turn point optimization
+    enable_turn_optimization: true
+    
+    # Turn detection angle threshold (radians)
+    # Smaller values detect more turns
+    # 0.1 radians ≈ 5.7 degrees
+    turn_angle_threshold: 0.1
+    
+    # Turn merge distance threshold (pixels)
+    # Turns within this distance may be merged
+    turn_merge_distance: 10.0
+    
+    # Turn merge angle threshold (radians)
+    # Turns with angle change below this may be merged
+    # 0.35 radians ≈ 20 degrees
+    turn_merge_angle: 0.35
+    
+    # Enable turn smoothing (experimental)
+    enable_turn_smoothing: false
+    
+    # Turn smoothing radius (meters)
+    # Radius for generating smooth turn curves
+    turn_smoothing_radius: 0.3
+    
+    # ==================== Advanced Parameters ====================
+    
+    # Visualization
+    # Enable visualization markers for debugging
+    enable_visualization: true
+    
+    # Marker update rate (Hz)
+    visualization_rate: 1.0
+    
+    # Performance
+    # Maximum time budget for planning (seconds)
+    max_planning_time: 60.0
+    
+    # Maximum path points to generate
+    # Prevents excessive path generation for very large maps
+    max_path_points: 10000
+    
+    # Logging level
+    log_level: 'INFO'
+    
+    # Debug mode (verbose logging)
+    debug_mode: false

@@ -1,0 +1,206 @@
+// ============================================================
+// rosiwit_simulator - Jenkins Pipeline (ROS2 Humble)
+// ============================================================
+// Stages:
+//   1. Checkout  - Source code checkout
+//   2. Lint      - Code quality checks
+//   3. Build     - ROS2 colcon build + Docker build
+//   4. Test      - Automated tests
+//   5. Deploy    - Docker push
+// ============================================================
+
+pipeline {
+    agent {
+        label 'ros2-humble'  // Jenkins agent with ROS2 Humble + Docker
+    }
+
+    environment {
+        DOCKER_IMAGE = 'rosiwit-simulator'
+        DOCKER_TAG   = '2.0.0'
+        REGISTRY     = credentials('docker-registry-url')
+        ROS_DISTRO   = 'humble'
+    }
+
+    options {
+        // Build timeout
+        timeout(time: 45, unit: 'MINUTES')
+        // Don't run concurrent builds on same branch
+        disableConcurrentBuilds()
+        // Keep last 10 builds
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        // Timestamps in console
+        timestamps()
+    }
+
+    stages {
+        // ============================================================
+        // Stage: Checkout
+        // ============================================================
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_SHORT_SHA = sh(
+                        returnStdout: true,
+                        script: 'git rev-parse --short HEAD'
+                    ).trim()
+                }
+                echo "Building commit: ${env.GIT_SHORT_SHA}"
+                echo "Branch: ${env.BRANCH_NAME}"
+                echo "ROS2 Distribution: humble"
+            }
+        }
+
+        // ============================================================
+        // Stage: Lint
+        // ============================================================
+        stage('Lint') {
+            parallel {
+                stage('XML Lint') {
+                    steps {
+                        sh '''
+                            echo "Checking XML files..."
+                            find . -name "*.xml" -not -path "./docker/*" | while read f; do
+                                xmllint --noout "$f" || true
+                            done
+                        '''
+                    }
+                }
+                stage('Shell Lint') {
+                    steps {
+                        sh '''
+                            echo "Checking shell scripts..."
+                            if command -v shellcheck &> /dev/null; then
+                                find docker/ -name "*.sh" -exec shellcheck {} \\;
+                            else
+                                echo "shellcheck not available, skipping"
+                            fi
+                        '''
+                    }
+                }
+                stage('Python Launch Syntax') {
+                    steps {
+                        sh '''
+                            echo "Checking Python launch file syntax..."
+                            find launch/ -name "*.launch.py" | while read f; do
+                                python3 -m py_compile "$f" && echo "OK: $f"
+                            done
+                        '''
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // Stage: Build
+        // ============================================================
+        stage('Build') {
+            parallel {
+                stage('Colcon Build') {
+                    steps {
+                        sh '''
+                            # Source ROS2 Humble
+                            source /opt/ros/humble/setup.bash
+
+                            # Create workspace
+                            mkdir -p /tmp/ros2_ws/src
+                            cp -r . /tmp/ros2_ws/src/rosiwit_simulator
+                            cd /tmp/ros2_ws
+
+                            # Build
+                            colcon build --packages-select simulator \\
+                                --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+                            echo "Colcon build completed successfully"
+                        '''
+                    }
+                }
+                stage('Docker Build') {
+                    steps {
+                        sh '''
+                            docker build \
+                                -f docker/Dockerfile \
+                                --target runtime \
+                                -t ${DOCKER_IMAGE}:${DOCKER_TAG} \
+                                -t ${DOCKER_IMAGE}:${GIT_SHORT_SHA} \
+                                --label "git.ref=${GIT_SHORT_SHA}" \
+                                --label "build.date=$(date -u +\'%Y-%m-%dT%H:%M:%SZ\')" \
+                                .
+                        '''
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // Stage: Test
+        // ============================================================
+        stage('Test') {
+            steps {
+                sh '''
+                    # Source ROS2 Humble
+                    source /opt/ros/humble/setup.bash
+
+                    # Create workspace
+                    mkdir -p /tmp/ros2_ws/src
+                    cp -r . /tmp/ros2_ws/src/rosiwit_simulator
+                    cd /tmp/ros2_ws
+
+                    # Build
+                    colcon build --packages-select simulator
+                    source install/setup.bash
+
+                    # Run tests
+                    colcon test --packages-select simulator
+                    colcon test-result --verbose
+                '''
+            }
+            post {
+                always {
+                    // Archive test results
+                    junit 'build/**/test_results/**/*.xml'
+                }
+            }
+        }
+
+        // ============================================================
+        // Stage: Docker Push (main/master only)
+        // ============================================================
+        stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                }
+            }
+            steps {
+                sh '''
+                    # Login to registry
+                    echo "${DOCKER_REGISTRY_PASSWORD}" | \\
+                        docker login -u "${DOCKER_REGISTRY_USER}" --password-stdin "${REGISTRY}"
+
+                    # Tag and push
+                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${REGISTRY}/${DOCKER_IMAGE}:latest
+                    docker push ${REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                    docker push ${REGISTRY}/${DOCKER_IMAGE}:latest
+
+                    echo "Image pushed: ${REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Check the logs above for details.'
+        }
+        always {
+            // Clean up workspace
+            cleanWs()
+        }
+    }
+}

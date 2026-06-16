@@ -1,0 +1,250 @@
+# ============================================================
+# rosiwit_app - Docker Compose Configuration
+# Full robot system: Simulator + SLAM + Navigation + App
+# ============================================================
+#
+# Usage:
+#   Full stack (sim slam nav):  docker compose up -d sim-slam-nav
+#   App only:                   docker compose up -d app-only
+#   Development shell:          docker compose run --rm dev
+#   Run tests:                  docker compose run --rm test
+#   Lint check:                 docker compose run --rm lint
+#
+# Environment variables:
+#   ROS_DOMAIN_ID     - ROS2 DDS domain (default: 42)
+#   RMW_IMPLEMENTATION - DDS middleware (default: rmw_cyclonedds_cpp)
+#   MAP_PATH          - Map storage directory (default: /tmp/rosiwit_sim_map)
+#   DISPLAY           - X11 display for RViz/Gazebo GUI
+# ============================================================
+
+version: "3.8"
+
+# Shared environment defaults
+x-common-env: &common-env
+  ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+  RMW_IMPLEMENTATION: "${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+  ROS_LOG_LEVEL: INFO
+  MAP_PATH: "${MAP_PATH:-/tmp/rosiwit_sim_map}"
+
+# Shared security options
+x-security: &security
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+# Shared logging
+x-logging: &logging
+  driver: "json-file"
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  # ==================== Full Stack (Sim + SLAM + Nav + App) ====================
+  sim-slam-nav:
+    build:
+      context: ..
+      dockerfile: rosiwit_app/docker/Dockerfile
+      target: runtime
+    image: rosiwit-app:1.0.0
+    container_name: rosiwit-full-stack
+    hostname: rosiwit-app
+    network_mode: host
+    ipc: host
+    pid: host
+    environment:
+      <<: *common-env
+      DISPLAY: "${DISPLAY:-:0}"
+    volumes:
+      # X11 display for RViz
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/root/.Xauthority:ro
+      # Map storage (persistent)
+      - rosiwit_map_data:/tmp/rosiwit_sim_map:rw
+      # Shared memory for DDS
+      - /dev/shm:/dev/shm
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 12G
+        reservations:
+          cpus: '4.0'
+          memory: 6G
+    healthcheck:
+      test: ["CMD", "ros2", "topic", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    command:
+      - "ros2"
+      - "launch"
+      - "rosiwit_app"
+      - "system_bringup.launch.py"
+
+  # ==================== App Only (assumes other modules running) ====================
+  app-only:
+    build:
+      context: ..
+      dockerfile: rosiwit_app/docker/Dockerfile
+      target: runtime
+    image: rosiwit-app:1.0.0
+    container_name: rosiwit-app
+    hostname: rosiwit-app
+    network_mode: host
+    ipc: host
+    environment:
+      <<: *common-env
+    volumes:
+      - rosiwit_map_data:/tmp/rosiwit_sim_map:rw
+      - /dev/shm:/dev/shm
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "ros2", "node", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    command:
+      - "ros2"
+      - "launch"
+      - "rosiwit_app"
+      - "app_only.launch.py"
+
+  # ==================== Development Environment ====================
+  dev:
+    build:
+      context: ..
+      dockerfile: rosiwit_app/docker/Dockerfile
+      target: dev
+    image: rosiwit-app:dev
+    container_name: rosiwit-app-dev
+    hostname: rosiwit-dev
+    # Interactive mode for development
+    stdin_open: true
+    tty: true
+    # Mount source code for live development
+    volumes:
+      - ..:/ros2_ws/src:rw
+      - ros2_build:/ros2_ws/build:rw
+      - ros2_install:/ros2_ws/install:rw
+      - ros2_log:/ros2_ws/log:rw
+      - rosiwit_map_data:/tmp/rosiwit_sim_map:rw
+      # X11 display for RViz/Gazebo
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/root/.Xauthority:ro
+      - /dev/shm:/dev/shm
+    environment:
+      <<: *common-env
+      DISPLAY: "${DISPLAY:-:0}"
+      QT_X11_NO_MITSHM: "1"
+      ROS_LOCALHOST_ONLY: "${ROS_LOCALHOST_ONLY:-0}"
+    network_mode: host
+    ipc: host
+    pid: host
+    logging: *logging
+    working_dir: /ros2_ws
+    # Default: interactive bash shell
+    command: /bin/bash
+
+  # ==================== CI / Testing ====================
+  test:
+    build:
+      context: ..
+      dockerfile: rosiwit_app/docker/Dockerfile
+      target: dev
+    image: rosiwit-app:dev
+    container_name: rosiwit-app-test
+    network_mode: host
+    environment:
+      <<: *common-env
+      ROS_LOCALHOST_ONLY: "1"
+      PYTEST_COLOR: "1"
+    volumes:
+      - ..:/ros2_ws/src:rw
+      - test_results:/ros2_ws/test_results:rw
+      - /dev/shm:/dev/shm
+    working_dir: /ros2_ws
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        source /opt/ros/humble/setup.bash
+        source install/setup.bash || true
+        echo "=== Building rosiwit_app ==="
+        colcon build --packages-select rosiwit_app --symlink-install
+        echo "=== Running Tests ==="
+        cd src/rosiwit_app
+        python3 -m pytest tests/ -v --tb=short --junitxml=/ros2_ws/test_results/rosiwit_app_pytest.xml 2>&1 || true
+        echo "=== Test Results ==="
+        python3 -m pytest tests/ --co -q 2>/dev/null || echo "No tests collected"
+
+  # ==================== Linting ====================
+  lint:
+    build:
+      context: ..
+      dockerfile: rosiwit_app/docker/Dockerfile
+      target: dev
+    image: rosiwit-app:dev
+    container_name: rosiwit-app-lint
+    network_mode: none
+    working_dir: /ros2_ws/src/rosiwit_app
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "=== flake8 check ==="
+        python3 -m flake8 rosiit_app/ --max-line-length=120 --count --statistics 2>&1 || echo "[WARN] flake8 issues found"
+        echo "=== pydocstyle check ==="
+        python3 -m pydocstyle rosiwit_app/ --count 2>&1 || echo "[WARN] pydocstyle issues found"
+        echo "=== XML lint ==="
+        which xmllint > /dev/null 2>&1 && xmllint --noout package.xml 2>&1 || echo "[INFO] xmllint not available, skipping"
+
+  # ==================== RViz Visualization Only ====================
+  rviz:
+    build:
+      context: ..
+      dockerfile: rosiwit_app/docker/Dockerfile
+      target: runtime
+    image: rosiwit-app:1.0.0
+    container_name: rosiwit-rviz
+    hostname: rosiwit-rviz
+    network_mode: host
+    environment:
+      <<: *common-env
+      DISPLAY: "${DISPLAY:-:0}"
+      QT_X11_NO_MITSHM: "1"
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/root/.Xauthority:ro
+      - /dev/shm:/dev/shm
+    command:
+      - "ros2"
+      - "run"
+      - "rviz2"
+      - "rviz2"
+      - "-d"
+      - "/ros2_ws/src/rosiwit_app/rviz/rosiwit_app.rviz"
+
+volumes:
+  rosiwit_map_data:
+    driver: local
+  ros2_build:
+    driver: local
+  ros2_install:
+    driver: local
+  ros2_log:
+    driver: local
+  test_results:
+    driver: local

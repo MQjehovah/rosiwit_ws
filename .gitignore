@@ -1,0 +1,11 @@
+.vscode/
+.github/
+
+
+
+
+build/
+install/
+log/
+
+__pycache__/

@@ -1,0 +1,152 @@
+[
+  {
+    "test_name": "map.pgm_预处理",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 0,
+    "zone_count": 0,
+    "processing_time": 0.011170148849487305,
+    "details": "原始可通行区域: 196709, 处理后: 187759, 变化率: 4.55%"
+  },
+  {
+    "test_name": "map.pgm_分区规划",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 0,
+    "zone_count": 1,
+    "processing_time": 0.11678147315979004,
+    "details": "分区数量: 1, 类型分布: {'COMPLEX': 1}"
+  },
+  {
+    "test_name": "map.pgm_方向优化",
+    "success": true,
+    "coverage_rate": 99.19220777900351,
+    "path_length": 0.0,
+    "turn_count": 194,
+    "zone_count": 0,
+    "processing_time": 0,
+    "details": "方法: pca_based, 简单方向转弯: 194, 优化后转弯: 194, 减少: 0"
+  },
+  {
+    "test_name": "map.pgm_转弯优化",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 194,
+    "zone_count": 0,
+    "processing_time": 0.0,
+    "details": "原始转弯: 194, 优化后: 194, 减少: 0.0%, 类型分布: {'SHARP': 88, 'MEDIUM': 55, 'GENTLE': 45, 'SCANLINE_END': 3, 'U_TURN': 3}"
+  },
+  {
+    "test_name": "map.pgm_综合对比",
+    "success": true,
+    "coverage_rate": 96.03526020670127,
+    "path_length": 1378.3929267683448,
+    "turn_count": 196,
+    "zone_count": 0,
+    "processing_time": 0.0,
+    "details": "覆盖率提升: -3.16%, 转弯减少: -1.0%, 路径缩短: 8.1%"
+  },
+  {
+    "test_name": "grid_map_of_layer_0.png_预处理",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 0,
+    "zone_count": 0,
+    "processing_time": 0.004140377044677734,
+    "details": "原始可通行区域: 57092, 处理后: 56330, 变化率: 1.33%"
+  },
+  {
+    "test_name": "grid_map_of_layer_0.png_分区规划",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 0,
+    "zone_count": 4,
+    "processing_time": 0.05456042289733887,
+    "details": "分区数量: 4, 类型分布: {'COMPLEX': 4}"
+  },
+  {
+    "test_name": "grid_map_of_layer_0.png_方向优化",
+    "success": true,
+    "coverage_rate": 98.06627898829959,
+    "path_length": 0.0,
+    "turn_count": 162,
+    "zone_count": 0,
+    "processing_time": 0,
+    "details": "方法: pca_based, 简单方向转弯: 138, 优化后转弯: 162, 减少: -24"
+  },
+  {
+    "test_name": "grid_map_of_layer_0.png_转弯优化",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 162,
+    "zone_count": 0,
+    "processing_time": 0.0,
+    "details": "原始转弯: 162, 优化后: 162, 减少: 0.0%, 类型分布: {'SHARP': 78, 'MEDIUM': 53, 'GENTLE': 30, 'U_TURN': 1}"
+  },
+  {
+    "test_name": "grid_map_of_layer_0.png_综合对比",
+    "success": true,
+    "coverage_rate": 97.21502136901843,
+    "path_length": 389.57335459575046,
+    "turn_count": 157,
+    "zone_count": 0,
+    "processing_time": 0.0,
+    "details": "覆盖率提升: -1.38%, 转弯减少: -13.8%, 路径缩短: 18.2%"
+  },
+  {
+    "test_name": "grid_map_of_layer_3.png_预处理",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 0,
+    "zone_count": 0,
+    "processing_time": 0.004303455352783203,
+    "details": "原始可通行区域: 108327, 处理后: 101827, 变化率: 6.00%"
+  },
+  {
+    "test_name": "grid_map_of_layer_3.png_分区规划",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 0,
+    "zone_count": 1,
+    "processing_time": 0.05743145942687988,
+    "details": "分区数量: 1, 类型分布: {'COMPLEX': 1}"
+  },
+  {
+    "test_name": "grid_map_of_layer_3.png_方向优化",
+    "success": true,
+    "coverage_rate": 98.33097934956197,
+    "path_length": 0.0,
+    "turn_count": 172,
+    "zone_count": 0,
+    "processing_time": 0,
+    "details": "方法: pca_based, 简单方向转弯: 172, 优化后转弯: 172, 减少: 0"
+  },
+  {
+    "test_name": "grid_map_of_layer_3.png_转弯优化",
+    "success": true,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 172,
+    "zone_count": 0,
+    "processing_time": 0.0,
+    "details": "原始转弯: 172, 优化后: 172, 减少: 0.0%, 类型分布: {'SHARP': 76, 'MEDIUM': 44, 'GENTLE': 44, 'SCANLINE_END': 3, 'U_TURN': 5}"
+  },
+  {
+    "test_name": "grid_map_of_layer_3.png_综合对比",
+    "success": true,
+    "coverage_rate": 94.38459479169552,
+    "path_length": 703.3235956176509,
+    "turn_count": 164,
+    "zone_count": 0,
+    "processing_time": 0.0,
+    "details": "覆盖率提升: -3.95%, 转弯减少: 4.7%, 路径缩短: 20.0%"
+  }
+]

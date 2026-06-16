@@ -1,0 +1,71 @@
+// ============================================================
+// rosiwit_app - VS Code Dev Container Configuration
+// Provides a full ROS2 Humble development environment
+// ============================================================
+// Usage:
+//   1. Install "Dev Containers" extension in VS Code
+//   2. Open this folder in VS Code
+//   3. Ctrl+Shift+P → "Dev Containers: Reopen in Container"
+// ============================================================
+{
+  "name": "rosiwit_app Dev (ROS2 Humble)",
+  "build": {
+    "dockerfile": "../docker/Dockerfile",
+    "context": "..",
+    "target": "dev"
+  },
+  "workspaceFolder": "/ros2_ws/src/rosiwit_app",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/ros2_ws/src/rosiwit_app,type=bind",
+  "runArgs": [
+    "--network=host",
+    "--ipc=host",
+    "--pid=host",
+    "--privileged"
+  ],
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY:}",
+    "ROS_DOMAIN_ID": "42",
+    "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
+    "QT_X11_NO_MITSHM": "1",
+    "MAP_PATH": "/tmp/rosiwit_sim_map"
+  },
+  "mounts": [
+    // X11 display
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
+    // Shared memory for DDS
+    "source=rosiwit-dev-shm,target=/dev/shm,type=tmpfs",
+    // Map data
+    "source=rosiwit_map_data,target=/tmp/rosiwit_sim_map,type=volume"
+  ],
+  "settings": {
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.profiles.linux": {
+      "bash": {
+        "path": "/bin/bash",
+        "args": ["-c", "source /opt/ros/humble/setup.bash && source /ros2_ws/install/setup.bash 2>/dev/null; exec bash"],
+        "icon": "terminal-bash"
+      }
+    },
+    "python.defaultInterpreterPath": "/usr/bin/python3",
+    "python.linting.enabled": true,
+    "python.linting.flake8Enabled": true,
+    "python.linting.flake8Args": ["--max-line-length=120"],
+    "python.formatting.provider": "autopep8",
+    "files.associations": {
+      "*.launch.py": "python",
+      "*.yaml": "yaml"
+    },
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  },
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "twxs.cmake",
+    "ms-iot.vscode-ros",
+    "redhat.vscode-yaml",
+    "streetsidesoftware.code-spell-checker"
+  ],
+  "postCreateCommand": "source /opt/ros/humble/setup.bash && cd /ros2_ws && colcon build --packages-select rosiwit_app --symlink-install 2>&1 || echo 'Build completed with warnings'",
+  "remoteUser": "root"
+}

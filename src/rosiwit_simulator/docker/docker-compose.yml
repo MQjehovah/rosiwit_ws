@@ -1,0 +1,314 @@
+# ============================================================
+# rosiwit_simulator - ROS2 Humble Docker Compose
+# ============================================================
+# Simulation stack:
+#   1. simulator       - ROS2 Humble + Gazebo 11 (3D LiDAR simulation)
+#   2. simulator-devel - ROS2 Humble development environment
+#
+# Optional external services:
+#   3. slam            - ROS2 Humble + FAST-LIO2 (requires rosiwit_slam)
+#   4. slam-viz        - ROS2 visualization node
+#
+# Usage:
+#   Full stack:        docker-compose up -d
+#   Simulator only:    docker-compose up -d simulator
+#   Development:       docker-compose up -d simulator-devel
+# ============================================================
+
+version: '3.8'
+
+services:
+  # ==================== ROS2 Simulator ====================
+  simulator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runtime
+    image: rosiwit-simulator:2.0.0
+    container_name: rosiwit-simulator
+    hostname: simulator
+
+    # Environment
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - DISPLAY=${DISPLAY:-:0}
+      - LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-0}
+      - GAZEBO_MODEL_PATH=/colcon_ws/src/rosiwit_simulator/models
+      - ROS_LOG_LEVEL=INFO
+
+    # Network - host mode for DDS discovery + Gazebo
+    network_mode: host
+
+    # IPC for shared memory (DDS)
+    ipc: host
+
+    # Security - minimal privileges
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+
+    # Volume mounts
+    volumes:
+      # X11 display for Gazebo GUI + RViz
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/home/rosuser/.Xauthority:ro
+      # Shared memory for DDS
+      - /dev/shm:/dev/shm
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "ros2", "topic", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+    # Launch Gazebo + 3D LiDAR simulation (ROS2 native)
+    command: >
+      /bin/bash -c "
+        source /opt/ros/humble/setup.bash &&
+        source /colcon_ws/install/setup.bash &&
+        ros2 launch simulator simulator_gazebo_3d.launch.py
+      "
+
+  # ==================== ROS2 Development Environment ====================
+  simulator-devel:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: builder
+    image: rosiwit-simulator:2.0.0-devel
+    container_name: rosiwit-simulator-devel
+    hostname: simulator-devel
+
+    # Environment
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - DISPLAY=${DISPLAY:-:0}
+      - LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-0}
+      - GAZEBO_MODEL_PATH=/colcon_ws/src/rosiwit_simulator/models
+
+    network_mode: host
+    ipc: host
+
+    # Security
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+
+    volumes:
+      # Mount source for live development
+      - ../src/rosiwit_simulator:/colcon_ws/src/rosiwit_simulator:rw
+      # X11 display
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/home/rosuser/.Xauthority:ro
+      - /dev/shm:/dev/shm
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+
+    healthcheck:
+      test: ["CMD", "ros2", "topic", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+    # Interactive development shell
+    command: >
+      /bin/bash -c "
+        source /opt/ros/humble/setup.bash &&
+        colcon build --packages-select simulator &&
+        source /colcon_ws/install/setup.bash &&
+        echo '============================================================'
+        echo ' ROS2 Humble Development Environment Ready'
+        echo ' Workspace: /colcon_ws'
+        echo ' Package:   simulator'
+        echo ' Use: ros2 launch simulator <launch_file>.launch.py'
+        echo '============================================================'
+        && tail -f /dev/null
+      "
+
+  # ==================== FAST-LIO2 SLAM (ROS2 Native, Optional) ====================
+  # Requires: ../rosiwit_slam project with Dockerfile
+  slam:
+    build:
+      context: ../rosiwit_slam
+      dockerfile: docker/Dockerfile
+      target: runtime
+    image: fast-lio2-slam:latest
+    container_name: rosiwit-slam
+    hostname: slam-node
+
+    # Security
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - ROS_LOG_LEVEL=INFO
+
+    network_mode: host
+    ipc: host
+
+    volumes:
+      - ../rosiwit_slam/config:/config:ro
+      - ./data/maps:/data/maps
+      - ./data/bags:/data/bags:ro
+      - /dev/shm:/dev/shm
+
+    # No ros1_bridge dependency - direct ROS2 DDS communication
+    depends_on:
+      simulator:
+        condition: service_healthy
+
+    working_dir: /ros2_ws
+
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+
+    healthcheck:
+      test: ["CMD", "ros2", "node", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+    # Launch FAST-LIO2 (ROS2 native, no bridge needed)
+    command: >
+      /bin/bash -c "
+        source /opt/ros/humble/setup.bash &&
+        source /ros2_ws/install/setup.bash &&
+        ros2 launch rosiwit_slam fast_lio2.launch.py
+          config_file:=velodyne_vlp16.yaml
+          lidar_topic:=/velodyne_points
+          imu_topic:=/imu
+          use_sim_time:=true
+      "
+
+  # ==================== SLAM Visualization ====================
+  slam-viz:
+    image: ros:humble-ros-base-jammy
+    container_name: rosiwit-slam-viz
+    hostname: slam-viz
+
+    # Security
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - DISPLAY=${DISPLAY:-:0}
+      - LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}
+
+    network_mode: host
+    ipc: host
+
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/home/rosuser/.Xauthority:ro
+      - /dev/shm:/dev/shm
+
+    depends_on:
+      - slam
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+    healthcheck:
+      test: ["CMD", "ros2", "topic", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+    # Install RViz2 and visualize SLAM output (ROS2 native)
+    command: >
+      /bin/bash -c "
+        apt-get update && apt-get install -y ros-humble-rviz2 &&
+        source /opt/ros/humble/setup.bash &&
+        rviz2 -d /opt/ros/humble/share/rviz/default.rviz
+      "

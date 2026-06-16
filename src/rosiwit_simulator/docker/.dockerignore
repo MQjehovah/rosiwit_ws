@@ -1,0 +1,45 @@
+# ============================================================
+# rosiwit_simulator - Docker Ignore (ROS2 Humble)
+# ============================================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+images/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts (rebuilt in Docker)
+build/
+install/
+log/
+logs/
+
+# Test files
+tests/
+test_report.md
+pytest_cache/
+__pycache__/
+.pytest_cache/
+
+# Docker files (avoid recursive copy)
+docker/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+Jenkinsfile

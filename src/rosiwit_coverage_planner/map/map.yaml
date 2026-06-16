@@ -1,0 +1,6 @@
+occupied_thresh: 0.59
+negate: 0
+free_thresh: 0.49
+image: /opt/xzrobot/maps/1764828793389/map.pgm
+origin: [-48.35494447487991, -37.86936215270595, 0]
+resolution: 0.05

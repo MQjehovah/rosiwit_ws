@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<robot name="arm" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!--
+        Combined model: mbot_base + 3D LiDAR (VLP-16) + IMU
+        Use this xacro for 3D SLAM simulation.
+        For 2D lidar simulation, use mbot_with_laser_gazebo.xacro instead.
+    -->
+
+    <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/gazebo/mbot_base.xacro" />
+    <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/lidar3d_gazebo.xacro" />
+    <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/imu_gazebo.xacro" />
+
+    <xacro:lidar3d_gazebo prefix="velodyne"/>
+    <xacro:imu prefix="imu"/>
+
+    <xacro:mbot_base/>
+
+</robot>

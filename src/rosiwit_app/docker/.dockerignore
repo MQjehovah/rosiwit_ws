@@ -1,0 +1,65 @@
+# ============================================================
+# .dockerignore - rosiwit_app
+# Exclude files from Docker build context
+# ============================================================
+
+# Build artifacts
+build/
+install/
+log/
+.ccache/
+
+# Version control
+.git/
+.gitignore
+.gitmodules
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files (avoid recursive copy)
+docker/Dockerfile
+docker/docker-compose.yml
+docker/.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+Jenkinsfile
+
+# Documentation (not needed in image)
+docs/
+*.md
+!README.md
+
+# Test artifacts
+tests/
+test/
+test_results/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# Coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.bak
+*.log

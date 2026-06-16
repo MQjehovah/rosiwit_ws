@@ -1,0 +1,12 @@
+[
+  {
+    "map_name": "map",
+    "success": false,
+    "coverage_rate": 0.0,
+    "path_length": 0.0,
+    "turn_count": 0,
+    "path_points": 0,
+    "processing_time": 0.06293535232543945,
+    "message": "Coverage planning failed: No map received"
+  }
+]

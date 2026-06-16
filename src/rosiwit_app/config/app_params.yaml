@@ -1,0 +1,23 @@
+# rosiwit_app 参数配置
+rosiwit_app:
+  ros__parameters:
+    # 地图配置
+    map_path: "/tmp/rosiwit_sim_map"
+    map_file: "fast_lio2_map"
+    auto_save_position: true
+    position_save_interval: 5.0  # 秒
+
+    # 系统配置
+    startup_timeout: 30.0        # 子系统启动超时(秒)
+    health_check_interval: 1.0   # 健康检查间隔(秒)
+
+    # 导航配置
+    navigation_timeout: 120.0    # 导航超时(秒)
+    goal_reached_tolerance: 0.3  # 目标到达容差(米)
+
+    # 启动模式
+    auto_load_map: true          # 启动时自动加载地图
+    auto_start_mapping: true     # 无地图时自动开始建图
+
+    # 航点文件（空值则使用默认路径）
+    waypoints_file: ""
