@@ -132,6 +132,7 @@ public:
                 params_.imu.acc_bias_noise = imu_node["acc_bias_noise"].as<double>(0.0001);
                 params_.imu.gyro_bias_noise = imu_node["gyro_bias_noise"].as<double>(0.00001);
                 params_.imu.gravity_magnitude = imu_node["gravity"].as<double>(9.81);
+                params_.imu.acc_scale = imu_node["acc_scale"].as<double>(1.0);
             }
 
             // 加载LiDAR参数
@@ -166,6 +167,7 @@ public:
                 params_.iekf.converge_threshold = iekf_node["converge_threshold"].as<double>(0.001);
                 params_.iekf.position_noise = iekf_node["position_noise"].as<double>(0.01);
                 params_.iekf.rotation_noise = iekf_node["rotation_noise"].as<double>(0.01);
+                params_.iekf.max_correspondence_distance = iekf_node["max_correspondence_distance"].as<double>(1.0);
             }
 
             // 加载闭环检测参数

@@ -7,6 +7,7 @@ imu:
   acc_bias_noise: 0.0001
   gyro_bias_noise: 0.00001
   gravity: 9.81         # 重力加速度
+  acc_scale: 1.0        # 加速度比例因子 (IMU输出为g单位时设为9.81)
 
 ## ==================== LiDAR 参数 ====================
 lidar:
@@ -28,6 +29,7 @@ iekf:
   converge_threshold: 0.001 # 收敛阈值
   position_noise: 0.01      # 位置噪声
   rotation_noise: 0.01      # 旋转噪声
+  max_correspondence_distance: 1.0  # scan-to-map 对应点最大距离 (米)
 
 ## ==================== 闭环检测参数 ====================
 loop_closure:

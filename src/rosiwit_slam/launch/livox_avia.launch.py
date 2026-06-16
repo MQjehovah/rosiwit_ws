@@ -29,7 +29,7 @@ def generate_launch_description():
         name='rosiwit_slam',
         output='screen',
         parameters=[
-            config_file_path,
+            {'config_file': config_file_path},
             {'use_sim_time': LaunchConfiguration('use_sim_time')}
         ]
     )

@@ -313,6 +313,7 @@ struct ImuParams {
     double acc_bias_noise = 0.0001;  // 加速度计偏置噪声
     double gyro_bias_noise = 0.00001; // 陀螺仪偏置噪声
     double gravity_magnitude = 9.81; // 重力大小
+    double acc_scale = 1.0;          // 加速度比例因子 (g->m/s^2 时设为9.81)
 
     Vector3d acc_bias_init = Vector3d::Zero();
     Vector3d gyro_bias_init = Vector3d::Zero();
@@ -347,6 +348,9 @@ struct IekfParams {
     // 测量噪声协方差
     double position_noise = 0.01;
     double rotation_noise = 0.01;
+
+    // scan-to-map 对应点搜索最大距离
+    double max_correspondence_distance = 1.0;
 
     // 地图管理
     double map_update_distance = 0.2; // 地图更新最小距离

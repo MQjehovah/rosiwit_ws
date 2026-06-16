@@ -681,7 +681,7 @@ inline void FastLio2Node::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg
     imu.timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
     imu.acc = Vector3d(msg->linear_acceleration.x,
                        msg->linear_acceleration.y,
-                       msg->linear_acceleration.z);
+                       msg->linear_acceleration.z) * config_.imu.acc_scale;
     imu.gyro = Vector3d(msg->angular_velocity.x,
                         msg->angular_velocity.y,
                         msg->angular_velocity.z);
@@ -856,8 +856,8 @@ inline bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
             PointType nearest;
             double dist;
 
-            if (ikd_tree_->nearestSearch(query, nearest, dist)) {
-                if (dist < config_.iekf.position_noise * 3) {
+                if (ikd_tree_->nearestSearch(query, nearest, dist)) {
+                    if (dist < config_.iekf.max_correspondence_distance) {
                     valid_indices.push_back(i);
                     source_points.push_back(Vector3d(cloud->points[i].x,
                                                      cloud->points[i].y,

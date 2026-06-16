@@ -7,6 +7,7 @@ imu:
   acc_bias_noise: 0.0001
   gyro_bias_noise: 0.00001
   gravity: 9.81
+  acc_scale: 9.81                    # 加速度比例因子 (该数据包IMU为g单位，需×9.81转m/s²)
 
 ## ==================== LiDAR 参数 ====================
 lidar:
@@ -28,12 +29,13 @@ iekf:
   converge_threshold: 0.001
   position_noise: 0.01
   rotation_noise: 0.01
+  max_correspondence_distance: 1.0   # scan-to-map 对应点最大距离 (米)
 
 ## ==================== ROS2 参数 ====================
 ros:
-  # 输入话题 - 匹配 Ouster 数据集 (rosbag2_2024_05_23-15_43_25)
-  lidar_topic: "/ouster/points"      # Ouster LiDAR点云话题
-  imu_topic: "/ouster/imu"           # Ouster IMU数据话题
+  # 输入话题 - 匹配 Livox 数据包 (rosbag2)
+  lidar_topic: "/livox/lidar"          # Livox LiDAR点云话题
+  imu_topic: "/livox/imu"              # Livox IMU数据话题
   odom_topic: "/odom"
 
   # 输出话题
@@ -42,13 +44,13 @@ ros:
   map_topic: "/cloud_map"
   keyframe_topic: "/keyframe_cloud"
 
-  # 坐标系 - Ouster 传感器坐标系
+  # 坐标系 - Livox 传感器坐标系
   world_frame: "world"
   map_frame: "map"
   odom_frame: "odom"
   base_frame: "base_link"
-  lidar_frame: "os_sensor"           # Ouster LiDAR坐标系
-  imu_frame: "os_imu"                # Ouster IMU坐标系
+  lidar_frame: "livox_frame"           # Livox LiDAR坐标系
+  imu_frame: "livox_frame"             # Livox IMU坐标系
 
   # 发布参数
   map_publish_rate: 2.0              # 地图发布频率 (Hz)
