@@ -2,7 +2,7 @@
 
 欢迎查阅 rosiwit_slam 项目文档。
 
-> **注意**: 本项目原名为 `fast_lio2_slam`，已重命名为 `rosiwit_slam`（包名），可执行文件名为 `fast_lio2_node`。部分文档中可能仍有旧名引用，请以代码为准。
+> **注意**: 本项目原名为 `fast_lio2_slam`，已重命名为 `rosiwit_slam`（包名），可执行文件名为 `rosiwit_slam`。部分文档中可能仍有旧名引用，请以代码为准。
 
 ---
 

@@ -1,11 +1,9 @@
 # rosiwit_slam 测试用例文档
 
-> ⚠️ **[待更新: 包名已变更]** 文档中 `ros2 run fast_lio2_slam fast_lio2_slam` 命令应替换为 `ros2 run rosiwit_slam fast_lio2_node`。
-
 **文档版本**: v2.0
 **测试日期**: 2026-04-25
 **重测日期**: 2026-04-26
-**项目版本**: fast_lio2_slam v1.0
+**项目版本**: rosiwit_slam v1.0
 **数据集**: Trayectory1 (Ouster OS1-64)
 
 ---
@@ -103,8 +101,8 @@ config/livox_avia.yaml    存在
 | **前置条件** | 项目已编译 |
 
 **测试步骤**:
-1. 检查可执行文件: `ls -la install/fast_lio2_slam/lib/fast_lio2_slam/fast_lio2_slam`
-2. 验证执行权限: `test -x install/fast_lio2_slam/lib/fast_lio2_slam/fast_lio2_slam && echo "可执行"`
+1. 检查可执行文件: `ls -la install/rosiwit_slam/lib/rosiwit_slam/rosiwit_slam`
+2. 验证执行权限: `test -x install/rosiwit_slam/lib/rosiwit_slam/rosiwit_slam && echo "可执行"`
 
 **预期结果**:
 ```
@@ -209,7 +207,7 @@ Topic information: ...
 **测试步骤**:
 1. 启动节点:
    ```bash
-   ros2 run fast_lio2_slam fast_lio2_slam --ros-args \
+   ros2 run rosiwit_slam rosiwit_slam --ros-args \
        -p use_sim_time:=true \
        -p config_file:=config/default.yaml
    ```
@@ -342,7 +340,7 @@ IMU数据正常接收，无 "No IMU data for prediction" 警告
 1. 修改配置文件，设置特定参数
 2. 启动节点并指定配置文件:
    ```bash
-   ros2 run fast_lio2_slam fast_lio2_slam --ros-args \
+   ros2 run rosiwit_slam rosiwit_slam --ros-args \
        -p use_sim_time:=true \
        -p config_file:=config/default.yaml
    ```
@@ -481,7 +479,7 @@ IMU数据正常接收，无 "No IMU data for prediction" 警告
    ```
 2. 启动节点:
    ```bash
-   ros2 run fast_lio2_slam fast_lio2_slam --ros-args \
+   ros2 run rosiwit_slam rosiwit_slam --ros-args \
        -p config_file:=config/default.yaml
    ```
 3. 验证日志中的参数值
@@ -577,7 +575,7 @@ IMU数据正常接收，无 "No IMU data for prediction" 警告
 
 **验证日志**:
 ```
-[WARN] [fast_lio2_slam]: No IMU data for prediction  # 仅出现1次
+[WARN] [rosiwit_slam]: No IMU data for prediction  # 仅出现1次
 ... (后续运行200秒无警告) ...
 ```
 
@@ -653,7 +651,7 @@ ros2 bag play 正常播放
 ros2 bag reindex datasets/Trayectory1
 
 # 2. 运行SLAM节点
-ros2 run fast_lio2_slam fast_lio2_slam --ros-args \
+ros2 run rosiwit_slam rosiwit_slam --ros-args \
     -p use_sim_time:=true \
     -p config_file:=config/default.yaml
 

@@ -12,7 +12,7 @@ source install/setup.bash
 ros2 launch rosiwit_slam fast_lio2.launch.py
 
 # 3. 或直接运行节点
-ros2 run rosiwit_slam fast_lio2_node --ros-args -p use_sim_time:=true
+ros2 run rosiwit_slam rosiwit_slam --ros-args -p use_sim_time:=true
 ```
 
 ## ✅ 项目状态
@@ -73,11 +73,11 @@ qos = QoSProfile(
 ## 📊 测试输出示例
 
 ```
-[INFO] [fast_lio2_node]: Parameters loaded: lidar_topic=/velodyne_points, imu_topic=/imu
-[INFO] [fast_lio2_node]: Subscribers created
-[INFO] [fast_lio2_node]: Publishers created
-[INFO] [fast_lio2_node]: Services created
-[INFO] [fast_lio2_node]: rosiwit_slam Node initialized successfully!
+[INFO] [rosiwit_slam]: Parameters loaded: lidar_topic=/velodyne_points, imu_topic=/imu
+[INFO] [rosiwit_slam]: Subscribers created
+[INFO] [rosiwit_slam]: Publishers created
+[INFO] [rosiwit_slam]: Services created
+[INFO] [rosiwit_slam]: rosiwit_slam Node initialized successfully!
 [INFO] [comprehensive_mapping_test]: LiDAR sent: 1, points: 1100, time: 0.10s
 [INFO] [comprehensive_mapping_test]: ✅ 收到里程计 #1: pos=[0.12, 0.05, 0.00]
 [INFO] [comprehensive_mapping_test]: ✅ 收到路径 #1, poses: 10

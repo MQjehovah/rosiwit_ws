@@ -16,8 +16,8 @@
 **编译成功** ✅
 
 - 可执行文件大小: 1.8MB
-- 编译输出路径: `build/fast_lio2_slam/fast_lio2_slam`
-- 安装路径: `install/fast_lio2_slam/lib/fast_lio2_slam/fast_lio2_slam`
+- 编译输出路径: `build/rosiwit_slam/rosiwit_slam`
+- 安装路径: `install/rosiwit_slam/lib/rosiwit_slam/rosiwit_slam`
 
 ### 2. 节点运行状态
 
@@ -26,12 +26,12 @@
 节点可以成功启动，提供完整的ROS2接口：
 
 ```
-[INFO] [fast_lio2_slam]: Parameters loaded: lidar_topic=/lidar_points, imu_topic=/imu/data
-[INFO] [fast_lio2_slam]: Subscribers created
-[INFO] [fast_lio2_slam]: Publishers created
-[INFO] [fast_lio2_slam]: Services created
-[INFO] [fast_lio2_slam]: Map manager initialized
-[INFO] [fast_lio2_slam]: FAST-LIO2 SLAM Node initialized successfully!
+[INFO] [rosiwit_slam]: Parameters loaded: lidar_topic=/lidar_points, imu_topic=/imu/data
+[INFO] [rosiwit_slam]: Subscribers created
+[INFO] [rosiwit_slam]: Publishers created
+[INFO] [rosiwit_slam]: Services created
+[INFO] [rosiwit_slam]: Map manager initialized
+[INFO] [rosiwit_slam]: FAST-LIO2 SLAM Node initialized successfully!
 ```
 
 ### 3. ROS2接口验证
@@ -217,7 +217,7 @@ fast_lio2_slam/
 
 测试结果：
 ```
-[INFO] [fast_lio2_slam]: First LiDAR scan received at time: 0.100
+[INFO] [rosiwit_slam]: First LiDAR scan received at time: 0.100
 [INFO] [comprehensive_mapping_test]: LiDAR sent: 1, points: 1100, time: 0.10s
 [INFO] [comprehensive_mapping_test]: LiDAR sent: 2, points: 1100, time: 0.20s
 ...
@@ -260,10 +260,10 @@ cd /home/jmq/agent/workspace/project/fast_lio2_slam
 source install/setup.bash
 
 # 启动节点（仿真时间模式）
-ros2 run fast_lio2_slam fast_lio2_slam --ros-args -p use_sim_time:=true
+ros2 run rosiwit_slam rosiwit_slam --ros-args -p use_sim_time:=true
 
 # 或使用launch文件
-ros2 launch fast_lio2_slam fast_lio2.launch.py
+ros2 launch rosiwit_slam fast_lio2.launch.py
 ```
 
 ### 运行测试
@@ -306,7 +306,7 @@ rviz2
 测试时需启用仿真时间：
 ```bash
 # 节点启动时
-ros2 run fast_lio2_slam fast_lio2_slam --ros-args -p use_sim_time:=true
+ros2 run rosiwit_slam rosiwit_slam --ros-args -p use_sim_time:=true
 
 # 测试脚本需发布 /clock 话题
 ```

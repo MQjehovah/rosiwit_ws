@@ -184,7 +184,7 @@ WORKDIR /ros2_ws
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
-    CMD ros2 node list 2>/dev/null | grep -q fast_lio2_node || exit 1
+    CMD ros2 node list 2>/dev/null | grep -q rosiwit_slam || exit 1
 
 # Switch to non-root user (SEC-001 fix — CRITICAL)
 USER slam_user

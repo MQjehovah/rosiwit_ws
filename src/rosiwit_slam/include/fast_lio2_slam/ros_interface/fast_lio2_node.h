@@ -288,7 +288,7 @@ private:
 // ==================== 实现部分 ====================
 
 inline FastLio2Node::FastLio2Node(const rclcpp::NodeOptions& options)
-    : Node("fast_lio2_slam", options),
+    : Node("rosiwit_slam", options),
       system_initialized_(false),
       is_processing_(false),
       first_scan_received_(false),

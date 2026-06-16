@@ -216,7 +216,7 @@ colcon build --packages-select rosiwit_slam --symlink-install
 source install/setup.bash
 
 # 4. 运行节点
-ros2 run rosiwit_slam fast_lio2_slam --ros-args \
+ros2 run rosiwit_slam rosiwit_slam --ros-args \
   --params-file config/optimized.yaml \
   -p use_sim_time:=true
 ```
@@ -302,7 +302,7 @@ colcon build --packages-select rosiwit_slam
 
 ```bash
 # 1. 启动节点
-ros2 run rosiwit_slam fast_lio2_slam
+ros2 run rosiwit_slam rosiwit_slam
 
 # 2. 播放rosbag
 ros2 bag play trajectory1.db3 --clock

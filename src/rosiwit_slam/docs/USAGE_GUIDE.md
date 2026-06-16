@@ -4,10 +4,10 @@
 
 ✅ **项目已成功编译并可以运行**
 
-> **注意**: 包名已从 `fast_lio2_slam` 变更为 `rosiwit_slam`，可执行文件名为 `fast_lio2_node`。
+> **注意**: 包名已从 `fast_lio2_slam` 变更为 `rosiwit_slam`，可执行文件名为 `rosiwit_slam`。
 > 以下文档内容中部分命令仍使用旧名，请以最新命令为准。
 
-节点 `/fast_lio2_node` 提供完整的ROS2接口：
+节点 `/rosiwit_slam` 提供完整的ROS2接口：
 - **订阅**: `/velodyne_points`, `/imu`
 - **发布**: `/cloud_map`, `/odom_estimated`, `/path_estimated`
 - **服务**: `/save_map`, `/save_pcd`
@@ -27,12 +27,12 @@ source install/setup.bash
 
 **仿真时间模式（用于测试）**:
 ```bash
-ros2 run rosiwit_slam fast_lio2_node --ros-args -p use_sim_time:=true
+ros2 run rosiwit_slam rosiwit_slam --ros-args -p use_sim_time:=true
 ```
 
 **真实时间模式（用于实际运行）**:
 ```bash
-ros2 run rosiwit_slam fast_lio2_node
+ros2 run rosiwit_slam rosiwit_slam
 ```
 
 **使用launch文件**:
@@ -49,7 +49,7 @@ ros2 launch rosiwit_slam fast_lio2.launch.py
 
 # 方式2: 手动测试
 # 终端1: 启动节点
-ros2 run rosiwit_slam fast_lio2_node --ros-args -p use_sim_time:=true
+ros2 run rosiwit_slam rosiwit_slam --ros-args -p use_sim_time:=true
 
 # 终端2: 运行测试脚本
 python3 test_mapping_comprehensive.py
@@ -129,7 +129,7 @@ ros2 bag play your_data.bag --clock --rate 1.0
 
 2. 配置雷达话题映射:
 ```bash
-ros2 run rosiwit_slam fast_lio2_node --ros-args \
+ros2 run rosiwit_slam rosiwit_slam --ros-args \
   -p lidar_topic:=/livox/lidar \
   -p imu_topic:=/livox/imu
 ```
@@ -139,7 +139,7 @@ ros2 run rosiwit_slam fast_lio2_node --ros-args \
 ### 命令行参数
 
 ```bash
-ros2 run rosiwit_slam fast_lio2_node --ros-args \
+ros2 run rosiwit_slam rosiwit_slam --ros-args \
   -p use_sim_time:=true \
   -p lidar_topic:=/lidar_points \
   -p imu_topic:=/imu/data \
@@ -181,7 +181,7 @@ source /opt/ros/humble/setup.bash
 source install/setup.bash
 
 # 检查依赖库
-ldd install/rosiwit_slam/lib/rosiwit_slam/fast_lio2_node
+ldd install/rosiwit_slam/lib/rosiwit_slam/rosiwit_slam
 ```
 
 ### 2. 没有输出数据

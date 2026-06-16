@@ -427,9 +427,6 @@ map_project/
 ```bash
 # ROS2服务调用
 ros2 service call /save_map std_srvs/srv/Trigger
-
-# 或通过命令行保存
-ros2 run rosiwit_slam save_map --path ./map_output
 ```
 
 #### 加载地图

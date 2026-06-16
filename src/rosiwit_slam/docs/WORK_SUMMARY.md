@@ -1,7 +1,5 @@
 # 代码工程师工作总结
 
-> ⚠️ **[待更新: 包名已变更]** 文档中 `ros2 run fast_lio2_slam fast_lio2_slam` 命令应替换为 `ros2 run rosiwit_slam fast_lio2_node`。
-
 ## 任务完成情况
 
 ### ✅ 主要任务
@@ -127,7 +125,7 @@ cd /home/jmq/agent/workspace/project/fast_lio2_slam
 # 终端1: 启动节点
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 run fast_lio2_slam fast_lio2_slam --ros-args -p use_sim_time:=true
+ros2 run rosiwit_slam rosiwit_slam --ros-args -p use_sim_time:=true
 
 # 终端2: 运行测试
 python3 test_mapping_comprehensive.py

@@ -4,7 +4,7 @@
 **更新日期**: 2026-05-05
 **作者**: AI Development Team
 
-> **包名**: `rosiwit_slam` | **可执行文件**: `fast_lio2_node` | **ROS2 Distro**: Humble
+> **包名**: `rosiwit_slam` | **可执行文件**: `rosiwit_slam` | **ROS2 Distro**: Humble
 
 ---
 
@@ -576,7 +576,7 @@ try {
 | `gazebo` | `gazebo_ros` | Gazebo 物理仿真器 (headless) |
 | `robot_state_publisher` | `robot_state_publisher` | 机器人 TF 发布 |
 | `spawn_entity` | `gazebo_ros` | 在 Gazebo 中生成机器人 |
-| `fast_lio2_node` | `rosiwit_slam` | SLAM 节点 |
+| `rosiwit_slam` | `rosiwit_slam` | SLAM 节点 |
 | `auto_motion_node` | Python script | 自动轨迹运动节点 |
 
 #### 话题匹配

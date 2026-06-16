@@ -1,7 +1,7 @@
 # rosiwit_slam 环境配置报告
 
 > ⚠️ **[待更新: 文件路径已变更]**
-> 本文档中部分路径仍引用旧路径 `project/fast_lio2_slam`。实际项目路径已迁移至 `projects/rosiwit_ws/src/rosiwit_slam`，包名从 `fast_lio2_slam` 变更为 `rosiwit_slam`，可执行文件名为 `fast_lio2_node`，`ROS_DOMAIN_ID` 已改为 `42`。请以代码为准。
+> 本文档中部分路径仍引用旧路径 `project/fast_lio2_slam`。实际项目路径已迁移至 `projects/rosiwit_ws/src/rosiwit_slam`，包名从 `fast_lio2_slam` 变更为 `rosiwit_slam`，可执行文件名为 `rosiwit_slam`，`ROS_DOMAIN_ID` 已改为 `42`。请以代码为准。
 
 ## 执行时间
 2026-05-05 (更新标记)
@@ -42,7 +42,7 @@
 | build/ 目录 | ✅ 存在 |
 | install/ 目录 | ✅ 存在 |
 | install/setup.bash | ✅ 存在 |
-| fast_lio2_slam 可执行文件 | ✅ 已编译 |
+| rosiwit_slam 可执行文件 | ✅ 已编译 |
 
 ### 5. 配置文件
 | 文件 | 状态 |

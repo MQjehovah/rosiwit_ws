@@ -1,7 +1,7 @@
 # rosiwit_slam 架构设计
 
 **项目**: 基于ROS2的3D激光+IMU+里程计融合SLAM节点开发
-**包名**: `rosiwit_slam` | **可执行**: `fast_lio2_node`
+**包名**: `rosiwit_slam` | **可执行**: `rosiwit_slam`
 **角色**: 软件架构师
 **日期**: 2026-05-05 (更新)
 **输入**: 算法研究员技术选型报告 (FAST-LIO2 + 闭环优化扩展方案)

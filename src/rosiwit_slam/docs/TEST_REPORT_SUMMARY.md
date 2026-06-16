@@ -1,12 +1,10 @@
 # rosiwit_slam 测试报告概览
 
-> ⚠️ **[待更新: 包名已变更]** 文档中 `ros2 run fast_lio2_slam fast_lio2_slam` 命令应替换为 `ros2 run rosiwit_slam fast_lio2_node`。
-
 **文档版本**: v2.0
 **测试日期**: 2026-04-26
 **重测日期**: 2026-04-26
 **测试工程师**: AI测试工程师
-**项目版本**: fast_lio2_slam v1.0
+**项目版本**: rosiwit_slam v1.0
 **数据集**: Trayectory1 (Ouster OS1-64)
 
 ---
@@ -87,7 +85,7 @@
 | TC-ENV-001 | ROS2环境加载 | ✅ | ROS_DISTRO=humble |
 | TC-ENV-002 | 数据集文件存在 | ✅ | rosbag2_2024_05_23-15_43_25_0.db3 (3.0GB) |
 | TC-ENV-003 | 配置文件存在 | ✅ | config/default.yaml |
-| TC-ENV-004 | 可执行文件存在 | ✅ | install/fast_lio2_slam/lib/fast_lio2_slam/fast_lio2_slam |
+| TC-ENV-004 | 可执行文件存在 | ✅ | install/rosiwit_slam/lib/rosiwit_slam/rosiwit_slam |
 
 ### 3.2 数据集兼容性测试 ✅ PASS
 
@@ -221,7 +219,7 @@
 ros2 bag reindex datasets/Trayectory1
 
 # 2. 运行SLAM节点
-ros2 run fast_lio2_slam fast_lio2_slam --ros-args \
+ros2 run rosiwit_slam rosiwit_slam --ros-args \
     -p use_sim_time:=true \
     -p config_file:=config/default.yaml
 

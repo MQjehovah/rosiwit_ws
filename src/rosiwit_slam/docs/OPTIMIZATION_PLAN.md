@@ -474,7 +474,7 @@ jobs:
       
       - name: Run tests
         run: |
-          colcon test --packages-select fast_lio2_slam
+          colcon test --packages-select rosiwit_slam
           colcon test-result --verbose
       
       - name: Upload coverage

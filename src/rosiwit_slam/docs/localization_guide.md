@@ -118,7 +118,7 @@ ros2 service call /load_map std_srvs/srv/Trigger
 
 1. **启动节点并加载地图**
    ```bash
-   ros2 run rosiwit_slam fast_lio2_node --ros-args \
+   ros2 run rosiwit_slam rosiwit_slam --ros-args \
        --params-file config/default.yaml \
        -p map.load_on_startup:=true \
        -p map.map_path:=/path/to/your/map

@@ -99,6 +99,7 @@ set(SOURCES
 # 使用独立的 NODE_NAME 避免与 rosidl_generate_interfaces(${PROJECT_NAME} ...) 目标冲突
 set(NODE_NAME fast_lio2_node)
 add_executable(${NODE_NAME} ${SOURCES})
+set_target_properties(${NODE_NAME} PROPERTIES OUTPUT_NAME "rosiwit_slam")
 
 ament_target_dependencies(${NODE_NAME}
     rclcpp

@@ -1,11 +1,9 @@
 # rosiwit_slam 测试缺陷报告
 
-> ⚠️ **[待更新: 包名已变更]** 文档中 `ros2 run fast_lio2_slam fast_lio2_slam` 命令应替换为 `ros2 run rosiwit_slam fast_lio2_node`。
-
 **文档版本**: v2.0
 **测试日期**: 2026-04-25
 **重测日期**: 2026-04-26
-**项目版本**: fast_lio2_slam v1.0
+**项目版本**: rosiwit_slam v1.0
 **数据集**: Trayectory1 (Ouster OS1-64)
 
 ---
@@ -52,7 +50,7 @@
 
 2. 启动SLAM节点：
    ```bash
-   ros2 run fast_lio2_slam fast_lio2_slam --ros-args \
+   ros2 run rosiwit_slam rosiwit_slam --ros-args \
        -p use_sim_time:=true \
        -p config_file:=config/default.yaml
    ```
@@ -283,8 +281,8 @@ bool success = converter.fromROSMsg(msg, cloud);
 ### 错误日志
 
 ```
-[INFO] [fast_lio2_slam]: First LiDAR scan received at time: 360.188
-[WARN] [fast_lio2_slam]: No IMU data for prediction
+[INFO] [rosiwit_slam]: First LiDAR scan received at time: 360.188
+[WARN] [rosiwit_slam]: No IMU data for prediction
 ```
 
 ### 分析结论
@@ -302,7 +300,7 @@ bool success = converter.fromROSMsg(msg, cloud);
 
 **验证日志**:
 ```
-[WARN] [fast_lio2_slam]: No IMU data for prediction  # 仅出现1次
+[WARN] [rosiwit_slam]: No IMU data for prediction  # 仅出现1次
 ... (后续运行200秒无警告) ...
 ```
 

@@ -41,10 +41,10 @@ def generate_launch_description():
     ])
 
     # 创建节点
-    fast_lio2_node = Node(
+    slam_node = Node(
         package='rosiwit_slam',
-        executable='fast_lio2_node',
-        name='fast_lio2_node',
+        executable='rosiwit_slam',
+        name='rosiwit_slam',
         output='screen',
         parameters=[
             {'config_file': config_file_path},
@@ -59,5 +59,5 @@ def generate_launch_description():
         use_sim_time_arg,
         lidar_topic_arg,
         imu_topic_arg,
-        fast_lio2_node
+        slam_node
     ])
