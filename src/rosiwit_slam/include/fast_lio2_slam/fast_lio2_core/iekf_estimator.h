@@ -34,6 +34,19 @@ using SO3d = Sophus::SO3<double>;
 inline Matrix3d skewSymmetric(const Vector3d& v);
 
 /**
+ * @brief 将旋转投影到纯 yaw (锁定 roll/pitch)
+ *
+ * 仿真平面运动约束: 机器人只在 xy 平面运动, roll/pitch 恒为 0。
+ * 这能阻止"旋转倾斜 → 重力投影到水平面 → 位置二次发散"的失稳链。
+ */
+inline Quaterniond clampToPlanarYaw(const Quaterniond& q) {
+    double sin_yaw = 2.0 * (q.w() * q.z() + q.x() * q.y());
+    double cos_yaw = 1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z());
+    double yaw = std::atan2(sin_yaw, cos_yaw);
+    return Quaterniond(Eigen::AngleAxisd(yaw, Vector3d::UnitZ()));
+}
+
+/**
  * @brief IEKF估计器配置
  */
 struct IekfConfig {
@@ -281,6 +294,9 @@ inline void IekfEstimator::predict(const ImuData& imu_data, double dt) {
                                            delta_angle.normalized()));
     state_.rotation = state_.rotation * delta_q;
     state_.rotation.normalize();
+    // 仿真平面约束: 锁定 roll/pitch, 仅保留 yaw
+    state_.rotation = clampToPlanarYaw(state_.rotation);
+    state_.rotation.normalize();
 
     // 2. 速度/位置更新 (激光主导模式下跳过，平移由激光匹配修正)
     if (config_.use_acc_integration) {
@@ -393,6 +409,9 @@ inline bool IekfEstimator::update(const std::vector<Vector3d>& source_points,
                                           delta_rot.normalized()));
     state_.rotation = state_.rotation * delta_q;
     state_.rotation.normalize();
+    // 仿真平面约束: 锁定 roll/pitch, 仅保留 yaw
+    state_.rotation = clampToPlanarYaw(state_.rotation);
+    state_.rotation.normalize();
 
     // 更新速度、偏置
     state_.velocity += dx.block<3, 1>(6, 0);
@@ -492,20 +511,30 @@ inline bool IekfEstimator::updateWithNormals(
     // 状态更新
     Eigen::Matrix<double, 24, 1> dx = K * residual;
 
+    // 限制单次更新幅度，防止平坦地面发散
+    Vector3d pos_dx = dx.block<3, 1>(0, 0);
+    if (pos_dx.norm() > 0.5) pos_dx = pos_dx.normalized() * 0.5;
+    Vector3d rot_dx = dx.block<3, 1>(3, 0);
+    if (rot_dx.norm() > 0.1) rot_dx = rot_dx.normalized() * 0.1;
+    Vector3d vel_dx = dx.block<3, 1>(6, 0);
+    if (vel_dx.norm() > 1.0) vel_dx = vel_dx.normalized() * 1.0;
+
     // 更新位置
-    state_.position += dx.block<3, 1>(0, 0);
+    state_.position += pos_dx;
 
     // 更新姿态
-    Vector3d delta_rot = dx.block<3, 1>(3, 0);
-    if (delta_rot.norm() > 1e-10) {
-        Quaterniond delta_q(Eigen::AngleAxisd(delta_rot.norm(),
-                                              delta_rot.normalized()));
+    if (rot_dx.norm() > 1e-10) {
+        Quaterniond delta_q(Eigen::AngleAxisd(rot_dx.norm(),
+                                              rot_dx.normalized()));
         state_.rotation = state_.rotation * delta_q;
         state_.rotation.normalize();
     }
+    // 仿真平面约束: 锁定 roll/pitch, 仅保留 yaw
+    state_.rotation = clampToPlanarYaw(state_.rotation);
+    state_.rotation.normalize();
 
     // 更新速度等状态 (如果估计)
-    state_.velocity += dx.block<3, 1>(6, 0);
+    state_.velocity += vel_dx;
 
     // 更新偏置
     state_.acc_bias += dx.block<3, 1>(9, 0);

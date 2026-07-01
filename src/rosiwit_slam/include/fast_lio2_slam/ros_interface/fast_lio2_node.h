@@ -739,9 +739,10 @@ inline void FastLio2Node::processPointCloud(PointCloudData& cloud_data) {
 
     static int process_count = 0;
     process_count++;
-    if (process_count <= 5 || process_count % 100 == 0) {
-        RCLCPP_INFO(this->get_logger(), "processPointCloud #%d, scan_id=%d, pts=%zu, t=%.3f",
-                    process_count, cloud_data.scan_id, cloud_data.cloud->size(), cloud_data.timestamp);
+    if (process_count <= 60 || process_count % 100 == 0) {
+        RCLCPP_INFO(this->get_logger(), "processPointCloud #%d, scan_id=%d, pts=%zu, t=%.3f, map_pts=%zu",
+                    process_count, cloud_data.scan_id, cloud_data.cloud->size(), cloud_data.timestamp,
+                    ikd_tree_->size());
     }
 
     // 1. 点云预处理
@@ -760,10 +761,17 @@ inline void FastLio2Node::processPointCloud(PointCloudData& cloud_data) {
     performPrediction(current_state_.timestamp, t_scan);
     PROFILE_END(imu_prediction);
 
-    if (process_count <= 5) {
-        RCLCPP_INFO(this->get_logger(), "After prediction: pos=(%.3f,%.3f,%.3f), t_state=%.3f",
+    if (process_count <= 60) {
+        bool has_nan = !std::isfinite(current_state_.position(0)) ||
+                       !std::isfinite(current_state_.position(1)) ||
+                       !std::isfinite(current_state_.position(2)) ||
+                       !std::isfinite(current_state_.rotation.w());
+        RCLCPP_INFO(this->get_logger(), "After prediction: pos=(%.4f,%.4f,%.4f) q=(%.4f,%.4f,%.4f,%.4f) t_state=%.3f%s",
                     current_state_.position(0), current_state_.position(1),
-                    current_state_.position(2), current_state_.timestamp);
+                    current_state_.position(2),
+                    current_state_.rotation.x(), current_state_.rotation.y(),
+                    current_state_.rotation.z(), current_state_.rotation.w(),
+                    current_state_.timestamp, has_nan ? "  <<< NaN STATE" : "");
     }
 
     // 3. IEKF更新步
@@ -887,20 +895,39 @@ inline bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
             }
         }
 
-        // 调试输出
+        // 调试输出: 每帧第一次迭代都打印, 失败时打印完整状态
         static int update_cnt = 0;
         update_cnt++;
-        if (update_cnt <= 5 || update_cnt % 100 == 0) {
+        if (iter == 0) {
             RCLCPP_INFO(this->get_logger(),
-                "performUpdate #%d: pts=%zu, valid=%zu, "
-                "pose=(%.3f,%.3f,%.3f)",
+                "performUpdate iter0 #%d: pts=%zu, valid=%zu, pose=(%.4f,%.4f,%.4f), map_pts=%zu",
                 update_cnt, transformed_cloud->size(), valid_indices.size(),
-                current_pose.translation()(0), current_pose.translation()(1), current_pose.translation()(2));
+                current_pose.translation()(0), current_pose.translation()(1),
+                current_pose.translation()(2), ikd_tree_->size());
         }
 
         if (valid_indices.size() < 10) {
-            RCLCPP_WARN(this->get_logger(), "Too few valid correspondences: %zu",
-                        valid_indices.size());
+            // 采样 transformed_cloud 的最近距离, 判断是位姿发散还是地图损坏
+            double min_d = 1e9, max_d = 0, sample_d = 0;
+            int sampled = 0;
+            for (size_t i = 0; i < transformed_cloud->size() && sampled < 200; ++i) {
+                PointType nn; double dd;
+                if (ikd_tree_->nearestSearch(transformed_cloud->points[i], nn, dd)) {
+                    min_d = std::min(min_d, dd); max_d = std::max(max_d, dd); sample_d += dd; sampled++;
+                }
+            }
+            bool has_nan = !std::isfinite(current_state_.position(0)) ||
+                           !std::isfinite(current_state_.rotation.w());
+            RCLCPP_WARN(this->get_logger(),
+                "Too few valid=%zu | pose=(%.4f,%.4f,%.4f) q=(%.4f,%.4f,%.4f,%.4f) | "
+                "nn_dist min=%.3f max=%.3f avg=%.3f | map_pts=%zu pts=%zu%s",
+                valid_indices.size(),
+                current_state_.position(0), current_state_.position(1), current_state_.position(2),
+                current_state_.rotation.x(), current_state_.rotation.y(),
+                current_state_.rotation.z(), current_state_.rotation.w(),
+                min_d, max_d, sampled ? sample_d / sampled : -1.0,
+                ikd_tree_->size(), cloud->size(),
+                has_nan ? "  <<< NaN STATE" : "");
             return false;
         }
 

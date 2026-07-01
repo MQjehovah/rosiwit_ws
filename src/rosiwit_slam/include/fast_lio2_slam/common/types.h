@@ -217,6 +217,12 @@ public:
                 result.push_back(imu);
             }
         }
+
+        // 清除已消耗的旧数据（保留 t_end 之后的）
+        while (!buffer_.empty() && buffer_.front().timestamp < t_end) {
+            buffer_.pop_front();
+        }
+
         return result;
     }
 
