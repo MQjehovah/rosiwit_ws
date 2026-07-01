@@ -1,4 +1,5 @@
 import os
+import tempfile
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -11,6 +12,10 @@ import xacro
 def generate_launch_description():
     simulator_dir = get_package_share_directory('rosiwit_simulator')
     gazebo_ros_dir = get_package_share_directory('gazebo_ros')
+
+    # WSL 兼容设置（在 gzserver 启动前设置）
+    os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'
+    os.environ['LD_LIBRARY_PATH'] = os.path.join(os.path.dirname(gazebo_ros_dir), '..', 'lib') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
 
     # 设置 Gazebo 模型路径
     set_gazebo_model_path = SetEnvironmentVariable(
@@ -45,16 +50,21 @@ def generate_launch_description():
     )
 
     # 加载机器人模型描述参数 (xacro -> URDF)
-    xacro_file = os.path.join(simulator_dir, 'urdf', 'xacro', 'gazebo', 'mbot_with_laser_gazebo.xacro')
+    xacro_file = os.path.join(simulator_dir, 'urdf', 'xacro', 'gazebo', 'mbot_with_fisheye_gazebo.xacro')
     robot_description_content = xacro.process_file(xacro_file).toxml()
 
-    # Spawn 模型 (ROS2: spawn_entity.py)
+    # 将 URDF 写入临时文件供 spawn_entity.py 使用（ROS2 不支持 -param）
+    tmp_urdf = tempfile.NamedTemporaryFile(mode='w', suffix='.urdf', delete=False)
+    tmp_urdf.write(robot_description_content)
+    tmp_urdf.close()
+
+    # Spawn 模型
     spawn_model = Node(
         package='gazebo_ros',
         executable='spawn_entity.py',
         arguments=[
-            '-urdf', '-model', 'mrobot',
-            '-param', 'robot_description'
+            '-entity', 'mrobot',
+            '-file', tmp_urdf.name
         ],
         output='screen'
     )
