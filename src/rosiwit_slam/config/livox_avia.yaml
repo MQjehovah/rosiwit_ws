@@ -30,6 +30,7 @@ iekf:
   position_noise: 0.01
   rotation_noise: 0.01
   max_correspondence_distance: 1.0   # scan-to-map 对应点最大距离 (米)
+  use_acc_integration: false       # 激光主导模式: 不积分加速度，平移由激光匹配修正
 
 ## ==================== ROS2 参数 ====================
 ros:

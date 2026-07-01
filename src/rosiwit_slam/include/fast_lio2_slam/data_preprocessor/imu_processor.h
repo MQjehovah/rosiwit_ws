@@ -133,6 +133,10 @@ public:
      */
     bool getImuAtTime(double timestamp, ImuData& imu);
 
+    // 静止初始化结果
+    Quaterniond getInitRotation() const { return init_rotation_; }
+    Vector3d getGyroBiasEst() const { return gyro_bias_est_; }
+
 private:
     ImuProcessorConfig config_;
     std::deque<ImuData> imu_buffer_;
@@ -144,6 +148,10 @@ private:
     Vector3d gyro_sum_;
     int init_count_;
     bool bias_initialized_;
+
+    // 静止初始化结果
+    Vector3d gyro_bias_est_ = Vector3d::Zero();
+    Quaterniond init_rotation_ = Quaterniond::Identity();
 };
 
 // ==================== 实现部分 ====================
@@ -298,21 +306,37 @@ inline bool ImuProcessor::staticInitializeBias(int required_count) {
         required_count = config_.static_init_count;
     }
 
+    if (bias_initialized_) {
+        return true;
+    }
+
     if (init_count_ < required_count) {
         return false;
     }
 
-    // 计算平均值作为偏置估计
-    // 对于加速度计，静止时应测量到重力
+    // 静止时: 加速度计均值 = body系重力反应(向上), 陀螺仪均值 = 零偏
     Vector3d acc_mean = acc_sum_ / init_count_;
-    Vector3d gyro_mean = gyro_sum_ / init_count_;
+    gyro_bias_est_ = gyro_sum_ / init_count_;
 
-    // 陀螺仪偏置 = 静止时的角速度测量值
-    // 加速度计偏置 = 静止时加速度测量值 - 重力
-    // 注意：这里假设静止时Z轴向上
+    // 计算初始姿态 R0, 使 R0 * acc_mean 对齐到 world 系 +Z
+    double g_mag = acc_mean.norm();
+    if (g_mag > 1e-3) {
+        Vector3d a = acc_mean.normalized();
+        Vector3d b(0.0, 0.0, 1.0);
+        double c = std::min(1.0, std::max(-1.0, a.dot(b)));
+        double angle = std::acos(c);
+        Vector3d axis = a.cross(b);
+        if (axis.norm() > 1e-6) {
+            axis.normalize();
+            init_rotation_ = Quaterniond(Eigen::AngleAxisd(angle, axis));
+        } else {
+            init_rotation_ = Quaterniond::Identity();
+        }
+    } else {
+        init_rotation_ = Quaterniond::Identity();
+    }
 
     bias_initialized_ = true;
-
     return true;
 }
 

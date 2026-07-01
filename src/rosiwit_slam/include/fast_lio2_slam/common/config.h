@@ -168,6 +168,7 @@ public:
                 params_.iekf.position_noise = iekf_node["position_noise"].as<double>(0.01);
                 params_.iekf.rotation_noise = iekf_node["rotation_noise"].as<double>(0.01);
                 params_.iekf.max_correspondence_distance = iekf_node["max_correspondence_distance"].as<double>(1.0);
+                params_.iekf.use_acc_integration = iekf_node["use_acc_integration"].as<bool>(true);
             }
 
             // 加载闭环检测参数

@@ -351,6 +351,7 @@ struct IekfParams {
 
     // scan-to-map 对应点搜索最大距离
     double max_correspondence_distance = 1.0;
+    bool use_acc_integration = true;   // 是否积分加速度 (false=激光主导模式)
 
     // 地图管理
     double map_update_distance = 0.2; // 地图更新最小距离

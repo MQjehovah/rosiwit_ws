@@ -509,12 +509,15 @@ inline void FastLio2Node::initializeModules() {
     ImuProcessorConfig imu_config;
     imu_config.acc_noise = config_.imu.acc_noise;
     imu_config.gyro_noise = config_.imu.gyro_noise;
+    imu_config.static_init_count = 50;
     imu_processor_ = std::make_unique<ImuProcessor>(imu_config);
 
     // IEKF估计器
     IekfConfig iekf_config;
     iekf_config.max_iterations = config_.iekf.max_iterations;
     iekf_config.point_noise = config_.iekf.position_noise;
+    iekf_config.gravity_magnitude = config_.imu.gravity_magnitude;
+    iekf_config.use_acc_integration = config_.iekf.use_acc_integration;
     iekf_estimator_ = std::make_unique<IekfEstimator>();  // initialized_ = false
     // 只设置config，不调用initialize（因为initialize会设initialized_=true并重置P_）
     iekf_estimator_->setConfig(iekf_config);
@@ -803,10 +806,19 @@ inline void FastLio2Node::processPointCloud(PointCloudData& cloud_data) {
 
 inline void FastLio2Node::performPrediction(double t_start, double t_end) {
     if (!iekf_estimator_->isInitialized()) {
-        // 初始化IEKF状态
+        // 立即初始化: 有足够静止IMU数据则用其估计姿态/零偏，否则用单位阵
         State initial_state;
         initial_state.timestamp = t_start;
+        initial_state.gravity = Vector3d(0.0, 0.0, -config_.imu.gravity_magnitude);
+        if (imu_processor_->staticInitializeBias()) {
+            initial_state.rotation = imu_processor_->getInitRotation();
+            initial_state.gyro_bias = imu_processor_->getGyroBiasEst();
+            RCLCPP_INFO(this->get_logger(), "Init: using static IMU estimate");
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Init: identity (insufficient static IMU data)");
+        }
         iekf_estimator_->setInitialState(initial_state);
+        current_state_ = initial_state;
         return;
     }
 
@@ -836,6 +848,11 @@ inline bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
         ikd_tree_->build(cloud);
         RCLCPP_INFO(this->get_logger(), "performUpdate: kd-tree built successfully");
         return true;
+    }
+
+    // 估计器未初始化时跳过IEKF更新
+    if (!iekf_estimator_->isInitialized()) {
+        return false;
     }
 
     // 获取变换后的点云

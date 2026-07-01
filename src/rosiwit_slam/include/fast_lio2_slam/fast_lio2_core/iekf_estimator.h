@@ -51,6 +51,8 @@ struct IekfConfig {
     double gyro_noise = 0.01;         // 陀螺仪噪声
     double acc_bias_noise = 0.0001;   // 加速度计偏置噪声
     double gyro_bias_noise = 0.00001; // 陀螺仪偏置噪声
+    double gravity_magnitude = 9.81;  // 重力大小 (用于在线重力方向估计时归一化)
+    bool use_acc_integration = true;  // 是否积分加速度 (false=激光主导模式)
 
     // 地图匹配参数
     double max_correspondence_dist = 1.0; // 最大对应点距离
@@ -231,6 +233,8 @@ inline void IekfEstimator::setInitialState(const State& state) {
     // 偏置协方差
     P_.block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * 0.01;
     P_.block<3, 3>(12, 12) = Eigen::Matrix3d::Identity() * 0.001;
+    // 重力协方差 - 允许在线估计重力方向
+    P_.block<3, 3>(15, 15) = Eigen::Matrix3d::Identity() * 1.0;
 
     initialized_ = true;
 }
@@ -271,21 +275,21 @@ inline void IekfEstimator::predict(const ImuData& imu_data, double dt) {
 
     // ===== 状态更新 =====
 
-    // 1. 姿态更新
+    // 1. 姿态更新 (始终用陀螺仪积分)
     Vector3d delta_angle = gyro * dt;
     Quaterniond delta_q(Eigen::AngleAxisd(delta_angle.norm(),
                                            delta_angle.normalized()));
     state_.rotation = state_.rotation * delta_q;
     state_.rotation.normalize();
 
-    // 2. 速度更新
-    Vector3d acc_world = R * acc + state_.gravity;
-    state_.velocity += acc_world * dt;
+    // 2. 速度/位置更新 (激光主导模式下跳过，平移由激光匹配修正)
+    if (config_.use_acc_integration) {
+        Vector3d acc_world = R * acc + state_.gravity;
+        state_.velocity += acc_world * dt;
+        state_.position += state_.velocity * dt + 0.5 * acc_world * dt * dt;
+    }
 
-    // 3. 位置更新
-    state_.position += state_.velocity * dt + 0.5 * acc_world * dt * dt;
-
-    // 4. 更新时间戳
+    // 3. 更新时间戳
     state_.timestamp += dt;
 
     // ===== 协方差更新 =====
@@ -385,6 +389,16 @@ inline bool IekfEstimator::update(const std::vector<Vector3d>& source_points,
                                           delta_rot.normalized()));
     state_.rotation = state_.rotation * delta_q;
     state_.rotation.normalize();
+
+    // 更新速度、偏置、重力
+    state_.velocity += dx.block<3, 1>(6, 0);
+    state_.acc_bias += dx.block<3, 1>(9, 0);
+    state_.gyro_bias += dx.block<3, 1>(12, 0);
+    state_.gravity += dx.block<3, 1>(15, 0);
+    double g_norm = state_.gravity.norm();
+    if (g_norm > 1e-6) {
+        state_.gravity = state_.gravity / g_norm * config_.gravity_magnitude;
+    }
 
     // 更新协方差
     Eigen::Matrix<double, 24, 24> I_KH =
@@ -487,6 +501,13 @@ inline bool IekfEstimator::updateWithNormals(
     // 更新偏置
     state_.acc_bias += dx.block<3, 1>(9, 0);
     state_.gyro_bias += dx.block<3, 1>(12, 0);
+
+    // 更新重力方向并归一化 (保持重力大小不变，仅估计方向)
+    state_.gravity += dx.block<3, 1>(15, 0);
+    double g_norm = state_.gravity.norm();
+    if (g_norm > 1e-6) {
+        state_.gravity = state_.gravity / g_norm * config_.gravity_magnitude;
+    }
 
     // 更新协方差
     Eigen::Matrix<double, 24, 24> I_KH =
