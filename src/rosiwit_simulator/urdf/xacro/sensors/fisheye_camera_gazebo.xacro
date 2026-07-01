@@ -47,8 +47,8 @@
             <sensor type="camera" name="${prefix}_fisheye">
                 <update_rate>30.0</update_rate>
                 <camera name="${prefix}">
-                    <!-- 190° 鱼眼视场角 ≈ 3.316 rad -->
-                    <horizontal_fov>3.316</horizontal_fov>
+                    <!-- 160° 广角（Gazebo 标准相机上限 π ≈ 180°） -->
+                    <horizontal_fov>2.8</horizontal_fov>
                     <image>
                         <width>1280</width>
                         <height>720</height>

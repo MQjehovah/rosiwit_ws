@@ -16,6 +16,8 @@ setup(
             glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml')),
+        (os.path.join('lib', package_name),
+            ['scripts/avm_node_wrapper']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
