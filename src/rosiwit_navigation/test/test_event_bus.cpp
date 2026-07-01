@@ -10,6 +10,7 @@
 #include <atomic>
 
 #include "diffbot_navigation/core/event_bus.hpp"
+#include <rclcpp/rclcpp.hpp>
 
 using namespace diffbot_navigation::core;
 

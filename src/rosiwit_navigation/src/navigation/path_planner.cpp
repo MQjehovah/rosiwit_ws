@@ -10,7 +10,6 @@
 #include <memory>
 
 #include "nav2_util/node_utils.hpp"
-#include "nav2_navfn_planner/navfn_planner.hpp"
 
 namespace diffbot_navigation
 {

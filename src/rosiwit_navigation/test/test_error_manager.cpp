@@ -10,6 +10,7 @@
 
 #include "diffbot_navigation/core/error_manager.hpp"
 #include "diffbot_navigation/core/exceptions.hpp"
+#include <rclcpp/rclcpp.hpp>
 
 using namespace diffbot_navigation::core;
 

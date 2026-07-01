@@ -9,6 +9,7 @@
 #include <chrono>
 
 #include "diffbot_navigation/core/state_machine.hpp"
+#include <rclcpp/rclcpp.hpp>
 
 using namespace diffbot_navigation::core;
 
