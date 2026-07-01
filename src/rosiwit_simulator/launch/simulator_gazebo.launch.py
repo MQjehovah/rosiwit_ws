@@ -13,8 +13,10 @@ def generate_launch_description():
     simulator_dir = get_package_share_directory('rosiwit_simulator')
     gazebo_ros_dir = get_package_share_directory('gazebo_ros')
 
-    # WSL 兼容设置（在 gzserver 启动前设置）
-    os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'
+    # GPU 加速 (Intel Iris Xe via D3D12)
+    os.environ['LIBGL_ALWAYS_SOFTWARE'] = '0'
+    os.environ['MESA_D3D12_DEFAULT_ADAPTER_NAME'] = 'Intel'
+    os.environ['GALLIUM_DRIVER'] = 'd3d12'
     os.environ['LD_LIBRARY_PATH'] = os.path.join(os.path.dirname(gazebo_ros_dir), '..', 'lib') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
 
     # 设置 Gazebo 模型路径
@@ -64,7 +66,8 @@ def generate_launch_description():
         executable='spawn_entity.py',
         arguments=[
             '-entity', 'mrobot',
-            '-file', tmp_urdf.name
+            '-file', tmp_urdf.name,
+            '-timeout', '60'
         ],
         output='screen'
     )

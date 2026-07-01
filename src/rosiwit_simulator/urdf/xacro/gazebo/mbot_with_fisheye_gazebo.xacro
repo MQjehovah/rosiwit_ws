@@ -3,11 +3,13 @@
 
     <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/gazebo/mbot_base.xacro" />
     <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/lidar_gazebo.xacro" />
+    <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/lidar3d_gazebo.xacro" />
     <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/imu_gazebo.xacro" />
     <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/fisheye_camera_gazebo.xacro" />
 
     <xacro:imu prefix="imu"/>
     <xacro:rplidar prefix="laser"/>
+    <xacro:lidar3d_gazebo prefix="velodyne"/>
 
     <!-- 4 个广角相机，90°间隔，360°全覆盖，向下倾斜 20° 看到地面 -->
     <!-- 位置：底座半径 0.21m，高出底座 0.15m -->
