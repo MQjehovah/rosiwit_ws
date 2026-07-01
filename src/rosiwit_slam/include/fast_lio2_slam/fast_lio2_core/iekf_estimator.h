@@ -221,20 +221,20 @@ inline void IekfEstimator::initialize(const IekfConfig& config) {
 inline void IekfEstimator::setInitialState(const State& state) {
     state_ = state;
 
-    // 初始化协方差矩阵 - 增大初始不确定性
-    P_ = Eigen::Matrix<double, 24, 24>::Identity() * 0.01;
+    // 初始化协方差矩阵 — 仿真模式：低初始不确定性
+    P_ = Eigen::Matrix<double, 24, 24>::Identity() * 0.001;
 
-    // 位置协方差 - 初始位置不确定性较大（1米标准差）
-    P_.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * 1.0;
-    // 姿态协方差 - 初始姿态不确定性
-    P_.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * 0.1;
-    // 速度协方差
-    P_.block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * 1.0;
+    // 位置协方差 — 初始位置已知（起点）
+    P_.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * 0.001;
+    // 姿态协方差
+    P_.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * 0.001;
+    // 速度协方差 — 初始静止
+    P_.block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * 0.01;
     // 偏置协方差
-    P_.block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * 0.01;
-    P_.block<3, 3>(12, 12) = Eigen::Matrix3d::Identity() * 0.001;
-    // 重力协方差 - 允许在线估计重力方向
-    P_.block<3, 3>(15, 15) = Eigen::Matrix3d::Identity() * 1.0;
+    P_.block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * 0.0001;
+    P_.block<3, 3>(12, 12) = Eigen::Matrix3d::Identity() * 0.0001;
+    // 重力协方差 — 锁定
+    P_.block<3, 3>(15, 15) = Eigen::Matrix3d::Identity() * 0.0001;
 
     initialized_ = true;
 }
@@ -288,6 +288,10 @@ inline void IekfEstimator::predict(const ImuData& imu_data, double dt) {
         state_.velocity += acc_world * dt;
         state_.position += state_.velocity * dt + 0.5 * acc_world * dt * dt;
     }
+
+    // 仿真平面运动约束：锁定 z 轴
+    state_.position(2) = 0.0;
+    state_.velocity(2) = 0.0;
 
     // 3. 更新时间戳
     state_.timestamp += dt;
@@ -390,15 +394,20 @@ inline bool IekfEstimator::update(const std::vector<Vector3d>& source_points,
     state_.rotation = state_.rotation * delta_q;
     state_.rotation.normalize();
 
-    // 更新速度、偏置、重力
+    // 更新速度、偏置
     state_.velocity += dx.block<3, 1>(6, 0);
     state_.acc_bias += dx.block<3, 1>(9, 0);
     state_.gyro_bias += dx.block<3, 1>(12, 0);
-    state_.gravity += dx.block<3, 1>(15, 0);
+    // 仿真模式：锁定重力向量，防止 IEKF 配准在平坦地面上漂移
+    // state_.gravity += dx.block<3, 1>(15, 0);
     double g_norm = state_.gravity.norm();
     if (g_norm > 1e-6) {
         state_.gravity = state_.gravity / g_norm * config_.gravity_magnitude;
     }
+
+    // 仿真平面运动约束：锁定 z 轴和垂直速度
+    state_.position(2) = 0.0;
+    state_.velocity(2) = 0.0;
 
     // 更新协方差
     Eigen::Matrix<double, 24, 24> I_KH =
@@ -502,12 +511,16 @@ inline bool IekfEstimator::updateWithNormals(
     state_.acc_bias += dx.block<3, 1>(9, 0);
     state_.gyro_bias += dx.block<3, 1>(12, 0);
 
-    // 更新重力方向并归一化 (保持重力大小不变，仅估计方向)
-    state_.gravity += dx.block<3, 1>(15, 0);
-    double g_norm = state_.gravity.norm();
-    if (g_norm > 1e-6) {
-        state_.gravity = state_.gravity / g_norm * config_.gravity_magnitude;
-    }
+    // 仿真模式：锁定重力方向，防止平坦地面配准漂移
+    // state_.gravity += dx.block<3, 1>(15, 0);
+    // double g_norm = state_.gravity.norm();
+    // if (g_norm > 1e-6) {
+    //     state_.gravity = state_.gravity / g_norm * config_.gravity_magnitude;
+    // }
+
+    // 仿真平面运动约束：锁定 z 轴和垂直速度
+    state_.position(2) = 0.0;
+    state_.velocity(2) = 0.0;
 
     // 更新协方差
     Eigen::Matrix<double, 24, 24> I_KH =

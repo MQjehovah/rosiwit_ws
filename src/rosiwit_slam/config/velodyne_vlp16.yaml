@@ -1,43 +1,63 @@
-# FAST-LIO2 SLAM - Velodyne VLP-16 Configuration
+# FAST-LIO2 SLAM - Velodyne VLP-16 Configuration (Gazebo Simulation)
 
 ## ==================== IMU 参数 ====================
 imu:
-  acc_noise: 1.0
-  gyro_noise: 0.1
-  gravity: 9.81
+  acc_noise: 0.1        # 加速度计噪声 (m/s^2)
+  gyro_noise: 0.01      # 陀螺仪噪声 (rad/s)
+  acc_bias_noise: 0.0001
+  gyro_bias_noise: 0.00001
+  gravity: 9.81         # 重力加速度
+  acc_scale: 1.0        # 加速度比例因子
 
 ## ==================== LiDAR 参数 ====================
 lidar:
   scan_line: 16         # VLP-16 16线
   scan_period: 0.1      # 10Hz
-  max_range: 100.0
-  min_range: 0.5
+  max_range: 100.0      # 最大测量距离 (米)
+  min_range: 0.5        # 最小测量距离 (米)
   max_angle: 30.0       # ±15度
-  voxel_size: 0.2
+  voxel_size: 0.2       # 体素滤波大小
 
-## ==================== 外参 ====================
+## ==================== 外参 (LiDAR relative to IMU) ====================
+## velodyne_link at z=0.1955, imu_link at z=0.105
+## LiDAR is 0.090m above IMU
 extrinsic:
-  translation: [0.0, 0.0, 0.0]
+  translation: [0.0, 0.0, 0.090]
   rotation: [0.0, 0.0, 0.0]
 
 ## ==================== IEKF 参数 ====================
 iekf:
   max_iterations: 5
-  position_noise: 0.1
+  converge_threshold: 0.001
+  position_noise: 0.01
   rotation_noise: 0.01
+  max_correspondence_distance: 2.0  # scan-to-map 对应点最大距离 (米)
 
 ## ==================== ROS2 参数 ====================
 ros:
   lidar_topic: "/velodyne_points"
   imu_topic: "/imu"
+  odom_topic: "/odom"
+
+  odom_output_topic: "/odom_estimated"
+  path_topic: "/path_estimated"
+  map_topic: "/cloud_map"
+  keyframe_topic: "/keyframe_cloud"
 
   world_frame: "world"
+  map_frame: "map"
+  odom_frame: "odom"
   base_frame: "base_link"
   lidar_frame: "velodyne_link"
+  imu_frame: "imu_link"
+
+  map_publish_rate: 2.0
+  path_publish_rate: 20.0
+  map_max_points: 1000000
 
   publish_tf: true
+  tf_publish_rate: 50.0
 
-  # 服务
   save_map_service: "/save_map"
   load_map_service: "/load_map"
   save_pcd_service: "/save_pcd"
@@ -50,3 +70,10 @@ map:
   map_path: "/tmp/rosiwit_sim_map"
   enable_pcd_save: true
   enable_submap: true
+
+## ==================== 系统参数 ====================
+system:
+  debug_mode: false
+  thread_num: 4
+  process_timeout: 0.1
+  log_level: "info"

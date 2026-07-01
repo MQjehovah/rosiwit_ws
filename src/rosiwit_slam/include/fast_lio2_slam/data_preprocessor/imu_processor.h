@@ -280,6 +280,10 @@ inline State ImuProcessor::propagate(const State& state, const ImuData& imu, dou
     // 3. 位置更新
     new_state.position = state.position + state.velocity * dt + 0.5 * acc_world * dt * dt;
 
+    // 仿真平面运动约束：锁定 z 轴
+    new_state.position(2) = state.position(2);
+    new_state.velocity(2) = state.velocity(2);
+
     // 4. 偏置更新 (随机游走)
     // 这里简化处理，实际应考虑偏置的随机游走模型
     // new_state.acc_bias += noise
