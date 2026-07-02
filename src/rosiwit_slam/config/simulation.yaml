@@ -31,6 +31,7 @@ iekf:
   position_noise: 0.01
   rotation_noise: 0.01
   max_correspondence_distance: 2.0
+  use_acc_integration: false   # 仿真平面: 关闭加速度积分, 改为激光主导, 防止速度偏置积分导致位置漂移
 
 ## ==================== ROS2 参数 ====================
 ros:

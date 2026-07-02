@@ -947,13 +947,30 @@ inline bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
 }
 
 inline void FastLio2Node::updateMap(PointCloudPtr& cloud) {
-    // 变换点云到世界坐标系
-    PointCloudPtr transformed_cloud(new pcl::PointCloud<PointType>());
-    SE3d current_pose = current_state_.toSE3();
-    transformPointCloud(cloud, transformed_cloud, current_pose);
+    // 关键帧策略: 仅当位姿移动足够远(或旋转足够大)时才插入新点云。
+    // 静止机器人不应让地图反复膨胀/涂抹。
+    static SE3d last_kf_pose = current_state_.toSE3();
+    static bool kf_init = false;
 
-    // 加入地图
-    ikd_tree_->insertPointCloud(transformed_cloud);
+    SE3d current_pose = current_state_.toSE3();
+    double move_dist = (current_pose.translation() - last_kf_pose.translation()).norm();
+    double yaw_now = std::atan2(2.0 * (current_state_.rotation.w() * current_state_.rotation.z()),
+                                1.0 - 2.0 * (current_state_.rotation.z() * current_state_.rotation.z()));
+    static double last_kf_yaw = 0.0;
+    double dyaw = std::fabs(yaw_now - last_kf_yaw);
+
+    const double keyframe_dist = 0.3;   // 平移阈值 (m)
+    const double keyframe_yaw = 0.2;    // 旋转阈值 (rad)
+
+    if (!kf_init || move_dist > keyframe_dist || dyaw > keyframe_yaw) {
+        // 变换点云到世界坐标系并插入
+        PointCloudPtr transformed_cloud(new pcl::PointCloud<PointType>());
+        transformPointCloud(cloud, transformed_cloud, current_pose);
+        ikd_tree_->insertPointCloud(transformed_cloud);
+        last_kf_pose = current_pose;
+        last_kf_yaw = yaw_now;
+        kf_init = true;
+    }
 
     // 检查是否需要重建
     if (ikd_tree_->getDeletedCount() > static_cast<int>(ikd_tree_->size() * 0.3)) {
@@ -1033,7 +1050,7 @@ inline void FastLio2Node::publishMap() {
     pcl::toROSMsg(*map_cloud, map_msg);
 
     map_msg.header.stamp = this->now();
-    map_msg.header.frame_id = config_.ros.world_frame;
+    map_msg.header.frame_id = config_.ros.map_frame;
 
     map_pub_->publish(map_msg);
 }
@@ -1041,6 +1058,15 @@ inline void FastLio2Node::publishMap() {
 inline void FastLio2Node::publishTF() {
     if (!config_.ros.publish_tf) return;
 
+    // map -> odom: 单位变换 (本 SLAM 无独立轮速里程计, odom 即世界系, 与 map 重合)
+    geometry_msgs::msg::TransformStamped map_to_odom;
+    map_to_odom.header.stamp = this->now();
+    map_to_odom.header.frame_id = config_.ros.map_frame;
+    map_to_odom.child_frame_id = config_.ros.odom_frame;
+    map_to_odom.transform.rotation.w = 1.0;
+    tf_broadcaster_->sendTransform(map_to_odom);
+
+    // odom -> base_footprint: 当前 SLAM 位姿
     geometry_msgs::msg::TransformStamped transform;
 
     transform.header.stamp = this->now();

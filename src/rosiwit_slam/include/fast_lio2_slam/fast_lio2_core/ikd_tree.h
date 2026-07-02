@@ -316,18 +316,29 @@ inline int IKdTree::buildRecursive(const std::vector<int>& indices, int depth) {
 inline void IKdTree::insert(const PointType& point) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // 添加点
-    points_.push_back(point);
-    int new_point_idx = points_.size() - 1;
-
     if (root_idx_ < 0) {
         // 树为空，创建根节点
+        points_.push_back(point);
         nodes_.push_back(KDTreeNode());
         root_idx_ = 0;
         nodes_[root_idx_].point = point;
         nodes_[root_idx_].is_leaf = true;
         return;
     }
+
+    // 降采样: 已存在近距点则跳过, 防止地图在已观测区域重复膨胀/涂抹
+    // (静止机器人的地图不应从 3000 点涨到几十万点)
+    if (config_.enable_downsample) {
+        PointType nearest;
+        double dist = std::numeric_limits<double>::max();
+        nearestSearchRecursive(point, root_idx_, nearest, dist);
+        if (dist < config_.downsample_size) {
+            return;
+        }
+    }
+
+    // 添加点
+    points_.push_back(point);
 
     // 找到插入位置
     int node_idx = root_idx_;
@@ -377,6 +388,46 @@ inline void IKdTree::insert(const PointType& point) {
         }
 
         depth++;
+    }
+
+    // 到达已存在的叶节点: 需要将该叶节点分裂为内部节点 + 两个子叶节点
+    // 否则新点只进了 points_, 永远无法被 nearestSearch / getAllPoints 找到
+    {
+        PointType existing_point = nodes_[node_idx].point;
+        int axis = depth % 3;
+        nodes_[node_idx].is_leaf = false;
+        nodes_[node_idx].axis = axis;
+
+        double existing_value, new_value;
+        switch (axis) {
+            case 0: existing_value = existing_point.x; new_value = point.x; break;
+            case 1: existing_value = existing_point.y; new_value = point.y; break;
+            default: existing_value = existing_point.z; new_value = point.z; break;
+        }
+
+        nodes_.push_back(KDTreeNode());
+        int left_idx = nodes_.size() - 1;
+        nodes_[left_idx].is_leaf = true;
+        nodes_[left_idx].axis = -1;
+        nodes_[left_idx].parent = node_idx;
+
+        nodes_.push_back(KDTreeNode());
+        int right_idx = nodes_.size() - 1;
+        nodes_[right_idx].is_leaf = true;
+        nodes_[right_idx].axis = -1;
+        nodes_[right_idx].parent = node_idx;
+
+        if (new_value < existing_value) {
+            nodes_[left_idx].point = point;
+            nodes_[right_idx].point = existing_point;
+        } else {
+            nodes_[left_idx].point = existing_point;
+            nodes_[right_idx].point = point;
+        }
+
+        nodes_[node_idx].left = left_idx;
+        nodes_[node_idx].right = right_idx;
+        nodes_[node_idx].point = new_value < existing_value ? point : existing_point;
     }
 
     // 检查是否需要平衡
