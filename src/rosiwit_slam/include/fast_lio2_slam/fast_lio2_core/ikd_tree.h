@@ -390,44 +390,33 @@ inline void IKdTree::insert(const PointType& point) {
         depth++;
     }
 
-    // 到达已存在的叶节点: 需要将该叶节点分裂为内部节点 + 两个子叶节点
-    // 否则新点只进了 points_, 永远无法被 nearestSearch / getAllPoints 找到
+    // 到达已存在的叶节点: 把该叶节点升级为内部节点 (保留原 point 作为分割锚点),
+    // 然后根据轴比较结果, 把新点挂到对应一侧的新子叶节点。
+    // 否则新点只进了 points_, 永远无法被 nearestSearch / getAllPoints 找到。
     {
-        PointType existing_point = nodes_[node_idx].point;
         int axis = depth % 3;
         nodes_[node_idx].is_leaf = false;
         nodes_[node_idx].axis = axis;
 
-        double existing_value, new_value;
+        double node_value, point_value;
         switch (axis) {
-            case 0: existing_value = existing_point.x; new_value = point.x; break;
-            case 1: existing_value = existing_point.y; new_value = point.y; break;
-            default: existing_value = existing_point.z; new_value = point.z; break;
+            case 0: node_value = nodes_[node_idx].point.x; point_value = point.x; break;
+            case 1: node_value = nodes_[node_idx].point.y; point_value = point.y; break;
+            default: node_value = nodes_[node_idx].point.z; point_value = point.z; break;
         }
 
         nodes_.push_back(KDTreeNode());
-        int left_idx = nodes_.size() - 1;
-        nodes_[left_idx].is_leaf = true;
-        nodes_[left_idx].axis = -1;
-        nodes_[left_idx].parent = node_idx;
+        int child_idx = nodes_.size() - 1;
+        nodes_[child_idx].point = point;
+        nodes_[child_idx].is_leaf = true;
+        nodes_[child_idx].axis = -1;
+        nodes_[child_idx].parent = node_idx;
 
-        nodes_.push_back(KDTreeNode());
-        int right_idx = nodes_.size() - 1;
-        nodes_[right_idx].is_leaf = true;
-        nodes_[right_idx].axis = -1;
-        nodes_[right_idx].parent = node_idx;
-
-        if (new_value < existing_value) {
-            nodes_[left_idx].point = point;
-            nodes_[right_idx].point = existing_point;
+        if (point_value < node_value) {
+            nodes_[node_idx].left = child_idx;
         } else {
-            nodes_[left_idx].point = existing_point;
-            nodes_[right_idx].point = point;
+            nodes_[node_idx].right = child_idx;
         }
-
-        nodes_[node_idx].left = left_idx;
-        nodes_[node_idx].right = right_idx;
-        nodes_[node_idx].point = new_value < existing_value ? point : existing_point;
     }
 
     // 检查是否需要平衡

@@ -244,18 +244,24 @@ inline void transformPointCloud(const PointCloudPtr& cloud_in,
     cloud_out->clear();
     cloud_out->reserve(cloud_in->size());
 
+    const Matrix3d R = transform.rotation().matrix();
+
     for (const auto& point : cloud_in->points) {
         Vector3d p(point.x, point.y, point.z);
         Vector3d p_transformed = transform * p;
+
+        // 法向量是方向向量, 只用旋转部分变换 (不加平移)
+        Vector3d n(point.normal_x, point.normal_y, point.normal_z);
+        Vector3d n_transformed = R * n;
 
         PointType new_point;
         new_point.x = p_transformed(0);
         new_point.y = p_transformed(1);
         new_point.z = p_transformed(2);
         new_point.intensity = point.intensity;
-        new_point.normal_x = point.normal_x;
-        new_point.normal_y = point.normal_y;
-        new_point.normal_z = point.normal_z;
+        new_point.normal_x = n_transformed.x();
+        new_point.normal_y = n_transformed.y();
+        new_point.normal_z = n_transformed.z();
 
         cloud_out->points.push_back(new_point);
     }
