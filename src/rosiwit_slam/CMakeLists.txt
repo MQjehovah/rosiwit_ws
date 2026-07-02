@@ -7,6 +7,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_BUILD_TYPE Release)
 
+# ==================== ccache (可选, 缓存未变更的 TU) ====================
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "ccache enabled: ${CCACHE_PROGRAM}")
+else()
+    message(STATUS "ccache not found, install with: sudo apt install ccache")
+endif()
+
 # ==================== ROS2依赖 ====================
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -91,15 +101,34 @@ if(GTSAM_FOUND)
 endif()
 
 # ==================== 源文件 ====================
-set(SOURCES
-    src/main.cpp
+file(GLOB_RECURSE NODE_SOURCES CONFIGURE_DEPENDS
+    "src/*.cpp"
 )
+list(APPEND SOURCES src/main.cpp ${NODE_SOURCES})
 
 # ==================== 可执行目标 ====================
 # 使用独立的 NODE_NAME 避免与 rosidl_generate_interfaces(${PROJECT_NAME} ...) 目标冲突
 set(NODE_NAME fast_lio2_node)
 add_executable(${NODE_NAME} ${SOURCES})
 set_target_properties(${NODE_NAME} PROPERTIES OUTPUT_NAME "rosiwit_slam")
+
+# 预编译头: 稳定的重型头文件一次编译, 多个 TU 共享
+# 注意: 加 PCH 后 std::invoke_result 在某些 TU 报 "template argument 1 is invalid",
+# 可能是 PCH 与 rclcpp 模板交互有 bug。先禁用 PCH, 主优化靠 ccache + 多 TU。
+# target_precompile_headers(${NODE_NAME} PRIVATE
+#     <rclcpp/rclcpp.hpp>
+#     <sensor_msgs/msg/point_cloud2.hpp>
+#     <sensor_msgs/msg/imu.hpp>
+#     <nav_msgs/msg/odometry.hpp>
+#     <pcl/point_cloud.h>
+#     <pcl/point_types.h>
+#     <pcl/filters/voxel_grid.h>
+#     <Eigen/Dense>
+#     <Eigen/Geometry>
+#     <vector>
+#     <memory>
+#     <mutex>
+# )
 
 ament_target_dependencies(${NODE_NAME}
     rclcpp
