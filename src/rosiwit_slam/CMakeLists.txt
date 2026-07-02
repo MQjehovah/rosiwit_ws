@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.16)
 project(rosiwit_slam VERSION 1.0.0 LANGUAGES C CXX)
 
 # ==================== 编译设置 ====================
@@ -7,11 +7,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_BUILD_TYPE Release)
 
+# ==================== Unity构建加速 (CMake ≥ 3.16) ====================
+# 将多个源文件合并为少数编译单元(batch)，显著减少头文件重复解析开销
+# 注意: 需显式列出源文件或用 GLOB_RECURSE "src/**/*.cpp"
+# set(CMAKE_UNITY_BUILD ON)
+# set(CMAKE_UNITY_BUILD_BATCH_SIZE 8)
+
+# ==================== 编译器加速标志 ====================
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    # -pipe: 使用管道而非临时文件，减少磁盘I/O
+    string(APPEND CMAKE_CXX_FLAGS " -pipe")
+endif()
+
 # ==================== ccache (可选, 缓存未变更的 TU) ====================
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM)
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}" CACHE STRING "" FORCE)
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}" CACHE STRING "" FORCE)
+    # PCH 兼容: 允许 pch_defines/time_macros 变更时不刷新缓存
+    set(ENV{CCACHE_SLOPPINESS} "pch_defines,time_macros")
     message(STATUS "ccache enabled: ${CCACHE_PROGRAM}")
 else()
     message(STATUS "ccache not found, install with: sudo apt install ccache")
@@ -112,23 +126,13 @@ set(NODE_NAME fast_lio2_node)
 add_executable(${NODE_NAME} ${SOURCES})
 set_target_properties(${NODE_NAME} PROPERTIES OUTPUT_NAME "rosiwit_slam")
 
-# 预编译头: 稳定的重型头文件一次编译, 多个 TU 共享
-# 注意: 加 PCH 后 std::invoke_result 在某些 TU 报 "template argument 1 is invalid",
-# 可能是 PCH 与 rclcpp 模板交互有 bug。先禁用 PCH, 主优化靠 ccache + 多 TU。
-# target_precompile_headers(${NODE_NAME} PRIVATE
-#     <rclcpp/rclcpp.hpp>
-#     <sensor_msgs/msg/point_cloud2.hpp>
-#     <sensor_msgs/msg/imu.hpp>
-#     <nav_msgs/msg/odometry.hpp>
-#     <pcl/point_cloud.h>
-#     <pcl/point_types.h>
-#     <pcl/filters/voxel_grid.h>
-#     <Eigen/Dense>
-#     <Eigen/Geometry>
-#     <vector>
-#     <memory>
-#     <mutex>
-# )
+# ==================== 预编译头 (PCH) ====================
+# PCH 让编译器将 pch.hpp 中的重型头文件 (Eigen, PCL, STL) 预编译一次，
+# 所有 TU 共享该缓存，大幅减少头文件重复解析开销。
+# 注意：不包含 <rclcpp/rclcpp.hpp> 以避免旧版 GCC 的 std::invoke_result bug。
+set(PCH_HEADER
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/fast_lio2_slam/pch.hpp)
+target_precompile_headers(${NODE_NAME} PRIVATE ${PCH_HEADER})
 
 ament_target_dependencies(${NODE_NAME}
     rclcpp
@@ -139,6 +143,7 @@ ament_target_dependencies(${NODE_NAME}
     tf2_ros
     std_srvs
     pcl_conversions
+    visualization_msgs
 )
 
 # 链接库

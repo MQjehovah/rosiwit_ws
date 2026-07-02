@@ -225,4 +225,8 @@ MapMetadataMsg MapServer::getMetadata() const {
     return msg;
 }
 
+void MapServer::publishSubmapMarkers() {
+    // TODO: implement submap marker publishing
+}
+
 } // namespace fast_lio2_slam

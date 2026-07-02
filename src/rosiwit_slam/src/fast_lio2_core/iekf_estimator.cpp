@@ -63,7 +63,6 @@ void IekfEstimator::predict(const ImuData& imu_data, double dt) {
         state_.rotation = state_.rotation * delta_q;
         state_.rotation.normalize();
     }
-    state_.rotation = clampToPlanarYaw(state_.rotation);
     state_.rotation.normalize();
 
     if (config_.use_acc_integration) {
@@ -71,9 +70,6 @@ void IekfEstimator::predict(const ImuData& imu_data, double dt) {
         state_.velocity += acc_world * dt;
         state_.position += state_.velocity * dt + 0.5 * acc_world * dt * dt;
     }
-
-    state_.position(2) = 0.0;
-    state_.velocity(2) = 0.0;
 
     state_.timestamp += dt;
 
@@ -149,7 +145,6 @@ bool IekfEstimator::update(const std::vector<Vector3d>& source_points,
         state_.rotation = state_.rotation * delta_q;
         state_.rotation.normalize();
     }
-    state_.rotation = clampToPlanarYaw(state_.rotation);
     state_.rotation.normalize();
 
     state_.velocity += dx.block<3, 1>(6, 0);
@@ -160,9 +155,6 @@ bool IekfEstimator::update(const std::vector<Vector3d>& source_points,
     if (g_norm > 1e-6) {
         state_.gravity = state_.gravity / g_norm * config_.gravity_magnitude;
     }
-
-    state_.position(2) = 0.0;
-    state_.velocity(2) = 0.0;
 
     Eigen::Matrix<double, 24, 24> I_KH =
         Eigen::Matrix<double, 24, 24>::Identity() - K * H;
@@ -242,15 +234,11 @@ bool IekfEstimator::updateWithNormals(
         state_.rotation = state_.rotation * delta_q;
         state_.rotation.normalize();
     }
-    state_.rotation = clampToPlanarYaw(state_.rotation);
     state_.rotation.normalize();
 
     state_.velocity += vel_dx;
     state_.acc_bias += dx.block<3, 1>(9, 0);
     state_.gyro_bias += dx.block<3, 1>(12, 0);
-
-    state_.position(2) = 0.0;
-    state_.velocity(2) = 0.0;
 
     Eigen::Matrix<double, 24, 24> I_KH =
         Eigen::Matrix<double, 24, 24>::Identity() - K * H;

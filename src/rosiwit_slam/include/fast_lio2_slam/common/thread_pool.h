@@ -18,6 +18,7 @@
 #include <future>
 #include <atomic>
 #include <memory>
+#include <utility>
 
 namespace fast_lio2_slam {
 
@@ -62,14 +63,14 @@ public:
      */
     template<typename F, typename... Args>
     auto submit(F&& f, Args&&... args)
-        -> std::future<typename std::invoke_result<F, Args...>::type;
+        -> std::future<decltype(std::declval<F>()(std::declval<Args>()...))>;
 
     /**
      * @brief 提交高优先级任务
      */
     template<typename F, typename... Args>
     auto submitHighPriority(F&& f, Args&&... args)
-        -> std::future<typename std::invoke_result<F, Args...>::type>;
+        -> std::future<decltype(std::declval<F>()(std::declval<Args>()...))>;
 
     /**
      * @brief 批量提交任务
@@ -156,9 +157,9 @@ private:
 
 template<typename F, typename... Args>
 auto ThreadPool::submit(F&& f, Args&&... args)
-    -> std::future<typename std::invoke_result<F, Args...>::type> {
+    -> std::future<decltype(std::declval<F>()(std::declval<Args>()...))> {
 
-    using ReturnType = typename std::invoke_result<F, Args...>::type;
+    using ReturnType = decltype(std::declval<F>()(std::declval<Args>()...));
 
     // 包装任务为packaged_task
     auto task = std::make_shared<std::packaged_task<ReturnType()>>(
@@ -186,9 +187,9 @@ auto ThreadPool::submit(F&& f, Args&&... args)
 
 template<typename F, typename... Args>
 auto ThreadPool::submitHighPriority(F&& f, Args&&... args)
-    -> std::future<typename std::invoke_result<F, Args...>::type> {
+    -> std::future<decltype(std::declval<F>()(std::declval<Args>()...))> {
 
-    using ReturnType = typename std::invoke_result<F, Args...>::type;
+    using ReturnType = decltype(std::declval<F>()(std::declval<Args>()...));
 
     auto task = std::make_shared<std::packaged_task<ReturnType()>>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...));

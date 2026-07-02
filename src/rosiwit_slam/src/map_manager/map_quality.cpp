@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <sstream>
 
 namespace fast_lio2_slam {
@@ -310,6 +312,37 @@ std::vector<std::string> MapQualityEvaluator::generateRecommendations(
     }
 
     return recommendations;
+}
+
+std::vector<double> MapQualityEvaluator::computeDensityDistribution(const PointCloudPtr& cloud) {
+    std::vector<double> dist;
+    if (!cloud || cloud->empty()) return dist;
+    double grid = config_.grid_size;
+    std::map<std::pair<int64_t, int64_t>, int> grid_counts;
+    for (const auto& p : cloud->points) {
+        auto key = std::make_pair(
+            static_cast<int64_t>(std::floor(p.x / grid)),
+            static_cast<int64_t>(std::floor(p.y / grid)));
+        grid_counts[key]++;
+    }
+    dist.reserve(grid_counts.size());
+    for (const auto& [_, count] : grid_counts)
+        dist.push_back(static_cast<double>(count));
+    return dist;
+}
+
+std::vector<Eigen::Vector3d> MapQualityEvaluator::detectHoles(const PointCloudPtr& cloud) {
+    return {};
+}
+
+std::vector<Eigen::Vector3d> MapQualityEvaluator::detectLowDensityAreas(
+    const PointCloudPtr& cloud, double threshold) {
+    return {};
+}
+
+std::vector<Eigen::Vector3d> MapQualityEvaluator::detectHighDensityAreas(
+    const PointCloudPtr& cloud, double threshold) {
+    return {};
 }
 
 bool MapQualityEvaluator::saveReport(
