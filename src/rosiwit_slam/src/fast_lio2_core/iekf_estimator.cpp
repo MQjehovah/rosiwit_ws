@@ -174,7 +174,7 @@ bool IekfEstimator::updateWithNormals(
     int n = source_points.size();
     if (n < config_.min_valid_points) return false;
 
-    const int max_obs_points = 200;
+    const int max_obs_points = 500;
     std::vector<Vector3d> src_sub, tgt_sub, nrm_sub;
     if (n > max_obs_points) {
         double step = static_cast<double>(n) / max_obs_points;

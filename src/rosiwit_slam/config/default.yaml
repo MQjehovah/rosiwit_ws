@@ -29,8 +29,8 @@ iekf:
   converge_threshold: 0.001 # 收敛阈值
   position_noise: 0.01      # 位置噪声
   rotation_noise: 0.01      # 旋转噪声
-  max_correspondence_distance: 1.0  # scan-to-map 对应点最大距离 (米)
-  use_acc_integration: false# 禁用加速度积分(静止启动时防漂移)
+  max_correspondence_distance: 3.0  # scan-to-map 对应点最大距离 (米, 加大便于静止后恢复运动)
+  use_acc_integration: true # 启用加速度积分(静止检测负责防漂移)
 
 ## ==================== 闭环检测参数 ====================
 loop_closure:
