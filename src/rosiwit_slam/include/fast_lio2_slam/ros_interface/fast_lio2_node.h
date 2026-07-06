@@ -33,6 +33,8 @@
 #include "fast_lio2_slam/map_manager/map_persistence.h"
 #include "fast_lio2_slam/map_manager/map_quality.h"
 #include "fast_lio2_slam/localization/global_localizer.h"
+#include "fast_lio2_slam/loop_closure/scan_context.h"
+#include "fast_lio2_slam/loop_closure/gtsam_backend.h"
 
 #include <mutex>
 #include <queue>
@@ -89,6 +91,19 @@ private:
     void undistortPointCloud(PointCloudData& cloud_data);
     void saveProjectedMap(const PointCloudPtr& cloud, const std::string& base_path);
 
+    // 静止检测
+    bool isRobotStationary() const;
+    void updateStationaryState(const ImuData& imu);
+
+    // 闭环检测与优化
+    void detectLoopClosure(const PointCloudData& cloud_data);
+    void performGlobalOptimization();
+    void correctMapWithOptimization(const std::vector<SE3d>& corrected_poses);
+
+    // 关键帧管理
+    bool isKeyframe(const SE3d& pose) const;
+    void addKeyframe(int frame_id, const SE3d& pose, const PointCloudPtr& cloud);
+
 private:
     // 配置
     ConfigParams config_;
@@ -140,6 +155,12 @@ private:
     LocalizationState localization_state_;
     std::mutex localization_mutex_;
 
+    // 闭环检测模块
+    std::unique_ptr<ScanContext> scan_context_;
+    std::unique_ptr<GtsamBackend> gtsam_backend_;
+    int last_loop_detect_frame_;
+    std::vector<PoseNode> pose_graph_;
+
     // 里程计数据缓冲
     std::deque<OdomData> odom_buffer_;
     std::mutex odom_buffer_mutex_;
@@ -156,6 +177,18 @@ private:
     int scan_count_;
     int keyframe_count_;
     double last_scan_time_;
+
+    // 静止检测
+    bool is_stationary_;
+    int stationary_frame_count_;
+    double imu_acc_variance_;
+    double imu_gyro_variance_;
+    Vector3d last_imu_acc_mean_;
+    Vector3d last_imu_gyro_mean_;
+    int imu_variance_sample_count_;
+    static constexpr int kStationarySampleWindow = 10;
+    static constexpr double kStationaryAccThreshold = 0.3;
+    static constexpr double kStationaryGyroThreshold = 0.02;
 
     // 定时器
     rclcpp::TimerBase::SharedPtr process_timer_;

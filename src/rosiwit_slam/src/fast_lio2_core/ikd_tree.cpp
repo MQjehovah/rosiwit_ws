@@ -345,26 +345,27 @@ void IKdTree::kNearestSearchRecursive(const PointType& query, int node_idx,
 int IKdTree::radiusSearch(const PointType& query, double radius,
                           std::vector<PointType>& results) {
     std::lock_guard<std::mutex> lock(mutex_);
+    return radiusSearchUnsafe(query, radius, results);
+}
 
+int IKdTree::radiusSearchUnsafe(const PointType& query, double radius,
+                                std::vector<PointType>& results) {
     results.clear();
     if (root_idx_ < 0) return 0;
 
-    // 简化实现: 使用K近邻搜索后过滤
-    std::vector<double> distances;
-    kNearestSearch(query, 1000, results, distances);  // 搜索足够多的点
-
-    // 过滤距离
-    int count = 0;
-    for (size_t i = 0; i < results.size(); ++i) {
-        if (distances[i] <= radius) {
-            count++;
+    std::vector<std::pair<double, PointType>> tmp_heap;
+    int max_candidates = 1000;
+    tmp_heap.reserve(max_candidates + 1);
+    kNearestSearchRecursive(query, root_idx_, tmp_heap, max_candidates);
+    std::sort(tmp_heap.begin(), tmp_heap.end());
+    for (const auto& pair : tmp_heap) {
+        if (pair.first <= radius) {
+            results.push_back(pair.second);
         } else {
-            results.resize(i);
             break;
         }
     }
-
-    return count;
+    return results.size();
 }
 
 PointCloudPtr IKdTree::getAllPoints() {
@@ -408,7 +409,7 @@ void IKdTree::removePointsInRadius(const Vector3d& center, double radius) {
     query.z = center(2);
 
     std::vector<PointType> points_in_radius;
-    radiusSearch(query, radius, points_in_radius);
+    radiusSearchUnsafe(query, radius, points_in_radius);
 
     for (const auto& point : points_in_radius) {
         for (auto& node : nodes_) {
@@ -422,12 +423,12 @@ void IKdTree::removePointsInRadius(const Vector3d& center, double radius) {
 
 bool IKdTree::needRebalance() const {
     if (points_.empty()) return false;
-    double delete_ratio = deleted_count_ / points_.size();
+    double delete_ratio = static_cast<double>(deleted_count_) /
+                          static_cast<double>(points_.size());
     return delete_ratio > config_.balance_factor;
 }
 
 void IKdTree::rebalance() {
-    if (!needRebalance()) return;
     PointCloudPtr active_points = getAllPoints();
     build(active_points);
 }

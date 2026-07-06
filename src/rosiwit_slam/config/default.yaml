@@ -30,6 +30,7 @@ iekf:
   position_noise: 0.01      # 位置噪声
   rotation_noise: 0.01      # 旋转噪声
   max_correspondence_distance: 1.0  # scan-to-map 对应点最大距离 (米)
+  use_acc_integration: false# 禁用加速度积分(静止启动时防漂移)
 
 ## ==================== 闭环检测参数 ====================
 loop_closure:
@@ -48,8 +49,8 @@ odom_fusion:
 ## ==================== ROS2 参数 ====================
 ros:
   # 输入话题
-  lidar_topic: "/ouster/points"      # 匹配rosbag2数据包: Ouster LiDAR点云
-  imu_topic: "/ouster/imu"           # 匹配rosbag2数据包: Ouster IMU数据
+  lidar_topic: "/velodyne_points"    # LiDAR点云话题
+  imu_topic: "/imu"                  # IMU数据话题
   odom_topic: "/odom"
 
   # 输出话题
@@ -94,149 +95,5 @@ system:
   debug_mode: false         # 调试模式
   thread_num: 4             # 线程数
   process_timeout: 0.1      # 处理超时 (秒)
-  log_level: "info"         # 日志级别## ==================== 地图管理参数 ====================
-map:
-  # 基础配置
-  resolution: 0.2              # 地图分辨率 (体素大小, 米)
-  max_range: 100.0             # 最大距离范围 (米)
+  log_level: "info"         # 日志级别
 
-  # 子地图配置
-  submap:
-    enable: true               # 启用子地图
-    size: 50.0                # 子地图大小 (米)
-    max_points: 50000          # 子地图最大点数
-    overlap_ratio: 0.2         # 子地图重叠率
-
-  # 内存配置
-  memory:
-    max_global_points: 5000000  # 全局地图最大点数
-    max_memory_mb: 2048         # 最大内存占用 (MB)
-    enable_optimization: true   # 启用内存优化
-
-  # 文件配置
-  storage:
-    map_path: "./map"           # 地图存储路径
-    auto_save: true             # 自动保存
-    auto_save_interval: 60.0    # 自动保存间隔 (秒)
-    format: "pcd"               # 默认保存格式
-    compression: true           # 启用压缩
-
-  # 多会话配置
-  session:
-    enable: true                # 启用多会话
-    auto_session: true          # 自动创建会话
-    merge_on_load: false        # 加载时自动合并
-
-  # 质量配置
-  quality:
-    min_point_quality: 0.3      # 最小点质量
-    enable_filtering: true       # 启用滤波
-    enable_outlier_removal: true # 启用离群点去除
-    outlier_threshold: 2.0      # 离群点阈值 (标准差)
-
-  # 可视化配置
-  visualization:
-    publish_rate: 0.5          # 发布频率 (Hz)
-    voxel_size: 0.5            # 可视化体素大小
-    show_submap_bounds: true    # 显示子地图边界
-    show_trajectory: true       # 显示轨迹
-
-## ==================== 地图服务参数 ====================
-map_server:
-  # 服务名称
-  services:
-    save_map: "/save_map"
-    load_map: "/load_map"
-    clear_map: "/clear_map"
-    get_map: "/get_map"
-    get_metadata: "/get_map_metadata"
-    save_pcd: "/save_pcd"
-
-  # 话题名称
-  topics:
-    global_map: "/global_map"
-    local_map: "/local_map"
-    submap_markers: "/submap_markers"
-    map_info: "/map_info"
-
-  # 保存配置
-  save:
-    default_path: "./map"
-    default_format: "pcd"
-    include_trajectory: true
-    include_submaps: true
-    auto_save_on_shutdown: true
-
-## ==================== 地图质量评估参数 ====================
-map_quality:
-  # 评估参数
-  grid_size: 5.0               # 网格大小 (米)
-  min_density_threshold: 50.0  # 最小密度阈值 (点/平方米)
-  hole_threshold: 2.0          # 空洞阈值 (米)
-  neighbor_radius: 1.0         # 邻域搜索半径
-
-  # 权重配置
-  weights:
-    coverage: 0.2
-    density: 0.3
-    consistency: 0.2
-    completeness: 0.15
-    uniformity: 0.15
-
-  # 过滤参数
-  outlier_threshold: 3.0       # 离群点阈值 (标准差)
-  min_neighbors: 5            # 最小邻居数
-
-  # 输出参数
-  generate_heatmap: false      # 生成密度热力图
-  detailed_report: true       # 详细报告
-
-## ==================== 全局定位参数 ====================
-localization:
-  # 基础配置
-  enable: true                # 启用全局定位
-  mode: "manual"              # 定位模式: "auto"(自动) 或 "manual"(手动触发)
-
-  # Scan Context 参数（粗定位阶段）
-  scan_context:
-    ring_num: 20              # 环形分割数
-    sector_num: 60            # 扇形分割数
-    max_range: 80.0           # 最大距离范围 (米)
-    dist_threshold: 0.3       # 距离阈值
-    candidate_count: 5        # 候选帧数量
-    exclude_recent_frames: 30 # 排除最近的帧数
-
-  # 精配准参数
-  fine_alignment:
-    method: "ndt"             # 配准方法: "ndt" 或 "icp"
-    max_iterations: 50        # 最大迭代次数
-    convergence_threshold: 0.01  # 收敛阈值
-    transformation_epsilon: 0.01  # 变换精度
-    step_size: 0.1            # NDT 步长
-    resolution: 1.0           # NDT 分辨率 (米)
-    max_correspondence_dist: 2.0  # ICP 最大对应距离
-    voxel_size: 0.5           # 下采样体素大小
-
-  # 验证参数
-  validation:
-    min_fitness_score: 0.7     # 最小匹配得分
-    min_inlier_ratio: 0.5      # 最小内点比例
-    max_position_error: 2.0    # 最大位置误差 (米)
-    max_rotation_error: 0.5    # 最大旋转误差 (弧度)
-
-  # 搜索参数
-  search:
-    max_candidates: 10        # 最大候选帧数
-    use_initial_pose_hint: true  # 使用初始位姿提示
-    search_radius: 10.0       # 搜索半径 (米)
-
-  # 服务配置
-  services:
-    global_localize: "/global_localize"       # 全局定位服务
-    set_initial_pose: "/set_initial_pose"      # 设置初始位姿服务
-    get_localization_status: "/get_localization_status"  # 获取定位状态服务
-
-  # 话题配置
-  topics:
-    localization_status: "/localization_status"  # 定位状态话题
-    initial_pose: "/initial_pose"                # 初始位姿话题

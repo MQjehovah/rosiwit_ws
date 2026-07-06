@@ -225,7 +225,7 @@ bool PointCloudConverter::convertOuster(
 
     if (config_.verbose) {
         RCLCPP_INFO(rclcpp::get_logger("PointCloudConverter"),
-                    "Converted %zu Ouster points to Livox format (original: %zu)",
+                    "Converted %zu Ouster points to Livox format (original: %u)",
                     cloud->size(), msg->width * msg->height);
     }
 
