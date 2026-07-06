@@ -182,8 +182,8 @@ class GroundTextureMapper(Node):
         bev = self.latest_bev
         x, y, yaw = self.latest_pose
 
-        # Refine pose using local template matching (disabled for debugging)
-        # x, y, yaw = self._refine_pose(bev, x, y, yaw)
+        # Refine pose using local template matching
+        x, y, yaw = self._refine_pose(bev, x, y, yaw)
 
         res = BEV_RESOLUTION
         bcx = bcy = BEV_SIZE / 2.0  # BEV center = 400
