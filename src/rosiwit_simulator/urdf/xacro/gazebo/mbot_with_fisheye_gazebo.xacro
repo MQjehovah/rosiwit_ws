@@ -9,7 +9,7 @@
 
     <xacro:imu prefix="imu"/>
     <xacro:rplidar prefix="laser"/>
-    <xacro:lidar3d_gazebo prefix="velodyne"/>
+    <xacro:lidar3d_gazebo prefix="lidar"/>
 
     <!-- 4 个广角相机，90°间隔，360°全覆盖，向下倾斜 20° 看到地面 -->
     <!-- 位置：底座半径 0.21m，高出底座 0.15m -->
