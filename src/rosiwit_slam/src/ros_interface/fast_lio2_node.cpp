@@ -598,6 +598,24 @@ bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
                 min_d, max_d, sampled ? sample_d / sampled : -1.0,
                 ikd_tree_->size(), cloud->size(),
                 has_nan ? "  <<< NaN STATE" : "");
+            // 对应点太少但非零时, 用点对点ICP而非直接失败
+            if (valid_indices.size() > 3) {
+                RCLCPP_WARN(this->get_logger(), "Too few valid but trying point-to-point update with %zu points",
+                            valid_indices.size());
+                std::vector<std::pair<int, int>> correspondences;
+                correspondences.reserve(valid_indices.size());
+                for (size_t ci = 0; ci < valid_indices.size(); ++ci) {
+                    correspondences.emplace_back(valid_indices[ci], valid_indices[ci]);
+                }
+                iekf_estimator_->setState(current_state_);
+                bool p2p_success = iekf_estimator_->update(source_points, target_points, correspondences);
+                if (p2p_success) {
+                    current_state_ = iekf_estimator_->getState();
+                    current_pose = current_state_.toSE3();
+                    transformPointCloud(cloud, transformed_cloud, current_pose);
+                    continue;
+                }
+            }
             return false;
         }
 
