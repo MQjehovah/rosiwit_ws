@@ -25,7 +25,7 @@ extrinsic:
 
 ## ==================== IEKF 参数 ====================
 iekf:
-  max_iterations: 5         # 最大迭代次数
+  max_iterations: 10        # 最大迭代次数(加大便于旋转收敛)
   converge_threshold: 0.001 # 收敛阈值
   position_noise: 0.01      # 位置噪声
   rotation_noise: 0.01      # 旋转噪声

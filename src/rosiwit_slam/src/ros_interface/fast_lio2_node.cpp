@@ -542,7 +542,18 @@ bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
     SE3d current_pose = current_state_.toSE3();
     transformPointCloud(cloud, transformed_cloud, current_pose);
 
-    for (int iter = 0; iter < config_.iekf.max_iterations; ++iter) {
+    // 检测旋转: 从IMU获取当前角速度
+    ImuData latest_imu;
+    double angular_rate = 0.0;
+    if (imu_buffer_.getLatest(latest_imu)) {
+        angular_rate = latest_imu.gyro.norm();
+    }
+    bool is_rotating = angular_rate > 0.15;
+    int actual_max_iter = is_rotating ? std::max(8, config_.iekf.max_iterations) : config_.iekf.max_iterations;
+    double search_radius = is_rotating ? config_.iekf.max_correspondence_distance * 1.5
+                                       : config_.iekf.max_correspondence_distance;
+
+    for (int iter = 0; iter < actual_max_iter; ++iter) {
         std::vector<Vector3d> source_points;
         std::vector<Vector3d> target_points;
         std::vector<Vector3d> target_normals;
@@ -554,7 +565,7 @@ bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
             double dist;
 
             if (ikd_tree_->nearestSearch(query, nearest, dist)) {
-                if (dist < config_.iekf.max_correspondence_distance) {
+                if (dist < search_radius) {
                     valid_indices.push_back(i);
                     source_points.push_back(Vector3d(cloud->points[i].x,
                                                      cloud->points[i].y,
