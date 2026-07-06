@@ -17,7 +17,7 @@ setup(
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml')),
         (os.path.join('lib', package_name),
-            ['scripts/avm_node_wrapper']),
+            ['scripts/avm_node_wrapper', 'scripts/ground_texture_mapper_wrapper']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -29,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'avm_node = rosiwit_perception.avm_node:main',
+            'ground_texture_mapper = rosiwit_perception.ground_texture_mapper:main',
         ],
     },
 )
