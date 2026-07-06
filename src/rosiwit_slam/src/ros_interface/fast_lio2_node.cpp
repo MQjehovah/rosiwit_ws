@@ -22,7 +22,14 @@ FastLio2Node::FastLio2Node(const rclcpp::NodeOptions& options)
       first_scan_received_(false),
       scan_count_(0),
       keyframe_count_(0),
-      last_scan_time_(0) {
+      last_scan_time_(0),
+      is_stationary_(true),
+      stationary_frame_count_(0),
+      imu_acc_variance_(0.0),
+      imu_gyro_variance_(0.0),
+      last_imu_acc_mean_(Vector3d::Zero()),
+      last_imu_gyro_mean_(Vector3d::Zero()),
+      imu_variance_sample_count_(0) {
     initialize();
 }
 
@@ -94,6 +101,8 @@ void FastLio2Node::loadParameters() {
         config_.lidar.voxel_size > 0 ? config_.lidar.voxel_size : 0.2);
     this->declare_parameter("max_iterations",
         config_.iekf.max_iterations > 0 ? config_.iekf.max_iterations : 5);
+    this->declare_parameter("use_acc_integration",
+        config_.iekf.use_acc_integration);
 
     config_.ros.lidar_topic = this->get_parameter("lidar_topic").as_string();
     config_.ros.imu_topic = this->get_parameter("imu_topic").as_string();
@@ -102,6 +111,7 @@ void FastLio2Node::loadParameters() {
     config_.lidar.min_range = this->get_parameter("lidar_min_range").as_double();
     config_.lidar.voxel_size = this->get_parameter("voxel_size").as_double();
     config_.iekf.max_iterations = this->get_parameter("max_iterations").as_int();
+    config_.iekf.use_acc_integration = this->get_parameter("use_acc_integration").as_bool();
 
     RCLCPP_INFO(this->get_logger(), "Parameters loaded: lidar_topic=%s, imu_topic=%s",
                 config_.ros.lidar_topic.c_str(), config_.ros.imu_topic.c_str());
@@ -168,11 +178,11 @@ void FastLio2Node::createServices() {
 
 void FastLio2Node::initializeModules() {
     ConverterConfig converter_config;
-    converter_config.curvature_method = ConverterConfig::CurvatureMethod::RING_BASED;
-    converter_config.normal_method = ConverterConfig::NormalMethod::RING_BASED;
+    converter_config.curvature_method = ConverterConfig::CurvatureMethod::NEIGHBOR_BASED;
+    converter_config.normal_method = ConverterConfig::NormalMethod::PCA_BASED;
     converter_config.scan_lines = config_.lidar.scan_line;
     converter_config.curvature_neighbors = 5;
-    converter_config.normal_radius = 0.5;
+    converter_config.normal_radius = 1.0;
     converter_config.verbose = true;
     point_cloud_converter_ = std::make_unique<PointCloudConverter>(converter_config);
     RCLCPP_INFO(this->get_logger(), "Point cloud converter initialized (supports Ouster/Velodyne/Livox formats)");
@@ -186,7 +196,7 @@ void FastLio2Node::initializeModules() {
     ImuProcessorConfig imu_config;
     imu_config.acc_noise = config_.imu.acc_noise;
     imu_config.gyro_noise = config_.imu.gyro_noise;
-    imu_config.static_init_count = 50;
+    imu_config.static_init_count = 200;
     imu_processor_ = std::make_unique<ImuProcessor>(imu_config);
 
     IekfConfig iekf_config;
@@ -286,6 +296,25 @@ void FastLio2Node::initializeModules() {
         RCLCPP_INFO(this->get_logger(), "Global localizer initialized");
     }
 
+    // 初始化闭环检测模块
+    if (config_.loop_closure.enable) {
+        ScanContextConfig sc_config;
+        sc_config.ring_num = config_.loop_closure.ring_num;
+        sc_config.sector_num = config_.loop_closure.sector_num;
+        sc_config.max_range = config_.loop_closure.max_range;
+        sc_config.threshold = config_.loop_closure.threshold;
+        sc_config.exclude_near_scan = config_.loop_closure.min_interval;
+        scan_context_ = std::make_unique<ScanContext>(sc_config);
+        RCLCPP_INFO(this->get_logger(), "ScanContext loop closure detector initialized");
+
+        GtsamBackendConfig gtsam_config;
+        gtsam_config.max_iterations = config_.loop_closure.max_iterations;
+        gtsam_config.relative_pose_noise = config_.loop_closure.relative_pose_noise;
+        gtsam_backend_ = std::make_unique<GtsamBackend>(gtsam_config);
+        RCLCPP_INFO(this->get_logger(), "GTSAM backend initialized");
+    }
+    last_loop_detect_frame_ = 0;
+
     path_msg_.header.frame_id = config_.ros.world_frame;
     RCLCPP_INFO(this->get_logger(), "Core modules initialized");
 }
@@ -317,8 +346,8 @@ void FastLio2Node::lidarCallback(const sensor_msgs::msg::PointCloud2::SharedPtr 
     if (!first_scan_received_) {
         first_scan_received_ = true;
         current_state_.timestamp = cloud_data.timestamp;
-        RCLCPP_INFO(this->get_logger(), "First LiDAR scan received at time: %.3f, points: %zu",
-                    cloud_data.timestamp, cloud->size());
+        RCLCPP_INFO(this->get_logger(), "First LiDAR scan processed at time: %.3f, points: %zu (IMU samples: %zu)",
+                    cloud_data.timestamp, cloud->size(), imu_buffer_.size());
     }
 }
 
@@ -334,6 +363,8 @@ void FastLio2Node::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
 
     imu_buffer_.push(imu);
     imu_processor_->addImuData(imu);
+
+    updateStationaryState(imu);
 
     static int imu_count = 0;
     imu_count++;
@@ -409,17 +440,37 @@ void FastLio2Node::processPointCloud(PointCloudData& cloud_data) {
     }
 
     PROFILE_START(iekf_update);
-    bool iekf_success = performUpdate(filtered_cloud);
-    if (!iekf_success) {
-        RCLCPP_WARN(this->get_logger(), "IEKF update failed");
+    bool iekf_success = true;
+    bool robot_stationary = isRobotStationary();
+
+    if (robot_stationary && scan_count_ >= 2) {
+        current_state_.velocity.setZero();
+        if (process_count <= 60 || process_count % 50 == 0) {
+            RCLCPP_INFO(this->get_logger(), "Stationary: skipping IEKF update, keeping pose (%.3f,%.3f,%.3f)",
+                        current_state_.position.x(), current_state_.position.y(), current_state_.position.z());
+        }
+    } else {
+        iekf_success = performUpdate(filtered_cloud);
+        if (!iekf_success) {
+            RCLCPP_WARN(this->get_logger(), "IEKF update failed");
+        }
     }
     PROFILE_END(iekf_update);
 
     PROFILE_START(map_update);
-    if (iekf_success) {
+    if (iekf_success && !robot_stationary) {
         updateMap(filtered_cloud);
     }
     PROFILE_END(map_update);
+
+    // 闭环检测 (每隔一定帧数执行一次)
+    if (iekf_success && config_.loop_closure.enable && scan_context_) {
+        if (cloud_data.scan_id - last_loop_detect_frame_ >= config_.loop_closure.min_interval) {
+            PROFILE_START(loop_closure);
+            detectLoopClosure(cloud_data);
+            PROFILE_END(loop_closure);
+        }
+    }
 
     PROFILE_START(result_publish);
     publishOdometry();
@@ -447,9 +498,11 @@ void FastLio2Node::performPrediction(double t_start, double t_end) {
         if (imu_processor_->staticInitializeBias()) {
             initial_state.rotation = imu_processor_->getInitRotation();
             initial_state.gyro_bias = imu_processor_->getGyroBiasEst();
-            RCLCPP_INFO(this->get_logger(), "Init: using static IMU estimate");
+            RCLCPP_INFO(this->get_logger(), "Init: using static IMU estimate (gyro_bias=%.6f,%.6f,%.6f)",
+                        initial_state.gyro_bias.x(), initial_state.gyro_bias.y(), initial_state.gyro_bias.z());
         } else {
-            RCLCPP_INFO(this->get_logger(), "Init: identity (insufficient static IMU data)");
+            RCLCPP_INFO(this->get_logger(), "Init: identity (insufficient static IMU data, have %d/%d samples)",
+                        static_cast<int>(imu_processor_->bufferSize()), 200);
         }
         iekf_estimator_->setInitialState(initial_state);
         current_state_ = initial_state;
@@ -467,6 +520,10 @@ void FastLio2Node::performPrediction(double t_start, double t_end) {
     iekf_estimator_->predictBatch(imu_data);
     current_state_ = iekf_estimator_->getState();
     current_state_.timestamp = t_end;
+
+    if (isRobotStationary()) {
+        current_state_.velocity.setZero();
+    }
 }
 
 bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
@@ -545,8 +602,28 @@ bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
         }
 
         iekf_estimator_->setState(current_state_);
-        bool success = iekf_estimator_->updateWithNormals(source_points, target_points,
+        // 检查法向量是否有效 (非零), 否则退化为点对点ICP
+        bool has_valid_normals = false;
+        for (size_t ni = 0; ni < target_normals.size() && ni < 20; ++ni) {
+            if (target_normals[ni].squaredNorm() > 1e-6) {
+                has_valid_normals = true;
+                break;
+            }
+        }
+
+        bool success = false;
+        if (has_valid_normals) {
+            success = iekf_estimator_->updateWithNormals(source_points, target_points,
                                                           target_normals, valid_indices);
+        } else {
+            // 无法向量时使用点对点ICP
+            std::vector<std::pair<int, int>> correspondences;
+            correspondences.reserve(valid_indices.size());
+            for (size_t ci = 0; ci < valid_indices.size(); ++ci) {
+                correspondences.emplace_back(valid_indices[ci], valid_indices[ci]);
+            }
+            success = iekf_estimator_->update(source_points, target_points, correspondences);
+        }
 
         if (success) {
             current_state_ = iekf_estimator_->getState();
@@ -559,30 +636,185 @@ bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
 }
 
 void FastLio2Node::updateMap(PointCloudPtr& cloud) {
-    static SE3d last_kf_pose = current_state_.toSE3();
+    static SE3d last_kf_pose = SE3d();
     static bool kf_init = false;
 
     SE3d current_pose = current_state_.toSE3();
+
+    if (!kf_init) {
+        last_kf_pose = current_pose;
+        kf_init = true;
+    }
+
     double move_dist = (current_pose.translation() - last_kf_pose.translation()).norm();
     double yaw_now = std::atan2(2.0 * (current_state_.rotation.w() * current_state_.rotation.z()),
                                 1.0 - 2.0 * (current_state_.rotation.z() * current_state_.rotation.z()));
     static double last_kf_yaw = 0.0;
+    if (!kf_init) last_kf_yaw = yaw_now;
     double dyaw = std::fabs(yaw_now - last_kf_yaw);
 
     const double keyframe_dist = 0.3;
     const double keyframe_yaw = 0.2;
 
-    if (!kf_init || move_dist > keyframe_dist || dyaw > keyframe_yaw) {
+    // 关键帧判断: 满足运动距离或角度变化则创建关键帧
+    if (move_dist > keyframe_dist || dyaw > keyframe_yaw) {
         PointCloudPtr transformed_cloud(new pcl::PointCloud<PointType>());
         transformPointCloud(cloud, transformed_cloud, current_pose);
+
+        // 更新ikd-tree地图
         ikd_tree_->insertPointCloud(transformed_cloud);
+
+        // 更新MapManager (用于持久化和子地图管理)
+        if (map_manager_) {
+            map_manager_->addPointCloud(transformed_cloud, current_pose, scan_count_);
+        }
+
+        // 更新闭环检测用的关键帧
+        if (config_.loop_closure.enable && scan_context_) {
+            int keyframe_id = keyframe_count_++;
+            pose_graph_.emplace_back(keyframe_id, current_pose, current_state_.timestamp, scan_count_);
+
+            // 生成 Scan Context 描述子并添加
+            ScanContextDescriptor desc = scan_context_->makeDescriptor(
+                transformed_cloud, current_state_.timestamp, keyframe_id, current_pose);
+            scan_context_->addKeyframe(desc);
+
+            // 添加位姿到GTSAM后端
+            if (gtsam_backend_) {
+                if (pose_graph_.size() == 1) {
+                    gtsam_backend_->addPriorFactor(keyframe_id, current_pose);
+                } else if (pose_graph_.size() >= 2) {
+                    int prev_id = pose_graph_[pose_graph_.size() - 2].id;
+                    SE3d relative_pose = last_kf_pose.inverse() * current_pose;
+                    gtsam_backend_->addOdomFactor(prev_id, keyframe_id, relative_pose);
+                }
+            }
+        }
+
         last_kf_pose = current_pose;
         last_kf_yaw = yaw_now;
-        kf_init = true;
     }
 
+    // 条件性重建: 删除点过多时重建树
     if (ikd_tree_->getDeletedCount() > static_cast<int>(ikd_tree_->size() * 0.3)) {
         ikd_tree_->rebuildTree();
+    }
+}
+
+void FastLio2Node::detectLoopClosure(const PointCloudData& cloud_data) {
+    if (!scan_context_ || !gtsam_backend_ || pose_graph_.empty()) return;
+
+    SE3d current_pose = current_state_.toSE3();
+    PointCloudPtr transformed_cloud(new pcl::PointCloud<PointType>());
+    transformPointCloud(cloud_data.cloud, transformed_cloud, current_pose);
+
+    int keyframe_id = keyframe_count_ - 1;
+    if (keyframe_id < 0) return;
+
+    // 使用ScanContext检测闭环
+    ScanContextDescriptor query_desc = scan_context_->makeDescriptor(
+        transformed_cloud, current_state_.timestamp, keyframe_id, current_pose);
+
+    LoopConstraint constraint;
+    if (scan_context_->detectLoop(query_desc, constraint)) {
+        RCLCPP_INFO(this->get_logger(),
+                    "Loop closure detected! frame=%d -> match=%d, score=%.3f",
+                    keyframe_id, constraint.to_id, constraint.score);
+
+        int match_id = constraint.to_id;
+        if (match_id >= 0 && match_id < static_cast<int>(pose_graph_.size())) {
+            gtsam_backend_->addLoopClosureFactor(match_id, keyframe_id, constraint.relative_pose);
+
+            if (gtsam_backend_->optimize()) {
+                RCLCPP_INFO(this->get_logger(), "GTSAM optimization succeeded after loop closure");
+                std::vector<SE3d> corrected_poses = gtsam_backend_->getAllOptimizedPoses();
+                if (!corrected_poses.empty()) {
+                    correctMapWithOptimization(corrected_poses);
+                }
+            }
+        }
+    }
+
+    last_loop_detect_frame_ = cloud_data.scan_id;
+}
+
+void FastLio2Node::performGlobalOptimization() {
+    if (!gtsam_backend_ || !gtsam_backend_->optimize()) return;
+
+    RCLCPP_INFO(this->get_logger(), "Global pose graph optimization completed");
+    std::vector<SE3d> corrected_poses = gtsam_backend_->getAllOptimizedPoses();
+    if (corrected_poses.size() != pose_graph_.size()) {
+        RCLCPP_WARN(this->get_logger(), "Corrected poses count mismatch");
+        return;
+    }
+
+    correctMapWithOptimization(corrected_poses);
+}
+
+void FastLio2Node::correctMapWithOptimization(const std::vector<SE3d>& corrected_poses) {
+    if (corrected_poses.size() != pose_graph_.size() || corrected_poses.empty()) return;
+
+    // 更新最新位姿
+    SE3d latest_corrected = corrected_poses.back();
+    current_state_.position = latest_corrected.translation();
+    current_state_.rotation = latest_corrected.unit_quaternion();
+
+    // 更新位姿图
+    for (size_t i = 0; i < pose_graph_.size(); ++i) {
+        pose_graph_[i].pose = corrected_poses[i];
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Map correction applied: new pos=(%.2f, %.2f, %.2f)",
+                current_state_.position.x(), current_state_.position.y(),
+                current_state_.position.z());
+}
+
+bool FastLio2Node::isKeyframe(const SE3d& pose) const {
+    if (pose_graph_.empty()) return true;
+    const SE3d& last_pose = pose_graph_.back().pose;
+    double dist = (pose.translation() - last_pose.translation()).norm();
+    return dist > 0.3;
+}
+
+bool FastLio2Node::isRobotStationary() const {
+    if (imu_variance_sample_count_ < kStationarySampleWindow) return false;
+    return imu_gyro_variance_ < kStationaryGyroThreshold &&
+           imu_acc_variance_ < kStationaryAccThreshold;
+}
+
+void FastLio2Node::updateStationaryState(const ImuData& imu) {
+    const double alpha = 0.95;
+
+    if (imu_variance_sample_count_ == 0) {
+        last_imu_acc_mean_ = imu.acc;
+        last_imu_gyro_mean_ = imu.gyro;
+        imu_acc_variance_ = 0.0;
+        imu_gyro_variance_ = 0.0;
+        imu_variance_sample_count_ = 1;
+        return;
+    }
+
+    Vector3d acc_diff = imu.acc - last_imu_acc_mean_;
+    Vector3d gyro_diff = imu.gyro - last_imu_gyro_mean_;
+
+    last_imu_acc_mean_ = alpha * last_imu_acc_mean_ + (1.0 - alpha) * imu.acc;
+    last_imu_gyro_mean_ = alpha * last_imu_gyro_mean_ + (1.0 - alpha) * imu.gyro;
+
+    imu_acc_variance_ = alpha * imu_acc_variance_ + (1.0 - alpha) * acc_diff.squaredNorm();
+    imu_gyro_variance_ = alpha * imu_gyro_variance_ + (1.0 - alpha) * gyro_diff.squaredNorm();
+
+    if (imu_variance_sample_count_ < 1000) {
+        imu_variance_sample_count_++;
+    }
+}
+
+void FastLio2Node::addKeyframe(int frame_id, const SE3d& pose, const PointCloudPtr& cloud) {
+    pose_graph_.emplace_back(frame_id, pose, current_state_.timestamp, frame_id);
+
+    if (config_.loop_closure.enable && scan_context_) {
+        ScanContextDescriptor desc = scan_context_->makeDescriptor(
+            cloud, current_state_.timestamp, frame_id, pose);
+        scan_context_->addKeyframe(desc);
     }
 }
 
@@ -693,17 +925,21 @@ void FastLio2Node::saveMapCallback(
         return;
     }
 
-    std::string map_path = config_.map.map_path + "/fast_lio2_map";
-    PointCloudPtr full_cloud = ikd_tree_->getAllPoints();
-    std::cout << "[saveMapCallback] ikd_tree has " << full_cloud->size() << " points" << std::endl;
+    std::string map_dir = config_.map.map_path;
+    std::filesystem::create_directories(std::filesystem::path(map_dir));
+
+    std::string map_path = map_dir + "/fast_lio2_map";
+    PointCloudPtr ikd_cloud = ikd_tree_->getAllPoints();
+    RCLCPP_INFO(this->get_logger(), "ikd_tree has %zu points, MapManager has %zu points",
+                ikd_cloud->size(), map_manager_->pointCount());
 
     bool success = false;
+    PointCloudPtr full_cloud = ikd_cloud;
     if (!full_cloud->empty()) {
-        std::filesystem::create_directories(std::filesystem::path(map_path).parent_path());
         success = pcl::io::savePCDFileBinary(map_path + ".pcd", *full_cloud) == 0;
-        std::cout << "[saveMapCallback] PCD save " << (success ? "success" : "failed") << std::endl;
         if (success) {
             saveProjectedMap(full_cloud, map_path);
+            map_manager_->saveToPcd(map_dir + "/map_manager_full.pcd");
         }
     }
 
@@ -734,7 +970,12 @@ void FastLio2Node::savePcdCallback(
     ss << config_.map.map_path << "/pcd_" << std::put_time(std::localtime(&timestamp), "%Y%m%d_%H%M%S") << ".pcd";
     std::string pcd_path = ss.str();
 
-    bool success = map_manager_->saveToPcd(pcd_path);
+    PointCloudPtr pcd_cloud = ikd_tree_->getAllPoints();
+    bool success = false;
+    if (!pcd_cloud->empty()) {
+        std::filesystem::create_directories(std::filesystem::path(pcd_path).parent_path());
+        success = pcl::io::savePCDFileBinary(pcd_path, *pcd_cloud) == 0;
+    }
 
     if (success) {
         response->success = true;
@@ -800,7 +1041,77 @@ void FastLio2Node::setInitialPoseCallback(const geometry_msgs::msg::Pose::Shared
 }
 
 bool FastLio2Node::checkDataSync() { return true; }
-void FastLio2Node::undistortPointCloud(PointCloudData& /*cloud_data*/) {}
+
+void FastLio2Node::undistortPointCloud(PointCloudData& cloud_data) {
+    if (!iekf_estimator_ || !iekf_estimator_->isInitialized()) return;
+    if (cloud_data.cloud->empty()) return;
+
+    double t_start = current_state_.timestamp;
+    double t_end = cloud_data.timestamp;
+    if (t_end <= t_start) return;
+
+    // 获取扫描期间的IMU数据
+    std::vector<ImuData> imu_data = imu_buffer_.getImuInRange(t_start, t_end);
+    if (imu_data.size() < 2) return;
+
+    // 对每个点进行IMU插值去畸变
+    double scan_period = t_end - t_start;
+    PointCloudPtr undistorted(new pcl::PointCloud<PointType>());
+    undistorted->reserve(cloud_data.cloud->size());
+
+    State scan_start_state = iekf_estimator_->getState();
+    scan_start_state.timestamp = t_start;
+
+    for (const auto& point : cloud_data.cloud->points) {
+        // 点的时间戳 = 扫描开始 + 相对时间(归一化到[0,1])
+        double rel_time = point.intensity;
+        if (rel_time < 0.0 || rel_time > 1.0) rel_time = 0.5;
+        double point_time = t_start + rel_time * scan_period;
+
+        // 用IMU数据插值该时刻的位姿
+        State interp_state = scan_start_state;
+        double imu_dt = 0.0;
+        for (size_t i = 0; i + 1 < imu_data.size(); ++i) {
+            if (imu_data[i].timestamp <= point_time && imu_data[i + 1].timestamp >= point_time) {
+                double alpha = (point_time - imu_data[i].timestamp) /
+                               (imu_data[i + 1].timestamp - imu_data[i].timestamp);
+                alpha = std::clamp(alpha, 0.0, 1.0);
+
+                ImuData interp_imu;
+                interp_imu.timestamp = point_time;
+                interp_imu.acc = (1.0 - alpha) * imu_data[i].acc + alpha * imu_data[i + 1].acc;
+                interp_imu.gyro = (1.0 - alpha) * imu_data[i].gyro + alpha * imu_data[i + 1].gyro;
+
+                imu_dt = point_time - scan_start_state.timestamp;
+                break;
+            }
+        }
+
+        // 从扫描开始到该点的相对变换
+        Vector3d delta_angle = (interp_state.gyro_bias - scan_start_state.gyro_bias) * imu_dt;
+        Quaterniond delta_q = Quaterniond::Identity();
+        if (delta_angle.norm() > 1e-12) {
+            delta_q = Quaterniond(Eigen::AngleAxisd(delta_angle.norm(), delta_angle.normalized()));
+        }
+
+        // 将点从扫描开始时刻变换到扫描结束时刻
+        SE3d T_start(scan_start_state.rotation, scan_start_state.position);
+        SE3d T_point = T_start * SE3d(delta_q, Vector3d::Zero());
+
+        Vector3d p_point(point.x, point.y, point.z);
+        Vector3d p_end = T_point * p_point;
+
+        PointType new_point = point;
+        new_point.x = p_end.x();
+        new_point.y = p_end.y();
+        new_point.z = p_end.z();
+        undistorted->push_back(new_point);
+    }
+
+    undistorted->width = undistorted->size();
+    undistorted->height = 1;
+    cloud_data.cloud = undistorted;
+}
 
 void FastLio2Node::saveProjectedMap(const PointCloudPtr& cloud, const std::string& base_path) {
     if (cloud->empty()) return;
@@ -844,8 +1155,9 @@ void FastLio2Node::saveProjectedMap(const PointCloudPtr& cloud, const std::strin
     pgm.close();
 
     std::string yaml_path = base_path + ".yaml";
+    std::string pgm_filename = std::filesystem::path(base_path).filename().string() + ".pgm";
     std::ofstream yaml(yaml_path);
-    yaml << "image: \"" << base_path.substr(base_path.find_last_of('/') + 1) << ".pgm\"\n";
+    yaml << "image: \"" << pgm_filename << "\"\n";
     yaml << "resolution: " << resolution << "\n";
     yaml << "origin: [" << min_x << ", " << min_y << ", 0.0]\n";
     yaml << "negate: 0\n";

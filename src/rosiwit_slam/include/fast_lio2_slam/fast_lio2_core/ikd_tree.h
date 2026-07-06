@@ -86,6 +86,9 @@ public:
     int radiusSearch(const PointType& query, double radius,
                      std::vector<PointType>& results);
 
+    int radiusSearchUnsafe(const PointType& query, double radius,
+                           std::vector<PointType>& results);
+
     PointCloudPtr getAllPoints();
 
     void rebalance();
