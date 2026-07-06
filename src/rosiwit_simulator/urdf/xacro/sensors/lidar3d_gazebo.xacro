@@ -10,7 +10,7 @@
         - topicName: /velodyne_points
         - frameName: velodyne_link  (must match URDF link name for TF consistency)
     -->
-    <xacro:macro name="lidar3d_gazebo" params="prefix:=velodyne">
+    <xacro:macro name="lidar3d_gazebo" params="prefix:=lidar">
         <!-- Include physical description from lidar3d.xacro -->
         <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/lidar3d.xacro" />
         <xacro:lidar3d prefix="${prefix}" />
@@ -52,7 +52,7 @@
                         <remapping>~/out:=velodyne_points</remapping>
                     </ros>
                     <output_type>sensor_msgs/PointCloud2</output_type>
-                    <frame_name>velodyne_link</frame_name>
+                    <frame_name>lidar_link</frame_name>
                 </plugin>
             </sensor>
         </gazebo>

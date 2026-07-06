@@ -48,7 +48,7 @@ ros:
   map_frame: "map"
   odom_frame: "odom"
   base_frame: "base_footprint"
-  lidar_frame: "velodyne_link"
+  lidar_frame: "lidar_link"
   imu_frame: "imu_link"
 
   map_publish_rate: 2.0

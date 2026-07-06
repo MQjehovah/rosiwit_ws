@@ -56,7 +56,7 @@ struct IekfConfig {
     bool use_acc_integration = true;
 
     double max_correspondence_dist = 1.0;
-    int min_valid_points = 100;
+    int min_valid_points = 50;
 
     Vector3d ext_translation = Vector3d::Zero();
     Vector3d ext_rotation_euler = Vector3d::Zero();

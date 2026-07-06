@@ -11,7 +11,7 @@
     <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/lidar3d_gazebo.xacro" />
     <xacro:include filename="$(find rosiwit_simulator)/urdf/xacro/sensors/imu_gazebo.xacro" />
 
-    <xacro:lidar3d_gazebo prefix="velodyne"/>
+    <xacro:lidar3d_gazebo prefix="lidar"/>
     <xacro:imu prefix="imu"/>
 
     <xacro:mbot_base/>

@@ -5,7 +5,7 @@
         3D LiDAR physical description (Velodyne VLP-16 form factor)
         Defines link/joint only, no Gazebo plugin (see lidar3d_gazebo.xacro)
     -->
-    <xacro:macro name="lidar3d" params="prefix:=velodyne">
+    <xacro:macro name="lidar3d" params="prefix:=lidar">
         <!-- VLP-16: radius=0.0516m, height=0.0717m -->
         <link name="${prefix}_link">
             <inertial>

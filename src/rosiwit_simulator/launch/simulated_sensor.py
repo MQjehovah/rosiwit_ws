@@ -274,7 +274,7 @@ class SimulatedSensorNode(Node):
         points = self._generate_room_points()
 
         if points:
-            msg = create_pointcloud2(points, now, 'velodyne_link')
+            msg = create_pointcloud2(points, now, 'lidar_link')
             self.lidar_pub.publish(msg)
             self.get_logger().debug(f'Published {len(points)} points')
 
