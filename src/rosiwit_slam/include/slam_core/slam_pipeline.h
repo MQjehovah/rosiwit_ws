@@ -17,7 +17,7 @@ public:
     bool getGlobalMap(PointVec& out) override;
     SlamState state() const override;
 
-protected:
+public:
     bool onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) override;
     bool handleMapping(const SyncPackage& pkg, SlamOutput& out);
     bool handleLocalization(const SyncPackage& pkg, SlamOutput& out);

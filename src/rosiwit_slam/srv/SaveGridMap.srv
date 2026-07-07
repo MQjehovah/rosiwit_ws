@@ -1,0 +1,6 @@
+string pgm_path
+string yaml_path
+float64 resolution
+---
+bool success
+string message

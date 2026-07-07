@@ -4,9 +4,11 @@
 #include "slam_core/slam_base.h"   // dynamic_cast to call tryPopAndProcess
 #include <pcl_conversions/pcl_conversions.h>
 #include <yaml-cpp/yaml.h>
+#include <functional>
 #include "ros_interface/ros_utils.h"   // RosRosUtils::ros2PCL / getSec / getTime (ROS 层)
 
 using namespace std::chrono_literals;
+using namespace std::placeholders;
 
 namespace rosiwit_slam {
 
@@ -57,6 +59,17 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_timer     = create_wall_timer(20ms, std::bind(&SlamNode::timerCB, this));
     m_map_timer = create_wall_timer(2s,   std::bind(&SlamNode::mapTimerCB, this));
     m_path.header.frame_id = m_cfg.world_frame;
+
+    // 服务接口: 地图保存/加载/模式切换
+    m_srv_save_map = create_service<rosiwit_slam::srv::SaveMap>("save_map",
+        std::bind(&SlamNode::handleSaveMap, this, _1, _2, _3));
+    m_srv_load_map = create_service<rosiwit_slam::srv::LoadMap>("load_map",
+        std::bind(&SlamNode::handleLoadMap, this, _1, _2, _3));
+    m_srv_save_grid_map = create_service<rosiwit_slam::srv::SaveGridMap>("save_grid_map",
+        std::bind(&SlamNode::handleSaveGridMap, this, _1, _2, _3));
+    m_srv_set_slam_mode = create_service<rosiwit_slam::srv::SetSlamMode>("set_slam_mode",
+        std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3));
+
     RCLCPP_INFO(get_logger(), "SlamNode ready: algo=%s imu=%s lidar=%s",
                 algo_name.c_str(), m_cfg.imu_topic.c_str(), m_cfg.lidar_topic.c_str());
 }
@@ -170,5 +183,68 @@ void SlamNode::mapTimerCB() {
 }
 
 builtin_interfaces::msg::Time SlamNode::toRosTime(double sec) { return RosUtils::getTime(sec); }
+
+SlamPipeline* SlamNode::getPipeline() {
+    return dynamic_cast<SlamPipeline*>(m_algo.get());
+}
+
+void SlamNode::handleSaveMap(const std::shared_ptr<rmw_request_id_t>,
+                              const std::shared_ptr<rosiwit_slam::srv::SaveMap::Request> req,
+                              std::shared_ptr<rosiwit_slam::srv::SaveMap::Response> res) {
+    auto pipe = getPipeline();
+    if (!pipe) { res->success = false; res->message = "Not a SlamPipeline"; return; }
+    if (!pipe->m_map_mgr) { res->success = false; res->message = "No map manager"; return; }
+    res->success = pipe->m_map_mgr->saveMap(req->path);
+    res->message = res->success ? "Map saved" : "Save failed";
+}
+
+void SlamNode::handleLoadMap(const std::shared_ptr<rmw_request_id_t>,
+                              const std::shared_ptr<rosiwit_slam::srv::LoadMap::Request> req,
+                              std::shared_ptr<rosiwit_slam::srv::LoadMap::Response> res) {
+    auto pipe = getPipeline();
+    if (!pipe) { res->success = false; res->message = "Not a SlamPipeline"; return; }
+    if (!pipe->m_map_mgr) { res->success = false; res->message = "No map manager"; return; }
+    res->success = pipe->m_map_mgr->loadMap(req->path);
+    if (res->success) {
+        PointVec pts;
+        if (pipe->m_map_mgr->getGlobalMap(pts)) {
+            RCLCPP_INFO(get_logger(), "Loaded map: %s (%zu pts)", req->path.c_str(), pts.size());
+        }
+    }
+    res->message = res->success ? "Map loaded" : "Load failed";
+}
+
+void SlamNode::handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>,
+                                  const std::shared_ptr<rosiwit_slam::srv::SaveGridMap::Request> req,
+                                  std::shared_ptr<rosiwit_slam::srv::SaveGridMap::Response> res) {
+    auto pipe = getPipeline();
+    if (!pipe) { res->success = false; res->message = "Not a SlamPipeline"; return; }
+
+    auto* pcd_mgr = dynamic_cast<PcdMapManager*>(pipe->m_map_mgr.get());
+    if (!pcd_mgr) { res->success = false; res->message = "Map manager is not PcdMapManager"; return; }
+
+    res->success = pcd_mgr->saveGridMap(req->pgm_path, req->yaml_path, req->resolution);
+    res->message = res->success ? "Grid map saved" : "Grid map save failed";
+}
+
+void SlamNode::handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>,
+                                  const std::shared_ptr<rosiwit_slam::srv::SetSlamMode::Request> req,
+                                  std::shared_ptr<rosiwit_slam::srv::SetSlamMode::Response> res) {
+    auto pipe = getPipeline();
+    if (!pipe) { res->success = false; res->message = "Not a SlamPipeline"; return; }
+
+    if (req->mode == "mapping") {
+        pipe->m_is_localization_mode = false;
+        res->success = true;
+        res->message = "Switched to mapping mode";
+    } else if (req->mode == "localization") {
+        pipe->m_is_localization_mode = true;
+        res->success = true;
+        res->message = "Switched to localization mode";
+    } else {
+        res->success = false;
+        res->message = "Unknown mode: " + req->mode + " (use mapping/localization)";
+    }
+}
 
 } // namespace rosiwit_slam

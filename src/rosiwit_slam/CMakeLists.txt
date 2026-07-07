@@ -44,6 +44,16 @@ find_package(tf2_ros REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+# ==================== 消息和服务生成 ====================
+rosidl_generate_interfaces(${PROJECT_NAME}
+    "srv/SaveMap.srv"
+    "srv/LoadMap.srv"
+    "srv/SaveGridMap.srv"
+    "srv/SetSlamMode.srv"
+    DEPENDENCIES builtin_interfaces
+)
 
 # ==================== 第三方库依赖 ====================
 find_package(Eigen3 REQUIRED)
@@ -167,6 +177,9 @@ ament_target_dependencies(${NODE_NAME}
     pcl_conversions
     visualization_msgs
 )
+
+# 链接生成的 Service 消息类型
+rosidl_target_interfaces(${NODE_NAME} ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 # 链接库
 target_link_libraries(${NODE_NAME}

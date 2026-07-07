@@ -1,0 +1,5 @@
+# mode: "mapping" or "localization"
+string mode
+---
+bool success
+string message
