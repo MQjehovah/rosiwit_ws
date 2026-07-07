@@ -78,6 +78,7 @@ void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {
     s.gyro = V3D(msg->angular_velocity.x,    msg->angular_velocity.y,    msg->angular_velocity.z);
     s.time = RosUtils::getSec(msg->header);
     m_algo->onImu(s);
+    { static int _imu_cnt = 0; if (++_imu_cnt % 200 == 1) RCLCPP_INFO(get_logger(), "imuCB #%d t=%.3f acc=[%.2f,%.2f,%.2f]", _imu_cnt, s.time, s.acc.x(), s.acc.y(), s.acc.z()); }
 }
 
 void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -89,6 +90,7 @@ void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     f.start_time = RosUtils::getSec(msg->header);
     f.end_time   = f.start_time + (f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0);
     m_algo->onLidar(f);
+    { static int _lidar_cnt = 0; if (++_lidar_cnt % 10 == 1) RCLCPP_INFO(get_logger(), "lidarCB #%d pts=%zu span=[%.3f,%.3f]", _lidar_cnt, f.cloud->size(), f.start_time, f.end_time); }
 }
 
 void SlamNode::onOutput(const SlamOutput& out) {
@@ -98,11 +100,10 @@ void SlamNode::onOutput(const SlamOutput& out) {
 }
 
 void SlamNode::timerCB() {
-    // 轮询触发同步处理 (SlamBase fix b)
+    // 每次 timer 只处理一个已同步包 (不排空: 默认 callback group 是 MutuallyExclusive,
+    // 排空会霸占 group, 饿死 mapTimerCB / IMU / LiDAR 回调)
     auto* base = dynamic_cast<SlamBase*>(m_algo.get());
-    if (base) {
-        do { } while (base->tryPopAndProcess());   // 排空已同步的包
-    }
+    if (base) base->tryPopAndProcess();
 
     SlamOutput out; bool have;
     { std::lock_guard<std::mutex> lock(m_out_mutex); have = m_have_output; out = m_latest; }
@@ -162,9 +163,11 @@ void SlamNode::publish(const SlamOutput& out) {
 }
 
 void SlamNode::mapTimerCB() {
-    if (m_global_map_pub->get_subscription_count() <= 0) return;
     PointVec pts;
-    if (!m_algo->getGlobalMap(pts) || pts.empty()) return;
+    int subs = m_global_map_pub->get_subscription_count();
+    bool have_map = m_algo->getGlobalMap(pts);
+    RCLCPP_INFO(get_logger(), "mapTimerCB: subs=%d globalmap=%d pts=%zu", subs, (int)have_map, pts.size());
+    if (subs <= 0 || !have_map || pts.empty()) return;
     CloudType cloud; for (auto& p : pts) cloud.push_back(p);
     cloud.width = cloud.size(); cloud.height = 1;
     sensor_msgs::msg::PointCloud2 m; pcl::toROSMsg(cloud, m);
