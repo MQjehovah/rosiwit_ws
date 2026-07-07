@@ -208,7 +208,8 @@ bool IekfEstimator::updateWithNormals(
         double dist = plane_dists[i];
 
         Vector3d p_transformed = R * p_src + t;
-        double residual = normal.dot(p_transformed) + dist;
+        // pd2 已包含 normal·p_world + d, 直接作为残差
+        double residual = dist;
 
         // 雅可比 (1×24, 只有前6列非零)
         Eigen::Matrix<double, 1, 24> J = Eigen::Matrix<double, 1, 24>::Zero();
