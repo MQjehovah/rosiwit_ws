@@ -16,7 +16,9 @@ set(CMAKE_BUILD_TYPE Release)
 # ==================== 编译器加速标志 ====================
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     # -pipe: 使用管道而非临时文件，减少磁盘I/O
-    string(APPEND CMAKE_CXX_FLAGS " -pipe")
+    # -pthread: ikd_Tree 使用 pthread 互斥锁
+    string(APPEND CMAKE_CXX_FLAGS " -pipe -pthread")
+    string(APPEND CMAKE_C_FLAGS " -pthread")
 endif()
 
 # ==================== ccache (可选, 缓存未变更的 TU) ====================
@@ -61,6 +63,13 @@ find_package(PCL REQUIRED COMPONENTS common io filters kdtree registration)
 find_package(Sophus REQUIRED)
 add_compile_definitions(SOPHUS_USE_BASIC_LOGGING)
 
+# FAST-LIO2 lidar_processor 多线程并行 (匹配 FAST-LIO2_ROS2)
+find_package(OpenMP QUIET)
+if(OpenMP_FOUND)
+    add_compile_definitions(MP_EN MP_PROC_NUM=2)
+    string(APPEND CMAKE_CXX_FLAGS " ${OpenMP_CXX_FLAGS}")
+endif()
+
 # GTSAM - 尝试查找，用于后端位姿图优化
 find_package(GTSAM QUIET)
 if(GTSAM_FOUND)
@@ -85,6 +94,8 @@ remove_definitions(-DBOOST_ALL_NO_LIB)
 # ==================== 包含目录 ====================
 include_directories(
     include
+    src
+    src/map_builder
     ${EIGEN3_INCLUDE_DIRS}
     ${PCL_INCLUDE_DIRS}
     ${Sophus_INCLUDE_DIRS}
@@ -115,6 +126,8 @@ endif()
 file(GLOB_RECURSE NODE_SOURCES CONFIGURE_DEPENDS
     "src/*.cpp"
 )
+# main.cpp 单独列出, 避免重复
+list(REMOVE_ITEM NODE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 list(APPEND SOURCES src/main.cpp ${NODE_SOURCES})
 
 # ==================== 可执行目标 ====================
@@ -204,31 +217,13 @@ if(BUILD_TESTING)
         )
         target_link_libraries(test_types ${PCL_LIBRARIES} Sophus::Sophus)
 
-        # 2. IEKF估计器测试
-        ament_add_gtest(test_iekf_estimator test/test_iekf_estimator.cpp
-                        src/fast_lio2_core/iekf_estimator.cpp)
-        target_include_directories(test_iekf_estimator PRIVATE
-            include
-            ${EIGEN3_INCLUDE_DIRS}
-            ${PCL_INCLUDE_DIRS}
-            ${Sophus_INCLUDE_DIRS}
-        )
-        target_link_libraries(test_iekf_estimator ${PCL_LIBRARIES} Sophus::Sophus)
+        # 2. IEKF/iKD-Tree 测试已移除: 旧的 fast_lio2_core 实现 (iekf_estimator.cpp/
+        #    ikd_tree.cpp) 已被 FAST-LIO2_ROS2 的 map_builder 核心替代, 旧测试 API 不再适用。
 
         # 3. 点云滤波器/IMU处理器测试已移除:
         #    test_point_cloud_filter.cpp / test_imu_processor.cpp 引用了
         #    不存在的 API (PointCloudFilterConfig/PointCloudFilterParams,
         #    ImuProcessor::setAccBias 等), 与当前实现不匹配, 属历史遗留。
-
-        # 4. iKD-Tree测试
-        ament_add_gtest(test_ikd_tree test/test_ikd_tree.cpp src/fast_lio2_core/ikd_tree.cpp)
-        target_include_directories(test_ikd_tree PRIVATE
-            include
-            ${EIGEN3_INCLUDE_DIRS}
-            ${PCL_INCLUDE_DIRS}
-            ${Sophus_INCLUDE_DIRS}
-        )
-        target_link_libraries(test_ikd_tree ${PCL_LIBRARIES} Sophus::Sophus)
 
         # MapManager测试已移除: test_map_manager.cpp 调用了不存在的
         # MapQualityEvaluator::evaluatePointCloud (实际为 evaluate),
@@ -237,8 +232,6 @@ if(BUILD_TESTING)
         # 安装测试可执行文件
         install(TARGETS
             test_types
-            test_iekf_estimator
-            test_ikd_tree
             DESTINATION lib/${PROJECT_NAME}
         )
     else()

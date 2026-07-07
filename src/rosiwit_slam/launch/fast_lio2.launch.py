@@ -2,56 +2,42 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch.substitutions import PathJoinSubstitution
+import os
 
 
 def generate_launch_description():
-    # 声明launch参数
     config_file_arg = DeclareLaunchArgument(
-        'config_file',
-        default_value='default.yaml',
-        description='Configuration file name'
-    )
+        'config_file', default_value='default.yaml')
 
     use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='false',
-        description='Use simulation time'
-    )
+        'use_sim_time', default_value='false')
 
     lidar_topic_arg = DeclareLaunchArgument(
-        'lidar_topic',
-        default_value='/velodyne_points',
-        description='LiDAR point cloud topic'
-    )
+        'lidar_topic', default_value='/velodyne_points')
 
     imu_topic_arg = DeclareLaunchArgument(
-        'imu_topic',
-        default_value='/imu',
-        description='IMU data topic'
-    )
+        'imu_topic', default_value='/imu')
 
-    # 配置文件路径
-    config_file_path = PathJoinSubstitution([
-        FindPackageShare('rosiwit_slam'),
-        'config',
-        LaunchConfiguration('config_file')
-    ])
+    # Resolve config path at launch time
+    from ament_index_python.packages import get_package_share_directory
+    config_dir = os.path.join(
+        get_package_share_directory('rosiwit_slam'), 'config')
 
-    # 创建节点
     slam_node = Node(
         package='rosiwit_slam',
         executable='rosiwit_slam',
         name='rosiwit_slam',
         output='screen',
-        parameters=[
-            {'config_file': config_file_path},
-            {'use_sim_time': LaunchConfiguration('use_sim_time')},
-            {'lidar_topic': LaunchConfiguration('lidar_topic')},
-            {'imu_topic': LaunchConfiguration('imu_topic')}
-        ]
+        parameters=[{
+            'config_path': os.path.join(config_dir, 'default.yaml'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'lidar_topic': LaunchConfiguration('lidar_topic'),
+            'imu_topic': LaunchConfiguration('imu_topic'),
+        }]
     )
 
     return LaunchDescription([

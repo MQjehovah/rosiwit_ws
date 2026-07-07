@@ -1,8 +1,6 @@
 /**
  * @file fast_lio2_node.h
- * @brief FAST-LIO2 SLAM - ROS2节点主类
- * @author AI Development Team
- * @date 2026-04-24
+ * @brief FAST-LIO2 SLAM - ROS2节点主类 (基于 FAST-LIO2_ROS2 MapBuilder 核心)
  */
 
 #pragma once
@@ -12,192 +10,82 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
-#include <geometry_msgs/msg/pose.hpp>
 #include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/static_transform_broadcaster.h>
-#include <std_srvs/srv/trigger.hpp>
 
-#include "fast_lio2_slam/common/types.h"
-#include "fast_lio2_slam/common/config.h"
-#include "fast_lio2_slam/common/thread_pool.h"
-#include "fast_lio2_slam/common/profiler.h"
-#include "fast_lio2_slam/data_preprocessor/point_cloud_converter.h"
-#include "fast_lio2_slam/data_preprocessor/point_cloud_filter.h"
-#include "fast_lio2_slam/data_preprocessor/imu_processor.h"
-#include "fast_lio2_slam/fast_lio2_core/iekf_estimator.h"
-#include "fast_lio2_slam/fast_lio2_core/ikd_tree.h"
-#include "fast_lio2_slam/odom_fusion/odom_fusion.h"
-#include "fast_lio2_slam/map_manager/map_manager.h"
-#include "fast_lio2_slam/map_manager/map_server.h"
-#include "fast_lio2_slam/map_manager/map_persistence.h"
-#include "fast_lio2_slam/map_manager/map_quality.h"
-#include "fast_lio2_slam/localization/global_localizer.h"
-#include "fast_lio2_slam/loop_closure/scan_context.h"
-#include "fast_lio2_slam/loop_closure/gtsam_backend.h"
+#include "utils.h"
+#include "map_builder/commons.h"
+#include "map_builder/map_builder.h"
 
 #include <mutex>
-#include <queue>
-#include <atomic>
 #include <deque>
-
-namespace fast_lio2_slam {
+#include <memory>
 
 /**
- * @brief FAST-LIO2 SLAM ROS2节点
+ * @brief FAST-LIO2 SLAM ROS2节点 (全局命名空间, 核心算法来自 FAST-LIO2_ROS2)
  */
-class FastLio2Node : public rclcpp::Node {
+class FastLio2Node : public rclcpp::Node
+{
 public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-    explicit FastLio2Node(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
-    ~FastLio2Node();
+    explicit FastLio2Node(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
+    ~FastLio2Node() override = default;
 
 private:
-    void initialize();
+    struct NodeConfig
+    {
+        std::string imu_topic = "/imu";
+        std::string lidar_topic = "/velodyne_points";
+        std::string body_frame = "base_link";
+        std::string world_frame = "odom";
+        bool print_time_cost = false;
+    };
+
+    struct StateData
+    {
+        bool lidar_pushed = false;
+        std::mutex imu_mutex;
+        std::mutex lidar_mutex;
+        double last_lidar_time = -1.0;
+        double last_imu_time = -1.0;
+        std::deque<IMUData> imu_buffer;
+        std::deque<std::pair<double, pcl::PointCloud<pcl::PointXYZINormal>::Ptr>> lidar_buffer;
+        nav_msgs::msg::Path path;
+    };
+
     void loadParameters();
-    void createSubscribers();
-    void createPublishers();
-    void createServices();
-    void initializeModules();
+    void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg);
+    void lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
 
-    void lidarCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
-    void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
-    void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+    bool syncPackage();
+    void timerCB();
+    void publishGlobalMap();
 
-    void processPointCloud(PointCloudData& cloud_data);
-    void performPrediction(double t_start, double t_end);
-    bool performUpdate(PointCloudPtr& cloud);
-    void updateMap(PointCloudPtr& cloud);
+    void publishCloud(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub,
+                      CloudType::Ptr cloud, std::string frame_id, const double &time);
+    void publishOdometry(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub,
+                         std::string frame_id, std::string child_frame, const double &time);
+    void publishPath(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub,
+                     std::string frame_id, const double &time);
+    void broadCastTF(std::shared_ptr<tf2_ros::TransformBroadcaster> broad_caster,
+                     std::string frame_id, std::string child_frame, const double &time);
 
-    void publishOdometry();
-    void publishPath();
-    void publishMap();
-    void publishTF();
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr m_lidar_sub;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr m_imu_sub;
 
-    void saveMapCallback(
-        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
-    void savePcdCallback(
-        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_body_cloud_pub;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_world_cloud_pub;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_global_map_pub;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr m_path_pub;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_pub;
+    rclcpp::TimerBase::SharedPtr m_map_timer;
+    rclcpp::TimerBase::SharedPtr m_timer;
 
-    void globalLocalizeCallback(
-        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
-    void setInitialPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg);
-
-    bool checkDataSync();
-    void undistortPointCloud(PointCloudData& cloud_data);
-    void saveProjectedMap(const PointCloudPtr& cloud, const std::string& base_path);
-
-    // 静止检测
-    bool isRobotStationary() const;
-    void updateStationaryState(const ImuData& imu);
-
-    // 闭环检测与优化
-    void detectLoopClosure(const PointCloudData& cloud_data);
-    void performGlobalOptimization();
-    void correctMapWithOptimization(const std::vector<SE3d>& corrected_poses);
-
-    // 关键帧管理
-    bool isKeyframe(const SE3d& pose) const;
-    void addKeyframe(int frame_id, const SE3d& pose, const PointCloudPtr& cloud);
-
-private:
-    // 配置
-    ConfigParams config_;
-    std::string config_file_path_;
-
-    // ROS2接口
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr keyframe_pub_;
-
-    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
-
-    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
-    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_pcd_srv_;
-    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr global_localize_srv_;
-    rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr initial_pose_sub_;
-
-    // 数据缓冲
-    ImuBuffer imu_buffer_;
-    std::queue<PointCloudData> point_cloud_queue_;
-    std::mutex cloud_queue_mutex_;
-
-    // 核心模块
-    std::unique_ptr<PointCloudConverter> point_cloud_converter_;
-    std::unique_ptr<PointCloudFilter> point_cloud_filter_;
-    std::unique_ptr<ImuProcessor> imu_processor_;
-    std::unique_ptr<IekfEstimator> iekf_estimator_;
-    std::unique_ptr<IKdTree> ikd_tree_;
-    std::unique_ptr<OdomFusion> odom_fusion_;
-    std::unique_ptr<MapManager> map_manager_;
-
-    // 性能优化模块
-    std::unique_ptr<ThreadPool> thread_pool_;
-    ThreadPoolConfig thread_pool_config_;
-
-    // 建图增强模块
-    std::unique_ptr<MapServer> map_server_;
-    std::unique_ptr<MapPersistence> map_persistence_;
-    std::unique_ptr<MapQualityEvaluator> map_quality_;
-
-    // 全局定位模块
-    std::unique_ptr<GlobalLocalizer> global_localizer_;
-    LocalizationState localization_state_;
-    std::mutex localization_mutex_;
-
-    // 闭环检测模块
-    std::unique_ptr<ScanContext> scan_context_;
-    std::unique_ptr<GtsamBackend> gtsam_backend_;
-    int last_loop_detect_frame_;
-    std::vector<PoseNode> pose_graph_;
-
-    // 里程计数据缓冲
-    std::deque<OdomData> odom_buffer_;
-    std::mutex odom_buffer_mutex_;
-
-    // 状态
-    State current_state_;
-    std::vector<SE3d> pose_history_;
-    nav_msgs::msg::Path path_msg_;
-
-    // LiDAR->IMU 外参 (用于将LiDAR点变换到IMU系再做状态更新)
-    Matrix3d R_il_ = Matrix3d::Identity();
-    Vector3d t_il_ = Vector3d::Zero();
-
-    std::atomic<bool> system_initialized_;
-    std::atomic<bool> is_processing_;
-    std::atomic<bool> first_scan_received_;
-
-    int scan_count_;
-    int keyframe_count_;
-    double last_scan_time_;
-
-    // 静止检测
-    bool is_stationary_;
-    int stationary_frame_count_;
-    double imu_acc_variance_;
-    double imu_gyro_variance_;
-    Vector3d last_imu_acc_mean_;
-    Vector3d last_imu_gyro_mean_;
-    int imu_variance_sample_count_;
-    static constexpr int kStationarySampleWindow = 10;
-    static constexpr double kStationaryAccThreshold = 0.3;
-    static constexpr double kStationaryGyroThreshold = 0.02;
-
-    // 定时器
-    rclcpp::TimerBase::SharedPtr process_timer_;
-    rclcpp::TimerBase::SharedPtr map_timer_;
-    rclcpp::TimerBase::SharedPtr path_timer_;
+    StateData m_state_data;
+    SyncPackage m_package;
+    NodeConfig m_node_config;
+    Config m_builder_config;
+    std::shared_ptr<IESKF> m_kf;
+    std::shared_ptr<MapBuilder> m_builder;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf_broadcaster;
 };
-
-} // namespace fast_lio2_slam
