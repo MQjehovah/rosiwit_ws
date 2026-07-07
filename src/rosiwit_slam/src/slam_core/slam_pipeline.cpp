@@ -1,6 +1,7 @@
 #include "slam_core/slam_pipeline.h"
 #include "slam_core/slam_factory.h"
 #include <yaml-cpp/yaml.h>
+#include <iostream>
 
 namespace rosiwit_slam {
 
@@ -98,18 +99,19 @@ void SlamPipeline::onImu(const IMUSample& s) {
 
 void SlamPipeline::onLidar(const LidarFrame& f) {
     if (m_is_localization_mode && m_localization) {
-        // 定位模式: 绕过 SlamBase 同步, 直接处理
         m_localization->onLidar(f);
-        // 发布最新定位结果
-        if (m_localization->getStatus() == ILocalization::LOCALIZED) {
+        auto st = m_localization->getStatus();
+        if (st == ILocalization::LOCALIZED) {
             SlamOutput out;
             m_localization->getPose(out.pose);
             out.state = SlamState::RUNNING;
             out.has_new_pose = true;
             emitOutput(out);
+            std::cout << "[Loc] LOCALIZED: " << out.pose.trans.x() << " "
+                      << out.pose.trans.y() << " " << out.pose.trans.z() << std::endl;
         }
     } else {
-        SlamBase::onLidar(f);  // mapping 模式: 走原同步缓冲
+        SlamBase::onLidar(f);
     }
 }
 

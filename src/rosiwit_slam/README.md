@@ -32,6 +32,22 @@ ros2 launch rosiwit_slam slam.launch.py
 
 启动后日志:`SlamNode ready: algo=fast_lio2 imu=/imu lidar=/velodyne_points`。
 
+## 常用接口
+
+# 保存 3D 点云地图
+ros2 service call /save_map rosiwit_slam/srv/SaveMap "{path: 'map.pcd'}"
+
+# 保存 2D 占据栅格图(供 nav2 导航)
+ros2 service call /save_grid_map rosiwit_slam/srv/SaveGridMap \
+  "{pgm_path: 'map.pgm', yaml_path: 'map.yaml', resolution: 0.05}"
+
+# 加载地图(定位模式使用)
+ros2 service call /load_map rosiwit_slam/srv/LoadMap "{path: 'map.pcd'}"
+
+# 切换模式
+ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'mapping'}"
+ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'localization'}"
+
 ---
 
 ## 架构
@@ -104,22 +120,15 @@ gtest 覆盖工厂机制 + IMU/LiDAR 时间同步,不依赖 ROS 运行时。
 
 ---
 
-
-
-# 保存 3D 点云地图
-ros2 service call /save_map rosiwit_slam/srv/SaveMap "{path: 'map.pcd'}"
-
-# 保存 2D 占据栅格图(供 nav2 导航)
-ros2 service call /save_grid_map rosiwit_slam/srv/SaveGridMap \
-  "{pgm_path: 'map.pgm', yaml_path: 'map.yaml', resolution: 0.05}"
-
-# 加载地图(定位模式使用)
-ros2 service call /load_map rosiwit_slam/srv/LoadMap "{path: 'map.pcd'}"
-
-# 切换模式
-ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'mapping'}"
-ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'localization'}"
-
 ## 许可证
 
 MIT
+
+
+## TODO
+
+- [] 增加空闲状态，启动默认空闲状态，切换到定位/建图
+- [] 兼容rviz重定位，加载地图时给定初始位姿用于定位，并提供重定位ROS接口
+- [] 修复生成栅格地图特征点少问题
+- [] 建图模式与定位模式是否共享数据，随时可以在建图和定位模式切换
+- [] 发布栅格地图话题，在定位模式下确认机器人位置
