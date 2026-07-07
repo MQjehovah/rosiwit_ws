@@ -219,7 +219,6 @@ if(BUILD_TESTING)
             src/algorithms/fast_lio2/map_builder/imu_processor.cpp
             src/algorithms/fast_lio2/map_builder/lidar_processor.cpp
             src/algorithms/fast_lio2/map_builder/ikd_Tree.cpp
-            src/algorithms/fast_lio2/map_builder/utils.cpp
             src/algorithms/fast_lio2/map_builder/map_builder.cpp)
         target_include_directories(test_slam_factory PRIVATE
             include src src/algorithms/fast_lio2 src/algorithms/fast_lio2/map_builder
@@ -228,9 +227,6 @@ if(BUILD_TESTING)
         if(yaml-cpp_FOUND)
             target_link_libraries(test_slam_factory yaml-cpp)
         endif()
-        # utils.cpp (map_builder) 经 pcl::fromROSMsg 间接依赖 rclcpp/sensor_msgs/pcl_conversions
-        ament_target_dependencies(test_slam_factory
-            rclcpp sensor_msgs pcl_conversions builtin_interfaces std_msgs)
         install(TARGETS test_slam_factory DESTINATION lib/${PROJECT_NAME})
 
         # 5. SlamBase 同步基类单元测试 (Phase A)

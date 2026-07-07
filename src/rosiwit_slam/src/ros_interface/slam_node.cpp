@@ -4,7 +4,7 @@
 #include "slam_core/slam_base.h"   // dynamic_cast to call tryPopAndProcess
 #include <pcl_conversions/pcl_conversions.h>
 #include <yaml-cpp/yaml.h>
-#include "utils.h"                 // Utils::ros2PCL / getSec / getTime (map_builder)
+#include "ros_interface/ros_utils.h"   // RosRosUtils::ros2PCL / getSec / getTime (ROS 层)
 
 using namespace std::chrono_literals;
 
@@ -76,17 +76,17 @@ void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {
     IMUSample s;
     s.acc  = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
     s.gyro = V3D(msg->angular_velocity.x,    msg->angular_velocity.y,    msg->angular_velocity.z);
-    s.time = Utils::getSec(msg->header);
+    s.time = RosUtils::getSec(msg->header);
     m_algo->onImu(s);
 }
 
 void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     LidarFrame f;
-    f.cloud = Utils::ros2PCL(msg, m_cfg.lidar_filter_num, m_cfg.lidar_min_range, m_cfg.lidar_max_range);
+    f.cloud = RosUtils::ros2PCL(msg, m_cfg.lidar_filter_num, m_cfg.lidar_min_range, m_cfg.lidar_max_range);
     // 沿用现状: 按点时间(curvature 存偏移)排序
     std::sort(f.cloud->points.begin(), f.cloud->points.end(),
               [](const PointType& a, const PointType& b){ return a.curvature < b.curvature; });
-    f.start_time = Utils::getSec(msg->header);
+    f.start_time = RosUtils::getSec(msg->header);
     f.end_time   = f.start_time + (f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0);
     m_algo->onLidar(f);
 }
@@ -172,6 +172,6 @@ void SlamNode::mapTimerCB() {
     m_global_map_pub->publish(m);
 }
 
-builtin_interfaces::msg::Time SlamNode::toRosTime(double sec) { return Utils::getTime(sec); }
+builtin_interfaces::msg::Time SlamNode::toRosTime(double sec) { return RosUtils::getTime(sec); }
 
 } // namespace rosiwit_slam
