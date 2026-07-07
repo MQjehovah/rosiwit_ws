@@ -30,7 +30,7 @@ def generate_launch_description():
     from ament_index_python.packages import get_package_share_directory
     pkg_share = get_package_share_directory('rosiwit_slam')
     config_default = os.path.join(pkg_share, 'config', 'default.yaml')
-    rviz_config = os.path.join(pkg_share, 'rviz', 'fast_lio2.rviz')
+    rviz_config = os.path.join(pkg_share, 'rviz', 'slam.rviz')
 
     slam_node = Node(
         package='rosiwit_slam',
