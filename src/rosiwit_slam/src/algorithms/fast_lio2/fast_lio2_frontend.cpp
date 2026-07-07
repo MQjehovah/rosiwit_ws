@@ -52,7 +52,8 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
     fast_imus.reserve(m_imu_buffer.size());
     while (!m_imu_buffer.empty()) {
         const auto& s = m_imu_buffer.front();
-        fast_imus.emplace_back(s.acc, s.gyro, s.time);
+        double t = s.time;
+        fast_imus.emplace_back(s.acc, s.gyro, t);
         m_imu_buffer.pop_front();
     }
 
