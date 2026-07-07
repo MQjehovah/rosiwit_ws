@@ -38,12 +38,14 @@ class GroundTextureMapper(Node):
 
         self.bridge = CvBridge()
         self.latest_bev = None
-        self.latest_pose = None
+        self.latest_bev_stamp = None
         self.frame_count = 0
 
+        # 时间戳位姿缓冲区 (用于插值同步)
+        self.pose_buffer = []  # [(timestamp_sec, x, y, yaw), ...]
+        self.max_pose_buffer = 500
+
         # Canvas: growing global texture map
-        # Canvas coordinate: pixel (0,0) at top-left
-        # World coordinate: origin (0,0) at canvas center initially
         self.canvas_size = INITIAL_CANVAS_SIZE
         self.canvas_center_x = self.canvas_size // 2
         self.canvas_center_y = self.canvas_size // 2
@@ -76,17 +78,58 @@ class GroundTextureMapper(Node):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
-        # Extract yaw from quaternion
         yaw = math.atan2(
             2.0 * (q.w * q.z + q.x * q.y),
             1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        self.latest_pose = (x, y, yaw)
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+
+        self.pose_buffer.append((stamp, x, y, yaw))
+        if len(self.pose_buffer) > self.max_pose_buffer:
+            self.pose_buffer.pop(0)
 
     def _bev_callback(self, msg):
         try:
             self.latest_bev = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+            self.latest_bev_stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         except Exception as e:
             self.get_logger().warn(f'BEV decode failed: {e}')
+
+    def _get_pose_at(self, timestamp):
+        """在位姿缓冲区中插值获取指定时间戳的位姿"""
+        if len(self.pose_buffer) < 2:
+            return None
+
+        # 二分查找最近的位姿
+        stamps = [p[0] for p in self.pose_buffer]
+        import bisect
+        idx = bisect.bisect_left(stamps, timestamp)
+
+        if idx == 0:
+            return self.pose_buffer[0][1:]  # 太早，用最早的
+        if idx >= len(self.pose_buffer):
+            return self.pose_buffer[-1][1:]  # 太晚，用最新的
+
+        # 在 idx-1 和 idx 之间线性插值
+        t0, x0, y0, yaw0 = self.pose_buffer[idx - 1]
+        t1, x1, y1, yaw1 = self.pose_buffer[idx]
+        if t1 == t0:
+            return (x0, y0, yaw0)
+
+        alpha = (timestamp - t0) / (t1 - t0)
+        alpha = max(0.0, min(1.0, alpha))
+
+        x = x0 + alpha * (x1 - x0)
+        y = y0 + alpha * (y1 - y0)
+
+        # 角度插值 (处理 wrap-around)
+        dyaw = yaw1 - yaw0
+        if dyaw > math.pi:
+            dyaw -= 2 * math.pi
+        elif dyaw < -math.pi:
+            dyaw += 2 * math.pi
+        yaw = yaw0 + alpha * dyaw
+
+        return (x, y, yaw)
 
     def _refine_pose(self, bev, x, y, yaw):
         """
@@ -176,11 +219,16 @@ class GroundTextureMapper(Node):
         return x, y, yaw
 
     def _stitch_frame(self):
-        if self.latest_bev is None or self.latest_pose is None:
+        if self.latest_bev is None or self.latest_bev_stamp is None:
+            return
+
+        # 用 AVM 图像时间戳插值获取对应位姿 (解决运动中不同步)
+        pose = self._get_pose_at(self.latest_bev_stamp)
+        if pose is None:
             return
 
         bev = self.latest_bev
-        x, y, yaw = self.latest_pose
+        x, y, yaw = pose
 
         # Refine pose using local template matching
         x, y, yaw = self._refine_pose(bev, x, y, yaw)
