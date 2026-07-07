@@ -11,8 +11,9 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-// Sophus SE3实现 (简化版，基于Eigen)
-#include "sophus_se3.hpp"
+// Sophus SE3/SO3 (系统库)
+#include <sophus/se3.hpp>
+#include <sophus/so3.hpp>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
 #include <vector>
@@ -93,7 +94,7 @@ struct State {
      */
     void fromSE3(const SE3d& se3) {
         position = se3.translation();
-        rotation = se3.rotation().quaternion();
+        rotation = se3.so3().unit_quaternion();
     }
 
     /**
@@ -218,8 +219,8 @@ public:
             }
         }
 
-        // 清除已消耗的旧数据（保留 t_end 之后的）
-        while (!buffer_.empty() && buffer_.front().timestamp < t_end) {
+        // 只清除 t_start 之前的旧数据，保留 t_start~t_end 之间的数据供下次使用
+        while (!buffer_.empty() && buffer_.front().timestamp < t_start) {
             buffer_.pop_front();
         }
 

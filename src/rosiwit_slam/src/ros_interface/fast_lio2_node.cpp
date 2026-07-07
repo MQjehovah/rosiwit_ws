@@ -177,6 +177,10 @@ void FastLio2Node::createServices() {
 }
 
 void FastLio2Node::initializeModules() {
+    // LiDAR->IMU 外参 (从配置读取, 欧拉角转旋转矩阵)
+    R_il_ = eulerToRotationMatrix(config_.lidar.rotation_euler);
+    t_il_ = config_.lidar.translation;
+
     ConverterConfig converter_config;
     converter_config.curvature_method = ConverterConfig::CurvatureMethod::NEIGHBOR_BASED;
     converter_config.normal_method = ConverterConfig::NormalMethod::PCA_BASED;
@@ -364,8 +368,6 @@ void FastLio2Node::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
     imu_buffer_.push(imu);
     imu_processor_->addImuData(imu);
 
-    updateStationaryState(imu);
-
     static int imu_count = 0;
     imu_count++;
     if (imu_count <= 3 || imu_count % 100 == 0) {
@@ -440,25 +442,14 @@ void FastLio2Node::processPointCloud(PointCloudData& cloud_data) {
     }
 
     PROFILE_START(iekf_update);
-    bool iekf_success = true;
-    bool robot_stationary = isRobotStationary();
-
-    if (robot_stationary && scan_count_ >= 2) {
-        current_state_.velocity.setZero();
-        if (process_count <= 60 || process_count % 50 == 0) {
-            RCLCPP_INFO(this->get_logger(), "Stationary: skipping IEKF update, keeping pose (%.3f,%.3f,%.3f)",
-                        current_state_.position.x(), current_state_.position.y(), current_state_.position.z());
-        }
-    } else {
-        iekf_success = performUpdate(filtered_cloud);
-        if (!iekf_success) {
-            RCLCPP_WARN(this->get_logger(), "IEKF update failed");
-        }
+    bool iekf_success = performUpdate(filtered_cloud);
+    if (!iekf_success) {
+        RCLCPP_WARN(this->get_logger(), "IEKF update failed");
     }
     PROFILE_END(iekf_update);
 
     PROFILE_START(map_update);
-    if (iekf_success && !robot_stationary) {
+    if (iekf_success) {
         updateMap(filtered_cloud);
     }
     PROFILE_END(map_update);
@@ -520,10 +511,6 @@ void FastLio2Node::performPrediction(double t_start, double t_end) {
     iekf_estimator_->predictBatch(imu_data);
     current_state_ = iekf_estimator_->getState();
     current_state_.timestamp = t_end;
-
-    if (isRobotStationary()) {
-        current_state_.velocity.setZero();
-    }
 }
 
 bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
@@ -538,126 +525,89 @@ bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
         return false;
     }
 
-    PointCloudPtr transformed_cloud(new pcl::PointCloud<PointType>());
-    SE3d current_pose = current_state_.toSE3();
-    transformPointCloud(cloud, transformed_cloud, current_pose);
+    const int K = 5;
+    const double plane_threshold = 0.1;
+    const double score_threshold = 0.9;
+    const double max_sq_dist = 5.0;
+    const int min_effective_features = 10;
 
-    // 检测旋转: 从IMU获取当前角速度
-    ImuData latest_imu;
-    double angular_rate = 0.0;
-    if (imu_buffer_.getLatest(latest_imu)) {
-        angular_rate = latest_imu.gyro.norm();
-    }
-    bool is_rotating = angular_rate > 0.15;
-    int actual_max_iter = is_rotating ? std::max(8, config_.iekf.max_iterations) : config_.iekf.max_iterations;
-    double search_radius = is_rotating ? config_.iekf.max_correspondence_distance * 1.5
-                                       : config_.iekf.max_correspondence_distance;
+    static int update_cnt = 0;
+    update_cnt++;
 
-    for (int iter = 0; iter < actual_max_iter; ++iter) {
+    for (int iter = 0; iter < 1; ++iter) {
+        SE3d current_pose = current_state_.toSE3();
+        const Matrix3d R = current_pose.so3().matrix();
+        const Vector3d t = current_pose.translation();
+
         std::vector<Vector3d> source_points;
-        std::vector<Vector3d> target_points;
-        std::vector<Vector3d> target_normals;
-        std::vector<int> valid_indices;
+        std::vector<Vector3d> plane_normals;
+        std::vector<double> plane_dists;
+        source_points.reserve(cloud->size());
+        plane_normals.reserve(cloud->size());
+        plane_dists.reserve(cloud->size());
 
-        for (size_t i = 0; i < transformed_cloud->size(); ++i) {
-            PointType query = transformed_cloud->points[i];
-            PointType nearest;
-            double dist;
+        for (size_t i = 0; i < cloud->size(); ++i) {
+            const PointType& pt_body = cloud->points[i];
+            Vector3d p_body(pt_body.x, pt_body.y, pt_body.z);
+            // 应用外参: LiDAR -> IMU -> World
+            Vector3d p_imu = R_il_ * p_body + t_il_;
+            Vector3d p_world = R * p_imu + t;
 
-            if (ikd_tree_->nearestSearch(query, nearest, dist)) {
-                if (dist < search_radius) {
-                    valid_indices.push_back(i);
-                    source_points.push_back(Vector3d(cloud->points[i].x,
-                                                     cloud->points[i].y,
-                                                     cloud->points[i].z));
-                    target_points.push_back(Vector3d(nearest.x, nearest.y, nearest.z));
-                    target_normals.push_back(Vector3d(nearest.normal_x,
-                                                     nearest.normal_y,
-                                                     nearest.normal_z));
-                }
-            }
+            PointType query;
+            query.x = p_world.x();
+            query.y = p_world.y();
+            query.z = p_world.z();
+
+            std::vector<PointType> neighbors;
+            std::vector<double> sq_dists;
+            if (!ikd_tree_->kNearestSearch(query, K, neighbors, sq_dists)) continue;
+            if (static_cast<int>(neighbors.size()) < K) continue;
+            if (sq_dists[K - 1] > max_sq_dist) continue;
+
+            Eigen::Vector4d pabcd;
+            if (!esti_plane(neighbors, plane_threshold, pabcd)) continue;
+
+            double pd2 = pabcd(0) * p_world.x() +
+                         pabcd(1) * p_world.y() +
+                         pabcd(2) * p_world.z() +
+                         pabcd(3);
+            double body_norm = p_body.norm();
+            if (body_norm < 1e-6) continue;
+            double s = 1.0 - 0.9 * std::fabs(pd2) / std::sqrt(body_norm);
+            if (s <= score_threshold) continue;
+
+            source_points.push_back(p_imu);
+            plane_normals.push_back(Vector3d(pabcd(0), pabcd(1), pabcd(2)));
+            plane_dists.push_back(pd2);
         }
 
-        static int update_cnt = 0;
-        update_cnt++;
         if (iter == 0) {
             RCLCPP_INFO(this->get_logger(),
-                "performUpdate iter0 #%d: pts=%zu, valid=%zu, pose=(%.4f,%.4f,%.4f), map_pts=%zu",
-                update_cnt, transformed_cloud->size(), valid_indices.size(),
-                current_pose.translation()(0), current_pose.translation()(1),
-                current_pose.translation()(2), ikd_tree_->size());
+                "performUpdate #%d iter0: pts=%zu, effect=%zu, pose=(%.4f,%.4f,%.4f), map_pts=%zu",
+                update_cnt, cloud->size(), source_points.size(),
+                t(0), t(1), t(2), ikd_tree_->size());
         }
 
-        if (valid_indices.size() < 10) {
-            double min_d = 1e9, max_d = 0, sample_d = 0;
-            int sampled = 0;
-            for (size_t i = 0; i < transformed_cloud->size() && sampled < 200; ++i) {
-                PointType nn; double dd;
-                if (ikd_tree_->nearestSearch(transformed_cloud->points[i], nn, dd)) {
-                    min_d = std::min(min_d, dd); max_d = std::max(max_d, dd); sample_d += dd; sampled++;
-                }
-            }
+        if (static_cast<int>(source_points.size()) < min_effective_features) {
             bool has_nan = !std::isfinite(current_state_.position(0)) ||
                            !std::isfinite(current_state_.rotation.w());
             RCLCPP_WARN(this->get_logger(),
-                "Too few valid=%zu | pose=(%.4f,%.4f,%.4f) q=(%.4f,%.4f,%.4f,%.4f) | "
-                "nn_dist min=%.3f max=%.3f avg=%.3f | map_pts=%zu pts=%zu%s",
-                valid_indices.size(),
+                "Too few effective features=%zu (need %d) | pose=(%.4f,%.4f,%.4f) | map_pts=%zu pts=%zu%s",
+                source_points.size(), min_effective_features,
                 current_state_.position(0), current_state_.position(1), current_state_.position(2),
-                current_state_.rotation.x(), current_state_.rotation.y(),
-                current_state_.rotation.z(), current_state_.rotation.w(),
-                min_d, max_d, sampled ? sample_d / sampled : -1.0,
                 ikd_tree_->size(), cloud->size(),
                 has_nan ? "  <<< NaN STATE" : "");
-            // 对应点太少但非零时, 用点对点ICP而非直接失败
-            if (valid_indices.size() > 3) {
-                RCLCPP_WARN(this->get_logger(), "Too few valid but trying point-to-point update with %zu points",
-                            valid_indices.size());
-                std::vector<std::pair<int, int>> correspondences;
-                correspondences.reserve(valid_indices.size());
-                for (size_t ci = 0; ci < valid_indices.size(); ++ci) {
-                    correspondences.emplace_back(valid_indices[ci], valid_indices[ci]);
-                }
-                iekf_estimator_->setState(current_state_);
-                bool p2p_success = iekf_estimator_->update(source_points, target_points, correspondences);
-                if (p2p_success) {
-                    current_state_ = iekf_estimator_->getState();
-                    current_pose = current_state_.toSE3();
-                    transformPointCloud(cloud, transformed_cloud, current_pose);
-                    continue;
-                }
-            }
-            return false;
+            break;
         }
 
         iekf_estimator_->setState(current_state_);
-        // 检查法向量是否有效 (非零), 否则退化为点对点ICP
-        bool has_valid_normals = false;
-        for (size_t ni = 0; ni < target_normals.size() && ni < 20; ++ni) {
-            if (target_normals[ni].squaredNorm() > 1e-6) {
-                has_valid_normals = true;
-                break;
-            }
-        }
-
-        bool success = false;
-        if (has_valid_normals) {
-            success = iekf_estimator_->updateWithNormals(source_points, target_points,
-                                                          target_normals, valid_indices);
-        } else {
-            // 无法向量时使用点对点ICP
-            std::vector<std::pair<int, int>> correspondences;
-            correspondences.reserve(valid_indices.size());
-            for (size_t ci = 0; ci < valid_indices.size(); ++ci) {
-                correspondences.emplace_back(valid_indices[ci], valid_indices[ci]);
-            }
-            success = iekf_estimator_->update(source_points, target_points, correspondences);
-        }
+        bool success = iekf_estimator_->updateWithNormals(
+            source_points, plane_normals, plane_dists, {});
 
         if (success) {
             current_state_ = iekf_estimator_->getState();
-            current_pose = current_state_.toSE3();
-            transformPointCloud(cloud, transformed_cloud, current_pose);
+        } else {
+            break;
         }
     }
 
@@ -665,68 +615,66 @@ bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
 }
 
 void FastLio2Node::updateMap(PointCloudPtr& cloud) {
-    static SE3d last_kf_pose = SE3d();
-    static bool kf_init = false;
+    if (cloud->empty()) return;
 
-    SE3d current_pose = current_state_.toSE3();
+    const State& state = current_state_;
+    SE3d current_pose = state.toSE3();
 
-    if (!kf_init) {
-        last_kf_pose = current_pose;
-        kf_init = true;
-    }
+    // Transform cloud to world frame
+    PointCloudPtr world_cloud(new pcl::PointCloud<PointType>());
+    transformPointCloud(cloud, world_cloud, current_pose);
 
-    double move_dist = (current_pose.translation() - last_kf_pose.translation()).norm();
-    double yaw_now = std::atan2(2.0 * (current_state_.rotation.w() * current_state_.rotation.z()),
-                                1.0 - 2.0 * (current_state_.rotation.z() * current_state_.rotation.z()));
-    static double last_kf_yaw = 0.0;
-    if (!kf_init) last_kf_yaw = yaw_now;
-    double dyaw = std::fabs(yaw_now - last_kf_yaw);
+    // Per-voxel deduplication (like FAST-LIO2's incrCloudMap)
+    double map_res = config_.iekf.map_leaf_size;  // 0.2m
+    PointCloudPtr points_to_add(new pcl::PointCloud<PointType>());
+    PointCloudPtr points_no_downsample(new pcl::PointCloud<PointType>());
 
-    const double keyframe_dist = 0.3;
-    const double keyframe_yaw = 0.2;
+    for (const auto& p_world : world_cloud->points) {
+        // Compute voxel center
+        double mid_x = std::floor(p_world.x / map_res) * map_res + 0.5 * map_res;
+        double mid_y = std::floor(p_world.y / map_res) * map_res + 0.5 * map_res;
+        double mid_z = std::floor(p_world.z / map_res) * map_res + 0.5 * map_res;
 
-    // 关键帧判断: 满足运动距离或角度变化则创建关键帧
-    if (move_dist > keyframe_dist || dyaw > keyframe_yaw) {
-        PointCloudPtr transformed_cloud(new pcl::PointCloud<PointType>());
-        transformPointCloud(cloud, transformed_cloud, current_pose);
-
-        // 更新ikd-tree地图
-        ikd_tree_->insertPointCloud(transformed_cloud);
-
-        // 更新MapManager (用于持久化和子地图管理)
-        if (map_manager_) {
-            map_manager_->addPointCloud(transformed_cloud, current_pose, scan_count_);
+        // Find nearest neighbor in map
+        PointType query = p_world;
+        PointType nearest;
+        double dist;
+        if (!ikd_tree_->nearestSearch(query, nearest, dist)) {
+            // No nearby point → add without downsample
+            points_no_downsample->push_back(p_world);
+            continue;
         }
 
-        // 更新闭环检测用的关键帧
-        if (config_.loop_closure.enable && scan_context_) {
-            int keyframe_id = keyframe_count_++;
-            pose_graph_.emplace_back(keyframe_id, current_pose, current_state_.timestamp, scan_count_);
+        // Check if existing point is in the same voxel and closer to center
+        double nearest_dist_to_center = std::sqrt(
+            (nearest.x - mid_x) * (nearest.x - mid_x) +
+            (nearest.y - mid_y) * (nearest.y - mid_y) +
+            (nearest.z - mid_z) * (nearest.z - mid_z));
+        double point_dist_to_center = std::sqrt(
+            (p_world.x - mid_x) * (p_world.x - mid_x) +
+            (p_world.y - mid_y) * (p_world.y - mid_y) +
+            (p_world.z - mid_z) * (p_world.z - mid_z));
 
-            // 生成 Scan Context 描述子并添加
-            ScanContextDescriptor desc = scan_context_->makeDescriptor(
-                transformed_cloud, current_state_.timestamp, keyframe_id, current_pose);
-            scan_context_->addKeyframe(desc);
-
-            // 添加位姿到GTSAM后端
-            if (gtsam_backend_) {
-                if (pose_graph_.size() == 1) {
-                    gtsam_backend_->addPriorFactor(keyframe_id, current_pose);
-                } else if (pose_graph_.size() >= 2) {
-                    int prev_id = pose_graph_[pose_graph_.size() - 2].id;
-                    SE3d relative_pose = last_kf_pose.inverse() * current_pose;
-                    gtsam_backend_->addOdomFactor(prev_id, keyframe_id, relative_pose);
-                }
-            }
+        if (nearest_dist_to_center < point_dist_to_center) {
+            // Existing point is better → skip
+            continue;
         }
 
-        last_kf_pose = current_pose;
-        last_kf_yaw = yaw_now;
+        // This point is better → add with downsample
+        points_to_add->push_back(p_world);
     }
 
-    // 条件性重建: 删除点过多时重建树
-    if (ikd_tree_->getDeletedCount() > static_cast<int>(ikd_tree_->size() * 0.3)) {
-        ikd_tree_->rebuildTree();
+    // Insert into ikd-tree
+    if (!points_to_add->empty()) {
+        ikd_tree_->insertPointCloud(points_to_add);
+    }
+    if (!points_no_downsample->empty()) {
+        ikd_tree_->insertPointCloud(points_no_downsample);
+    }
+
+    // Also update MapManager
+    if (map_manager_) {
+        map_manager_->addPointCloud(world_cloud, current_pose, scan_count_);
     }
 }
 

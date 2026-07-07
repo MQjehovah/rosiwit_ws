@@ -21,7 +21,7 @@ void GtsamBackend::initialize(const GtsamBackendConfig& config) {
     gtsam::ISAM2Params isam_params;
     isam_params.relinearizeThreshold = config_.wildfire_threshold;
     isam_params.relinearizeSkip = config_.relinearize_skip;
-    isam_params.enablePartialRelinearizeCheck = true;
+    isam_params.enablePartialRelinearizationCheck = true;
     isam_params.cacheLinearizedFactors = true;
     isam_params.findUnusedFactorSlots = true;
 
@@ -46,7 +46,7 @@ void GtsamBackend::initialize(const GtsamBackendConfig& config) {
 void GtsamBackend::reset() {
     clear();
 #ifdef USE_GTSAM
-    isam_.reset();
+    isam_ = gtsam::ISAM2();
     initial_estimate_.clear();
     current_estimate_.clear();
     latest_node_id_ = -1;
@@ -57,7 +57,7 @@ void GtsamBackend::addPriorFactor(int id, const SE3d& pose) {
 #ifdef USE_GTSAM
     // 使用GTSAM添加先验因子
     gtsam::Pose3 gtsam_pose(
-        gtsam::Rot3(pose.rotationMatrix()),
+        gtsam::Rot3(pose.so3().matrix()),
         gtsam::Point3(pose.translation().x(), pose.translation().y(), pose.translation().z()));
 
     // 添加先验因子
@@ -83,7 +83,7 @@ void GtsamBackend::addOdomFactor(int from_id, int to_id, const SE3d& relative_po
 #ifdef USE_GTSAM
     // GTSAM实现：添加BetweenFactor
     gtsam::Pose3 relative_gtsam(
-        gtsam::Rot3(relative_pose.rotationMatrix()),
+        gtsam::Rot3(relative_pose.so3().matrix()),
         gtsam::Point3(relative_pose.translation().x(),
                       relative_pose.translation().y(),
                       relative_pose.translation().z()));
@@ -131,7 +131,7 @@ void GtsamBackend::addLoopClosureFactor(int from_id, int to_id, const SE3d& rela
 #ifdef USE_GTSAM
     // GTSAM实现：添加闭环BetweenFactor
     gtsam::Pose3 relative_gtsam(
-        gtsam::Rot3(relative_pose.rotationMatrix()),
+        gtsam::Rot3(relative_pose.so3().matrix()),
         gtsam::Point3(relative_pose.translation().x(),
                       relative_pose.translation().y(),
                       relative_pose.translation().z()));

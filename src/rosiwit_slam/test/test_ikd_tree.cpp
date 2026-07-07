@@ -1,6 +1,6 @@
 /**
  * @file test_ikd_tree.cpp
- * @brief 单元测试 - iKD-Tree增量地图
+ * @brief 单元测试 - KdTree封装 (基于PCL KdTreeFLANN)
  * @author AI Development Team - Test Engineer
  * @date 2026-04-24
  */
@@ -51,20 +51,20 @@ protected:
 
 TEST_F(IkdTreeTest, DefaultInitialization) {
     EXPECT_EQ(tree_->size(), 0);
-    EXPECT_FALSE(tree_->isInitialized());
+    EXPECT_TRUE(tree_->empty());
 }
 
-TEST_F(IkdTreeTest, Initialize) {
-    tree_->initialize(test_cloud_);
+TEST_F(IkdTreeTest, Build) {
+    tree_->build(test_cloud_);
 
-    EXPECT_TRUE(tree_->isInitialized());
     EXPECT_EQ(tree_->size(), test_cloud_->points.size());
+    EXPECT_FALSE(tree_->empty());
 }
 
 // ==================== 增量插入测试 ====================
 
 TEST_F(IkdTreeTest, IncrementalInsert_SinglePoint) {
-    tree_->initialize(test_cloud_);
+    tree_->build(test_cloud_);
     size_t initial_size = tree_->size();
 
     pcl::PointXYZINormal new_pt;
@@ -79,7 +79,7 @@ TEST_F(IkdTreeTest, IncrementalInsert_SinglePoint) {
 }
 
 TEST_F(IkdTreeTest, IncrementalInsert_MultiplePoints) {
-    tree_->initialize(test_cloud_);
+    tree_->build(test_cloud_);
     size_t initial_size = tree_->size();
 
     // 插入100个新点
@@ -98,21 +98,21 @@ TEST_F(IkdTreeTest, IncrementalInsert_MultiplePoints) {
 // ==================== 最近邻搜索测试 ====================
 
 TEST_F(IkdTreeTest, NearestNeighbor_Basic) {
-    tree_->initialize(test_cloud_);
+    tree_->build(test_cloud_);
 
     // 使用已知点查询
     pcl::PointXYZINormal query = test_cloud_->points[0];
     pcl::PointXYZINormal nearest;
-    float distance = 0.0f;
+    double distance = 0.0;
 
     bool found = tree_->nearestSearch(query, nearest, distance);
 
     EXPECT_TRUE(found);
-    EXPECT_NEAR(distance, 0.0f, 1e-6);  // 应该找到自己
+    EXPECT_NEAR(distance, 0.0, 1e-6);  // 应该找到自己
 }
 
 TEST_F(IkdTreeTest, NearestNeighbor_NewPoint) {
-    tree_->initialize(test_cloud_);
+    tree_->build(test_cloud_);
 
     pcl::PointXYZINormal query;
     query.x = 0.0f;
@@ -121,19 +121,19 @@ TEST_F(IkdTreeTest, NearestNeighbor_NewPoint) {
     query.intensity = 0.0f;
 
     pcl::PointXYZINormal nearest;
-    float distance = 0.0f;
+    double distance = 0.0;
 
     bool found = tree_->nearestSearch(query, nearest, distance);
 
     EXPECT_TRUE(found);
-    EXPECT_GE(distance, 0.0f);  // 距离应该非负
-    EXPECT_LT(distance, 20.0f);  // 在测试范围内应该找到近邻
+    EXPECT_GE(distance, 0.0);   // 距离应该非负
+    EXPECT_LT(distance, 20.0);  // 在测试范围内应该找到近邻
 }
 
 TEST_F(IkdTreeTest, NearestNeighbor_EmptyTree) {
     pcl::PointXYZINormal query;
     pcl::PointXYZINormal nearest;
-    float distance = 0.0f;
+    double distance = 0.0;
 
     bool found = tree_->nearestSearch(query, nearest, distance);
 
@@ -143,7 +143,7 @@ TEST_F(IkdTreeTest, NearestNeighbor_EmptyTree) {
 // ==================== K近邻搜索测试 ====================
 
 TEST_F(IkdTreeTest, KNearestNeighbor_Basic) {
-    tree_->initialize(test_cloud_);
+    tree_->build(test_cloud_);
 
     pcl::PointXYZINormal query;
     query.x = 0.0f;
@@ -151,118 +151,148 @@ TEST_F(IkdTreeTest, KNearestNeighbor_Basic) {
     query.z = 0.0f;
 
     int k = 5;
-    std::vector<int> indices;
-    std::vector<float> distances;
+    std::vector<pcl::PointXYZINormal> results;
+    std::vector<double> distances;
 
-    int found = tree_->kNearestSearch(query, k, indices, distances);
+    bool found = tree_->kNearestSearch(query, k, results, distances);
 
-    EXPECT_EQ(found, k);
-    EXPECT_EQ(indices.size(), k);
-    EXPECT_EQ(distances.size(), k);
+    EXPECT_TRUE(found);
+    EXPECT_EQ(static_cast<int>(results.size()), k);
+    EXPECT_EQ(static_cast<int>(distances.size()), k);
 
-    // 距离应该递增
+    // 距离应该递增 (PCL返回平方距离)
     for (size_t i = 1; i < distances.size(); ++i) {
-        EXPECT_GE(distances[i], distances[i-1]);
+        EXPECT_GE(distances[i], distances[i - 1]);
     }
 }
 
 TEST_F(IkdTreeTest, KNearestNeighbor_LargeK) {
-    tree_->initialize(test_cloud_);
+    tree_->build(test_cloud_);
 
     pcl::PointXYZINormal query;
     query.x = 0.0f;
     query.y = 0.0f;
     query.z = 0.0f;
 
-    int k = 100;  // 大于测试点数
-    std::vector<int> indices;
-    std::vector<float> distances;
+    int k = 2000;  // 大于测试点数
+    std::vector<pcl::PointXYZINormal> results;
+    std::vector<double> distances;
 
-    int found = tree_->kNearestSearch(query, k, indices, distances);
+    bool found = tree_->kNearestSearch(query, k, results, distances);
 
     // 应该返回所有点
-    EXPECT_EQ(found, static_cast<int>(test_cloud_->points.size()));
+    EXPECT_TRUE(found);
+    EXPECT_EQ(static_cast<int>(results.size()),
+              static_cast<int>(test_cloud_->points.size()));
 }
 
-// ==================== 半径搜索测试 ====================
+// ==================== 获取所有点测试 ====================
 
-TEST_F(IkdTreeTest, RadiusSearch_Basic) {
-    tree_->initialize(test_cloud_);
+TEST_F(IkdTreeTest, GetAllPoints) {
+    tree_->build(test_cloud_);
 
-    pcl::PointXYZINormal query;
-    query.x = 0.0f;
-    query.y = 0.0f;
-    query.z = 0.0f;
-
-    double radius = 5.0;
-    std::vector<int> indices;
-    std::vector<float> distances;
-
-    int found = tree_->radiusSearch(query, radius, indices, distances);
-
-    EXPECT_GT(found, 0);
-
-    // 所有返回的点应该在半径内
-    for (float d : distances) {
-        EXPECT_LE(d, radius);
-    }
+    auto cloud = tree_->getAllPoints();
+    EXPECT_EQ(cloud->size(), test_cloud_->points.size());
 }
 
-TEST_F(IkdTreeTest, RadiusSearch_SmallRadius) {
-    tree_->initialize(test_cloud_);
+// ==================== 降采样插入测试 ====================
 
-    pcl::PointXYZINormal query;
-    query.x = 0.0f;
-    query.y = 0.0f;
-    query.z = 0.0f;
-
-    double radius = 0.001;  // 很小的半径
-    std::vector<int> indices;
-    std::vector<float> distances;
-
-    int found = tree_->radiusSearch(query, radius, indices, distances);
-
-    // 小半径应该找到很少或零个点
-    EXPECT_GE(found, 0);
-}
-
-// ==================== 点删除测试 ====================
-
-TEST_F(IkdTreeTest, RemovePoint) {
-    tree_->initialize(test_cloud_);
+TEST_F(IkdTreeTest, InsertPointCloud_Downsample) {
+    IKdTreeConfig config;
+    config.downsample_size = 1.0;  // 1米降采样
+    tree_->setConfig(config);
+    tree_->build(test_cloud_);
     size_t initial_size = tree_->size();
 
-    // 删除一个点
-    pcl::PointXYZINormal pt = test_cloud_->points[0];
-    bool removed = tree_->remove(pt);
+    // 插入与已有点非常接近的点 (应被降采样跳过)
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr near_cloud(
+        new pcl::PointCloud<pcl::PointXYZINormal>);
+    for (const auto& pt : test_cloud_->points) {
+        pcl::PointXYZINormal offset = pt;
+        offset.x += 0.01f;  // 微小偏移, 在降采样范围内
+        near_cloud->push_back(offset);
+    }
+    near_cloud->width = near_cloud->size();
+    near_cloud->height = 1;
 
-    // 注意：实现可能不支持删除或返回不同结果
-    EXPECT_TRUE(true);  // 验证接口可用
+    tree_->insertPointCloud(near_cloud);
+
+    // 由于降采样, 大部分点应被跳过
+    EXPECT_LE(tree_->size(), initial_size + 10);
 }
 
-// ==================== 边界框查询测试 ====================
+// ==================== 清空测试 ====================
 
-TEST_F(IkdTreeTest, BoxSearch) {
-    tree_->initialize(test_cloud_);
+TEST_F(IkdTreeTest, Clear) {
+    tree_->build(test_cloud_);
+    EXPECT_GT(tree_->size(), 0);
 
-    Vector3d min_pt(-5.0, -5.0, -5.0);
-    Vector3d max_pt(5.0, 5.0, 5.0);
-    std::vector<int> indices;
+    tree_->clear();
 
-    int found = tree_->boxSearch(min_pt, max_pt, indices);
+    EXPECT_EQ(tree_->size(), 0);
+    EXPECT_TRUE(tree_->empty());
+}
 
-    EXPECT_GT(found, 0);
+// ==================== 边界条件测试 ====================
 
-    // 验证返回的点在边界框内
-    for (int idx : indices) {
-        const auto& pt = test_cloud_->points[idx];
-        EXPECT_GE(pt.x, min_pt.x());
-        EXPECT_LE(pt.x, max_pt.x());
-        EXPECT_GE(pt.y, min_pt.y());
-        EXPECT_LE(pt.y, max_pt.y());
-        EXPECT_GE(pt.z, min_pt.z());
-        EXPECT_LE(pt.z, max_pt.z());
+TEST_F(IkdTreeTest, SinglePointTree) {
+    auto single_cloud = pcl::PointCloud<pcl::PointXYZINormal>::Ptr(
+        new pcl::PointCloud<pcl::PointXYZINormal>);
+
+    pcl::PointXYZINormal pt;
+    pt.x = 0.0f;
+    pt.y = 0.0f;
+    pt.z = 0.0f;
+    pt.intensity = 0.0f;
+    single_cloud->points.push_back(pt);
+    single_cloud->width = 1;
+    single_cloud->height = 1;
+
+    tree_->build(single_cloud);
+    EXPECT_EQ(tree_->size(), 1);
+
+    pcl::PointXYZINormal query;
+    query.x = 0.0f;
+    query.y = 0.0f;
+    query.z = 0.0f;
+
+    pcl::PointXYZINormal nearest;
+    double dist;
+    bool found = tree_->nearestSearch(query, nearest, dist);
+
+    EXPECT_TRUE(found);
+    EXPECT_NEAR(dist, 0.0, 1e-6);
+}
+
+TEST_F(IkdTreeTest, DuplicatePoints) {
+    auto cloud = pcl::PointCloud<pcl::PointXYZINormal>::Ptr(
+        new pcl::PointCloud<pcl::PointXYZINormal>);
+
+    // 添加重复点
+    for (int i = 0; i < 100; ++i) {
+        pcl::PointXYZINormal pt;
+        pt.x = 0.0f;  // 全部在原点
+        pt.y = 0.0f;
+        pt.z = 0.0f;
+        pt.intensity = static_cast<float>(i);
+        cloud->points.push_back(pt);
     }
+    cloud->width = cloud->points.size();
+    cloud->height = 1;
+
+    tree_->build(cloud);
+
+    pcl::PointXYZINormal query;
+    query.x = 0.0f;
+    query.y = 0.0f;
+    query.z = 0.0f;
+
+    pcl::PointXYZINormal nearest;
+    double dist;
+    bool found = tree_->nearestSearch(query, nearest, dist);
+
+    EXPECT_TRUE(found);
+    EXPECT_NEAR(dist, 0.0, 1e-6);
 }
 
 // ==================== 性能测试 ====================
@@ -288,7 +318,7 @@ TEST_F(IkdTreeTest, Performance_LargeCloud) {
     large_cloud->height = 1;
 
     // 测试建树时间
-    tree_->initialize(large_cloud);
+    tree_->build(large_cloud);
     EXPECT_EQ(tree_->size(), 10000);
 
     // 测试查询时间
@@ -299,95 +329,11 @@ TEST_F(IkdTreeTest, Performance_LargeCloud) {
 
     for (int i = 0; i < 100; ++i) {
         pcl::PointXYZINormal nearest;
-        float dist;
+        double dist;
         tree_->nearestSearch(query, nearest, dist);
     }
 
     EXPECT_TRUE(true);  // 验证性能可接受
-}
-
-// ==================== 并发安全测试 ====================
-
-TEST_F(IkdTreeTest, ThreadSafety_Basic) {
-    tree_->initialize(test_cloud_);
-
-    // 并发插入和查询
-    // 注意：实际测试需要多线程框架
-    EXPECT_TRUE(tree_->isThreadSafe() || true);  // 验证接口或默认行为
-}
-
-// ==================== 清空测试 ====================
-
-TEST_F(IkdTreeTest, Clear) {
-    tree_->initialize(test_cloud_);
-    EXPECT_GT(tree_->size(), 0);
-
-    tree_->clear();
-
-    EXPECT_EQ(tree_->size(), 0);
-    EXPECT_FALSE(tree_->isInitialized());
-}
-
-// ==================== 边界条件测试 ====================
-
-TEST_F(IkdTreeTest, SinglePointTree) {
-    auto single_cloud = pcl::PointCloud<pcl::PointXYZINormal>::Ptr(
-        new pcl::PointCloud<pcl::PointXYZINormal>);
-
-    pcl::PointXYZINormal pt;
-    pt.x = 0.0f;
-    pt.y = 0.0f;
-    pt.z = 0.0f;
-    pt.intensity = 0.0f;
-    single_cloud->points.push_back(pt);
-    single_cloud->width = 1;
-    single_cloud->height = 1;
-
-    tree_->initialize(single_cloud);
-    EXPECT_EQ(tree_->size(), 1);
-
-    pcl::PointXYZINormal query;
-    query.x = 0.0f;
-    query.y = 0.0f;
-    query.z = 0.0f;
-
-    pcl::PointXYZINormal nearest;
-    float dist;
-    bool found = tree_->nearestSearch(query, nearest, dist);
-
-    EXPECT_TRUE(found);
-    EXPECT_NEAR(dist, 0.0f, 1e-6);
-}
-
-TEST_F(IkdTreeTest, DuplicatePoints) {
-    auto cloud = pcl::PointCloud<pcl::PointXYZINormal>::Ptr(
-        new pcl::PointCloud<pcl::PointXYZINormal>);
-
-    // 添加重复点
-    for (int i = 0; i < 100; ++i) {
-        pcl::PointXYZINormal pt;
-        pt.x = 0.0f;  // 全部在原点
-        pt.y = 0.0f;
-        pt.z = 0.0f;
-        pt.intensity = static_cast<float>(i);
-        cloud->points.push_back(pt);
-    }
-    cloud->width = cloud->points.size();
-    cloud->height = 1;
-
-    tree_->initialize(cloud);
-
-    pcl::PointXYZINormal query;
-    query.x = 0.0f;
-    query.y = 0.0f;
-    query.z = 0.0f;
-
-    pcl::PointXYZINormal nearest;
-    float dist;
-    bool found = tree_->nearestSearch(query, nearest, dist);
-
-    EXPECT_TRUE(found);
-    EXPECT_NEAR(dist, 0.0f, 1e-6);
 }
 
 } // namespace test

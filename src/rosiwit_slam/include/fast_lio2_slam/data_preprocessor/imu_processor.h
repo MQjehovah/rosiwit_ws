@@ -9,7 +9,8 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-#include "fast_lio2_slam/common/sophus_se3.hpp"
+#include <sophus/se3.hpp>
+#include <sophus/so3.hpp>
 #include "fast_lio2_slam/common/types.h"
 #include "fast_lio2_slam/common/config.h"
 #include <deque>

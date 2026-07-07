@@ -170,6 +170,10 @@ private:
     std::vector<SE3d> pose_history_;
     nav_msgs::msg::Path path_msg_;
 
+    // LiDAR->IMU 外参 (用于将LiDAR点变换到IMU系再做状态更新)
+    Matrix3d R_il_ = Matrix3d::Identity();
+    Vector3d t_il_ = Vector3d::Zero();
+
     std::atomic<bool> system_initialized_;
     std::atomic<bool> is_processing_;
     std::atomic<bool> first_scan_received_;

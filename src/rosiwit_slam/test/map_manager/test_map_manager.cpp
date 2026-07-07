@@ -63,7 +63,7 @@ TEST_F(MapManagerTest, AddPointCloudTest) {
         cloud->push_back(point);
     }
     
-    SE3d pose = SE3d::Identity();
+    SE3d pose = SE3d();
     
     map_manager_->addPointCloud(cloud, pose, 0);
     

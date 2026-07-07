@@ -9,8 +9,9 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-// 使用自定义的Sophus简化实现，避免与系统库冲突
-#include "sophus_se3.hpp"
+// Sophus SE3/SO3 (系统库)
+#include <sophus/se3.hpp>
+#include <sophus/so3.hpp>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
@@ -244,7 +245,7 @@ inline void transformPointCloud(const PointCloudPtr& cloud_in,
     cloud_out->clear();
     cloud_out->reserve(cloud_in->size());
 
-    const Matrix3d R = transform.rotation().matrix();
+    const Matrix3d R = transform.so3().matrix();
 
     for (const auto& point : cloud_in->points) {
         Vector3d p(point.x, point.y, point.z);
@@ -268,6 +269,50 @@ inline void transformPointCloud(const PointCloudPtr& cloud_in,
 
     cloud_out->width = cloud_out->points.size();
     cloud_out->height = 1;
+}
+
+/**
+ * @brief 最小二乘平面拟合 (FAST-LIO2 esti_plane)
+ *
+ * 对 N 个邻近点求解平面方程 n·p + d = 0, 其中 n 为单位法向量。
+ * 解析步骤: 构造 A·normvec = -1, 归一化后得到单位法向与 d = 1/|normvec|。
+ *
+ * @param points    邻近点集 (至少 3 个点)
+ * @param threshold 平面内点残差阈值, 任一点残差超限则视为拟合失败
+ * @param pabcd     输出 [nx, ny, nz, d], 满足 nx·x + ny·y + nz·z + d = 0
+ * @return true 所有点残差均在阈值内
+ */
+inline bool esti_plane(const std::vector<PointType>& points,
+                       double threshold,
+                       Eigen::Vector4d& pabcd) {
+    if (points.size() < 3) return false;
+
+    Eigen::MatrixXd A(points.size(), 3);
+    Eigen::VectorXd b(points.size());
+    A.setZero();
+    b.setOnes();
+    b *= -1.0;
+    for (size_t i = 0; i < points.size(); ++i) {
+        A(i, 0) = points[i].x;
+        A(i, 1) = points[i].y;
+        A(i, 2) = points[i].z;
+    }
+    Eigen::Vector3d normvec = A.colPivHouseholderQr().solve(b);
+    double norm = normvec.norm();
+    if (norm < 1e-9) return false;
+    pabcd(0) = normvec(0) / norm;
+    pabcd(1) = normvec(1) / norm;
+    pabcd(2) = normvec(2) / norm;
+    pabcd(3) = 1.0 / norm;
+    for (size_t j = 0; j < points.size(); ++j) {
+        if (std::fabs(pabcd(0) * points[j].x +
+                      pabcd(1) * points[j].y +
+                      pabcd(2) * points[j].z +
+                      pabcd(3)) > threshold) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**

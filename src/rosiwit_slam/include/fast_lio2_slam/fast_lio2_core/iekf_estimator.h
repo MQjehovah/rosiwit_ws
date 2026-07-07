@@ -9,7 +9,8 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-#include "fast_lio2_slam/common/sophus_se3.hpp"
+#include <sophus/se3.hpp>
+#include <sophus/so3.hpp>
 #include "fast_lio2_slam/common/types.h"
 #include "fast_lio2_slam/common/config.h"
 #include <vector>
@@ -90,8 +91,8 @@ public:
                 const std::vector<std::pair<int, int>>& correspondences);
 
     bool updateWithNormals(const std::vector<Vector3d>& source_points,
-                           const std::vector<Vector3d>& target_points,
-                           const std::vector<Vector3d>& target_normals,
+                           const std::vector<Vector3d>& plane_normals,
+                           const std::vector<double>& plane_dists,
                            const std::vector<int>& valid_indices);
 
     void reset();
@@ -123,6 +124,11 @@ private:
 
     bool initialized_;
     int update_count_;
+
+    // Mid-point integration: store previous unbiased IMU sample
+    Vector3d last_acc_unbiased_ = Vector3d::Zero();
+    Vector3d last_gyro_unbiased_ = Vector3d::Zero();
+    bool last_imu_set_ = false;
 };
 
 } // namespace fast_lio2_slam

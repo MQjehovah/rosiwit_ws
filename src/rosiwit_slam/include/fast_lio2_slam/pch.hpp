@@ -34,4 +34,5 @@
 
 // Project types
 #include "fast_lio2_slam/common/types.h"
-#include "fast_lio2_slam/common/sophus_se3.hpp"
+#include <sophus/se3.hpp>
+#include <sophus/so3.hpp>

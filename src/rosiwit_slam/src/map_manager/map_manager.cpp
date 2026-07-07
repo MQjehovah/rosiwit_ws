@@ -35,7 +35,7 @@ void MapManager::addPointCloud(const PointCloudPtr& cloud,
     if (cloud->empty()) return;
 
     // 变换点云到世界坐标系
-    Matrix3d R = pose.rotation().matrix();
+    Matrix3d R = pose.so3().matrix();
     Vector3d t = pose.translation();
 
     PointCloudPtr transformed_cloud(new pcl::PointCloud<PointType>());
@@ -271,7 +271,7 @@ bool MapManager::loadSubmaps(const std::string& path) {
             }
             center /= new_submap.cloud->size();
 
-            new_submap.center_pose.setTranslation(center);
+            new_submap.center_pose.translation() = center;
             new_submap.is_active = false;
 
             submaps_.push_back(new_submap);
@@ -385,7 +385,7 @@ void MapManager::mergeSubmaps() {
                                        submaps_[j].center_pose.translation() *
                                        submaps_[j].cloud->size()) /
                                        (submaps_[i].cloud->size() + submaps_[j].cloud->size());
-                submaps_[i].center_pose.setTranslation(new_center);
+                submaps_[i].center_pose.translation() = new_center;
 
                 // 清空被合并的子地图
                 submaps_[j].cloud->clear();

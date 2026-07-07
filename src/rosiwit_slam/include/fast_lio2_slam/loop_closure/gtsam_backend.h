@@ -9,7 +9,8 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-#include "fast_lio2_slam/common/sophus_se3.hpp"
+#include <sophus/se3.hpp>
+#include <sophus/so3.hpp>
 #include "fast_lio2_slam/common/types.h"
 #include <vector>
 
@@ -20,6 +21,7 @@
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/nonlinear/Symbol.h>
 #include <gtsam/slam/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/navigation/ImuFactor.h>
