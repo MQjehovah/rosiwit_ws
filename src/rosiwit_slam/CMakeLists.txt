@@ -44,16 +44,6 @@ find_package(tf2_ros REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(visualization_msgs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-
-# ==================== 消息和服务生成 ====================
-rosidl_generate_interfaces(${PROJECT_NAME}
-    "msg/LocalizationStatus.msg"
-    "srv/GlobalLocalize.srv"
-    "srv/SetInitialPose.srv"
-    "srv/GetLocalizationStatus.srv"
-    DEPENDENCIES geometry_msgs builtin_interfaces
-)
 
 # ==================== 第三方库依赖 ====================
 find_package(Eigen3 REQUIRED)
