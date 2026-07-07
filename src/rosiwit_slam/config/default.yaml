@@ -1,5 +1,7 @@
-# FAST-LIO2 SLAM - Default Configuration (FAST-LIO2_ROS2 核心配置格式)
-# 注意: 本文件采用 FAST-LIO2_ROS2 的扁平化键值结构, 供 fast_lio2_node 直接读取
+# rosiwit_slam - Default Configuration (扁平化键值结构, 供 FastLio2Algorithm 读取)
+# 切换算法: 修改 slam_algorithm 字段; SlamFactory 按此名创建对应算法实例
+
+slam_algorithm: fast_lio2
 
 imu_topic: /imu
 lidar_topic: /velodyne_points
