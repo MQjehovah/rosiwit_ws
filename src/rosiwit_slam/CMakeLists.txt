@@ -128,15 +128,17 @@ file(GLOB_RECURSE NODE_SOURCES CONFIGURE_DEPENDS
 list(REMOVE_ITEM NODE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 list(APPEND SOURCES src/main.cpp ${NODE_SOURCES})
 
-# 显式添加 CeresBackend (GLOB 有时遗漏新文件)
+# 显式添加 CeresBackend 和 OccupancyGridMap (GLOB 有时遗漏新文件)
 if(Ceres_FOUND)
     list(APPEND SOURCES src/algorithms/ceres_backend/ceres_backend.cpp)
 endif()
+list(APPEND SOURCES src/algorithms/pcd_map_manager/occupancy_grid_map.cpp)
 
 # 显式添加 Phase 3+4 新组件
 list(APPEND SOURCES
     src/algorithms/gicp_localization/gicp_localization.cpp
     src/algorithms/pcd_map_manager/pcd_map_manager.cpp
+    src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
     src/algorithms/scan_context_lc/scan_context_lc.cpp
 )
 
@@ -249,6 +251,7 @@ if(BUILD_TESTING)
         target_sources(test_slam_factory PRIVATE
             src/algorithms/gicp_localization/gicp_localization.cpp
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
+            src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
             src/algorithms/scan_context_lc/scan_context_lc.cpp)
         install(TARGETS test_slam_factory DESTINATION lib/${PROJECT_NAME})
 
@@ -280,6 +283,7 @@ if(BUILD_TESTING)
         target_sources(test_slam_pipeline PRIVATE
             src/algorithms/gicp_localization/gicp_localization.cpp
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
+            src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
             src/algorithms/scan_context_lc/scan_context_lc.cpp)
         install(TARGETS test_slam_pipeline DESTINATION lib/${PROJECT_NAME})
 
@@ -318,7 +322,8 @@ if(BUILD_TESTING)
         # PcdMapManager 单元测试 (Phase 4)
         ament_add_gtest(test_pcd_map_manager
             test/test_pcd_map_manager.cpp
-            src/algorithms/pcd_map_manager/pcd_map_manager.cpp)
+            src/algorithms/pcd_map_manager/pcd_map_manager.cpp
+            src/algorithms/pcd_map_manager/occupancy_grid_map.cpp)
         target_include_directories(test_pcd_map_manager PRIVATE
             include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
         target_link_libraries(test_pcd_map_manager ${PCL_LIBRARIES})

@@ -19,6 +19,8 @@ public:
 
 protected:
     bool onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) override;
+    bool handleMapping(const SyncPackage& pkg, SlamOutput& out);
+    bool handleLocalization(const SyncPackage& pkg, SlamOutput& out);
 
     std::unique_ptr<IFrontend>     m_frontend;
     std::unique_ptr<IBackend>      m_backend;
@@ -28,6 +30,9 @@ protected:
 
     std::string m_pipeline_name;
     int m_frame_count = 0;
+    bool m_is_localization_mode = false;
+    PoseStamped m_loc_last_pose;
+    bool m_loc_initialized = false;
 };
 
 } // namespace rosiwit_slam

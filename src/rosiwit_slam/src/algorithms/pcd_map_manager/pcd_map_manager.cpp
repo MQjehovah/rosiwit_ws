@@ -102,4 +102,30 @@ bool PcdMapManager::addSubMap(const KeyFrame& kf) {
     return true;
 }
 
+bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& yaml_path,
+                                  double resolution, const std::string& frame_id) {
+    if (!global_map_ || global_map_->empty()) return false;
+    OccupancyGridConfig cfg;
+    cfg.resolution = resolution;
+    OccupancyGridMap grid_map(cfg);
+    if (!grid_map.buildFromPointCloud(global_map_)) return false;
+    if (!grid_map.saveToPGM(pgm_path, yaml_path, frame_id)) return false;
+    m_grid_data = grid_map.getData();
+    m_grid_w = grid_map.getWidth();
+    m_grid_h = grid_map.getHeight();
+    m_grid_res = resolution;
+    std::cout << "[PcdMapManager] Grid map saved: " << pgm_path
+              << " (" << m_grid_w << "x" << m_grid_h << ")" << std::endl;
+    return true;
+}
+
+bool PcdMapManager::loadGridMap(const std::string& pgm_path, const std::string& yaml_path) {
+    OccupancyGridMap grid_map;
+    if (!grid_map.loadFromPGM(pgm_path, yaml_path)) return false;
+    m_grid_data = grid_map.getData();
+    m_grid_w = grid_map.getWidth();
+    m_grid_h = grid_map.getHeight();
+    return true;
+}
+
 } // namespace rosiwit_slam
