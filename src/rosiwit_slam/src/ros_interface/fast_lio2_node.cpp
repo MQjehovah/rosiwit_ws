@@ -620,9 +620,10 @@ void FastLio2Node::updateMap(PointCloudPtr& cloud) {
     const State& state = current_state_;
     SE3d current_pose = state.toSE3();
 
-    // Transform cloud to world frame
+    // Transform cloud to world frame (LiDAR → IMU → World)
+    SE3d lidar_to_world = current_pose * SE3d(R_il_, t_il_);
     PointCloudPtr world_cloud(new pcl::PointCloud<PointType>());
-    transformPointCloud(cloud, world_cloud, current_pose);
+    transformPointCloud(cloud, world_cloud, lidar_to_world);
 
     // Per-voxel deduplication (like FAST-LIO2's incrCloudMap)
     double map_res = config_.iekf.map_leaf_size;  // 0.2m
@@ -683,7 +684,7 @@ void FastLio2Node::detectLoopClosure(const PointCloudData& cloud_data) {
 
     SE3d current_pose = current_state_.toSE3();
     PointCloudPtr transformed_cloud(new pcl::PointCloud<PointType>());
-    transformPointCloud(cloud_data.cloud, transformed_cloud, current_pose);
+    SE3d ltw = current_pose * SE3d(R_il_, t_il_); transformPointCloud(cloud_data.cloud, transformed_cloud, ltw);
 
     int keyframe_id = keyframe_count_ - 1;
     if (keyframe_id < 0) return;
