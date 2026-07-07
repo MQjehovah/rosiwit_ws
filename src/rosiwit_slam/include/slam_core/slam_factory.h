@@ -5,6 +5,7 @@
 #include <vector>
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/i_frontend.h"
+#include "slam_core/i_backend.h"
 
 namespace rosiwit_slam {
 
@@ -13,6 +14,7 @@ public:
     static std::unique_ptr<ISlamAlgorithm> create(const std::string& name);
     static std::vector<std::string> listNames();
     static std::unique_ptr<IFrontend> createFrontend(const std::string& name);
+    static std::unique_ptr<IBackend> createBackend(const std::string& name);
 };
 
 } // namespace rosiwit_slam

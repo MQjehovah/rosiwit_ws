@@ -60,6 +60,9 @@ if(OpenMP_FOUND)
     string(APPEND CMAKE_CXX_FLAGS " ${OpenMP_CXX_FLAGS}")
 endif()
 
+# Ceres - 用于后端位姿图优化
+find_package(Ceres REQUIRED)
+
 # GTSAM - 尝试查找，用于后端位姿图优化
 find_package(GTSAM QUIET)
 if(GTSAM_FOUND)
@@ -109,6 +112,10 @@ if(yaml-cpp_FOUND)
     include_directories(${yaml-cpp_INCLUDE_DIRS})
 endif()
 
+if(Ceres_FOUND)
+    include_directories(${CERES_INCLUDE_DIRS})
+endif()
+
 if(GTSAM_FOUND)
     include_directories(${GTSAM_INCLUDE_DIRS})
 endif()
@@ -120,6 +127,11 @@ file(GLOB_RECURSE NODE_SOURCES CONFIGURE_DEPENDS
 # main.cpp 单独列出, 避免重复
 list(REMOVE_ITEM NODE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 list(APPEND SOURCES src/main.cpp ${NODE_SOURCES})
+
+# 显式添加 CeresBackend (GLOB 有时遗漏新文件)
+if(Ceres_FOUND)
+    list(APPEND SOURCES src/algorithms/ceres_backend/ceres_backend.cpp)
+endif()
 
 # ==================== 可执行目标 ====================
 # 使用独立的 NODE_NAME 避免与 rosidl_generate_interfaces(${PROJECT_NAME} ...) 目标冲突
@@ -159,6 +171,10 @@ endif()
 
 if(yaml-cpp_FOUND)
     target_link_libraries(${NODE_NAME} yaml-cpp)
+endif()
+
+if(Ceres_FOUND)
+    target_link_libraries(${NODE_NAME} Ceres::ceres)
 endif()
 
 if(GTSAM_FOUND)
@@ -219,6 +235,10 @@ if(BUILD_TESTING)
         if(yaml-cpp_FOUND)
             target_link_libraries(test_slam_factory yaml-cpp)
         endif()
+        if(Ceres_FOUND)
+            target_sources(test_slam_factory PRIVATE src/algorithms/ceres_backend/ceres_backend.cpp)
+            target_link_libraries(test_slam_factory Ceres::ceres)
+        endif()
         install(TARGETS test_slam_factory DESTINATION lib/${PROJECT_NAME})
 
         # SlamPipeline orchestrator test
@@ -242,6 +262,10 @@ if(BUILD_TESTING)
         if(yaml-cpp_FOUND)
             target_link_libraries(test_slam_pipeline yaml-cpp)
         endif()
+        if(Ceres_FOUND)
+            target_sources(test_slam_pipeline PRIVATE src/algorithms/ceres_backend/ceres_backend.cpp)
+            target_link_libraries(test_slam_pipeline Ceres::ceres)
+        endif()
         install(TARGETS test_slam_pipeline DESTINATION lib/${PROJECT_NAME})
 
         # 5. SlamBase 同步基类单元测试 (Phase A)
@@ -250,6 +274,19 @@ if(BUILD_TESTING)
             include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${Sophus_INCLUDE_DIRS})
         target_link_libraries(test_slam_base_sync ${PCL_LIBRARIES} Sophus::Sophus)
         install(TARGETS test_slam_base_sync DESTINATION lib/${PROJECT_NAME})
+
+        # CeresBackend 位姿图优化单元测试 (Phase 2)
+        ament_add_gtest(test_ceres_backend
+            test/test_ceres_backend.cpp
+            src/algorithms/ceres_backend/ceres_backend.cpp)
+        target_include_directories(test_ceres_backend PRIVATE
+            include ${EIGEN3_INCLUDE_DIRS} ${CERES_INCLUDE_DIRS})
+        target_link_libraries(test_ceres_backend Ceres::ceres)
+        if(yaml-cpp_FOUND)
+            target_include_directories(test_ceres_backend PRIVATE ${yaml-cpp_INCLUDE_DIRS})
+            target_link_libraries(test_ceres_backend yaml-cpp)
+        endif()
+        install(TARGETS test_ceres_backend DESTINATION lib/${PROJECT_NAME})
 
         # 2. IEKF/iKD-Tree 测试已移除: 旧的 fast_lio2_core 实现 (iekf_estimator.cpp/
         #    ikd_tree.cpp) 已被 FAST-LIO2_ROS2 的 map_builder 核心替代, 旧测试 API 不再适用。
