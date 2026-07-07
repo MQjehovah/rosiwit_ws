@@ -18,7 +18,7 @@
 > - 新增算法: 在 `algorithms/<name>/` 实现 `ISlamAlgorithm`,在 `SlamFactory::create()` 加分支,ROS 层零改动
 > - 设计文档:`docs/plans/2026-07-07-layered-architecture-design.md`
 >
-> **下方为重构前的旧文档,目录结构与模块描述已过时。** 未集成的历史模块(数据预处理/回环/地图管理/里程计融合等)已归档至 `legacy/`,不参与编译。
+> **下方为重构前的旧文档,目录结构与模块描述已过时。**
 
 ---
 
