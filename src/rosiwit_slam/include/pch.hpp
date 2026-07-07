@@ -32,7 +32,6 @@
 #include <pcl/registration/ndt.h>
 #include <pcl/search/kdtree.h>
 
-// Project types
-#include "fast_lio2_slam/common/types.h"
+// Sophus
 #include <sophus/se3.hpp>
 #include <sophus/so3.hpp>

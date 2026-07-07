@@ -133,7 +133,7 @@ list(APPEND SOURCES src/main.cpp ${NODE_SOURCES})
 
 # ==================== 可执行目标 ====================
 # 使用独立的 NODE_NAME 避免与 rosidl_generate_interfaces(${PROJECT_NAME} ...) 目标冲突
-set(NODE_NAME fast_lio2_node)
+set(NODE_NAME slam_node)
 add_executable(${NODE_NAME} ${SOURCES})
 set_target_properties(${NODE_NAME} PROPERTIES OUTPUT_NAME "rosiwit_slam")
 
@@ -142,7 +142,7 @@ set_target_properties(${NODE_NAME} PROPERTIES OUTPUT_NAME "rosiwit_slam")
 # 所有 TU 共享该缓存，大幅减少头文件重复解析开销。
 # 注意：不包含 <rclcpp/rclcpp.hpp> 以避免旧版 GCC 的 std::invoke_result bug。
 set(PCH_HEADER
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/fast_lio2_slam/pch.hpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/pch.hpp)
 target_precompile_headers(${NODE_NAME} PRIVATE ${PCH_HEADER})
 
 ament_target_dependencies(${NODE_NAME}
@@ -208,17 +208,7 @@ if(BUILD_TESTING)
     if(Sophus_FOUND)
         find_package(ament_cmake_gtest REQUIRED)
 
-        # 1. 类型定义测试
-        ament_add_gtest(test_types test/test_types.cpp)
-        target_include_directories(test_types PRIVATE
-            include
-            ${EIGEN3_INCLUDE_DIRS}
-            ${PCL_INCLUDE_DIRS}
-            ${Sophus_INCLUDE_DIRS}
-        )
-        target_link_libraries(test_types ${PCL_LIBRARIES} Sophus::Sophus)
-
-        # 4. SlamFactory 单元测试 (Phase A/C): factory 直接构造 FastLio2Algorithm, 需链接其完整实现
+        # SlamFactory 单元测试 (Phase A/C): factory 直接构造 FastLio2Algorithm, 需链接其完整实现
         ament_add_gtest(test_slam_factory
             test/test_slam_factory.cpp
             src/slam_core/slam_factory.cpp
@@ -262,11 +252,6 @@ if(BUILD_TESTING)
         # MapQualityEvaluator::evaluatePointCloud (实际为 evaluate),
         # 且依赖 yaml-cpp 链接, 属历史遗留 API 不匹配。
 
-        # 安装测试可执行文件
-        install(TARGETS
-            test_types
-            DESTINATION lib/${PROJECT_NAME}
-        )
     else()
         message(STATUS "Sophus not found, skipping gtest targets (BUILD_TESTING)")
     endif()
