@@ -1,8 +1,28 @@
 # Rosiwit SLAM
 
-**基于ROS2的多传感器融合SLAM节点**
+**基于 ROS2 的分层 SLAM 框架,支持运行时切换多种 SLAM 算法**
 
-## 📋 项目概述
+> ## 架构概览 (2026-07 三层重构)
+>
+> 本包采用**三层架构**,通过 `slam_algorithm` 字段在运行时切换算法:
+>
+> ```
+> src/
+> ├── ros_interface/        ROS 接口层: SlamNode (极薄, msg<->IMUSample/LidarFrame 转换 + 发布)
+> ├── slam_core/            SLAM 接口层: ISlamAlgorithm + SlamBase(同步基类) + SlamFactory(运行时工厂)
+> └── algorithms/fast_lio2/ 算法层: FastLio2Algorithm (封装 MapBuilder+IESKF)
+> ```
+>
+> - 数据流: ROS msg → SlamNode 转 IMUSample/LidarFrame → 算法 onImu/onLidar → SlamOutput 回调 → SlamNode 发布 odom/path/cloud/tf
+> - 切换算法: 改 `config/default.yaml` 的 `slam_algorithm`,或 `ros2 launch rosiwit_slam slam.launch.py slam_algorithm:=<name>`
+> - 新增算法: 在 `algorithms/<name>/` 实现 `ISlamAlgorithm`,在 `SlamFactory::create()` 加分支,ROS 层零改动
+> - 设计文档:`docs/plans/2026-07-07-layered-architecture-design.md`
+>
+> **下方为重构前的旧文档,目录结构与模块描述已过时。** 未集成的历史模块(数据预处理/回环/地图管理/里程计融合等)已归档至 `legacy/`,不参与编译。
+
+---
+
+## 📋 项目概述(旧)
 
 本项目实现了一个基于FAST-LIO2算法的ROS2 SLAM节点，支持3D激光雷达、IMU和里程计的多传感器融合定位与建图。
 
