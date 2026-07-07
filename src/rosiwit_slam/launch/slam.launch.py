@@ -18,7 +18,7 @@ def generate_launch_description():
         'use_sim_time', default_value='false')
 
     use_rviz_arg = DeclareLaunchArgument(
-        'use_rviz', default_value='true',
+        'use_rviz', default_value='false',
         description='Launch rviz2 with the package rviz config (subscribes cloud_map to trigger publishing)')
 
     lidar_topic_arg = DeclareLaunchArgument(
