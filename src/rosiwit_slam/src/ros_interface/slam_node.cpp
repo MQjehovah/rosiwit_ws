@@ -170,6 +170,7 @@ void SlamNode::mapTimerCB() {
     sensor_msgs::msg::PointCloud2 m; pcl::toROSMsg(cloud, m);
     m.header.frame_id = m_cfg.world_frame; m.header.stamp = now();
     m_global_map_pub->publish(m);
+    RCLCPP_INFO(get_logger(), "Published global map with %zu points", cloud.size());
 }
 
 builtin_interfaces::msg::Time SlamNode::toRosTime(double sec) { return RosUtils::getTime(sec); }
