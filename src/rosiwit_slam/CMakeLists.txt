@@ -201,6 +201,7 @@ if(BUILD_TESTING)
         # SlamFactory 单元测试 (Phase A/C): factory 直接构造 FastLio2Algorithm, 需链接其完整实现
         ament_add_gtest(test_slam_factory
             test/test_slam_factory.cpp
+            src/slam_core/slam_pipeline.cpp
             src/slam_core/slam_factory.cpp
             src/slam_core/slam_base.cpp
             src/algorithms/fast_lio2/fast_lio2_algorithm.cpp
@@ -219,6 +220,29 @@ if(BUILD_TESTING)
             target_link_libraries(test_slam_factory yaml-cpp)
         endif()
         install(TARGETS test_slam_factory DESTINATION lib/${PROJECT_NAME})
+
+        # SlamPipeline orchestrator test
+        ament_add_gtest(test_slam_pipeline
+            test/test_slam_pipeline.cpp
+            src/slam_core/slam_pipeline.cpp
+            src/slam_core/slam_base.cpp
+            src/slam_core/slam_factory.cpp
+            src/algorithms/fast_lio2/fast_lio2_algorithm.cpp
+            src/algorithms/fast_lio2/fast_lio2_frontend.cpp
+            src/algorithms/fast_lio2/map_builder/commons.cpp
+            src/algorithms/fast_lio2/map_builder/ieskf.cpp
+            src/algorithms/fast_lio2/map_builder/imu_processor.cpp
+            src/algorithms/fast_lio2/map_builder/lidar_processor.cpp
+            src/algorithms/fast_lio2/map_builder/ikd_Tree.cpp
+            src/algorithms/fast_lio2/map_builder/map_builder.cpp)
+        target_include_directories(test_slam_pipeline PRIVATE
+            include src src/algorithms/fast_lio2 src/algorithms/fast_lio2/map_builder
+            ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${Sophus_INCLUDE_DIRS})
+        target_link_libraries(test_slam_pipeline ${PCL_LIBRARIES} Sophus::Sophus)
+        if(yaml-cpp_FOUND)
+            target_link_libraries(test_slam_pipeline yaml-cpp)
+        endif()
+        install(TARGETS test_slam_pipeline DESTINATION lib/${PROJECT_NAME})
 
         # 5. SlamBase 同步基类单元测试 (Phase A)
         ament_add_gtest(test_slam_base_sync test/test_slam_base_sync.cpp src/slam_core/slam_base.cpp)
