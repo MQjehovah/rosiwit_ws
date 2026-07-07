@@ -217,6 +217,13 @@ if(BUILD_TESTING)
         )
         target_link_libraries(test_types ${PCL_LIBRARIES} Sophus::Sophus)
 
+        # 4. SlamFactory 单元测试 (Phase A)
+        ament_add_gtest(test_slam_factory test/test_slam_factory.cpp src/slam_core/slam_factory.cpp)
+        target_include_directories(test_slam_factory PRIVATE
+            include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${Sophus_INCLUDE_DIRS})
+        target_link_libraries(test_slam_factory ${PCL_LIBRARIES} Sophus::Sophus)
+        install(TARGETS test_slam_factory DESTINATION lib/${PROJECT_NAME})
+
         # 2. IEKF/iKD-Tree 测试已移除: 旧的 fast_lio2_core 实现 (iekf_estimator.cpp/
         #    ikd_tree.cpp) 已被 FAST-LIO2_ROS2 的 map_builder 核心替代, 旧测试 API 不再适用。
 
