@@ -13,6 +13,8 @@ namespace rosiwit_slam {
 class SlamPipeline : public SlamBase {
 public:
     bool init(const std::string& config_path) override;
+    void onImu(const IMUSample& s) override;   // 重写: local 模式直接喂定位模块
+    void onLidar(const LidarFrame& f) override; // 重写: local 模式绕过 SlamBase 同步
     std::string name() const override { return m_pipeline_name; }
     bool getGlobalMap(PointVec& out) override;
     SlamState state() const override;

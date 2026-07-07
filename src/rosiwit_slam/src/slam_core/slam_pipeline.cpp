@@ -88,9 +88,38 @@ bool SlamPipeline::init(const std::string& config_path) {
     return m_frontend != nullptr;
 }
 
+void SlamPipeline::onImu(const IMUSample& s) {
+    if (m_is_localization_mode && m_localization) {
+        m_localization->onImu(s);
+    } else {
+        SlamBase::onImu(s);  // mapping 模式: 走原同步缓冲
+    }
+}
+
+void SlamPipeline::onLidar(const LidarFrame& f) {
+    if (m_is_localization_mode && m_localization) {
+        // 定位模式: 绕过 SlamBase 同步, 直接处理
+        m_localization->onLidar(f);
+        // 发布最新定位结果
+        if (m_localization->getStatus() == ILocalization::LOCALIZED) {
+            SlamOutput out;
+            m_localization->getPose(out.pose);
+            out.state = SlamState::RUNNING;
+            out.has_new_pose = true;
+            emitOutput(out);
+        }
+    } else {
+        SlamBase::onLidar(f);  // mapping 模式: 走原同步缓冲
+    }
+}
+
 bool SlamPipeline::onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) {
     if (m_is_localization_mode) {
-        return handleLocalization(pkg, out);
+        // 定位模式: onLidar 已直接处理, 这里只做 IMU 预测
+        if (m_localization) {
+            for (const auto& imu : pkg.imus) m_localization->onImu(imu);
+        }
+        return false;  // 不由这里发布定位结果
     }
     return handleMapping(pkg, out);
 }

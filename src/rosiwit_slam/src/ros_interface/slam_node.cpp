@@ -204,7 +204,7 @@ void SlamNode::handleSaveMap(const std::shared_ptr<rmw_request_id_t>,
 
 void SlamNode::handleLoadMap(const std::shared_ptr<rmw_request_id_t>,
                               const std::shared_ptr<rosiwit_slam::srv::LoadMap::Request> req,
-                              std::shared_ptr<rosiwit_slam::srv::LoadMap::Response> res) {
+                               std::shared_ptr<rosiwit_slam::srv::LoadMap::Response> res) {
     auto pipe = getPipeline();
     if (!pipe) { res->success = false; res->message = "Not a SlamPipeline"; return; }
     if (!pipe->m_map_mgr) { res->success = false; res->message = "No map manager"; return; }
@@ -213,6 +213,15 @@ void SlamNode::handleLoadMap(const std::shared_ptr<rmw_request_id_t>,
         PointVec pts;
         if (pipe->m_map_mgr->getGlobalMap(pts)) {
             RCLCPP_INFO(get_logger(), "Loaded map: %s (%zu pts)", req->path.c_str(), pts.size());
+        }
+        // 同时设置到定位模块
+        if (pipe->m_localization) {
+            pipe->m_localization->setMap(req->path);
+            PoseStamped init_pose;
+            init_pose.trans = Eigen::Vector3d::Zero();
+            init_pose.rot   = Eigen::Matrix3d::Identity();
+            pipe->m_localization->setInitPose(init_pose);
+            RCLCPP_INFO(get_logger(), "Set map to localization module");
         }
     }
     res->message = res->success ? "Map loaded" : "Load failed";
