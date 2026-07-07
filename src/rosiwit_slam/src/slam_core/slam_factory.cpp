@@ -5,6 +5,9 @@
 #include "algorithms/fast_lio2/fast_lio2_algorithm.h"
 #include "algorithms/fast_lio2/fast_lio2_frontend.h"
 #include "algorithms/ceres_backend/ceres_backend.h"
+#include "algorithms/gicp_localization/gicp_localization.h"
+#include "algorithms/pcd_map_manager/pcd_map_manager.h"
+#include "algorithms/scan_context_lc/scan_context_lc.h"
 
 namespace rosiwit_slam {
 
@@ -25,6 +28,21 @@ std::unique_ptr<IFrontend> SlamFactory::createFrontend(const std::string& name) 
 
 std::unique_ptr<IBackend> SlamFactory::createBackend(const std::string& name) {
     if (name == "ceres_pose_graph") return std::make_unique<CeresBackend>();
+    return nullptr;
+}
+
+std::unique_ptr<ILocalization> SlamFactory::createLocalization(const std::string& name) {
+    if (name == "gicp_localization") return std::make_unique<GicpLocalization>();
+    return nullptr;
+}
+
+std::unique_ptr<IMapManager> SlamFactory::createMapManager(const std::string& name) {
+    if (name == "pcd_map_manager") return std::make_unique<PcdMapManager>();
+    return nullptr;
+}
+
+std::unique_ptr<ILoopClosure> SlamFactory::createLoopClosure(const std::string& name) {
+    if (name == "simple_scan_context") return std::make_unique<ScanContextLC>();
     return nullptr;
 }
 

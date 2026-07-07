@@ -133,6 +133,13 @@ if(Ceres_FOUND)
     list(APPEND SOURCES src/algorithms/ceres_backend/ceres_backend.cpp)
 endif()
 
+# 显式添加 Phase 3+4 新组件
+list(APPEND SOURCES
+    src/algorithms/gicp_localization/gicp_localization.cpp
+    src/algorithms/pcd_map_manager/pcd_map_manager.cpp
+    src/algorithms/scan_context_lc/scan_context_lc.cpp
+)
+
 # ==================== 可执行目标 ====================
 # 使用独立的 NODE_NAME 避免与 rosidl_generate_interfaces(${PROJECT_NAME} ...) 目标冲突
 set(NODE_NAME slam_node)
@@ -239,6 +246,10 @@ if(BUILD_TESTING)
             target_sources(test_slam_factory PRIVATE src/algorithms/ceres_backend/ceres_backend.cpp)
             target_link_libraries(test_slam_factory Ceres::ceres)
         endif()
+        target_sources(test_slam_factory PRIVATE
+            src/algorithms/gicp_localization/gicp_localization.cpp
+            src/algorithms/pcd_map_manager/pcd_map_manager.cpp
+            src/algorithms/scan_context_lc/scan_context_lc.cpp)
         install(TARGETS test_slam_factory DESTINATION lib/${PROJECT_NAME})
 
         # SlamPipeline orchestrator test
@@ -266,6 +277,10 @@ if(BUILD_TESTING)
             target_sources(test_slam_pipeline PRIVATE src/algorithms/ceres_backend/ceres_backend.cpp)
             target_link_libraries(test_slam_pipeline Ceres::ceres)
         endif()
+        target_sources(test_slam_pipeline PRIVATE
+            src/algorithms/gicp_localization/gicp_localization.cpp
+            src/algorithms/pcd_map_manager/pcd_map_manager.cpp
+            src/algorithms/scan_context_lc/scan_context_lc.cpp)
         install(TARGETS test_slam_pipeline DESTINATION lib/${PROJECT_NAME})
 
         # 5. SlamBase 同步基类单元测试 (Phase A)
@@ -287,6 +302,42 @@ if(BUILD_TESTING)
             target_link_libraries(test_ceres_backend yaml-cpp)
         endif()
         install(TARGETS test_ceres_backend DESTINATION lib/${PROJECT_NAME})
+
+        # GICPLocalization 单元测试 (Phase 3)
+        ament_add_gtest(test_gicp_localization
+            test/test_gicp_localization.cpp
+            src/algorithms/gicp_localization/gicp_localization.cpp)
+        target_include_directories(test_gicp_localization PRIVATE
+            include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+        target_link_libraries(test_gicp_localization ${PCL_LIBRARIES})
+        if(yaml-cpp_FOUND)
+            target_link_libraries(test_gicp_localization yaml-cpp)
+        endif()
+        install(TARGETS test_gicp_localization DESTINATION lib/${PROJECT_NAME})
+
+        # PcdMapManager 单元测试 (Phase 4)
+        ament_add_gtest(test_pcd_map_manager
+            test/test_pcd_map_manager.cpp
+            src/algorithms/pcd_map_manager/pcd_map_manager.cpp)
+        target_include_directories(test_pcd_map_manager PRIVATE
+            include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+        target_link_libraries(test_pcd_map_manager ${PCL_LIBRARIES})
+        if(yaml-cpp_FOUND)
+            target_link_libraries(test_pcd_map_manager yaml-cpp)
+        endif()
+        install(TARGETS test_pcd_map_manager DESTINATION lib/${PROJECT_NAME})
+
+        # ScanContextLC 单元测试 (Phase 4)
+        ament_add_gtest(test_scan_context_lc
+            test/test_scan_context_lc.cpp
+            src/algorithms/scan_context_lc/scan_context_lc.cpp)
+        target_include_directories(test_scan_context_lc PRIVATE
+            include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+        target_link_libraries(test_scan_context_lc ${PCL_LIBRARIES})
+        if(yaml-cpp_FOUND)
+            target_link_libraries(test_scan_context_lc yaml-cpp)
+        endif()
+        install(TARGETS test_scan_context_lc DESTINATION lib/${PROJECT_NAME})
 
         # 2. IEKF/iKD-Tree 测试已移除: 旧的 fast_lio2_core 实现 (iekf_estimator.cpp/
         #    ikd_tree.cpp) 已被 FAST-LIO2_ROS2 的 map_builder 核心替代, 旧测试 API 不再适用。
