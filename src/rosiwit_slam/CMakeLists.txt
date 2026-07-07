@@ -204,6 +204,7 @@ if(BUILD_TESTING)
             src/slam_core/slam_factory.cpp
             src/slam_core/slam_base.cpp
             src/algorithms/fast_lio2/fast_lio2_algorithm.cpp
+            src/algorithms/fast_lio2/fast_lio2_frontend.cpp
             src/algorithms/fast_lio2/map_builder/commons.cpp
             src/algorithms/fast_lio2/map_builder/ieskf.cpp
             src/algorithms/fast_lio2/map_builder/imu_processor.cpp
