@@ -95,7 +95,8 @@ remove_definitions(-DBOOST_ALL_NO_LIB)
 include_directories(
     include
     src
-    src/map_builder
+    src/algorithms/fast_lio2
+    src/algorithms/fast_lio2/map_builder
     ${EIGEN3_INCLUDE_DIRS}
     ${PCL_INCLUDE_DIRS}
     ${Sophus_INCLUDE_DIRS}
