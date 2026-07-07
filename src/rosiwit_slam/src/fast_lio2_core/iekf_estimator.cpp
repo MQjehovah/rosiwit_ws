@@ -220,9 +220,10 @@ bool IekfEstimator::updateWithNormals(
         b_accum += J.transpose() * residual * sigma_inv2;
     }
 
-    // MAP 求解: δx = -(P^{-1} + H^T R^{-1} H)^{-1} * (H^T R^{-1} r)
+    // IESKF MAP 求解: δx = -(I + P^{-1} + H^T R^{-1} H)^{-1} * (H^T R^{-1} r)
+    // I 项来自 Lie 群线性化，防止旋转过度修正
     Eigen::Matrix<double, 24, 24> P_inv = P_.inverse();
-    Eigen::Matrix<double, 24, 24> A = P_inv + H_accum;
+    Eigen::Matrix<double, 24, 24> A = Eigen::Matrix<double, 24, 24>::Identity() + P_inv + H_accum;
     Eigen::Matrix<double, 24, 1> dx = -A.householderQr().solve(b_accum);
 
     // 状态更新

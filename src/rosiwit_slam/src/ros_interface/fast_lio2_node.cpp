@@ -534,7 +534,7 @@ bool FastLio2Node::performUpdate(PointCloudPtr& cloud) {
     static int update_cnt = 0;
     update_cnt++;
 
-    for (int iter = 0; iter < 1; ++iter) {
+    for (int iter = 0; iter < config_.iekf.max_iterations; ++iter) {
         SE3d current_pose = current_state_.toSE3();
         const Matrix3d R = current_pose.so3().matrix();
         const Vector3d t = current_pose.translation();
