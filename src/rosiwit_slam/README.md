@@ -104,6 +104,22 @@ gtest 覆盖工厂机制 + IMU/LiDAR 时间同步,不依赖 ROS 运行时。
 
 ---
 
+
+
+# 保存 3D 点云地图
+ros2 service call /save_map rosiwit_slam/srv/SaveMap "{path: 'map.pcd'}"
+
+# 保存 2D 占据栅格图(供 nav2 导航)
+ros2 service call /save_grid_map rosiwit_slam/srv/SaveGridMap \
+  "{pgm_path: 'map.pgm', yaml_path: 'map.yaml', resolution: 0.05}"
+
+# 加载地图(定位模式使用)
+ros2 service call /load_map rosiwit_slam/srv/LoadMap "{path: 'map.pcd'}"
+
+# 切换模式
+ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'mapping'}"
+ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'localization'}"
+
 ## 许可证
 
 MIT

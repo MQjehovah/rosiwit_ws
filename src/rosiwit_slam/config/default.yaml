@@ -1,7 +1,15 @@
-# rosiwit_slam - Default Configuration (扁平化键值结构, 供 FastLio2Algorithm 读取)
-# 切换算法: 修改 slam_algorithm 字段; SlamFactory 按此名创建对应算法实例
+# rosiwit_slam - Default Configuration
+# 通过 slam_algorithm 选择算法, 默认使用 SlamPipeline
 
-slam_algorithm: fast_lio2
+slam_algorithm: fast_lio2_pipeline
+pipeline: "fast_lio2_mapping"
+pipeline_mode: mapping
+modules:
+  frontend: "fast_lio2_frontend"
+  backend: ""
+  loop_closure: ""
+  map_manager: "pcd_map_manager"
+  localization: ""
 
 imu_topic: /imu
 lidar_topic: /velodyne_points

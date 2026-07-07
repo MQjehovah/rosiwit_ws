@@ -18,6 +18,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     std::string algo_name = "fast_lio2";
     this->declare_parameter<std::string>("slam_algorithm", algo_name);
     this->get_parameter("slam_algorithm", algo_name);
+    // 服务接口需要 SlamPipeline, 自动升级默认算法
+    if (algo_name == "fast_lio2" || algo_name.empty()) {
+        algo_name = "fast_lio2_pipeline";
+    }
 
     std::string config_path;
     this->declare_parameter<std::string>("config_file", "");
