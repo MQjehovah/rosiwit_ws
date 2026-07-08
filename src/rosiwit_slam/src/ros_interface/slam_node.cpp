@@ -103,7 +103,9 @@ void SlamNode::timerCB() {
 }
 
 void SlamNode::publish(const SlamOutput& out) {
-    auto stamp = toRosTime(out.pose.time);
+    builtin_interfaces::msg::Time stamp;
+    if (out.pose.time > 0) stamp = toRosTime(out.pose.time);
+    else stamp = now();
     Eigen::Quaterniond q(out.pose.rot);
     if (m_odom_pub->get_subscription_count() > 0) {
         nav_msgs::msg::Odometry odom;
