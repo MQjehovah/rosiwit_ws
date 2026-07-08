@@ -15,123 +15,92 @@ bool SlamPipeline::init(const std::string& config_path) {
 
     m_pipeline_name = cfg["pipeline"].as<std::string>("custom_pipeline");
 
-    std::string mode = cfg["pipeline_mode"].as<std::string>("mapping");
-    m_is_localization_mode = (mode == "localization");
+    // 启动模式: 默认 IDLE
+    std::string mode_str = cfg["pipeline_mode"].as<std::string>("idle");
+    if (mode_str == "mapping")          m_mode = PipelineMode::MAPPING;
+    else if (mode_str == "localization") m_mode = PipelineMode::LOCALIZATION;
+    else                                m_mode = PipelineMode::IDLE;
 
     auto modules = cfg["modules"];
-    if (!modules) return false;
+    if (!modules) return true;  // IDLE 不需要模块
 
-    // Create modules based on config
     std::string name;
     name = modules["frontend"].as<std::string>("");
-    if (!name.empty()) {
-        m_frontend = SlamFactory::createFrontend(name);
-        if (m_frontend && !m_frontend->init(config_path)) {
-            m_frontend.reset();
-        }
-    }
-
+    if (!name.empty()) { m_frontend = SlamFactory::createFrontend(name); if (m_frontend && !m_frontend->init(config_path)) m_frontend.reset(); }
     name = modules["backend"].as<std::string>("");
-    if (!name.empty()) {
-        m_backend = SlamFactory::createBackend(name);
-        if (m_backend && !m_backend->init(config_path)) {
-            m_backend.reset();
-        }
-    }
-
+    if (!name.empty()) { m_backend = SlamFactory::createBackend(name); if (m_backend && !m_backend->init(config_path)) m_backend.reset(); }
     name = modules["loop_closure"].as<std::string>("");
-    if (!name.empty()) {
-        m_loop = SlamFactory::createLoopClosure(name);
-        if (m_loop && !m_loop->init(config_path)) {
-            m_loop.reset();
-        }
-    }
-
+    if (!name.empty()) { m_loop = SlamFactory::createLoopClosure(name); if (m_loop && !m_loop->init(config_path)) m_loop.reset(); }
     name = modules["localization"].as<std::string>("");
-    if (!name.empty()) {
-        m_localization = SlamFactory::createLocalization(name);
-        if (m_localization && !m_localization->init(config_path)) {
-            m_localization.reset();
-        }
-    }
-
+    if (!name.empty()) { m_localization = SlamFactory::createLocalization(name); if (m_localization && !m_localization->init(config_path)) m_localization.reset(); }
     name = modules["map_manager"].as<std::string>("");
-    if (!name.empty()) {
-        m_map_mgr = SlamFactory::createMapManager(name);
-        if (m_map_mgr && !m_map_mgr->init(config_path)) {
-            m_map_mgr.reset();
-        }
-    }
+    if (!name.empty()) { m_map_mgr = SlamFactory::createMapManager(name); if (m_map_mgr && !m_map_mgr->init(config_path)) m_map_mgr.reset(); }
 
-    // Localization mode: load map and set initial pose
-    if (m_is_localization_mode) {
-        if (!m_localization || !m_map_mgr) {
-            return false;  // 定位模式需要定位模块和地图管理
-        }
-        std::string map_name = cfg["localization_map"].as<std::string>("map.pcd");
-        if (m_map_mgr->loadMap(map_name)) {
-            m_localization->setMap(map_name);
-            // 如果配置了初始位姿
+    // config 指定定位模式启动: 加载地图
+    if (m_mode == PipelineMode::LOCALIZATION && m_map_mgr && m_localization) {
+        std::string map_name = cfg["localization_map"].as<std::string>("");
+        if (!map_name.empty()) {
+            PoseStamped init; init.trans = V3D::Zero(); init.rot = M3D::Identity();
             if (cfg["init_pose"]) {
-                PoseStamped init;
                 auto p = cfg["init_pose"];
                 init.trans.x() = p["x"].as<double>(0.0);
                 init.trans.y() = p["y"].as<double>(0.0);
                 init.trans.z() = p["z"].as<double>(0.0);
-                m_localization->setInitPose(init);
             }
-            m_loc_initialized = true;
+            loadMapForLocalization(map_name, init);
         }
-        return m_localization != nullptr;
     }
+    return true;
+}
 
-    // Mapping mode: at least need frontend
-    return m_frontend != nullptr;
+void SlamPipeline::setMode(PipelineMode mode) {
+    m_mode = mode;
+}
+
+bool SlamPipeline::loadMapForLocalization(const std::string& path, const PoseStamped& init_pose) {
+    if (!m_map_mgr || !m_map_mgr->loadMap(path)) return false;
+    if (m_localization) { m_localization->setMap(path); m_localization->setInitPose(init_pose); }
+    return true;
 }
 
 void SlamPipeline::onImu(const IMUSample& s) {
-    if (m_is_localization_mode && m_localization) {
-        m_localization->onImu(s);
+    auto mode = m_mode.load();
+    if (mode == PipelineMode::IDLE) return;
+    if (mode == PipelineMode::LOCALIZATION) {
+        if (m_localization) m_localization->onImu(s);
+        if (m_frontend) m_frontend->onImu(s);  // 保持前端运行
     } else {
-        SlamBase::onImu(s);  // mapping 模式: 走原同步缓冲
+        SlamBase::onImu(s);
     }
 }
 
 void SlamPipeline::onLidar(const LidarFrame& f) {
-    if (m_is_localization_mode && m_localization) {
-        m_localization->onLidar(f);
-        auto st = m_localization->getStatus();
-        if (st == ILocalization::LOCALIZED) {
-            SlamOutput out;
-            m_localization->getPose(out.pose);
-            out.state = SlamState::RUNNING;
-            out.has_new_pose = true;
-            emitOutput(out);
-            std::cout << "[Loc] LOCALIZED: " << out.pose.trans.x() << " "
-                      << out.pose.trans.y() << " " << out.pose.trans.z() << std::endl;
+    auto mode = m_mode.load();
+    if (mode == PipelineMode::IDLE) return;
+    if (mode == PipelineMode::LOCALIZATION) {
+        if (m_localization) {
+            m_localization->onLidar(f);
+            if (m_localization->getStatus() == ILocalization::LOCALIZED) {
+                SlamOutput out;
+                m_localization->getPose(out.pose);
+                out.state = SlamState::RUNNING;
+                out.has_new_pose = true;
+                emitOutput(out);
+            }
         }
+        if (m_frontend) m_frontend->onLidar(f);
     } else {
         SlamBase::onLidar(f);
     }
 }
 
 bool SlamPipeline::onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) {
-    if (m_is_localization_mode) {
-        // 定位模式: onLidar 已直接处理, 这里只做 IMU 预测
-        if (m_localization) {
-            for (const auto& imu : pkg.imus) m_localization->onImu(imu);
-        }
-        return false;  // 不由这里发布定位结果
-    }
     return handleMapping(pkg, out);
 }
 
 bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
     if (!m_frontend) return false;
-
-    for (const auto& imu : pkg.imus) {
-        m_frontend->onImu(imu);
-    }
+    for (const auto& imu : pkg.imus) m_frontend->onImu(imu);
     m_frontend->onLidar(pkg.frame);
 
     PoseStamped odom;
@@ -144,18 +113,9 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
         if (m_loop) m_loop->addKeyFrame(kf);
         if (m_map_mgr) m_map_mgr->addSubMap(kf);
     }
-
     if (m_backend && m_frame_count > 0 && m_frame_count % 50 == 0) {
-        if (m_loop) {
-            PoseStamped rel_pose;
-            double cov = 1.0;
-            if (m_loop->detect(rel_pose, cov)) {
-                m_backend->addConstraints({});
-            }
-        }
         m_backend->optimize();
     }
-
     out.pose = odom;
     m_frontend->getClouds(out.body_cloud, out.world_cloud);
     out.state = SlamState::RUNNING;
@@ -163,30 +123,15 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
     return true;
 }
 
-bool SlamPipeline::handleLocalization(const SyncPackage& pkg, SlamOutput& out) {
-    if (!m_localization) return false;
-
-    for (const auto& imu : pkg.imus) {
-        m_localization->onImu(imu);
-    }
-    m_localization->onLidar(pkg.frame);
-
-    if (m_localization->getStatus() == ILocalization::LOCALIZED) {
-        m_localization->getPose(out.pose);
-        out.state = SlamState::RUNNING;
-        out.has_new_pose = true;
-        return true;
-    }
-    return false;
-}
-
 bool SlamPipeline::getGlobalMap(PointVec& out) {
+    if (m_mode == PipelineMode::LOCALIZATION && m_map_mgr) return m_map_mgr->getGlobalMap(out);
     if (m_frontend) return m_frontend->getGlobalMap(out);
     if (m_map_mgr) return m_map_mgr->getGlobalMap(out);
     return false;
 }
 
 SlamState SlamPipeline::state() const {
+    if (m_mode == PipelineMode::IDLE) return SlamState::READY;
     return SlamState::RUNNING;
 }
 

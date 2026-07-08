@@ -1,134 +1,94 @@
 # rosiwit_slam
 
-基于 ROS2 的**分层 SLAM 框架**——三层架构(ROS 接口层 / SLAM 接口层 / 算法层),支持运行时切换多种 SLAM 算法。内置 **FAST-LIO2**(LiDAR-Inertial 紧耦合,IESKF + iKD-Tree)。
-
-📖 完整文档见 [`docs/rosiwit_slam.md`](docs/rosiwit_slam.md)。
-
----
-
-## 特性
-
-- **三层架构**:ROS 接口层 / SLAM 接口层 / 算法层,职责清晰、解耦
-- **运行时算法切换**:config 或 launch 参数,无需重编译
-- **算法层脱离 ROS**:对 rclcpp 零依赖,可独立单元测试
-- **内置 FAST-LIO2**:IESKF + iKD-Tree,LiDAR+IMU 紧耦合里程计
+基于 ROS2 的**分层 SLAM 框架**,三层架构(ROS 接口层 / SLAM 接口层 / 算法层),支持运行时模式切换(mapping / localization / idle)、地图保存/加载、2D 栅格图生成。内置 **FAST-LIO2** 前端 + **Ceres** 后端 + **GICP** 定位。
 
 ---
 
 ## 快速开始
 
 ```bash
-# 1. 安装依赖 (Ubuntu 22.04 + ROS2 Humble)
-bash scripts/install_dependencies.sh
+# 构建
+cd ~/rosiwit_ws && colcon build --packages-select rosiwit_slam --symlink-install && source install/setup.bash
 
-# 2. 构建
-cd ~/rosiwit_ws
-colcon build --packages-select rosiwit_slam --symlink-install
-source install/setup.bash
-
-# 3. 运行
-ros2 launch rosiwit_slam slam.launch.py
+# 启动 (默认 IDLE 模式, 不处理数据)
+ros2 launch rosiwit_slam slam.launch.py use_sim_time:=true
 ```
 
-启动后日志:`SlamNode ready: algo=fast_lio2 imu=/imu lidar=/velodyne_points`。
+## 工作流
 
-## 常用接口
+### 建图
 
-# 保存 3D 点云地图
+```bash
+# 1. 切换到建图模式
+ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'mapping'}"
+
+# 2. 机器人走一圈...
+
+# 3. 保存地图
 ros2 service call /save_map rosiwit_slam/srv/SaveMap "{path: 'map.pcd'}"
+ros2 service call /save_grid_map rosiwit_slam/srv/SaveGridMap "{pgm_path: 'map.pgm', yaml_path: 'map.yaml', resolution: 0.05}"
 
-# 保存 2D 占据栅格图(供 nav2 导航)
-ros2 service call /save_grid_map rosiwit_slam/srv/SaveGridMap \
-  "{pgm_path: 'map.pgm', yaml_path: 'map.yaml', resolution: 0.05}"
+# 4. 切回 IDLE
+ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'idle'}"
+```
 
-# 加载地图(定位模式使用)
+### 定位
+
+```bash
+# 1. 加载地图 (同时设置到定位模块, 初始位姿默认 (0,0,0))
 ros2 service call /load_map rosiwit_slam/srv/LoadMap "{path: 'map.pcd'}"
 
-# 切换模式
-ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'mapping'}"
+# 2. 切换到定位模式
 ros2 service call /set_slam_mode rosiwit_slam/srv/SetSlamMode "{mode: 'localization'}"
 
----
+# 3. (可选) 在 RViz 中用 2D Pose Estimate 设置初始位姿
+#    → 自动通过 /initialpose 话题传给定位模块
+
+# 4. 定位结果通过 /lio_odom /lio_path /tf 输出
+```
+
+### 模式随时切换
+
+建图和定位可以随时切换:
+- `mapping → idle`: 停止建图, 保留已积累的地图
+- `idle → localization`: 加载地图后开始定位
+- `localization → mapping`: 回到建图模式 (前端持续运行, 无缝切换)
+
+## ROS 接口
+
+| 类型 | 名称 | 说明 |
+|---|---|---|
+| 订阅 | `/imu`, `/velodyne_points` | IMU + LiDAR |
+| 订阅 | `/initialpose` | RViz 2D Pose Estimate (定位模式设置初始位姿) |
+| 发布 | `lio_odom` | Odometry |
+| 发布 | `lio_path` | 累计轨迹 |
+| 发布 | `body_cloud`, `world_cloud` | 当前帧点云 |
+| 发布 | `cloud_map` | 全局地图 (建图=实时, 定位=加载的地图) |
+| 发布 | `grid_map` | nav_msgs/OccupancyGrid (定位模式) |
+| TF | `odom → base_link` | 位姿 |
+| Service | `save_map` | 保存 PCD 地图 |
+| Service | `load_map` | 加载 PCD 地图 (同时设置到定位模块) |
+| Service | `save_grid_map` | 保存 2D 栅格图 (PGM+YAML) |
+| Service | `set_slam_mode` | 切换模式 (mapping/localization/idle) |
 
 ## 架构
 
 ```
-ROS 接口层 (ros_interface/)   SlamNode: msg↔IMUSample/LidarFrame 转换 + 发布
-        │ ISlamAlgorithm (unique_ptr, 工厂创建)
-SLAM 接口层 (slam_core/)      ISlamAlgorithm + SlamBase(同步基类) + SlamFactory(运行时工厂)
-        │ 继承 SlamBase
-算法层 (algorithms/)          FastLio2Algorithm (适配 MapBuilder+IESKF)
+ROS 接口层 (ros_interface/)
+  SlamNode — 极薄: msg 转换 + 发布 + 服务
+        │ ISlamAlgorithm (SlamPipeline)
+SLAM 接口层 (slam_core/)
+  SlamPipeline — 编排器: IDLE/MAPPING/LOCALIZATION 三态
+  IFrontend / IBackend / ILoopClosure / IMapManager / ILocalization
+  SlamFactory — 运行时工厂
+算法层 (algorithms/)
+  fast_lio2/        — FastLio2Frontend (IESKF + iKD-Tree)
+  ceres_backend/    — Ceres 位姿图优化
+  gicp_localization/— GICP scan-to-map 定位
+  pcd_map_manager/  — PCD 地图 + 2D 占据栅格
+  scan_context_lc/  — 距离回环检测
 ```
-
-Node 只通过 `SlamOutput`(位姿+点云)拿结果,看不到任何算法内部细节。数据流与各层职责详见 [`docs/rosiwit_slam.md`](docs/rosiwit_slam.md)。
-
----
-
-## 切换 / 添加算法
-
-```bash
-# 运行时切换 (无需重编译)
-ros2 launch rosiwit_slam slam.launch.py slam_algorithm:=<name>
-# 或改 config/default.yaml 的 slam_algorithm 字段
-```
-
-**添加新算法**:在 `algorithms/<name>/` 实现 `ISlamAlgorithm`(继承 `SlamBase` 复用同步逻辑),在 `SlamFactory::create()` 加分支。ROS 层零改动。完整步骤见 [docs](docs/rosiwit_slam.md)。
-
----
-
-## 话题与 TF
-
-| 类型 | 名称 | 说明 |
-|---|---|---|
-| 订阅 | `/imu`, `/velodyne_points` | IMU + PointCloud2(launch 可覆盖) |
-| 发布 | `lio_odom` | Odometry(world→body 位姿+速度) |
-| 发布 | `lio_path` | 累计轨迹 |
-| 发布 | `body_cloud`, `world_cloud` | 当前帧 body/world 系点云 |
-| 发布 | `cloud_map` | 全局地图(2s 周期) |
-| TF | `odom → base_link` | 可经 config 的 `world_frame`/`body_frame` 配置 |
-
----
-
-## 目录结构
-
-```
-rosiwit_slam/
-├── src/
-│   ├── ros_interface/          SlamNode + RosUtils (极薄 ROS 层)
-│   ├── slam_core/              ISlamAlgorithm + SlamBase + SlamFactory
-│   ├── algorithms/fast_lio2/   FastLio2Algorithm + map_builder 核心
-│   └── main.cpp                SlamFactory::create() → SlamNode
-├── include/{ros_interface,slam_core,algorithms/fast_lio2}/  对应头文件
-├── config/default.yaml         唯一配置(扁平格式)
-├── launch/slam.launch.py       主 launch(slam_algorithm 参数化)
-├── test/                       gtest: slam_factory + slam_base_sync
-├── scripts/                    install_dependencies.sh + 数据工具
-├── docs/rosiwit_slam.md        完整文档
-├── rviz/                       可视化配置
-└── CMakeLists.txt, package.xml
-```
-
----
-
-## 测试
-
-```bash
-colcon test --packages-select rosiwit_slam --event-handlers console_direct+
-```
-
-gtest 覆盖工厂机制 + IMU/LiDAR 时间同步,不依赖 ROS 运行时。
-
----
 
 ## 许可证
 
 MIT
-
-
-## TODO
-
-- [] 增加空闲状态，启动默认空闲状态，切换到定位/建图
-- [] 兼容rviz重定位，加载地图时给定初始位姿用于定位，并提供重定位ROS接口
-- [] 修复生成栅格地图特征点少问题
-- [] 建图模式与定位模式是否共享数据，随时可以在建图和定位模式切换
-- [] 发布栅格地图话题，在定位模式下确认机器人位置

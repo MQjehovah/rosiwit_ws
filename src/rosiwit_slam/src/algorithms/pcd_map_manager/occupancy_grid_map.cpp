@@ -37,14 +37,10 @@ bool OccupancyGridMap::buildFromPointCloud(
 
     m_data.assign(m_width * m_height, -1);  // 初始化为 unknown
 
-    double ground_low = m_config.ground_height - 0.2;
-    double ground_high = m_config.ground_height + m_config.height_thresh;
-
-    // Step 1: 填入占据点
+    // Step 1: 填入占据点 — 用 min_height/max_height 范围, 保留更多特征
     std::vector<int> point_count(m_width * m_height, 0);
     for (const auto& pt : cloud->points) {
-        if (pt.z < ground_low || pt.z > ground_high) continue;
-        // 过滤地面点 (只保留地面以上的物体)
+        if (pt.z < m_config.min_height || pt.z > m_config.max_height) continue;
         int col = static_cast<int>((pt.x - m_origin_x) / m_config.resolution);
         int row = static_cast<int>((pt.y - m_origin_y) / m_config.resolution);
         if (col < 0 || col >= m_width || row < 0 || row >= m_height) continue;

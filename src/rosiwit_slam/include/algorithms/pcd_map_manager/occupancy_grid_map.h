@@ -9,12 +9,12 @@
 namespace rosiwit_slam {
 
 struct OccupancyGridConfig {
-    double resolution = 0.05;     // 栅格大小 (米/像素)
-    double height_thresh = 0.3;   // 高于地面的高度阈值(m)
-    double ground_height = -0.5;  // 地面高度(m)
-    int occupied_thresh = 3;      // 每个栅格内至少 N 个点才算占据
-    int free_thresh_rays = 50;    // 射线采样数
-    double max_range = 30.0;      // 最大射线距离
+    double resolution = 0.05;
+    double min_height = -1.0;    // 过滤地面以下的点
+    double max_height = 2.0;     // 过滤天花板以上的点
+    int    occupied_thresh = 1;  // 每个栅格至少 1 个点就占据(降低阈值增加特征)
+    int    free_thresh_rays = 360;
+    double max_range = 30.0;
 };
 
 // 2D 占据栅格地图生成器
