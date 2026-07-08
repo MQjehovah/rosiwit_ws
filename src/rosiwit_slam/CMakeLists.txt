@@ -179,7 +179,8 @@ ament_target_dependencies(${NODE_NAME}
 )
 
 # 链接生成的 Service 消息类型
-rosidl_target_interfaces(${NODE_NAME} ${PROJECT_NAME} "rosidl_typesupport_cpp")
+rosidl_get_typesupport_target(typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+target_link_libraries(${NODE_NAME} "${typesupport_target}")
 
 # 链接库
 target_link_libraries(${NODE_NAME}

@@ -1,6 +1,7 @@
 .vscode/
 .github/
 
+.crush
 .claude/
 
 .colcon
@@ -10,3 +11,6 @@ install/
 log/
 
 __pycache__/
+
+
+AGENTS.md

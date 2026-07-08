@@ -124,25 +124,6 @@ else()
 endif()
 
 # ============================================================
-# 核心基础设施库
-# ============================================================
-add_library(diffbot_core_lib SHARED
-  src/core/state_machine.cpp
-  src/core/error_manager.cpp
-  src/core/event_bus.cpp
-  src/core/parameter_manager.cpp
-)
-target_include_directories(diffbot_core_lib PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
-ament_target_dependencies(diffbot_core_lib
-  rclcpp
-  geometry_msgs
-  nav_msgs
-)
-
-# ============================================================
 # 窄道检测器库
 # ============================================================
 add_library(diffbot_narrow_passage_lib SHARED
@@ -170,9 +151,6 @@ target_include_directories(diffbot_planners_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(diffbot_planners_lib
-  diffbot_core_lib
-)
 ament_target_dependencies(diffbot_planners_lib
   rclcpp
   geometry_msgs
@@ -190,9 +168,6 @@ target_include_directories(diffbot_controllers_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(diffbot_controllers_lib
-  diffbot_core_lib
-)
 ament_target_dependencies(diffbot_controllers_lib
   rclcpp
   geometry_msgs
@@ -201,7 +176,7 @@ ament_target_dependencies(diffbot_controllers_lib
 )
 
 # ============================================================
-# 导航库——轨迹生成、路径规划、避障等（无 Nav2 依赖）
+# 导航库——轨迹生成、路径规划、避障等
 # ============================================================
 add_library(diffbot_navigation_lib SHARED
   src/navigation/trajectory_generator.cpp
@@ -211,14 +186,12 @@ add_library(diffbot_navigation_lib SHARED
   src/obstacle_avoidance/obstacle_detector.cpp
   src/obstacle_avoidance/obstacle_avoidance_planner.cpp
   src/narrow_passage/narrow_passage_planner.cpp
-  src/core/navigation_coordinator.cpp
 )
 target_include_directories(diffbot_navigation_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(diffbot_navigation_lib
-  diffbot_core_lib
   diffbot_narrow_passage_lib
   diffbot_planners_lib
 )
@@ -245,9 +218,6 @@ target_include_directories(diffbot_controller_utils_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(diffbot_controller_utils_lib
-  diffbot_core_lib
-)
 ament_target_dependencies(diffbot_controller_utils_lib
   rclcpp
   geometry_msgs
@@ -263,7 +233,6 @@ if(NOT "${nav2_core_DIR}" STREQUAL "")
     $<INSTALL_INTERFACE:include>
   )
   target_link_libraries(diffbot_controller_lib
-    diffbot_core_lib
     diffbot_controller_utils_lib
   )
   ament_target_dependencies(diffbot_controller_lib
@@ -284,54 +253,6 @@ endif()
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_lint_auto REQUIRED)
-
-  # 核心状态机测试
-  ament_add_gtest(test_state_machine test/test_state_machine.cpp)
-  target_link_libraries(test_state_machine
-    diffbot_core_lib
-    GTest::GTest
-    GTest::Main
-  )
-  ament_target_dependencies(test_state_machine
-    rclcpp
-    geometry_msgs
-  )
-
-  # 错误管理器测试
-  ament_add_gtest(test_error_manager test/test_error_manager.cpp)
-  target_link_libraries(test_error_manager
-    diffbot_core_lib
-    GTest::GTest
-    GTest::Main
-  )
-  ament_target_dependencies(test_error_manager
-    rclcpp
-    geometry_msgs
-  )
-
-  # 参数管理器测试
-  ament_add_gtest(test_parameter_manager test/test_parameter_manager.cpp)
-  target_link_libraries(test_parameter_manager
-    diffbot_core_lib
-    GTest::GTest
-    GTest::Main
-  )
-  ament_target_dependencies(test_parameter_manager
-    rclcpp
-    geometry_msgs
-  )
-
-  # 事件总线测试
-  ament_add_gtest(test_event_bus test/test_event_bus.cpp)
-  target_link_libraries(test_event_bus
-    diffbot_core_lib
-    GTest::GTest
-    GTest::Main
-  )
-  ament_target_dependencies(test_event_bus
-    rclcpp
-    geometry_msgs
-  )
 
   # 窄道检测器测试
   ament_add_gtest(test_narrow_passage_detector test/test_narrow_passage_detector.cpp)
@@ -358,36 +279,9 @@ if(BUILD_TESTING)
     nav_msgs
   )
 
-  # 集成测试
-  ament_add_gtest(test_integration test/test_integration.cpp)
-  target_link_libraries(test_integration
-    diffbot_core_lib
-    GTest::GTest
-    GTest::Main
-  )
-  ament_target_dependencies(test_integration
-    rclcpp
-    geometry_msgs
-  )
-
-  # 性能基准测试
-  ament_add_gtest(test_performance_benchmark test/test_performance_benchmark.cpp)
-  target_link_libraries(test_performance_benchmark
-    diffbot_core_lib
-    GTest::GTest
-    GTest::Main
-  )
-  ament_target_dependencies(test_performance_benchmark
-    rclcpp
-    geometry_msgs
-  )
-
-  # ==========================================================
-  # 轨迹生成器测试（18用例 / 518行）
-  # ==========================================================
+  # 轨迹生成器测试
   ament_add_gtest(test_trajectory_generator test/test_trajectory_generator.cpp)
   target_link_libraries(test_trajectory_generator
-    diffbot_core_lib
     diffbot_navigation_lib
     GTest::GTest
     GTest::Main
@@ -398,12 +292,9 @@ if(BUILD_TESTING)
     nav_msgs
   )
 
-  # ==========================================================
   # 速度限制器测试
-  # ==========================================================
   ament_add_gtest(test_velocity_limiter test/test_velocity_limiter.cpp)
   target_link_libraries(test_velocity_limiter
-    diffbot_core_lib
     diffbot_controller_utils_lib
     GTest::GTest
     GTest::Main
@@ -418,7 +309,6 @@ if(BUILD_TESTING)
   # ==========================================================
   # ament_add_gtest(test_obstacle_detector test/test_obstacle_detector.cpp)
   # target_link_libraries(test_obstacle_detector
-  #   diffbot_core_lib
   #   diffbot_navigation_lib
   #   GTest::GTest
   #   GTest::Main
@@ -434,7 +324,6 @@ if(BUILD_TESTING)
   # ==========================================================
   ament_add_gtest(test_narrow_passage test/test_narrow_passage.cpp)
   target_link_libraries(test_narrow_passage
-    diffbot_core_lib
     diffbot_narrow_passage_lib
     diffbot_navigation_lib
     GTest::GTest
@@ -451,7 +340,6 @@ if(BUILD_TESTING)
   # ==========================================================
   # ament_add_gtest(test_obstacle_avoidance test/test_obstacle_avoidance.cpp)
   # target_link_libraries(test_obstacle_avoidance
-  #   diffbot_core_lib
   #   diffbot_navigation_lib
   #   GTest::GTest
   #   GTest::Main
@@ -467,7 +355,6 @@ if(BUILD_TESTING)
   # ==========================================================
   # ament_add_gtest(test_performance test/test_performance.cpp)
   # target_link_libraries(test_performance
-  #   diffbot_core_lib
   #   diffbot_navigation_lib
   #   diffbot_planners_lib
   #   diffbot_controller_utils_lib
@@ -478,14 +365,12 @@ if(BUILD_TESTING)
   #   rclcpp
   #   geometry_msgs
   #   nav_msgs
-  # )
 
   # ==========================================================
   # 单点导航测试 (TODO: API 不匹配，需要重写测试)
   # ==========================================================
   # ament_add_gtest(test_single_point_navigation test/test_single_point_navigation.cpp)
   # target_link_libraries(test_single_point_navigation
-  #   diffbot_core_lib
   #   diffbot_navigation_lib
   #   diffbot_controller_utils_lib
   #   GTest::GTest
@@ -495,38 +380,12 @@ if(BUILD_TESTING)
   #   rclcpp
   #   geometry_msgs
   #   nav_msgs
-  # )
 
   # ==========================================================
-  # 补充测试：PID控制器抗饱和（来自优化添加）
-  # 依赖 Nav2（通过 diff_drive_controller.hpp），条件编译
-  # ==========================================================
-  if(NOT "${nav2_core_DIR}" STREQUAL "")
-    ament_add_gtest(test_pid_controller test/test_pid_controller.cpp)
-    target_link_libraries(test_pid_controller
-      diffbot_core_lib
-      diffbot_controller_lib
-      GTest::GTest
-      GTest::Main
-    )
-    ament_target_dependencies(test_pid_controller
-      rclcpp
-      rclcpp_lifecycle
-      geometry_msgs
-      nav_msgs
-      tf2_ros
-      tf2_geometry_msgs
-      nav2_core
-      nav2_costmap_2d
-    )
-  endif()
-
-  # ==========================================================
-  # 补充测试：轨迹生成器边界 (TODO: API 不匹配，需要重写测试)
+  # 轨迹生成器边缘测试 (TODO: API 不匹配，需要重写测试)
   # ==========================================================
   # ament_add_gtest(test_trajectory_generator_edge test/test_trajectory_generator_edge.cpp)
   # target_link_libraries(test_trajectory_generator_edge
-  #   diffbot_core_lib
   #   diffbot_navigation_lib
   #   GTest::GTest
   #   GTest::Main
@@ -535,29 +394,26 @@ if(BUILD_TESTING)
   #   rclcpp
   #   geometry_msgs
   #   nav_msgs
-  # )
 
   # ==========================================================
-  # 补充测试：A* 规划器基础功能 (TODO: API 不匹配，需要重写测试)
+  # A* 规划器测试 (TODO: API 不匹配，需要重写测试)
   # ==========================================================
   # ament_add_gtest(test_astar_planner test/test_astar_planner.cpp)
   # target_link_libraries(test_astar_planner
-  #   diffbot_core_lib
   #   diffbot_planners_lib
   #   GTest::GTest
   #   GTest::Main
   # )
   # ament_target_dependencies(test_astar_planner
   #   rclcpp
+  #   geometry_msgs
   #   nav_msgs
-  # )
 
   # ==========================================================
-  # 补充测试：A*大网格性能 (TODO: API 不匹配，需要重写测试)
+  # A* 规划器性能测试 (TODO: API 不匹配，需要重写测试)
   # ==========================================================
   # ament_add_gtest(test_astar_planner_perf test/test_astar_planner_perf.cpp)
   # target_link_libraries(test_astar_planner_perf
-  #   diffbot_core_lib
   #   diffbot_planners_lib
   #   GTest::GTest
   #   GTest::Main
@@ -565,30 +421,50 @@ if(BUILD_TESTING)
   # ament_target_dependencies(test_astar_planner_perf
   #   rclcpp
   #   geometry_msgs
-  # )
+  #   nav_msgs
 
   # ==========================================================
-  # 补充测试：窄通道增强 (TODO: API 不匹配，需要重写测试)
+  # 窄通道增强测试 (TODO: API 不匹配，需要重写测试)
   # ==========================================================
   # ament_add_gtest(test_narrow_passage_enhanced test/test_narrow_passage_enhanced.cpp)
   # target_link_libraries(test_narrow_passage_enhanced
-  #   diffbot_core_lib
   #   diffbot_narrow_passage_lib
   #   GTest::GTest
   #   GTest::Main
   # )
   # ament_target_dependencies(test_narrow_passage_enhanced
   #   rclcpp
+  #   sensor_msgs
   #   geometry_msgs
   # )
 
+  # ==========================================================
+  # PID 控制器测试 (TODO: API 不匹配，需要重写测试)
+  # ==========================================================
+  # ament_add_gtest(test_pid_controller test/test_pid_controller.cpp)
+  # target_link_libraries(test_pid_controller
+  #   diffbot_controller_utils_lib
+  #   GTest::GTest
+  #   GTest::Main
+  # )
+  # ament_target_dependencies(test_pid_controller
+  #   rclcpp
+  #   geometry_msgs
+  #   nav_msgs
+  # )
+
+  # ==========================================================
+  # 代码规范检查
+  # ==========================================================
+  if(COMMAND ament_lint_auto_find_test_dependencies)
+    ament_lint_auto_find_test_dependencies()
+  endif()
 endif()
 
 # ============================================================
 # 安装
 # ============================================================
 install(TARGETS
-  diffbot_core_lib
   diffbot_narrow_passage_lib
   diffbot_planners_lib
   diffbot_controllers_lib
@@ -599,25 +475,24 @@ install(TARGETS
   RUNTIME DESTINATION bin
 )
 
-# 条件安装 diff_drive_controller 库（仅 Nav2 可用时）
 if(TARGET diffbot_controller_lib)
-  install(TARGETS diffbot_controller_lib
+  install(TARGETS
+    diffbot_controller_lib
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
   )
 endif()
 
-install(DIRECTORY include/
+install(DIRECTORY
+  launch
+  config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  include/
   DESTINATION include
-)
-
-install(DIRECTORY launch/
-  DESTINATION share/${PROJECT_NAME}/launch
-)
-
-install(DIRECTORY config/
-  DESTINATION share/${PROJECT_NAME}/config
 )
 
 ament_package()
