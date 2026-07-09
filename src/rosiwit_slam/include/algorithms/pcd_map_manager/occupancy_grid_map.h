@@ -10,9 +10,9 @@ namespace rosiwit_slam {
 
 struct OccupancyGridConfig {
     double resolution = 0.05;
-    double min_height = 0.2;     // 障碍物最小高度(地面以上), 去除地面噪点
-    double max_height = 2.0;     // 障碍物最大高度
-    int    occupied_thresh = 3;  // 每个栅格至少 N 个点才算占据(去噪)
+    double min_height = 0.1;     // 障碍物最低高度(地面以上 10cm), 兼顾低矮障碍
+    double max_height = 2.5;     // 障碍物最高高度
+    int    occupied_thresh = 2;  // 每个栅格至少 2 个点就算占据
     int    free_thresh_rays = 360;
     double max_range = 30.0;
 };
@@ -38,7 +38,6 @@ public:
 
 private:
     void rayTraceFreeSpace(const pcl::PointCloud<pcl::PointXYZINormal>::ConstPtr& cloud);
-    void morphologicalOpen();  // 腐蚀+膨胀去孤立噪点
     int cellIndex(int col, int row) const;
 
     OccupancyGridConfig m_config;
