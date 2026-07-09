@@ -81,27 +81,20 @@ bool OccupancyGridMap::buildFromPointCloud(
         }
     }
 
-    // 生成栅格:
-    // - 有传感器观测到(any_count > 0) 且障碍物点少(obs_count < thresh) → FREE(0)
-    // - 障碍物点多(obs_count >= thresh) → OCCUPIED(100)
-    // - 未观测到(any_count == 0) → UNKNOWN(-1)
-    m_data.assign(total_cells, -1);
-    int occupied_cells = 0, free_cells = 0;
+    // 生成栅格: 默认全部 FREE, 只标记有障碍物高度的点为 OCCUPIED
+    m_data.assign(total_cells, 0);  // 默认 free
+    int occupied_cells = 0;
     for (int i = 0; i < total_cells; ++i) {
-        if (any_count[i] == 0) continue;  // 未观测 → unknown
         if (obs_count[i] >= m_config.occupied_thresh) {
-            m_data[i] = 100;   // 占据
+            m_data[i] = 100;   // 有障碍物高度的点 → 占据
             occupied_cells++;
-        } else {
-            m_data[i] = 0;     // 被观测到但没有障碍物 → 自由
-            free_cells++;
         }
+        // 其余全部 free (包括未扫描到的地面)
     }
 
     std::cout << "[GridMap] " << m_width << "x" << m_height
               << " occupied=" << occupied_cells
-              << " free=" << free_cells
-              << " unknown=" << (total_cells - occupied_cells - free_cells)
+              << " total=" << total_cells
               << std::endl;
 
     return true;
