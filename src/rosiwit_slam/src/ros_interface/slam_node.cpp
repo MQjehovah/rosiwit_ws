@@ -137,10 +137,10 @@ void SlamNode::publish(const SlamOutput& out) {
 }
 
 void SlamNode::mapTimerCB() {
-    // 定位模式: 始终发布加载的地图(不管有无订阅者, RViz 需要它)
-    // 建图模式: 有订阅者才发(节省 CPU)
     auto pipe = getPipeline();
     bool always_pub = (pipe && pipe->getMode() == PipelineMode::LOCALIZATION);
+
+    // 1. cloud_map
     if (always_pub || m_global_map_pub->get_subscription_count() > 0) {
         PointVec pts;
         if (m_algo->getGlobalMap(pts) && !pts.empty()) {
@@ -148,6 +148,23 @@ void SlamNode::mapTimerCB() {
             cloud.width = cloud.size(); cloud.height = 1;
             sensor_msgs::msg::PointCloud2 m; pcl::toROSMsg(cloud, m);
             m.header.frame_id = m_cfg.world_frame; m.header.stamp = now(); m_global_map_pub->publish(m);
+        }
+    }
+
+    // 2. grid_map (nav_msgs/OccupancyGrid) — 定位模式下发布
+    if (pipe && pipe->getMode() == PipelineMode::LOCALIZATION && !m_grid_map_published) {
+        auto* pcd = dynamic_cast<PcdMapManager*>(pipe->m_map_mgr.get());
+        if (pcd && !pcd->getGridData().empty()) {
+            nav_msgs::msg::OccupancyGrid grid;
+            grid.header.frame_id = m_cfg.world_frame;
+            grid.header.stamp = now();
+            grid.info.resolution = 0.05;
+            grid.info.width = 0;
+            grid.info.height = 0;
+            grid.data = pcd->getGridData();
+            m_grid_map_pub->publish(grid);
+            m_grid_map_published = true;
+            RCLCPP_INFO(get_logger(), "Published grid_map (%d x %d)", grid.info.width, grid.info.height);
         }
     }
 }
@@ -178,6 +195,10 @@ void SlamNode::handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std:
     if (!pipe || !pipe->m_map_mgr) { res->success = false; res->message = "No map manager"; return; }
     PoseStamped init; init.trans = V3D::Zero(); init.rot = M3D::Identity();
     res->success = pipe->loadMapForLocalization(req->path, init);
+    if (res->success) {
+        auto* pcd = dynamic_cast<PcdMapManager*>(pipe->m_map_mgr.get());
+        if (pcd) pcd->generateGridMap(0.05);
+    }
     res->message = res->success ? "Loaded" : "Failed";
 }
 

@@ -73,6 +73,7 @@ private:
     SlamOutput m_latest;
     bool m_have_output = false;
     nav_msgs::msg::Path m_path;
+    bool m_grid_map_published = false;
 };
 
 } // namespace rosiwit_slam

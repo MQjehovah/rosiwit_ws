@@ -17,6 +17,7 @@ public:
     bool addSubMap(const KeyFrame& kf) override;
 
     // 2D 占据栅格地图
+    bool generateGridMap(double resolution = 0.05);
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path,
                      double resolution = 0.05, const std::string& frame_id = "map");
     bool loadGridMap(const std::string& pgm_path, const std::string& yaml_path);
