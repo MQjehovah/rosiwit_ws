@@ -247,8 +247,11 @@ void SmoothNavigation::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr
 void SmoothNavigation::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
 {
   current_map_ = msg;
-  RCLCPP_DEBUG(get_logger(), "Map updated: size=%d x %d",
-    msg->info.width, msg->info.height);
+  if (path_planner_) {
+    path_planner_->setMap(msg);
+  }
+  RCLCPP_INFO(get_logger(), "Map received: %d x %d, res=%.3f",
+    msg->info.width, msg->info.height, msg->info.resolution);
 }
 
 void SmoothNavigation::goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)

@@ -93,6 +93,20 @@ void PathPlanner::deactivate()
   active_ = false;
 }
 
+
+void PathPlanner::setMap(const nav_msgs::msg::OccupancyGrid::SharedPtr & msg)
+{
+  map_data_ = msg->data;
+  map_width_ = msg->info.width;
+  map_height_ = msg->info.height;
+  map_resolution_ = msg->info.resolution;
+  map_origin_x_ = msg->info.origin.position.x;
+  map_origin_y_ = msg->info.origin.position.y;
+  configured_ = true;
+  RCLCPP_INFO(logger_, "Map set: %d x %d, res=%.3f, origin=(%.2f, %.2f)",
+    map_width_, map_height_, map_resolution_, map_origin_x_, map_origin_y_);
+}
+
 nav_msgs::msg::Path PathPlanner::createPlan(
   const geometry_msgs::msg::PoseStamped & start,
   const geometry_msgs::msg::PoseStamped & goal)
@@ -230,15 +244,16 @@ nav_msgs::msg::Path PathPlanner::planWithNavFn(
   path.header.stamp = clock_->now();
   path.header.frame_id = start.header.frame_id;
 
-  // 获取代价地图
-  auto costmap = costmap_ros_->getCostmap();
-  unsigned int size_x = costmap->getSizeInCellsX();
-  unsigned int size_y = costmap->getSizeInCellsY();
+  // 使用内部地图数据
+  unsigned int size_x = map_width_;
+  unsigned int size_y = map_height_;
 
-  // 计算起点和终点在代价地图中的位置
+  // 计算起点和终点在地图中的位置
   unsigned int start_mx, start_my, goal_mx, goal_my;
-  costmap->worldToMap(start.pose.position.x, start.pose.position.y, start_mx, start_my);
-  costmap->worldToMap(goal.pose.position.x, goal.pose.position.y, goal_mx, goal_my);
+  start_mx = static_cast<unsigned int>((start.pose.position.x - map_origin_x_) / map_resolution_);
+  start_my = static_cast<unsigned int>((start.pose.position.y - map_origin_y_) / map_resolution_);
+  goal_mx = static_cast<unsigned int>((goal.pose.position.x - map_origin_x_) / map_resolution_);
+  goal_my = static_cast<unsigned int>((goal.pose.position.y - map_origin_y_) / map_resolution_);
 
   RCLCPP_DEBUG(
     logger_,

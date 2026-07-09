@@ -40,7 +40,7 @@ def generate_launch_description():
         # 是否启动RViz
         DeclareLaunchArgument(
             'use_rviz',
-            default_value='true',
+            default_value='false',
             description='Whether to start RViz'
         ),
         # RViz配置文件

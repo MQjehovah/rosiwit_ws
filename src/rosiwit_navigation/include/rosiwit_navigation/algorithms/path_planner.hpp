@@ -80,7 +80,8 @@ public:
    * @param costmap_ros 代价地图
    * @param frame_id 地图坐标系
    */
-  void configure(
+  void setMap(const nav_msgs::msg::OccupancyGrid::SharedPtr & msg);
+    void configure(
     const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
     std::string name,
     std::shared_ptr<tf2_ros::Buffer> tf,
@@ -172,6 +173,12 @@ private:
 
   PlannerConfig config_;
   bool configured_;
+  std::vector<int8_t> map_data_;
+  int map_width_ = 0;
+  int map_height_ = 0;
+  double map_resolution_ = 0.05;
+  double map_origin_x_ = 0.0;
+  double map_origin_y_ = 0.0;
   bool active_;
 
   // 日志记录器
