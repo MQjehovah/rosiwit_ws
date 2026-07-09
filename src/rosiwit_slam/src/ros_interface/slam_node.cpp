@@ -51,6 +51,16 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_map_pub         = create_publisher<nav_msgs::msg::OccupancyGrid>("map", 1);
     m_odom_nav_pub    = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     m_tf = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
+    m_static_tf = std::make_shared<tf2_ros::StaticTransformBroadcaster>(*this);
+    // 发布 map -> odom 静态变换 (nav2 global_costmap 需要 map frame)
+    {
+        geometry_msgs::msg::TransformStamped static_tf;
+        static_tf.header.stamp = now();
+        static_tf.header.frame_id = "map";
+        static_tf.child_frame_id = "odom";
+        static_tf.transform.rotation.w = 1.0;
+        m_static_tf->sendTransform(static_tf);
+    }
     m_timer     = create_wall_timer(20ms, std::bind(&SlamNode::timerCB, this));
     m_map_timer = create_wall_timer(2s,   std::bind(&SlamNode::mapTimerCB, this));
     m_path.header.frame_id = m_cfg.world_frame;

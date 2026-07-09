@@ -9,6 +9,7 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <builtin_interfaces/msg/time.hpp>
 #include <mutex>
 #include "slam_core/i_slam_algorithm.h"
@@ -65,6 +66,7 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_nav_pub;
     rclcpp::TimerBase::SharedPtr m_timer, m_map_timer;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf;
+    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> m_static_tf;
     rclcpp::Service<rosiwit_slam::srv::SaveMap>::SharedPtr       m_srv_save_map;
     rclcpp::Service<rosiwit_slam::srv::LoadMap>::SharedPtr       m_srv_load_map;
     rclcpp::Service<rosiwit_slam::srv::SaveGridMap>::SharedPtr   m_srv_save_grid_map;

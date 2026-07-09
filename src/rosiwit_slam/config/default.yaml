@@ -15,7 +15,7 @@ modules:
 imu_topic: /imu
 lidar_topic: /velodyne_points
 body_frame: base_footprint
-world_frame: map
+world_frame: odom
 
 lidar_filter_num: 3
 lidar_min_range: 0.5
