@@ -137,7 +137,11 @@ void SlamNode::publish(const SlamOutput& out) {
 }
 
 void SlamNode::mapTimerCB() {
-    if (m_global_map_pub->get_subscription_count() > 0) {
+    // 定位模式: 始终发布加载的地图(不管有无订阅者, RViz 需要它)
+    // 建图模式: 有订阅者才发(节省 CPU)
+    auto pipe = getPipeline();
+    bool always_pub = (pipe && pipe->getMode() == PipelineMode::LOCALIZATION);
+    if (always_pub || m_global_map_pub->get_subscription_count() > 0) {
         PointVec pts;
         if (m_algo->getGlobalMap(pts) && !pts.empty()) {
             CloudType cloud; for (auto& p : pts) cloud.push_back(p);

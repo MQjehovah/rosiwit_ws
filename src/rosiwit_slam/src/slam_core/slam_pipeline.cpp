@@ -2,6 +2,7 @@
 #include "slam_core/slam_factory.h"
 #include <yaml-cpp/yaml.h>
 #include <iostream>
+#include <pcl/common/transforms.h>
 
 namespace rosiwit_slam {
 
@@ -85,6 +86,16 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
                 m_localization->getPose(out.pose);
                 out.state = SlamState::RUNNING;
                 out.has_new_pose = true;
+                // 把当前扫描变换到地图坐标系(world), 供 RViz 可视化匹配关系
+                if (f.cloud && !f.cloud->empty()) {
+                    CloudType::Ptr world_scan(new CloudType());
+                    Eigen::Affine3d T = Eigen::Affine3d::Identity();
+                    T.translate(out.pose.trans);
+                    T.rotate(out.pose.rot);
+                    pcl::transformPointCloud(*f.cloud, *world_scan, T);
+                    out.world_cloud = world_scan;
+                    out.body_cloud = f.cloud;
+                }
                 emitOutput(out);
             }
         }
