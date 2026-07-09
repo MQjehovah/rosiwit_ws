@@ -5,9 +5,9 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <memory>
-#include "diffbot_navigation/navigation/trajectory_generator.hpp"
+#include "rosiwit_navigation/algorithms/trajectory_generator.hpp"
 
-using namespace diffbot_navigation::navigation;
+using namespace rosiwit_navigation::navigation;
 
 class TrajectoryGeneratorTest : public ::testing::Test
 {

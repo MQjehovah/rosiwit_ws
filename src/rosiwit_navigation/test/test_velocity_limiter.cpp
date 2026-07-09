@@ -4,9 +4,9 @@
 
 #include <gtest/gtest.h>
 #include <cmath>
-#include "diffbot_navigation/controller/velocity_limiter.hpp"
+#include "rosiwit_navigation/algorithms/velocity_limiter.hpp"
 
-using namespace diffbot_navigation::controller;
+using namespace rosiwit_navigation::controller;
 
 class VelocityLimiterTest : public ::testing::Test
 {

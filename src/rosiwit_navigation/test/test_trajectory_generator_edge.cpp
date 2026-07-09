@@ -8,11 +8,11 @@
 #include <cmath>
 #include <memory>
 #include <vector>
-#include "diffbot_navigation/navigation/trajectory_generator.hpp"
+#include "rosiwit_navigation/algorithms/trajectory_generator.hpp"
 #include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 
-using namespace diffbot_navigation::navigation;
+using namespace rosiwit_navigation::navigation;
 
 // ============================================================
 // Fixture: 轨迹生成器测试环境
@@ -78,7 +78,7 @@ TEST_F(TrajectoryGeneratorEdgeTest, HandleEmptyPath)
   empty_path.header.frame_id = "map";
 
   // 不应崩溃
-  std::vector<diffbot_navigation::core::TrajectoryPoint> trajectory;
+  std::vector<rosiwit_navigation::core::TrajectoryPoint> trajectory;
 
   EXPECT_NO_THROW({
     trajectory = generator_->generateTrajectory(empty_path, default_velocity_);
@@ -97,7 +97,7 @@ TEST_F(TrajectoryGeneratorEdgeTest, HandleSinglePointPath)
 {
   auto path = createPath({{1.0, 2.0}});  // 仅一个点
 
-  std::vector<diffbot_navigation::core::TrajectoryPoint> trajectory;
+  std::vector<rosiwit_navigation::core::TrajectoryPoint> trajectory;
 
   EXPECT_NO_THROW({
     trajectory = generator_->generateTrajectory(path, default_velocity_);
@@ -143,7 +143,7 @@ TEST_F(TrajectoryGeneratorEdgeTest, DuplicateStartGoalPath)
 {
   auto path = createPath({{0.0, 0.0}, {0.0, 0.0}});
 
-  std::vector<diffbot_navigation::core::TrajectoryPoint> trajectory;
+  std::vector<rosiwit_navigation::core::TrajectoryPoint> trajectory;
   EXPECT_NO_THROW({
     trajectory = generator_->generateTrajectory(path, default_velocity_);
   });
@@ -168,7 +168,7 @@ TEST_F(TrajectoryGeneratorEdgeTest, VeryLongPathHandling)
   // 应能在合理时间内完成
   auto start = std::chrono::steady_clock::now();
 
-  std::vector<diffbot_navigation::core::TrajectoryPoint> trajectory;
+  std::vector<rosiwit_navigation::core::TrajectoryPoint> trajectory;
   EXPECT_NO_THROW({
     trajectory = generator_->generateTrajectory(path, default_velocity_);
   });
@@ -195,7 +195,7 @@ TEST_F(TrajectoryGeneratorEdgeTest, NonZeroInitialVelocity)
   moving_velocity.linear.x = 0.5;   // 已有前进速度
   moving_velocity.angular.z = -0.1; // 微小旋转
 
-  std::vector<diffbot_navigation::core::TrajectoryPoint> trajectory;
+  std::vector<rosiwit_navigation::core::TrajectoryPoint> trajectory;
   EXPECT_NO_THROW({
     trajectory = generator_->generateTrajectory(path, moving_velocity);
   });
@@ -232,7 +232,7 @@ TEST_F(TrajectoryGeneratorEdgeTest, PathWithNaNCoordinates)
   path.poses.push_back(nan_pose);
 
   // 不应崩溃（至少返回部分结果）
-  std::vector<diffbot_navigation::core::TrajectoryPoint> trajectory;
+  std::vector<rosiwit_navigation::core::TrajectoryPoint> trajectory;
   EXPECT_NO_THROW({
     trajectory = generator_->generateTrajectory(path, default_velocity_);
   });
@@ -252,7 +252,7 @@ TEST_F(TrajectoryGeneratorEdgeTest, MicroscopicPathHandling)
   auto path = createPath({{0.0, 0.0}, {1e-7, 1e-7}});
   ASSERT_EQ(path.poses.size(), 2u);
 
-  std::vector<diffbot_navigation::core::TrajectoryPoint> trajectory;
+  std::vector<rosiwit_navigation::core::TrajectoryPoint> trajectory;
   EXPECT_NO_THROW({
     trajectory = generator_->generateTrajectory(path, default_velocity_);
   });
@@ -270,7 +270,7 @@ TEST_F(TrajectoryGeneratorEdgeTest, InitialVelocityExceedsMax)
   excessive_velocity.linear.x = 10.0;    // 远超 max_linear_velocity=1.0
   excessive_velocity.angular.z = 5.0;    // 远超 max_angular_velocity=1.5
 
-  std::vector<diffbot_navigation::core::TrajectoryPoint> trajectory;
+  std::vector<rosiwit_navigation::core::TrajectoryPoint> trajectory;
   EXPECT_NO_THROW({
     trajectory = generator_->generateTrajectory(path, excessive_velocity);
   });

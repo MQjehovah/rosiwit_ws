@@ -6,9 +6,9 @@
 #include <cmath>
 #include <memory>
 #include <vector>
-#include "diffbot_navigation/narrow_passage/narrow_passage_detector.hpp"
+#include "rosiwit_navigation/algorithms/narrow_passage_detector.hpp"
 
-using namespace diffbot_navigation::narrow_passage;
+using namespace rosiwit_navigation::narrow_passage;
 
 class NarrowPassageDetectorTest : public ::testing::Test
 {
