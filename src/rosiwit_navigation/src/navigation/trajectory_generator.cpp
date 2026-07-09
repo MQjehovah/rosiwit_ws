@@ -224,7 +224,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
   // 创建简化的路径
   nav_msgs::msg::Path path;
   path.header.stamp = rclcpp::Clock().now();
-  path.header.frame_id = "map";
+  path.header.frame_id = frame_id_;
 
   // 添加起点
   geometry_msgs::msg::PoseStamped start_pose;
@@ -354,7 +354,7 @@ nav_msgs::msg::Path TrajectoryGenerator::toPathMsg(const std::vector<TrajectoryP
 {
   nav_msgs::msg::Path path;
   path.header.stamp = rclcpp::Clock().now();
-  path.header.frame_id = "map";
+  path.header.frame_id = frame_id_;
 
   for (const auto & point : trajectory) {
     geometry_msgs::msg::PoseStamped pose;

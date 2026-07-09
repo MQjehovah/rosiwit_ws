@@ -176,6 +176,11 @@ public:
    */
   nav_msgs::msg::Path toPathMsg(const std::vector<TrajectoryPoint> & trajectory);
 
+  /**
+   * @brief 设置轨迹 frame_id
+   */
+  void setFrameId(const std::string & frame_id) { frame_id_ = frame_id; }
+
 private:
   /**
    * @brief 计算两点之间的距离
@@ -209,6 +214,7 @@ private:
   // 成员变量
   TrajectoryConfig config_;
   Config simple_config_;
+  std::string frame_id_ = "odom";
   rclcpp::Logger logger_{rclcpp::get_logger("trajectory_generator")};
 };
 

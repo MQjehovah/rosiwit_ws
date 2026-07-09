@@ -267,6 +267,10 @@ private:
   // 地图
   nav_msgs::msg::OccupancyGrid::SharedPtr current_map_;
 
+  // 坐标系
+  std::string global_frame_ = "odom";
+  std::string robot_frame_ = "base_link";
+
   // 参数
   NavigationParams params_;
 

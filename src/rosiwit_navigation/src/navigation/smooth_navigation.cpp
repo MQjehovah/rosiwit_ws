@@ -41,6 +41,7 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_configure(const rclcpp_lifecy
   // 初始化组件
   path_planner_ = std::make_shared<PathPlanner>();
   trajectory_generator_ = std::make_shared<TrajectoryGenerator>();
+  trajectory_generator_->setFrameId(global_frame_);
 
   // 初始化订阅者和发布者
   initializeSubscribers();
@@ -143,6 +144,9 @@ void SmoothNavigation::loadParameters()
   nav2_util::declare_parameter_if_not_declared(this, "min_lookahead_distance", rclcpp::ParameterValue(0.3));
   nav2_util::declare_parameter_if_not_declared(this, "max_lookahead_distance", rclcpp::ParameterValue(0.9));
 
+  nav2_util::declare_parameter_if_not_declared(this, "global_frame", rclcpp::ParameterValue(std::string("odom")));
+  nav2_util::declare_parameter_if_not_declared(this, "robot_frame", rclcpp::ParameterValue(std::string("base_link")));
+
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
   get_parameter("max_velocity_x", params_.max_velocity_x);
@@ -155,6 +159,9 @@ void SmoothNavigation::loadParameters()
   get_parameter("lookahead_distance", params_.lookahead_distance);
   get_parameter("min_lookahead_distance", params_.min_lookahead_distance);
   get_parameter("max_lookahead_distance", params_.max_lookahead_distance);
+
+  get_parameter("global_frame", global_frame_);
+  get_parameter("robot_frame", robot_frame_);
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
   RCLCPP_INFO(get_logger(), "  - controller_frequency: %.1f Hz", params_.controller_frequency);
@@ -341,10 +348,10 @@ bool SmoothNavigation::updateCurrentPose()
     // 从TF获取当前位姿
     geometry_msgs::msg::TransformStamped transform;
     transform = tf_buffer_->lookupTransform(
-      "map", "base_link", tf2::TimePointZero);
+      global_frame_, robot_frame_, tf2::TimePointZero);
 
     current_pose_.header.stamp = transform.header.stamp;
-    current_pose_.header.frame_id = "map";
+    current_pose_.header.frame_id = global_frame_;
     current_pose_.pose.position.x = transform.transform.translation.x;
     current_pose_.pose.position.y = transform.transform.translation.y;
     current_pose_.pose.position.z = transform.transform.translation.z;
