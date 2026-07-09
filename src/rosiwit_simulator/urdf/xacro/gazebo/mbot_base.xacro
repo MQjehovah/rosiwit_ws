@@ -186,7 +186,7 @@
                 <command_topic>cmd_vel</command_topic>
                 <odometry_frame>odom</odometry_frame>
                 <odometry_topic>odom</odometry_topic>
-                <publish_odom_tf>true</publish_odom_tf>
+                <publish_odom_tf>false</publish_odom_tf>
                 <robot_base_frame>base_footprint</robot_base_frame>
             </plugin>
         </gazebo>
