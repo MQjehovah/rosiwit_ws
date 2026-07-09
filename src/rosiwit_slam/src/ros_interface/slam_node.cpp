@@ -48,6 +48,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_path_pub        = create_publisher<nav_msgs::msg::Path>("lio_path", 10000);
     m_global_map_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_map", 10);
     m_grid_map_pub    = create_publisher<nav_msgs::msg::OccupancyGrid>("grid_map", 1);
+    m_map_pub         = create_publisher<nav_msgs::msg::OccupancyGrid>("map", 1);
+    m_odom_nav_pub    = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     m_tf = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
     m_timer     = create_wall_timer(20ms, std::bind(&SlamNode::timerCB, this));
     m_map_timer = create_wall_timer(2s,   std::bind(&SlamNode::mapTimerCB, this));
@@ -114,6 +116,7 @@ void SlamNode::publish(const SlamOutput& out) {
         odom.pose.pose.orientation.x = q.x(); odom.pose.pose.orientation.y = q.y(); odom.pose.pose.orientation.z = q.z(); odom.pose.pose.orientation.w = q.w();
         odom.twist.twist.linear.x = out.pose.vel.x(); odom.twist.twist.linear.y = out.pose.vel.y(); odom.twist.twist.linear.z = out.pose.vel.z();
         m_odom_pub->publish(odom);
+        if (m_odom_nav_pub->get_subscription_count() > 0) m_odom_nav_pub->publish(odom);
     }
     {
         geometry_msgs::msg::TransformStamped tf;
@@ -167,6 +170,7 @@ void SlamNode::mapTimerCB() {
             grid.info.origin.orientation.w = 1.0;
             grid.data = pcd->getGridData();
             m_grid_map_pub->publish(grid);
+            if (m_map_pub) m_map_pub->publish(grid);
             m_grid_map_published = true;
             RCLCPP_INFO(get_logger(), "Published grid_map (%d x %d, res=%.3f)", grid.info.width, grid.info.height, grid.info.resolution);
         }

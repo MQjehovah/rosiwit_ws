@@ -61,6 +61,8 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_pub;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr     m_path_pub;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr m_grid_map_pub;
+    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr m_map_pub;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_nav_pub;
     rclcpp::TimerBase::SharedPtr m_timer, m_map_timer;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf;
     rclcpp::Service<rosiwit_slam::srv::SaveMap>::SharedPtr       m_srv_save_map;
