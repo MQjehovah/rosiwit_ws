@@ -163,13 +163,19 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
+    # Auto-activate smooth_navigation lifecycle (2.5s after launch)
+    smooth_configure = TimerAction(period=2.5, actions=[ExecuteProcess(
+        cmd=['ros2', 'lifecycle', 'set', '/smooth_navigation', 'configure'])])
+    smooth_activate = TimerAction(period=4.0, actions=[ExecuteProcess(
+        cmd=['ros2', 'lifecycle', 'set', '/smooth_navigation', 'activate'])])
+
     # ============================================================
     # 组合所有节点
     # ============================================================
     return LaunchDescription(
         declared_arguments +
         navigation_nodes +
-        [lifecycle_manager_nav2] +
+        [lifecycle_manager_nav2, smooth_configure, smooth_activate] +
         nav2_nodes +
         [rviz_node]
     )
