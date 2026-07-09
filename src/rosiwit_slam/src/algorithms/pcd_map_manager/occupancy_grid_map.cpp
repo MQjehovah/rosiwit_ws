@@ -22,11 +22,11 @@ bool OccupancyGridMap::buildFromPointCloud(
 {
     if (!cloud || cloud->empty()) return false;
 
-    // 轻度降采样, 减少噪点但保留细节
+    // 降采样去噪
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZINormal>);
     pcl::VoxelGrid<pcl::PointXYZINormal> vg;
     vg.setInputCloud(cloud);
-    vg.setLeafSize(0.05f, 0.05f, 0.05f);
+    vg.setLeafSize(0.1f, 0.1f, 0.1f);
     vg.filter(*filtered);
 
     pcl::PointXYZINormal min_pt, max_pt;
@@ -42,9 +42,7 @@ bool OccupancyGridMap::buildFromPointCloud(
     m_origin_x = min_x - m_config.resolution;
     m_origin_y = min_y - m_config.resolution;
 
-    m_data.assign(m_width * m_height, -1);  // unknown
-
-    // 自适应检测地面高度 (Z 轴直方图)
+    // 自适应地面高度检测
     std::vector<int> z_hist(100, 0);
     double z_min = static_cast<double>(min_pt.z);
     double z_max = static_cast<double>(max_pt.z);
@@ -58,34 +56,53 @@ bool OccupancyGridMap::buildFromPointCloud(
         if (z_hist[i] > z_hist[ground_bin]) ground_bin = i;
     }
     double ground_z = z_min + (ground_bin + 0.5) / 100.0 * z_range;
-    double obs_min_z = ground_z + m_config.min_height;
-    double obs_max_z = ground_z + m_config.max_height;
+
+    // 障碍物高度范围: 地面以上 0.15m ~ 1.8m
+    double obs_min_z = ground_z + 0.15;
+    double obs_max_z = ground_z + 1.8;
 
     std::cout << "[GridMap] Ground Z=" << ground_z
-              << " obstacle range: [" << obs_min_z << ", " << obs_max_z << "]" << std::endl;
+              << " obstacle: [" << obs_min_z << ", " << obs_max_z << "]" << std::endl;
 
-    // 统计每个栅格的障碍物点数
-    std::vector<int> point_count(m_width * m_height, 0);
+    int total_cells = m_width * m_height;
+
+    // 统计每格的障碍物点数和总点数
+    std::vector<int> obs_count(total_cells, 0);   // 障碍物高度范围内的点数
+    std::vector<int> any_count(total_cells, 0);   // 任意高度的点数(用于判断是否被观测到)
+
     for (const auto& pt : filtered->points) {
-        if (pt.z < obs_min_z || pt.z > obs_max_z) continue;
         int col = static_cast<int>((pt.x - m_origin_x) / m_config.resolution);
         int row = static_cast<int>((pt.y - m_origin_y) / m_config.resolution);
         if (col < 0 || col >= m_width || row < 0 || row >= m_height) continue;
-        point_count[cellIndex(col, row)]++;
-    }
-
-    // 标记占据
-    for (int r = 0; r < m_height; ++r) {
-        for (int c = 0; c < m_width; ++c) {
-            int idx = cellIndex(c, r);
-            if (point_count[idx] >= m_config.occupied_thresh) {
-                m_data[idx] = 100;
-            }
+        int idx = cellIndex(col, row);
+        any_count[idx]++;
+        if (pt.z >= obs_min_z && pt.z <= obs_max_z) {
+            obs_count[idx]++;
         }
     }
 
-    // 射线追踪标记自由空间 (传感器→障碍物之间的区域标记为 free)
-    rayTraceFreeSpace(filtered);
+    // 生成栅格:
+    // - 有传感器观测到(any_count > 0) 且障碍物点少(obs_count < thresh) → FREE(0)
+    // - 障碍物点多(obs_count >= thresh) → OCCUPIED(100)
+    // - 未观测到(any_count == 0) → UNKNOWN(-1)
+    m_data.assign(total_cells, -1);
+    int occupied_cells = 0, free_cells = 0;
+    for (int i = 0; i < total_cells; ++i) {
+        if (any_count[i] == 0) continue;  // 未观测 → unknown
+        if (obs_count[i] >= m_config.occupied_thresh) {
+            m_data[i] = 100;   // 占据
+            occupied_cells++;
+        } else {
+            m_data[i] = 0;     // 被观测到但没有障碍物 → 自由
+            free_cells++;
+        }
+    }
+
+    std::cout << "[GridMap] " << m_width << "x" << m_height
+              << " occupied=" << occupied_cells
+              << " free=" << free_cells
+              << " unknown=" << (total_cells - occupied_cells - free_cells)
+              << std::endl;
 
     return true;
 }
@@ -93,30 +110,7 @@ bool OccupancyGridMap::buildFromPointCloud(
 void OccupancyGridMap::rayTraceFreeSpace(
     const pcl::PointCloud<pcl::PointXYZINormal>::ConstPtr& cloud)
 {
-    double sx = 0, sy = 0;
-    for (const auto& p : cloud->points) { sx += p.x; sy += p.y; }
-    sx /= cloud->size(); sy /= cloud->size();
-
-    int sensor_col = static_cast<int>((sx - m_origin_x) / m_config.resolution);
-    int sensor_row = static_cast<int>((sy - m_origin_y) / m_config.resolution);
-
-    int max_cells = static_cast<int>(m_config.max_range / m_config.resolution);
-
-    for (int angle_idx = 0; angle_idx < m_config.free_thresh_rays; ++angle_idx) {
-        double theta = 2.0 * M_PI * angle_idx / m_config.free_thresh_rays;
-        double dx = std::cos(theta);
-        double dy = std::sin(theta);
-
-        for (int step = 0; step < max_cells; ++step) {
-            int c = sensor_col + static_cast<int>(dx * step);
-            int r = sensor_row + static_cast<int>(dy * step);
-            if (c < 0 || c >= m_width || r < 0 || r >= m_height) break;
-
-            int idx = cellIndex(c, r);
-            if (m_data[idx] == 100) break;       // 遇到障碍物停止
-            if (m_data[idx] == -1) m_data[idx] = 0;  // 标记 free
-        }
-    }
+    // 不再使用射线追踪, 改为基于观测的直接标记
 }
 
 bool OccupancyGridMap::saveToPGM(
