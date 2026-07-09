@@ -20,6 +20,7 @@ apt-get install -y -qq \
     ros-humble-nav2-core \
     ros-humble-nav2-util \
     ros-humble-nav2-costmap-2d \
+    ros-humble-pcl-ros \
     libpcap0.8 \
     2>&1 | tail -5
 
