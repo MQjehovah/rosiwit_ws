@@ -100,7 +100,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{'use_sim_time': use_sim_time,
                      'autostart': autostart,
-                     'node_names': ['smooth_navigation']}],
+                     'node_names': ['smooth_navigation', 'controller_server', 'planner_server', 'behavior_server', 'bt_navigator']}],
     )
     # ============================================================
     # Nav2 核心组件（可选）
