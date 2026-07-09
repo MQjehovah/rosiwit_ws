@@ -100,7 +100,19 @@ def generate_launch_description():
         output='screen',
         parameters=[{'use_sim_time': use_sim_time,
                      'autostart': autostart,
-                     'node_names': ['smooth_navigation', 'controller_server', 'planner_server', 'behavior_server', 'bt_navigator']}],
+                     'node_names': ['smooth_navigation']}],
+    )
+
+    # Lifecycle Manager for nav2 nodes (costmaps, etc.)
+    lifecycle_manager_nav2 = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_nav2',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time,
+                     'autostart': autostart,
+                     'node_names': ['controller_server', 'planner_server',
+                                    'behavior_server', 'bt_navigator']}],
     )
     # ============================================================
     # Nav2 核心组件（可选）
@@ -165,7 +177,7 @@ def generate_launch_description():
     return LaunchDescription(
         declared_arguments +
         navigation_nodes +
-        [lifecycle_manager_node] +
+        [lifecycle_manager_node, lifecycle_manager_nav2] +
         nav2_nodes +
         [rviz_node]
     )
