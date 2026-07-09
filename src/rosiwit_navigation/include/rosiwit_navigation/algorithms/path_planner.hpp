@@ -183,7 +183,7 @@ private:
 
   // 日志记录器
   rclcpp::Logger logger_{rclcpp::get_logger("path_planner")};
-  rclcpp::Clock::SharedPtr clock_;
+  rclcpp::Clock::SharedPtr clock_{std::make_shared<rclcpp::Clock>()};
 };
 
 } // namespace navigation
