@@ -180,6 +180,11 @@ protected:
   void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
 
   /**
+   * @brief RViz目标点回调
+   */
+  void goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+
+  /**
    * @brief 控制循环
    */
   void controlLoop();
@@ -238,6 +243,7 @@ private:
   // 订阅者
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
 
   // 发布者
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;

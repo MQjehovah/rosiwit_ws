@@ -111,6 +111,7 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycl
   // 重置订阅者和发布者
   odom_sub_.reset();
   map_sub_.reset();
+  goal_sub_.reset();
   cmd_vel_pub_.reset();
   path_pub_.reset();
   global_path_pub_.reset();
@@ -179,6 +180,10 @@ void SmoothNavigation::initializeSubscribers()
     "/map", rclcpp::SensorDataQoS(),
     std::bind(&SmoothNavigation::mapCallback, this, std::placeholders::_1));
 
+  goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+    "/goal_pose", rclcpp::SystemDefaultsQoS(),
+    std::bind(&SmoothNavigation::goalCallback, this, std::placeholders::_1));
+
   RCLCPP_INFO(get_logger(), "Subscribers initialized");
 }
 
@@ -244,6 +249,17 @@ void SmoothNavigation::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr
   current_map_ = msg;
   RCLCPP_DEBUG(get_logger(), "Map updated: size=%d x %d",
     msg->info.width, msg->info.height);
+}
+
+void SmoothNavigation::goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+{
+  RCLCPP_INFO(get_logger(),
+    "Received /goal_pose: (%.2f, %.2f, %.2f)",
+    msg->pose.position.x, msg->pose.position.y,
+    tf2::getYaw(msg->pose.orientation));
+
+  goal_pose_ = *msg;
+  executeNavigation(goal_pose_);
 }
 
 void SmoothNavigation::controlLoop()
