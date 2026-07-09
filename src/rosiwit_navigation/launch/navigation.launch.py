@@ -91,6 +91,17 @@ def generate_launch_description():
         ),
     ]
 
+
+    # Lifecycle Manager (自动激活 lifecycle 节点)
+    lifecycle_manager_node = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_smooth_nav',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time,
+                     'autostart': autostart,
+                     'node_names': ['smooth_navigation']}],
+    )
     # ============================================================
     # Nav2 核心组件（可选）
     # ============================================================
@@ -154,6 +165,7 @@ def generate_launch_description():
     return LaunchDescription(
         declared_arguments +
         navigation_nodes +
+        [lifecycle_manager_node] +
         nav2_nodes +
         [rviz_node]
     )

@@ -48,7 +48,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_path_pub        = create_publisher<nav_msgs::msg::Path>("lio_path", 10000);
     m_global_map_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_map", 10);
     m_grid_map_pub    = create_publisher<nav_msgs::msg::OccupancyGrid>("grid_map", 1);
-    m_map_pub         = create_publisher<nav_msgs::msg::OccupancyGrid>("map", 1);
+    m_map_pub         = create_publisher<nav_msgs::msg::OccupancyGrid>("map", rclcpp::QoS(1).transient_local());
     m_odom_nav_pub    = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     m_tf = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
     m_static_tf = std::make_shared<tf2_ros::StaticTransformBroadcaster>(*this);
