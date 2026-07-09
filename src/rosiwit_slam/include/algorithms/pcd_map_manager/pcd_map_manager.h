@@ -22,6 +22,11 @@ public:
                      double resolution = 0.05, const std::string& frame_id = "map");
     bool loadGridMap(const std::string& pgm_path, const std::string& yaml_path);
     const std::vector<int8_t>& getGridData() const { return m_grid_data; }
+    int getGridWidth() const { return m_grid_w; }
+    int getGridHeight() const { return m_grid_h; }
+    double getGridRes() const { return m_grid_res; }
+    double getGridOriginX() const { return m_grid_ox; }
+    double getGridOriginY() const { return m_grid_oy; }
 
 private:
     CloudType::Ptr global_map_;

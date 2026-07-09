@@ -154,17 +154,21 @@ void SlamNode::mapTimerCB() {
     // 2. grid_map (nav_msgs/OccupancyGrid) — 定位模式下发布
     if (pipe && pipe->getMode() == PipelineMode::LOCALIZATION && !m_grid_map_published) {
         auto* pcd = dynamic_cast<PcdMapManager*>(pipe->m_map_mgr.get());
-        if (pcd && !pcd->getGridData().empty()) {
+        if (pcd && pcd->getGridWidth() > 0 && pcd->getGridHeight() > 0) {
             nav_msgs::msg::OccupancyGrid grid;
             grid.header.frame_id = m_cfg.world_frame;
             grid.header.stamp = now();
-            grid.info.resolution = 0.05;
-            grid.info.width = 0;
-            grid.info.height = 0;
+            grid.info.resolution = pcd->getGridRes();
+            grid.info.width = pcd->getGridWidth();
+            grid.info.height = pcd->getGridHeight();
+            grid.info.origin.position.x = pcd->getGridOriginX();
+            grid.info.origin.position.y = pcd->getGridOriginY();
+            grid.info.origin.position.z = 0.0;
+            grid.info.origin.orientation.w = 1.0;
             grid.data = pcd->getGridData();
             m_grid_map_pub->publish(grid);
             m_grid_map_published = true;
-            RCLCPP_INFO(get_logger(), "Published grid_map (%d x %d)", grid.info.width, grid.info.height);
+            RCLCPP_INFO(get_logger(), "Published grid_map (%d x %d, res=%.3f)", grid.info.width, grid.info.height, grid.info.resolution);
         }
     }
 }

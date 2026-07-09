@@ -113,6 +113,8 @@ bool PcdMapManager::generateGridMap(double resolution) {
     m_grid_w = grid_map.getWidth();
     m_grid_h = grid_map.getHeight();
     m_grid_res = resolution;
+    m_grid_ox = grid_map.getOriginX();
+    m_grid_oy = grid_map.getOriginY();
     std::cout << "[PcdMapManager] Generated grid map: " << m_grid_w << "x" << m_grid_h << std::endl;
     return true;
 }
@@ -129,6 +131,8 @@ bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& 
     m_grid_w = grid_map.getWidth();
     m_grid_h = grid_map.getHeight();
     m_grid_res = resolution;
+    m_grid_ox = grid_map.getOriginX();
+    m_grid_oy = grid_map.getOriginY();
     std::cout << "[PcdMapManager] Grid map saved: " << pgm_path
               << " (" << m_grid_w << "x" << m_grid_h << ")" << std::endl;
     return true;

@@ -37,6 +37,8 @@ public:
     int getWidth() const { return m_width; }
     int getHeight() const { return m_height; }
     double getResolution() const { return m_config.resolution; }
+    double getOriginX() const { return m_origin_x; }
+    double getOriginY() const { return m_origin_y; }
     const std::vector<int8_t>& getData() const { return m_data; }
 
 private:
