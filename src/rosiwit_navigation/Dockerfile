@@ -100,9 +100,9 @@ RUN cd ${ROS_WS} && \
 # Build the project
 RUN /bin/bash -c "source /opt/ros/humble/setup.bash && \
     cd ${ROS_WS} && \
-    colcon build --packages-select diffbot_navigation --symlink-install \
+    colcon build --packages-select rosiwit_navigation --symlink-install \
     --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON \
-    && colcon test --packages-select diffbot_navigation --event-handlers console_direct+ || true"
+    && colcon test --packages-select rosiwit_navigation --event-handlers console_direct+ || true"
 
 # ==================== Stage 3: Runtime (slim) ====================
 FROM base AS runtime
@@ -139,4 +139,4 @@ COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["ros2", "launch", "diffbot_navigation", "navigation.launch.py"]
+CMD ["ros2", "launch", "rosiwit_navigation", "navigation.launch.py"]

@@ -22,7 +22,7 @@
 
   <depend>rosiwit_slam</depend>
   <depend>rosiwit_simulator</depend>
-  <depend>diffbot_navigation</depend>
+  <depend>rosiwit_navigation</depend>
 
   <test_depend>pytest</test_depend>
 

@@ -14,8 +14,8 @@ import os
 
 def generate_launch_description():
     # 获取包路径
-    pkg_share = FindPackageShare('diffbot_navigation')
-    pkg_dir = pkg_share.find('diffbot_navigation')
+    pkg_share = FindPackageShare('rosiwit_navigation')
+    pkg_dir = pkg_share.find('rosiwit_navigation')
 
     # 声明启动参数
     declared_arguments = [
@@ -75,7 +75,7 @@ def generate_launch_description():
     navigation_nodes = [
         # 平滑导航节点（核心导航控制）
         Node(
-            package='diffbot_navigation',
+            package='rosiwit_navigation',
             executable='smooth_navigation_node',
             name='smooth_navigation',
             output='screen',

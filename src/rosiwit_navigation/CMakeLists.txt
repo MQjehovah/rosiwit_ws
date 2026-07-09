@@ -4,7 +4,7 @@
 # ============================================================
 
 cmake_minimum_required(VERSION 3.14)
-project(diffbot_navigation)
+project(rosiwit_navigation)
 
 # 所有目标启用位置无关代码（共享库必需）
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

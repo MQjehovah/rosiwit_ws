@@ -61,7 +61,7 @@ services:
     volumes:
       - ./config:/ros2_ws/src/rosiwit_navigation/config:ro
       - ./maps:/ros2_ws/src/rosiwit_navigation/maps:ro
-    command: ["ros2", "launch", "diffbot_navigation", "navigation.launch.py"]
+    command: ["ros2", "launch", "rosiwit_navigation", "navigation.launch.py"]
 
   # ==================== CI / Testing ====================
   test:
@@ -86,10 +86,10 @@ services:
         source /opt/ros/humble/setup.bash
         source install/setup.bash || true
         echo "=== Building ==="
-        colcon build --packages-select diffbot_navigation --symlink-install \
+        colcon build --packages-select rosiwit_navigation --symlink-install \
           --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
         echo "=== Running Tests ==="
-        colcon test --packages-select diffbot_navigation --event-handlers console_direct+
+        colcon test --packages-select rosiwit_navigation --event-handlers console_direct+
         echo "=== Test Results ==="
         colcon test-result --all --verbose
 
@@ -109,7 +109,7 @@ services:
         echo "=== clang-format check ==="
         find include src -name '*.hpp' -o -name '*.cpp' | xargs clang-format --dry-run --Werror 2>&1 || echo "[WARN] Formatting issues found"
         echo "=== clang-tidy check ==="
-        find include src -name '*.hpp' -o -name '*.cpp' | head -5 | xargs clang-tidy -p /ros2_ws/build/diffbot_navigation 2>&1 || echo "[WARN] Tidy issues found"
+        find include src -name '*.hpp' -o -name '*.cpp' | head -5 | xargs clang-tidy -p /ros2_ws/build/rosiwit_navigation 2>&1 || echo "[WARN] Tidy issues found"
         echo "=== cppcheck ==="
         cppcheck --enable=all --suppress=missingIncludeSystem --std=c++17 \
           --error-exitcode=0 -I include/ src/ 2>&1 || echo "[WARN] Cppcheck issues found"

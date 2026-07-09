@@ -13,7 +13,7 @@ import os
 
 def generate_launch_description():
     # 获取包路径
-    pkg_dir = FindPackageShare('diffbot_navigation').find('diffbot_navigation')
+    pkg_dir = FindPackageShare('rosiwit_navigation').find('rosiwit_navigation')
     
     # 声明启动参数
     declared_arguments = [
