@@ -136,7 +136,7 @@ ament_target_dependencies(nav_ros_interface
 # 可执行文件
 # ============================================================
 add_executable(smooth_navigation_node
-  src/ros_interface/navigation_node_main.cpp)
+  src/main.cpp)
 target_link_libraries(smooth_navigation_node nav_ros_interface)
 ament_target_dependencies(smooth_navigation_node rclcpp rclcpp_lifecycle)
 
