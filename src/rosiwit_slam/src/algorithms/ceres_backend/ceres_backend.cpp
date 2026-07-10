@@ -127,7 +127,11 @@ bool CeresBackend::optimize() {
         r_block[2] = q.y();
         r_block[3] = q.z();
         if (r_block[0] < 0.0) { r_block[0] = -r_block[0]; r_block[1] = -r_block[1]; r_block[2] = -r_block[2]; r_block[3] = -r_block[3]; }
+#if CERES_VERSION_MAJOR >= 2 && CERES_VERSION_MINOR >= 2
+        problem.AddParameterBlock(r_block, 4, new ceres::QuaternionManifold());
+#else
         problem.AddParameterBlock(r_block, 4, new ceres::QuaternionParameterization());
+#endif
 
         param_blocks.push_back(t_block);
         param_blocks.push_back(r_block);

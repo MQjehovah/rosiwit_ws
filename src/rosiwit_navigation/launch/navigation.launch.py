@@ -3,22 +3,14 @@
 # ============================================================
 
 from launch import LaunchDescription
-from launch.actions import TimerAction, ExecuteProcess
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, TimerAction, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, TimerAction, ExecuteProcess
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from launch.actions import TimerAction, ExecuteProcess
-from ament_index_python.packages import get_package_share_directory
-import os
 
 
 def generate_launch_description():
-    # 获取包路径
-    pkg_share = FindPackageShare('rosiwit_navigation')
-    pkg_dir = pkg_share.find('rosiwit_navigation')
-
     # 声明启动参数
     declared_arguments = [
         # 是否使用仿真时间
@@ -27,17 +19,11 @@ def generate_launch_description():
             default_value='false',
             description='Use simulation (Gazebo) clock if true'
         ),
-        # 地图文件路径
+        # 地图文件
         DeclareLaunchArgument(
             'map',
             default_value='',
             description='Full path to map yaml file to load'
-        ),
-        # 参数文件路径
-        DeclareLaunchArgument(
-            'params_file',
-            default_value='',
-            description='Full path to the ROS2 parameters file to use for all launched nodes'
         ),
         # 是否启动RViz
         DeclareLaunchArgument(
@@ -51,25 +37,12 @@ def generate_launch_description():
             default_value='',
             description='Full path to the RViz config file to use'
         ),
-        # 自动启动
-        DeclareLaunchArgument(
-            'autostart',
-            default_value='true',
-            description='Automatically startup the nav2 stack'
-        ),
-        # 是否使用Nav2
-        DeclareLaunchArgument(
-            'use_nav2',
-            default_value='true',
-            description='Whether to use Nav2 stack'
-        ),
     ]
 
     # 获取参数配置
     use_sim_time = LaunchConfiguration('use_sim_time')
-    params_file = LaunchConfiguration('params_file')
+    map_file = LaunchConfiguration('map')
     use_rviz = LaunchConfiguration('use_rviz')
-    autostart = LaunchConfiguration('autostart')
 
     # ============================================================
     # 自定义导航节点
@@ -78,12 +51,11 @@ def generate_launch_description():
         # 平滑导航节点（核心导航控制）
         Node(
             package='rosiwit_navigation',
-            executable='smooth_navigation_node',
-            name='smooth_navigation',
+            executable='rosiwit_navigation_node',
+            name='rosiwit_navigation_node',
             output='screen',
             parameters=[
                 {'use_sim_time': use_sim_time},
-                params_file,
             ],
             remappings=[
                 ('/cmd_vel', '/cmd_vel'),
@@ -93,61 +65,22 @@ def generate_launch_description():
         ),
     ]
 
-
-
-
-    # Lifecycle Manager for nav2 nodes (costmaps, etc.)
-    lifecycle_manager_nav2 = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='lifecycle_manager_nav2',
+    # ============================================================
+    # 地图服务 (nav2_map_server)
+    # ============================================================
+    map_server = Node(
+        package='nav2_map_server',
+        executable='map_server',
+        name='map_server',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time,
-                     'autostart': autostart,
-                     'node_names': ['controller_server', 'planner_server',
-                                    'behavior_server', 'bt_navigator']}],
+        parameters=[{'yaml_filename': map_file, 'use_sim_time': use_sim_time}],
     )
-    # ============================================================
-    # Nav2 核心组件（可选）
-    # ============================================================
-    nav2_nodes = [
-        # Controller Server
-        Node(
-            package='nav2_controller',
-            executable='controller_server',
-            name='controller_server',
-            output='screen',
-            parameters=[params_file],
-            condition=IfCondition(LaunchConfiguration('use_nav2')),
-        ),
-        # Planner Server
-        Node(
-            package='nav2_planner',
-            executable='planner_server',
-            name='planner_server',
-            output='screen',
-            parameters=[params_file],
-            condition=IfCondition(LaunchConfiguration('use_nav2')),
-        ),
-        # Behavior Server
-        Node(
-            package='nav2_behaviors',
-            executable='behavior_server',
-            name='behavior_server',
-            output='screen',
-            parameters=[params_file],
-            condition=IfCondition(LaunchConfiguration('use_nav2')),
-        ),
-        # BT Navigator
-        Node(
-            package='nav2_bt_navigator',
-            executable='bt_navigator',
-            name='bt_navigator',
-            output='screen',
-            parameters=[params_file],
-            condition=IfCondition(LaunchConfiguration('use_nav2')),
-        ),
-    ]
+
+    # Auto-activate map_server lifecycle
+    map_configure = TimerAction(period=1.0, actions=[ExecuteProcess(
+        cmd=['ros2', 'lifecycle', 'set', '/map_server', 'configure'])])
+    map_activate = TimerAction(period=2.0, actions=[ExecuteProcess(
+        cmd=['ros2', 'lifecycle', 'set', '/map_server', 'activate'])])
 
     # ============================================================
     # RViz可视化
@@ -164,11 +97,11 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # Auto-activate smooth_navigation lifecycle (2.5s after launch)
-    smooth_configure = TimerAction(period=2.5, actions=[ExecuteProcess(
-        cmd=['ros2', 'lifecycle', 'set', '/smooth_navigation', 'configure'])])
-    smooth_activate = TimerAction(period=4.0, actions=[ExecuteProcess(
-        cmd=['ros2', 'lifecycle', 'set', '/smooth_navigation', 'activate'])])
+    # Auto-activate rosiwit_navigation_node lifecycle (2.5s after launch)
+    nav_configure = TimerAction(period=2.5, actions=[ExecuteProcess(
+        cmd=['ros2', 'lifecycle', 'set', '/rosiwit_navigation_node', 'configure'])])
+    nav_activate = TimerAction(period=4.0, actions=[ExecuteProcess(
+        cmd=['ros2', 'lifecycle', 'set', '/rosiwit_navigation_node', 'activate'])])
 
     # ============================================================
     # 组合所有节点
@@ -176,27 +109,8 @@ def generate_launch_description():
     return LaunchDescription(
         declared_arguments +
         navigation_nodes +
-        [lifecycle_manager_nav2, smooth_configure, smooth_activate] +
-        nav2_nodes +
+        [map_server, map_configure, map_activate] +
+        [nav_configure, nav_activate] +
         [rviz_node]
     )
 
-    # RViz节点 (占位)
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        arguments=['-d', LaunchConfiguration('rviz_config_file')],
-        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
-        condition=IfCondition(LaunchConfiguration('use_rviz')),
-        output='screen'
-    )
-
-    return LaunchDescription(declared_arguments + [
-        # 提示信息
-        # 注意: 完整的导航节点将在源代码实现后添加
-        # 目前仅为占位配置
-
-        # RViz可视化
-        rviz_node,
-    ])

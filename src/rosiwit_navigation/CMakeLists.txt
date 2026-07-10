@@ -136,10 +136,10 @@ ament_target_dependencies(nav_ros_interface
 # ============================================================
 # 可执行文件
 # ============================================================
-add_executable(smooth_navigation_node
+add_executable(rosiwit_navigation_node
   src/main.cpp)
-target_link_libraries(smooth_navigation_node nav_ros_interface)
-ament_target_dependencies(smooth_navigation_node rclcpp rclcpp_lifecycle)
+target_link_libraries(rosiwit_navigation_node nav_ros_interface)
+ament_target_dependencies(rosiwit_navigation_node rclcpp rclcpp_lifecycle)
 
 # Nav2 依赖的控制器 (可选)
 if(nav2_core_FOUND)
@@ -193,7 +193,7 @@ endif()
 install(TARGETS
   nav_planners nav_controllers nav_tracking nav_narrow_passage
   nav_obstacle_detection nav_navigation_lib nav_core nav_ros_interface
-  smooth_navigation_node
+  rosiwit_navigation_node
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
