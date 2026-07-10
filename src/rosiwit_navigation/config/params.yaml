@@ -1,0 +1,34 @@
+# ============================================================
+# rosiwit_navigation 参数配置
+# ============================================================
+rosiwit_navigation_node:
+  ros__parameters:
+    # 速度限制
+    max_velocity_x: 0.5
+    min_velocity_x: -0.5
+    max_velocity_theta: 1.0
+
+    # 加速度限制
+    max_accel_x: 0.5
+    max_accel_theta: 1.0
+
+    # 频率
+    controller_frequency: 20.0
+    planner_frequency: 1.0
+
+    # 规划器 / 控制器
+    planner_name: "astar"
+    controller_name: "pure_pursuit"
+
+    # 坐标系
+    global_frame: "odom"
+    robot_frame: "base_link"
+
+    # 导航容差
+    goal_tolerance_xy: 0.1
+    goal_tolerance_yaw: 0.1
+
+    # Pure Pursuit 前瞻距离
+    lookahead_distance: 0.6
+    min_lookahead_distance: 0.3
+    max_lookahead_distance: 0.9

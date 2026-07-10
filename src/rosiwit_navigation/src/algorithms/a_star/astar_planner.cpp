@@ -52,10 +52,17 @@ void AStarPlanner::setCostmap(const core::Costmap& costmap)
     nx_ = costmap_->grid->info.width;
     ny_ = costmap_->grid->info.height;
 
-    // 复制代价数据
+    // 复制代价数据（OccupancyGrid: 0=free, 100=occupied, -1=unknown）
     costmap_data_.resize(nx_ * ny_);
     for (size_t i = 0; i < costmap_->grid->data.size(); ++i) {
-        costmap_data_[i] = static_cast<unsigned char>(costmap_->grid->data[i]);
+        int8_t v = costmap_->grid->data[i];
+        if (v == 0) {
+            costmap_data_[i] = 0;                     // free
+        } else if (v < 0 || v >= 100) {
+            costmap_data_[i] = 255;                   // unknown or occupied → lethal
+        } else {
+            costmap_data_[i] = static_cast<unsigned char>(v * 255 / 100);  // scale
+        }
     }
 
     // 初始化节点数组
