@@ -57,11 +57,12 @@ include_directories(include)
 # 规划器
 add_library(nav_planners SHARED
   src/algorithms/a_star/astar_planner.cpp
+  src/algorithms/a_star/path_smoother.cpp
   src/algorithms/navfn/navfn_planner.cpp
 )
 target_include_directories(nav_planners PUBLIC include)
 ament_target_dependencies(nav_planners
-  rclcpp geometry_msgs nav_msgs tf2_ros)
+  rclcpp geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs)
 
 # 控制器 (无 Nav2 依赖)
 add_library(nav_controllers SHARED

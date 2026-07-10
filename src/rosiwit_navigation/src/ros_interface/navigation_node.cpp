@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "nav2_util/node_utils.hpp"
+#include "rosiwit_navigation/algorithms/path_smoother.hpp"
 
 
 
@@ -48,6 +49,7 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_configure(const rclcpp_lifecy
     planner_cfg.max_iterations = 50000;
     planner_cfg.timeout = 2.0;
     planner_strategy_->initialize(planner_cfg);
+    planner_strategy_->setInflationRadius(inflation_radius_);
     RCLCPP_INFO(get_logger(), "Created planner strategy: %s", planner_name_.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "Planner '%s' not found, falling back to PathPlanner", planner_name_.c_str());
@@ -185,6 +187,7 @@ void SmoothNavigation::loadParameters()
 
   nav2_util::declare_parameter_if_not_declared(this, "planner_name", rclcpp::ParameterValue(std::string("astar")));
   nav2_util::declare_parameter_if_not_declared(this, "controller_name", rclcpp::ParameterValue(std::string("pure_pursuit")));
+  nav2_util::declare_parameter_if_not_declared(this, "inflation_radius", rclcpp::ParameterValue(0.5));
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -203,6 +206,7 @@ void SmoothNavigation::loadParameters()
   get_parameter("robot_frame", robot_frame_);
   get_parameter("planner_name", planner_name_);
   get_parameter("controller_name", controller_name_);
+  get_parameter("inflation_radius", inflation_radius_);
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
   RCLCPP_INFO(get_logger(), "  - controller_frequency: %.1f Hz", params_.controller_frequency);
@@ -405,6 +409,15 @@ void SmoothNavigation::executeNavigation(const geometry_msgs::msg::PoseStamped &
     auto result = planner_strategy_->plan(start_pose, goal_pose_core);
     if (result.is_ok()) {
       current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
+
+      // 平滑路径
+      if (current_path_.poses.size() >= 3) {
+        planners::SmootherConfig smoother_cfg;
+        smoother_cfg.max_iterations = 100;
+        smoother_cfg.alpha_start = 0.5;
+        smoother_cfg.alpha_end = 0.1;
+        current_path_ = planners::smoothPath(current_path_, current_map_, smoother_cfg);
+      }
     } else {
       RCLCPP_ERROR(get_logger(), "Planner '%s' failed: %s",
         planner_name_.c_str(), result.error_message().c_str());

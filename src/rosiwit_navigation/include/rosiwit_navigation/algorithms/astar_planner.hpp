@@ -14,6 +14,8 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <queue>
+#include <utility>
 
 #include "rosiwit_navigation/nav_core/i_planner.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
@@ -161,6 +163,7 @@ public:
     // ===================================================================
     bool initialize(const core::PlannerConfig& config) override;
     void setCostmap(const core::Costmap& costmap) override;
+    void setInflationRadius(double radius_meters);
     core::Result<core::Path> plan(const core::Pose2D& start, const core::Pose2D& goal) override;
     void planAsync(const core::Pose2D& start, const core::Pose2D& goal,
                    std::function<void(const core::Result<core::Path>&)> callback) override;
@@ -186,6 +189,7 @@ private:
     std::vector<uint8_t> closed_list_;                 // 关闭列表（O(1)数组访问，缓存友好）
     std::vector<int> closed_indices_;                  // 已关闭节点索引（用于快速重置）
     bool use_weighted_heuristic_;                      // 大网格时启用加权启发式
+    double inflation_radius_ = 0.5;                    // 障碍物膨胀半径（米）
 
     // 性能控制
     int max_iterations_;                               // 最大迭代次数（防止无限循环）
@@ -194,6 +198,7 @@ private:
     int iterations_;                                   // 当前迭代计数
 
     // 内部方法
+    void inflateCostmap();                               // 障碍物膨胀
     double heuristic(int x1, int y1, int x2, int y2) const;
     bool isValid(int x, int y) const;
     bool isObstacle(int x, int y) const;

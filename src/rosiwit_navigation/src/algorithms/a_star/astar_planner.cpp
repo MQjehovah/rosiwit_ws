@@ -71,11 +71,93 @@ void AStarPlanner::setCostmap(const core::Costmap& costmap)
     // 初始化关闭列表（vector<bool> O(1) 数组访问，缓存友好）
     closed_list_.resize(nx_ * ny_, 0);
 
+    // 障碍物膨胀（BFS计算到最近障碍物的距离）
+    inflateCostmap();
+
     // 大网格（>100K 节点）启用加权启发式加速收敛
     use_weighted_heuristic_ = (nx_ * ny_ > 100000);
 
     RCLCPP_INFO(logger_, "Costmap set: %dx%d, weighted_heuristic=%s",
         nx_, ny_, use_weighted_heuristic_ ? "true" : "false");
+}
+
+void AStarPlanner::setInflationRadius(double radius_meters)
+{
+    inflation_radius_ = radius_meters;
+}
+
+void AStarPlanner::inflateCostmap()
+{
+    if (inflation_radius_ <= 0.0) return;
+    if (!costmap_) return;
+
+    double res = costmap_->resolution;
+    if (res <= 0.0) res = 0.05;
+
+    int radius_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
+    if (radius_cells < 1) return;
+
+    // 安全缓冲区：障碍物往外 safety_cells 格标为 lethal（强制绕行）
+    int safety_cells = std::max(1, static_cast<int>(std::ceil(0.15 / res)));
+
+    // BFS: 从所有障碍物格子出发计算距离
+    std::vector<float> dist(nx_ * ny_, std::numeric_limits<float>::max());
+    std::queue<std::pair<int, int>> q;
+
+    for (unsigned int y = 0; y < ny_; ++y) {
+        for (unsigned int x = 0; x < nx_; ++x) {
+            if (costmap_data_[y * nx_ + x] >= AStarConstants::kObstacleThreshold) {
+                dist[y * nx_ + x] = 0.0f;
+                q.push({x, y});
+            }
+        }
+    }
+
+    const int dx[4] = {-1, 0, 1, 0};
+    const int dy[4] = {0, -1, 0, 1};
+
+    while (!q.empty()) {
+        auto [cx, cy] = q.front(); q.pop();
+        float cd = dist[cy * nx_ + cx];
+        float nd = cd + 1.0f;
+
+        if (nd > radius_cells) continue;
+
+        for (int i = 0; i < 4; ++i) {
+            int nx = cx + dx[i];
+            int ny = cy + dy[i];
+            if (nx >= 0 && nx < static_cast<int>(nx_) &&
+                ny >= 0 && ny < static_cast<int>(ny_)) {
+                size_t idx = static_cast<size_t>(ny) * nx_ + static_cast<size_t>(nx);
+                if (nd < dist[idx]) {
+                    dist[idx] = nd;
+                    q.push({nx, ny});
+                }
+            }
+        }
+    }
+
+    // 根据距离设置膨胀代价
+    const unsigned char lethal = AStarConstants::kObstacleThreshold;
+    float inv_radius = 1.0f / (radius_cells - safety_cells);
+
+    for (size_t i = 0; i < nx_ * ny_; ++i) {
+        if (costmap_data_[i] >= lethal) continue;
+
+        float d = dist[i];
+        if (d <= safety_cells) {
+            // 安全缓冲区 → lethal，规划器必须绕行
+            costmap_data_[i] = lethal;
+        } else if (d <= radius_cells) {
+            // 膨胀区 → 梯度代价（靠近障碍物越高）
+            float ratio = 1.0f - (d - safety_cells) * inv_radius;
+            costmap_data_[i] = std::max(costmap_data_[i],
+                static_cast<unsigned char>(ratio * (lethal - 1)));
+        }
+    }
+
+    RCLCPP_INFO(logger_, "Costmap inflated: radius=%.2fm (%d cells)",
+        inflation_radius_, radius_cells);
 }
 
 core::Result<core::Path> AStarPlanner::plan(

@@ -32,3 +32,6 @@ rosiwit_navigation_node:
     lookahead_distance: 0.6
     min_lookahead_distance: 0.3
     max_lookahead_distance: 0.9
+
+    # 障碍物膨胀半径（路径离障碍物的距离）
+    inflation_radius: 0.5

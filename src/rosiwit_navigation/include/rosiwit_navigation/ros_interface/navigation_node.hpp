@@ -283,6 +283,7 @@ private:
   // 策略名称参数
   std::string planner_name_;
   std::string controller_name_;
+  double inflation_radius_ = 0.5;
 
   // 坐标系
   std::string global_frame_ = "odom";
