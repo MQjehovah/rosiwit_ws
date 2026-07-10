@@ -21,7 +21,7 @@ using rclcpp_lifecycle::LifecycleNode;
 using ros_interface::RosUtils;
 
 SmoothNavigation::SmoothNavigation(const rclcpp::NodeOptions & options)
-: LifecycleNode("smooth_navigation", options),
+: LifecycleNode("rosiwit_navigation", options),
   current_state_(NavigationState::IDLE),
   is_navigating_(false),
   is_paused_(false)
@@ -30,7 +30,7 @@ SmoothNavigation::SmoothNavigation(const rclcpp::NodeOptions & options)
 
 LifecycleNode::CallbackReturn SmoothNavigation::on_configure(const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(get_logger(), "Configuring smooth_navigation node");
+  RCLCPP_INFO(get_logger(), "Configuring rosiwit_navigation node");
 
   // 加载参数
   loadParameters();
@@ -83,13 +83,13 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_configure(const rclcpp_lifecy
   // 初始化Action服务器
   initializeActionServer();
 
-  RCLCPP_INFO(get_logger(), "rosiwit_navigatio node configured successfully");
+  RCLCPP_INFO(get_logger(), "rosiwit_navigation node configured successfully");
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
 LifecycleNode::CallbackReturn SmoothNavigation::on_activate(const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(get_logger(), "Activating smooth_navigation node");
+  RCLCPP_INFO(get_logger(), "Activating rosiwit_navigation node");
 
   // 激活发布者
   cmd_vel_pub_->on_activate();
@@ -105,13 +105,13 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_activate(const rclcpp_lifecyc
   // 设置状态为活跃
   current_state_ = NavigationState::IDLE;
 
-  RCLCPP_INFO(get_logger(), "rosiwit_navigatio node activated");
+  RCLCPP_INFO(get_logger(), "rosiwit_navigation node activated");
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
 LifecycleNode::CallbackReturn SmoothNavigation::on_deactivate(const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(get_logger(), "Deactivating smooth_navigation node");
+  RCLCPP_INFO(get_logger(), "Deactivating rosiwit_navigation node");
 
   // 停用定时器
   control_timer_->cancel();
@@ -130,13 +130,13 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_deactivate(const rclcpp_lifec
 
   current_state_ = NavigationState::IDLE;
 
-  RCLCPP_INFO(get_logger(), "rosiwit_navigatio node deactivated");
+  RCLCPP_INFO(get_logger(), "rosiwit_navigation node deactivated");
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
 LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(get_logger(), "Cleaning up smooth_navigation node");
+  RCLCPP_INFO(get_logger(), "Cleaning up rosiwit_navigation node");
 
   // 清理组件
   path_planner_->cleanup();
@@ -155,13 +155,13 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycl
   tf_buffer_.reset();
   tf_listener_.reset();
 
-  RCLCPP_INFO(get_logger(), "rosiwit_navigatio node cleaned up");
+  RCLCPP_INFO(get_logger(), "rosiwit_navigation node cleaned up");
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
 LifecycleNode::CallbackReturn SmoothNavigation::on_shutdown(const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(get_logger(), "Shutting down smooth_navigation node");
+  RCLCPP_INFO(get_logger(), "Shutting down rosiwit_navigation node");
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 

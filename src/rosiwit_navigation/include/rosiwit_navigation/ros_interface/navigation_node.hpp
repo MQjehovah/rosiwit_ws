@@ -292,7 +292,7 @@ private:
   NavigationParams params_;
 
   // 日志
-  rclcpp::Logger logger_{rclcpp::get_logger("smooth_navigation")};
+  rclcpp::Logger logger_{rclcpp::get_logger("rosiwit_navigation")};
 };
 
 } // namespace navigation
