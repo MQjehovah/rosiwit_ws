@@ -77,9 +77,9 @@ def generate_launch_description():
     )
 
     # Auto-activate map_server lifecycle
-    map_configure = TimerAction(period=1.0, actions=[ExecuteProcess(
+    map_configure = TimerAction(period=2.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/map_server', 'configure'])])
-    map_activate = TimerAction(period=2.0, actions=[ExecuteProcess(
+    map_activate = TimerAction(period=4.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/map_server', 'activate'])])
 
     # ============================================================
@@ -97,10 +97,10 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # Auto-activate rosiwit_navigation_node lifecycle (2.5s after launch)
-    nav_configure = TimerAction(period=2.5, actions=[ExecuteProcess(
+    # Auto-activate rosiwit_navigation_node lifecycle (6s after launch)
+    nav_configure = TimerAction(period=6.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/rosiwit_navigation_node', 'configure'])])
-    nav_activate = TimerAction(period=4.0, actions=[ExecuteProcess(
+    nav_activate = TimerAction(period=8.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/rosiwit_navigation_node', 'activate'])])
 
     # ============================================================

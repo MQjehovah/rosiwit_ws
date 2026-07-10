@@ -217,7 +217,7 @@ void SmoothNavigation::initializeSubscribers()
     std::bind(&SmoothNavigation::odometryCallback, this, std::placeholders::_1));
 
   map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
-    "/map", rclcpp::SensorDataQoS(),
+    "/map", rclcpp::QoS(1).transient_local().reliable(),
     std::bind(&SmoothNavigation::mapCallback, this, std::placeholders::_1));
 
   goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -291,7 +291,16 @@ void SmoothNavigation::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr
     path_planner_->setMap(msg);
   }
   if (planner_strategy_) {
+    auto grid = std::make_shared<core::CostmapGrid>();
+    grid->info.width = msg->info.width;
+    grid->info.height = msg->info.height;
+    grid->info.resolution = msg->info.resolution;
+    grid->info.origin.position.x = msg->info.origin.position.x;
+    grid->info.origin.position.y = msg->info.origin.position.y;
+    grid->data = msg->data;
+
     core::Costmap costmap;
+    costmap.grid = grid;
     costmap.width = msg->info.width;
     costmap.height = msg->info.height;
     costmap.resolution = msg->info.resolution;
