@@ -8,9 +8,9 @@
 #include <string>
 #include <cmath>
 
-#include "tf2/utils.hpp"
-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "nav2_util/node_utils.hpp"
+
+
 
 namespace rosiwit_navigation
 {
@@ -18,6 +18,7 @@ namespace navigation
 {
 
 using rclcpp_lifecycle::LifecycleNode;
+using ros_interface::RosUtils;
 
 SmoothNavigation::SmoothNavigation(const rclcpp::NodeOptions & options)
 : LifecycleNode("smooth_navigation", options),
@@ -37,6 +38,38 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_configure(const rclcpp_lifecy
   // 初始化TF2
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+  // 使用NavigationFactory创建规划器策略
+  planner_strategy_ = nav_core::NavigationFactory::createPlanner(planner_name_);
+  if (planner_strategy_) {
+    core::PlannerConfig planner_cfg;
+    planner_cfg.name = planner_name_;
+    planner_cfg.resolution = 0.05;
+    planner_cfg.max_iterations = 50000;
+    planner_cfg.timeout = 2.0;
+    planner_strategy_->initialize(planner_cfg);
+    RCLCPP_INFO(get_logger(), "Created planner strategy: %s", planner_name_.c_str());
+  } else {
+    RCLCPP_WARN(get_logger(), "Planner '%s' not found, falling back to PathPlanner", planner_name_.c_str());
+  }
+
+  // 使用NavigationFactory创建控制器策略
+  controller_strategy_ = nav_core::NavigationFactory::createController(controller_name_);
+  if (controller_strategy_) {
+    core::ControllerConfig ctrl_cfg;
+    ctrl_cfg.lookahead_distance = params_.lookahead_distance;
+    ctrl_cfg.xy_goal_tolerance = params_.goal_tolerance_xy;
+    ctrl_cfg.max_lookahead_distance = params_.max_lookahead_distance;
+    ctrl_cfg.min_lookahead_distance = params_.min_lookahead_distance;
+    ctrl_cfg.max_linear_velocity = params_.max_velocity_x;
+    ctrl_cfg.max_angular_velocity = params_.max_velocity_theta;
+    ctrl_cfg.kinematics.max_velocity_x = params_.max_velocity_x;
+    ctrl_cfg.kinematics.max_velocity_theta = params_.max_velocity_theta;
+    controller_strategy_->initialize(ctrl_cfg);
+    RCLCPP_INFO(get_logger(), "Created controller strategy: %s", controller_name_.c_str());
+  } else {
+    RCLCPP_WARN(get_logger(), "Controller '%s' not found, using fallback inline controller", controller_name_.c_str());
+  }
 
   // 初始化组件
   path_planner_ = std::make_shared<PathPlanner>();
@@ -107,6 +140,8 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycl
 
   // 清理组件
   path_planner_->cleanup();
+  planner_strategy_.reset();
+  controller_strategy_.reset();
 
   // 重置订阅者和发布者
   odom_sub_.reset();
@@ -148,6 +183,9 @@ void SmoothNavigation::loadParameters()
   nav2_util::declare_parameter_if_not_declared(this, "global_frame", rclcpp::ParameterValue(std::string("odom")));
   nav2_util::declare_parameter_if_not_declared(this, "robot_frame", rclcpp::ParameterValue(std::string("base_link")));
 
+  nav2_util::declare_parameter_if_not_declared(this, "planner_name", rclcpp::ParameterValue(std::string("astar")));
+  nav2_util::declare_parameter_if_not_declared(this, "controller_name", rclcpp::ParameterValue(std::string("pure_pursuit")));
+
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
   get_parameter("max_velocity_x", params_.max_velocity_x);
@@ -163,6 +201,8 @@ void SmoothNavigation::loadParameters()
 
   get_parameter("global_frame", global_frame_);
   get_parameter("robot_frame", robot_frame_);
+  get_parameter("planner_name", planner_name_);
+  get_parameter("controller_name", controller_name_);
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
   RCLCPP_INFO(get_logger(), "  - controller_frequency: %.1f Hz", params_.controller_frequency);
@@ -249,6 +289,16 @@ void SmoothNavigation::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr
   current_map_ = msg;
   if (path_planner_) {
     path_planner_->setMap(msg);
+  }
+  if (planner_strategy_) {
+    core::Costmap costmap;
+    costmap.width = msg->info.width;
+    costmap.height = msg->info.height;
+    costmap.resolution = msg->info.resolution;
+    costmap.origin_x = msg->info.origin.position.x;
+    costmap.origin_y = msg->info.origin.position.y;
+    costmap.data.assign(msg->data.begin(), msg->data.end());
+    planner_strategy_->setCostmap(costmap);
   }
   RCLCPP_INFO(get_logger(), "Map received: %d x %d, res=%.3f",
     msg->info.width, msg->info.height, msg->info.resolution);
@@ -340,12 +390,30 @@ void SmoothNavigation::executeNavigation(const geometry_msgs::msg::PoseStamped &
   RCLCPP_INFO(get_logger(), "Planning path to goal...");
   current_state_ = NavigationState::PLANNING;
 
-  current_path_ = path_planner_->createPlan(current_pose_, goal);
+  if (planner_strategy_) {
+    auto start_pose = RosUtils::toCorePose(current_pose_);
+    auto goal_pose_core = RosUtils::toCorePose(goal);
+    auto result = planner_strategy_->plan(start_pose, goal_pose_core);
+    if (result.is_ok()) {
+      current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
+    } else {
+      RCLCPP_ERROR(get_logger(), "Planner '%s' failed: %s",
+        planner_name_.c_str(), result.error_message().c_str());
+      current_state_ = NavigationState::FAILED;
+      return;
+    }
+  } else {
+    current_path_ = path_planner_->createPlan(current_pose_, goal);
+    if (current_path_.poses.empty()) {
+      RCLCPP_ERROR(get_logger(), "Failed to plan path");
+      current_state_ = NavigationState::FAILED;
+      return;
+    }
+  }
 
-  if (current_path_.poses.empty()) {
-    RCLCPP_ERROR(get_logger(), "Failed to plan path");
-    current_state_ = NavigationState::FAILED;
-    return;
+  // 将路径注入控制器
+  if (controller_strategy_) {
+    controller_strategy_->setPath(RosUtils::toCorePath(current_path_));
   }
 
   // 发布全局路径
@@ -385,23 +453,26 @@ bool SmoothNavigation::updateCurrentPose()
 
 bool SmoothNavigation::isGoalReached()
 {
-  // 计算到目标的距离
+  // 优先使用控制器的目标到达判断
+  if (controller_strategy_) {
+    auto core_pose = RosUtils::toCorePose(current_pose_);
+    return controller_strategy_->isGoalReached(core_pose);
+  }
+
+  // 后备：使用简单的欧氏距离判断
   double dx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
   double dy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
   double distance = std::sqrt(dx * dx + dy * dy);
 
-  // 计算角度差
   double goal_yaw = tf2::getYaw(goal_pose_.pose.orientation);
   double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
   double angle_diff = std::abs(goal_yaw - current_yaw);
 
-  // 规范化角度差
   while (angle_diff > M_PI) {
     angle_diff -= 2.0 * M_PI;
   }
   angle_diff = std::abs(angle_diff);
 
-  // 检查是否满足容差
   bool xy_reached = distance < params_.goal_tolerance_xy;
   bool yaw_reached = angle_diff < params_.goal_tolerance_yaw;
 
@@ -410,17 +481,27 @@ bool SmoothNavigation::isGoalReached()
 
 geometry_msgs::msg::Twist SmoothNavigation::computeVelocityCommand()
 {
-  // 简化的速度计算
+  // 优先使用控制器的速度计算
+  if (controller_strategy_) {
+    auto core_pose = RosUtils::toCorePose(current_pose_);
+    auto core_vel = RosUtils::toCoreVelocity(current_velocity_);
+    auto cmd = controller_strategy_->computeVelocityCommand(core_pose, core_vel);
+    geometry_msgs::msg::Twist result = RosUtils::toRosTwist(cmd);
+    RCLCPP_DEBUG(get_logger(),
+      "Controller computed velocity: linear=%.2f, angular=%.2f",
+      result.linear.x, result.angular.z);
+    return result;
+  }
+
+  // 后备：简化的速度计算
   geometry_msgs::msg::Twist cmd_vel;
 
-  // 计算到目标的距离和方向
   double dx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
   double dy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
   double distance = std::sqrt(dx * dx + dy * dy);
   double target_angle = std::atan2(dy, dx);
   double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
 
-  // 计算角度差
   double angle_diff = target_angle - current_yaw;
   while (angle_diff > M_PI) {
     angle_diff -= 2.0 * M_PI;
@@ -429,19 +510,15 @@ geometry_msgs::msg::Twist SmoothNavigation::computeVelocityCommand()
     angle_diff += 2.0 * M_PI;
   }
 
-  // 线速度：根据距离调整
-  if (std::abs(angle_diff) < M_PI / 4) {  // 角度误差小于45度时前进
-    // 使用简单的速度规划
-    double vel_scale = std::min(distance / 1.0, 1.0);  // 距离越远速度越大
+  if (std::abs(angle_diff) < M_PI / 4) {
+    double vel_scale = std::min(distance / 1.0, 1.0);
     cmd_vel.linear.x = vel_scale * params_.max_velocity_x;
   } else {
-    cmd_vel.linear.x = 0.0;  // 角度误差大时停止前进
+    cmd_vel.linear.x = 0.0;
   }
 
-  // 角速度：根据角度差调整
-  cmd_vel.angular.z = 2.0 * angle_diff;  // 简单的比例控制
+  cmd_vel.angular.z = 2.0 * angle_diff;
 
-  // 应用速度限制
   cmd_vel.linear.x = std::clamp(cmd_vel.linear.x,
     params_.min_velocity_x, params_.max_velocity_x);
   cmd_vel.angular.z = std::clamp(cmd_vel.angular.z,

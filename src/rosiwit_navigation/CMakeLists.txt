@@ -123,6 +123,7 @@ ament_target_dependencies(nav_core rclcpp)
 # ============================================================
 add_library(nav_ros_interface SHARED
   src/ros_interface/navigation_node.cpp
+  src/ros_interface/ros_utils.cpp
 )
 target_include_directories(nav_ros_interface PUBLIC include)
 target_link_libraries(nav_ros_interface
@@ -130,7 +131,7 @@ target_link_libraries(nav_ros_interface
   nav_obstacle_detection nav_core)
 ament_target_dependencies(nav_ros_interface
   rclcpp rclcpp_lifecycle geometry_msgs nav_msgs
-  sensor_msgs tf2_ros tf2_geometry_msgs nav2_util)
+  sensor_msgs tf2 tf2_ros tf2_geometry_msgs nav2_util)
 
 # ============================================================
 # 可执行文件

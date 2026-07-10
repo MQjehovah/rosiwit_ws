@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <atomic>
+#include <string>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
@@ -23,6 +24,8 @@
 
 #include "rosiwit_navigation/algorithms/path_planner.hpp"
 #include "rosiwit_navigation/algorithms/trajectory_generator.hpp"
+#include "rosiwit_navigation/nav_core/navigation_factory.hpp"
+#include "rosiwit_navigation/ros_interface/ros_utils.hpp"
 
 namespace rosiwit_navigation
 {
@@ -272,6 +275,14 @@ private:
 
   // 地图
   nav_msgs::msg::OccupancyGrid::SharedPtr current_map_;
+
+  // 策略型规划器和控制器（由NavigationFactory创建）
+  std::unique_ptr<core::IPlannerStrategy> planner_strategy_;
+  std::unique_ptr<core::IControllerStrategy> controller_strategy_;
+
+  // 策略名称参数
+  std::string planner_name_;
+  std::string controller_name_;
 
   // 坐标系
   std::string global_frame_ = "odom";
