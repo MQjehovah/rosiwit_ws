@@ -48,59 +48,63 @@ find_package(nav2_msgs QUIET)
 # ============================================================
 # Include
 # ============================================================
-include_directories(include)
+include_directories(include src
+  src/algorithms/global_planner
+  src/algorithms/local_planner
+  src/algorithms/safe_passage
+  src/algorithms/support)
 
 # ============================================================
 # 算法层 Libraries
 # ============================================================
 
-# 规划器
+# 全局规划器 (A*, NavFn, 路径平滑)
 add_library(nav_planners SHARED
-  src/algorithms/a_star/astar_planner.cpp
-  src/algorithms/a_star/path_smoother.cpp
-  src/algorithms/navfn/navfn_planner.cpp
+  src/algorithms/global_planner/astar_planner.cpp
+  src/algorithms/global_planner/path_smoother.cpp
+  src/algorithms/global_planner/navfn_planner.cpp
 )
 target_include_directories(nav_planners PUBLIC include)
 ament_target_dependencies(nav_planners
   rclcpp geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs)
 
-# 控制器 (无 Nav2 依赖)
+# 局部控制器 (PurePursuit — 无 Nav2 依赖)
 add_library(nav_controllers SHARED
-  src/algorithms/pure_pursuit/pure_pursuit_controller.cpp
+  src/algorithms/local_planner/pure_pursuit_controller.cpp
 )
 target_include_directories(nav_controllers PUBLIC include)
 ament_target_dependencies(nav_controllers
   rclcpp geometry_msgs nav_msgs)
 
-# 速度限制器
+# 支撑模块 (速度限制)
 add_library(nav_tracking SHARED
-  src/algorithms/tracking/velocity_limiter.cpp
+  src/algorithms/support/velocity_limiter.cpp
 )
 target_include_directories(nav_tracking PUBLIC include)
 ament_target_dependencies(nav_tracking rclcpp geometry_msgs)
 
-# 窄道检测
+# 安全通行 — 窄道检测
 add_library(nav_narrow_passage SHARED
-  src/algorithms/narrow_passage/narrow_passage_detector.cpp
+  src/algorithms/safe_passage/narrow_passage_detector.cpp
 )
 target_include_directories(nav_narrow_passage PUBLIC include)
 ament_target_dependencies(nav_narrow_passage
   rclcpp sensor_msgs geometry_msgs nav_msgs)
 
-# 障碍物检测
+# 局部避障 — 障碍物检测
 add_library(nav_obstacle_detection SHARED
-  src/algorithms/obstacle_avoidance/obstacle_detector.cpp
+  src/algorithms/local_planner/obstacle_detector.cpp
 )
 target_include_directories(nav_obstacle_detection PUBLIC include)
 ament_target_dependencies(nav_obstacle_detection
   rclcpp rclcpp_lifecycle sensor_msgs geometry_msgs nav_msgs tf2_ros nav2_costmap_2d)
 
-# 路径规划 + 轨迹生成 + 避障 (导航主库)
+# 导航主库 (路径规划 + 轨迹生成 + 避障规划 + 窄道规划)
 add_library(nav_navigation_lib SHARED
-  src/algorithms/path_planning/path_planner.cpp
-  src/algorithms/trajectory/trajectory_generator.cpp
-  src/algorithms/obstacle_avoidance/obstacle_avoidance_planner.cpp
-  src/algorithms/narrow_passage/narrow_passage_planner.cpp
+  src/algorithms/support/path_planner.cpp
+  src/algorithms/support/trajectory_generator.cpp
+  src/algorithms/local_planner/obstacle_avoidance_planner.cpp
+  src/algorithms/safe_passage/narrow_passage_planner.cpp
 )
 target_include_directories(nav_navigation_lib PUBLIC include)
 target_link_libraries(nav_navigation_lib
@@ -145,7 +149,7 @@ ament_target_dependencies(rosiwit_navigation_node rclcpp rclcpp_lifecycle)
 # Nav2 依赖的控制器 (可选)
 if(nav2_core_FOUND)
   add_library(nav_diff_drive SHARED
-    src/algorithms/diff_drive/diff_drive_controller.cpp
+    src/algorithms/local_planner/diff_drive_controller.cpp
   )
   target_include_directories(nav_diff_drive PUBLIC include)
   target_link_libraries(nav_diff_drive nav_tracking)

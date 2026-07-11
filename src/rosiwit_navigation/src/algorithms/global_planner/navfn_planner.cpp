@@ -2,7 +2,7 @@
 // Diffbot Navigation - NavFn 规划器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/navfn_planner.hpp"
+#include "navfn_planner.hpp"
 #include "rosiwit_navigation/nav_core/exceptions.hpp"
 
 #include <algorithm>
@@ -19,8 +19,8 @@ namespace planners
 NavFnPlanner::NavFnPlanner()
     : planner_name_("navfn")
     , logger_(rclcpp::get_logger("navfn_planner"))
-    , planning_active_(false)
     , nx_(0), ny_(0)
+    , planning_active_(false)
 {
 }
 
@@ -131,9 +131,9 @@ void NavFnPlanner::computePotential(const core::Pose2D& goal)
     std::fill(potential_.begin(), potential_.end(), -1.0f);
 
     // 目标点势场值为0
-    float resolution = costmap_->grid->info.resolution;
-    float origin_x = costmap_->grid->info.origin.position.x;
-    float origin_y = costmap_->grid->info.origin.position.y;
+    float resolution = static_cast<float>(costmap_->grid->info.resolution);
+    float origin_x = static_cast<float>(costmap_->grid->info.origin.position.x);
+    float origin_y = static_cast<float>(costmap_->grid->info.origin.position.y);
 
     int goal_x = static_cast<int>((goal.x - origin_x) / resolution);
     int goal_y = static_cast<int>((goal.y - origin_y) / resolution);
@@ -176,9 +176,9 @@ void NavFnPlanner::computePotential(const core::Pose2D& goal)
 bool NavFnPlanner::findPath(
     const core::Pose2D& start, const core::Pose2D& goal, core::Path& path)
 {
-    float resolution = costmap_->grid->info.resolution;
-    float origin_x = costmap_->grid->info.origin.position.x;
-    float origin_y = costmap_->grid->info.origin.position.y;
+    float resolution = static_cast<float>(costmap_->grid->info.resolution);
+    float origin_x = static_cast<float>(costmap_->grid->info.origin.position.x);
+    float origin_y = static_cast<float>(costmap_->grid->info.origin.position.y);
 
     int start_x = static_cast<int>((start.x - origin_x) / resolution);
     int start_y = static_cast<int>((start.y - origin_y) / resolution);

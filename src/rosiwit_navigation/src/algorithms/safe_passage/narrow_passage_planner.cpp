@@ -2,7 +2,7 @@
 // Diffbot Navigation - 窄道通行规划器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/narrow_passage_planner.hpp"
+#include "narrow_passage_planner.hpp"
 
 #include <algorithm>
 #include <cmath>

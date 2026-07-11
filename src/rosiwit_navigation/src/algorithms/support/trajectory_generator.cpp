@@ -2,7 +2,7 @@
 // Diffbot Navigation - 轨迹生成器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/trajectory_generator.hpp"
+#include "trajectory_generator.hpp"
 
 #include <algorithm>
 #include <cmath>

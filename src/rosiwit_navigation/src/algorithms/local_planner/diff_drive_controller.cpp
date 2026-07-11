@@ -2,7 +2,7 @@
 // Diffbot Navigation - 差速轮控制器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/diff_drive_controller.hpp"
+#include "diff_drive_controller.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -524,7 +524,7 @@ int DiffDriveController::findClosestPointOnPath(
 
     if (dist < min_dist) {
       min_dist = dist;
-      min_idx = i;
+      min_idx = static_cast<int>(i);
     }
   }
 
@@ -551,7 +551,7 @@ geometry_msgs::msg::PoseStamped DiffDriveController::interpolateLookaheadPoint(
 
   // 从最近点开始搜索前视点
   double accumulated_dist = 0.0;
-  for (size_t i = closest_idx; i < current_path_.poses.size() - 1; ++i) {
+  for (int i = std::max(0, closest_idx); i < static_cast<int>(current_path_.poses.size()) - 1; ++i) {
     double dx = current_path_.poses[i + 1].pose.position.x -
       current_path_.poses[i].pose.position.x;
     double dy = current_path_.poses[i + 1].pose.position.y -

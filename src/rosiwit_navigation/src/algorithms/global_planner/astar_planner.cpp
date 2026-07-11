@@ -2,7 +2,7 @@
 // Diffbot Navigation - A* 规划器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/astar_planner.hpp"
+#include "astar_planner.hpp"
 #include "rosiwit_navigation/nav_core/exceptions.hpp"
 
 #include <algorithm>

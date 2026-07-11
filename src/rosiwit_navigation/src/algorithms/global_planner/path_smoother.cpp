@@ -3,7 +3,7 @@
 // 使用梯度下降法平滑 A* 规划的栅格路径
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/path_smoother.hpp"
+#include "path_smoother.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -46,7 +46,8 @@ nav_msgs::msg::Path smoothPath(
             return true;  // 超出地图边界视为障碍物
         }
         // 注意：inflateCostmap 已经把障碍物附近标为 254+，这里直接用
-        return costmap->data[my * costmap->info.width + mx] >= 100;
+        size_t idx = static_cast<size_t>(my) * costmap->info.width + static_cast<size_t>(mx);
+        return costmap->data[idx] >= 100;
     };
 
     // 梯度下降平滑迭代

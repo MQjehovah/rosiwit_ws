@@ -50,8 +50,8 @@ def generate_launch_description():
     # 获取参数配置
     use_sim_time = LaunchConfiguration('use_sim_time')
     map_file = LaunchConfiguration('map')
-    params_file = LaunchConfiguration('params_file')
     use_rviz = LaunchConfiguration('use_rviz')
+    params_file = LaunchConfiguration('params_file')
 
     # ============================================================
     # 自定义导航节点
@@ -87,9 +87,9 @@ def generate_launch_description():
     )
 
     # Auto-activate map_server lifecycle
-    map_configure = TimerAction(period=2.0, actions=[ExecuteProcess(
+    map_configure = TimerAction(period=4.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/map_server', 'configure'])])
-    map_activate = TimerAction(period=4.0, actions=[ExecuteProcess(
+    map_activate = TimerAction(period=6.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/map_server', 'activate'])])
 
     # ============================================================
@@ -108,9 +108,9 @@ def generate_launch_description():
     )
 
     # Auto-activate rosiwit_navigation_node lifecycle (6s after launch)
-    nav_configure = TimerAction(period=6.0, actions=[ExecuteProcess(
+    nav_configure = TimerAction(period=8.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/rosiwit_navigation_node', 'configure'])])
-    nav_activate = TimerAction(period=8.0, actions=[ExecuteProcess(
+    nav_activate = TimerAction(period=10.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/rosiwit_navigation_node', 'activate'])])
 
     # ============================================================

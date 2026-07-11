@@ -18,7 +18,7 @@
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
 #include "tf2_ros/buffer.h"
 
-#include "rosiwit_navigation/algorithms/obstacle_detector.hpp"
+#include "obstacle_detector.hpp"
 
 namespace rosiwit_navigation
 {

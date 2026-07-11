@@ -2,7 +2,7 @@
 // Diffbot Navigation - Pure Pursuit 控制器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/pure_pursuit_controller.hpp"
+#include "pure_pursuit_controller.hpp"
 
 #include <algorithm>
 #include <cmath>

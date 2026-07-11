@@ -9,7 +9,7 @@
 #include <cmath>
 
 #include "nav2_util/node_utils.hpp"
-#include "rosiwit_navigation/algorithms/path_smoother.hpp"
+#include "path_smoother.hpp"
 
 
 

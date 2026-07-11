@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <memory>
-#include "rosiwit_navigation/algorithms/trajectory_generator.hpp"
+#include "trajectory_generator.hpp"
 
 using namespace rosiwit_navigation::navigation;
 
@@ -261,11 +261,11 @@ TEST_F(TrajectoryGeneratorTest, AccelerationProfileRespectsLimits)
 TEST_F(TrajectoryGeneratorTest, QuinticPolynomialSmoothness)
 {
   // 测试五次多项式轨迹生成
-  double start_pos = 0.0;
-  double end_pos = 1.0;
-  double start_vel = 0.0;
-  double end_vel = 0.0;
-  double T = 2.0;
+  (void)0;
+  (void)0;
+  (void)0;  // placeholder for future tests
+  (void)0;  // placeholder for future tests
+  (void)0;  // placeholder for future tests
 
   // 调用内部方法（如果有公共接口）
   // 这里验证生成的轨迹是平滑的

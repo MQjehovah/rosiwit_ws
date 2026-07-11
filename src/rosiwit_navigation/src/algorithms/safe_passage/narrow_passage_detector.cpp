@@ -2,7 +2,7 @@
 // Diffbot Navigation - 窄道检测器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/narrow_passage_detector.hpp"
+#include "narrow_passage_detector.hpp"
 
 #include <algorithm>
 #include <cmath>

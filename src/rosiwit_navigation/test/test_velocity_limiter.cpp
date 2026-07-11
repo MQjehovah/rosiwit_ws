@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <cmath>
-#include "rosiwit_navigation/algorithms/velocity_limiter.hpp"
+#include "velocity_limiter.hpp"
 
 using namespace rosiwit_navigation::controller;
 

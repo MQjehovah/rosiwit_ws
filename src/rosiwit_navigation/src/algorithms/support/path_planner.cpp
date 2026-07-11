@@ -2,7 +2,7 @@
 // Diffbot Navigation - 路径规划器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/path_planner.hpp"
+#include "path_planner.hpp"
 
 #include <algorithm>
 #include <cmath>

@@ -6,7 +6,7 @@
 #include <cmath>
 #include <memory>
 #include <vector>
-#include "rosiwit_navigation/algorithms/narrow_passage_detector.hpp"
+#include "narrow_passage_detector.hpp"
 
 using namespace rosiwit_navigation::narrow_passage;
 

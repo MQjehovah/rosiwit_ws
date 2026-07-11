@@ -2,7 +2,7 @@
 // Diffbot Navigation - 障碍物检测器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/obstacle_detector.hpp"
+#include "obstacle_detector.hpp"
 
 #include <algorithm>
 #include <cmath>

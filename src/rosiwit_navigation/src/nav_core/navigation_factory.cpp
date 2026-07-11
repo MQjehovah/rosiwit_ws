@@ -1,8 +1,8 @@
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 
-#include "rosiwit_navigation/algorithms/astar_planner.hpp"
-#include "rosiwit_navigation/algorithms/navfn_planner.hpp"
-#include "rosiwit_navigation/algorithms/pure_pursuit_controller.hpp"
+#include "astar_planner.hpp"
+#include "navfn_planner.hpp"
+#include "pure_pursuit_controller.hpp"
 
 namespace rosiwit_navigation {
 namespace nav_core {

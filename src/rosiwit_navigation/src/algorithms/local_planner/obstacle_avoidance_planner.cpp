@@ -2,7 +2,7 @@
 // Diffbot Navigation - 避障规划器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/obstacle_avoidance_planner.hpp"
+#include "obstacle_avoidance_planner.hpp"
 
 #include <algorithm>
 #include <cmath>

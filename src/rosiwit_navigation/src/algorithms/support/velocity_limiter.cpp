@@ -2,7 +2,7 @@
 // Diffbot Navigation - 速度限制器实现
 // ============================================================
 
-#include "rosiwit_navigation/algorithms/velocity_limiter.hpp"
+#include "velocity_limiter.hpp"
 
 #include <algorithm>
 #include <cmath>

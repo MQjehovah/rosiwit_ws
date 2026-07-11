@@ -10,7 +10,7 @@
 #include <vector>
 #include <string>
 
-#include "rosiwit_navigation/algorithms/pid_controller.hpp"
+#include "pid_controller.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "geometry_msgs/msg/twist.hpp"
