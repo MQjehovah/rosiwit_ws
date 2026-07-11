@@ -13,9 +13,8 @@ def generate_launch_description():
     simulator_dir = get_package_share_directory('rosiwit_simulator')
     gazebo_ros_dir = get_package_share_directory('gazebo_ros')
 
-    # GPU 加速 (Intel Iris Xe via D3D12)
+    # GPU 加速 (WSL D3D12, 自动检测适配器)
     os.environ['LIBGL_ALWAYS_SOFTWARE'] = '0'
-    os.environ['MESA_D3D12_DEFAULT_ADAPTER_NAME'] = 'Intel'
     os.environ['GALLIUM_DRIVER'] = 'd3d12'
     os.environ['LD_LIBRARY_PATH'] = os.path.join(os.path.dirname(gazebo_ros_dir), '..', 'lib') + ':' + os.environ.get('LD_LIBRARY_PATH', '')
 
@@ -76,7 +75,8 @@ def generate_launch_description():
     joint_state_publisher = Node(
         package='joint_state_publisher',
         executable='joint_state_publisher',
-        name='joint_state_publisher'
+        name='joint_state_publisher',
+        parameters=[{'robot_description': robot_description_content}]
     )
 
     # robot_state_publisher
