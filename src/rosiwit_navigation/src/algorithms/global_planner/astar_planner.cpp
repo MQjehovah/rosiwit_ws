@@ -16,7 +16,7 @@ namespace planners
 
 AStarPlanner::AStarPlanner()
     : planner_name_("astar")
-    , logger_(rclcpp::get_logger("astar_planner"))
+    , logger_(core::Logger("astar_planner"))
     , planning_active_(false)
     , nx_(0), ny_(0)
     , max_iterations_(AStarConstants::kDefaultMaxIterations)
@@ -36,7 +36,7 @@ bool AStarPlanner::initialize(const core::PlannerConfig& config)
 {
     config_ = config;
     planner_name_ = config.name.empty() ? "astar" : config.name;
-    RCLCPP_INFO(logger_, "A* planner initialized");
+    LOG_INFO(logger_, "A* planner initialized");
     return true;
 }
 
@@ -45,7 +45,7 @@ void AStarPlanner::setCostmap(const core::Costmap& costmap)
     costmap_ = std::make_shared<core::Costmap>(costmap);
 
     if (!costmap_->grid) {
-        RCLCPP_ERROR(logger_, "Invalid costmap provided");
+        LOG_ERROR(logger_, "Invalid costmap provided");
         return;
     }
 
@@ -77,7 +77,7 @@ void AStarPlanner::setCostmap(const core::Costmap& costmap)
     // 大网格（>100K 节点）启用加权启发式加速收敛
     use_weighted_heuristic_ = (nx_ * ny_ > 100000);
 
-    RCLCPP_INFO(logger_, "Costmap set: %dx%d, weighted_heuristic=%s",
+    LOG_INFO(logger_, "Costmap set: %dx%d, weighted_heuristic=%s",
         nx_, ny_, use_weighted_heuristic_ ? "true" : "false");
 }
 
@@ -156,7 +156,7 @@ void AStarPlanner::inflateCostmap()
         }
     }
 
-    RCLCPP_INFO(logger_, "Costmap inflated: radius=%.2fm (%d cells)",
+    LOG_INFO(logger_, "Costmap inflated: radius=%.2fm (%d cells)",
         inflation_radius_, radius_cells);
 }
 
@@ -176,7 +176,7 @@ core::Result<core::Path> AStarPlanner::plan(
     // 确保 costmap 已设置
     if (!costmap_ || !costmap_->grid) {
         planning_active_ = false;
-        RCLCPP_ERROR(logger_, "Costmap not initialized");
+        LOG_ERROR(logger_, "Costmap not initialized");
         return core::Result<core::Path>::error(
             core::ErrorCode::PLANNING_FAILED, "Costmap not initialized");
     }
@@ -232,7 +232,7 @@ core::Result<core::Path> AStarPlanner::plan(
         // 检查迭代次数限制
         if (++iterations_ > max_iterations_) {
             planning_active_ = false;
-            RCLCPP_WARN(logger_, "A* exceeded max iterations (%d)", max_iterations_);
+            LOG_WARN(logger_, "A* exceeded max iterations (%d)", max_iterations_);
             return core::Result<core::Path>::error(
                 core::ErrorCode::TIMEOUT, "Planning iteration limit exceeded");
         }
@@ -241,7 +241,7 @@ core::Result<core::Path> AStarPlanner::plan(
         auto elapsed = std::chrono::steady_clock::now() - planning_start_time_;
         if (std::chrono::duration<double>(elapsed).count() > planning_timeout_seconds_) {
             planning_active_ = false;
-            RCLCPP_WARN(logger_, "A* planning timeout (%.2fs)", planning_timeout_seconds_);
+            LOG_WARN(logger_, "A* planning timeout (%.2fs)", planning_timeout_seconds_);
             return core::Result<core::Path>::error(
                 core::ErrorCode::TIMEOUT, "Planning timeout exceeded");
         }
@@ -435,7 +435,7 @@ void AStarPlanner::configure(const Config& config)
     // 栅格分辨率安全下限
     if (temp.grid_resolution <= 0.0) {
         temp.grid_resolution = AStarConstants::kDefaultGridResolution;
-        RCLCPP_WARN(logger_,
+        LOG_WARN(logger_,
             "grid_resolution=%.6f 非法，重置为默认值 %.3f",
             config.grid_resolution, temp.grid_resolution);
     }
@@ -446,7 +446,7 @@ void AStarPlanner::configure(const Config& config)
 
     // 栅格分辨率变更时触发重新初始化
     if (std::abs(temp.grid_resolution - simple_config_.grid_resolution) > 1e-9) {
-        RCLCPP_INFO(logger_,
+        LOG_INFO(logger_,
             "Grid resolution changed: %.4f → %.4f, reinitializing",
             simple_config_.grid_resolution, temp.grid_resolution);
         nx_ = 0;
@@ -469,7 +469,7 @@ AStarResult AStarPlanner::plan(
 
     // 边界检查：网格为空
     if (!grid || grid->data.empty()) {
-        RCLCPP_ERROR(logger_, "A* plan(): null or empty occupancy grid");
+        LOG_ERROR(logger_, "A* plan(): null or empty occupancy grid");
         return result;
     }
 
@@ -495,12 +495,12 @@ AStarResult AStarPlanner::plan(
 
     // 边界检查：起点/终点越界
     if (sx < 0 || sx >= static_cast<int>(nx) || sy < 0 || sy >= static_cast<int>(ny)) {
-        RCLCPP_WARN(logger_,
+        LOG_WARN(logger_,
             "A* plan(): start (%d, %d) out of bounds [0-%u, 0-%u]", sx, sy, nx, ny);
         return result;
     }
     if (gx < 0 || gx >= static_cast<int>(nx) || gy < 0 || gy >= static_cast<int>(ny)) {
-        RCLCPP_WARN(logger_,
+        LOG_WARN(logger_,
             "A* plan(): goal (%d, %d) out of bounds [0-%u, 0-%u]", gx, gy, nx, ny);
         return result;
     }
@@ -526,11 +526,11 @@ AStarResult AStarPlanner::plan(
     };
 
     if (isObstacleGrid(sx, sy)) {
-        RCLCPP_WARN(logger_, "A* plan(): start (%d, %d) is on obstacle", sx, sy);
+        LOG_WARN(logger_, "A* plan(): start (%d, %d) is on obstacle", sx, sy);
         return result;
     }
     if (isObstacleGrid(gx, gy)) {
-        RCLCPP_WARN(logger_, "A* plan(): goal (%d, %d) is on obstacle", gx, gy);
+        LOG_WARN(logger_, "A* plan(): goal (%d, %d) is on obstacle", gx, gy);
         return result;
     }
 
@@ -594,7 +594,7 @@ AStarResult AStarPlanner::plan(
             auto now = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double, std::milli>(now - start_time).count();
             if (elapsed > timeout * 1000.0) {
-                RCLCPP_WARN(logger_, "A* timeout after %d iterations (%.1f ms)", iter, elapsed);
+                LOG_WARN(logger_, "A* timeout after %d iterations (%.1f ms)", iter, elapsed);
                 break;
             }
         }
@@ -651,7 +651,7 @@ AStarResult AStarPlanner::plan(
     result.elapsed_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
     if (!found) {
-        RCLCPP_INFO(logger_,
+        LOG_INFO(logger_,
             "A* plan(): no path found after %d iterations (%.1f ms)", iter, result.elapsed_ms);
         return result;
     }
@@ -680,7 +680,7 @@ AStarResult AStarPlanner::plan(
     }
 
     result.success = true;
-    RCLCPP_INFO(logger_,
+    LOG_INFO(logger_,
         "A* plan(): found path length=%zu after %d iterations (%.1f ms)",
         result.path.size(), iter, result.elapsed_ms);
 

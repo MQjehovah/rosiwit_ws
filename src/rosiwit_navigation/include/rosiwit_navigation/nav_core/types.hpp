@@ -125,6 +125,32 @@ struct Obstacle
 
 using ObstacleArray = std::vector<Obstacle>;
 
+/**
+ * @brief 激光扫描数据（纯C++，替代 sensor_msgs::LaserScan）
+ */
+struct RangeScan
+{
+  std::vector<float> ranges;
+  std::vector<float> intensities;
+  float angle_min = -3.14159f;
+  float angle_max = 3.14159f;
+  float angle_increment = 0.0174533f;
+  float range_min = 0.1f;
+  float range_max = 10.0f;
+  size_t size() const { return ranges.size(); }
+};
+
+/**
+ * @brief 点云数据（纯C++，替代 sensor_msgs::PointCloud2）
+ */
+struct PointCloud
+{
+  struct Point { float x, y, z; };
+  std::vector<Point> points;
+  bool empty() const { return points.empty(); }
+  size_t size() const { return points.size(); }
+};
+
 struct TrajectoryPoint
 {
   double x;

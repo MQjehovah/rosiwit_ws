@@ -1,4 +1,5 @@
 // ============================================================
+#include "rosiwit_navigation/nav_core/types.hpp"
 // rosiwit_navigation - 路径平滑器
 // ============================================================
 
@@ -8,8 +9,6 @@
 #include <vector>
 #include <cmath>
 
-#include "nav_msgs/msg/path.hpp"
-#include "nav_msgs/msg/occupancy_grid.hpp"
 
 namespace rosiwit_navigation
 {
@@ -34,9 +33,9 @@ struct SmootherConfig
  * 算法：对每个内点，施加指向相邻点中点的拉力，
  * 多次迭代后路径趋于平滑。若平滑后进入障碍物则回退。
  */
-nav_msgs::msg::Path smoothPath(
-    const nav_msgs::msg::Path & raw_path,
-    const nav_msgs::msg::OccupancyGrid::SharedPtr costmap,
+core::Path smoothPath(
+    const core::Path & raw_path,
+    const std::shared_ptr<core::CostmapGrid> costmap,
     const SmootherConfig & config = SmootherConfig());
 
 }  // namespace planners

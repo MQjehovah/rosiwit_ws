@@ -33,154 +33,154 @@ protected:
 
 TEST_F(VelocityLimiterTest, LimitLinearVelocityWithinBounds)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 0.3;  // 在限制范围内
-  velocity.angular.z = 0.5;
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 0.3;  // 在限制范围内
+  velocity.angular_z = 0.5;
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.linear.x, 0.3);
-  EXPECT_DOUBLE_EQ(result.angular.z, 0.5);
+  EXPECT_DOUBLE_EQ(result.linear_x, 0.3);
+  EXPECT_DOUBLE_EQ(result.angular_z, 0.5);
 }
 
 TEST_F(VelocityLimiterTest, LimitLinearVelocityExceedsMax)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 1.0;  // 超过最大值
-  velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 1.0;  // 超过最大值
+  velocity.angular_z = 0.0;
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.linear.x, 0.5);  // 应该被限制到0.5
+  EXPECT_DOUBLE_EQ(result.linear_x, 0.5);  // 应该被限制到0.5
 }
 
 TEST_F(VelocityLimiterTest, LimitLinearVelocityBelowMin)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = -1.0;  // 低于最小值
-  velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = -1.0;  // 低于最小值
+  velocity.angular_z = 0.0;
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.linear.x, -0.5);  // 应该被限制到-0.5
+  EXPECT_DOUBLE_EQ(result.linear_x, -0.5);  // 应该被限制到-0.5
 }
 
 TEST_F(VelocityLimiterTest, LimitAngularVelocityExceedsMax)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 0.0;
-  velocity.angular.z = 2.0;  // 超过最大值
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 0.0;
+  velocity.angular_z = 2.0;  // 超过最大值
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.angular.z, 1.0);  // 应该被限制到1.0
+  EXPECT_DOUBLE_EQ(result.angular_z, 1.0);  // 应该被限制到1.0
 }
 
 TEST_F(VelocityLimiterTest, LimitAngularVelocityBelowMin)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 0.0;
-  velocity.angular.z = -2.0;  // 低于最小值
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 0.0;
+  velocity.angular_z = -2.0;  // 低于最小值
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.angular.z, -1.0);  // 应该被限制到-1.0
+  EXPECT_DOUBLE_EQ(result.angular_z, -1.0);  // 应该被限制到-1.0
 }
 
 TEST_F(VelocityLimiterTest, LimitBothVelocitiesSimultaneously)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 2.0;    // 超过最大值
-  velocity.angular.z = -1.5;  // 低于最小值
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 2.0;    // 超过最大值
+  velocity.angular_z = -1.5;  // 低于最小值
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.linear.x, 0.5);
-  EXPECT_DOUBLE_EQ(result.angular.z, -1.0);
+  EXPECT_DOUBLE_EQ(result.linear_x, 0.5);
+  EXPECT_DOUBLE_EQ(result.angular_z, -1.0);
 }
 
 // ==================== 加速度限制测试 ====================
 
 TEST_F(VelocityLimiterTest, LimitAccelerationWithinBounds)
 {
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
-  geometry_msgs::msg::Twist target_velocity;
-  target_velocity.linear.x = 0.1;  // 加速度在范围内
-  target_velocity.angular.z = 0.2;
+  rosiwit_navigation::core::VelocityCommand target_velocity;
+  target_velocity.linear_x = 0.1;  // 加速度在范围内
+  target_velocity.angular_z = 0.2;
 
   double dt = 0.1;  // 100ms
   auto result = limiter_->limitAcceleration(current_velocity, target_velocity, dt);
 
   // 加速度为 1.0 m/s²，在限制范围内
-  EXPECT_NEAR(result.linear.x, 0.1, 1e-6);
-  EXPECT_NEAR(result.angular.z, 0.2, 1e-6);
+  EXPECT_NEAR(result.linear_x, 0.1, 1e-6);
+  EXPECT_NEAR(result.angular_z, 0.2, 1e-6);
 }
 
 TEST_F(VelocityLimiterTest, LimitAccelerationExceedsMax)
 {
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
-  geometry_msgs::msg::Twist target_velocity;
-  target_velocity.linear.x = 1.0;  // 需要非常大的加速度
-  target_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand target_velocity;
+  target_velocity.linear_x = 1.0;  // 需要非常大的加速度
+  target_velocity.angular_z = 0.0;
 
   double dt = 0.1;  // 100ms
   auto result = limiter_->limitAcceleration(current_velocity, target_velocity, dt);
 
   // 最大加速度为0.5 m/s²，dt=0.1s，所以最大变化为0.05
-  EXPECT_DOUBLE_EQ(result.linear.x, 0.05);
+  EXPECT_DOUBLE_EQ(result.linear_x, 0.05);
 }
 
 TEST_F(VelocityLimiterTest, LimitDecelerationExceedsMin)
 {
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.5;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.5;
+  current_velocity.angular_z = 0.0;
 
-  geometry_msgs::msg::Twist target_velocity;
-  target_velocity.linear.x = 0.0;  // 急停
-  target_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand target_velocity;
+  target_velocity.linear_x = 0.0;  // 急停
+  target_velocity.angular_z = 0.0;
 
   double dt = 0.1;  // 100ms
   auto result = limiter_->limitAcceleration(current_velocity, target_velocity, dt);
 
   // 最大减速度为-0.5 m/s²，dt=0.1s，所以最大减速为0.05
-  EXPECT_DOUBLE_EQ(result.linear.x, 0.45);
+  EXPECT_DOUBLE_EQ(result.linear_x, 0.45);
 }
 
 TEST_F(VelocityLimiterTest, LimitAngularAcceleration)
 {
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
-  geometry_msgs::msg::Twist target_velocity;
-  target_velocity.linear.x = 0.0;
-  target_velocity.angular.z = 2.0;  // 需要非常大的角加速度
+  rosiwit_navigation::core::VelocityCommand target_velocity;
+  target_velocity.linear_x = 0.0;
+  target_velocity.angular_z = 2.0;  // 需要非常大的角加速度
 
   double dt = 0.05;  // 50ms
   auto result = limiter_->limitAcceleration(current_velocity, target_velocity, dt);
 
   // 最大角加速度为1.0 rad/s²，dt=0.05s，所以最大变化为0.05
-  EXPECT_DOUBLE_EQ(result.angular.z, 0.05);
+  EXPECT_DOUBLE_EQ(result.angular_z, 0.05);
 }
 
 // ==================== 综合限制测试 ====================
 
 TEST_F(VelocityLimiterTest, LimitVelocityAndAccelerationCombined)
 {
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.2;
-  current_velocity.angular.z = 0.3;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.2;
+  current_velocity.angular_z = 0.3;
 
-  geometry_msgs::msg::Twist target_velocity;
-  target_velocity.linear.x = 1.0;  // 超过速度和加速度限制
-  target_velocity.angular.z = 2.0;  // 超过速度和加速度限制
+  rosiwit_navigation::core::VelocityCommand target_velocity;
+  target_velocity.linear_x = 1.0;  // 超过速度和加速度限制
+  target_velocity.angular_z = 2.0;  // 超过速度和加速度限制
 
   double dt = 0.1;
   auto result = limiter_->limitVelocityAndAcceleration(current_velocity, target_velocity, dt);
@@ -189,57 +189,57 @@ TEST_F(VelocityLimiterTest, LimitVelocityAndAccelerationCombined)
   // 加速度限制后: linear.x = 0.2 + 0.5*0.1 = 0.25
   //              angular.z = 0.3 + 1.0*0.1 = 0.4
   // 速度限制：都在范围内
-  EXPECT_NEAR(result.linear.x, 0.25, 1e-6);
-  EXPECT_NEAR(result.angular.z, 0.4, 1e-6);
+  EXPECT_NEAR(result.linear_x, 0.25, 1e-6);
+  EXPECT_NEAR(result.angular_z, 0.4, 1e-6);
 }
 
 // ==================== 边界条件测试 ====================
 
 TEST_F(VelocityLimiterTest, ZeroVelocityInput)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 0.0;
-  velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 0.0;
+  velocity.angular_z = 0.0;
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.linear.x, 0.0);
-  EXPECT_DOUBLE_EQ(result.angular.z, 0.0);
+  EXPECT_DOUBLE_EQ(result.linear_x, 0.0);
+  EXPECT_DOUBLE_EQ(result.angular_z, 0.0);
 }
 
 TEST_F(VelocityLimiterTest, VerySmallVelocityInput)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 1e-10;  // 非常小的值
-  velocity.angular.z = 1e-10;
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 1e-10;  // 非常小的值
+  velocity.angular_z = 1e-10;
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_NEAR(result.linear.x, 1e-10, 1e-15);
-  EXPECT_NEAR(result.angular.z, 1e-10, 1e-15);
+  EXPECT_NEAR(result.linear_x, 1e-10, 1e-15);
+  EXPECT_NEAR(result.angular_z, 1e-10, 1e-15);
 }
 
 TEST_F(VelocityLimiterTest, LargeVelocityInput)
 {
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 1000.0;  // 非常大的值
-  velocity.angular.z = -1000.0;
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 1000.0;  // 非常大的值
+  velocity.angular_z = -1000.0;
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.linear.x, 0.5);  // 应该被限制
-  EXPECT_DOUBLE_EQ(result.angular.z, -1.0);
+  EXPECT_DOUBLE_EQ(result.linear_x, 0.5);  // 应该被限制
+  EXPECT_DOUBLE_EQ(result.angular_z, -1.0);
 }
 
 TEST_F(VelocityLimiterTest, ZeroDeltaTime)
 {
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.1;
-  current_velocity.angular.z = 0.2;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.1;
+  current_velocity.angular_z = 0.2;
 
-  geometry_msgs::msg::Twist target_velocity;
-  target_velocity.linear.x = 0.3;
-  target_velocity.angular.z = 0.4;
+  rosiwit_navigation::core::VelocityCommand target_velocity;
+  target_velocity.linear_x = 0.3;
+  target_velocity.angular_z = 0.4;
 
   double dt = 0.0;  // 时间间隔为0
   // 应该不崩溃，返回当前速度或目标速度
@@ -250,13 +250,13 @@ TEST_F(VelocityLimiterTest, ZeroDeltaTime)
 
 TEST_F(VelocityLimiterTest, NegativeDeltaTime)
 {
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.1;
-  current_velocity.angular.z = 0.2;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.1;
+  current_velocity.angular_z = 0.2;
 
-  geometry_msgs::msg::Twist target_velocity;
-  target_velocity.linear.x = 0.3;
-  target_velocity.angular.z = 0.4;
+  rosiwit_navigation::core::VelocityCommand target_velocity;
+  target_velocity.linear_x = 0.3;
+  target_velocity.angular_z = 0.4;
 
   double dt = -0.1;  // 负时间间隔
   // 应该处理异常情况
@@ -281,14 +281,14 @@ TEST_F(VelocityLimiterTest, SetNewLimits)
 
   limiter_->setLimits(new_limits);
 
-  geometry_msgs::msg::Twist velocity;
-  velocity.linear.x = 1.5;  // 超过新限制
-  velocity.angular.z = 2.5;
+  rosiwit_navigation::core::VelocityCommand velocity;
+  velocity.linear_x = 1.5;  // 超过新限制
+  velocity.angular_z = 2.5;
 
   auto result = limiter_->limitVelocity(velocity);
 
-  EXPECT_DOUBLE_EQ(result.linear.x, 1.0);
-  EXPECT_DOUBLE_EQ(result.angular.z, 2.0);
+  EXPECT_DOUBLE_EQ(result.linear_x, 1.0);
+  EXPECT_DOUBLE_EQ(result.angular_z, 2.0);
 }
 
 TEST_F(VelocityLimiterTest, GetLimits)

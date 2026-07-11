@@ -18,7 +18,7 @@ namespace planners
 
 NavFnPlanner::NavFnPlanner()
     : planner_name_("navfn")
-    , logger_(rclcpp::get_logger("navfn_planner"))
+    , logger_(core::Logger("navfn_planner"))
     , nx_(0), ny_(0)
     , planning_active_(false)
 {
@@ -32,7 +32,7 @@ bool NavFnPlanner::initialize(const core::PlannerConfig& config)
 {
     config_ = config;
     planner_name_ = config.name.empty() ? "navfn" : config.name;
-    RCLCPP_INFO(logger_, "NavFn planner initialized");
+    LOG_INFO(logger_, "NavFn planner initialized");
     return true;
 }
 
@@ -41,7 +41,7 @@ void NavFnPlanner::setCostmap(const core::Costmap& costmap)
     costmap_ = std::make_shared<core::Costmap>(costmap);
 
     if (!costmap_->grid) {
-        RCLCPP_ERROR(logger_, "Invalid costmap provided");
+        LOG_ERROR(logger_, "Invalid costmap provided");
         return;
     }
 
@@ -58,7 +58,7 @@ void NavFnPlanner::setCostmap(const core::Costmap& costmap)
     gradx_.resize(nx_ * ny_, 0);
     grady_.resize(nx_ * ny_, 0);
 
-    RCLCPP_INFO(logger_, "Costmap set: %dx%d", nx_, ny_);
+    LOG_INFO(logger_, "Costmap set: %dx%d", nx_, ny_);
 }
 
 core::Result<core::Path> NavFnPlanner::plan(

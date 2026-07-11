@@ -15,7 +15,7 @@ namespace controllers
 
 PurePursuitController::PurePursuitController()
 : controller_name_("PurePursuitController"),
-  logger_(rclcpp::get_logger("PurePursuitController")),
+  logger_(core::Logger("PurePursuitController")),
   current_waypoint_idx_(0),
   max_linear_velocity_(0.5),
   max_angular_velocity_(1.0),
@@ -39,7 +39,7 @@ bool PurePursuitController::initialize(const core::ControllerConfig& config)
     max_angular_velocity_ = config.kinematics.max_velocity_theta;
     initialized_ = true;
     
-    RCLCPP_INFO(logger_, "Pure Pursuit Controller initialized with lookahead=%.2f, tolerance=%.2f",
+    LOG_INFO(logger_, "Pure Pursuit Controller initialized with lookahead=%.2f, tolerance=%.2f",
                 lookahead_distance_, goal_tolerance_);
     return true;
 }
@@ -50,7 +50,7 @@ void PurePursuitController::setPath(const core::Path& path)
     current_waypoint_idx_ = 0;
     goal_reached_ = false;
     
-    RCLCPP_INFO(logger_, "Path set with %zu waypoints", path_.size());
+    LOG_INFO(logger_, "Path set with %zu waypoints", path_.size());
 }
 
 core::VelocityCommand PurePursuitController::computeVelocityCommand(

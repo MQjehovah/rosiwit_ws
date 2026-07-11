@@ -19,7 +19,7 @@
 
 #include "rosiwit_navigation/nav_core/i_planner.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
-#include "rclcpp/rclcpp.hpp"
+#include "rosiwit_navigation/nav_core/logger.hpp"
 
 namespace rosiwit_navigation
 {
@@ -175,7 +175,7 @@ public:
 
 private:
     std::string planner_name_;
-    rclcpp::Logger logger_;
+    core::Logger logger_;
     core::PlannerConfig config_;
     Config simple_config_;
     std::shared_ptr<core::Costmap> costmap_;

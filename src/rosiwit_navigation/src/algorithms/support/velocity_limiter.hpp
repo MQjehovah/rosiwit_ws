@@ -7,7 +7,8 @@
 #define ROSIWIT_NAVIGATION__CONTROLLER__VELOCITY_LIMITER_HPP_
 
 #include <memory>
-#include "rclcpp/rclcpp.hpp"
+#include "rosiwit_navigation/nav_core/logger.hpp"
+#include "rosiwit_navigation/nav_core/types.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 
 namespace rosiwit_navigation
@@ -81,8 +82,8 @@ public:
    * @param velocity 输入速度
    * @return 限制后的速度
    */
-  geometry_msgs::msg::Twist limitVelocity(
-    const geometry_msgs::msg::Twist & velocity);
+  core::VelocityCommand limitVelocity(
+    const core::VelocityCommand & velocity);
 
   /**
    * @brief 应用加速度限制
@@ -91,17 +92,17 @@ public:
    * @param dt 时间间隔
    * @return 限制后的速度
    */
-  geometry_msgs::msg::Twist limitAcceleration(
-    const geometry_msgs::msg::Twist & current_velocity,
-    const geometry_msgs::msg::Twist & target_velocity,
+  core::VelocityCommand limitAcceleration(
+    const core::VelocityCommand & current_velocity,
+    const core::VelocityCommand & target_velocity,
     double dt);
 
   /**
    * @brief 应用速度和加速度限制
    */
-  geometry_msgs::msg::Twist limitVelocityAndAcceleration(
-    const geometry_msgs::msg::Twist & current_velocity,
-    const geometry_msgs::msg::Twist & target_velocity,
+  core::VelocityCommand limitVelocityAndAcceleration(
+    const core::VelocityCommand & current_velocity,
+    const core::VelocityCommand & target_velocity,
     double dt);
 
   /**
@@ -109,19 +110,19 @@ public:
    * @param current_velocity 当前速度
    * @return 停止距离
    */
-  double computeStoppingDistance(const geometry_msgs::msg::Twist & current_velocity);
+  double computeStoppingDistance(const core::VelocityCommand & current_velocity);
 
   /**
    * @brief 计算停止时间
    * @param current_velocity 当前速度
    * @return 停止时间
    */
-  double computeStoppingTime(const geometry_msgs::msg::Twist & current_velocity);
+  double computeStoppingTime(const core::VelocityCommand & current_velocity);
 
   /**
    * @brief 检查速度是否有效
    */
-  bool isVelocityValid(const geometry_msgs::msg::Twist & velocity);
+  bool isVelocityValid(const core::VelocityCommand & velocity);
 
   /**
    * @brief 应用速度比例限制
@@ -129,8 +130,8 @@ public:
    * @param scale 比例因子 (0-1)
    * @return 缩放后的速度
    */
-  geometry_msgs::msg::Twist scaleVelocity(
-    const geometry_msgs::msg::Twist & velocity,
+  core::VelocityCommand scaleVelocity(
+    const core::VelocityCommand & velocity,
     double scale);
 
 private:
@@ -141,7 +142,7 @@ private:
 
   // 成员变量
   VelocityLimits limits_;
-  rclcpp::Logger logger_{rclcpp::get_logger("velocity_limiter")};
+  core::Logger logger_{core::Logger("velocity_limiter")};
 };
 
 } // namespace controller

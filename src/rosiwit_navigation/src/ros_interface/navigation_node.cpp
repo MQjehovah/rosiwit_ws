@@ -416,7 +416,22 @@ void SmoothNavigation::executeNavigation(const geometry_msgs::msg::PoseStamped &
         smoother_cfg.max_iterations = 100;
         smoother_cfg.alpha_start = 0.5;
         smoother_cfg.alpha_end = 0.1;
-        current_path_ = planners::smoothPath(current_path_, current_map_, smoother_cfg);
+
+        // 转换为 core 类型，平滑，再转回 ROS 类型
+        core::Path core_path = RosUtils::toCorePath(current_path_);
+        // 构建 core::CostmapGrid 用于碰撞检测
+        std::shared_ptr<core::CostmapGrid> core_map;
+        if (current_map_) {
+          core_map = std::make_shared<core::CostmapGrid>();
+          core_map->info.width = current_map_->info.width;
+          core_map->info.height = current_map_->info.height;
+          core_map->info.resolution = current_map_->info.resolution;
+          core_map->info.origin.position.x = current_map_->info.origin.position.x;
+          core_map->info.origin.position.y = current_map_->info.origin.position.y;
+          core_map->data = current_map_->data;
+        }
+        core_path = planners::smoothPath(core_path, core_map, smoother_cfg);
+        current_path_ = RosUtils::toRosPath(core_path, goal.header.frame_id, now());
       }
     } else {
       RCLCPP_ERROR(get_logger(), "Planner '%s' failed: %s",

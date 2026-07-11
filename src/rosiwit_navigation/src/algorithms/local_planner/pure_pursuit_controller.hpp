@@ -12,7 +12,7 @@
 
 #include "rosiwit_navigation/nav_core/i_controller.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
-#include "rclcpp/rclcpp.hpp"
+#include "rosiwit_navigation/nav_core/logger.hpp"
 
 namespace rosiwit_navigation
 {
@@ -50,7 +50,7 @@ public:
 
 private:
     std::string controller_name_;
-    rclcpp::Logger logger_;
+    core::Logger logger_;
     core::ControllerConfig config_;
     core::Path path_;
     size_t current_waypoint_idx_;
