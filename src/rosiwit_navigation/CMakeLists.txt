@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
 project(rosiwit_navigation)
+find_package(ament_cmake REQUIRED)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -68,3 +69,5 @@ install(TARGETS nav_planners nav_controllers nav_tracking nav_navigation_lib
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
+
+ament_package()

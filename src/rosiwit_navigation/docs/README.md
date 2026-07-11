@@ -12,7 +12,7 @@ algorithms/       ←  实现层：具体算法
 
 ```
 /goal_pose (话题)  ──┐
-                      ├──→ SmoothNavigation (LifecycleNode)
+                      ├──→ NavigationNode (LifecycleNode)
 /navigate_to_pose (Action) ──┘         │
                                         ├──→ PathPlanner (A*/NavFn)
                                         ├──→ TrajectoryGenerator

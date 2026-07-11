@@ -24,7 +24,7 @@ namespace navigation
 using rclcpp_lifecycle::LifecycleNode;
 using ros_interface::RosUtils;
 
-SmoothNavigation::SmoothNavigation(const rclcpp::NodeOptions & options)
+NavigationNode::NavigationNode(const rclcpp::NodeOptions & options)
 : LifecycleNode("rosiwit_navigation", options),
   current_state_(NavigationState::IDLE),
   is_navigating_(false),
@@ -32,7 +32,7 @@ SmoothNavigation::SmoothNavigation(const rclcpp::NodeOptions & options)
 {
 }
 
-LifecycleNode::CallbackReturn SmoothNavigation::on_configure(const rclcpp_lifecycle::State &)
+LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Configuring rosiwit_navigation node");
 
@@ -91,7 +91,7 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_configure(const rclcpp_lifecy
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
-LifecycleNode::CallbackReturn SmoothNavigation::on_activate(const rclcpp_lifecycle::State &)
+LifecycleNode::CallbackReturn NavigationNode::on_activate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Activating rosiwit_navigation node");
 
@@ -112,7 +112,7 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_activate(const rclcpp_lifecyc
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
-LifecycleNode::CallbackReturn SmoothNavigation::on_deactivate(const rclcpp_lifecycle::State &)
+LifecycleNode::CallbackReturn NavigationNode::on_deactivate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Deactivating rosiwit_navigation node");
 
@@ -136,7 +136,7 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_deactivate(const rclcpp_lifec
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
-LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycle::State &)
+LifecycleNode::CallbackReturn NavigationNode::on_cleanup(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Cleaning up rosiwit_navigation node");
 
@@ -160,13 +160,13 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycl
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
-LifecycleNode::CallbackReturn SmoothNavigation::on_shutdown(const rclcpp_lifecycle::State &)
+LifecycleNode::CallbackReturn NavigationNode::on_shutdown(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Shutting down rosiwit_navigation node");
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
-void SmoothNavigation::loadParameters()
+void NavigationNode::loadParameters()
 {
   this->declare_parameter("controller_frequency", 20.0);
   this->declare_parameter("planner_frequency", 1.0);
@@ -213,28 +213,29 @@ void SmoothNavigation::loadParameters()
   RCLCPP_INFO(get_logger(), "  - goal_tolerance_xy: %.2f m", params_.goal_tolerance_xy);
 }
 
-void SmoothNavigation::initializeSubscribers()
+void NavigationNode::initializeSubscribers()
 {
+  std::string odom_topic = this->declare_parameter("odom_topic", "/odom");
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-    "/odom", rclcpp::SensorDataQoS(),
-    std::bind(&SmoothNavigation::odometryCallback, this, std::placeholders::_1));
+    odom_topic, rclcpp::SensorDataQoS(),
+    std::bind(&NavigationNode::odometryCallback, this, std::placeholders::_1));
 
   map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
     "/map", rclcpp::QoS(1).transient_local().reliable(),
-    std::bind(&SmoothNavigation::mapCallback, this, std::placeholders::_1));
+    std::bind(&NavigationNode::mapCallback, this, std::placeholders::_1));
 
   scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
     "/scan", rclcpp::SensorDataQoS(),
-    std::bind(&SmoothNavigation::scanCallback, this, std::placeholders::_1));
+    std::bind(&NavigationNode::scanCallback, this, std::placeholders::_1));
 
   goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
     "/goal_pose", rclcpp::SystemDefaultsQoS(),
-    std::bind(&SmoothNavigation::goalCallback, this, std::placeholders::_1));
+    std::bind(&NavigationNode::goalCallback, this, std::placeholders::_1));
 
   RCLCPP_INFO(get_logger(), "Subscribers initialized");
 }
 
-void SmoothNavigation::initializePublishers()
+void NavigationNode::initializePublishers()
 {
   cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>(
     "/cmd_vel", rclcpp::SystemDefaultsQoS());
@@ -248,28 +249,28 @@ void SmoothNavigation::initializePublishers()
   RCLCPP_INFO(get_logger(), "Publishers initialized");
 }
 
-void SmoothNavigation::initializeActionServer()
+void NavigationNode::initializeActionServer()
 {
 
   RCLCPP_INFO(get_logger(), "Action server initialized");
 }
 
-void SmoothNavigation::initializeTimers()
+void NavigationNode::initializeTimers()
 {
   // 控制循环定时器
   control_timer_ = create_wall_timer(
     std::chrono::milliseconds(static_cast<int>(1000.0 / params_.controller_frequency)),
-    std::bind(&SmoothNavigation::controlLoop, this));
+    std::bind(&NavigationNode::controlLoop, this));
 
   // 重规划检查定时器
   replanning_timer_ = create_wall_timer(
     std::chrono::milliseconds(static_cast<int>(1000.0 / params_.planner_frequency)),
-    std::bind(&SmoothNavigation::replanningCheck, this));
+    std::bind(&NavigationNode::replanningCheck, this));
 
   RCLCPP_INFO(get_logger(), "Timers initialized");
 }
 
-void SmoothNavigation::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+void NavigationNode::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
   current_velocity_ = msg->twist.twist;
 
@@ -284,7 +285,7 @@ void SmoothNavigation::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr
     current_velocity_.angular.z);
 }
 
-void SmoothNavigation::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
+void NavigationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
 {
   // 将激光点转换到 map 坐标系
   geometry_msgs::msg::TransformStamped tf;
@@ -312,7 +313,7 @@ void SmoothNavigation::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr
 }
 
 
-void SmoothNavigation::updateCostmap()
+void NavigationNode::updateCostmap()
 {
   if (!current_map_) return;
 
@@ -431,7 +432,7 @@ void SmoothNavigation::updateCostmap()
   controller_strategy_->setObstacles(obstacles);
 }
 
-void SmoothNavigation::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+void NavigationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
 {
   current_map_ = msg;
   updateCostmap();
@@ -439,7 +440,7 @@ void SmoothNavigation::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr
     msg->info.width, msg->info.height, msg->info.resolution);
 }
 
-void SmoothNavigation::goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+void NavigationNode::goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
 {
   RCLCPP_INFO(get_logger(),
     "Received /goal_pose: (%.2f, %.2f, %.2f)",
@@ -450,7 +451,7 @@ void SmoothNavigation::goalCallback(const geometry_msgs::msg::PoseStamped::Share
   executeNavigation(goal_pose_);
 }
 
-void SmoothNavigation::controlLoop()
+void NavigationNode::controlLoop()
 {
   if (!is_navigating_ || is_paused_) {
     return;
@@ -481,7 +482,7 @@ void SmoothNavigation::controlLoop()
   publishPath(current_path_);
 }
 
-void SmoothNavigation::replanningCheck()
+void NavigationNode::replanningCheck()
 {
   if (!is_navigating_ || is_paused_) {
     return;
@@ -493,7 +494,7 @@ void SmoothNavigation::replanningCheck()
 }
 
 
-void SmoothNavigation::executeNavigation(const geometry_msgs::msg::PoseStamped & goal)
+void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & goal)
 {
   // 更新当前位姿
   if (!updateCurrentPose()) {
@@ -562,7 +563,7 @@ void SmoothNavigation::executeNavigation(const geometry_msgs::msg::PoseStamped &
   current_state_ = NavigationState::CONTROLLING;
 }
 
-bool SmoothNavigation::updateCurrentPose()
+bool NavigationNode::updateCurrentPose()
 {
   try {
     // 从TF获取当前位姿
@@ -584,7 +585,7 @@ bool SmoothNavigation::updateCurrentPose()
   }
 }
 
-bool SmoothNavigation::isGoalReached()
+bool NavigationNode::isGoalReached()
 {
   // 优先使用控制器的目标到达判断
   if (controller_strategy_) {
@@ -612,7 +613,7 @@ bool SmoothNavigation::isGoalReached()
   return xy_reached && yaw_reached;
 }
 
-geometry_msgs::msg::Twist SmoothNavigation::computeVelocityCommand()
+geometry_msgs::msg::Twist NavigationNode::computeVelocityCommand()
 {
   // 优先使用控制器的速度计算
   if (controller_strategy_) {
@@ -664,17 +665,17 @@ geometry_msgs::msg::Twist SmoothNavigation::computeVelocityCommand()
   return cmd_vel;
 }
 
-void SmoothNavigation::publishVelocityCommand(const geometry_msgs::msg::Twist & cmd_vel)
+void NavigationNode::publishVelocityCommand(const geometry_msgs::msg::Twist & cmd_vel)
 {
   cmd_vel_pub_->publish(cmd_vel);
 }
 
-void SmoothNavigation::publishPath(const nav_msgs::msg::Path & path)
+void NavigationNode::publishPath(const nav_msgs::msg::Path & path)
 {
   path_pub_->publish(path);
 }
 
-void SmoothNavigation::stopNavigation()
+void NavigationNode::stopNavigation()
 {
   is_navigating_ = false;
   is_paused_ = false;
@@ -689,7 +690,7 @@ void SmoothNavigation::stopNavigation()
   RCLCPP_INFO(get_logger(), "Navigation stopped");
 }
 
-void SmoothNavigation::pauseNavigation()
+void NavigationNode::pauseNavigation()
 {
   is_paused_ = true;
   current_state_ = NavigationState::IDLE;
@@ -703,7 +704,7 @@ void SmoothNavigation::pauseNavigation()
   RCLCPP_INFO(get_logger(), "Navigation paused");
 }
 
-void SmoothNavigation::resumeNavigation()
+void NavigationNode::resumeNavigation()
 {
   if (is_navigating_ && is_paused_) {
     is_paused_ = false;

@@ -3,8 +3,8 @@
 // 提供平滑的单点导航功能
 // ============================================================
 
-#ifndef ROSIWIT_NAVIGATION__NAVIGATION__SMOOTH_NAVIGATION_HPP_
-#define ROSIWIT_NAVIGATION__NAVIGATION__SMOOTH_NAVIGATION_HPP_
+#ifndef ROSIWIT_NAVIGATION__NAVIGATION__NAVIGATION_NODE_HPP_
+#define ROSIWIT_NAVIGATION__NAVIGATION__NAVIGATION_NODE_HPP_
 
 #include <memory>
 #include <atomic>
@@ -77,21 +77,21 @@ struct NavigationParams
 };
 
 /**
- * @class SmoothNavigation
+ * @class NavigationNode
  * @brief 平滑导航主控制器，协调路径规划和轨迹跟踪
  */
-class SmoothNavigation : public rclcpp_lifecycle::LifecycleNode
+class NavigationNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
   /**
    * @brief 构造函数
    */
-  explicit SmoothNavigation(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  explicit NavigationNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
   /**
    * @brief 析构函数
    */
-  ~SmoothNavigation() override = default;
+  ~NavigationNode() override = default;
 
   /**
    * @brief 配置节点
@@ -297,4 +297,4 @@ private:
 } // namespace navigation
 } // namespace rosiwit_navigation
 
-#endif // ROSIWIT_NAVIGATION__NAVIGATION__SMOOTH_NAVIGATION_HPP_
+#endif // ROSIWIT_NAVIGATION__NAVIGATION__NAVIGATION_NODE_HPP_

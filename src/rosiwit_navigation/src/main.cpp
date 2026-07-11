@@ -13,7 +13,7 @@ int main(int argc, char ** argv)
   rclcpp::init(argc, argv);
 
   // 创建生命周期节点
-  auto navigation_node = std::make_shared<rosiwit_navigation::navigation::SmoothNavigation>();
+  auto navigation_node = std::make_shared<rosiwit_navigation::navigation::NavigationNode>();
 
   // 执行节点
   rclcpp::spin(navigation_node->get_node_base_interface());
