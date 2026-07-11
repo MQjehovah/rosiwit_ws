@@ -173,8 +173,9 @@ void SlamNode::mapTimerCB() {
         }
     }
 
-    // 2. grid_map (nav_msgs/OccupancyGrid) — 定位模式下发布
-    if (is_localization && !m_grid_map_published) {
+    // 2. grid_map (nav_msgs/OccupancyGrid)
+    // mapping 模式下也发布, 给导航提供 costmap
+    if (!m_grid_map_published && (is_localization || m_map_pub->get_subscription_count() > 0)) {
         auto grid_info = m_algo_raw->getGridInfo();
         if (grid_info.width > 0 && grid_info.height > 0) {
             nav_msgs::msg::OccupancyGrid grid;

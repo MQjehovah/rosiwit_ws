@@ -34,4 +34,7 @@ rosiwit_navigation_node:
     max_lookahead_distance: 0.9
 
     # 障碍物膨胀半径（路径离障碍物的距离）
-    inflation_radius: 0.5
+    inflation_radius: 0.8
+
+    # 里程计话题（Gazebo 纯仿真用 /odom，跑 SLAM 时用 /lio_odom）
+    odom_topic: /odom

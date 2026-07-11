@@ -27,6 +27,11 @@ def generate_launch_description():
             ]),
             description='Path to params yaml file'
         ),
+        # 是否加载地图服务
+        DeclareLaunchArgument(
+            'load_map', default_value='false',
+            description='Load map_server (requires map.yaml)'
+        ),
         # 地图文件
         DeclareLaunchArgument(
             'map',
@@ -76,7 +81,7 @@ def generate_launch_description():
     ]
 
     # ============================================================
-    # 地图服务 (nav2_map_server)
+    # 地图服务 (nav2_map_server) — 仅在指定 map 文件时启动
     # ============================================================
     map_server = Node(
         package='nav2_map_server',
@@ -84,13 +89,16 @@ def generate_launch_description():
         name='map_server',
         output='screen',
         parameters=[{'yaml_filename': map_file, 'use_sim_time': use_sim_time}],
+        condition=IfCondition(LaunchConfiguration('load_map')),
     )
 
     # Auto-activate map_server lifecycle
     map_configure = TimerAction(period=4.0, actions=[ExecuteProcess(
-        cmd=['ros2', 'lifecycle', 'set', '/map_server', 'configure'])])
+        cmd=['ros2', 'lifecycle', 'set', '/map_server', 'configure'])],
+        condition=IfCondition(LaunchConfiguration('load_map')))
     map_activate = TimerAction(period=6.0, actions=[ExecuteProcess(
-        cmd=['ros2', 'lifecycle', 'set', '/map_server', 'activate'])])
+        cmd=['ros2', 'lifecycle', 'set', '/map_server', 'activate'])],
+        condition=IfCondition(LaunchConfiguration('load_map')))
 
     # ============================================================
     # RViz可视化
@@ -107,8 +115,8 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # Auto-activate rosiwit_navigation_node lifecycle (6s after launch)
-    nav_configure = TimerAction(period=8.0, actions=[ExecuteProcess(
+    # Auto-activate rosiwit_navigation_node lifecycle
+    nav_configure = TimerAction(period=6.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/rosiwit_navigation_node', 'configure'])])
     nav_activate = TimerAction(period=10.0, actions=[ExecuteProcess(
         cmd=['ros2', 'lifecycle', 'set', '/rosiwit_navigation_node', 'activate'])])
