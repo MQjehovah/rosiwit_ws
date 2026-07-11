@@ -6,7 +6,13 @@
 #include "algorithms/ceres_backend/ceres_backend.h"
 #include "algorithms/gicp_localization/gicp_localization.h"
 #include "algorithms/pcd_map_manager/pcd_map_manager.h"
-#include "algorithms/scan_context_lc/scan_context_lc.h"
+// 新增算法
+#include "algorithms/point_lio/point_lio_frontend.h"
+#include "algorithms/scan_context/scan_context_lc.h"
+
+#ifdef USE_GTSAM
+#include "algorithms/gtsam_backend/gtsam_isam2_backend.h"
+#endif
 
 namespace rosiwit_slam {
 
@@ -21,11 +27,15 @@ std::vector<std::string> SlamFactory::listNames() {
 
 std::unique_ptr<IFrontend> SlamFactory::createFrontend(const std::string& name) {
     if (name == "fast_lio2_frontend") return std::make_unique<FastLio2Frontend>();
+    if (name == "point_lio_frontend")  return std::make_unique<PointLioFrontend>();
     return nullptr;
 }
 
 std::unique_ptr<IBackend> SlamFactory::createBackend(const std::string& name) {
     if (name == "ceres_pose_graph") return std::make_unique<CeresBackend>();
+#ifdef USE_GTSAM
+    if (name == "gtsam_isam2")    return std::make_unique<GtsamIsam2Backend>();
+#endif
     return nullptr;
 }
 
@@ -40,7 +50,7 @@ std::unique_ptr<IMapManager> SlamFactory::createMapManager(const std::string& na
 }
 
 std::unique_ptr<ILoopClosure> SlamFactory::createLoopClosure(const std::string& name) {
-    if (name == "simple_scan_context") return std::make_unique<ScanContextLC>();
+    if (name == "scan_context")  return std::make_unique<ScanContextLoopClosure>();
     return nullptr;
 }
 

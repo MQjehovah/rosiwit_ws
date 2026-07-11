@@ -100,6 +100,7 @@ include_directories(
     src
     src/algorithms/fast_lio2
     src/algorithms/fast_lio2/map_builder
+    src/algorithms
     ${EIGEN3_INCLUDE_DIRS}
     ${PCL_INCLUDE_DIRS}
     ${Sophus_INCLUDE_DIRS}
@@ -149,7 +150,11 @@ set(SOURCES
     src/algorithms/gicp_localization/gicp_localization.cpp
     src/algorithms/pcd_map_manager/pcd_map_manager.cpp
     src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
-    src/algorithms/scan_context_lc/scan_context_lc.cpp
+    # 新增算法 (2026-07)
+    src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp
+    src/algorithms/scan_context/scan_context.cpp
+    src/algorithms/scan_context/scan_context_lc.cpp
+    src/algorithms/point_lio/point_lio_frontend.cpp
 )
 
 # ==================== 可执行目标 ====================
@@ -255,7 +260,7 @@ if(BUILD_TESTING)
             src/algorithms/fast_lio2/map_builder/ikd_Tree.cpp
             src/algorithms/fast_lio2/map_builder/map_builder.cpp)
         target_include_directories(test_slam_factory PRIVATE
-            include src src/algorithms/fast_lio2 src/algorithms/fast_lio2/map_builder
+            include src src/algorithms src/algorithms/fast_lio2 src/algorithms/fast_lio2/map_builder
             ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${Sophus_INCLUDE_DIRS})
         target_link_libraries(test_slam_factory ${PCL_LIBRARIES} Sophus::Sophus)
         if(yaml-cpp_FOUND)
@@ -269,7 +274,9 @@ if(BUILD_TESTING)
             src/algorithms/gicp_localization/gicp_localization.cpp
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
             src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
-            src/algorithms/scan_context_lc/scan_context_lc.cpp)
+            src/algorithms/scan_context/scan_context.cpp
+            src/algorithms/scan_context/scan_context_lc.cpp
+            src/algorithms/point_lio/point_lio_frontend.cpp)
         install(TARGETS test_slam_factory DESTINATION lib/${PROJECT_NAME})
 
         # SlamPipeline orchestrator test
@@ -286,7 +293,7 @@ if(BUILD_TESTING)
             src/algorithms/fast_lio2/map_builder/ikd_Tree.cpp
             src/algorithms/fast_lio2/map_builder/map_builder.cpp)
         target_include_directories(test_slam_pipeline PRIVATE
-            include src src/algorithms/fast_lio2 src/algorithms/fast_lio2/map_builder
+            include src src/algorithms src/algorithms/fast_lio2 src/algorithms/fast_lio2/map_builder
             ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${Sophus_INCLUDE_DIRS})
         target_link_libraries(test_slam_pipeline ${PCL_LIBRARIES} Sophus::Sophus)
         if(yaml-cpp_FOUND)
@@ -300,7 +307,9 @@ if(BUILD_TESTING)
             src/algorithms/gicp_localization/gicp_localization.cpp
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
             src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
-            src/algorithms/scan_context_lc/scan_context_lc.cpp)
+            src/algorithms/scan_context/scan_context.cpp
+            src/algorithms/scan_context/scan_context_lc.cpp
+            src/algorithms/point_lio/point_lio_frontend.cpp)
         install(TARGETS test_slam_pipeline DESTINATION lib/${PROJECT_NAME})
 
     else()
@@ -354,19 +363,7 @@ if(BUILD_TESTING)
     endif()
     install(TARGETS test_pcd_map_manager DESTINATION lib/${PROJECT_NAME})
 
-    # ScanContextLC 单元测试
-    ament_add_gtest(test_scan_context_lc
-        test/test_scan_context_lc.cpp
-        src/algorithms/scan_context_lc/scan_context_lc.cpp)
-    target_include_directories(test_scan_context_lc PRIVATE
-        include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
-    target_link_libraries(test_scan_context_lc ${PCL_LIBRARIES})
-    if(yaml-cpp_FOUND)
-        target_link_libraries(test_scan_context_lc yaml-cpp)
-    endif()
-    install(TARGETS test_scan_context_lc DESTINATION lib/${PROJECT_NAME})
-
-    # 注释保留: 已移除的旧测试说明
+    # 注释保留: 已移除的旧测试说明 (test_scan_context_lc 已随 simple_scan_context 删除)
     # 2. IEKF/iKD-Tree 测试已移除 ...
     # 3. 点云滤波器/IMU处理器测试已移除 ...
     # MapManager测试已移除 ...
