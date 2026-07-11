@@ -1,6 +1,7 @@
 #include "algorithms/ceres_backend/ceres_backend.h"
 #include <iostream>
 #include <fstream>
+#include <array>
 
 #ifndef YAML_CPP_DISABLED
 #include <yaml-cpp/yaml.h>
@@ -110,31 +111,37 @@ bool CeresBackend::optimize() {
     ceres::Problem problem;
 
     size_t N = keyframes_.size();
+    // RAII: 使用 stack 分配的数组, 自动析构, 无需手动 delete[]
+    std::vector<std::array<double, 3>> trans_blocks(N);
+    std::vector<std::array<double, 4>> rot_blocks(N);
     std::vector<double*> param_blocks;
-    param_blocks.reserve(N);
+    param_blocks.reserve(N * 2);
 
-    for (auto& kf : keyframes_) {
-        double* t_block = new double[3];
-        t_block[0] = kf.pose.trans.x();
-        t_block[1] = kf.pose.trans.y();
-        t_block[2] = kf.pose.trans.z();
-        problem.AddParameterBlock(t_block, 3);
+    for (size_t i = 0; i < N; ++i) {
+        auto& kf = keyframes_[i];
+
+        trans_blocks[i][0] = kf.pose.trans.x();
+        trans_blocks[i][1] = kf.pose.trans.y();
+        trans_blocks[i][2] = kf.pose.trans.z();
+        problem.AddParameterBlock(trans_blocks[i].data(), 3);
 
         Eigen::Quaterniond q(kf.pose.rot);
-        double* r_block = new double[4];
-        r_block[0] = q.w();
-        r_block[1] = q.x();
-        r_block[2] = q.y();
-        r_block[3] = q.z();
-        if (r_block[0] < 0.0) { r_block[0] = -r_block[0]; r_block[1] = -r_block[1]; r_block[2] = -r_block[2]; r_block[3] = -r_block[3]; }
+        rot_blocks[i][0] = q.w();
+        rot_blocks[i][1] = q.x();
+        rot_blocks[i][2] = q.y();
+        rot_blocks[i][3] = q.z();
+        // 确保四元数 w 为正, 避免不必要的参数化奇异
+        if (rot_blocks[i][0] < 0.0) {
+            for (int j = 0; j < 4; ++j) rot_blocks[i][j] = -rot_blocks[i][j];
+        }
 #if CERES_VERSION_MAJOR >= 2 && CERES_VERSION_MINOR >= 2
-        problem.AddParameterBlock(r_block, 4, new ceres::QuaternionManifold());
+        problem.AddParameterBlock(rot_blocks[i].data(), 4, new ceres::QuaternionManifold());
 #else
-        problem.AddParameterBlock(r_block, 4, new ceres::QuaternionParameterization());
+        problem.AddParameterBlock(rot_blocks[i].data(), 4, new ceres::QuaternionParameterization());
 #endif
 
-        param_blocks.push_back(t_block);
-        param_blocks.push_back(r_block);
+        param_blocks.push_back(trans_blocks[i].data());
+        param_blocks.push_back(rot_blocks[i].data());
     }
 
     if (param_blocks.size() > 2) {
@@ -155,13 +162,10 @@ bool CeresBackend::optimize() {
 
     if (!summary.IsSolutionUsable()) {
         std::cerr << "[CeresBackend] Optimization failed: " << summary.message << std::endl;
-        for (auto* block : param_blocks) delete[] block;
         return false;
     }
 
     updatePoses(param_blocks);
-
-    for (auto* block : param_blocks) delete[] block;
 
     num_optimizations_++;
     return true;

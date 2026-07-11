@@ -91,8 +91,8 @@ if(NOT yaml-cpp_FOUND)
     add_compile_definitions(YAML_CPP_DISABLED)
 endif()
 
-# PCL不使用Boost
-remove_definitions(-DBOOST_ALL_NO_LIB)
+# PCL不使用Boost (在 NODE_NAME 定义之后设置)
+# target_compile_definitions(${NODE_NAME} PRIVATE BOOST_ALL_NO_LIB) # moved below
 
 # ==================== 包含目录 ====================
 include_directories(
@@ -130,22 +130,22 @@ if(GTSAM_FOUND)
     include_directories(${GTSAM_INCLUDE_DIRS})
 endif()
 
-# ==================== 源文件 ====================
-file(GLOB_RECURSE NODE_SOURCES CONFIGURE_DEPENDS
-    "src/*.cpp"
-)
-# main.cpp 单独列出, 避免重复
-list(REMOVE_ITEM NODE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-list(APPEND SOURCES src/main.cpp ${NODE_SOURCES})
-
-# 显式添加 CeresBackend 和 OccupancyGridMap (GLOB 有时遗漏新文件)
-if(Ceres_FOUND)
-    list(APPEND SOURCES src/algorithms/ceres_backend/ceres_backend.cpp)
-endif()
-list(APPEND SOURCES src/algorithms/pcd_map_manager/occupancy_grid_map.cpp)
-
-# 显式添加 Phase 3+4 新组件
-list(APPEND SOURCES
+# ==================== 源文件 (显式列表, 避免 GLOB_RECURSE 遗漏新文件) ====================
+set(SOURCES
+    src/main.cpp
+    src/ros_interface/ros_utils.cpp
+    src/ros_interface/slam_node.cpp
+    src/slam_core/slam_base.cpp
+    src/slam_core/slam_factory.cpp
+    src/slam_core/slam_pipeline.cpp
+    src/algorithms/fast_lio2/fast_lio2_frontend.cpp
+    src/algorithms/fast_lio2/map_builder/commons.cpp
+    src/algorithms/fast_lio2/map_builder/ieskf.cpp
+    src/algorithms/fast_lio2/map_builder/imu_processor.cpp
+    src/algorithms/fast_lio2/map_builder/lidar_processor.cpp
+    src/algorithms/fast_lio2/map_builder/ikd_Tree.cpp
+    src/algorithms/fast_lio2/map_builder/map_builder.cpp
+    src/algorithms/ceres_backend/ceres_backend.cpp
     src/algorithms/gicp_localization/gicp_localization.cpp
     src/algorithms/pcd_map_manager/pcd_map_manager.cpp
     src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
@@ -157,6 +157,9 @@ list(APPEND SOURCES
 set(NODE_NAME slam_node)
 add_executable(${NODE_NAME} ${SOURCES})
 set_target_properties(${NODE_NAME} PROPERTIES OUTPUT_NAME "rosiwit_slam")
+
+# PCL不使用Boost (仅对当前目标生效, 避免影响第三方依赖)
+target_compile_definitions(${NODE_NAME} PRIVATE BOOST_ALL_NO_LIB)
 
 # ==================== 预编译头 (PCH) ====================
 # PCH 让编译器将 pch.hpp 中的重型头文件 (Eigen, PCL, STL) 预编译一次，
@@ -231,19 +234,19 @@ install(DIRECTORY rviz
 )
 
 # ==================== 测试 ====================
-# gtest 目标依赖 Sophus::Sophus，若环境未安装 Sophus 则跳过测试
 if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
     find_package(Sophus QUIET)
-    if(Sophus_FOUND)
-        find_package(ament_cmake_gtest REQUIRED)
 
-        # SlamFactory 单元测试 (Phase A/C): factory 直接构造 FastLio2Algorithm, 需链接其完整实现
+    # ---- 依赖 Sophus 的测试 (FastLio2Frontend 使用 Sophus::SO3d) ----
+    if(Sophus_FOUND)
+
+        # SlamFactory 单元测试
         ament_add_gtest(test_slam_factory
             test/test_slam_factory.cpp
             src/slam_core/slam_pipeline.cpp
             src/slam_core/slam_factory.cpp
             src/slam_core/slam_base.cpp
-            src/algorithms/fast_lio2/fast_lio2_algorithm.cpp
             src/algorithms/fast_lio2/fast_lio2_frontend.cpp
             src/algorithms/fast_lio2/map_builder/commons.cpp
             src/algorithms/fast_lio2/map_builder/ieskf.cpp
@@ -275,7 +278,6 @@ if(BUILD_TESTING)
             src/slam_core/slam_pipeline.cpp
             src/slam_core/slam_base.cpp
             src/slam_core/slam_factory.cpp
-            src/algorithms/fast_lio2/fast_lio2_algorithm.cpp
             src/algorithms/fast_lio2/fast_lio2_frontend.cpp
             src/algorithms/fast_lio2/map_builder/commons.cpp
             src/algorithms/fast_lio2/map_builder/ieskf.cpp
@@ -301,78 +303,73 @@ if(BUILD_TESTING)
             src/algorithms/scan_context_lc/scan_context_lc.cpp)
         install(TARGETS test_slam_pipeline DESTINATION lib/${PROJECT_NAME})
 
-        # 5. SlamBase 同步基类单元测试 (Phase A)
-        ament_add_gtest(test_slam_base_sync test/test_slam_base_sync.cpp src/slam_core/slam_base.cpp)
-        target_include_directories(test_slam_base_sync PRIVATE
-            include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${Sophus_INCLUDE_DIRS})
-        target_link_libraries(test_slam_base_sync ${PCL_LIBRARIES} Sophus::Sophus)
-        install(TARGETS test_slam_base_sync DESTINATION lib/${PROJECT_NAME})
-
-        # CeresBackend 位姿图优化单元测试 (Phase 2)
-        ament_add_gtest(test_ceres_backend
-            test/test_ceres_backend.cpp
-            src/algorithms/ceres_backend/ceres_backend.cpp)
-        target_include_directories(test_ceres_backend PRIVATE
-            include ${EIGEN3_INCLUDE_DIRS} ${CERES_INCLUDE_DIRS})
-        target_link_libraries(test_ceres_backend Ceres::ceres)
-        if(yaml-cpp_FOUND)
-            target_include_directories(test_ceres_backend PRIVATE ${yaml-cpp_INCLUDE_DIRS})
-            target_link_libraries(test_ceres_backend yaml-cpp)
-        endif()
-        install(TARGETS test_ceres_backend DESTINATION lib/${PROJECT_NAME})
-
-        # GICPLocalization 单元测试 (Phase 3)
-        ament_add_gtest(test_gicp_localization
-            test/test_gicp_localization.cpp
-            src/algorithms/gicp_localization/gicp_localization.cpp)
-        target_include_directories(test_gicp_localization PRIVATE
-            include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
-        target_link_libraries(test_gicp_localization ${PCL_LIBRARIES})
-        if(yaml-cpp_FOUND)
-            target_link_libraries(test_gicp_localization yaml-cpp)
-        endif()
-        install(TARGETS test_gicp_localization DESTINATION lib/${PROJECT_NAME})
-
-        # PcdMapManager 单元测试 (Phase 4)
-        ament_add_gtest(test_pcd_map_manager
-            test/test_pcd_map_manager.cpp
-            src/algorithms/pcd_map_manager/pcd_map_manager.cpp
-            src/algorithms/pcd_map_manager/occupancy_grid_map.cpp)
-        target_include_directories(test_pcd_map_manager PRIVATE
-            include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
-        target_link_libraries(test_pcd_map_manager ${PCL_LIBRARIES})
-        if(yaml-cpp_FOUND)
-            target_link_libraries(test_pcd_map_manager yaml-cpp)
-        endif()
-        install(TARGETS test_pcd_map_manager DESTINATION lib/${PROJECT_NAME})
-
-        # ScanContextLC 单元测试 (Phase 4)
-        ament_add_gtest(test_scan_context_lc
-            test/test_scan_context_lc.cpp
-            src/algorithms/scan_context_lc/scan_context_lc.cpp)
-        target_include_directories(test_scan_context_lc PRIVATE
-            include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
-        target_link_libraries(test_scan_context_lc ${PCL_LIBRARIES})
-        if(yaml-cpp_FOUND)
-            target_link_libraries(test_scan_context_lc yaml-cpp)
-        endif()
-        install(TARGETS test_scan_context_lc DESTINATION lib/${PROJECT_NAME})
-
-        # 2. IEKF/iKD-Tree 测试已移除: 旧的 fast_lio2_core 实现 (iekf_estimator.cpp/
-        #    ikd_tree.cpp) 已被 FAST-LIO2_ROS2 的 map_builder 核心替代, 旧测试 API 不再适用。
-
-        # 3. 点云滤波器/IMU处理器测试已移除:
-        #    test_point_cloud_filter.cpp / test_imu_processor.cpp 引用了
-        #    不存在的 API (PointCloudFilterConfig/PointCloudFilterParams,
-        #    ImuProcessor::setAccBias 等), 与当前实现不匹配, 属历史遗留。
-
-        # MapManager测试已移除: test_map_manager.cpp 调用了不存在的
-        # MapQualityEvaluator::evaluatePointCloud (实际为 evaluate),
-        # 且依赖 yaml-cpp 链接, 属历史遗留 API 不匹配。
-
     else()
-        message(STATUS "Sophus not found, skipping gtest targets (BUILD_TESTING)")
+        message(STATUS "Sophus not found — skipping test_slam_factory and test_slam_pipeline (need Sophus for SO3d)")
     endif()
+
+    # ---- 不依赖 Sophus 的测试 (可无条件运行) ----
+
+    # SlamBase 同步基类单元测试
+    ament_add_gtest(test_slam_base_sync test/test_slam_base_sync.cpp src/slam_core/slam_base.cpp)
+    target_include_directories(test_slam_base_sync PRIVATE
+        include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_slam_base_sync ${PCL_LIBRARIES})
+    install(TARGETS test_slam_base_sync DESTINATION lib/${PROJECT_NAME})
+
+    # CeresBackend 位姿图优化单元测试
+    ament_add_gtest(test_ceres_backend
+        test/test_ceres_backend.cpp
+        src/algorithms/ceres_backend/ceres_backend.cpp)
+    target_include_directories(test_ceres_backend PRIVATE
+        include ${EIGEN3_INCLUDE_DIRS} ${CERES_INCLUDE_DIRS})
+    target_link_libraries(test_ceres_backend Ceres::ceres)
+    if(yaml-cpp_FOUND)
+        target_include_directories(test_ceres_backend PRIVATE ${yaml-cpp_INCLUDE_DIRS})
+        target_link_libraries(test_ceres_backend yaml-cpp)
+    endif()
+    install(TARGETS test_ceres_backend DESTINATION lib/${PROJECT_NAME})
+
+    # GICPLocalization 单元测试
+    ament_add_gtest(test_gicp_localization
+        test/test_gicp_localization.cpp
+        src/algorithms/gicp_localization/gicp_localization.cpp)
+    target_include_directories(test_gicp_localization PRIVATE
+        include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_gicp_localization ${PCL_LIBRARIES})
+    if(yaml-cpp_FOUND)
+        target_link_libraries(test_gicp_localization yaml-cpp)
+    endif()
+    install(TARGETS test_gicp_localization DESTINATION lib/${PROJECT_NAME})
+
+    # PcdMapManager 单元测试
+    ament_add_gtest(test_pcd_map_manager
+        test/test_pcd_map_manager.cpp
+        src/algorithms/pcd_map_manager/pcd_map_manager.cpp
+        src/algorithms/pcd_map_manager/occupancy_grid_map.cpp)
+    target_include_directories(test_pcd_map_manager PRIVATE
+        include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_pcd_map_manager ${PCL_LIBRARIES})
+    if(yaml-cpp_FOUND)
+        target_link_libraries(test_pcd_map_manager yaml-cpp)
+    endif()
+    install(TARGETS test_pcd_map_manager DESTINATION lib/${PROJECT_NAME})
+
+    # ScanContextLC 单元测试
+    ament_add_gtest(test_scan_context_lc
+        test/test_scan_context_lc.cpp
+        src/algorithms/scan_context_lc/scan_context_lc.cpp)
+    target_include_directories(test_scan_context_lc PRIVATE
+        include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_scan_context_lc ${PCL_LIBRARIES})
+    if(yaml-cpp_FOUND)
+        target_link_libraries(test_scan_context_lc yaml-cpp)
+    endif()
+    install(TARGETS test_scan_context_lc DESTINATION lib/${PROJECT_NAME})
+
+    # 注释保留: 已移除的旧测试说明
+    # 2. IEKF/iKD-Tree 测试已移除 ...
+    # 3. 点云滤波器/IMU处理器测试已移除 ...
+    # MapManager测试已移除 ...
 endif()
 
 # ==================== 导出 ====================

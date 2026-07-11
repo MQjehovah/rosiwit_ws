@@ -12,8 +12,11 @@
 class RosUtils {
 public:
     static double getSec(std_msgs::msg::Header &header);
+    /// 将 ROS PointCloud2 转换为 PCL 点云, 支持降采样和距离滤波。
+    /// @param scan_period_ms LiDAR 扫描周期 (ms), 用于计算各点时间戳 (写入 curvature)
     static pcl::PointCloud<pcl::PointXYZINormal>::Ptr ros2PCL(
         const sensor_msgs::msg::PointCloud2::SharedPtr msg,
-        int filter_num, double min_range = 0.5, double max_range = 20.0);
+        int filter_num, double min_range = 0.5, double max_range = 20.0,
+        float scan_period_ms = 100.0f);
     static builtin_interfaces::msg::Time getTime(const double &sec);
 };

@@ -120,6 +120,11 @@ bool PcdMapManager::generateGridMap(double resolution) {
 }
 
 bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& yaml_path,
+                                  double resolution) {
+    return saveGridMap(pgm_path, yaml_path, resolution, "map");
+}
+
+bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& yaml_path,
                                   double resolution, const std::string& frame_id) {
     if (!global_map_ || global_map_->empty()) return false;
     OccupancyGridConfig cfg;
@@ -145,6 +150,17 @@ bool PcdMapManager::loadGridMap(const std::string& pgm_path, const std::string& 
     m_grid_w = grid_map.getWidth();
     m_grid_h = grid_map.getHeight();
     return true;
+}
+
+GridInfo PcdMapManager::getGridInfo() const {
+    GridInfo info;
+    info.width = m_grid_w;
+    info.height = m_grid_h;
+    info.resolution = m_grid_res;
+    info.origin_x = m_grid_ox;
+    info.origin_y = m_grid_oy;
+    info.data = m_grid_data;
+    return info;
 }
 
 } // namespace rosiwit_slam

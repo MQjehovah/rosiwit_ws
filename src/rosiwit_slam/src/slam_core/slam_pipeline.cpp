@@ -146,4 +146,53 @@ SlamState SlamPipeline::state() const {
     return SlamState::RUNNING;
 }
 
+// === ISlamAlgorithm 扩展接口实现 ===
+
+bool SlamPipeline::saveMap(const std::string& path) {
+    if (!m_map_mgr) return false;
+    return m_map_mgr->saveMap(path);
+}
+
+bool SlamPipeline::loadMap(const std::string& path) {
+    if (!m_map_mgr) return false;
+    PoseStamped init;
+    init.trans = V3D::Zero();
+    init.rot = M3D::Identity();
+    if (!loadMapForLocalization(path, init)) return false;
+    // 加载地图后生成栅格地图用于导航
+    m_map_mgr->generateGridMap(0.05);
+    return true;
+}
+
+bool SlamPipeline::saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) {
+    if (!m_map_mgr) return false;
+    return m_map_mgr->saveGridMap(pgm_path, yaml_path, resolution);
+}
+
+bool SlamPipeline::setPipelineMode(const std::string& mode) {
+    if (mode == "mapping")         { setMode(PipelineMode::MAPPING); return true; }
+    else if (mode == "localization") { setMode(PipelineMode::LOCALIZATION); return true; }
+    else if (mode == "idle")         { setMode(PipelineMode::IDLE); return true; }
+    return false;
+}
+
+std::string SlamPipeline::getPipelineMode() const {
+    switch (m_mode.load()) {
+        case PipelineMode::MAPPING:       return "mapping";
+        case PipelineMode::LOCALIZATION:  return "localization";
+        default:                          return "idle";
+    }
+}
+
+bool SlamPipeline::setInitPose(const PoseStamped& pose) {
+    if (!m_localization) return false;
+    m_localization->setInitPose(pose);
+    return true;
+}
+
+GridInfo SlamPipeline::getGridInfo() const {
+    if (!m_map_mgr) return {};
+    return m_map_mgr->getGridInfo();
+}
+
 } // namespace rosiwit_slam

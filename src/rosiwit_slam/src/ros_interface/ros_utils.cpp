@@ -3,15 +3,16 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RosUtils::ros2PCL(
-    const sensor_msgs::msg::PointCloud2::SharedPtr msg, int filter_num, double min_range, double max_range)
+    const sensor_msgs::msg::PointCloud2::SharedPtr msg, int filter_num,
+    double min_range, double max_range, float scan_period_ms)
 {
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
     pcl::PointCloud<pcl::PointXYZI>::Ptr tmp_cloud(new pcl::PointCloud<pcl::PointXYZI>);
     pcl::fromROSMsg(*msg, *tmp_cloud);
 
     const int point_num = tmp_cloud->size();
+    if (filter_num < 1) filter_num = 1;
     cloud->reserve(point_num / filter_num + 1);
-    const float scan_period_ms = 100.0f;
     for (int i = 0; i < point_num; i += filter_num) {
         const auto& p = tmp_cloud->points[i];
         const float d2 = p.x * p.x + p.y * p.y + p.z * p.z;

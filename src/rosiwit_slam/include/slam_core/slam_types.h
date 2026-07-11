@@ -44,4 +44,12 @@ struct SlamOutput {
     bool has_new_pose = false;
 };
 
+/// 栅格地图信息 (在 ISlamAlgorithm / IMapManager 间共享)
+struct GridInfo {
+    int width = 0, height = 0;
+    double resolution = 0.05;
+    double origin_x = 0, origin_y = 0;
+    std::vector<int8_t> data;
+};
+
 } // namespace rosiwit_slam

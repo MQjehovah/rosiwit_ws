@@ -1,9 +1,9 @@
 # rosiwit_slam - Default Configuration
-# 启动默认 IDLE 模式, 通过 service 切换 mapping/localization
+# 默认 mapping 模式, 可通过 service (set_slam_mode) 切换到 localization / idle
 
 slam_algorithm: fast_lio2_pipeline
 pipeline: "rosiwit_slam"
-pipeline_mode: idle            # idle | mapping | localization
+pipeline_mode: mapping          # mapping | localization | idle
 
 modules:
   frontend: "fast_lio2_frontend"
@@ -14,12 +14,13 @@ modules:
 
 imu_topic: /imu
 lidar_topic: /velodyne_points
-body_frame: base_footprint
+body_frame: base_link
 world_frame: odom
 
 lidar_filter_num: 3
 lidar_min_range: 0.5
 lidar_max_range: 100.0
+scan_period_ms: 100.0       # LiDAR 扫描周期 (ms), 用于计算各点时间戳
 scan_resolution: 0.15
 map_resolution: 0.3
 

@@ -13,15 +13,15 @@
 #include <builtin_interfaces/msg/time.hpp>
 #include <mutex>
 #include "slam_core/i_slam_algorithm.h"
-#include "slam_core/slam_pipeline.h"
 #include "slam_core/slam_types.h"
-#include "algorithms/pcd_map_manager/pcd_map_manager.h"
 #include "rosiwit_slam/srv/save_map.hpp"
 #include "rosiwit_slam/srv/load_map.hpp"
 #include "rosiwit_slam/srv/save_grid_map.hpp"
 #include "rosiwit_slam/srv/set_slam_mode.hpp"
 
 namespace rosiwit_slam {
+
+class SlamBase;    // forward declare for tryPopAndProcess
 
 class SlamNode : public rclcpp::Node {
 public:
@@ -37,6 +37,7 @@ private:
         int    lidar_filter_num = 3;
         double lidar_min_range  = 0.5;
         double lidar_max_range  = 100.0;
+        float  scan_period_ms   = 100.0f;   // LiDAR 扫描周期 (毫秒), 用于点时间戳
     };
 
     void loadParameters();
@@ -48,7 +49,6 @@ private:
     void publish(const SlamOutput& out);
     void initialPoseCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
     builtin_interfaces::msg::Time toRosTime(double sec);
-    SlamPipeline* getPipeline();
 
     void handleSaveMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SaveMap::Request>, std::shared_ptr<rosiwit_slam::srv::SaveMap::Response>);
     void handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::LoadMap::Request>, std::shared_ptr<rosiwit_slam::srv::LoadMap::Response>);
@@ -64,7 +64,7 @@ private:
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr m_grid_map_pub;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr m_map_pub;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_nav_pub;
-    rclcpp::TimerBase::SharedPtr m_timer, m_map_timer;
+    rclcpp::TimerBase::SharedPtr m_process_timer, m_map_timer;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> m_static_tf;
     rclcpp::Service<rosiwit_slam::srv::SaveMap>::SharedPtr       m_srv_save_map;
@@ -72,6 +72,7 @@ private:
     rclcpp::Service<rosiwit_slam::srv::SaveGridMap>::SharedPtr   m_srv_save_grid_map;
     rclcpp::Service<rosiwit_slam::srv::SetSlamMode>::SharedPtr   m_srv_set_slam_mode;
     std::unique_ptr<ISlamAlgorithm> m_algo;
+    ISlamAlgorithm* m_algo_raw = nullptr;       // non-owning, same as m_algo.get()
     NodeConfig m_cfg;
     std::mutex m_out_mutex;
     SlamOutput m_latest;

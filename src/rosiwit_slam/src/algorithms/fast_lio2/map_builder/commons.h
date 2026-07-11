@@ -2,6 +2,7 @@
 #include <Eigen/Eigen>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
+#include <string>
 
 using PointType = pcl::PointXYZINormal;
 using CloudType = pcl::PointCloud<PointType>;
@@ -53,6 +54,11 @@ struct Config
 
     double lidar_cov_inv = 1000.0;
 };
+
+/// 从 YAML 配置文件中解析 FastLIO2 公共配置字段。
+/// 返回 true 表示成功; false 表示解析失败。
+/// @note 此函数消除 FastLio2Algorithm 和 FastLio2Frontend 之间的配置解析重复。
+bool parseFastLio2Config(const std::string& config_path, Config& out_cfg);
 
 struct IMUData
 {

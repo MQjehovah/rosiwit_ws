@@ -34,10 +34,10 @@ bool SlamBase::popSyncedPackage(SyncPackage& out) {
 
     m_pending.imus.clear();
     while (!m_imu_buf.empty() && m_imu_buf.front().time < m_pending.frame.end_time) {
-        m_pending.imus.push_back(m_imu_buf.front());
+        m_pending.imus.push_back(std::move(m_imu_buf.front()));
         m_imu_buf.pop_front();
     }
-    out = m_pending;
+    out = std::move(m_pending);
     m_lidar_buf.pop_front();
     m_lidar_pushed = false;
     return true;

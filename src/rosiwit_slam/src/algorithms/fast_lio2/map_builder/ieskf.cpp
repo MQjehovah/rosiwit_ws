@@ -102,7 +102,7 @@ void IESKF::update()
         H.block<12, 12>(0, 0) += shared_data.H;
         b.block<12, 1>(0, 0) += shared_data.b;
 
-        delta = -H.inverse() * b;
+        delta = -H.ldlt().solve(b);
 
         m_x += delta;
         shared_data.iter_num += 1;
@@ -116,5 +116,5 @@ void IESKF::update()
     // L.block<3, 3>(6, 6) = JrInv(delta.segment<3>(6));
     L.block<3, 3>(0, 0) = Jr(delta.segment<3>(0));
     L.block<3, 3>(6, 6) = Jr(delta.segment<3>(6));
-    m_P = L * H.inverse() * L.transpose();
+    m_P = L * H.ldlt().solve(M21D::Identity()) * L.transpose();
 }

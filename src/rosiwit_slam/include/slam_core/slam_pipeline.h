@@ -23,6 +23,15 @@ public:
     bool getGlobalMap(PointVec& out) override;
     SlamState state() const override;
 
+    // === ISlamAlgorithm 扩展接口 ===
+    bool saveMap(const std::string& path) override;
+    bool loadMap(const std::string& path) override;
+    bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) override;
+    bool setPipelineMode(const std::string& mode) override;
+    std::string getPipelineMode() const override;
+    bool setInitPose(const PoseStamped& pose) override;
+    GridInfo getGridInfo() const override;
+
     // === 模式控制 (供 ROS 服务调用) ===
     PipelineMode getMode() const { return m_mode.load(); }
     void setMode(PipelineMode mode);
@@ -32,17 +41,15 @@ public:
     bool onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) override;
     bool handleMapping(const SyncPackage& pkg, SlamOutput& out);
 
-    // 模块指针 (public 供 SlamNode 服务访问)
+    std::string m_pipeline_name;
+    int m_frame_count = 0;
+
+private:
     std::unique_ptr<IFrontend>     m_frontend;
     std::unique_ptr<IBackend>      m_backend;
     std::unique_ptr<ILoopClosure>  m_loop;
     std::unique_ptr<IMapManager>   m_map_mgr;
     std::unique_ptr<ILocalization> m_localization;
-
-    std::string m_pipeline_name;
-    int m_frame_count = 0;
-
-private:
     std::atomic<PipelineMode> m_mode{PipelineMode::IDLE};
 };
 

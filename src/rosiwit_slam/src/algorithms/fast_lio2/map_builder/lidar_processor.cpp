@@ -5,12 +5,11 @@ LidarProcessor::LidarProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_co
     m_ikdtree = std::make_shared<KD_TREE<PointType>>();
     m_ikdtree->set_downsample_param(m_config.map_resolution);
     m_cloud_down_lidar.reset(new CloudType);
-    m_cloud_down_world.reset(new CloudType(10000, 1));
-    m_norm_vec.reset(new CloudType(10000, 1));
-    m_effect_cloud_lidar.reset(new CloudType(10000, 1));
-    m_effect_norm_vec.reset(new CloudType(10000, 1));
-    m_nearest_points.resize(10000);
-    m_point_selected_flag.resize(10000, false);
+    m_cloud_down_world.reset(new CloudType);
+    m_norm_vec.reset(new CloudType);
+    m_effect_cloud_lidar.reset(new CloudType);
+    m_effect_norm_vec.reset(new CloudType);
+    // 缓冲区将在 process() 中根据实际点云大小动态调整
 
     if (m_config.scan_resolution > 0.0)
     {
@@ -173,6 +172,24 @@ void LidarProcessor::process(SyncPackage &package)
     {
         pcl::copyPointCloud(*package.cloud, *m_cloud_down_lidar);
     }
+
+    // 根据实际点云大小动态调整缓冲区，避免硬编码 10000 点限制导致的越界
+    {
+        size_t n = m_cloud_down_lidar->size();
+        if (m_cloud_down_world->size() != n)
+            m_cloud_down_world->resize(n);
+        if (m_norm_vec->size() != n)
+            m_norm_vec->resize(n);
+        if (m_effect_cloud_lidar->size() != n)
+            m_effect_cloud_lidar->resize(n);
+        if (m_effect_norm_vec->size() != n)
+            m_effect_norm_vec->resize(n);
+        if (m_nearest_points.size() != n)
+            m_nearest_points.resize(n);
+        if (m_point_selected_flag.size() != n)
+            m_point_selected_flag.resize(n, false);
+    }
+
     trimCloudMap();
     m_kf->update();
     incrCloudMap();
