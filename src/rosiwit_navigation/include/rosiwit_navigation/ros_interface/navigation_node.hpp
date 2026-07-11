@@ -14,6 +14,7 @@
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -178,6 +179,8 @@ protected:
    * @brief 地图回调
    */
   void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
+  void updateCostmap();
+  void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
 
   /**
    * @brief RViz目标点回调
@@ -239,6 +242,7 @@ private:
   // 订阅者
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
 
   // 发布者
@@ -268,6 +272,7 @@ private:
 
   // 地图
   nav_msgs::msg::OccupancyGrid::SharedPtr current_map_;
+  std::vector<geometry_msgs::msg::Point> laser_points_;
 
   // 策略型规划器和控制器（由NavigationFactory创建）
   std::unique_ptr<core::IPlannerStrategy> planner_strategy_;

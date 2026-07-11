@@ -7,6 +7,8 @@
 #include <memory>
 #include <string>
 #include <cmath>
+#include <queue>
+#include <utility>
 
 #include "path_smoother.hpp"
 #include "tf2/utils.hpp"
@@ -145,6 +147,7 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycl
   // 重置订阅者和发布者
   odom_sub_.reset();
   map_sub_.reset();
+  scan_sub_.reset();
   goal_sub_.reset();
   cmd_vel_pub_.reset();
   path_pub_.reset();
@@ -220,6 +223,10 @@ void SmoothNavigation::initializeSubscribers()
     "/map", rclcpp::QoS(1).transient_local().reliable(),
     std::bind(&SmoothNavigation::mapCallback, this, std::placeholders::_1));
 
+  scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
+    "/scan", rclcpp::SensorDataQoS(),
+    std::bind(&SmoothNavigation::scanCallback, this, std::placeholders::_1));
+
   goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
     "/goal_pose", rclcpp::SystemDefaultsQoS(),
     std::bind(&SmoothNavigation::goalCallback, this, std::placeholders::_1));
@@ -277,28 +284,157 @@ void SmoothNavigation::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr
     current_velocity_.angular.z);
 }
 
+void SmoothNavigation::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
+{
+  // 将激光点转换到 map 坐标系
+  geometry_msgs::msg::TransformStamped tf;
+  try {
+    tf = tf_buffer_->lookupTransform(
+      "map", msg->header.frame_id, msg->header.stamp,
+      tf2::durationFromSec(0.1));
+  } catch (tf2::TransformException &) { return; }
+
+  laser_points_.clear();
+  double angle = msg->angle_min;
+  for (size_t i = 0; i < msg->ranges.size(); ++i, angle += msg->angle_increment) {
+    if (msg->ranges[i] < msg->range_min || msg->ranges[i] > msg->range_max) continue;
+    geometry_msgs::msg::PointStamped lp;
+    lp.header = msg->header;
+    lp.point.x = msg->ranges[i] * std::cos(angle);
+    lp.point.y = msg->ranges[i] * std::sin(angle);
+    lp.point.z = 0.0;
+    geometry_msgs::msg::PointStamped mp;
+    tf2::doTransform(lp, mp, tf);
+    laser_points_.push_back(mp.point);
+  }
+  // 激光数据更新后重新生成 costmap（含障碍物层）
+  updateCostmap();
+}
+
+
+void SmoothNavigation::updateCostmap()
+{
+  if (!current_map_) return;
+
+  unsigned int w = current_map_->info.width;
+  unsigned int h = current_map_->info.height;
+  float res = current_map_->info.resolution;
+  double ox = current_map_->info.origin.position.x;
+  double oy = current_map_->info.origin.position.y;
+
+  // ========== 全局 costmap（全图，给规划器） ==========
+  // 只在首次或地图更新时全量计算，由 mapCallback 触发
+  // 这里用 mapCallback 中一样的方式：直接传递静态地图给规划器
+  // 激光障碍物不写进全局 costmap（规划器重规划频率低，激光数据过时快）
+
+  // --- 喂给规划器（只含静态地图） ---
+  if (planner_strategy_) {
+    auto grid = std::make_shared<core::CostmapGrid>();
+    grid->info.width = w;
+    grid->info.height = h;
+    grid->info.resolution = res;
+    grid->info.origin.position.x = ox;
+    grid->info.origin.position.y = oy;
+    grid->data = current_map_->data;
+
+    core::Costmap cm;
+    cm.grid = grid;
+    cm.width = w; cm.height = h; cm.resolution = res;
+    cm.origin_x = ox; cm.origin_y = oy;
+    cm.data.assign(current_map_->data.size(), 0);
+    for (size_t i = 0; i < current_map_->data.size(); ++i)
+      cm.data[i] = (current_map_->data[i] >= 100) ? 255 : 0;
+    planner_strategy_->setCostmap(cm);
+  }
+
+  // ========== 局部 costmap（机器人周围窗口，给控制器） ==========
+  if (!controller_strategy_) return;
+
+  // 获取机器人当前位置
+  double rx = 0, ry = 0;
+  try {
+    auto tf = tf_buffer_->lookupTransform("map", "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
+    rx = tf.transform.translation.x;
+    ry = tf.transform.translation.y;
+  } catch (tf2::TransformException &) { return; }
+
+  // 局部窗口参数
+  double win_width = 6.0;   // 6x6m 窗口
+  int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
+  int cx = static_cast<int>((rx - ox) / res);
+  int cy = static_cast<int>((ry - oy) / res);
+
+  // 提取窗口内的障碍物（静态地图 + 激光）
+  core::ObstacleArray obstacles;
+  std::vector<std::vector<bool>> visited(h, std::vector<bool>(w, false));
+
+  // BFS 聚类 + 提取窗口内障碍物
+  int step = std::max(1, static_cast<int>(0.3 / res));
+  for (int dy = -win_half; dy <= win_half; dy += step) {
+    for (int dx = -win_half; dx <= win_half; dx += step) {
+      int mx = cx + dx, my = cy + dy;
+      if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) continue;
+      if (visited[my][mx]) continue;
+
+      bool is_obs = (current_map_->data[my * w + mx] >= 100);
+      // 也检查激光点
+      for (const auto& pt : laser_points_) {
+        int lx = static_cast<int>((pt.x - ox) / res);
+        int ly = static_cast<int>((pt.y - oy) / res);
+        if (std::abs(lx - mx) <= 1 && std::abs(ly - my) <= 1) { is_obs = true; break; }
+      }
+      if (!is_obs) continue;
+
+      // BFS 聚类
+      std::queue<std::pair<int,int>> cluster_q;
+      cluster_q.push({mx, my});
+      visited[my][mx] = true;
+      double sum_x = 0, sum_y = 0;
+      int cnt = 0, min_x = mx, max_x = mx, min_y = my, max_y = my;
+
+      while (!cluster_q.empty()) {
+        auto [cx2, cy2] = cluster_q.front(); cluster_q.pop();
+        sum_x += cx2; sum_y += cy2; ++cnt;
+        min_x = std::min(min_x, cx2); max_x = std::max(max_x, cx2);
+        min_y = std::min(min_y, cy2); max_y = std::max(max_y, cy2);
+
+        for (int i = 0; i < 4; ++i) {
+          int nx = cx2 + (i==0 ? -1 : i==1 ? 1 : 0);
+          int ny = cy2 + (i==2 ? -1 : i==3 ? 1 : 0);
+          if (nx >= 0 && nx < static_cast<int>(w) && ny >= 0 && ny < static_cast<int>(h) && !visited[ny][nx]) {
+            bool neighbor_obs = (current_map_->data[ny * w + nx] >= 100);
+            if (!neighbor_obs) {
+              for (const auto& pt : laser_points_) {
+                int lx = static_cast<int>((pt.x - ox) / res);
+                int ly = static_cast<int>((pt.y - oy) / res);
+                if (nx == lx && ny == ly) { neighbor_obs = true; break; }
+              }
+            }
+            if (neighbor_obs) {
+              visited[ny][nx] = true;
+              cluster_q.push({nx, ny});
+            }
+          }
+        }
+      }
+
+      core::Obstacle obs;
+      obs.x = ox + (sum_x / cnt + 0.5) * res;
+      obs.y = oy + (sum_y / cnt + 0.5) * res;
+      double w_ = (max_x - min_x + 1) * res;
+      double h_ = (max_y - min_y + 1) * res;
+      obs.radius = std::sqrt(w_ * w_ + h_ * h_) * 0.5;
+      obstacles.push_back(obs);
+    }
+  }
+
+  controller_strategy_->setObstacles(obstacles);
+}
+
 void SmoothNavigation::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
 {
   current_map_ = msg;
-  if (planner_strategy_) {
-    auto grid = std::make_shared<core::CostmapGrid>();
-    grid->info.width = msg->info.width;
-    grid->info.height = msg->info.height;
-    grid->info.resolution = msg->info.resolution;
-    grid->info.origin.position.x = msg->info.origin.position.x;
-    grid->info.origin.position.y = msg->info.origin.position.y;
-    grid->data = msg->data;
-
-    core::Costmap costmap;
-    costmap.grid = grid;
-    costmap.width = msg->info.width;
-    costmap.height = msg->info.height;
-    costmap.resolution = msg->info.resolution;
-    costmap.origin_x = msg->info.origin.position.x;
-    costmap.origin_y = msg->info.origin.position.y;
-    costmap.data.assign(msg->data.begin(), msg->data.end());
-    planner_strategy_->setCostmap(costmap);
-  }
+  updateCostmap();
   RCLCPP_INFO(get_logger(), "Map received: %d x %d, res=%.3f",
     msg->info.width, msg->info.height, msg->info.resolution);
 }
