@@ -64,6 +64,8 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     core::ControllerConfig ctrl_cfg;
     ctrl_cfg.lookahead_distance = params_.lookahead_distance;
     ctrl_cfg.xy_goal_tolerance = params_.goal_tolerance_xy;
+    ctrl_cfg.slow_down_distance = 1.5;
+    ctrl_cfg.lookahead_gain = 1.0;
     ctrl_cfg.max_lookahead_distance = params_.max_lookahead_distance;
     ctrl_cfg.min_lookahead_distance = params_.min_lookahead_distance;
     ctrl_cfg.max_linear_velocity = params_.max_velocity_x;
@@ -324,11 +326,8 @@ void NavigationNode::updateCostmap()
   double oy = current_map_->info.origin.position.y;
 
   // ========== 全局 costmap（全图，给规划器） ==========
-  // 只在首次或地图更新时全量计算，由 mapCallback 触发
-  // 这里用 mapCallback 中一样的方式：直接传递静态地图给规划器
-  // 激光障碍物不写进全局 costmap（规划器重规划频率低，激光数据过时快）
+  // 合并静态地图 + 激光实时障碍物
 
-  // --- 喂给规划器（只含静态地图） ---
   if (planner_strategy_) {
     auto grid = std::make_shared<core::CostmapGrid>();
     grid->info.width = w;
@@ -342,9 +341,20 @@ void NavigationNode::updateCostmap()
     cm.grid = grid;
     cm.width = w; cm.height = h; cm.resolution = res;
     cm.origin_x = ox; cm.origin_y = oy;
+
+    // 从静态地图初始化
     cm.data.assign(current_map_->data.size(), 0);
     for (size_t i = 0; i < current_map_->data.size(); ++i)
       cm.data[i] = (current_map_->data[i] >= 100) ? 255 : 0;
+
+    // 叠加激光实时障碍物
+    for (const auto& pt : laser_points_) {
+      int mx = static_cast<int>((pt.x - ox) / res);
+      int my = static_cast<int>((pt.y - oy) / res);
+      if (mx >= 0 && mx < static_cast<int>(w) && my >= 0 && my < static_cast<int>(h))
+        cm.data[my * w + mx] = 255;
+    }
+
     planner_strategy_->setCostmap(cm);
   }
 
@@ -472,6 +482,25 @@ void NavigationNode::controlLoop()
     return;
   }
 
+  // ========== 初始原地旋转：确保机器人面朝路径方向再前进 ==========
+  if (m_need_initial_rotate) {
+    geometry_msgs::msg::Twist rot_cmd;
+    double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
+    double target_yaw = m_initial_rotate_target;
+    double angle_error = target_yaw - current_yaw;
+    while (angle_error > M_PI) angle_error -= 2.0 * M_PI;
+    while (angle_error < -M_PI) angle_error += 2.0 * M_PI;
+
+    if (std::abs(angle_error) < 0.08) {
+      m_need_initial_rotate = false;
+      RCLCPP_INFO(get_logger(), "Initial rotation done, starting Pure Pursuit");
+    } else {
+      rot_cmd.angular.z = std::clamp(1.5 * angle_error, -0.8, 0.8);
+      publishVelocityCommand(rot_cmd);
+      return;
+    }
+  }
+
   // 计算速度命令
   geometry_msgs::msg::Twist cmd_vel = computeVelocityCommand();
 
@@ -556,6 +585,23 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
   RCLCPP_INFO(get_logger(),
     "Path planned with %zu points",
     current_path_.poses.size());
+
+  // 检查是否需要先原地旋转（Pure Pursuit 只能前进）
+  m_need_initial_rotate = false;
+  if (current_path_.poses.size() > 2) {
+    double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
+    double dx = current_path_.poses[1].pose.position.x - current_path_.poses[0].pose.position.x;
+    double dy = current_path_.poses[1].pose.position.y - current_path_.poses[0].pose.position.y;
+    double path_yaw = std::atan2(dy, dx);
+    double yaw_diff = path_yaw - current_yaw;
+    while (yaw_diff > M_PI) yaw_diff -= 2.0 * M_PI;
+    while (yaw_diff < -M_PI) yaw_diff += 2.0 * M_PI;
+    if (std::abs(yaw_diff) > 0.35) {
+      m_need_initial_rotate = true;
+      m_initial_rotate_target = path_yaw;
+      RCLCPP_INFO(get_logger(), "Initial rotation needed: %.1f deg", yaw_diff * 180.0 / M_PI);
+    }
+  }
 
   // 设置导航状态
   is_navigating_ = true;

@@ -5,7 +5,7 @@ rosiwit_navigation_node:
   ros__parameters:
     # 速度限制
     max_velocity_x: 0.5
-    min_velocity_x: -0.5
+    min_velocity_x: 0.0
     max_velocity_theta: 1.0
 
     # 加速度限制
@@ -29,12 +29,12 @@ rosiwit_navigation_node:
     goal_tolerance_yaw: 0.1
 
     # Pure Pursuit 前瞻距离
-    lookahead_distance: 0.6
-    min_lookahead_distance: 0.3
-    max_lookahead_distance: 0.9
+    lookahead_distance: 0.8
+    min_lookahead_distance: 0.4
+    max_lookahead_distance: 1.2
 
     # 障碍物膨胀半径（路径离障碍物的距离）
-    inflation_radius: 0.8
+    inflation_radius: 1.5
 
     # 里程计话题（Gazebo 纯仿真用 /odom，跑 SLAM 时用 /lio_odom）
     odom_topic: /odom

@@ -147,17 +147,42 @@ size_t PurePursuitController::findLookaheadPoint(const core::Pose2D& current_pos
 {
     if (path_.empty()) return 0;
 
-    // 动态调整前视距离
-    double dynamic_lookahead = calculateLookaheadDistance(0.3);  // 默认速度
-    dynamic_lookahead = std::min(dynamic_lookahead, config_.max_lookahead_distance);
-    dynamic_lookahead = std::max(dynamic_lookahead, lookahead_distance_);
+    // 先找最近路径点，计算局部路径曲率
+    size_t nearest_idx = 0;
+    double nearest_dist = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < path_.size(); ++i) {
+        double d = current_pose.distanceTo(path_.points[i].pose);
+        if (d < nearest_dist) {
+            nearest_dist = d;
+            nearest_idx = i;
+        }
+    }
 
-    // 从当前路径点开始搜索
-    size_t start_index = current_waypoint_idx_;
+    // 评估前方路径段的曲率: 取最近点前 3 个点的转角
+    double path_curvature = 0.0;
+    if (nearest_idx + 3 < path_.size()) {
+        const auto& p0 = path_.points[nearest_idx].pose;
+        const auto& p1 = path_.points[nearest_idx + 1].pose;
+        const auto& p2 = path_.points[nearest_idx + 3].pose;
+        double dx1 = p1.x - p0.x, dy1 = p1.y - p0.y;
+        double dx2 = p2.x - p1.x, dy2 = p2.y - p1.y;
+        double angle_diff = std::abs(std::atan2(dy2, dx2) - std::atan2(dy1, dx1));
+        if (angle_diff > M_PI) angle_diff = 2 * M_PI - angle_diff;
+        path_curvature = angle_diff;  // rad/segment
+    }
+
+    // 动态前视: 曲率越大前视越短 (0.3~1.2m)
+    double base_lookahead = config_.max_lookahead_distance;
+    double curvature_factor = 1.0 / (1.0 + 4.0 * path_curvature);
+    double dynamic_lookahead = base_lookahead * curvature_factor;
+    dynamic_lookahead = std::clamp(dynamic_lookahead,
+        config_.min_lookahead_distance, config_.max_lookahead_distance);
+
+    // 从最近路径点开始搜索
+    size_t start_index = nearest_idx;
 
     for (size_t i = start_index; i < path_.size(); ++i) {
         double distance = current_pose.distanceTo(path_.points[i].pose);
-
         if (distance >= dynamic_lookahead) {
             return i;
         }
@@ -200,12 +225,12 @@ core::VelocityCommand PurePursuitController::purePursuitAlgorithm(
     // 计算曲率
     double curvature = 2.0 * local_y / (L * L);
 
-    // 根据曲率调整线速度
+    // 根据曲率调整线速度 (系数 2.0, 原始 FAST-LIO2 用的 5.0 过于激进)
     double linear_vel = max_linear_velocity_;
     if (std::abs(curvature) > 0.1) {
-        linear_vel *= (1.0 / (1.0 + 5.0 * std::abs(curvature)));
+        linear_vel *= (1.0 / (1.0 + 2.0 * std::abs(curvature)));
     }
-    linear_vel = std::max(linear_vel, 0.05);
+    linear_vel = std::max(linear_vel, 0.10);
 
     // 计算角速度
     double angular_vel = curvature * linear_vel;

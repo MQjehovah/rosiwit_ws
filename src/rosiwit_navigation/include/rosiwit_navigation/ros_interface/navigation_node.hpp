@@ -263,6 +263,10 @@ private:
   geometry_msgs::msg::PoseStamped current_pose_;
   geometry_msgs::msg::Twist current_velocity_;
 
+  // 初始旋转：Pure Pursuit 只前进，目标在后方时先原地掉头
+  bool m_need_initial_rotate = false;
+  double m_initial_rotate_target = 0.0;
+
   // 目标位姿
   geometry_msgs::msg::PoseStamped goal_pose_;
 
