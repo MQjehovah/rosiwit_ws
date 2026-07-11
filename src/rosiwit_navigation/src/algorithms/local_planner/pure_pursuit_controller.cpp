@@ -1,3 +1,4 @@
+#include "rosiwit_navigation/nav_core/logger.hpp"
 // ============================================================
 // Diffbot Navigation - Pure Pursuit 控制器实现
 // ============================================================

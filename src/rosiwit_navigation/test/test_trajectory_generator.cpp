@@ -8,6 +8,7 @@
 #include "trajectory_generator.hpp"
 
 using namespace rosiwit_navigation::navigation;
+using namespace rosiwit_navigation::core;
 
 class TrajectoryGeneratorTest : public ::testing::Test
 {
@@ -77,12 +78,11 @@ TEST_F(TrajectoryGeneratorTest, SetNewConfig)
 
 TEST_F(TrajectoryGeneratorTest, GenerateFromEmptyPath)
 {
-  nav_msgs::msg::Path empty_path;
-  empty_path.header.frame_id = "map";
+  rosiwit_navigation::core::Path empty_path;
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(empty_path, current_velocity);
 
@@ -92,18 +92,16 @@ TEST_F(TrajectoryGeneratorTest, GenerateFromEmptyPath)
 
 TEST_F(TrajectoryGeneratorTest, GenerateFromSinglePointPath)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
-  geometry_msgs::msg::PoseStamped pose;
-  pose.pose.position.x = 1.0;
-  pose.pose.position.y = 0.0;
-  pose.pose.orientation.w = 1.0;
-  path.poses.push_back(pose);
+  rosiwit_navigation::core::Pose2D pose;
+  pose.x = 1.0;
+  pose.y = 0.0;
+  path.points.push_back(pose);
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -113,21 +111,19 @@ TEST_F(TrajectoryGeneratorTest, GenerateFromSinglePointPath)
 
 TEST_F(TrajectoryGeneratorTest, GenerateFromStraightPath)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   // 生成直线路径
   for (int i = 0; i <= 10; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.2;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.2;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -143,23 +139,20 @@ TEST_F(TrajectoryGeneratorTest, GenerateFromStraightPath)
 
 TEST_F(TrajectoryGeneratorTest, GenerateFromCurvedPath)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   // 生成曲线路径（半圆）
   for (int i = 0; i <= 20; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
+    rosiwit_navigation::core::Pose2D pose;
     double angle = M_PI * i / 20.0;
-    pose.pose.position.x = std::cos(angle);
-    pose.pose.position.y = std::sin(angle);
-    pose.pose.orientation.z = std::sin(angle / 2.0);
-    pose.pose.orientation.w = std::cos(angle / 2.0);
-    path.poses.push_back(pose);
+    pose.x = std::cos(angle);
+    pose.y = std::sin(angle);
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -174,20 +167,18 @@ TEST_F(TrajectoryGeneratorTest, GenerateFromCurvedPath)
 
 TEST_F(TrajectoryGeneratorTest, GenerateWithNonZeroInitialVelocity)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   for (int i = 0; i <= 10; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.2;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.2;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.2;  // 非零初始速度
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.2;  // 非零初始速度
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -203,21 +194,19 @@ TEST_F(TrajectoryGeneratorTest, GenerateWithNonZeroInitialVelocity)
 
 TEST_F(TrajectoryGeneratorTest, VelocityProfileRespectsLimits)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   // 长路径，让速度达到最大值
   for (int i = 0; i <= 100; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.1;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.1;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -230,20 +219,18 @@ TEST_F(TrajectoryGeneratorTest, VelocityProfileRespectsLimits)
 
 TEST_F(TrajectoryGeneratorTest, AccelerationProfileRespectsLimits)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   for (int i = 0; i <= 50; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.1;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.1;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -269,20 +256,18 @@ TEST_F(TrajectoryGeneratorTest, QuinticPolynomialSmoothness)
 
   // 调用内部方法（如果有公共接口）
   // 这里验证生成的轨迹是平滑的
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   for (int i = 0; i <= 20; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.05;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.05;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -299,24 +284,22 @@ TEST_F(TrajectoryGeneratorTest, QuinticPolynomialSmoothness)
 
 TEST_F(TrajectoryGeneratorTest, GoalTolerance)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
-  geometry_msgs::msg::PoseStamped start, goal;
-  start.pose.position.x = 0.0;
-  start.pose.position.y = 0.0;
-  start.pose.orientation.w = 1.0;
+  rosiwit_navigation::core::Pose2D start, goal;
+  start.x = 0.0;
+  start.y = 0.0;
+  start.theta = 1.0;
 
-  goal.pose.position.x = 1.0;
-  goal.pose.position.y = 0.0;
-  goal.pose.orientation.w = 1.0;
+  goal.x = 1.0;
+  goal.y = 0.0;
 
-  path.poses.push_back(start);
-  path.poses.push_back(goal);
+  path.points.push_back(start);
+  path.points.push_back(goal);
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -324,8 +307,8 @@ TEST_F(TrajectoryGeneratorTest, GoalTolerance)
   if (!trajectory.empty()) {
     double final_x = trajectory.back().x;
     double final_y = trajectory.back().y;
-    double distance_to_goal = std::sqrt((final_x - goal.pose.position.x) * (final_x - goal.pose.position.x) +
-                                          (final_y - goal.pose.position.y) * (final_y - goal.pose.position.y));
+    double distance_to_goal = std::sqrt((final_x - goal.x) * (final_x - goal.x) +
+                                          (final_y - goal.y) * (final_y - goal.y));
     EXPECT_LE(distance_to_goal, config_.xy_goal_tolerance + 0.5);  // 允许一定误差
   }
 }
@@ -334,25 +317,24 @@ TEST_F(TrajectoryGeneratorTest, GoalTolerance)
 
 TEST_F(TrajectoryGeneratorTest, VeryShortPath)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   // 非常短的路径
-  geometry_msgs::msg::PoseStamped pose1, pose2;
-  pose1.pose.position.x = 0.0;
-  pose1.pose.position.y = 0.0;
-  pose1.pose.orientation.w = 1.0;
+  rosiwit_navigation::core::Pose2D pose1, pose2;
+  pose1.x = 0.0;
+  pose1.y = 0.0;
+  pose1.theta = 0.0;
 
-  pose2.pose.position.x = 0.01;
-  pose2.pose.position.y = 0.0;
-  pose2.pose.orientation.w = 1.0;
+  pose2.x = 0.01;
+  pose2.y = 0.0;
+  pose2.theta = 0.0;
 
-  path.poses.push_back(pose1);
-  path.poses.push_back(pose2);
+  path.points.push_back(pose1);
+  path.points.push_back(pose2);
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   EXPECT_NO_THROW({
     auto trajectory = generator_->generateTrajectory(path, current_velocity);
@@ -361,20 +343,18 @@ TEST_F(TrajectoryGeneratorTest, VeryShortPath)
 
 TEST_F(TrajectoryGeneratorTest, ZeroVelocityInput)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   for (int i = 0; i <= 5; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.5;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.5;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -383,20 +363,18 @@ TEST_F(TrajectoryGeneratorTest, ZeroVelocityInput)
 
 TEST_F(TrajectoryGeneratorTest, LargeVelocityInput)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   for (int i = 0; i <= 5; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.5;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.5;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 10.0;  // 很大的初始速度
-  current_velocity.angular.z = 5.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 10.0;  // 很大的初始速度
+  current_velocity.angular_z = 5.0;
 
   // 应该安全处理过大速度
   EXPECT_NO_THROW({
@@ -408,20 +386,18 @@ TEST_F(TrajectoryGeneratorTest, LargeVelocityInput)
 
 TEST_F(TrajectoryGeneratorTest, TrajectoryPointValidity)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   for (int i = 0; i <= 10; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.1;
-    pose.pose.position.y = std::sin(i * 0.3);
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.1;
+    pose.y = std::sin(i * 0.3);
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.1;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.1;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -449,20 +425,18 @@ TEST_F(TrajectoryGeneratorTest, TrajectoryPointValidity)
 
 TEST_F(TrajectoryGeneratorTest, TrajectoryContinuity)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   for (int i = 0; i <= 20; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.2;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.2;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   auto trajectory = generator_->generateTrajectory(path, current_velocity);
 
@@ -483,20 +457,18 @@ TEST_F(TrajectoryGeneratorTest, TrajectoryContinuity)
 
 TEST_F(TrajectoryGeneratorTest, ResetClearsInternalState)
 {
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
+  rosiwit_navigation::core::Path path;
 
   for (int i = 0; i <= 5; ++i) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.pose.position.x = i * 0.1;
-    pose.pose.position.y = 0.0;
-    pose.pose.orientation.w = 1.0;
-    path.poses.push_back(pose);
+    rosiwit_navigation::core::Pose2D pose;
+    pose.x = i * 0.1;
+    pose.y = 0.0;
+    path.points.push_back(pose);
   }
 
-  geometry_msgs::msg::Twist current_velocity;
-  current_velocity.linear.x = 0.0;
-  current_velocity.angular.z = 0.0;
+  rosiwit_navigation::core::VelocityCommand current_velocity;
+  current_velocity.linear_x = 0.0;
+  current_velocity.angular_z = 0.0;
 
   // 生成轨迹
   auto trajectory1 = generator_->generateTrajectory(path, current_velocity);

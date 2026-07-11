@@ -9,7 +9,6 @@
 #include <memory>
 #include "rosiwit_navigation/nav_core/logger.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
-#include "geometry_msgs/msg/twist.hpp"
 
 namespace rosiwit_navigation
 {

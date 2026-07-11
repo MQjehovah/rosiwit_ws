@@ -1,4 +1,3 @@
-// ============================================================
 // Diffbot Navigation - 轨迹生成器
 // 生成平滑的、符合运动学约束的轨迹
 // ============================================================
@@ -10,13 +9,12 @@
 #include <vector>
 #include <cmath>
 
-#include "rclcpp/rclcpp.hpp"
-#include "geometry_msgs/msg/pose_stamped.hpp"
-#include "geometry_msgs/msg/twist.hpp"
-#include "geometry_msgs/msg/pose2_d.hpp"
-#include "nav_msgs/msg/path.hpp"
+#include "rosiwit_navigation/nav_core/logger.hpp"
+#include "rosiwit_navigation/nav_core/types.hpp"
+// ============================================================
 
 #include "rosiwit_navigation/nav_core/types.hpp"
+// ============================================================
 
 namespace rosiwit_navigation
 {
@@ -129,8 +127,8 @@ public:
    * - 初始速度超过最大值 → 裁剪到允许范围
    */
   std::vector<TrajectoryPoint> generateTrajectory(
-    const nav_msgs::msg::Path & path,
-    const geometry_msgs::msg::Twist & current_velocity);
+    const core::Path & path,
+    const core::VelocityCommand & current_velocity);
 
   /**
    * @brief 生成从起点到终点的轨迹
@@ -141,10 +139,10 @@ public:
    * @return 生成的轨迹点序列
    */
   std::vector<TrajectoryPoint> generateTrajectory(
-    const geometry_msgs::msg::Pose2D & start,
-    const geometry_msgs::msg::Pose2D & goal,
-    const geometry_msgs::msg::Twist & start_vel,
-    const geometry_msgs::msg::Twist & end_vel);
+    const core::Pose2D & start,
+    const core::Pose2D & goal,
+    const core::VelocityCommand & start_vel,
+    const core::VelocityCommand & end_vel);
 
   /**
    * @brief 平滑速度曲线
@@ -174,7 +172,7 @@ public:
    * @param trajectory 轨迹点序列
    * @return ROS Path消息
    */
-  nav_msgs::msg::Path toPathMsg(const std::vector<TrajectoryPoint> & trajectory);
+  core::Path toPathMsg(const std::vector<TrajectoryPoint> & trajectory);
 
   /**
    * @brief 设置轨迹 frame_id
@@ -186,8 +184,8 @@ private:
    * @brief 计算两点之间的距离
    */
   double distance(
-    const geometry_msgs::msg::Pose2D & p1,
-    const geometry_msgs::msg::Pose2D & p2);
+    const core::Pose2D & p1,
+    const core::Pose2D & p2);
 
   /**
    * @brief 规范化角度到 [-pi, pi]
@@ -198,8 +196,8 @@ private:
    * @brief 计算转向角
    */
   double computeSteeringAngle(
-    const geometry_msgs::msg::Pose2D & current,
-    const geometry_msgs::msg::Pose2D & target);
+    const core::Pose2D & current,
+    const core::Pose2D & target);
 
   /**
    * @brief 应用速度限制
@@ -215,7 +213,7 @@ private:
   TrajectoryConfig config_;
   Config simple_config_;
   std::string frame_id_ = "odom";
-  rclcpp::Logger logger_{rclcpp::get_logger("trajectory_generator")};
+  core::Logger logger_{core::Logger("trajectory_generator")};
 };
 
 } // namespace navigation

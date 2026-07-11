@@ -8,8 +8,9 @@
 #include <string>
 #include <cmath>
 
-#include "nav2_util/node_utils.hpp"
 #include "path_smoother.hpp"
+#include "tf2/utils.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 
 
@@ -74,7 +75,6 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_configure(const rclcpp_lifecy
   }
 
   // 初始化组件
-  path_planner_ = std::make_shared<PathPlanner>();
   trajectory_generator_ = std::make_shared<TrajectoryGenerator>();
   trajectory_generator_->setFrameId(global_frame_);
 
@@ -99,7 +99,6 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_activate(const rclcpp_lifecyc
   global_path_pub_->on_activate();
 
   // 激活规划器
-  path_planner_->activate();
 
   // 创建绑定到当前状态的定时器
   initializeTimers();
@@ -125,7 +124,6 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_deactivate(const rclcpp_lifec
   global_path_pub_->on_deactivate();
 
   // 停用规划器
-  path_planner_->deactivate();
 
   // 停止当前导航
   stopNavigation();
@@ -141,7 +139,6 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycl
   RCLCPP_INFO(get_logger(), "Cleaning up rosiwit_navigation node");
 
   // 清理组件
-  path_planner_->cleanup();
   planner_strategy_.reset();
   controller_strategy_.reset();
 
@@ -152,7 +149,6 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_cleanup(const rclcpp_lifecycl
   cmd_vel_pub_.reset();
   path_pub_.reset();
   global_path_pub_.reset();
-  action_server_.reset();
 
   tf_buffer_.reset();
   tf_listener_.reset();
@@ -169,25 +165,25 @@ LifecycleNode::CallbackReturn SmoothNavigation::on_shutdown(const rclcpp_lifecyc
 
 void SmoothNavigation::loadParameters()
 {
-  nav2_util::declare_parameter_if_not_declared(this, "controller_frequency", rclcpp::ParameterValue(20.0));
-  nav2_util::declare_parameter_if_not_declared(this, "planner_frequency", rclcpp::ParameterValue(1.0));
-  nav2_util::declare_parameter_if_not_declared(this, "max_velocity_x", rclcpp::ParameterValue(0.5));
-  nav2_util::declare_parameter_if_not_declared(this, "max_velocity_theta", rclcpp::ParameterValue(1.0));
-  nav2_util::declare_parameter_if_not_declared(this, "min_velocity_x", rclcpp::ParameterValue(-0.5));
-  nav2_util::declare_parameter_if_not_declared(this, "max_accel_x", rclcpp::ParameterValue(0.5));
-  nav2_util::declare_parameter_if_not_declared(this, "max_accel_theta", rclcpp::ParameterValue(1.0));
-  nav2_util::declare_parameter_if_not_declared(this, "goal_tolerance_xy", rclcpp::ParameterValue(0.1));
-  nav2_util::declare_parameter_if_not_declared(this, "goal_tolerance_yaw", rclcpp::ParameterValue(0.1));
-  nav2_util::declare_parameter_if_not_declared(this, "lookahead_distance", rclcpp::ParameterValue(0.6));
-  nav2_util::declare_parameter_if_not_declared(this, "min_lookahead_distance", rclcpp::ParameterValue(0.3));
-  nav2_util::declare_parameter_if_not_declared(this, "max_lookahead_distance", rclcpp::ParameterValue(0.9));
+  this->declare_parameter("controller_frequency", 20.0);
+  this->declare_parameter("planner_frequency", 1.0);
+  this->declare_parameter("max_velocity_x", 0.5);
+  this->declare_parameter("max_velocity_theta", 1.0);
+  this->declare_parameter("min_velocity_x", -0.5);
+  this->declare_parameter("max_accel_x", 0.5);
+  this->declare_parameter("max_accel_theta", 1.0);
+  this->declare_parameter("goal_tolerance_xy", 0.1);
+  this->declare_parameter("goal_tolerance_yaw", 0.1);
+  this->declare_parameter("lookahead_distance", 0.6);
+  this->declare_parameter("min_lookahead_distance", 0.3);
+  this->declare_parameter("max_lookahead_distance", 0.9);
 
-  nav2_util::declare_parameter_if_not_declared(this, "global_frame", rclcpp::ParameterValue(std::string("odom")));
-  nav2_util::declare_parameter_if_not_declared(this, "robot_frame", rclcpp::ParameterValue(std::string("base_link")));
+  this->declare_parameter("global_frame", std::string("odom"));
+  this->declare_parameter("robot_frame", std::string("base_link"));
 
-  nav2_util::declare_parameter_if_not_declared(this, "planner_name", rclcpp::ParameterValue(std::string("astar")));
-  nav2_util::declare_parameter_if_not_declared(this, "controller_name", rclcpp::ParameterValue(std::string("pure_pursuit")));
-  nav2_util::declare_parameter_if_not_declared(this, "inflation_radius", rclcpp::ParameterValue(0.5));
+  this->declare_parameter("planner_name", std::string("astar"));
+  this->declare_parameter("controller_name", std::string("pure_pursuit"));
+  this->declare_parameter("inflation_radius", 0.5);
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -247,13 +243,6 @@ void SmoothNavigation::initializePublishers()
 
 void SmoothNavigation::initializeActionServer()
 {
-  action_server_ = std::make_unique<nav2_util::SimpleActionServer<nav2_msgs::action::NavigateToPose>>(
-    shared_from_this(),
-    "navigate_to_pose",
-    std::bind(&SmoothNavigation::navigateToPoseCallback, this),
-    nullptr,
-    std::chrono::milliseconds(500),
-    true);
 
   RCLCPP_INFO(get_logger(), "Action server initialized");
 }
@@ -291,9 +280,6 @@ void SmoothNavigation::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr
 void SmoothNavigation::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
 {
   current_map_ = msg;
-  if (path_planner_) {
-    path_planner_->setMap(msg);
-  }
   if (planner_strategy_) {
     auto grid = std::make_shared<core::CostmapGrid>();
     grid->info.width = msg->info.width;
@@ -370,25 +356,6 @@ void SmoothNavigation::replanningCheck()
   RCLCPP_DEBUG(get_logger(), "Replanning check");
 }
 
-void SmoothNavigation::navigateToPoseCallback()
-{
-  auto goal = action_server_->get_current_goal();
-
-  RCLCPP_INFO(get_logger(),
-    "Received navigate_to_pose goal: (%.2f, %.2f)",
-    goal->pose.pose.position.x,
-    goal->pose.pose.position.y);
-
-  // 设置目标位姿
-  goal_pose_ = goal->pose;
-
-  // 执行导航
-  executeNavigation(goal_pose_);
-
-  // 设置结果
-  auto result = std::make_shared<nav2_msgs::action::NavigateToPose::Result>();
-  action_server_->succeeded_current(result);
-}
 
 void SmoothNavigation::executeNavigation(const geometry_msgs::msg::PoseStamped & goal)
 {
@@ -436,13 +403,6 @@ void SmoothNavigation::executeNavigation(const geometry_msgs::msg::PoseStamped &
     } else {
       RCLCPP_ERROR(get_logger(), "Planner '%s' failed: %s",
         planner_name_.c_str(), result.error_message().c_str());
-      current_state_ = NavigationState::FAILED;
-      return;
-    }
-  } else {
-    current_path_ = path_planner_->createPlan(current_pose_, goal);
-    if (current_path_.poses.empty()) {
-      RCLCPP_ERROR(get_logger(), "Failed to plan path");
       current_state_ = NavigationState::FAILED;
       return;
     }

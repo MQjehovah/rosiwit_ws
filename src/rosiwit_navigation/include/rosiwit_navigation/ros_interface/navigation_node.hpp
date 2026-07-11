@@ -17,12 +17,9 @@
 #include "nav_msgs/msg/path.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
-#include "nav2_util/simple_action_server.hpp"
-#include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 
-#include "path_planner.hpp"
 #include "trajectory_generator.hpp"
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 #include "rosiwit_navigation/ros_interface/ros_utils.hpp"
@@ -234,14 +231,10 @@ protected:
 
 private:
   // 组件
-  std::shared_ptr<PathPlanner> path_planner_;
   std::shared_ptr<TrajectoryGenerator> trajectory_generator_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-  // Action服务器
-  std::unique_ptr<nav2_util::SimpleActionServer<nav2_msgs::action::NavigateToPose>>
-    action_server_;
 
   // 订阅者
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;

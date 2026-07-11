@@ -8,8 +8,6 @@
 #include <cmath>
 #include <limits>
 
-#include "tf2/utils.hpp"
-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 namespace rosiwit_navigation
 {
@@ -47,42 +45,42 @@ void TrajectoryGenerator::configure(const Config& config)
   // 时间步长安全下限：不低于 0.01s
   if (temp.dt < TrajectoryConstants::kMinDt) {
     temp.dt = TrajectoryConstants::kDefaultDt;
-    RCLCPP_WARN(logger_, "dt=%.6f 过小，重置为默认值 %.3f", config.dt, temp.dt);
+    LOG_WARN(logger_, "dt=%.6f 过小，重置为默认值 %.3f", config.dt, temp.dt);
   }
   // 前视距离合法性检查
   if (temp.min_lookahead_distance > temp.max_lookahead_distance) {
-    RCLCPP_WARN(logger_, "min_lookahead > max_lookahead，交换两者");
+    LOG_WARN(logger_, "min_lookahead > max_lookahead，交换两者");
     std::swap(temp.min_lookahead_distance, temp.max_lookahead_distance);
   }
   simple_config_ = temp;
 }
 
 std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
-  const nav_msgs::msg::Path & path,
-  const geometry_msgs::msg::Twist & current_velocity)
+  const core::Path & path,
+  const core::VelocityCommand & current_velocity)
 {
-  if (path.poses.empty()) {
-    RCLCPP_WARN(logger_, "Cannot generate trajectory from empty path");
+  if (path.points.empty()) {
+    LOG_WARN(logger_, "Cannot generate trajectory from empty path");
     return std::vector<TrajectoryPoint>();
   }
 
   // 检查起始点是否包含 NaN/Inf
-  if (std::isnan(path.poses[0].pose.position.x) ||
-      std::isnan(path.poses[0].pose.position.y) ||
-      std::isinf(path.poses[0].pose.position.x) ||
-      std::isinf(path.poses[0].pose.position.y)) {
-    RCLCPP_ERROR(logger_,
+  if (std::isnan(path.points[0].pose.x) ||
+      std::isnan(path.points[0].pose.y) ||
+      std::isinf(path.points[0].pose.x) ||
+      std::isinf(path.points[0].pose.y)) {
+    LOG_ERROR(logger_,
       "Path start point has NaN/Inf coordinates (%.2f, %.2f)",
-      path.poses[0].pose.position.x, path.poses[0].pose.position.y);
+      path.points[0].pose.x, path.points[0].pose.y);
     return std::vector<TrajectoryPoint>();
   }
 
   // 单点路径：返回仅含起点的轨迹，速度为零
-  if (path.poses.size() == 1) {
+  if (path.points.size() == 1) {
     TrajectoryPoint point;
-    point.x = path.poses[0].pose.position.x;
-    point.y = path.poses[0].pose.position.y;
-    point.theta = tf2::getYaw(path.poses[0].pose.orientation);
+    point.x = path.points[0].pose.x;
+    point.y = path.points[0].pose.y;
+    point.theta = path.points[0].pose.theta;
     point.vx = 0.0;
     point.vtheta = 0.0;
     point.time = 0.0;
@@ -93,14 +91,14 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
   std::vector<TrajectoryPoint> trajectory;
 
   // 初始化当前点
-  geometry_msgs::msg::Pose2D current_pose;
-  current_pose.x = path.poses[0].pose.position.x;
-  current_pose.y = path.poses[0].pose.position.y;
-  current_pose.theta = tf2::getYaw(path.poses[0].pose.orientation);
+  core::Pose2D current_pose;
+  current_pose.x = path.points[0].pose.x;
+  current_pose.y = path.points[0].pose.y;
+  current_pose.theta = path.points[0].pose.theta;
 
   double current_time = 0.0;
-  double current_vel_x = current_velocity.linear.x;
-  double current_vel_theta = current_velocity.angular.z;
+  double current_vel_x = current_velocity.linear_x;
+  double current_vel_theta = current_velocity.angular_z;
 
   // 初始速度裁剪（防止从异常速度开始）
   if (std::isnan(current_vel_x) || std::isinf(current_vel_x)) {
@@ -115,21 +113,21 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
     std::min(config_.max_velocity_theta, current_vel_theta));
 
   // 生成轨迹点
-  for (size_t i = 1; i < path.poses.size(); ++i) {
+  for (size_t i = 1; i < path.points.size(); ++i) {
     // 跳过包含 NaN/Inf 的路径点
-    double px = path.poses[i].pose.position.x;
-    double py = path.poses[i].pose.position.y;
+    double px = path.points[i].pose.x;
+    double py = path.points[i].pose.y;
     if (std::isnan(px) || std::isnan(py) || std::isinf(px) || std::isinf(py)) {
-      RCLCPP_WARN(logger_,
+      LOG_WARN(logger_,
         "Skipping path point[%zu] with NaN/Inf coordinates (%.2f, %.2f)",
         i, px, py);
       continue;
     }
 
-    geometry_msgs::msg::Pose2D target_pose;
+    core::Pose2D target_pose;
     target_pose.x = px;
     target_pose.y = py;
-    target_pose.theta = tf2::getYaw(path.poses[i].pose.orientation);
+    target_pose.theta = path.points[i].pose.theta;
 
     // 计算到下一个点的距离和方向
     double dx = target_pose.x - current_pose.x;
@@ -176,9 +174,9 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
 
   // 添加终点
   TrajectoryPoint final_point;
-  final_point.x = path.poses.back().pose.position.x;
-  final_point.y = path.poses.back().pose.position.y;
-  final_point.theta = tf2::getYaw(path.poses.back().pose.orientation);
+  final_point.x = path.points.back().pose.x;
+  final_point.y = path.points.back().pose.y;
+  final_point.theta = path.points.back().pose.theta;
   final_point.vx = 0.0;
   final_point.vtheta = 0.0;
   final_point.time = current_time;
@@ -203,7 +201,7 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
       pt.theta = normalizeAngle(first.theta + alpha * normalizeAngle(last.theta - first.theta));
       pt.vx = first.vx + alpha * (last.vx - first.vx);
       pt.vtheta = first.vtheta + alpha * (last.vtheta - first.vtheta);
-      pt.time = first.time + i * dt;
+      pt.time = first.time + static_cast<double>(i) * dt;
       trajectory.push_back(pt);
     }
     // 确保终点在轨迹中
@@ -216,37 +214,28 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
 }
 
 std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(
-  const geometry_msgs::msg::Pose2D & start,
-  const geometry_msgs::msg::Pose2D & goal,
-  const geometry_msgs::msg::Twist & start_vel,
-  const geometry_msgs::msg::Twist & end_vel)
+  const core::Pose2D & start,
+  const core::Pose2D & goal,
+  const core::VelocityCommand & start_vel,
+  const core::VelocityCommand & end_vel)
 {
+  (void)end_vel;
   // 创建简化的路径
-  nav_msgs::msg::Path path;
-  path.header.stamp = rclcpp::Clock().now();
-  path.header.frame_id = frame_id_;
+  core::Path path;
 
   // 添加起点
-  geometry_msgs::msg::PoseStamped start_pose;
-  start_pose.header = path.header;
-  start_pose.pose.position.x = start.x;
-  start_pose.pose.position.y = start.y;
-  start_pose.pose.position.z = 0.0;
-  tf2::Quaternion q_start;
-  q_start.setRPY(0, 0, start.theta);
-  start_pose.pose.orientation = tf2::toMsg(q_start);
-  path.poses.push_back(start_pose);
+  core::Pose2D start_pose;
+  start_pose.x = start.x;
+  start_pose.y = start.y;
+  start_pose.theta = start.theta;
+  path.points.push_back(start_pose);
 
   // 添加终点
-  geometry_msgs::msg::PoseStamped goal_pose;
-  goal_pose.header = path.header;
-  goal_pose.pose.position.x = goal.x;
-  goal_pose.pose.position.y = goal.y;
-  goal_pose.pose.position.z = 0.0;
-  tf2::Quaternion q_goal;
-  q_goal.setRPY(0, 0, goal.theta);
-  goal_pose.pose.orientation = tf2::toMsg(q_goal);
-  path.poses.push_back(goal_pose);
+  core::Pose2D goal_pose;
+  goal_pose.x = goal.x;
+  goal_pose.y = goal.y;
+  goal_pose.theta = goal.theta;
+  path.points.push_back(goal_pose);
 
   return generateTrajectory(path, start_vel);
 }
@@ -329,12 +318,12 @@ bool TrajectoryGenerator::validateTrajectory(const std::vector<TrajectoryPoint> 
   // 检查速度是否在合理范围内
   for (const auto & point : trajectory) {
     if (std::abs(point.vx) > config_.max_velocity_x * 1.5) {
-      RCLCPP_WARN(logger_, "Velocity x exceeds limit: %.2f", point.vx);
+      LOG_WARN(logger_, "Velocity x exceeds limit: %.2f", point.vx);
       return false;
     }
 
     if (std::abs(point.vtheta) > config_.max_velocity_theta * 1.5) {
-      RCLCPP_WARN(logger_, "Velocity theta exceeds limit: %.2f", point.vtheta);
+      LOG_WARN(logger_, "Velocity theta exceeds limit: %.2f", point.vtheta);
       return false;
     }
   }
@@ -342,7 +331,7 @@ bool TrajectoryGenerator::validateTrajectory(const std::vector<TrajectoryPoint> 
   // 检查时间是否递增
   for (size_t i = 1; i < trajectory.size(); ++i) {
     if (trajectory[i].time <= trajectory[i - 1].time) {
-      RCLCPP_WARN(logger_, "Time not increasing at point %zu", i);
+      LOG_WARN(logger_, "Time not increasing at point %zu", i);
       return false;
     }
   }
@@ -350,32 +339,26 @@ bool TrajectoryGenerator::validateTrajectory(const std::vector<TrajectoryPoint> 
   return true;
 }
 
-nav_msgs::msg::Path TrajectoryGenerator::toPathMsg(const std::vector<TrajectoryPoint> & trajectory)
+core::Path TrajectoryGenerator::toPathMsg(const std::vector<TrajectoryPoint> & trajectory)
 {
-  nav_msgs::msg::Path path;
-  path.header.stamp = rclcpp::Clock().now();
-  path.header.frame_id = frame_id_;
+  core::Path path;
 
   for (const auto & point : trajectory) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.header = path.header;
-    pose.pose.position.x = point.x;
-    pose.pose.position.y = point.y;
-    pose.pose.position.z = 0.0;
+    core::Pose2D pose;
+    pose.x = point.x;
+    pose.y = point.y;
+    
 
-    tf2::Quaternion q;
-    q.setRPY(0, 0, point.theta);
-    pose.pose.orientation = tf2::toMsg(q);
 
-    path.poses.push_back(pose);
+    path.points.push_back(pose);
   }
 
   return path;
 }
 
 double TrajectoryGenerator::distance(
-  const geometry_msgs::msg::Pose2D & p1,
-  const geometry_msgs::msg::Pose2D & p2)
+  const core::Pose2D & p1,
+  const core::Pose2D & p2)
 {
   return std::sqrt(std::pow(p2.x - p1.x, 2) + std::pow(p2.y - p1.y, 2));
 }
@@ -392,8 +375,8 @@ double TrajectoryGenerator::normalizeAngle(double angle)
 }
 
 double TrajectoryGenerator::computeSteeringAngle(
-  const geometry_msgs::msg::Pose2D & current,
-  const geometry_msgs::msg::Pose2D & target)
+  const core::Pose2D & current,
+  const core::Pose2D & target)
 {
   double dx = target.x - current.x;
   double dy = target.y - current.y;
