@@ -79,6 +79,11 @@ private:
     bool m_have_output = false;
     nav_msgs::msg::Path m_path;
     bool m_grid_map_published = false;
+
+    // EMA 平滑滤波（抑制 LIO 抖动，避免 costmap 中机器人中心跳进 lethal）
+    PoseStamped m_smoothed_pose;
+    bool m_has_smoothed = false;
+    double m_ema_alpha = 0.3;
 };
 
 } // namespace rosiwit_slam

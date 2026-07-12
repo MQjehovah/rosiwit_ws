@@ -231,6 +231,7 @@ protected:
    * @brief 发布路径（用于可视化）
    */
   void publishPath(const nav_msgs::msg::Path & path);
+  void publishLocalCostmap();
 
 private:
   // 组件
@@ -249,10 +250,13 @@ private:
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr global_path_pub_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr global_costmap_pub_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_pub_;
 
   // 定时器
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr replanning_timer_;
+  rclcpp::TimerBase::SharedPtr local_costmap_timer_;
 
   // 状态变量
   std::atomic<NavigationState> current_state_;
@@ -286,6 +290,7 @@ private:
   std::string planner_name_;
   std::string controller_name_;
   double inflation_radius_ = 0.5;
+  double robot_radius_ = 0.21;
 
   // 坐标系
   std::string global_frame_ = "odom";

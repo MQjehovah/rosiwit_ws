@@ -47,7 +47,7 @@ private:
 
     std::vector<Sample> search(const core::Pose2D& pose, const core::VelocityCommand& vel);
     VelocityBounds dynamicWindow(const core::VelocityCommand& vel) const;
-    void simulate(const core::Pose2D& pose, Sample& s) const;
+    core::Pose2D simulate(const core::Pose2D& pose, Sample& s) const;
     double headingCost(const core::Pose2D& pose) const;
     double clearanceCost(const core::Pose2D& pose) const;
     size_t findClosest(const core::Pose2D& pose) const;

@@ -53,6 +53,7 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     planner_cfg.timeout = 2.0;
     planner_strategy_->initialize(planner_cfg);
     planner_strategy_->setInflationRadius(inflation_radius_);
+    planner_strategy_->setRobotRadius(robot_radius_);
     RCLCPP_INFO(get_logger(), "Created planner strategy: %s", planner_name_.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "Planner '%s' not found, falling back to PathPlanner", planner_name_.c_str());
@@ -189,6 +190,7 @@ void NavigationNode::loadParameters()
   this->declare_parameter("planner_name", std::string("astar"));
   this->declare_parameter("controller_name", std::string("pure_pursuit"));
   this->declare_parameter("inflation_radius", 0.5);
+  this->declare_parameter("robot_radius", 0.21);
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -208,6 +210,7 @@ void NavigationNode::loadParameters()
   get_parameter("planner_name", planner_name_);
   get_parameter("controller_name", controller_name_);
   get_parameter("inflation_radius", inflation_radius_);
+  get_parameter("robot_radius", robot_radius_);
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
   RCLCPP_INFO(get_logger(), "  - controller_frequency: %.1f Hz", params_.controller_frequency);
@@ -248,6 +251,11 @@ void NavigationNode::initializePublishers()
   global_path_pub_ = create_publisher<nav_msgs::msg::Path>(
     "/global_path", rclcpp::SystemDefaultsQoS());
 
+  global_costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
+    "/global_costmap", rclcpp::QoS(1).transient_local());
+  local_costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
+    "/local_costmap", rclcpp::QoS(1).transient_local());
+
   RCLCPP_INFO(get_logger(), "Publishers initialized");
 }
 
@@ -268,6 +276,11 @@ void NavigationNode::initializeTimers()
   replanning_timer_ = create_wall_timer(
     std::chrono::milliseconds(static_cast<int>(1000.0 / params_.planner_frequency)),
     std::bind(&NavigationNode::replanningCheck, this));
+
+  // 局部 costmap 发布定时器（10Hz）
+  local_costmap_timer_ = create_wall_timer(
+    std::chrono::milliseconds(100),
+    std::bind(&NavigationNode::publishLocalCostmap, this));
 
   RCLCPP_INFO(get_logger(), "Timers initialized");
 }
@@ -356,6 +369,46 @@ void NavigationNode::updateCostmap()
     }
 
     planner_strategy_->setCostmap(cm);
+
+    // 膨胀并发布 costmap 供 RViz 可视化
+    int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
+    int safety_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
+    std::vector<float> dist(w * h, std::numeric_limits<float>::max());
+    std::queue<std::pair<int,int>> q;
+    for (unsigned int y = 0; y < h; ++y)
+      for (unsigned int x = 0; x < w; ++x)
+        if (cm.data[y * w + x] >= 254) { dist[y * w + x] = 0; q.push({x, y}); }
+    const int dx4[4] = {-1,0,1,0}, dy4[4] = {0,-1,0,1};
+    while (!q.empty()) {
+      auto [cx, cy] = q.front(); q.pop();
+      float cd = dist[cy * w + cx];
+      if (cd >= inflate_cells) continue;
+      for (int i = 0; i < 4; ++i) {
+        int nx = cx + dx4[i], ny = cy + dy4[i];
+        if (nx < 0 || nx >= static_cast<int>(w) || ny < 0 || ny >= static_cast<int>(h)) continue;
+        if (cd + 1 < dist[ny * w + nx]) { dist[ny * w + nx] = cd + 1; q.push({nx, ny}); }
+      }
+    }
+    nav_msgs::msg::OccupancyGrid costmap_msg;
+    costmap_msg.header.frame_id = "map";
+    costmap_msg.header.stamp = now();
+    costmap_msg.info.resolution = res;
+    costmap_msg.info.width = w;
+    costmap_msg.info.height = h;
+    costmap_msg.info.origin.position.x = ox;
+    costmap_msg.info.origin.position.y = oy;
+    costmap_msg.info.origin.orientation.w = 1.0;
+    costmap_msg.data.resize(w * h);
+    float inv = 1.0f / (inflate_cells - safety_cells);
+    for (size_t i = 0; i < w * h; ++i) {
+      if (cm.data[i] >= 254) { costmap_msg.data[i] = 100; continue; }
+      float d = dist[i];
+      if (d <= safety_cells) costmap_msg.data[i] = 100;
+      else if (d <= inflate_cells) costmap_msg.data[i] = static_cast<int8_t>(
+        (1.0f - (d - safety_cells) * inv) * 99);
+      else costmap_msg.data[i] = 0;
+    }
+    global_costmap_pub_->publish(costmap_msg);
   }
 
   // ========== 局部 costmap（机器人周围窗口，给控制器） ==========
@@ -440,6 +493,71 @@ void NavigationNode::updateCostmap()
   }
 
   controller_strategy_->setObstacles(obstacles);
+}
+
+void NavigationNode::publishLocalCostmap()
+{
+  if (!current_map_) return;
+  unsigned int w = current_map_->info.width;
+  unsigned int h = current_map_->info.height;
+  float res = current_map_->info.resolution;
+  double ox = current_map_->info.origin.position.x;
+  double oy = current_map_->info.origin.position.y;
+  double rx = 0, ry = 0;
+  try {
+    auto tf = tf_buffer_->lookupTransform("map", "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
+    rx = tf.transform.translation.x; ry = tf.transform.translation.y;
+  } catch (tf2::TransformException &) { return; }
+  double win_width = 6.0;
+  int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
+  int cx = static_cast<int>((rx - ox) / res);
+  int cy = static_cast<int>((ry - oy) / res);
+  int lw = win_half * 2;
+  nav_msgs::msg::OccupancyGrid local_costmap;
+  local_costmap.header.frame_id = "map";
+  local_costmap.header.stamp = now();
+  local_costmap.info.resolution = res;
+  local_costmap.info.width = lw;
+  local_costmap.info.height = lw;
+  local_costmap.info.origin.position.x = rx - win_width / 2.0;
+  local_costmap.info.origin.position.y = ry - win_width / 2.0;
+  local_costmap.info.origin.orientation.w = 1.0;
+  std::vector<int8_t> raw(lw * lw, 0);
+  for (int dy = -win_half; dy < win_half; ++dy)
+    for (int dx = -win_half; dx < win_half; ++dx) {
+      int mx = cx + dx, my = cy + dy;
+      if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) continue;
+      int gx = dx + win_half, gy = dy + win_half;
+      raw[gy * lw + gx] = (current_map_->data[my * w + mx] >= 100) ? 100 : 0;
+    }
+  int l_inflate = static_cast<int>(std::ceil(inflation_radius_ / res));
+  int l_safety = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
+  std::vector<float> ldist(lw * lw, std::numeric_limits<float>::max());
+  std::queue<std::pair<int,int>> lq;
+  for (int y = 0; y < lw; ++y)
+    for (int x = 0; x < lw; ++x)
+      if (raw[y * lw + x] >= 100) { ldist[y * lw + x] = 0; lq.push({x, y}); }
+  const int ddx[4] = {-1,0,1,0}, ddy[4] = {0,-1,0,1};
+  while (!lq.empty()) {
+    auto [cx2, cy2] = lq.front(); lq.pop();
+    float cd = ldist[cy2 * lw + cx2];
+    if (cd >= l_inflate) continue;
+    for (int i = 0; i < 4; ++i) {
+      int nx = cx2 + ddx[i], ny = cy2 + ddy[i];
+      if (nx < 0 || nx >= lw || ny < 0 || ny >= lw) continue;
+      if (cd + 1 < ldist[ny * lw + nx]) { ldist[ny * lw + nx] = cd + 1; lq.push({nx, ny}); }
+    }
+  }
+  float linv = 1.0f / (l_inflate - l_safety);
+  local_costmap.data.resize(lw * lw);
+  for (int i = 0; i < lw * lw; ++i) {
+    if (raw[i] >= 100) { local_costmap.data[i] = 100; continue; }
+    float d = ldist[i];
+    if (d <= l_safety) local_costmap.data[i] = 100;
+    else if (d <= l_inflate) local_costmap.data[i] = static_cast<int8_t>((1.0f - (d - l_safety) * linv) * 99);
+    else local_costmap.data[i] = 0;
+  }
+  local_costmap_pub_->publish(local_costmap);
 }
 
 void NavigationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)

@@ -84,7 +84,7 @@ namespace AStarConstants {
     constexpr double kStraightCost = 1.0;                    // 直线移动代价
     constexpr double kDiagonalCost = 1.414;                  // 对角线移动代价 (√2)
     constexpr unsigned char kObstacleThreshold = 254;        // 障碍物判定阈值
-    constexpr double kCostFactorScale = 0.5;                 // 代价因子缩放 (0-1)
+    constexpr double kCostFactorScale = 3.0;                 // 梯度代价缩放，越大路径越倾向远离障碍物
     constexpr unsigned char kMaxCost = 255;                  // 最大代价值
     constexpr int kDefaultMaxIterations = 50000;             // 默认最大迭代次数（50K 确保大网格<2s）
     constexpr double kDefaultTimeoutSeconds = 2.0;           // 默认规划超时（秒）
@@ -164,6 +164,7 @@ public:
     bool initialize(const core::PlannerConfig& config) override;
     void setCostmap(const core::Costmap& costmap) override;
     void setInflationRadius(double radius_meters);
+    void setRobotRadius(double radius) { robot_radius_ = radius; }
     core::Result<core::Path> plan(const core::Pose2D& start, const core::Pose2D& goal) override;
     void planAsync(const core::Pose2D& start, const core::Pose2D& goal,
                    std::function<void(const core::Result<core::Path>&)> callback) override;
@@ -190,6 +191,7 @@ private:
     std::vector<int> closed_indices_;                  // 已关闭节点索引（用于快速重置）
     bool use_weighted_heuristic_;                      // 大网格时启用加权启发式
     double inflation_radius_ = 0.5;                    // 障碍物膨胀半径（米）
+    double robot_radius_ = 0.21;                        // 机器人半径（米）
 
     // 性能控制
     int max_iterations_;                               // 最大迭代次数（防止无限循环）

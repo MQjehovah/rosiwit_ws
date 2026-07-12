@@ -112,7 +112,26 @@ void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     }
 }
 
-void SlamNode::onOutput(const SlamOutput& out) { std::lock_guard<std::mutex> lock(m_out_mutex); m_latest = out; m_have_output = true; }
+void SlamNode::onOutput(const SlamOutput& out) {
+  std::lock_guard<std::mutex> lock(m_out_mutex);
+  // EMA 平滑：抑制 LIO 高频抖动
+  if (!m_has_smoothed) {
+    m_smoothed_pose = out.pose;
+    m_has_smoothed = true;
+  } else {
+    double a = m_ema_alpha;
+    m_smoothed_pose.trans = a * out.pose.trans + (1.0 - a) * m_smoothed_pose.trans;
+    Eigen::Quaterniond q_curr(m_smoothed_pose.rot);
+    Eigen::Quaterniond q_next(out.pose.rot);
+    m_smoothed_pose.rot = q_curr.slerp(a, q_next).toRotationMatrix();
+    m_smoothed_pose.time = out.pose.time;
+    m_smoothed_pose.vel = a * out.pose.vel + (1.0 - a) * m_smoothed_pose.vel;
+  }
+  m_latest = out;
+  // 用平滑后的位姿替换原始位姿
+  m_latest.pose = m_smoothed_pose;
+  m_have_output = true;
+}
 
 void SlamNode::timerCB() {
     auto* base = dynamic_cast<SlamBase*>(m_algo.get());

@@ -18,7 +18,7 @@ rosiwit_navigation_node:
 
     # 规划器 / 控制器
     planner_name: "astar"
-    controller_name: "pure_pursuit"
+    controller_name: "dwa"
 
     # 坐标系
     global_frame: "odom"
@@ -33,8 +33,11 @@ rosiwit_navigation_node:
     min_lookahead_distance: 0.4
     max_lookahead_distance: 1.2
 
+    # 机器人半径 (m)
+    robot_radius: 0.30
+
     # 障碍物膨胀半径（路径离障碍物的距离）
-    inflation_radius: 1.5
+    inflation_radius: 1.0
 
     # 里程计话题（Gazebo 纯仿真用 /odom，跑 SLAM 时用 /lio_odom）
     odom_topic: /odom

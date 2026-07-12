@@ -18,7 +18,8 @@ public:
 
   virtual bool initialize(const PlannerConfig & config) = 0;
   virtual void setCostmap(const Costmap & costmap) = 0;
-  virtual void setInflationRadius(double /*radius_meters*/) {}  // optional, default no inflation
+  virtual void setInflationRadius(double /*radius_meters*/) {}  // optional
+  virtual void setRobotRadius(double /*radius*/) {}
   virtual Result<Path> plan(const Pose2D & start, const Pose2D & goal) = 0;
   virtual void planAsync(const Pose2D & start, const Pose2D & goal,
                           std::function<void(const Result<Path> &)> callback) = 0;

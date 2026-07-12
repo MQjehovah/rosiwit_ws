@@ -7,9 +7,9 @@ namespace controllers {
 
 DwaController::DwaController()
     : name_("dwa"), logger_("dwa"), idx_(0),
-      max_vx_(0.5), min_vx_(-0.1), max_vw_(1.0),
-      max_accel_(0.5), max_dvw_(1.0),
-      goal_tol_(0.1), dt_(0.1), sim_time_(1.5),
+      max_vx_(0.25), min_vx_(0.0), max_vw_(0.5),
+      max_accel_(1.0), max_dvw_(2.0),
+      goal_tol_(0.1), dt_(0.1), sim_time_(1.0),
       initialized_(false), goal_reached_(false) {}
 
 DwaController::~DwaController() = default;
@@ -41,15 +41,17 @@ core::VelocityCommand DwaController::computeVelocityCommand(
     auto best = std::min_element(samples.begin(), samples.end(),
         [](const Sample& a, const Sample& b) { return a.cost < b.cost; });
 
-    // Simulate forward to find waypoint index
+    // 平滑推进 idx_，最多 +2 防止前视点跳变
     double px = pose.x, py = pose.y, pt = pose.theta;
+    size_t max_ci = idx_;
     for (double t = 0; t < sim_time_; t += dt_) {
         px += best->v * std::cos(pt) * dt_;
         py += best->v * std::sin(pt) * dt_;
         pt += best->w * dt_;
         size_t ci = findClosest({px, py, pt});
-        if (ci > idx_) idx_ = ci;
+        if (ci > max_ci) max_ci = ci;
     }
+    idx_ = std::min(idx_ + 2, max_ci);
 
     double dxg = path_.points.back().pose.x - pose.x;
     double dyg = path_.points.back().pose.y - pose.y;
@@ -67,7 +69,7 @@ std::vector<DwaController::Sample> DwaController::search(
     const core::Pose2D& pose, const core::VelocityCommand& vel) {
     auto bounds = dynamicWindow(vel);
     std::vector<Sample> samples;
-    int nv = 6, nw = 8;
+    int nv = 10, nw = 10;
     double dv = (bounds.max_vx - bounds.min_vx) / nv;
     double dw_ = (bounds.max_vw - bounds.min_vw) / nw;
 
@@ -76,16 +78,17 @@ std::vector<DwaController::Sample> DwaController::search(
             Sample s;
             s.v = bounds.min_vx + i * dv;
             s.w = bounds.min_vw + j * dw_;
-            simulate(pose, s);
-            s.heading = headingCost({pose.x, pose.y, pose.theta});
-            s.clearance = clearanceCost({pose.x, pose.y, pose.theta});
-            s.velocity = (std::abs(s.v) / max_vx_ + std::abs(s.w) / max_vw_) * 0.5;
+            core::Pose2D end_pose = simulate(pose, s);
+            s.heading = headingCost(end_pose);
             double h = 1.0 - s.heading;
-            double c = 1.0 - std::min(s.clearance / 2.0, 1.0);
-            double v = 1.0 - s.velocity;
-            s.cost = 0.5 * h + 0.3 * c + 0.2 * v;
-            if (s.clearance > 0.01 || s.heading < 0.1)
-                samples.push_back(s);
+            double c = (s.clearance < 0.15) ? 1.0 - s.clearance / 0.15 : 0.0;
+            double v = 1.0 - (std::abs(s.v) / max_vx_ + std::abs(s.w) / max_vw_) * 0.5;
+            // 平滑度：惩罚与当前速度差异大的轨迹，防止左右来回跳
+            double dv_cmd = std::abs(s.v - vel.linear_x) / max_vx_;
+            double dw_cmd = std::abs(s.w - vel.angular_z) / max_vw_;
+            double smooth = (dv_cmd + dw_cmd) * 0.5;
+            s.cost = 0.4 * h + 0.1 * c + 0.4 * v + 0.1 * smooth;
+            samples.push_back(s);
         }
     }
     return samples;
@@ -93,33 +96,44 @@ std::vector<DwaController::Sample> DwaController::search(
 
 DwaController::VelocityBounds DwaController::dynamicWindow(const core::VelocityCommand& vel) const {
     VelocityBounds b;
-    b.min_vx = std::max(min_vx_, vel.linear_x - max_accel_ * dt_);
-    b.max_vx = std::min(max_vx_, vel.linear_x + max_accel_ * dt_);
-    b.min_vw = std::max(-max_vw_, vel.angular_z - max_dvw_ * dt_);
-    b.max_vw = std::min(max_vw_, vel.angular_z + max_dvw_ * dt_);
+    // 用 sim_time_ 而不是 dt_，让动态窗口覆盖整个模拟周期能达到的速度
+    b.min_vx = std::max(min_vx_, vel.linear_x - max_accel_ * sim_time_);
+    b.max_vx = std::min(max_vx_, vel.linear_x + max_accel_ * sim_time_);
+    b.min_vw = std::max(-max_vw_, vel.angular_z - max_dvw_ * sim_time_);
+    b.max_vw = std::min(max_vw_, vel.angular_z + max_dvw_ * sim_time_);
     return b;
 }
 
-void DwaController::simulate(const core::Pose2D& pose, Sample& s) const {
+core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const {
     double px = pose.x, py = pose.y, pt = pose.theta;
-    double min_dist = std::numeric_limits<double>::max();
+    s.clearance = 5.0;  // start with large clearance
     for (double t = 0; t < sim_time_; t += dt_) {
         px += s.v * std::cos(pt) * dt_;
         py += s.v * std::sin(pt) * dt_;
         pt += s.w * dt_;
+        double step_min = 5.0;
         for (const auto& obs : obstacles_) {
             double dx = px - obs.x, dy = py - obs.y;
             double d = std::sqrt(dx * dx + dy * dy) - obs.radius;
-            if (d < min_dist) min_dist = d;
-            if (d < 0.1) { s.clearance = 0; return; }
+            if (d < step_min) step_min = d;
         }
+        // 记录全程最小距离，不提前退出（碰撞后继续模拟，但距离为负时 penalty 递增）
+        if (step_min < s.clearance) s.clearance = step_min;
     }
-    s.clearance = min_dist;
+    return {px, py, pt};
 }
 
 double DwaController::headingCost(const core::Pose2D& pose) const {
     if (path_.points.empty()) return 1;
-    size_t target = std::min(idx_ + 5, path_.points.size() - 1);
+    // 找距离当前位置 0.5m 的前视点，避免用 idx_+3 太近导致抖动
+    size_t target = idx_;
+    double best_dist_diff = std::numeric_limits<double>::max();
+    for (size_t i = idx_; i < path_.points.size(); ++i) {
+        double d = std::sqrt(std::pow(path_.points[i].pose.x - pose.x, 2) +
+                             std::pow(path_.points[i].pose.y - pose.y, 2));
+        double diff = std::abs(d - 0.5);
+        if (diff < best_dist_diff) { best_dist_diff = diff; target = i; }
+    }
     double dx = path_.points[target].pose.x - pose.x;
     double dy = path_.points[target].pose.y - pose.y;
     double goal_angle = std::atan2(dy, dx);
