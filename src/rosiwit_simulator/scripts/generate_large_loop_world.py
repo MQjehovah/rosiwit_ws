@@ -52,7 +52,7 @@ def wall_collision(name, sx, sy, sz):
 
 
 def wall_link(name, sx, sy, sz, px, py, pz, ry=0, r=0.7, g=0.7, b=0.7):
-    ry_str = f"0 -0 {ry}" if ry else "0 -0 0"
+    ry_str = f"0 0 {ry}" if ry else "0 0 0"
     return f"""  <link name='{name}'>
     <pose>{px} {py} {pz} {ry_str}</pose>
     {wall_collision(name, sx, sy, sz)}
@@ -65,19 +65,19 @@ def wall_link(name, sx, sy, sz, px, py, pz, ry=0, r=0.7, g=0.7, b=0.7):
 def box_model(name, sx, sy, sz, px, py, pz, ry=0, r=0.7, g=0.7, b=0.7, static=True):
     """通用盒子模型"""
     static_str = "1" if static else "0"
-    ry_str = f"0 -0 {ry}" if ry else "0 -0 0"
+    ry_str = f"0 0 {ry}" if ry else "0 0 0"
     return f"""  <model name='{name}'>
     <static>{static_str}</static>
     <pose>{px} {py} {pz} {ry_str}</pose>
     <link name='{name}_link'>
       <inertial><mass>1</mass></inertial>
       <collision name='collision'>
-        <pose>0 0 {sz/2} 0 -0 0</pose>
+        <pose>0 0 {sz/2} 0 0 0</pose>
         <geometry><box><size>{sx} {sy} {sz}</size></box></geometry>
         <surface><contact><ode/></contact><bounce/></surface>
       </collision>
       <visual name='visual'>
-        <pose>0 0 {sz/2} 0 -0 0</pose>
+        <pose>0 0 {sz/2} 0 0 0</pose>
         <geometry><box><size>{sx} {sy} {sz}</size></box></geometry>
         <material>
           <ambient>{r} {g} {b} 1</ambient>
@@ -92,7 +92,7 @@ def box_model(name, sx, sy, sz, px, py, pz, ry=0, r=0.7, g=0.7, b=0.7, static=Tr
 
 def include_model(name, px, py, pz, ry=0):
     """引用 models/ 中的现有家具模型"""
-    ry_str = f"0 -0 {ry}" if ry else "0 -0 0"
+    ry_str = f"0 0 {ry}" if ry else "0 0 0"
     return f"""  <include>
     <uri>model://{name}</uri>
     <pose>{px} {py} {pz} {ry_str}</pose>
@@ -334,6 +334,24 @@ def generate_world():
         lines.append(box_model(f"feature_pillar_{i}", 1.0, 1.0, 2.0,
                                 mx, my, 0, 0, 0.4, 0.6, 0.2))
 
+    # ============ 庭院内添加一些障碍物/特征 (防止空旷) ============
+    courtyard_obstacles = [
+        # (x, y, size_x, size_y, r, g, b)
+        (0, 0, 2.0, 2.0, 0.5, 0.3, 0.2),      # 中央高台
+        (-12, -6, 1.5, 1.5, 0.6, 0.6, 0.1),    # 黄色方块
+        (12, 6, 1.2, 1.2, 0.2, 0.5, 0.3),       # 绿色方块
+        (-8, 10, 0.8, 2.0, 0.7, 0.3, 0.3),      # 红色长条
+        (10, -8, 2.0, 0.8, 0.3, 0.3, 0.7),      # 蓝色长条
+        (-15, -12, 1.0, 1.0, 0.8, 0.5, 0.2),    # 橙色方块
+        (18, -10, 0.6, 0.6, 0.4, 0.4, 0.4),     # 灰色小柱
+        (-18, 12, 0.6, 0.6, 0.4, 0.4, 0.4),     # 灰色小柱
+        (5, -14, 0.8, 0.8, 0.2, 0.6, 0.6),      # 青色
+        (-5, 14, 0.8, 0.8, 0.6, 0.2, 0.6),      # 紫色
+    ]
+    for i, (ox, oy, sx, sy, cr, cg, cb) in enumerate(courtyard_obstacles):
+        lines.append(box_model(f"courtyard_obj_{i}", sx, sy, 0.5,
+                                ox, oy, 0.25, 0, cr, cg, cb))
+
     # ============ 添加一些现有家具模型 ============
     extra_furniture = [
         ("Vase_01", -8, -18, 0, 0),
@@ -351,7 +369,7 @@ def generate_world():
     # ============ Gui 相机 ============
     lines.append("""    <gui fullscreen='0'>
       <camera name='user_camera'>
-        <pose>0 -35 30 0 1.2 0</pose>
+        <pose>30 -25 35 0 1.0 -0.8</pose>
         <view_controller>orbit</view_controller>
         <projection_type>perspective</projection_type>
       </camera>

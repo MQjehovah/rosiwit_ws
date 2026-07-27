@@ -1,11 +1,13 @@
 import os
+import tempfile
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable, OpaqueFunction, TimerAction, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, Command
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
+import xacro
 
 
 def generate_launch_description():
@@ -20,24 +22,17 @@ def generate_launch_description():
         value=os.path.join(simulator_dir, 'models')
     )
 
-    # 参数
     world_name_arg = DeclareLaunchArgument(
         'world_name',
-        default_value=os.path.join(simulator_dir, 'world', 'house.world')
+        default_value=os.path.join(simulator_dir, 'world', 'large.world')
     )
     use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='true')
     gui_arg = DeclareLaunchArgument('gui', default_value='true')
     paused_arg = DeclareLaunchArgument('paused', default_value='false')
     headless_arg = DeclareLaunchArgument('headless', default_value='false')
     debug_arg = DeclareLaunchArgument('debug', default_value='false')
-    use_3d_lidar_arg = DeclareLaunchArgument('use_3d_lidar', default_value='false')
-    run_slam_arg = DeclareLaunchArgument('run_slam', default_value='false')
-    drive_mode_arg = DeclareLaunchArgument('drive_mode', default_value='explore')
-    drive_duration_arg = DeclareLaunchArgument('drive_duration', default_value='180.0')
-    enable_backend_arg = DeclareLaunchArgument('enable_backend', default_value='true')
-    backend_type_arg = DeclareLaunchArgument('backend_type', default_value='ceres_pose_graph')
+    use_3d_lidar_arg = DeclareLaunchArgument('use_3d_lidar', default_value='true')
 
-    # Gazebo
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(gazebo_ros_dir, 'launch', 'gazebo.launch.py')
@@ -53,91 +48,53 @@ def generate_launch_description():
     )
 
     # 机器人模型
-    def launch_robot(context):
-        use_3d = context.launch_configurations.get('use_3d_lidar', 'false')
-        xacro_name = 'mbot_with_lidar3d_gazebo.xacro' if use_3d == 'true' else 'mbot_with_fisheye_gazebo.xacro'
-        xacro_path = os.path.join(simulator_dir, 'urdf', 'xacro', 'gazebo', xacro_name)
-        robot_desc = Command(['xacro ', xacro_path])
-        return [
-            Node(
-                package='robot_state_publisher',
-                executable='robot_state_publisher',
-                output='screen',
-                parameters=[{
-                    'robot_description': ParameterValue(robot_desc, value_type=str),
-                    'publish_frequency': 50.0,
-                }]
-            ),
-            Node(
-                package='gazebo_ros',
-                executable='spawn_entity.py',
-                arguments=['-topic', 'robot_description', '-entity', 'mrobot', '-timeout', '60'],
-                output='screen'
-            ),
-        ]
+    use_3d = LaunchConfiguration('use_3d_lidar')
+    xacro_file_default = os.path.join(simulator_dir, 'urdf', 'xacro', 'gazebo', 'mbot_with_fisheye_gazebo.xacro')
+    xacro_file_3d = os.path.join(simulator_dir, 'urdf', 'xacro', 'gazebo', 'mbot_with_lidar3d_gazebo.xacro')
 
-    # rosiwit_slam
-    slam_config_path = os.path.join(
-        get_package_share_directory('rosiwit_slam'), 'config', 'sim_vlp16.yaml'
-    )
+    # 先用 3D 版本
+    xacro_file = xacro_file_3d
+    robot_description_content = xacro.process_file(xacro_file).toxml()
 
-    slam_node = Node(
-        package='rosiwit_slam',
-        executable='rosiwit_slam',
-        name='rosiwit_slam',
-        output='screen',
-        parameters=[{
-            'config_path': slam_config_path,
-            'use_sim_time': True,
-            'lidar_topic': '/velodyne_points',
-            'imu_topic': '/imu',
-            'slam_algorithm': 'fast_lio2_pipeline',
-        }],
-    )
-    slam_delayed = TimerAction(
-        period=3.0,
-        actions=[slam_node],
-        condition=IfCondition(LaunchConfiguration('run_slam'))
-    )
+    tmp_urdf = tempfile.NamedTemporaryFile(mode='w', suffix='.urdf', delete=False)
+    tmp_urdf.write(robot_description_content)
+    tmp_urdf.close()
 
-    # 自动驾驶
-    auto_drive = Node(
-        package='rosiwit_simulator',
-        executable='sim_drive.py',
-        name='auto_driver',
-        output='screen',
-        parameters=[{
-            'use_sim_time': True,
-            'linear_speed': 0.5,
-            'angular_speed': 0.3,
-            'mode': LaunchConfiguration('drive_mode'),
-            'duration': LaunchConfiguration('drive_duration'),
-        }],
-        condition=IfCondition(LaunchConfiguration('run_slam'))
-    )
-
-    # 地图保存
-    save_map = ExecuteProcess(
-        cmd=['bash', '-c',
-             'sleep 180 && '
-             'ros2 service call /save_map rosiwit_slam/srv/SaveMap '
-             '"{path: /tmp/large_loop_map.pcd}" && '
-             'ros2 service call /save_grid_map rosiwit_slam/srv/SaveGridMap '
-             '"{pgm_path: /tmp/large_loop_grid.pgm, yaml_path: /tmp/large_loop_grid.yaml, resolution: 0.05}" || '
-             'echo "map save done"',
+    spawn_model = Node(
+        package='gazebo_ros',
+        executable='spawn_entity.py',
+        arguments=[
+            '-entity', 'mrobot',
+            '-file', tmp_urdf.name,
+            '-timeout', '60'
         ],
+        output='screen'
+    )
+
+    joint_state_publisher = Node(
+        package='joint_state_publisher',
+        executable='joint_state_publisher',
+        name='joint_state_publisher',
+        parameters=[{'robot_description': robot_description_content}]
+    )
+
+    robot_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
         output='screen',
-        condition=IfCondition(LaunchConfiguration('run_slam'))
+        parameters=[{
+            'robot_description': robot_description_content,
+            'publish_frequency': 50.0,
+        }]
     )
 
     return LaunchDescription([
         set_gazebo_model_path,
         world_name_arg, use_sim_time_arg, gui_arg, paused_arg, headless_arg, debug_arg,
-        use_3d_lidar_arg, run_slam_arg, drive_mode_arg, drive_duration_arg,
-        enable_backend_arg, backend_type_arg,
+        use_3d_lidar_arg,
         gazebo,
-        OpaqueFunction(function=launch_robot),
-        slam_delayed,
-        auto_drive,
-        save_map,
+        spawn_model,
+        joint_state_publisher,
+        robot_state_publisher,
     ])
