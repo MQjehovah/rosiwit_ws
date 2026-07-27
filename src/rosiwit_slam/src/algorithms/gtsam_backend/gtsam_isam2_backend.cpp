@@ -108,7 +108,7 @@ bool GtsamIsam2Backend::optimize() {
     for (size_t i = m_last_opt_size; i < N; ++i) {
         if (i == 0) {
             // 首帧: 先验因子 (固定初始位姿)
-            gtsam::Matrix66 prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
+            auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
                 (gtsam::Vector6() << 1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6).finished());
             m_graph->emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
                 X(0), toGtsamPose(m_keyframes[0].pose), prior_noise);
@@ -130,7 +130,9 @@ bool GtsamIsam2Backend::optimize() {
         }
 
         // 初始值
-        m_initial_estimates->insert(X(i), toGtsamPose(m_keyframes[i].pose));
+        if (!m_initial_estimates->exists(X(i))) {
+            m_initial_estimates->insert(X(i), toGtsamPose(m_keyframes[i].pose));
+        }
     }
 
     // === 2. 添加回环约束 ===
@@ -160,8 +162,10 @@ bool GtsamIsam2Backend::optimize() {
 
     // === 3. iSAM2 增量更新 ===
     try {
-        m_isam2->update(*m_graph, *m_initial_estimates);
-        m_isam2->update();  // 第二次 update 触发重线性化
+        if (m_graph->size() > 0) {
+            m_isam2->update(*m_graph, *m_initial_estimates);
+            m_isam2->update();
+        }
 
         gtsam::Values result = m_isam2->calculateEstimate();
 

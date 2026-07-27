@@ -66,6 +66,8 @@ def generate_launch_description():
         arguments=[
             '-entity', 'mrobot',
             '-file', tmp_urdf.name,
+            '-x', '0', '-y', '-18', '-z', '0.1',
+            '-Y', '1.57',
             '-timeout', '60'
         ],
         output='screen'

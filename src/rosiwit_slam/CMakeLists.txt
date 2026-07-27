@@ -277,6 +277,10 @@ if(BUILD_TESTING)
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/point_lio/point_lio_frontend.cpp)
+        if(GTSAM_FOUND)
+            target_sources(test_slam_factory PRIVATE src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp)
+            target_link_libraries(test_slam_factory gtsam)
+        endif()
         install(TARGETS test_slam_factory DESTINATION lib/${PROJECT_NAME})
 
         # SlamPipeline orchestrator test
@@ -310,6 +314,10 @@ if(BUILD_TESTING)
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/point_lio/point_lio_frontend.cpp)
+        if(GTSAM_FOUND)
+            target_sources(test_slam_pipeline PRIVATE src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp)
+            target_link_libraries(test_slam_pipeline gtsam)
+        endif()
         install(TARGETS test_slam_pipeline DESTINATION lib/${PROJECT_NAME})
 
     else()

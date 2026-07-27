@@ -7,8 +7,8 @@ pipeline_mode: mapping          # mapping | localization | idle
 
 modules:
   frontend: "fast_lio2_frontend"
-  backend: ""
-  loop_closure: ""
+  backend: "gtsam_isam2"
+  loop_closure: "scan_context"
   map_manager: "pcd_map_manager"
   localization: "gicp_localization"
 
@@ -21,8 +21,8 @@ lidar_filter_num: 3
 lidar_min_range: 0.5
 lidar_max_range: 100.0
 scan_period_ms: 100.0       # LiDAR 扫描周期 (ms), 用于计算各点时间戳
-scan_resolution: 0.15
-map_resolution: 0.3
+scan_resolution: 0.5
+map_resolution: 0.5
 
 cube_len: 300
 det_range: 60

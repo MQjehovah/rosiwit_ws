@@ -94,7 +94,7 @@ bool PcdMapManager::addSubMap(const KeyFrame& kf) {
 
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(global_map_);
-    vg.setLeafSize(0.1f, 0.1f, 0.1f);
+    vg.setLeafSize(0.5f, 0.5f, 0.5f);
     CloudType::Ptr filtered(new CloudType());
     vg.filter(*filtered);
     global_map_ = filtered;
