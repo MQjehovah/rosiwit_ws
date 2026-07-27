@@ -19,8 +19,8 @@ def generate_launch_description():
         'use_sim_time', default_value='false')
 
     use_rviz_arg = DeclareLaunchArgument(
-        'use_rviz', default_value='false',
-        description='Launch rviz2 with the package rviz config (subscribes cloud_map to trigger publishing)')
+        'use_rviz', default_value='true',
+        description='Launch rviz2 with the package rviz config')
 
     lidar_topic_arg = DeclareLaunchArgument(
         'lidar_topic', default_value='/velodyne_points')
@@ -30,6 +30,7 @@ def generate_launch_description():
 
     from ament_index_python.packages import get_package_share_directory
     pkg_share = get_package_share_directory('rosiwit_slam')
+    
     config_default = os.path.join(pkg_share, 'config', 'default.yaml')
     rviz_config = os.path.join(pkg_share, 'rviz', 'slam.rviz')
 

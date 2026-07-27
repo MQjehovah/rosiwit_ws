@@ -28,11 +28,11 @@ cube_len: 300
 det_range: 60
 move_thresh: 1.5
 
-na: 0.01
-ng: 0.01
-nba: 0.0001
-nbg: 0.0001
-imu_init_num: 20
+na: 0.001
+ng: 0.001
+nba: 0.00001
+nbg: 0.00001
+imu_init_num: 200
 near_search_num: 5
 ieskf_max_iter: 5
 
@@ -40,4 +40,4 @@ gravity_align: true
 esti_il: false
 r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 t_il: [0.0, 0.0, 0.0905]
-lidar_cov_inv: 1000.0
+lidar_cov_inv: 5000.0

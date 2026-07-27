@@ -1,26 +1,30 @@
 Panels:
   - Class: rviz_common/Displays
+    Help Height: 70
     Name: Displays
     Property Tree Widget:
       Expanded:
         - /Global Options1
-        - /Status1
+        - /Global Map1
       Splitter Ratio: 0.5
+    Tree Height: 302
   - Class: rviz_common/Views
-    Name: Views
     Expanded:
       - /Current View1
-
+    Name: Views
+    Splitter Ratio: 0.5
 Visualization Manager:
   Class: ""
   Displays:
-    - Class: rviz_default_plugins/Grid
-      Name: Grid
+    - Alpha: 0.5
       Cell Size: 1
+      Class: rviz_default_plugins/Grid
       Color: 160; 160; 160
+      Enabled: true
       Line Style:
-        Line Width: 0.03
+        Line Width: 0.029999999329447746
         Value: Lines
+      Name: Grid
       Normal Cell Count: 10
       Offset:
         X: 0
@@ -30,111 +34,193 @@ Visualization Manager:
       Plane Cell Count: 10
       Reference Frame: <Fixed Frame>
       Value: true
-
     - Class: rviz_default_plugins/TF
-      Name: TF
       Enabled: true
       Frame Timeout: 15
       Frames:
         All Enabled: true
+        back_caster_link:
+          Value: true
+        base_footprint:
+          Value: true
+        base_link:
+          Value: true
+        front_caster_link:
+          Value: true
+        imu_link:
+          Value: true
+        left_wheel_link:
+          Value: true
+        lidar_link:
+          Value: true
+        map:
+          Value: true
+        odom:
+          Value: true
+        right_wheel_link:
+          Value: true
+      Marker Scale: 1
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Tree:
+        map:
+          odom:
+            base_link:
+              back_caster_link:
+                {}
+              front_caster_link:
+                {}
+              imu_link:
+                {}
+              left_wheel_link:
+                {}
+              lidar_link:
+                {}
+              right_wheel_link:
+                {}
       Update Interval: 0
       Value: true
-
-    - Class: rviz_default_plugins/Odometry
+    - Angle Tolerance: 0.10000000149011612
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.30000001192092896
+          Color: 204; 51; 204
+          Scale: 1
+          Value: true
+        Value: true
+      Enabled: true
+      Keep: 100
       Name: Odometry
+      Position Tolerance: 0.10000000149011612
+      Shape:
+        Alpha: 1
+        Axes Length: 1
+        Axes Radius: 0.10000000149011612
+        Color: 255; 25; 0
+        Head Length: 0.30000001192092896
+        Head Radius: 0.10000000149011612
+        Shaft Length: 1
+        Shaft Radius: 0.05000000074505806
+        Value: Arrow
       Topic:
         Depth: 5
         Durability Policy: Volatile
+        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /lio_odom
-      Color: 0; 255; 0
-      Enabled: true
-      Keep: 100
-      Position Tolerance: 0.1
-      Shape:
-        Value: Arrow
       Value: true
-
-    - Class: rviz_default_plugins/Path
-      Name: Path
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /lio_path
-      Alpha: 1
+    - Alpha: 1
       Buffer Length: 1
+      Class: rviz_default_plugins/Path
       Color: 255; 0; 0
       Enabled: true
-      Head Diameter: 0.3
-      Head Length: 0.2
-      Length: 0.3
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
       Line Style: Lines
-      Line Width: 0.03
+      Line Width: 0.029999999329447746
+      Name: Path
       Offset:
         X: 0
         Y: 0
         Z: 0
       Pose Color: 255; 85; 255
       Pose Style: None
-      Radius: 0.03
-      Shaft Diameter: 0.1
-      Shaft Length: 0.1
-      Value: true
-
-    - Class: rviz_default_plugins/PointCloud2
-      Name: Global Map
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
       Topic:
         Depth: 5
         Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /lio_path
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 2.4108383655548096
+        Min Value: -0.8421649932861328
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: AxisColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 0
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: Global Map
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 2
+      Size (m): 0.10000000149011612
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /cloud_map
-      Alpha: 1
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+    - Alpha: 1
       Autocompute Intensity Bounds: true
-      Color: 255; 255; 255
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 0; 255; 255
       Color Transformer: Intensity
       Decay Time: 0
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
+      Max Intensity: 0
       Min Color: 0; 0; 0
-      Name: Global Map
+      Min Intensity: 0
+      Name: World Cloud
       Position Transformer: XYZ
       Selectable: true
-      Size (Pixels): 2
-      Size (m): 0.01
-      Style: Flat Squares
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: true
-
-    - Class: rviz_default_plugins/PointCloud2
-      Name: World Cloud
+      Size (Pixels): 3
+      Size (m): 0.05000000074505806
+      Style: Points
       Topic:
         Depth: 5
         Durability Policy: Volatile
+        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /world_cloud
-      Alpha: 1
-      Autocompute Intensity Bounds: true
-      Color: 0; 255; 255
-      Color Transformer: Intensity
-      Decay Time: 0
-      Enabled: true
+      Use Fixed Frame: true
       Use rainbow: true
-      Size (Pixels): 3
-      Size (m): 0.05
-      Style: Points
       Value: true
-
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: odom
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:
@@ -144,19 +230,13 @@ Visualization Manager:
   Transformation:
     Current:
       Class: rviz_default_plugins/TF
-      Enabled: true
-      Frame Timeout: 15
-      Frames:
-        All Enabled: true
-      Update Interval: 0
-      Value: true
   Value: true
   Views:
     Current:
       Class: rviz_default_plugins/ThirdPersonFollower
-      Distance: 15
+      Distance: 21.07391929626465
       Enable Stereo Rendering:
-        Stereo Eye Separation: 0.06
+        Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
@@ -165,23 +245,24 @@ Visualization Manager:
         Y: 0
         Z: 0
       Focal Shape Fixed Size: true
-      Focal Shape Size: 0.05
-      Invert Focal Plane: false
+      Focal Shape Size: 0.05000000074505806
+      Invert Z Axis: false
       Name: Current View
-      Near Clip Distance: 0.01
+      Near Clip Distance: 0.009999999776482582
       Pitch: 0.5
       Target Frame: base_link
       Value: ThirdPersonFollower (rviz)
-      Yaw: 3.14
-
+      Yaw: 3.140000104904175
+    Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
   Height: 800
   Hide Left Dock: false
   Hide Right Dock: true
+  QMainWindow State: 000000ff00000000fd00000001000000000000019b000002cafc0200000002fb000000100044006900730070006c006100790073010000003b000001af000000c700fffffffb0000000a0056006900650077007301000001f000000115000000a000ffffff0000030f000002ca00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Views:
-    collapsed: true
+    collapsed: false
   Width: 1200
-  X: 100
-  Y: 100
+  X: 2740
+  Y: 47

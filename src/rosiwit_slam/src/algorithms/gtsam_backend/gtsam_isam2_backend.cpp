@@ -108,9 +108,9 @@ bool GtsamIsam2Backend::optimize() {
         if (kf.added_to_graph && !kf.dirty) continue;
 
         if (i == 0 && !kf.added_to_graph) {
-            // 首帧: 先验因子 (只加一次)
-            auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
-                (gtsam::Vector6() << 1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6).finished());
+            // 首帧: 先验因子, 极强约束固定初始位姿
+            auto prior_noise = gtsam::noiseModel::Diagonal::Variances(
+                (gtsam::Vector6() << 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12).finished());
             m_graph->emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
                 X(0), toGtsamPose(kf.pose), prior_noise);
             if (!m_initial_estimates->exists(X(0))) {
@@ -125,9 +125,8 @@ bool GtsamIsam2Backend::optimize() {
             gtsam::Pose3 dPose = toGtsamPose(prev_kf.pose).between(toGtsamPose(kf.pose));
 
             gtsam::Vector6 odom_noise_vec;
-            odom_noise_vec << m_odom_trans_noise, m_odom_trans_noise, m_odom_trans_noise,
-                              m_odom_rot_noise, m_odom_rot_noise, m_odom_rot_noise;
-            auto odom_noise = gtsam::noiseModel::Diagonal::Sigmas(odom_noise_vec);
+            odom_noise_vec << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4;
+            auto odom_noise = gtsam::noiseModel::Diagonal::Variances(odom_noise_vec);
 
             m_graph->emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
                 X(i-1), X(i), dPose, odom_noise);
@@ -154,10 +153,10 @@ bool GtsamIsam2Backend::optimize() {
                           c.relative_pose.trans.z()));
 
         gtsam::Vector6 lc_noise_vec;
-        lc_noise_vec << m_lc_trans_noise, m_lc_trans_noise, m_lc_trans_noise,
-                        m_lc_rot_noise, m_lc_rot_noise, m_lc_rot_noise;
-        double weight = 1.0 / std::max(c.cov, 0.01);
-        auto lc_noise = gtsam::noiseModel::Diagonal::Sigmas(lc_noise_vec * weight);
+        lc_noise_vec << 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5;
+        auto lc_noise = gtsam::noiseModel::Robust::Create(
+            gtsam::noiseModel::mEstimator::Cauchy::Create(1),
+            gtsam::noiseModel::Diagonal::Variances(lc_noise_vec));
 
         m_graph->emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
             X(from_it->second), X(to_it->second), rel_pose, lc_noise);
@@ -170,7 +169,7 @@ bool GtsamIsam2Backend::optimize() {
 
     try {
         m_isam2->update(*m_graph, *m_initial_estimates);
-        m_isam2->update();
+        for (int i = 0; i < 5; ++i) m_isam2->update();
 
         gtsam::Values result = m_isam2->calculateEstimate();
 
