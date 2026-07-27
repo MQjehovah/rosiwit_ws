@@ -8,7 +8,8 @@ public:
     virtual ~ILoopClosure() = default;
     virtual bool init(const std::string& config_path) = 0;
     virtual void addKeyFrame(const KeyFrame& kf) = 0;
-    virtual bool detect(PoseStamped& relative_pose, double& cov) = 0;
+    virtual bool detect(PoseStamped& relative_pose, double& cov,
+                        std::string& matched_kf_id) = 0;
 };
 
 } // namespace rosiwit_slam

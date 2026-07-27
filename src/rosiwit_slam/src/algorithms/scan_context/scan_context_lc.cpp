@@ -4,6 +4,7 @@
 #include <fstream>
 #include <algorithm>
 #include <pcl/common/transforms.h>
+#include <pcl/filters/voxel_grid.h>
 
 #ifndef YAML_CPP_DISABLED
 #include <yaml-cpp/yaml.h>
@@ -14,7 +15,7 @@ namespace rosiwit_slam {
 bool ScanContextLoopClosure::init(const std::string& config_path) {
     std::ifstream fin(config_path);
     if (!fin.good()) {
-        std::cerr << "[ScanContextLC_v2] Config not found, using defaults" << std::endl;
+        std::cerr << "[ScanContextLC] Config not found, using defaults" << std::endl;
     } else {
 #ifndef YAML_CPP_DISABLED
         try {
@@ -24,6 +25,8 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                 m_min_keyframe_gap  = lc["sc_min_keyframe_gap"].as<int>(m_min_keyframe_gap);
                 m_dist_thresh       = lc["sc_dist_thresh"].as<double>(m_dist_thresh);
                 m_candidate_ratio   = lc["sc_candidate_ratio"].as<double>(m_candidate_ratio);
+                m_icp_fitness_thresh = lc["icp_fitness_thresh"].as<float>(m_icp_fitness_thresh);
+                m_icp_max_corr_dist  = lc["icp_max_corr_dist"].as<float>(m_icp_max_corr_dist);
 
                 ScanContext::Config sc_cfg;
                 sc_cfg.num_rings   = lc["sc_num_rings"].as<int>(sc_cfg.num_rings);
@@ -35,26 +38,27 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                 m_cfg_max_radius = sc_cfg.max_radius;
             }
         } catch (const std::exception& e) {
-            std::cerr << "[ScanContextLC_v2] Config parse error: " << e.what() << std::endl;
+            std::cerr << "[ScanContextLC] Config parse error: " << e.what() << std::endl;
             return false;
         }
 #endif
     }
 
-    std::cout << "[ScanContextLC_v2] Initialized (rings=" << m_cfg_num_rings
+    std::cout << "[ScanContextLC] Initialized (rings=" << m_cfg_num_rings
               << ", sectors=" << m_cfg_num_sectors
               << ", max_r=" << m_cfg_max_radius
-              << ", dist_thresh=" << m_dist_thresh << ")" << std::endl;
+              << ", dist_thresh=" << m_dist_thresh
+              << ", icp_fitness<" << m_icp_fitness_thresh << ")" << std::endl;
     return true;
 }
 
 void ScanContextLoopClosure::addKeyFrame(const KeyFrame& kf) {
     if (!kf.cloud || kf.cloud->empty()) return;
 
-    // 构造描述符
     KeyFrameRecord rec;
     rec.id = kf.id;
     rec.pose = kf.pose;
+    rec.cloud = kf.cloud;
     rec.desc = m_sc.makeDescriptor(kf.cloud);
     rec.has_descriptor = true;
 
@@ -62,103 +66,130 @@ void ScanContextLoopClosure::addKeyFrame(const KeyFrame& kf) {
     m_keyframes.push_back(std::move(rec));
 }
 
-bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov) {
+bool ScanContextLoopClosure::icpVerify(
+    const CloudType::Ptr& src, const CloudType::Ptr& tgt,
+    const Eigen::Matrix4f& init_guess,
+    Eigen::Matrix4f& out_delta, float& out_fitness)
+{
+    // 降采样
+    auto downsample = [&](const CloudType::Ptr& in) -> CloudType::Ptr {
+        CloudType::Ptr out(new CloudType);
+        pcl::VoxelGrid<PointType> vg;
+        vg.setInputCloud(in);
+        vg.setLeafSize(0.5f, 0.5f, 0.5f);
+        vg.filter(*out);
+        return out;
+    };
+
+    auto src_down = downsample(src);
+    auto tgt_down = downsample(tgt);
+
+    if (src_down->size() < 10 || tgt_down->size() < 10) return false;
+
+    pcl::GeneralizedIterativeClosestPoint<PointType, PointType> gicp;
+    gicp.setInputSource(src_down);
+    gicp.setInputTarget(tgt_down);
+    gicp.setMaxCorrespondenceDistance(m_icp_max_corr_dist);
+    gicp.setMaximumIterations(m_icp_max_iter);
+    gicp.setTransformationEpsilon(1e-8);
+    gicp.setEuclideanFitnessEpsilon(1e-6);
+
+    CloudType aligned;
+    gicp.align(aligned, init_guess);
+
+    if (!gicp.hasConverged()) return false;
+
+    out_fitness = gicp.getFitnessScore();
+    out_delta = gicp.getFinalTransformation();
+
+    return out_fitness < m_icp_fitness_thresh;
+}
+
+bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
+                                     std::string& matched_kf_id) {
     if (m_keyframes.size() < static_cast<size_t>(m_min_keyframe_gap + 1)) {
         return false;
     }
 
     const auto& latest = m_keyframes.back();
-    if (!latest.has_descriptor) return false;
+    if (!latest.has_descriptor || !latest.cloud) return false;
 
     size_t latest_idx = m_keyframes.size() - 1;
-    size_t search_start = 0;  // 从头开始搜索
+    size_t search_start = 0;
 
-    // === 1. RingKey 快速筛选候选 ===
-    struct Candidate {
-        size_t idx;
-        double rk_dist;
-    };
+    // === 1. RingKey 快速筛选 ===
+    struct Candidate { size_t idx; double rk_dist; };
     std::vector<Candidate> candidates;
 
     for (size_t i = search_start; i < latest_idx - m_min_keyframe_gap; ++i) {
         if (!m_keyframes[i].has_descriptor) continue;
 
-        // 检查是否已检测过
-        bool already_detected = false;
+        bool already = false;
         for (const auto& loop : m_detected_loops) {
-            if (loop.first == i && loop.second == latest_idx) {
-                already_detected = true;
-                break;
-            }
+            if (loop.first == i && loop.second == latest_idx) { already = true; break; }
         }
-        if (already_detected) continue;
+        if (already) continue;
 
         double rk_dist = ScanContext::ringKeyDistance(
             m_keyframes[i].desc.ring_key, latest.desc.ring_key);
         candidates.push_back({i, rk_dist});
     }
-
     if (candidates.empty()) return false;
 
-    // 按 RingKey 距离排序, 取 top k
     std::sort(candidates.begin(), candidates.end(),
-              [](const Candidate& a, const Candidate& b) {
-                  return a.rk_dist < b.rk_dist;
-              });
+              [](const Candidate& a, const Candidate& b) { return a.rk_dist < b.rk_dist; });
 
     size_t num_candidates = std::max(1, static_cast<int>(
         candidates.size() * m_candidate_ratio));
     num_candidates = std::min(num_candidates, candidates.size());
 
-    // === 2. 精确描述符匹配 ===
-    double best_dist = m_dist_thresh;  // 只有比阈值更好的才接受
-    int best_candidate_idx = -1;
+    // === 2. 精确描述符匹配 + ICP 验证 ===
+    int best_idx = -1;
     int best_col_shift = 0;
+    double best_desc_dist = m_dist_thresh;
 
     for (size_t ci = 0; ci < num_candidates; ++ci) {
         const auto& cand = candidates[ci];
         const auto& cand_rec = m_keyframes[cand.idx];
 
         int col_shift = 0;
-        double d = ScanContext::distance(cand_rec.desc, latest.desc, &col_shift);
+        double desc_d = ScanContext::distance(cand_rec.desc, latest.desc, &col_shift);
+        if (desc_d >= best_desc_dist) continue;
 
-        if (d < best_dist) {
-            best_dist = d;
-            best_candidate_idx = static_cast<int>(cand.idx);
+        // ICP 验证
+        double yaw_diff = 2.0 * M_PI * col_shift / m_cfg_num_sectors;
+        Eigen::Matrix4f init_guess = Eigen::Matrix4f::Identity();
+        init_guess.block<3,3>(0,0) = Eigen::AngleAxisf(yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
+
+        Eigen::Matrix4f delta;
+        float fitness;
+        if (icpVerify(latest.cloud, cand_rec.cloud, init_guess, delta, fitness)) {
+            best_desc_dist = desc_d;
+            best_idx = static_cast<int>(cand.idx);
             best_col_shift = col_shift;
         }
     }
 
-    if (best_candidate_idx < 0) return false;
+    if (best_idx < 0) return false;
+
+    const auto& match = m_keyframes[best_idx];
 
     // === 3. 计算相对位姿 ===
-    const auto& match = m_keyframes[best_candidate_idx];
-
-    // 柱偏移 → 旋转角度
-    double yaw_diff = 2.0 * M_PI * best_col_shift / m_cfg_num_sectors;
-
-    // 从两个关键帧的估计位姿计算相对变换
-    // T_candidate_latest = T_candidate^{-1} * T_latest
     Eigen::Matrix3d R_c_inv = match.pose.rot.transpose();
     Eigen::Vector3d t_c_inv = -R_c_inv * match.pose.trans;
 
-    Eigen::Matrix3d R_rel = R_c_inv * latest.pose.rot;
-    Eigen::Vector3d t_rel = R_c_inv * (latest.pose.trans - match.pose.trans);
-
+    matched_kf_id = match.id;
     relative_pose.time = latest.pose.time;
-    relative_pose.rot = R_rel;
-    relative_pose.trans = t_rel;
+    relative_pose.rot = R_c_inv * latest.pose.rot;
+    relative_pose.trans = R_c_inv * (latest.pose.trans - match.pose.trans);
 
-    // 置信度: 距离越小置信度越高
-    cov = std::min(1.0, best_dist / m_dist_thresh);
+    cov = std::min(1.0, best_desc_dist / m_dist_thresh);
 
-    // 记录检测到的回环
-    m_detected_loops.emplace_back(best_candidate_idx, latest_idx);
+    m_detected_loops.emplace_back(best_idx, latest_idx);
 
-    std::cout << "[ScanContextLC_v2] Loop detected: kf_" << best_candidate_idx
+    std::cout << "[ScanContextLC] Loop detected: kf_" << best_idx
               << " <-> kf_" << latest_idx
-              << " (desc_dist=" << best_dist << ", yaw_shift=" << yaw_diff * 180.0 / M_PI << "deg)"
-              << std::endl;
+              << " (desc_dist=" << best_desc_dist << ")" << std::endl;
 
     return true;
 }
