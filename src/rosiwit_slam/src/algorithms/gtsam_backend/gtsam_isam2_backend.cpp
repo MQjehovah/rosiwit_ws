@@ -15,7 +15,6 @@ bool GtsamIsam2Backend::init(const std::string& config_path) {
     if (!fin.good()) {
         std::cerr << "[GtsamIsam2Backend] Config not found: " << config_path
                   << ", using defaults" << std::endl;
-        // 仍初始化, 使用默认参数
     } else {
 #ifndef YAML_CPP_DISABLED
         try {
@@ -53,11 +52,12 @@ bool GtsamIsam2Backend::init(const std::string& config_path) {
 void GtsamIsam2Backend::addKeyFrame(const KeyFrame& kf) {
     if (!m_inited) return;
 
+    // 已存在的关键帧: 更新位姿, 标记需要重新优化
     if (m_kf_index.count(kf.id)) {
-        // 更新已有的关键帧
         KeyFrameNode& node = m_keyframes[m_kf_index[kf.id]];
         node.pose = kf.pose;
         node.timestamp = kf.timestamp;
+        node.dirty = true;
         return;
     }
 
@@ -65,6 +65,8 @@ void GtsamIsam2Backend::addKeyFrame(const KeyFrame& kf) {
     node.id = kf.id;
     node.pose = kf.pose;
     node.timestamp = kf.timestamp;
+    node.added_to_graph = false;
+    node.dirty = false;
     m_kf_index[kf.id] = m_keyframes.size();
     m_keyframes.push_back(node);
 }
@@ -96,29 +98,31 @@ PoseStamped GtsamIsam2Backend::fromGtsamPose(const gtsam::Pose3& gp, double time
 bool GtsamIsam2Backend::optimize() {
     if (!m_inited || m_keyframes.empty()) return false;
 
+    using gtsam::symbol_shorthand::X;
     size_t N = m_keyframes.size();
-    if (N <= m_last_opt_size) {
-        // 无新帧, 但仍处理回环约束
-        if (m_pending_constraints.empty()) return false;
-    }
+    bool has_new_factors = false;
 
-    using gtsam::symbol_shorthand::X;  // X(0), X(1), ...
+    // === 1. 添加未入图的关键帧 ===
+    for (size_t i = 0; i < N; ++i) {
+        auto& kf = m_keyframes[i];
+        if (kf.added_to_graph && !kf.dirty) continue;
 
-    // === 1. 添加新关键帧的初始估计 ===
-    for (size_t i = m_last_opt_size; i < N; ++i) {
-        if (i == 0) {
-            // 首帧: 先验因子 (固定初始位姿)
+        if (i == 0 && !kf.added_to_graph) {
+            // 首帧: 先验因子 (只加一次)
             auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
                 (gtsam::Vector6() << 1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6).finished());
             m_graph->emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(
-                X(0), toGtsamPose(m_keyframes[0].pose), prior_noise);
-        } else {
+                X(0), toGtsamPose(kf.pose), prior_noise);
+            if (!m_initial_estimates->exists(X(0))) {
+                m_initial_estimates->insert(X(0), toGtsamPose(kf.pose));
+            }
+            kf.added_to_graph = true;
+            kf.dirty = false;
+            has_new_factors = true;
+        } else if (i > 0 && !kf.added_to_graph) {
             // 与上一帧的里程计约束
-            const auto& prev = m_keyframes[i-1].pose;
-            const auto& curr = m_keyframes[i].pose;
-
-            // 相对位姿: T_prev_curr = T_prev^{-1} * T_curr
-            gtsam::Pose3 dPose = toGtsamPose(prev).between(toGtsamPose(curr));
+            const auto& prev_kf = m_keyframes[i-1];
+            gtsam::Pose3 dPose = toGtsamPose(prev_kf.pose).between(toGtsamPose(kf.pose));
 
             gtsam::Vector6 odom_noise_vec;
             odom_noise_vec << m_odom_trans_noise, m_odom_trans_noise, m_odom_trans_noise,
@@ -127,11 +131,12 @@ bool GtsamIsam2Backend::optimize() {
 
             m_graph->emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
                 X(i-1), X(i), dPose, odom_noise);
-        }
-
-        // 初始值
-        if (!m_initial_estimates->exists(X(i))) {
-            m_initial_estimates->insert(X(i), toGtsamPose(m_keyframes[i].pose));
+            if (!m_initial_estimates->exists(X(i))) {
+                m_initial_estimates->insert(X(i), toGtsamPose(kf.pose));
+            }
+            kf.added_to_graph = true;
+            kf.dirty = false;
+            has_new_factors = true;
         }
     }
 
@@ -151,25 +156,24 @@ bool GtsamIsam2Backend::optimize() {
         gtsam::Vector6 lc_noise_vec;
         lc_noise_vec << m_lc_trans_noise, m_lc_trans_noise, m_lc_trans_noise,
                         m_lc_rot_noise, m_lc_rot_noise, m_lc_rot_noise;
-        // 置信度加权
         double weight = 1.0 / std::max(c.cov, 0.01);
         auto lc_noise = gtsam::noiseModel::Diagonal::Sigmas(lc_noise_vec * weight);
 
         m_graph->emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
             X(from_it->second), X(to_it->second), rel_pose, lc_noise);
+        has_new_factors = true;
     }
     m_pending_constraints.clear();
 
     // === 3. iSAM2 增量更新 ===
+    if (!has_new_factors) return false;
+
     try {
-        if (m_graph->size() > 0) {
-            m_isam2->update(*m_graph, *m_initial_estimates);
-            m_isam2->update();
-        }
+        m_isam2->update(*m_graph, *m_initial_estimates);
+        m_isam2->update();
 
         gtsam::Values result = m_isam2->calculateEstimate();
 
-        // 更新关键帧位姿
         for (size_t i = 0; i < N; ++i) {
             if (result.exists(X(i))) {
                 gtsam::Pose3 pose = result.at<gtsam::Pose3>(X(i));
@@ -178,15 +182,16 @@ bool GtsamIsam2Backend::optimize() {
             }
         }
 
-        m_last_opt_size = N;
-
-        // 清空已处理的图 (iSAM2 已内部维护)
         m_graph->resize(0);
         m_initial_estimates->clear();
 
+        std::cout << "[GtsamIsam2Backend] Optimized " << N << " keyframes"
+                  << " (added " << m_pending_constraints.size() << " lc)" << std::endl;
         return true;
     } catch (const std::exception& e) {
         std::cerr << "[GtsamIsam2Backend] Optimization failed: " << e.what() << std::endl;
+        m_graph->resize(0);
+        m_initial_estimates->clear();
         return false;
     }
 }

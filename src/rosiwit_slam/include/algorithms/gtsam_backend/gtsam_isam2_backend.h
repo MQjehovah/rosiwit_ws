@@ -48,6 +48,8 @@ private:
         PoseStamped pose;
         int64_t timestamp = 0;
         bool is_optimized = false;
+        bool added_to_graph = false;
+        bool dirty = false;
     };
 
     gtsam::Pose3 toGtsamPose(const PoseStamped& p) const;
