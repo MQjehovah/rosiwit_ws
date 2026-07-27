@@ -13,7 +13,7 @@ modules:
   localization: "gicp_localization"
 
 imu_topic: /imu
-lidar_topic: /velodyne_points
+lidar_topic: /lidar
 body_frame: base_link
 world_frame: odom
 

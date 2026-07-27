@@ -23,7 +23,7 @@ def generate_launch_description():
         description='Launch rviz2 with the package rviz config')
 
     lidar_topic_arg = DeclareLaunchArgument(
-        'lidar_topic', default_value='/velodyne_points')
+        'lidar_topic', default_value='/lidar')
 
     imu_topic_arg = DeclareLaunchArgument(
         'imu_topic', default_value='/imu')
