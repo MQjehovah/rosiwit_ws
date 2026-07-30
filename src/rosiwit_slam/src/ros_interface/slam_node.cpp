@@ -12,6 +12,11 @@ using namespace std::placeholders;
 
 namespace rosiwit_slam {
 
+SlamNode::~SlamNode() {
+    m_process_timer.reset();
+    m_map_timer.reset();
+}
+
 SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_slam", options) {
     loadParameters();
     std::string algo_name = "fast_lio2";
@@ -172,6 +177,7 @@ void SlamNode::publish(const SlamOutput& out) {
         geometry_msgs::msg::PoseStamped ps; ps.header.frame_id = m_cfg.world_frame; ps.header.stamp = stamp;
         ps.pose.position.x = out.pose.trans.x(); ps.pose.position.y = out.pose.trans.y(); ps.pose.position.z = out.pose.trans.z();
         ps.pose.orientation.x = q.x(); ps.pose.orientation.y = q.y(); ps.pose.orientation.z = q.z(); ps.pose.orientation.w = q.w();
+        std::lock_guard<std::mutex> lock(m_out_mutex);
         m_path.poses.push_back(ps); m_path_pub->publish(m_path);
     }
 }
@@ -245,7 +251,10 @@ void SlamNode::handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const 
 }
 
 void SlamNode::handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SetSlamMode::Request> req, std::shared_ptr<rosiwit_slam::srv::SetSlamMode::Response> res) {
-    if (req->mode == "mapping" || req->mode == "localization") { m_have_output = false; m_path.poses.clear(); }
+    if (req->mode == "mapping" || req->mode == "localization") {
+        std::lock_guard<std::mutex> lock(m_out_mutex);
+        m_have_output = false; m_path.poses.clear();
+    }
     if (m_algo_raw->setPipelineMode(req->mode)) {
         res->success = true; res->message = "Mode -> " + req->mode;
     } else {

@@ -134,7 +134,10 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
             m_keyframes[i].desc.ring_key, latest.desc.ring_key);
         candidates.push_back({i, rk_dist});
     }
-    if (candidates.empty()) return false;
+    if (candidates.empty()) {
+        std::cout << "[ScanContextLC] No candidates from RingKey" << std::endl;
+        return false;
+    }
 
     std::sort(candidates.begin(), candidates.end(),
               [](const Candidate& a, const Candidate& b) { return a.rk_dist < b.rk_dist; });
@@ -144,6 +147,8 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
     num_candidates = std::min(num_candidates, candidates.size());
 
     // === 2. 精确描述符匹配 + ICP 验证 ===
+    std::cout << "[ScanContextLC] " << candidates.size() << " candidates, top "
+              << num_candidates << " to check" << std::endl;
     int best_idx = -1;
     int best_col_shift = 0;
     double best_desc_dist = m_dist_thresh;
@@ -164,9 +169,14 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         Eigen::Matrix4f delta;
         float fitness;
         if (icpVerify(latest.cloud, cand_rec.cloud, init_guess, delta, fitness)) {
+            std::cout << "[ScanContextLC] ICP passed: desc=" << desc_d
+                      << ", fitness=" << fitness << std::endl;
             best_desc_dist = desc_d;
             best_idx = static_cast<int>(cand.idx);
             best_col_shift = col_shift;
+        } else {
+            std::cout << "[ScanContextLC] ICP failed: desc=" << desc_d
+                      << ", fitness=" << fitness << std::endl;
         }
     }
 

@@ -26,7 +26,7 @@ class SlamBase;    // forward declare for tryPopAndProcess
 class SlamNode : public rclcpp::Node {
 public:
     explicit SlamNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
-    ~SlamNode() override = default;
+    ~SlamNode() override;
 
 private:
     struct NodeConfig {
@@ -64,6 +64,8 @@ private:
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr m_grid_map_pub;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr m_map_pub;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_nav_pub;
+    std::unique_ptr<ISlamAlgorithm> m_algo;
+    ISlamAlgorithm* m_algo_raw = nullptr;
     rclcpp::TimerBase::SharedPtr m_process_timer, m_map_timer;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> m_static_tf;
@@ -71,8 +73,6 @@ private:
     rclcpp::Service<rosiwit_slam::srv::LoadMap>::SharedPtr       m_srv_load_map;
     rclcpp::Service<rosiwit_slam::srv::SaveGridMap>::SharedPtr   m_srv_save_grid_map;
     rclcpp::Service<rosiwit_slam::srv::SetSlamMode>::SharedPtr   m_srv_set_slam_mode;
-    std::unique_ptr<ISlamAlgorithm> m_algo;
-    ISlamAlgorithm* m_algo_raw = nullptr;       // non-owning, same as m_algo.get()
     NodeConfig m_cfg;
     std::mutex m_out_mutex;
     SlamOutput m_latest;

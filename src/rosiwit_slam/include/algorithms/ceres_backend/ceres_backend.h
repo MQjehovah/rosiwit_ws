@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <mutex>
 #include <unordered_map>
 #include <Eigen/Eigen>
 #include <ceres/ceres.h>
@@ -41,6 +42,7 @@ private:
     std::vector<KeyFrameNode> keyframes_;
     std::vector<RelPoseConstraint> constraints_;
     std::unordered_map<std::string, size_t> kf_index_;
+    std::mutex m_mutex;
 
     int optimize_period_ = 10;
     int num_optimizations_ = 0;

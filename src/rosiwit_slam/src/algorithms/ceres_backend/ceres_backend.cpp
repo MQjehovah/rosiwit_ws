@@ -92,6 +92,7 @@ void CeresBackend::addKeyFrame(const KeyFrame& kf) {
 }
 
 void CeresBackend::addConstraints(const std::vector<Constraint>& constraints) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     for (const auto& c : constraints) {
         RelPoseConstraint rel;
         rel.from_kf = c.from_kf;
@@ -206,6 +207,7 @@ void CeresBackend::addOdometryConstraints(ceres::Problem& problem, std::vector<d
 }
 
 void CeresBackend::addLoopConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     for (const auto& c : constraints_) {
         auto from_it = kf_index_.find(c.from_kf);
         auto to_it = kf_index_.find(c.to_kf);

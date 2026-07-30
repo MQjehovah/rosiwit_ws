@@ -16,6 +16,7 @@
 #include "slam_core/slam_types.h"
 #include <string>
 #include <vector>
+#include <mutex>
 #include <unordered_map>
 #include <memory>
 
@@ -58,6 +59,7 @@ private:
     std::vector<KeyFrameNode> m_keyframes;
     std::vector<Constraint> m_pending_constraints;
     std::unordered_map<std::string, size_t> m_kf_index;
+    std::mutex m_mutex;
 
     std::unique_ptr<gtsam::NonlinearFactorGraph> m_graph;
     std::unique_ptr<gtsam::Values> m_initial_estimates;

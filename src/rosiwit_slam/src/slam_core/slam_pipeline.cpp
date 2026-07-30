@@ -191,6 +191,7 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
 
         // 回环检测: 每 30 帧触发一次
         if (m_loop && m_frame_count % 30 == 0) {
+            std::cout << "[Pipeline] LC check at kf_" << m_frame_count << std::endl;
             PoseStamped rel_pose;
             double cov = 0;
             std::string matched_id;

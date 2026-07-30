@@ -72,6 +72,7 @@ void GtsamIsam2Backend::addKeyFrame(const KeyFrame& kf) {
 }
 
 void GtsamIsam2Backend::addConstraints(const std::vector<Constraint>& constraints) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_pending_constraints.insert(m_pending_constraints.end(),
                                   constraints.begin(), constraints.end());
 }
@@ -140,29 +141,32 @@ bool GtsamIsam2Backend::optimize() {
     }
 
     // === 2. 添加回环约束 ===
-    for (const auto& c : m_pending_constraints) {
-        auto from_it = m_kf_index.find(c.from_kf);
-        auto to_it = m_kf_index.find(c.to_kf);
-        if (from_it == m_kf_index.end() || to_it == m_kf_index.end()) continue;
-        if (from_it->second == to_it->second) continue;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& c : m_pending_constraints) {
+            auto from_it = m_kf_index.find(c.from_kf);
+            auto to_it = m_kf_index.find(c.to_kf);
+            if (from_it == m_kf_index.end() || to_it == m_kf_index.end()) continue;
+            if (from_it->second == to_it->second) continue;
 
-        gtsam::Pose3 rel_pose(
-            gtsam::Rot3(c.relative_pose.rot),
-            gtsam::Point3(c.relative_pose.trans.x(),
-                          c.relative_pose.trans.y(),
-                          c.relative_pose.trans.z()));
+            gtsam::Pose3 rel_pose(
+                gtsam::Rot3(c.relative_pose.rot),
+                gtsam::Point3(c.relative_pose.trans.x(),
+                              c.relative_pose.trans.y(),
+                              c.relative_pose.trans.z()));
 
-        gtsam::Vector6 lc_noise_vec;
-        lc_noise_vec << 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5;
-        auto lc_noise = gtsam::noiseModel::Robust::Create(
-            gtsam::noiseModel::mEstimator::Cauchy::Create(1),
-            gtsam::noiseModel::Diagonal::Variances(lc_noise_vec));
+            gtsam::Vector6 lc_noise_vec;
+            lc_noise_vec << 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5;
+            auto lc_noise = gtsam::noiseModel::Robust::Create(
+                gtsam::noiseModel::mEstimator::Cauchy::Create(1),
+                gtsam::noiseModel::Diagonal::Variances(lc_noise_vec));
 
-        m_graph->emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
-            X(from_it->second), X(to_it->second), rel_pose, lc_noise);
-        has_new_factors = true;
+            m_graph->emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+                X(from_it->second), X(to_it->second), rel_pose, lc_noise);
+            has_new_factors = true;
+        }
+        m_pending_constraints.clear();
     }
-    m_pending_constraints.clear();
 
     // === 3. iSAM2 增量更新 ===
     if (!has_new_factors) return false;

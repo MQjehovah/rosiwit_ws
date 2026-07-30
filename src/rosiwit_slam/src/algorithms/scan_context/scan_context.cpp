@@ -16,23 +16,28 @@ ScanContext::Descriptor ScanContext::makeDescriptor(const CloudType::Ptr& cloud)
     desc.ring_key = Eigen::VectorXi::Zero(nr);
 
     if (!cloud || cloud->empty()) return desc;
+    if (nr <= 0 || ns <= 0) { std::cerr << "[SC] bad cfg: nr=" << nr << " ns=" << ns << std::endl; return desc; }
 
     double ring_width = (max_r - min_r) / nr;
     double sector_angle = 2.0 * M_PI / ns;
 
     // 遍历每个点, 填入对应格子
-    for (const auto& pt : cloud->points) {
+    for (size_t pi = 0; pi < cloud->size(); ++pi) {
+        const auto& pt = cloud->points[pi];
         double x = pt.x, y = pt.y, z = pt.z;
+        if (!std::isfinite(x) || !std::isfinite(y)) continue;
         double r = std::sqrt(x * x + y * y);
         if (r < min_r || r >= max_r) continue;
 
         int ring = static_cast<int>((r - min_r) / ring_width);
-        ring = std::min(ring, nr - 1);
+        if (ring < 0) ring = 0;
+        if (ring >= nr) ring = nr - 1;
 
-        double theta = std::atan2(y, x);  // [-π, π]
+        double theta = std::atan2(y, x);
         if (theta < 0) theta += 2.0 * M_PI;
         int sector = static_cast<int>(theta / sector_angle);
-        sector = std::min(sector, ns - 1);
+        if (sector < 0) sector = 0;
+        if (sector >= ns) sector = ns - 1;
 
         // 取每个格子的最大高度 (也可改用最大强度)
         if (z > desc.data(ring, sector)) {
