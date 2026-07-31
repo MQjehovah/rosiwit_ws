@@ -28,11 +28,11 @@ cube_len: 300
 det_range: 60
 move_thresh: 1.5
 
-na: 0.001
-ng: 0.001
-nba: 0.00001
-nbg: 0.00001
-imu_init_num: 200
+na: 0.002
+ng: 0.002
+nba: 0.0001
+nbg: 0.0001
+imu_init_num: 400
 near_search_num: 5
 ieskf_max_iter: 5
 
