@@ -47,3 +47,7 @@ lidar_cov_inv: 1000.0
 robust_kernel: cauchy
 robust_scale: 0.5
 robust_floor: 0.1
+dynamic_removal: true
+persist_thresh: 2
+persist_window: 20
+dynamic_residual_thresh: 1.0

@@ -41,6 +41,10 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.robust_kernel = config["robust_kernel"].as<std::string>(out_cfg.robust_kernel);
         out_cfg.robust_scale  = config["robust_scale"].as<double>(out_cfg.robust_scale);
         out_cfg.robust_floor  = config["robust_floor"].as<double>(out_cfg.robust_floor);
+        out_cfg.dynamic_removal = config["dynamic_removal"].as<bool>(out_cfg.dynamic_removal);
+        out_cfg.persist_thresh  = config["persist_thresh"].as<int>(out_cfg.persist_thresh);
+        out_cfg.persist_window  = config["persist_window"].as<int>(out_cfg.persist_window);
+        out_cfg.dynamic_residual_thresh = config["dynamic_residual_thresh"].as<double>(out_cfg.dynamic_residual_thresh);
         return true;
     } catch (const std::exception& e) {
         return false;

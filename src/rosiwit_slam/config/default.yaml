@@ -41,9 +41,13 @@ esti_il: false
 r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 t_il: [0.0, 0.0, 0.0905]
 lidar_cov_inv: 5000.0
-robust_kernel: cauchy # none | huber | cauchy | tukey
+robust_kernel: cauchy # none | huber | cauchy | tukey 动态障碍物剔除匹配
 robust_scale: 0.5
 robust_floor: 0.1
+dynamic_removal: true # 动态障碍物剔除建图
+persist_thresh: 2
+persist_window: 20
+dynamic_residual_thresh: 1.0
 
 # 回环检测参数
 loop_closure:

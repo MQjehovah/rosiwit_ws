@@ -86,6 +86,15 @@ void LidarProcessor::trimCloudMap()
     return;
 }
 
+long LidarProcessor::voxelKey(const PointType &p, double voxel_size)
+{
+    const long ix = static_cast<long>(std::floor(p.x / voxel_size));
+    const long iy = static_cast<long>(std::floor(p.y / voxel_size));
+    const long iz = static_cast<long>(std::floor(p.z / voxel_size));
+    const long M = (1L << 21) - 1;
+    return ((ix & M) << 42) | ((iy & M) << 21) | (iz & M);
+}
+
 void LidarProcessor::incrCloudMap()
 {
     if (m_cloud_down_lidar->empty())
@@ -103,6 +112,30 @@ void LidarProcessor::incrCloudMap()
         m_cloud_down_world->points[i].y = point(1);
         m_cloud_down_world->points[i].z = point(2);
         m_cloud_down_world->points[i].intensity = m_cloud_down_lidar->points[i].intensity;
+
+        // 动态一致性门控：与地图重叠但未被稳定观测的点视为动态，不入图
+        if (m_config.dynamic_removal && m_config.persist_thresh > 1)
+        {
+            const long key = voxelKey(m_cloud_down_world->points[i], m_config.map_resolution);
+            auto it = m_voxel_last_frame.find(key);
+            if (it == m_voxel_last_frame.end() || m_frame_idx - it->second > m_config.persist_window)
+            {
+                m_voxel_last_frame[key] = m_frame_idx;
+                m_voxel_count[key] = 1;
+            }
+            else
+            {
+                m_voxel_last_frame[key] = m_frame_idx;
+                m_voxel_count[key]++;
+            }
+            const bool has_near = !m_nearest_points[i].empty() &&
+                                  sq_dist(m_nearest_points[i][0], m_cloud_down_world->points[i]) <= 5.0;
+            if (has_near && std::fabs(m_point_residual[i]) > m_config.dynamic_residual_thresh)
+                continue;
+            if (has_near && m_voxel_count[key] < m_config.persist_thresh)
+                continue;
+        }
+
         // 如果该点附近没有近邻点则需要添加到地图中
         if (m_nearest_points[i].empty())
         {
@@ -157,6 +190,25 @@ void LidarProcessor::initCloudMap(PointVec &point_vec)
 
 void LidarProcessor::process(SyncPackage &package)
 {
+    m_frame_idx++;
+
+    // 定期清理过期的体素观测，避免内存无界增长
+    if (m_config.persist_window > 0 && m_frame_idx % (m_config.persist_window * 10) == 0)
+    {
+        for (auto it = m_voxel_last_frame.begin(); it != m_voxel_last_frame.end();)
+        {
+            if (m_frame_idx - it->second > m_config.persist_window)
+            {
+                m_voxel_count.erase(it->first);
+                it = m_voxel_last_frame.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+
     // m_kf->setLossFunction([&](State &s, SharedState &d)
     //                       { updateLossFunc(s, d); });
     // m_kf->setStopFunction([&](const V21D &delta) -> bool
@@ -192,6 +244,8 @@ void LidarProcessor::process(SyncPackage &package)
             m_robust_weight.resize(n, 1.0);
         if (m_effect_weight.size() != n)
             m_effect_weight.resize(n, 1.0);
+        if (m_point_residual.size() != n)
+            m_point_residual.resize(n, 0.0);
     }
 
     trimCloudMap();
@@ -248,6 +302,7 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         point_world.y = point_world_vec(1);
         point_world.z = point_world_vec(2);
         point_world.intensity = point_body.intensity;
+        m_point_residual[i] = 0.0;
         std::vector<float> point_sq_dist(m_config.near_search_num);
         auto &points_near = m_nearest_points[i];
         m_ikdtree->Nearest_Search(point_world, m_config.near_search_num, points_near, point_sq_dist);
@@ -263,6 +318,7 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         if (esti_plane(points_near, 0.1, pabcd))
         {
             double pd2 = pabcd(0) * point_world_vec(0) + pabcd(1) * point_world_vec(1) + pabcd(2) * point_world_vec(2) + pabcd(3);
+            m_point_residual[i] = pd2;
             double s = 1 - 0.9 * std::fabs(pd2) / std::sqrt(point_body_vec.norm());
             if (s > 0.9)
             {

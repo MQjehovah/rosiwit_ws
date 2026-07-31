@@ -56,6 +56,10 @@ struct Config
     std::string robust_kernel = "tukey";
     double robust_scale = 0.5;
     double robust_floor = 0.1;
+    bool dynamic_removal = true;
+    int persist_thresh = 2;
+    int persist_window = 20;
+    double dynamic_residual_thresh = 1.0;
 };
 
 /// 从 YAML 配置文件中解析 FastLIO2 公共配置字段。

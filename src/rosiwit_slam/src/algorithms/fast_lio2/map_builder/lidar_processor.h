@@ -4,6 +4,8 @@
 #include "ikd_Tree.h"
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
+#include <unordered_map>
+#include <cmath>
 
 struct LocalMap
 {
@@ -29,6 +31,8 @@ public:
 
     double robustWeight(double residual) const;
 
+    static long voxelKey(const PointType &p, double voxel_size);
+
     static CloudType::Ptr transformCloud(CloudType::Ptr inp, const M3D &r, const V3D &t);
     M3D r_wl() { return m_kf->x().r_wi * m_kf->x().r_il; }
     V3D t_wl() { return m_kf->x().t_wi + m_kf->x().r_wi * m_kf->x().t_il; }
@@ -50,5 +54,9 @@ private:
     std::vector<PointVec> m_nearest_points;
     std::vector<double> m_robust_weight;
     std::vector<double> m_effect_weight;
+    std::vector<double> m_point_residual;
     pcl::VoxelGrid<PointType> m_scan_filter;
+    std::unordered_map<long, int> m_voxel_count;
+    std::unordered_map<long, long> m_voxel_last_frame;
+    long m_frame_idx = 0;
 };
