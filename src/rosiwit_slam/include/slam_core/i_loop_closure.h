@@ -10,6 +10,7 @@ public:
     virtual void addKeyFrame(const KeyFrame& kf) = 0;
     virtual bool detect(PoseStamped& relative_pose, double& cov,
                         std::string& matched_kf_id) = 0;
+    virtual bool saveDatabase(const std::string& path) { (void)path; return false; }
 };
 
 } // namespace rosiwit_slam

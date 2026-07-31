@@ -61,4 +61,18 @@ private:
     Config m_cfg;
 };
 
+/// 数据库条目: 关键帧 id + 全局位姿 + 描述子
+struct ScanContextDatabaseEntry {
+    std::string id;
+    Eigen::Matrix3d rot = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d trans = Eigen::Vector3d::Zero();
+    ScanContext::Descriptor desc;
+};
+
+/// 序列化 ScanContext 数据库到二进制文件 (用于重定位时加载)
+bool saveScanContextDatabase(const std::string& path, const std::vector<ScanContextDatabaseEntry>& db);
+
+/// 从二进制文件加载 ScanContext 数据库
+bool loadScanContextDatabase(const std::string& path, std::vector<ScanContextDatabaseEntry>& db);
+
 } // namespace rosiwit_slam

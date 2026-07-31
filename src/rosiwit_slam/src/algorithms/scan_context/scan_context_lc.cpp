@@ -105,6 +105,26 @@ bool ScanContextLoopClosure::icpVerify(
     return out_fitness < m_icp_fitness_thresh;
 }
 
+bool ScanContextLoopClosure::saveDatabase(const std::string& path) {
+    std::vector<ScanContextDatabaseEntry> db;
+    db.reserve(m_keyframes.size());
+    for (const auto& rec : m_keyframes) {
+        if (!rec.has_descriptor) continue;
+        ScanContextDatabaseEntry e;
+        e.id = rec.id;
+        e.rot = rec.pose.rot;
+        e.trans = rec.pose.trans;
+        e.desc = rec.desc;
+        db.push_back(std::move(e));
+    }
+    bool ok = saveScanContextDatabase(path, db);
+    if (ok) {
+        std::cout << "[ScanContextLC] Saved database: " << db.size()
+                  << " keyframes -> " << path << std::endl;
+    }
+    return ok;
+}
+
 bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
                                      std::string& matched_kf_id) {
     if (m_keyframes.size() < static_cast<size_t>(m_min_keyframe_gap + 1)) {

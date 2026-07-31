@@ -235,7 +235,11 @@ SlamState SlamPipeline::state() const {
 
 bool SlamPipeline::saveMap(const std::string& path) {
     if (!m_map_mgr) return false;
-    return m_map_mgr->saveMap(path);
+    bool ok = m_map_mgr->saveMap(path);
+    if (ok && m_loop) {
+        m_loop->saveDatabase(path + ".scdb");
+    }
+    return ok;
 }
 
 bool SlamPipeline::loadMap(const std::string& path) {

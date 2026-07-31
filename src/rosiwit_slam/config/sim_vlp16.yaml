@@ -44,6 +44,18 @@ esti_il: false
 r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 t_il: [0.0, 0.0, 0.0]
 lidar_cov_inv: 1000.0
+# ScanContext 全局重定位参数 (localization: scan_context_localization)
+localization:
+  sc_num_rings: 20
+  sc_num_sectors: 60
+  sc_max_radius: 80.0
+  sc_min_radius: 2.0
+  sc_dist_thresh: 0.4
+  sc_candidate_ratio: 0.3
+  icp_voxel_res: 0.5
+  icp_max_corr_dist: 2.0
+  icp_fitness_thresh: 1.0
+  icp_max_iter: 32
 robust_kernel: cauchy
 robust_scale: 0.5
 robust_floor: 0.1

@@ -18,6 +18,7 @@ public:
     void addKeyFrame(const KeyFrame& kf) override;
     bool detect(PoseStamped& relative_pose, double& cov,
                 std::string& matched_kf_id) override;
+    bool saveDatabase(const std::string& path) override;
 
 private:
     struct KeyFrameRecord {

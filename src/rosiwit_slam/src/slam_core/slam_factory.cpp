@@ -5,6 +5,7 @@
 #include "algorithms/fast_lio2/fast_lio2_frontend.h"
 #include "algorithms/ceres_backend/ceres_backend.h"
 #include "algorithms/gicp_localization/gicp_localization.h"
+#include "algorithms/scan_context/scan_context_localization.h"
 #include "algorithms/pcd_map_manager/pcd_map_manager.h"
 // 新增算法
 #include "algorithms/point_lio/point_lio_frontend.h"
@@ -41,6 +42,7 @@ std::unique_ptr<IBackend> SlamFactory::createBackend(const std::string& name) {
 
 std::unique_ptr<ILocalization> SlamFactory::createLocalization(const std::string& name) {
     if (name == "gicp_localization") return std::make_unique<GicpLocalization>();
+    if (name == "scan_context_localization") return std::make_unique<ScanContextLocalization>();
     return nullptr;
 }
 

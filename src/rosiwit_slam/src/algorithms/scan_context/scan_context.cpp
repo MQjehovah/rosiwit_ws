@@ -2,6 +2,8 @@
 #include "algorithms/scan_context/scan_context.h"
 #include <algorithm>
 #include <limits>
+#include <fstream>
+#include <cstring>
 
 namespace rosiwit_slam {
 
@@ -121,6 +123,90 @@ double ScanContext::ringKeyDistance(const Eigen::VectorXi& a, const Eigen::Vecto
         dist += std::abs(a(i) - b(i));
     }
     return dist / n;
+}
+
+bool saveScanContextDatabase(const std::string& path, const std::vector<ScanContextDatabaseEntry>& db) {
+    std::ofstream ofs(path, std::ios::binary);
+    if (!ofs.is_open()) {
+        std::cerr << "[SC] Failed to open for write: " << path << std::endl;
+        return false;
+    }
+
+    auto writeMat = [&ofs](const Eigen::MatrixXd& m) {
+        int rows = m.rows(), cols = m.cols();
+        ofs.write(reinterpret_cast<const char*>(&rows), sizeof(int));
+        ofs.write(reinterpret_cast<const char*>(&cols), sizeof(int));
+        ofs.write(reinterpret_cast<const char*>(m.data()), sizeof(double) * rows * cols);
+    };
+    auto writeVec = [&ofs](const Eigen::VectorXi& v) {
+        int n = v.size();
+        ofs.write(reinterpret_cast<const char*>(&n), sizeof(int));
+        ofs.write(reinterpret_cast<const char*>(v.data()), sizeof(int) * n);
+    };
+
+    int num_entries = static_cast<int>(db.size());
+    ofs.write(reinterpret_cast<const char*>(&num_entries), sizeof(int));
+    for (const auto& e : db) {
+        int id_len = static_cast<int>(e.id.size());
+        ofs.write(reinterpret_cast<const char*>(&id_len), sizeof(int));
+        ofs.write(e.id.c_str(), id_len);
+        for (int i = 0; i < 9; ++i)
+            ofs.write(reinterpret_cast<const char*>(e.rot.data() + i), sizeof(double));
+        for (int i = 0; i < 3; ++i)
+            ofs.write(reinterpret_cast<const char*>(e.trans.data() + i), sizeof(double));
+        writeMat(e.desc.data);
+        writeVec(e.desc.ring_key);
+    }
+    ofs.close();
+    return true;
+}
+
+bool loadScanContextDatabase(const std::string& path, std::vector<ScanContextDatabaseEntry>& db) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs.is_open()) {
+        std::cerr << "[SC] Failed to open for read: " << path << std::endl;
+        return false;
+    }
+
+    auto readMat = [&ifs](Eigen::MatrixXd& m) -> bool {
+        int rows = 0, cols = 0;
+        if (!ifs.read(reinterpret_cast<char*>(&rows), sizeof(int))) return false;
+        if (!ifs.read(reinterpret_cast<char*>(&cols), sizeof(int))) return false;
+        if (rows <= 0 || rows > 1000 || cols <= 0 || cols > 1000) return false;
+        m.resize(rows, cols);
+        ifs.read(reinterpret_cast<char*>(m.data()), sizeof(double) * rows * cols);
+        return ifs.good();
+    };
+    auto readVec = [&ifs](Eigen::VectorXi& v) -> bool {
+        int n = 0;
+        if (!ifs.read(reinterpret_cast<char*>(&n), sizeof(int))) return false;
+        if (n < 0 || n > 100000) return false;
+        v.resize(n);
+        ifs.read(reinterpret_cast<char*>(v.data()), sizeof(int) * n);
+        return ifs.good();
+    };
+
+    db.clear();
+    int num_entries = 0;
+    if (!ifs.read(reinterpret_cast<char*>(&num_entries), sizeof(int))) return false;
+    if (num_entries < 0 || num_entries > 10000000) return false;
+    db.reserve(num_entries);
+
+    for (int i = 0; i < num_entries; ++i) {
+        ScanContextDatabaseEntry e;
+        int id_len = 0;
+        if (!ifs.read(reinterpret_cast<char*>(&id_len), sizeof(int))) return false;
+        if (id_len < 0 || id_len > 100000) return false;
+        e.id.resize(id_len);
+        ifs.read(&e.id[0], id_len);
+        ifs.read(reinterpret_cast<char*>(e.rot.data()), sizeof(double) * 9);
+        ifs.read(reinterpret_cast<char*>(e.trans.data()), sizeof(double) * 3);
+        if (!readMat(e.desc.data)) return false;
+        if (!readVec(e.desc.ring_key)) return false;
+        if (!ifs.good()) return false;
+        db.push_back(std::move(e));
+    }
+    return true;
 }
 
 } // namespace rosiwit_slam

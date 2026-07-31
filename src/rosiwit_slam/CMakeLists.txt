@@ -154,6 +154,7 @@ set(SOURCES
     src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp
     src/algorithms/scan_context/scan_context.cpp
     src/algorithms/scan_context/scan_context_lc.cpp
+    src/algorithms/scan_context/scan_context_localization.cpp
     src/algorithms/point_lio/point_lio_frontend.cpp
 )
 
@@ -276,6 +277,7 @@ if(BUILD_TESTING)
             src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
+            src/algorithms/scan_context/scan_context_localization.cpp
             src/algorithms/point_lio/point_lio_frontend.cpp)
         if(GTSAM_FOUND)
             target_sources(test_slam_factory PRIVATE src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp)
@@ -313,6 +315,7 @@ if(BUILD_TESTING)
             src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
+            src/algorithms/scan_context/scan_context_localization.cpp
             src/algorithms/point_lio/point_lio_frontend.cpp)
         if(GTSAM_FOUND)
             target_sources(test_slam_pipeline PRIVATE src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp)
