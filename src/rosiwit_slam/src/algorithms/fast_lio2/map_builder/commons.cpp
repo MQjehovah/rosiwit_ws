@@ -38,6 +38,9 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         }
 
         out_cfg.lidar_cov_inv = config["lidar_cov_inv"].as<double>(out_cfg.lidar_cov_inv);
+        out_cfg.robust_kernel = config["robust_kernel"].as<std::string>(out_cfg.robust_kernel);
+        out_cfg.robust_scale  = config["robust_scale"].as<double>(out_cfg.robust_scale);
+        out_cfg.robust_floor  = config["robust_floor"].as<double>(out_cfg.robust_floor);
         return true;
     } catch (const std::exception& e) {
         return false;

@@ -188,11 +188,47 @@ void LidarProcessor::process(SyncPackage &package)
             m_nearest_points.resize(n);
         if (m_point_selected_flag.size() != n)
             m_point_selected_flag.resize(n, false);
+        if (m_robust_weight.size() != n)
+            m_robust_weight.resize(n, 1.0);
+        if (m_effect_weight.size() != n)
+            m_effect_weight.resize(n, 1.0);
     }
 
     trimCloudMap();
     m_kf->update();
     incrCloudMap();
+}
+
+double LidarProcessor::robustWeight(double residual) const
+{
+    double w = 1.0;
+    if (m_config.robust_scale > 0.0)
+    {
+        const double s2 = m_config.robust_scale * m_config.robust_scale;
+        if (m_config.robust_kernel == "tukey")
+        {
+            const double ratio = residual * residual / s2;
+            if (ratio >= 1.0)
+                w = 0.0;
+            else
+            {
+                const double t = 1.0 - ratio;
+                w = t * t;
+            }
+        }
+        else if (m_config.robust_kernel == "cauchy")
+        {
+            w = 1.0 / (1.0 + residual * residual / s2);
+        }
+        else if (m_config.robust_kernel == "huber")
+        {
+            const double a = std::fabs(residual);
+            w = (a <= m_config.robust_scale) ? 1.0 : m_config.robust_scale / a;
+        }
+    }
+    if (m_config.robust_floor > 0.0)
+        w = std::max(w, m_config.robust_floor);
+    return w;
 }
 
 void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
@@ -235,6 +271,7 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
                 m_norm_vec->points[i].y = pabcd(1);
                 m_norm_vec->points[i].z = pabcd(2);
                 m_norm_vec->points[i].intensity = pd2;
+                m_robust_weight[i] = robustWeight(pd2);
             }
         }
     }
@@ -246,6 +283,7 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
             continue;
         m_effect_cloud_lidar->points[effect_feat_num] = m_cloud_down_lidar->points[i];
         m_effect_norm_vec->points[effect_feat_num] = m_norm_vec->points[i];
+        m_effect_weight[effect_feat_num] = m_robust_weight[i];
         effect_feat_num++;
     }
     if (effect_feat_num < 1)
@@ -275,8 +313,8 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
             J.block<1, 3>(0, 6) = C;
             J.block<1, 3>(0, 9) = D;
         }
-        share_data.H += J.transpose() * m_config.lidar_cov_inv * J;
-        share_data.b += J.transpose() * m_config.lidar_cov_inv * norm_p.intensity;
+        share_data.H += J.transpose() * m_config.lidar_cov_inv * m_effect_weight[i] * J;
+        share_data.b += J.transpose() * m_config.lidar_cov_inv * m_effect_weight[i] * norm_p.intensity;
     }
 }
 

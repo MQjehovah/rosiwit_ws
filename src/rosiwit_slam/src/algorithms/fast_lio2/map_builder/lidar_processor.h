@@ -27,6 +27,8 @@ public:
 
     void updateLossFunc(State &state, SharedState &share_data);
 
+    double robustWeight(double residual) const;
+
     static CloudType::Ptr transformCloud(CloudType::Ptr inp, const M3D &r, const V3D &t);
     M3D r_wl() { return m_kf->x().r_wi * m_kf->x().r_il; }
     V3D t_wl() { return m_kf->x().t_wi + m_kf->x().r_wi * m_kf->x().t_il; }
@@ -46,5 +48,7 @@ private:
     CloudType::Ptr m_effect_cloud_lidar;
     CloudType::Ptr m_effect_norm_vec;
     std::vector<PointVec> m_nearest_points;
+    std::vector<double> m_robust_weight;
+    std::vector<double> m_effect_weight;
     pcl::VoxelGrid<PointType> m_scan_filter;
 };

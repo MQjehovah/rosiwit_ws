@@ -53,6 +53,9 @@ struct Config
     V3D t_il = V3D::Zero();
 
     double lidar_cov_inv = 1000.0;
+    std::string robust_kernel = "tukey";
+    double robust_scale = 0.5;
+    double robust_floor = 0.1;
 };
 
 /// 从 YAML 配置文件中解析 FastLIO2 公共配置字段。

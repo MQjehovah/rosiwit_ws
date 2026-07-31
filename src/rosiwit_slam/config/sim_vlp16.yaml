@@ -44,3 +44,6 @@ esti_il: false
 r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 t_il: [0.0, 0.0, 0.0]
 lidar_cov_inv: 1000.0
+robust_kernel: cauchy
+robust_scale: 0.5
+robust_floor: 0.1
