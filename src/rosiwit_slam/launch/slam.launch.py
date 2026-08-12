@@ -28,10 +28,18 @@ def generate_launch_description():
     imu_topic_arg = DeclareLaunchArgument(
         'imu_topic', default_value='/imu')
 
+    config_arg = DeclareLaunchArgument(
+        'config_file', default_value='default.yaml',
+        description='Config file name under <pkg>/config (e.g. default.yaml, livox.yaml, sim_vlp16.yaml)')
+
     from ament_index_python.packages import get_package_share_directory
+    from launch_ros.substitutions import FindPackageShare
+    from launch.substitutions import PathJoinSubstitution
+
     pkg_share = get_package_share_directory('rosiwit_slam')
-    
-    config_default = os.path.join(pkg_share, 'config', 'default.yaml')
+
+    config_default = PathJoinSubstitution(
+        [FindPackageShare('rosiwit_slam'), 'config', LaunchConfiguration('config_file')])
     rviz_config = os.path.join(pkg_share, 'rviz', 'slam.rviz')
 
     slam_node = Node(
@@ -65,6 +73,7 @@ def generate_launch_description():
         use_rviz_arg,
         lidar_topic_arg,
         imu_topic_arg,
+        config_arg,
         slam_node,
         rviz_node,
     ])

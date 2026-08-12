@@ -44,6 +44,7 @@ struct Config
     double ng = 0.01;
     double nba = 0.0001;
     double nbg = 0.0001;
+    double acc_scale = 1.0; // 加速度单位转换: 传感器若以 g 为单位(如 Livox 内置 IMU), 设 9.81
     int imu_init_num = 20;
     int near_search_num = 5;
     int ieskf_max_iter = 5;

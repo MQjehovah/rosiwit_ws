@@ -22,6 +22,7 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.ng               = config["ng"].as<double>(out_cfg.ng);
         out_cfg.nba              = config["nba"].as<double>(out_cfg.nba);
         out_cfg.nbg              = config["nbg"].as<double>(out_cfg.nbg);
+        out_cfg.acc_scale        = config["acc_scale"].as<double>(out_cfg.acc_scale);
         out_cfg.imu_init_num     = config["imu_init_num"].as<int>(out_cfg.imu_init_num);
         out_cfg.near_search_num  = config["near_search_num"].as<int>(out_cfg.near_search_num);
         out_cfg.ieskf_max_iter   = config["ieskf_max_iter"].as<int>(out_cfg.ieskf_max_iter);

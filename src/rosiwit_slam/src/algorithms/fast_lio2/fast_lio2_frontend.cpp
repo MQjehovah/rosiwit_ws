@@ -18,7 +18,9 @@ bool FastLio2Frontend::init(const std::string& config_path) {
 
 void FastLio2Frontend::onImu(const IMUSample& s) {
     if (!m_inited) return;
-    m_imu_buffer.push_back(s);
+    IMUSample scaled = s;
+    scaled.acc = s.acc * m_config.acc_scale;
+    m_imu_buffer.push_back(scaled);
 }
 
 void FastLio2Frontend::onLidar(const LidarFrame& f) {

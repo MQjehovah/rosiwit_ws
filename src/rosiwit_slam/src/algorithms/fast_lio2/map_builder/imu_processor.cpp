@@ -69,6 +69,8 @@ void IMUProcessor::undistort(SyncPackage &package)
     Input inp;
     inp.acc = m_imu_cache.back().acc;
     inp.gyro = m_imu_cache.back().gyro;
+    // IMU 数据存在周期性的数百毫秒丢帧时, 限制单步传播时间, 避免用陈旧 IMU 长时间积分导致速度发散
+    const double max_prop_dt = 0.1;
     for (auto it_imu = m_imu_cache.begin(); it_imu < (m_imu_cache.end() - 1); it_imu++)
     {
         IMUData &head = *it_imu;
@@ -83,6 +85,9 @@ void IMUProcessor::undistort(SyncPackage &package)
         else
             dt = tail.time - head.time;
 
+        // 大间隔(丢帧): 用最后有效 IMU 补偿, 限制 dt 防止发散
+        if (dt > max_prop_dt) dt = max_prop_dt;
+
         inp.acc = acc_val;
         inp.gyro = gyro_val;
         m_kf->predict(inp, dt, m_Q);
@@ -94,6 +99,7 @@ void IMUProcessor::undistort(SyncPackage &package)
     }
 
     dt = propagate_time_end - imu_time_end;
+    if (dt > max_prop_dt) dt = max_prop_dt;
     m_kf->predict(inp, dt, m_Q);
     m_last_imu = m_imu_cache.back();
     m_last_propagate_end_time = propagate_time_end;
