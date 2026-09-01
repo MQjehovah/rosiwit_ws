@@ -18,15 +18,34 @@ bool IMUProcessor::initialize(SyncPackage &package)
     m_imu_cache.insert(m_imu_cache.end(), package.imus.begin(), package.imus.end());
     if (m_imu_cache.size() < static_cast<size_t>(m_config.imu_init_num))
         return false;
-    V3D acc_mean = V3D::Zero();
-    V3D gyro_mean = V3D::Zero();
+
+    // 鲁棒重力对齐: 录包 IMU 存在空洞/微动, 只用近似静止(角速度小)的样本
+    // 估计重力方向和陀螺零偏, 避免空洞期间的运动加速度污染初始化。
+    V3D acc_sum = V3D::Zero();
+    V3D gyro_sum = V3D::Zero();
+    int n_static = 0;
     for (const auto &imu : m_imu_cache)
     {
-        acc_mean += imu.acc;
-        gyro_mean += imu.gyro;
+        if (imu.gyro.norm() < 0.15)   // 近似静止
+        {
+            acc_sum += imu.acc;
+            gyro_sum += imu.gyro;
+            n_static++;
+        }
     }
-    acc_mean /= static_cast<double>(m_imu_cache.size());
-    gyro_mean /= static_cast<double>(m_imu_cache.size());
+    if (n_static < 3)
+    {
+        // 静态样本不足(全程在动), 退化为全样本均值
+        for (const auto &imu : m_imu_cache)
+        {
+            acc_sum += imu.acc;
+            gyro_sum += imu.gyro;
+            n_static++;
+        }
+    }
+    V3D acc_mean = acc_sum / n_static;
+    V3D gyro_mean = gyro_sum / n_static;
+
     m_kf->x().r_il = m_config.r_il;
     m_kf->x().t_il = m_config.t_il;
     m_kf->x().bg = gyro_mean;
@@ -42,6 +61,8 @@ bool IMUProcessor::initialize(SyncPackage &package)
     m_kf->P().block<3, 3>(9, 9) = M3D::Identity() * 0.00001;
     m_kf->P().block<3, 3>(15, 15) = M3D::Identity() * 0.0001;
     m_kf->P().block<3, 3>(18, 18) = M3D::Identity() * 0.0001;
+    // IMU 有空洞, 初始化姿态存在不确定性, 放大初始姿态协方差让 lidar 校正
+    m_kf->P().block<3, 3>(0, 0) = M3D::Identity() * 0.001;
 
     m_last_imu = m_imu_cache.back();
     m_last_propagate_end_time = package.cloud_end_time;
@@ -60,6 +81,22 @@ void IMUProcessor::undistort(SyncPackage &package)
 
     const double cloud_time_begin = package.cloud_start_time;
     const double propagate_time_end = package.cloud_end_time;
+
+    // 退化处理: IMU 空洞(丢帧)跨越了传播基准点。
+    // 空洞期间运动未知, 用陈旧状态跨空洞外推会污染位姿。
+    // 处理: 重置传播基准到空洞后的 IMU, 速度清零、增大状态协方差,
+    // 让后续 lidar scan-to-map 匹配主导收敛, 而不是继承空洞前的速度/姿态误差。
+    if (m_imu_cache.size() > 1 && m_last_propagate_end_time > 0) {
+        double first_new_imu = m_imu_cache[1].time;   // [0]=m_last_imu, [1]=本帧首个IMU
+        if (first_new_imu - m_last_propagate_end_time > 0.3) {
+            m_last_propagate_end_time = first_new_imu;
+            m_kf->x().v.setZero();                     // 空洞期间速度未知, 清零
+            // 增大位置/速度/姿态协方差, 让 lidar 观测重新主导
+            m_kf->P().block<3, 3>(0, 0)  = M3D::Identity() * 0.01;
+            m_kf->P().block<3, 3>(3, 3)  = M3D::Identity() * 1.0;
+            m_kf->P().block<3, 3>(12,12) = M3D::Identity() * 1.0;
+        }
+    }
 
     m_poses_cache.clear();
     m_poses_cache.emplace_back(0.0, m_last_acc, m_last_gyro, m_kf->x().v, m_kf->x().t_wi, m_kf->x().r_wi);
