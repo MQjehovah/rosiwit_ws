@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <mutex>
 #include "slam_core/i_map_manager.h"
 #include "algorithms/pcd_map_manager/occupancy_grid_map.h"
 
@@ -15,6 +16,8 @@ public:
     bool loadMap(const std::string& name) override;
     bool getGlobalMap(PointVec& out) override;
     bool addSubMap(const KeyFrame& kf) override;
+    void onBackendOptimized(const std::vector<PoseStamped>& corrected) override;
+    bool getCorrectionAnchor(PoseStamped& out) override;
 
     // 2D 占据栅格地图 (IMapManager 接口覆写)
     bool generateGridMap(double resolution = 0.05) override;
@@ -29,6 +32,11 @@ public:
                      double resolution, const std::string& frame_id);
 
 private:
+    struct Submap {
+        PoseStamped pose;          // 前端原始位姿(与交付后端顺序一致)
+        CloudType::Ptr cloud;      // 关键帧点云(保持原始引用, 不被外部修改)
+    };
+
     CloudType::Ptr global_map_;
     std::string map_dir_;
     bool initialized_ = false;
@@ -36,6 +44,10 @@ private:
     int m_grid_w = 0, m_grid_h = 0;
     double m_grid_res = 0.05;
     double m_grid_ox = 0, m_grid_oy = 0;
+
+    std::vector<Submap> submaps_;        // addSubMap 顺序保存的关键帧(原始位姿)
+    PoseStamped m_frontier_anchor_;      // 前沿锚点 A = G_last*P_last^{-1}, 新位姿经 A∘R 转到修正系
+    std::mutex m_mutex_;                 // 保护 global_map_ / submaps_ / anchor
 };
 
 } // namespace rosiwit_slam

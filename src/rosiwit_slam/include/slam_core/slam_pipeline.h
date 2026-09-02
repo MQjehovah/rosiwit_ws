@@ -66,6 +66,11 @@ private:
     std::condition_variable m_queue_cv;
     bool m_backend_running = false;
 
+    // 实时回环修正: 后端优化后由地图管理器提供的前沿锚点 A, 输出位姿/轨迹用它转到修正系
+    std::mutex m_anchor_mutex;
+    PoseStamped m_out_anchor_;   // 初始为单位变换
+    bool m_have_anchor_ = false;
+
     struct BackendItem {
         BackendTask task;
         KeyFrame kf;

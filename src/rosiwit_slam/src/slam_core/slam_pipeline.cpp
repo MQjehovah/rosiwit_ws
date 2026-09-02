@@ -6,6 +6,24 @@
 
 namespace rosiwit_slam {
 
+namespace {
+// SE3 组合/求逆: poseMul(a,b) = 先 b 后 a
+PoseStamped poseMul(const PoseStamped& a, const PoseStamped& b) {
+    PoseStamped c;
+    c.time = b.time;
+    c.rot = a.rot * b.rot;
+    c.trans = a.rot * b.trans + a.trans;
+    return c;
+}
+PoseStamped poseInv(const PoseStamped& p) {
+    PoseStamped q;
+    q.time = p.time;
+    q.rot = p.rot.transpose();
+    q.trans = -q.rot * p.trans;
+    return q;
+}
+}  // namespace
+
 SlamPipeline::~SlamPipeline() {
     if (m_backend_running) {
         pushBackendTask(BackendTask::STOP);
@@ -165,7 +183,21 @@ void SlamPipeline::backendThreadLoop() {
             m_backend->addKeyFrame(item.kf);
         }
         if (item.task == BackendTask::OPTIMIZE && m_backend) {
-            m_backend->optimize();
+            if (m_backend->optimize()) {
+                // 后端反馈: 把修正后的关键帧位姿交给地图管理器重建全局地图,
+                // 让回环优化真正作用到保存/发布的地图上(修正拐点叠图)。
+                std::vector<PoseStamped> corrected;
+                if (m_map_mgr && m_backend->getUpdatedPoses(corrected) && !corrected.empty()) {
+                    m_map_mgr->onBackendOptimized(corrected);
+                    // 取回前沿锚点, 供主线程把之后输出(odom/path/world_cloud)实时转到修正系
+                    PoseStamped anchor;
+                    if (m_map_mgr->getCorrectionAnchor(anchor)) {
+                        std::lock_guard<std::mutex> lock(m_anchor_mutex);
+                        m_out_anchor_ = anchor;
+                        m_have_anchor_ = true;
+                    }
+                }
+            }
         }
     }
 }
@@ -214,8 +246,27 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
         pushBackendTask(BackendTask::OPTIMIZE);
     }
 
-    out.pose = odom;
+    out.body_cloud = out.world_cloud = nullptr;
     m_frontend->getClouds(out.body_cloud, out.world_cloud);
+
+    // 实时回环修正: 后端优化后, 把输出位姿/轨迹与 world_cloud 平移到修正坐标系(A∘R),
+    // 使 odom/tf/path 与重建后的地图一致, 回环瞬间可看到"拉回"。
+    PoseStamped anchor;
+    bool have_anchor = false;
+    {
+        std::lock_guard<std::mutex> lock(m_anchor_mutex);
+        if (m_have_anchor_) { anchor = m_out_anchor_; have_anchor = true; }
+    }
+    out.pose = poseMul(anchor, odom);
+    out.pose.vel = anchor.rot * odom.vel;
+    if (have_anchor && out.world_cloud && !out.world_cloud->empty()) {
+        Eigen::Affine3d T = Eigen::Affine3d::Identity();
+        T.rotate(anchor.rot);
+        T.translate(anchor.trans);
+        CloudType::Ptr w(new CloudType());
+        pcl::transformPointCloud(*out.world_cloud, *w, T);
+        out.world_cloud = w;
+    }
     out.state = SlamState::RUNNING;
     out.has_new_pose = true;
     return true;
@@ -223,6 +274,14 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
 
 bool SlamPipeline::getGlobalMap(PointVec& out) {
     if (m_mode == PipelineMode::LOCALIZATION && m_map_mgr) return m_map_mgr->getGlobalMap(out);
+    // mapping: 优先发布后端修正版全局地图(map_manager 关键帧重建), 使回环修正实时可见
+    if (m_mode == PipelineMode::MAPPING && m_map_mgr) {
+        PointVec m;
+        if (m_map_mgr->getGlobalMap(m) && !m.empty()) {
+            out = std::move(m);
+            return true;
+        }
+    }
     if (m_frontend) return m_frontend->getGlobalMap(out);
     if (m_map_mgr) return m_map_mgr->getGlobalMap(out);
     return false;
