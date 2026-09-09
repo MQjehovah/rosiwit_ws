@@ -53,6 +53,9 @@ private:
     void backendThreadLoop();
     void pushBackendTask(BackendTask task, KeyFrame kf = {});
 
+    // saveMap 附带导出 map.xzmap (关键帧+优化位姿交给 io 模块落盘, SLAM 侧不感知设备格式)
+    bool exportXzMap(const std::string& pcd_path);
+
     std::unique_ptr<IFrontend>     m_frontend;
     std::unique_ptr<IBackend>      m_backend;
     std::unique_ptr<ILoopClosure>  m_loop;

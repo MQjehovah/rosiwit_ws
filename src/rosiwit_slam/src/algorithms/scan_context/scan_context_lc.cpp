@@ -126,6 +126,21 @@ bool ScanContextLoopClosure::saveDatabase(const std::string& path) {
     return ok;
 }
 
+bool ScanContextLoopClosure::getKeyframes(std::vector<KeyFrame>& out) {
+    out.clear();
+    out.reserve(m_keyframes.size());
+    for (const auto& rec : m_keyframes) {
+        KeyFrame kf;
+        kf.id = rec.id;
+        kf.pose = rec.pose;
+        kf.cloud = rec.cloud;
+        kf.timestamp = rec.pose.time > 0
+            ? static_cast<int64_t>(rec.pose.time * 1e6) : 0;
+        out.push_back(std::move(kf));
+    }
+    return !out.empty();
+}
+
 bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
                                      std::string& matched_kf_id) {
     if (m_keyframes.size() < static_cast<size_t>(m_min_keyframe_gap + 1)) {

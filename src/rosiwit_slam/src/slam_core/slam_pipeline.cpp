@@ -1,7 +1,9 @@
 #include "slam_core/slam_pipeline.h"
 #include "slam_core/slam_factory.h"
+#include "io/xzmap_writer.h"
 #include <yaml-cpp/yaml.h>
 #include <iostream>
+#include <cmath>
 #include <pcl/common/transforms.h>
 
 namespace rosiwit_slam {
@@ -297,8 +299,71 @@ bool SlamPipeline::saveMap(const std::string& path) {
     bool ok = m_map_mgr->saveMap(path);
     if (ok && m_loop) {
         m_loop->saveDatabase(path + ".scdb");
+        exportXzMap(path);
     }
     return ok;
+}
+
+// xzmap 导出: 关键帧(body系点云) + 回环优化后位姿, 整理为 io 模块的中性结构后落盘。
+// 本函数不感知设备格式的任何细节 (键名/量化/坐标系约定都在 io/xzmap_writer 内)。
+bool SlamPipeline::exportXzMap(const std::string& pcd_path) {
+    if (!m_loop) return false;
+
+    std::vector<KeyFrame> kfs;
+    if (!m_loop->getKeyframes(kfs) || kfs.empty()) {
+        std::cerr << "[SlamPipeline] xzmap export: no keyframes" << std::endl;
+        return false;
+    }
+
+    // 回环优化位姿按序回填 (backend 与 loop 关键帧数量一致时生效)
+    std::vector<PoseStamped> refined;
+    if (m_backend && m_backend->getUpdatedPoses(refined)
+            && refined.size() == kfs.size()) {
+        for (size_t i = 0; i < kfs.size(); ++i) kfs[i].pose = refined[i];
+    } else {
+        std::cerr << "[SlamPipeline] xzmap export: optimized poses unavailable ("
+                  << refined.size() << "/" << kfs.size()
+                  << "), fallback to frontend poses" << std::endl;
+    }
+
+    std::vector<io::XzMapKeyframe> xz_kfs;
+    xz_kfs.reserve(kfs.size());
+    for (auto& kf : kfs) {
+        io::XzMapKeyframe xk;
+        const M3D& r = kf.pose.rot;
+        // ZYX 欧拉角提取 (R = Rz(yaw)*Ry(pitch)*Rx(roll)), 值域 [-pi, pi]
+        xk.pose.roll  = std::atan2(r(2, 1), r(2, 2));
+        xk.pose.pitch = std::atan2(-r(2, 0), std::sqrt(r(2, 1) * r(2, 1) + r(2, 2) * r(2, 2)));
+        xk.pose.yaw   = std::atan2(r(1, 0), r(0, 0));
+        xk.pose.x = kf.pose.trans.x();
+        xk.pose.y = kf.pose.trans.y();
+        xk.pose.z = kf.pose.trans.z();
+        if (kf.cloud) {
+            xk.points.reserve(kf.cloud->size());
+            for (const auto& pt : kf.cloud->points) {
+                xk.points.emplace_back(pt.x, pt.y, pt.z);
+            }
+        }
+        xz_kfs.push_back(std::move(xk));
+    }
+
+    // map.pcd -> 同目录同名 .xzmap
+    std::string base = pcd_path;
+    const auto slash = base.find_last_of('/');
+    const std::string dir = (slash != std::string::npos) ? base.substr(0, slash + 1) : "";
+    base = (slash != std::string::npos) ? base.substr(slash + 1) : base;
+    const auto dot = base.rfind('.');
+    const std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
+    const std::string xz_path = dir + stem + ".xzmap";
+
+    long long total = 0;
+    if (io::writeXzMap(xz_path, stem, xz_kfs, &total)) {
+        std::cout << "[SlamPipeline] xzmap saved: " << xz_path
+                  << " (kf=" << xz_kfs.size() << ", pts=" << total << ")" << std::endl;
+        return true;
+    }
+    std::cerr << "[SlamPipeline] xzmap save failed: " << xz_path << std::endl;
+    return false;
 }
 
 bool SlamPipeline::loadMap(const std::string& path) {
