@@ -21,8 +21,25 @@ lidar_filter_num: 3
 lidar_min_range: 0.5
 lidar_max_range: 100.0
 scan_period_ms: 100.0
-scan_resolution: 0.5
-map_resolution: 0.5
+scan_resolution: 0.3
+map_resolution: 0.3
+map_save_voxel: 0.3
+
+# ---- GICP 定位参数 (GicpLocalization) ----
+voxel_resolution: 0.3
+fitness_threshold: 10.0
+max_iterations: 64
+transformation_epsilon: 0.00000001
+gicp_max_corr_dist: 2.0
+gicp_euclid_eps: 0.01
+
+# ---- 定位输出滤波 (可编排开关) ----
+use_pose_filter: true
+pose_filter_alpha: 0.6
+pose_filter_max_xy_m: 0.5
+pose_filter_max_yaw_deg: 20.0
+
+output_smoothing_alpha: 0.3
 
 cube_len: 300
 det_range: 60
@@ -59,6 +76,7 @@ loop_closure:
   sc_candidate_ratio: 0.3
   icp_fitness_thresh: 1.0
   icp_max_corr_dist: 2.0
+  icp_voxel_res: 0.3
 
 # ScanContext 全局重定位参数 (localization: scan_context_localization)
 localization:
@@ -68,7 +86,7 @@ localization:
   sc_min_radius: 2.0
   sc_dist_thresh: 0.4
   sc_candidate_ratio: 0.3
-  icp_voxel_res: 0.5
+  icp_voxel_res: 0.3
   icp_max_corr_dist: 2.0
   icp_fitness_thresh: 1.0
   icp_max_iter: 32

@@ -40,6 +40,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.lidar_min_range  = cfg["lidar_min_range"].as<double>(m_cfg.lidar_min_range);
             m_cfg.lidar_max_range  = cfg["lidar_max_range"].as<double>(m_cfg.lidar_max_range);
             m_cfg.scan_period_ms   = cfg["scan_period_ms"].as<float>(m_cfg.scan_period_ms);
+            if (cfg["output_smoothing_alpha"])
+                m_ema_alpha = cfg["output_smoothing_alpha"].as<double>();
         }
     }
     if (!m_algo->init(config_path)) { RCLCPP_FATAL(this->get_logger(), "Init failed"); throw std::runtime_error("init failed"); }

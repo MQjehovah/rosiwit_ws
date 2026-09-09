@@ -48,6 +48,8 @@ bool PcdMapManager::init(const std::string& config_path) {
         YAML::Node config = YAML::LoadFile(config_path);
         if (config["map_directory"])
             map_dir_ = config["map_directory"].as<std::string>();
+        if (config["map_save_voxel"])
+            save_voxel_ = config["map_save_voxel"].as<double>();
     } catch (const std::exception& e) {
         std::cerr << "[PcdMapManager] Config parse error: " << e.what() << std::endl;
         return false;
@@ -126,7 +128,7 @@ bool PcdMapManager::addSubMap(const KeyFrame& kf) {
 
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(global_map_);
-    vg.setLeafSize(0.5f, 0.5f, 0.5f);
+    vg.setLeafSize(save_voxel_, save_voxel_, save_voxel_);
     CloudType::Ptr filtered(new CloudType());
     vg.filter(*filtered);
     global_map_ = filtered;
@@ -167,7 +169,7 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
 
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(rebuilt);
-    vg.setLeafSize(0.5f, 0.5f, 0.5f);
+    vg.setLeafSize(save_voxel_, save_voxel_, save_voxel_);
     CloudType::Ptr filtered(new CloudType());
     vg.filter(*filtered);
     global_map_ = filtered;

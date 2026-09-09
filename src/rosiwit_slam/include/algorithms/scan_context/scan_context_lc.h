@@ -51,7 +51,7 @@ private:
     float m_icp_max_corr_dist = 2.0f;
     float m_icp_fitness_thresh = 1.0f;
     int m_icp_max_iter = 32;
-    float m_icp_voxel_res = 0.5f;
+    float m_icp_voxel_res = 0.3f;
 
     std::vector<std::pair<size_t, size_t>> m_detected_loops;
 };

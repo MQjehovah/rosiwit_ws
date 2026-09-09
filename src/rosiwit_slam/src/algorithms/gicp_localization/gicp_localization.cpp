@@ -1,6 +1,7 @@
 #include "algorithms/gicp_localization/gicp_localization.h"
 #include <iostream>
 #include <fstream>
+#include <cmath>
 #include <pcl/io/pcd_io.h>
 
 #ifndef YAML_CPP_DISABLED
@@ -10,10 +11,10 @@
 namespace rosiwit_slam {
 
 GicpLocalization::GicpLocalization() {
-    gicp_.setMaxCorrespondenceDistance(2.0);
+    gicp_.setMaxCorrespondenceDistance(max_corr_dist_);
     gicp_.setMaximumIterations(max_iterations_);
     gicp_.setTransformationEpsilon(transformation_epsilon_);
-    gicp_.setEuclideanFitnessEpsilon(0.01);
+    gicp_.setEuclideanFitnessEpsilon(euclid_eps_);
 }
 
 bool GicpLocalization::init(const std::string& config_path) {
@@ -35,6 +36,19 @@ bool GicpLocalization::init(const std::string& config_path) {
             max_iterations_ = config["max_iterations"].as<int>();
         if (config["transformation_epsilon"])
             transformation_epsilon_ = config["transformation_epsilon"].as<double>();
+        if (config["gicp_max_corr_dist"])
+            max_corr_dist_ = config["gicp_max_corr_dist"].as<float>();
+        if (config["gicp_euclid_eps"])
+            euclid_eps_ = config["gicp_euclid_eps"].as<double>();
+        // 输出位姿滤波开关与参数
+        if (config["use_pose_filter"])
+            use_pose_filter_ = config["use_pose_filter"].as<bool>();
+        if (config["pose_filter_alpha"])
+            pose_filter_alpha_ = config["pose_filter_alpha"].as<double>();
+        if (config["pose_filter_max_xy_m"])
+            pose_filter_max_xy_m_ = config["pose_filter_max_xy_m"].as<double>();
+        if (config["pose_filter_max_yaw_deg"])
+            pose_filter_max_yaw_deg_ = config["pose_filter_max_yaw_deg"].as<double>();
     } catch (const std::exception& e) {
         std::cerr << "[GicpLocalization] Config parse error: " << e.what() << std::endl;
         return false;
@@ -45,6 +59,8 @@ bool GicpLocalization::init(const std::string& config_path) {
 
     gicp_.setMaximumIterations(max_iterations_);
     gicp_.setTransformationEpsilon(transformation_epsilon_);
+    gicp_.setMaxCorrespondenceDistance(max_corr_dist_);
+    gicp_.setEuclideanFitnessEpsilon(euclid_eps_);
     return true;
 }
 
@@ -69,6 +85,10 @@ void GicpLocalization::setInitPose(const PoseStamped& pose) {
     m_imu_buffer.clear();
     m_last_imu_time = -1.0;
     m_last_vel = V3D::Zero();
+    m_vel_world_ = V3D::Zero();
+    m_filter_inited_ = false;
+    m_last_filter_time_ = -1.0;
+    m_last_filtered_trans_ = V3D::Zero();
     status_ = INIT;
 }
 
@@ -112,12 +132,19 @@ void GicpLocalization::onImu(const IMUSample& s) {
         current_pose_.rot = current_pose_.rot * aa.toRotationMatrix();
     }
 
-    // 位置-速度积分: 加速度在 world 系下投影
-    //   注意: 此处假设初始重力已被车身静态加速度抵消
-    //   更准确的做法: 在 setInitPose 时测量重力方向
-    const V3D acc_world = current_pose_.rot * acc;
-    current_pose_.trans += current_pose_.vel * dt + 0.5 * acc_world * dt * dt;
-    current_pose_.vel += acc_world * dt;
+    if (use_pose_filter_) {
+        // 滤波路径: 位置用"上一帧估计的世界速度"(常速)推进, 避免加速度双重积分的漂移/抖动;
+        // 速度在 onLidar 由匹配位姿差估计并低通得到。
+        current_pose_.trans += m_vel_world_ * dt;
+        current_pose_.vel = m_vel_world_;
+    } else {
+        // 原路径: 位置-速度积分, 加速度在 world 系下投影
+        //   注意: 此处假设初始重力已被车身静态加速度抵消
+        //   更准确的做法: 在 setInitPose 时测量重力方向
+        const V3D acc_world = current_pose_.rot * acc;
+        current_pose_.trans += current_pose_.vel * dt + 0.5 * acc_world * dt * dt;
+        current_pose_.vel += acc_world * dt;
+    }
 
     m_last_imu_time = s.time;
     m_has_imu_propagation = true;
@@ -159,13 +186,60 @@ void GicpLocalization::onLidar(const LidarFrame& f) {
 
     if (gicp_.hasConverged()) {
         Eigen::Matrix4f T = gicp_.getFinalTransformation();
-        current_pose_.rot = T.block<3,3>(0,0).cast<double>();
-        current_pose_.trans = T.block<3,1>(0,3).cast<double>();
-
         const double fitness = gicp_.getFitnessScore();
+
         if (fitness > fitness_threshold_) {
             status_ = LOST;
+        } else if (use_pose_filter_) {
+            // ---- 滤波路径: 预测(current_pose_, 由 onImu 推进) + GICP 量测融合 ----
+            PoseStamped measured;
+            measured.time = f.end_time;
+            measured.rot = T.block<3,3>(0,0).cast<double>();
+            measured.trans = T.block<3,1>(0,3).cast<double>();
+
+            if (!m_filter_inited_) {
+                // 首帧: 直接采用量测, 初始化滤波状态
+                current_pose_.rot = measured.rot;
+                current_pose_.trans = measured.trans;
+                current_pose_.vel.setZero();
+                m_vel_world_.setZero();
+                m_filter_inited_ = true;
+                m_last_filter_time_ = f.end_time;
+                status_ = LOCALIZED;
+            } else {
+                // 残差 = 量测 ⊖ 预测 (旋转取轴角, 平移取差)
+                const V3D e_t = measured.trans - current_pose_.trans;
+                const Eigen::Matrix3d dR = current_pose_.rot.transpose() * measured.rot;
+                const Eigen::AngleAxisd aa(dR);
+                const V3D e_r = aa.axis() * aa.angle();
+                const double e_yaw_deg = std::fabs(aa.angle()) * 57.2957795;
+
+                const bool outlier = (e_t.norm() > pose_filter_max_xy_m_) ||
+                                     (e_yaw_deg > pose_filter_max_yaw_deg_);
+                if (!outlier) {
+                    const double a = pose_filter_alpha_;
+                    // 融合: 只吸收修正量的一部分, 抑制单帧 GICP 噪声
+                    current_pose_.rot = current_pose_.rot *
+                        (Eigen::AngleAxisd(a * aa.angle(), aa.axis())).toRotationMatrix();
+                    current_pose_.trans += a * e_t;
+
+                    // 速度估计: 位置增量/时间, 低通平滑后用于下一帧预测
+                    const double dt_l = f.end_time - m_last_filter_time_;
+                    if (dt_l > 1e-3) {
+                        const V3D inst_vel = (current_pose_.trans - m_last_filtered_trans_) / dt_l;
+                        m_vel_world_ = m_vel_world_ * 0.5 + inst_vel * 0.5;
+                        current_pose_.vel = m_vel_world_;
+                    }
+                    m_last_filtered_trans_ = current_pose_.trans;
+                    m_last_filter_time_ = f.end_time;
+                }
+                // 残差超限(离群): 不采信本帧, 保持预测位姿, 避免跳动
+                status_ = LOCALIZED;
+            }
+            first_scan_ = false;
         } else {
+            current_pose_.rot = T.block<3,3>(0,0).cast<double>();
+            current_pose_.trans = T.block<3,1>(0,3).cast<double>();
             status_ = LOCALIZED;
             first_scan_ = false;
             // LiDAR 配准成功后将速度清零 (下一周期由 IMU 重新推算)

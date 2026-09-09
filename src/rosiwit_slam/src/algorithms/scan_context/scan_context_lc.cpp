@@ -27,6 +27,7 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                 m_candidate_ratio   = lc["sc_candidate_ratio"].as<double>(m_candidate_ratio);
                 m_icp_fitness_thresh = lc["icp_fitness_thresh"].as<float>(m_icp_fitness_thresh);
                 m_icp_max_corr_dist  = lc["icp_max_corr_dist"].as<float>(m_icp_max_corr_dist);
+                m_icp_voxel_res      = lc["icp_voxel_res"].as<float>(m_icp_voxel_res);
 
                 ScanContext::Config sc_cfg;
                 sc_cfg.num_rings   = lc["sc_num_rings"].as<int>(sc_cfg.num_rings);
@@ -76,7 +77,7 @@ bool ScanContextLoopClosure::icpVerify(
         CloudType::Ptr out(new CloudType);
         pcl::VoxelGrid<PointType> vg;
         vg.setInputCloud(in);
-        vg.setLeafSize(0.5f, 0.5f, 0.5f);
+        vg.setLeafSize(m_icp_voxel_res, m_icp_voxel_res, m_icp_voxel_res);
         vg.filter(*out);
         return out;
     };

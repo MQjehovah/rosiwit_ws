@@ -48,6 +48,7 @@ private:
     std::vector<Submap> submaps_;        // addSubMap 顺序保存的关键帧(原始位姿)
     PoseStamped m_frontier_anchor_;      // 前沿锚点 A = G_last*P_last^{-1}, 新位姿经 A∘R 转到修正系
     std::mutex m_mutex_;                 // 保护 global_map_ / submaps_ / anchor
+    double save_voxel_ = 0.3;            // 保存/重建全局地图时的体素大小(m), yaml: map_save_voxel
 };
 
 } // namespace rosiwit_slam

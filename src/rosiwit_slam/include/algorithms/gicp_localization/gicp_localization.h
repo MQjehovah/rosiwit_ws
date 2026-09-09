@@ -50,12 +50,26 @@ private:
     bool m_first_imu_received = false;       ///< 是否收到过首个 IMU
 
     // ============ 配置参数 ============
-    float voxel_resolution_ = 0.5f;
+    float voxel_resolution_ = 0.3f;      // 地图/扫描降采样体素 (yaml: voxel_resolution)
     float fitness_threshold_ = 10.0f;
     int max_iterations_ = 64;
     double transformation_epsilon_ = 1e-8;
+    float max_corr_dist_ = 2.0f;          // GICP 最大对应点距离 (yaml: gicp_max_corr_dist)
+    double euclid_eps_ = 0.01;            // GICP 欧氏收敛阈值 (yaml: gicp_euclid_eps)
     bool has_map_ = false;
     bool first_scan_ = true;
+
+    // ============ 输出位姿滤波 (可选, yaml: use_pose_filter) ============
+    // 开启后: 预测(IMU角速度积分+常速) → GICP量测 → 按门控的修正量平滑融合,
+    // 替代"每帧整体覆盖", 抑制帧间抖动且几乎不滞后; 关闭则保持原行为。
+    bool use_pose_filter_ = true;
+    double pose_filter_alpha_ = 0.6;       // 修正量融合系数 (0~1)
+    double pose_filter_max_xy_m_ = 0.5;    // 位置残差门限 m (超限不采信)
+    double pose_filter_max_yaw_deg_ = 20.0;// 航向残差门限 deg (超限不采信)
+    V3D m_vel_world_ = V3D::Zero();        // 世界系滤波速度估计
+    bool m_filter_inited_ = false;         // 滤波状态是否已初始化
+    double m_last_filter_time_ = -1.0;     // 上一次滤波更新时间
+    V3D m_last_filtered_trans_ = V3D::Zero(); // 上一次滤波后的世界系位移
 };
 
 } // namespace rosiwit_slam
