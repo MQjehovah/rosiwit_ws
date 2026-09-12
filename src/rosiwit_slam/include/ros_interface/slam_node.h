@@ -40,7 +40,6 @@ private:
         float  scan_period_ms   = 100.0f;   // LiDAR 扫描周期 (毫秒), 用于点时间戳
     };
 
-    void loadParameters();
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg);
     void lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void timerCB();

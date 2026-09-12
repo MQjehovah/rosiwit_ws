@@ -18,7 +18,6 @@ SlamNode::~SlamNode() {
 }
 
 SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_slam", options) {
-    loadParameters();
     std::string algo_name = "fast_lio2";
     this->declare_parameter<std::string>("slam_algorithm", algo_name);
     this->get_parameter("slam_algorithm", algo_name);
@@ -36,6 +35,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     if (!config_path.empty()) {
         YAML::Node cfg = YAML::LoadFile(config_path);
         if (cfg) {
+            m_cfg.imu_topic        = cfg["imu_topic"].as<std::string>(m_cfg.imu_topic);
+            m_cfg.lidar_topic      = cfg["lidar_topic"].as<std::string>(m_cfg.lidar_topic);
+            m_cfg.body_frame       = cfg["body_frame"].as<std::string>(m_cfg.body_frame);
+            m_cfg.world_frame      = cfg["world_frame"].as<std::string>(m_cfg.world_frame);
             m_cfg.lidar_filter_num = cfg["lidar_filter_num"].as<int>(m_cfg.lidar_filter_num);
             m_cfg.lidar_min_range  = cfg["lidar_min_range"].as<double>(m_cfg.lidar_min_range);
             m_cfg.lidar_max_range  = cfg["lidar_max_range"].as<double>(m_cfg.lidar_max_range);
@@ -83,17 +86,6 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
 
     std::string mode_str = m_algo_raw->getPipelineMode();
     RCLCPP_INFO(get_logger(), "SlamNode ready: algo=%s mode=%s imu=%s lidar=%s", algo_name.c_str(), mode_str.c_str(), m_cfg.imu_topic.c_str(), m_cfg.lidar_topic.c_str());
-}
-
-void SlamNode::loadParameters() {
-    this->declare_parameter<std::string>("imu_topic", m_cfg.imu_topic);
-    this->declare_parameter<std::string>("lidar_topic", m_cfg.lidar_topic);
-    this->declare_parameter<std::string>("body_frame", m_cfg.body_frame);
-    this->declare_parameter<std::string>("world_frame", m_cfg.world_frame);
-    this->get_parameter("imu_topic", m_cfg.imu_topic);
-    this->get_parameter("lidar_topic", m_cfg.lidar_topic);
-    this->get_parameter("body_frame", m_cfg.body_frame);
-    this->get_parameter("world_frame", m_cfg.world_frame);
 }
 
 void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {

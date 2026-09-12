@@ -22,12 +22,6 @@ def generate_launch_description():
         'use_rviz', default_value='true',
         description='Launch rviz2 with the package rviz config')
 
-    lidar_topic_arg = DeclareLaunchArgument(
-        'lidar_topic', default_value='/lidar')
-
-    imu_topic_arg = DeclareLaunchArgument(
-        'imu_topic', default_value='/imu')
-
     config_arg = DeclareLaunchArgument(
         'config_file', default_value='default.yaml',
         description='Config file name under <pkg>/config (e.g. default.yaml, livox.yaml, sim_vlp16.yaml)')
@@ -51,8 +45,6 @@ def generate_launch_description():
             'slam_algorithm': LaunchConfiguration('slam_algorithm'),
             'config_path': config_default,
             'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'lidar_topic': LaunchConfiguration('lidar_topic'),
-            'imu_topic': LaunchConfiguration('imu_topic'),
         }]
     )
 
@@ -71,8 +63,6 @@ def generate_launch_description():
         slam_algorithm_arg,
         use_sim_time_arg,
         use_rviz_arg,
-        lidar_topic_arg,
-        imu_topic_arg,
         config_arg,
         slam_node,
         rviz_node,
