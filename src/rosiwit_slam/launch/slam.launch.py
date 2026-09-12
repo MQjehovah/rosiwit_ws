@@ -24,7 +24,7 @@ def generate_launch_description():
 
     config_arg = DeclareLaunchArgument(
         'config_file', default_value='default.yaml',
-        description='Config file name under <pkg>/config (e.g. default.yaml, livox.yaml, sim_vlp16.yaml)')
+        description='Config file name under <pkg>/config (e.g. default.yaml, livox.yaml, sim_vlp16.yaml, vanjee722.yaml)')
 
     from ament_index_python.packages import get_package_share_directory
     from launch_ros.substitutions import FindPackageShare
