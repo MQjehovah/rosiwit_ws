@@ -2,6 +2,7 @@
 #include "algorithms/pcd_map_manager/occupancy_grid_map.h"
 #include <fstream>
 #include <cmath>
+#include <limits>
 #include <algorithm>
 #include <iostream>
 #include <pcl/common/common.h>
@@ -22,30 +23,65 @@ bool OccupancyGridMap::buildFromPointCloud(
 {
     if (!cloud || cloud->empty()) return false;
 
-    // 降采样去噪
+    // 1. 仅保留有限坐标点并统计包围盒:
+    //    建图结果发散时会出现极端离群点, NaN/Inf 会让 getMinMax3D/VoxelGrid 得到垃圾边界,
+    //    进而导致下面 int 网格尺寸溢出、std::vector 分配错乱而段错误。
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr finite(new pcl::PointCloud<pcl::PointXYZINormal>);
+    finite->reserve(cloud->size());
+    double min_x = std::numeric_limits<double>::max();
+    double max_x = std::numeric_limits<double>::lowest();
+    double min_y = min_x, max_y = max_x;
+    double min_z = min_x, max_z = max_x;
+    for (const auto& p : cloud->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        finite->push_back(p);
+        min_x = std::min(min_x, static_cast<double>(p.x));
+        max_x = std::max(max_x, static_cast<double>(p.x));
+        min_y = std::min(min_y, static_cast<double>(p.y));
+        max_y = std::max(max_y, static_cast<double>(p.y));
+        min_z = std::min(min_z, static_cast<double>(p.z));
+        max_z = std::max(max_z, static_cast<double>(p.z));
+    }
+    if (finite->empty()) return false;
+
+    // 2. 自适应体素下采样 leaf: 限制每轴体素数, 避免 PCL VoxelGrid 整数索引溢出
+    const double extent = std::max({max_x - min_x, max_y - min_y, max_z - min_z, 1e-3});
+    const double leaf = std::max(0.1, extent / 1024.0);
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZINormal>);
     pcl::VoxelGrid<pcl::PointXYZINormal> vg;
-    vg.setInputCloud(cloud);
-    vg.setLeafSize(0.1f, 0.1f, 0.1f);
+    vg.setInputCloud(finite);
+    vg.setLeafSize(static_cast<float>(leaf), static_cast<float>(leaf), static_cast<float>(leaf));
     vg.filter(*filtered);
+    if (filtered->empty()) return false;
 
-    pcl::PointXYZINormal min_pt, max_pt;
-    pcl::getMinMax3D(*filtered, min_pt, max_pt);
+    // 3. 网格分辨率: 若按请求分辨率会超出格数上限, 自适应放粗, 避免 int 溢出与内存爆炸
+    const long long MAX_CELLS = 25LL * 1000 * 1000;   // 2500 万格
+    double res = std::max(1e-3, m_config.resolution);
+    double span_x = std::max(max_x - min_x, res);
+    double span_y = std::max(max_y - min_y, res);
+    double need = std::ceil(span_x / res) * std::ceil(span_y / res);
+    if (need > static_cast<double>(MAX_CELLS)) {
+        double scale = std::sqrt(need / static_cast<double>(MAX_CELLS));
+        res *= scale;
+        std::cout << "[GridMap] WARN map too large, resolution coarsened "
+                  << m_config.resolution << " -> " << res << std::endl;
+    }
+    m_config.resolution = res;   // 保证 saveToPGM/yaml 与实际一致
 
-    double min_x = std::min(static_cast<double>(min_pt.x), origin.x());
-    double max_x = std::max(static_cast<double>(max_pt.x), origin.x());
-    double min_y = std::min(static_cast<double>(min_pt.y), origin.y());
-    double max_y = std::max(static_cast<double>(max_pt.y), origin.y());
+    double gmin_x = std::min(min_x, origin.x());
+    double gmax_x = std::max(max_x, origin.x());
+    double gmin_y = std::min(min_y, origin.y());
+    double gmax_y = std::max(max_y, origin.y());
 
-    m_width  = static_cast<int>(std::ceil((max_x - min_x) / m_config.resolution)) + 3;
-    m_height = static_cast<int>(std::ceil((max_y - min_y) / m_config.resolution)) + 3;
-    m_origin_x = min_x - m_config.resolution;
-    m_origin_y = min_y - m_config.resolution;
+    m_width  = static_cast<int>(std::ceil((gmax_x - gmin_x) / res)) + 3;
+    m_height = static_cast<int>(std::ceil((gmax_y - gmin_y) / res)) + 3;
+    m_origin_x = gmin_x - res;
+    m_origin_y = gmin_y - res;
 
-    // 自适应地面高度检测
+    // 自适应地面高度检测 (基于有限点包围盒)
     std::vector<int> z_hist(100, 0);
-    double z_min = static_cast<double>(min_pt.z);
-    double z_max = static_cast<double>(max_pt.z);
+    double z_min = min_z;
+    double z_max = max_z;
     double z_range = z_max - z_min + 0.001;
     for (const auto& pt : filtered->points) {
         int bin = static_cast<int>((pt.z - z_min) / z_range * 99);
@@ -71,8 +107,8 @@ bool OccupancyGridMap::buildFromPointCloud(
     std::vector<int> any_count(total_cells, 0);   // 任意高度的点数(用于判断是否被观测到)
 
     for (const auto& pt : filtered->points) {
-        int col = static_cast<int>((pt.x - m_origin_x) / m_config.resolution);
-        int row = static_cast<int>((pt.y - m_origin_y) / m_config.resolution);
+        int col = static_cast<int>((pt.x - m_origin_x) / res);
+        int row = static_cast<int>((pt.y - m_origin_y) / res);
         if (col < 0 || col >= m_width || row < 0 || row >= m_height) continue;
         int idx = cellIndex(col, row);
         any_count[idx]++;

@@ -2,6 +2,7 @@
 #include "ros_interface/ros_utils.h"
 #include <pcl_conversions/pcl_conversions.h>
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RosUtils::ros2PCL(
@@ -54,6 +55,9 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RosUtils::ros2PCL(
     cloud->reserve(point_num / filter_num + 1);
     for (int i = 0; i < point_num; i += filter_num) {
         const auto& p = tmp_cloud->points[i];
+        // 丢弃无效点: 机械式雷达(如 Vanjee)对无回波点输出 NaN/Inf,
+        // 而 NaN 与任何值比较均为 false, 会绕过下面的距离过滤进入建图/GICP KNN 触发断言。
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         const float d2 = p.x * p.x + p.y * p.y + p.z * p.z;
         if (d2 < min_range * min_range || d2 > max_range * max_range) continue;
         pcl::PointXYZINormal pt;
