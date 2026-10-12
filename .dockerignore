@@ -1,0 +1,15 @@
+# 构建上下文 = 仓库根目录。镜像只需要 docker/ 与 src/rosiwit_slam, 其余全部排除,
+# 避免把 build/ install/ log/ docs/ 以及 src 下其他包打进上下文。
+/*
+!/docker
+!/src
+/src/*
+!/src/rosiwit_slam
+
+# 兜底: 无论如何都不打包这些
+.git
+.gitignore
+build
+install
+log
+docs
