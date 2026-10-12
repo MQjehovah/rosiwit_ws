@@ -50,9 +50,16 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     if (!m_algo->init(config_path)) { RCLCPP_FATAL(this->get_logger(), "Init failed"); throw std::runtime_error("init failed"); }
     m_algo->setOutputCallback([this](const SlamOutput& o){ onOutput(o); });
 
-    m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, 10, std::bind(&SlamNode::imuCB, this, _1));
-    m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, 10, std::bind(&SlamNode::lidarCB, this, _1));
-    m_init_pose_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10, std::bind(&SlamNode::initialPoseCB, this, _1));
+    // 回调分组: 传感器订阅独立于"重处理"(定时器/服务)分组。配合多线程执行器,
+    // 即使建图/回环/保存地图耗时, 收包回调仍能在另一线程及时入队, 避免 DDS 队列溢出丢帧。
+    m_sensor_cb_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    m_work_cb_group   = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rclcpp::SubscriptionOptions sensor_sub_opts;
+    sensor_sub_opts.callback_group = m_sensor_cb_group;
+
+    m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, 1000, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
+    m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, 100, std::bind(&SlamNode::lidarCB, this, _1), sensor_sub_opts);
+    m_init_pose_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10, std::bind(&SlamNode::initialPoseCB, this, _1), sensor_sub_opts);
 
     m_body_cloud_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("body_cloud", 10000);
     m_world_cloud_pub = create_publisher<sensor_msgs::msg::PointCloud2>("world_cloud", 10000);
@@ -73,16 +80,17 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
         static_tf.transform.rotation.w = 1.0;
         m_static_tf->sendTransform(static_tf);
     }
-    // 事件驱动: LiDAR 到达时立即触发处理 (tryPopAndProcess 内部有锁保护)
-    // 低频率兜底定时器, 防止数据在极端时序下堆积
-    m_process_timer = create_wall_timer(100ms, std::bind(&SlamNode::timerCB, this));
-    m_map_timer = create_wall_timer(2s,   std::bind(&SlamNode::mapTimerCB, this));
+    // 处理定时器(work 分组): 只做重处理, 与传感器收包分组互不阻塞。
+    // 缩短周期以降低入队->处理的延迟; 每 tick 把已同步的包一次性排空, 避免积压。
+    m_process_timer = create_wall_timer(20ms, std::bind(&SlamNode::timerCB, this), m_work_cb_group);
+    m_map_timer = create_wall_timer(2s,   std::bind(&SlamNode::mapTimerCB, this), m_work_cb_group);
     m_path.header.frame_id = m_cfg.world_frame;
 
-    m_srv_save_map = create_service<rosiwit_slam::srv::SaveMap>("save_map", std::bind(&SlamNode::handleSaveMap, this, _1, _2, _3));
-    m_srv_load_map = create_service<rosiwit_slam::srv::LoadMap>("load_map", std::bind(&SlamNode::handleLoadMap, this, _1, _2, _3));
-    m_srv_save_grid_map = create_service<rosiwit_slam::srv::SaveGridMap>("save_grid_map", std::bind(&SlamNode::handleSaveGridMap, this, _1, _2, _3));
-    m_srv_set_slam_mode = create_service<rosiwit_slam::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3));
+    // 服务与处理定时器同组, 避免保存地图等操作与建图重处理并发(扫描上下文/地图非线程安全)
+    m_srv_save_map = create_service<rosiwit_slam::srv::SaveMap>("save_map", std::bind(&SlamNode::handleSaveMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_load_map = create_service<rosiwit_slam::srv::LoadMap>("load_map", std::bind(&SlamNode::handleLoadMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_save_grid_map = create_service<rosiwit_slam::srv::SaveGridMap>("save_grid_map", std::bind(&SlamNode::handleSaveGridMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_set_slam_mode = create_service<rosiwit_slam::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
 
     std::string mode_str = m_algo_raw->getPipelineMode();
     RCLCPP_INFO(get_logger(), "SlamNode ready: algo=%s mode=%s imu=%s lidar=%s", algo_name.c_str(), mode_str.c_str(), m_cfg.imu_topic.c_str(), m_cfg.lidar_topic.c_str());
@@ -103,12 +111,7 @@ void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     f.start_time = RosUtils::getSec(msg->header);
     f.end_time = f.start_time + (f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0);
     m_algo->onLidar(f);
-
-    // 事件驱动: LiDAR 入队后立即尝试同步处理, 减少定时器轮询延迟
-    // tryPopAndProcess 内部使用 m_buf_mutex, 与 onLidar 非同一锁 (后者已释放)
-    if (auto* base = dynamic_cast<SlamBase*>(m_algo_raw)) {
-        base->tryPopAndProcess();
-    }
+    // 只入队, 重处理交给 work 分组定时器, 保证本回调尽快返回、不阻塞后续收包
 }
 
 void SlamNode::onOutput(const SlamOutput& out) {
@@ -134,7 +137,8 @@ void SlamNode::onOutput(const SlamOutput& out) {
 
 void SlamNode::timerCB() {
     auto* base = dynamic_cast<SlamBase*>(m_algo.get());
-    if (base) base->tryPopAndProcess();
+    // 一次 tick 内排空所有已同步的包, 防止重处理慢时数据在内部缓冲区积压
+    if (base) { while (base->tryPopAndProcess()) {} }
     SlamOutput out; bool have;
     { std::lock_guard<std::mutex> lock(m_out_mutex); have = m_have_output; out = m_latest; }
     if (have && out.has_new_pose) publish(out);

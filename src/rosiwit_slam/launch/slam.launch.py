@@ -22,6 +22,10 @@ def generate_launch_description():
         'use_rviz', default_value='true',
         description='Launch rviz2 with the package rviz config')
 
+    use_mt_arg = DeclareLaunchArgument(
+        'use_multi_threaded', default_value='true',
+        description='Use MultiThreadedExecutor (decouple sensor RX from heavy processing to avoid dropped scans)')
+
     config_arg = DeclareLaunchArgument(
         'config_file', default_value='default.yaml',
         description='Config file name under <pkg>/config (e.g. default.yaml, livox.yaml, sim_vlp16.yaml, vanjee722.yaml)')
@@ -45,6 +49,7 @@ def generate_launch_description():
             'slam_algorithm': LaunchConfiguration('slam_algorithm'),
             'config_path': config_default,
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'use_multi_threaded': LaunchConfiguration('use_multi_threaded'),
         }]
     )
 
@@ -63,6 +68,7 @@ def generate_launch_description():
         slam_algorithm_arg,
         use_sim_time_arg,
         use_rviz_arg,
+        use_mt_arg,
         config_arg,
         slam_node,
         rviz_node,
