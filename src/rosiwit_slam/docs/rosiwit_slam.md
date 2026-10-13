@@ -186,6 +186,7 @@ rosiwit_slam/
 │           ├── grid_map_factory.cpp            2D 栅格策略工厂
 │           ├── grid_map_io.cpp                 PGM/YAML 读写
 │           ├── grid_map_utils.h                包围盒/去噪/形态学工具
+│           ├── grid_map_postprocess.cpp        2D 后处理管道(可组合算子)
 │           ├── ground_segmentation.cpp         地面估计(RANSAC/分位数先验)
 │           ├── height_projection_grid_map.cpp  高度投影策略
 │           ├── ray_casting_grid_map.cpp        射线投射策略(free/occupied/unknown)
@@ -367,7 +368,21 @@ rosiwit_slam/
 | `octomap` | OctoMap 3D 概率占据(内含射线 free)投影到 2D | 三态 | 逐帧观测(原点+扫描) |
 
 地面估计 (`grid_ground_method`): `ransac`(以 z 低分位数为先验, 在薄层内拟合平面, 恢复倾角且避免选中天花板)
-或 `percentile`。收尾统一做: 连通域去噪(`grid_min_component_cells`) + 形态学闭运算(`grid_close_radius`) + 膨胀(`grid_dilate_radius`)。
+或 `percentile`。
+
+**2D 后处理管道** (`algorithms/grid_map/grid_map_postprocess.*`, 可组合/可关闭):
+按 yaml `grid_post_pipeline` 顺序执行下列算子 (逗号分隔, 任选/可关闭):
+| 算子 | 功能 | 参数 |
+|------|------|------|
+| `denoise` | 连通域去噪, 剔除小块噪点 | `grid_min_component_cells`, `grid_connectivity`, `grid_no_info_is_obstacle` |
+| `open` | 形态学开运算(去毛刺) | `grid_open_radius` |
+| `close` | 形态学闭运算(填孔/连墙) | `grid_close_radius` |
+| `fill_holes` | 填内部小空洞 | `grid_fill_max_hole_cells` |
+| `dilate` | 障碍膨胀(椭圆核) | `grid_dilate_radius` |
+| `skeleton` | 骨架化+定宽膨胀(统一细墙) | `grid_skeleton_width` |
+| `line` | Hough 线段正则化(直墙) | `grid_line_min_len_m`, `grid_axis_snap` |
+
+默认管道 `denoise,close,dilate`; 追求“图纸感”可改 `grid_post_pipeline: denoise,skeleton`。
 
 策略通过 `IGridMapGenerator` 接口解耦, 新增算法只需实现接口并在 `GridMapFactory` 注册。
 `octomap` 依赖 `liboctomap-dev`(可选), 未安装时自动不注册。

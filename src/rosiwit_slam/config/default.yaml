@@ -39,6 +39,14 @@ grid_ransac_dist_thr: 0.10
 grid_min_hits: 2            # occupancy_logodds: 占据所需命中帧数
 grid_min_misses: 2          # occupancy_logodds: 自由所需未命中次数
 grid_mark_radius: 0
+# 2D 后处理管道 (可选算子: denoise|open|close|fill_holes|dilate|skeleton|line)
+grid_post_pipeline: denoise,close,dilate
+grid_connectivity: 8
+grid_open_radius: 0
+grid_fill_max_hole_cells: 0
+grid_skeleton_width: 0
+grid_line_min_len_m: 0.0
+grid_axis_snap: false
 
 # ---- GICP 定位参数 (GicpLocalization) ----
 voxel_resolution: 0.3

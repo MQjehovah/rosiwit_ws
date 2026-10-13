@@ -22,6 +22,7 @@
 #include <pcl/io/pcd_io.h>
 #include "algorithms/grid_map/grid_map_factory.h"
 #include "algorithms/grid_map/grid_map_io.h"
+#include "algorithms/grid_map/grid_map_postprocess.h"
 
 using namespace rosiwit_slam;
 
@@ -94,6 +95,10 @@ int main(int argc, char** argv) {
             std::cerr << "[grid_map_tool] strategy '" << name << "' failed" << std::endl;
             continue;
         }
+        GridPostConfig post;
+        post.resolution = info.resolution;
+        post.point_spacing = cfg.point_spacing;
+        applyGridPostProcess(info, post);
         const std::string pgm = out_dir + "/" + name + ".pgm";
         const std::string yml = out_dir + "/" + name + ".yaml";
         if (!saveGridMapPGM(info, pgm, yml, "map")) {

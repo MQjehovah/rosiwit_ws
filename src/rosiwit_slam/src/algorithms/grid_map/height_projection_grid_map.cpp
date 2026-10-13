@@ -101,6 +101,7 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
     }
 
     // 生成栅格: 默认全部 FREE, 只标记障碍高度范围的点为 OCCUPIED
+    // (去噪/闭运算/膨胀等统一由后处理管道处理)
     std::vector<int8_t> data(total_cells, 0);
     int occupied_cells = 0;
     for (int i = 0; i < total_cells; ++i) {
@@ -110,58 +111,10 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
         }
     }
 
-    // 去噪: 剔除小块占据簇 (膨胀前)
-    if (cfg.min_component_cells > 1) {
-        int before = occupied_cells;
-        removeSmallOccupiedComponents(data, width, height, cfg.min_component_cells, 0);
-        occupied_cells = 0;
-        for (auto v : data) if (v == 100) ++occupied_cells;
-        std::cout << "[GridMap] denoise: occupied " << before << " -> " << occupied_cells << std::endl;
-    }
-    if (cfg.close_radius > 0) {
-        morphCloseOccupied(data, width, height, cfg.close_radius);
-        occupied_cells = 0;
-        for (auto v : data) if (v == 100) ++occupied_cells;
-    }
-
-    // 障碍膨胀: 建图点云经体素下采样后点间距通常大于网格分辨率,
-    // 单点只落在孤立格中会形成"零星点/断续墙". 按点间距自动膨胀(或显式指定)
-    // 把这些点连成连续墙体, 同时略微加厚.
-    int dilate = cfg.dilate_radius;
-    if (dilate < 0) {
-        dilate = (cfg.point_spacing > 0.0)
-            ? static_cast<int>(std::floor(cfg.point_spacing / (2.0 * res)))
-            : 0;
-    }
-    if (dilate > 0 && occupied_cells > 0) {
-        std::vector<int8_t> dilated = data;
-        const int r2 = dilate * dilate;
-        for (int row = 0; row < height; ++row) {
-            for (int col = 0; col < width; ++col) {
-                if (data[cellIndex(col, row, width)] != 100) continue;
-                for (int dy = -dilate; dy <= dilate; ++dy) {
-                    int nr = row + dy;
-                    if (nr < 0 || nr >= height) continue;
-                    for (int dx = -dilate; dx <= dilate; ++dx) {
-                        if (dx * dx + dy * dy > r2) continue;
-                        int nc = col + dx;
-                        if (nc < 0 || nc >= width) continue;
-                        int idx = cellIndex(nc, nr, width);
-                        if (dilated[idx] == 0) {
-                            dilated[idx] = 100;
-                            occupied_cells++;
-                        }
-                    }
-                }
-            }
-        }
-        data.swap(dilated);
-    }
-
     std::cout << "[GridMap] " << width << "x" << height
               << " occupied=" << occupied_cells
               << " total=" << total_cells
-              << " dilate=" << dilate << " res=" << res << std::endl;
+              << " res=" << res << std::endl;
 
     out.width = width;
     out.height = height;

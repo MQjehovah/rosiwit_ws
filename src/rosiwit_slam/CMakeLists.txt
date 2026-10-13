@@ -94,6 +94,9 @@ endif()
 # 尝试查找yaml-cpp
 find_package(yaml-cpp QUIET)
 
+# OpenCV - 2D 栅格后处理管道 (形态学/细化/直线)
+find_package(OpenCV REQUIRED)
+
 # ==================== 编译选项 ====================
 if(NOT yaml-cpp_FOUND)
     message(WARNING "yaml-cpp not found, configuration file loading disabled")
@@ -152,6 +155,7 @@ set(GRID_MAP_SOURCES
     src/algorithms/grid_map/occupancy_logodds.cpp
     src/algorithms/grid_map/grid_map_io.cpp
     src/algorithms/grid_map/grid_map_factory.cpp
+    src/algorithms/grid_map/grid_map_postprocess.cpp
     src/algorithms/grid_map/ground_segmentation.cpp
 )
 
@@ -229,6 +233,8 @@ if(octomap_FOUND)
     target_link_libraries(${NODE_NAME} ${OCTOMAP_LIBRARIES})
 endif()
 
+target_link_libraries(${NODE_NAME} ${OpenCV_LIBS})
+
 # Sophus - 仅在找到时链接
 if(Sophus_FOUND)
     target_link_libraries(${NODE_NAME} Sophus::Sophus)
@@ -259,7 +265,7 @@ target_include_directories(grid_map_tool PRIVATE
 if(octomap_FOUND)
     target_link_libraries(grid_map_tool ${OCTOMAP_LIBRARIES})
 endif()
-target_link_libraries(grid_map_tool ${PCL_LIBRARIES})
+target_link_libraries(grid_map_tool ${PCL_LIBRARIES} ${OpenCV_LIBS})
 install(TARGETS grid_map_tool DESTINATION lib/${PROJECT_NAME})
 
 # ==================== 安装 ====================
@@ -320,6 +326,7 @@ if(BUILD_TESTING)
         if(octomap_FOUND)
             target_link_libraries(test_slam_factory ${OCTOMAP_LIBRARIES})
         endif()
+        target_link_libraries(test_slam_factory ${OpenCV_LIBS})
         if(Ceres_FOUND)
             target_sources(test_slam_factory PRIVATE src/algorithms/ceres_backend/ceres_backend.cpp)
             target_link_libraries(test_slam_factory Ceres::ceres)
@@ -362,6 +369,7 @@ if(BUILD_TESTING)
         if(octomap_FOUND)
             target_link_libraries(test_slam_pipeline ${OCTOMAP_LIBRARIES})
         endif()
+        target_link_libraries(test_slam_pipeline ${OpenCV_LIBS})
         if(Ceres_FOUND)
             target_sources(test_slam_pipeline PRIVATE src/algorithms/ceres_backend/ceres_backend.cpp)
             target_link_libraries(test_slam_pipeline Ceres::ceres)
@@ -432,6 +440,7 @@ if(BUILD_TESTING)
     if(octomap_FOUND)
         target_link_libraries(test_pcd_map_manager ${OCTOMAP_LIBRARIES})
     endif()
+    target_link_libraries(test_pcd_map_manager ${OpenCV_LIBS})
     install(TARGETS test_pcd_map_manager DESTINATION lib/${PROJECT_NAME})
 
     # 2D 栅格生成策略契约测试 (参数化遍历所有策略)
@@ -444,6 +453,7 @@ if(BUILD_TESTING)
     if(octomap_FOUND)
         target_link_libraries(test_grid_map_generator ${OCTOMAP_LIBRARIES})
     endif()
+    target_link_libraries(test_grid_map_generator ${OpenCV_LIBS})
     install(TARGETS test_grid_map_generator DESTINATION lib/${PROJECT_NAME})
 
     # 注释保留: 已移除的旧测试说明 (test_scan_context_lc 已随 simple_scan_context 删除)

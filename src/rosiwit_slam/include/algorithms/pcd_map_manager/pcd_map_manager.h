@@ -4,6 +4,7 @@
 #include <memory>
 #include "slam_core/i_map_manager.h"
 #include "slam_core/i_grid_map_generator.h"
+#include "algorithms/grid_map/grid_map_postprocess.h"
 
 namespace rosiwit_slam {
 
@@ -56,6 +57,7 @@ private:
     std::unique_ptr<IGridMapGenerator> grid_gen_;
     std::string grid_gen_name_ = "height_projection";
     GridMapConfig grid_cfg_;
+    GridPostConfig grid_post_cfg_;      // 2D 后处理管道 (可组合/可关闭)
     std::vector<Observation> observations_;   // 逐帧观测(原点+世界系扫描), 供射线类策略使用
 };
 

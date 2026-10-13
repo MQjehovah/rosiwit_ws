@@ -153,58 +153,12 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
         }
     }
 
-    // 5.5 去噪: 剔除小块占据簇 (膨胀前)
-    if (cfg.min_component_cells > 1) {
-        int before = occupied_cells;
-        removeSmallOccupiedComponents(data, width, height, cfg.min_component_cells, -1);
-        occupied_cells = 0;
-        for (auto v : data) if (v == 100) ++occupied_cells;
-        std::cout << "[RayCast] denoise: occupied " << before << " -> " << occupied_cells << std::endl;
-    }
-    if (cfg.close_radius > 0) {
-        morphCloseOccupied(data, width, height, cfg.close_radius);
-        occupied_cells = 0;
-        for (auto v : data) if (v == 100) ++occupied_cells;
-    }
-
-    // 6. 障碍膨胀: 连通稀疏回波, 并加厚以匹配机器人半径
-    int dilate = cfg.dilate_radius;
-    if (dilate < 0) {
-        dilate = (cfg.point_spacing > 0.0)
-            ? static_cast<int>(std::floor(cfg.point_spacing / (2.0 * res)))
-            : 0;
-    }
-    if (dilate > 0 && occupied_cells > 0) {
-        std::vector<int8_t> dilated = data;
-        const int r2 = dilate * dilate;
-        for (int row = 0; row < height; ++row) {
-            for (int col = 0; col < width; ++col) {
-                if (data[cellIndex(col, row, width)] != 100) continue;
-                for (int dy = -dilate; dy <= dilate; ++dy) {
-                    int nr = row + dy;
-                    if (nr < 0 || nr >= height) continue;
-                    for (int dx = -dilate; dx <= dilate; ++dx) {
-                        if (dx * dx + dy * dy > r2) continue;
-                        int nc = col + dx;
-                        if (nc < 0 || nc >= width) continue;
-                        int idx = cellIndex(nc, nr, width);
-                        if (dilated[idx] == 0) {          // 只膨胀 free, 保留 unknown
-                            dilated[idx] = 100;
-                            occupied_cells++;
-                        }
-                    }
-                }
-            }
-        }
-        data.swap(dilated);
-    }
-
     int free_cells = 0;
     for (auto v : data) if (v == 0) ++free_cells;
     std::cout << "[RayCast] " << width << "x" << height
               << " obs=" << obs.size() << " rays=" << rays
               << " occupied=" << occupied_cells << " free=" << free_cells
-              << " total=" << data.size() << " dilate=" << dilate
+              << " total=" << data.size()
               << " res=" << res << std::endl;
 
     out.width = width;

@@ -79,10 +79,29 @@ bool PcdMapManager::init(const std::string& config_path) {
             grid_cfg_.min_misses = config["grid_min_misses"].as<int>();
         if (config["grid_mark_radius"])
             grid_cfg_.mark_radius = config["grid_mark_radius"].as<int>();
+        // ---- 2D 后处理管道 ----
+        if (config["grid_post_pipeline"])
+            grid_post_cfg_.pipeline = parsePostPipeline(config["grid_post_pipeline"].as<std::string>());
         if (config["grid_min_component_cells"])
-            grid_cfg_.min_component_cells = config["grid_min_component_cells"].as<int>();
+            grid_post_cfg_.min_component_cells = config["grid_min_component_cells"].as<int>();
+        if (config["grid_connectivity"])
+            grid_post_cfg_.connectivity = config["grid_connectivity"].as<int>();
+        if (config["grid_no_info_is_obstacle"])
+            grid_post_cfg_.no_info_is_obstacle = config["grid_no_info_is_obstacle"].as<bool>();
         if (config["grid_close_radius"])
-            grid_cfg_.close_radius = config["grid_close_radius"].as<int>();
+            grid_post_cfg_.close_radius = config["grid_close_radius"].as<int>();
+        if (config["grid_open_radius"])
+            grid_post_cfg_.open_radius = config["grid_open_radius"].as<int>();
+        if (config["grid_fill_max_hole_cells"])
+            grid_post_cfg_.max_hole_cells = config["grid_fill_max_hole_cells"].as<int>();
+        if (config["grid_dilate_radius"])
+            grid_post_cfg_.dilate_radius = config["grid_dilate_radius"].as<int>();
+        if (config["grid_skeleton_width"])
+            grid_post_cfg_.skeleton_width = config["grid_skeleton_width"].as<int>();
+        if (config["grid_line_min_len_m"])
+            grid_post_cfg_.line_min_len_m = config["grid_line_min_len_m"].as<double>();
+        if (config["grid_axis_snap"])
+            grid_post_cfg_.axis_snap = config["grid_axis_snap"].as<bool>();
     } catch (const std::exception& e) {
         std::cerr << "[PcdMapManager] Config parse error: " << e.what() << std::endl;
         return false;
@@ -258,6 +277,10 @@ bool PcdMapManager::generateGridMap(double resolution) {
         : grid_gen_->build(global_map_, Eigen::Vector3d::Zero(), cfg, info);
     if (!ok) return false;
 
+    grid_post_cfg_.resolution = info.resolution;
+    grid_post_cfg_.point_spacing = save_voxel_;
+    applyGridPostProcess(info, grid_post_cfg_);
+
     m_grid_data = info.data;
     m_grid_w = info.width;
     m_grid_h = info.height;
@@ -290,6 +313,11 @@ bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& 
         ? grid_gen_->buildFromObservations(observations_, Eigen::Vector3d::Zero(), cfg, info)
         : grid_gen_->build(global_map_, Eigen::Vector3d::Zero(), cfg, info);
     if (!ok) return false;
+
+    grid_post_cfg_.resolution = info.resolution;
+    grid_post_cfg_.point_spacing = save_voxel_;
+    applyGridPostProcess(info, grid_post_cfg_);
+
     if (!saveGridMapPGM(info, pgm_path, yaml_path, frame_id)) return false;
 
     m_grid_data = info.data;
