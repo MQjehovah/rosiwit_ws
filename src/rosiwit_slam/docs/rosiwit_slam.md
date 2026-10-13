@@ -186,7 +186,8 @@ rosiwit_slam/
 │           ├── grid_map_factory.cpp            2D 栅格策略工厂
 │           ├── grid_map_io.cpp                 PGM/YAML 读写
 │           ├── height_projection_grid_map.cpp  高度投影策略
-│           └── ray_casting_grid_map.cpp        射线投射策略(free/occupied/unknown)
+│           ├── ray_casting_grid_map.cpp        射线投射策略(free/occupied/unknown)
+│           └── octomap_grid_map.cpp            OctoMap 概率占据策略(可选)
 ├── include/                          (对应头文件, 结构同上)
 ├── config/default.yaml               统一配置
 ├── launch/slam.launch.py             启动文件
@@ -359,8 +360,13 @@ rosiwit_slam/
 |------|------|--------------|------|
 | `height_projection` | 障碍高度带内点数投影 + 阈值 + 膨胀 | 未占据一律 free | 合并全局点云 |
 | `ray_casting` | 逐帧原点向回波投射线(Bresenham), 途经 free/终点 occupied | 未观测 unknown(-1) | 逐帧观测(原点+扫描) |
+| `octomap` | OctoMap 3D 概率占据(内含射线 free)投影到 2D | free/unknown 三态 | 逐帧观测(原点+扫描) |
 
 策略通过 `IGridMapGenerator` 接口解耦, 新增算法只需实现接口并在 `GridMapFactory` 注册。
+`octomap` 依赖 `liboctomap-dev`(可选), 未安装时自动不注册。
+
+对比工具: `scripts/compare_grid_maps.py out.png a.pgm b.pgm ...` 将多张 PGM 并排渲染为 PNG,
+并输出 occupied/free/unknown 占比(控制台/CSV), 用于横向评估各策略能力上限。
 
 **优势**:
 - 标准 PCD 格式，与主流工具兼容（CloudCompare / PDAL）

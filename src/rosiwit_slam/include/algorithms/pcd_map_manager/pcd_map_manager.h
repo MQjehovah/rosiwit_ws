@@ -25,6 +25,7 @@ public:
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path,
                      double resolution = 0.05) override;
     GridInfo getGridInfo() const override;
+    bool setGridMapGenerator(const std::string& name) override;
 
     bool loadGridMap(const std::string& pgm_path, const std::string& yaml_path);
 
@@ -53,6 +54,7 @@ private:
 
     // 2D 占据栅格: 生成策略 + 参数 (yaml: grid_map_generator / grid_*)
     std::unique_ptr<IGridMapGenerator> grid_gen_;
+    std::string grid_gen_name_ = "height_projection";
     GridMapConfig grid_cfg_;
     std::vector<Observation> observations_;   // 逐帧观测(原点+世界系扫描), 供射线类策略使用
 };

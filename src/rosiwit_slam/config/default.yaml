@@ -26,7 +26,7 @@ map_resolution: 0.3
 map_save_voxel: 0.3
 
 # ---- 2D 占据栅格建图 (grid_map_generator: GridMapFactory 注册的生成策略) ----
-grid_map_generator: height_projection
+grid_map_generator: height_projection  # height_projection | ray_casting | octomap(需liboctomap)
 grid_min_height: 0.1        # 地面以上障碍最低高度(m)
 grid_max_height: 2.0        # 地面以上障碍最高高度(m)
 grid_occupied_thresh: 1     # 每格最少点数判为占据
@@ -98,3 +98,6 @@ localization:
   icp_max_corr_dist: 2.0
   icp_fitness_thresh: 1.0
   icp_max_iter: 32
+# grid_ground_z: 0.0         # 手动指定地面高度(m); 注释/缺省=自适应检测
+# grid_min_component_cells: 10   # 去噪: 小于该格数的占据连通域按噪点剔除(0/1=关闭)
+# grid_close_radius: 1           # 形态学闭运算半径(格): 填补墙体筛孔/缝隙(0=关闭)

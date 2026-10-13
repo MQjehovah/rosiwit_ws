@@ -30,6 +30,8 @@ public:
     virtual bool loadMap(const std::string& /*path*/) { return false; }
     /// 保存栅格地图 (PGM + YAML)
     virtual bool saveGridMap(const std::string& /*pgm_path*/, const std::string& /*yaml_path*/, double /*resolution*/) { return false; }
+    /// 运行时切换 2D 栅格生成策略 (GridMapFactory 注册名); 默认不支持
+    virtual bool setGridMapGenerator(const std::string& /*name*/) { return false; }
     /// 设置管线模式: "idle" / "mapping" / "localization"
     virtual bool setPipelineMode(const std::string& /*mode*/) { return false; }
     /// 获取当前管线模式

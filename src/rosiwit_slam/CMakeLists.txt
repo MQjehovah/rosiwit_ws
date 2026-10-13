@@ -82,6 +82,15 @@ else()
     message(STATUS "GTSAM not found: using simplified pose graph optimization")
 endif()
 
+# octomap - 2D 栅格第三方对照策略 (octomap_grid_map)
+find_package(octomap QUIET)
+if(octomap_FOUND)
+    message(STATUS "octomap found: enabling 'octomap' grid strategy")
+    add_compile_definitions(HAVE_OCTOMAP)
+else()
+    message(STATUS "octomap not found: 'octomap' grid strategy disabled")
+endif()
+
 # 尝试查找yaml-cpp
 find_package(yaml-cpp QUIET)
 
@@ -131,6 +140,10 @@ if(GTSAM_FOUND)
     include_directories(${GTSAM_INCLUDE_DIRS})
 endif()
 
+if(octomap_FOUND)
+    include_directories(${OCTOMAP_INCLUDE_DIRS})
+endif()
+
 # ==================== 源文件 (显式列表, 避免 GLOB_RECURSE 遗漏新文件) ====================
 # 2D 栅格生成策略 (接口 slam_core/i_grid_map_generator.h)
 set(GRID_MAP_SOURCES
@@ -139,6 +152,11 @@ set(GRID_MAP_SOURCES
     src/algorithms/grid_map/grid_map_io.cpp
     src/algorithms/grid_map/grid_map_factory.cpp
 )
+
+# octomap 策略仅在找到 octomap 时编入 (策略内部由 HAVE_OCTOMAP 条件注册)
+if(octomap_FOUND)
+    list(APPEND GRID_MAP_SOURCES src/algorithms/grid_map/octomap_grid_map.cpp)
+endif()
 
 set(SOURCES
     src/main.cpp
@@ -205,6 +223,10 @@ target_link_libraries(${NODE_NAME}
     ${PCL_LIBRARIES}
 )
 
+if(octomap_FOUND)
+    target_link_libraries(${NODE_NAME} ${OCTOMAP_LIBRARIES})
+endif()
+
 # Sophus - 仅在找到时链接
 if(Sophus_FOUND)
     target_link_libraries(${NODE_NAME} Sophus::Sophus)
@@ -227,6 +249,17 @@ target_compile_definitions(${NODE_NAME} PRIVATE
     EIGEN_MPL2_ONLY
 )
 
+# ==================== 离线栅格对比工具 ====================
+# 读取 PCD, 用所有已注册策略各生成一张 PGM/YAML, 便于横向对比
+add_executable(grid_map_tool tools/grid_map_tool.cpp ${GRID_MAP_SOURCES})
+target_include_directories(grid_map_tool PRIVATE
+    include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+if(octomap_FOUND)
+    target_link_libraries(grid_map_tool ${OCTOMAP_LIBRARIES})
+endif()
+target_link_libraries(grid_map_tool ${PCL_LIBRARIES})
+install(TARGETS grid_map_tool DESTINATION lib/${PROJECT_NAME})
+
 # ==================== 安装 ====================
 install(TARGETS ${NODE_NAME}
     DESTINATION lib/${PROJECT_NAME}
@@ -246,6 +279,11 @@ install(DIRECTORY config
 
 install(DIRECTORY rviz
     DESTINATION share/${PROJECT_NAME}
+)
+
+install(DIRECTORY scripts
+    DESTINATION share/${PROJECT_NAME}
+    USE_SOURCE_PERMISSIONS
 )
 
 # ==================== 测试 ====================
@@ -276,6 +314,9 @@ if(BUILD_TESTING)
         target_link_libraries(test_slam_factory ${PCL_LIBRARIES} Sophus::Sophus)
         if(yaml-cpp_FOUND)
             target_link_libraries(test_slam_factory yaml-cpp)
+        endif()
+        if(octomap_FOUND)
+            target_link_libraries(test_slam_factory ${OCTOMAP_LIBRARIES})
         endif()
         if(Ceres_FOUND)
             target_sources(test_slam_factory PRIVATE src/algorithms/ceres_backend/ceres_backend.cpp)
@@ -315,6 +356,9 @@ if(BUILD_TESTING)
         target_link_libraries(test_slam_pipeline ${PCL_LIBRARIES} Sophus::Sophus)
         if(yaml-cpp_FOUND)
             target_link_libraries(test_slam_pipeline yaml-cpp)
+        endif()
+        if(octomap_FOUND)
+            target_link_libraries(test_slam_pipeline ${OCTOMAP_LIBRARIES})
         endif()
         if(Ceres_FOUND)
             target_sources(test_slam_pipeline PRIVATE src/algorithms/ceres_backend/ceres_backend.cpp)
@@ -383,6 +427,9 @@ if(BUILD_TESTING)
     if(yaml-cpp_FOUND)
         target_link_libraries(test_pcd_map_manager yaml-cpp)
     endif()
+    if(octomap_FOUND)
+        target_link_libraries(test_pcd_map_manager ${OCTOMAP_LIBRARIES})
+    endif()
     install(TARGETS test_pcd_map_manager DESTINATION lib/${PROJECT_NAME})
 
     # 2D 栅格生成策略契约测试 (参数化遍历所有策略)
@@ -392,6 +439,9 @@ if(BUILD_TESTING)
     target_include_directories(test_grid_map_generator PRIVATE
         include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
     target_link_libraries(test_grid_map_generator ${PCL_LIBRARIES})
+    if(octomap_FOUND)
+        target_link_libraries(test_grid_map_generator ${OCTOMAP_LIBRARIES})
+    endif()
     install(TARGETS test_grid_map_generator DESTINATION lib/${PROJECT_NAME})
 
     # 注释保留: 已移除的旧测试说明 (test_scan_context_lc 已随 simple_scan_context 删除)

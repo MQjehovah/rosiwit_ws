@@ -244,6 +244,11 @@ void SlamNode::handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std:
 }
 
 void SlamNode::handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SaveGridMap::Request> req, std::shared_ptr<rosiwit_slam::srv::SaveGridMap::Response> res) {
+    if (!req->generator.empty() && !m_algo_raw->setGridMapGenerator(req->generator)) {
+        res->success = false;
+        res->message = "Unknown generator: " + req->generator;
+        return;
+    }
     res->success = m_algo_raw->saveGridMap(req->pgm_path, req->yaml_path, req->resolution);
     res->message = res->success ? "Saved" : "Failed";
 }

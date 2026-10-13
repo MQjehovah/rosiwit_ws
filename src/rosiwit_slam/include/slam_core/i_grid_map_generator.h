@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <limits>
 #include <Eigen/Eigen>
 #include "slam_core/slam_types.h"
 
@@ -24,6 +25,9 @@ struct GridMapConfig {
     int    dilate_radius = -1;    // 障碍膨胀半径(格); <0 时按 point_spacing 自动
     double point_spacing = 0.0;   // 建图点云平均点间距(m), 用于自动膨胀
     double max_range = 0.0;       // 射线有效距离(m); <=0 表示不限
+    double ground_z = std::numeric_limits<double>::quiet_NaN();  // 地面高度(m); NaN=自适应检测
+    int    min_component_cells = 30;      // 去噪: 小于该格数的占据连通域按噪点剔除(0/1=关闭)
+    int    close_radius = 1;              // 形态学闭运算半径(格): 填补墙体筛孔/缝隙(0=关闭)
 };
 
 /// 栅格地图生成策略接口.

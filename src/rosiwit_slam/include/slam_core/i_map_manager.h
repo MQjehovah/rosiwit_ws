@@ -27,6 +27,8 @@ public:
     virtual bool saveGridMap(const std::string& /*pgm_path*/, const std::string& /*yaml_path*/, double /*resolution*/) { return false; }
     virtual bool generateGridMap(double /*resolution*/) { return false; }
     virtual GridInfo getGridInfo() const { return {}; }
+    // 运行时切换栅格生成策略 (GridMapFactory 注册名)
+    virtual bool setGridMapGenerator(const std::string& /*name*/) { return false; }
 };
 
 } // namespace rosiwit_slam

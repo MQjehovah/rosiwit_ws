@@ -47,7 +47,6 @@ bool PcdMapManager::init(const std::string& config_path) {
     }
 
 #ifndef YAML_CPP_DISABLED
-    std::string grid_gen_name = "height_projection";
     try {
         YAML::Node config = YAML::LoadFile(config_path);
         if (config["map_directory"])
@@ -55,7 +54,7 @@ bool PcdMapManager::init(const std::string& config_path) {
         if (config["map_save_voxel"])
             save_voxel_ = config["map_save_voxel"].as<double>();
         if (config["grid_map_generator"])
-            grid_gen_name = config["grid_map_generator"].as<std::string>();
+            grid_gen_name_ = config["grid_map_generator"].as<std::string>();
         if (config["grid_min_height"])
             grid_cfg_.min_height = config["grid_min_height"].as<double>();
         if (config["grid_max_height"])
@@ -66,19 +65,26 @@ bool PcdMapManager::init(const std::string& config_path) {
             grid_cfg_.dilate_radius = config["grid_dilate_radius"].as<int>();
         if (config["grid_max_range"])
             grid_cfg_.max_range = config["grid_max_range"].as<double>();
+        if (config["grid_ground_z"])
+            grid_cfg_.ground_z = config["grid_ground_z"].as<double>();
+        if (config["grid_min_component_cells"])
+            grid_cfg_.min_component_cells = config["grid_min_component_cells"].as<int>();
+        if (config["grid_close_radius"])
+            grid_cfg_.close_radius = config["grid_close_radius"].as<int>();
     } catch (const std::exception& e) {
         std::cerr << "[PcdMapManager] Config parse error: " << e.what() << std::endl;
         return false;
     }
-    grid_gen_ = GridMapFactory::create(grid_gen_name);
+    grid_gen_ = GridMapFactory::create(grid_gen_name_);
     if (!grid_gen_) {
-        std::cerr << "[PcdMapManager] Unknown grid_map_generator '" << grid_gen_name
+        std::cerr << "[PcdMapManager] Unknown grid_map_generator '" << grid_gen_name_
                   << "', fallback to height_projection" << std::endl;
-        grid_gen_ = GridMapFactory::create("height_projection");
+        grid_gen_name_ = "height_projection";
+        grid_gen_ = GridMapFactory::create(grid_gen_name_);
     }
 #else
     (void)config_path;
-    grid_gen_ = GridMapFactory::create("height_projection");
+    grid_gen_ = GridMapFactory::create(grid_gen_name_);
 #endif
 
     if (map_dir_.empty()) map_dir_ = ".";
@@ -235,7 +241,7 @@ bool PcdMapManager::generateGridMap(double resolution) {
     cfg.point_spacing = save_voxel_;
 
     GridInfo info;
-    bool ok = (grid_gen_->needsObservations() && !observations_.empty())
+    bool ok = !observations_.empty()
         ? grid_gen_->buildFromObservations(observations_, Eigen::Vector3d::Zero(), cfg, info)
         : grid_gen_->build(global_map_, Eigen::Vector3d::Zero(), cfg, info);
     if (!ok) return false;
@@ -268,7 +274,7 @@ bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& 
     cfg.point_spacing = save_voxel_;
 
     GridInfo info;
-    bool ok = (grid_gen_->needsObservations() && !observations_.empty())
+    bool ok = !observations_.empty()
         ? grid_gen_->buildFromObservations(observations_, Eigen::Vector3d::Zero(), cfg, info)
         : grid_gen_->build(global_map_, Eigen::Vector3d::Zero(), cfg, info);
     if (!ok) return false;
@@ -306,6 +312,19 @@ GridInfo PcdMapManager::getGridInfo() const {
     info.origin_y = m_grid_oy;
     info.data = m_grid_data;
     return info;
+}
+
+bool PcdMapManager::setGridMapGenerator(const std::string& name) {
+    std::lock_guard<std::mutex> lock(m_mutex_);
+    auto gen = GridMapFactory::create(name);
+    if (!gen) {
+        std::cerr << "[PcdMapManager] Unknown grid generator: " << name << std::endl;
+        return false;
+    }
+    grid_gen_ = std::move(gen);
+    grid_gen_name_ = name;
+    std::cout << "[PcdMapManager] grid generator -> " << name << std::endl;
+    return true;
 }
 
 } // namespace rosiwit_slam

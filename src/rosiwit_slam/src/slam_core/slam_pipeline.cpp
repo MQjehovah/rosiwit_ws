@@ -381,6 +381,11 @@ bool SlamPipeline::saveGridMap(const std::string& pgm_path, const std::string& y
     return m_map_mgr->saveGridMap(pgm_path, yaml_path, resolution);
 }
 
+bool SlamPipeline::setGridMapGenerator(const std::string& name) {
+    if (!m_map_mgr) return false;
+    return m_map_mgr->setGridMapGenerator(name);
+}
+
 bool SlamPipeline::setPipelineMode(const std::string& mode) {
     if (mode == "mapping")         { setMode(PipelineMode::MAPPING); return true; }
     else if (mode == "localization") { setMode(PipelineMode::LOCALIZATION); return true; }

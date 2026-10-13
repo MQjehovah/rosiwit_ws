@@ -29,6 +29,7 @@ public:
     bool saveMap(const std::string& path) override;
     bool loadMap(const std::string& path) override;
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) override;
+    bool setGridMapGenerator(const std::string& name) override;
     bool setPipelineMode(const std::string& mode) override;
     std::string getPipelineMode() const override;
     bool setInitPose(const PoseStamped& pose) override;

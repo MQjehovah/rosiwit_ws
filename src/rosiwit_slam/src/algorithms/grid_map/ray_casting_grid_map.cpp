@@ -1,5 +1,6 @@
 // src/algorithms/grid_map/ray_casting_grid_map.cpp
 #include "algorithms/grid_map/ray_casting_grid_map.h"
+#include "algorithms/grid_map/grid_map_utils.h"
 #include <cmath>
 #include <limits>
 #include <algorithm>
@@ -50,27 +51,32 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
                                               const GridMapConfig& cfg,
                                               GridInfo& out) {
     // 1. 收集有效点并统计包围盒(含所有观测原点, 保证原点格在地图内)
+    //    XY 用分位数稳健包围盒, 避免个别远端噪点把地图量程拉大.
     CloudType all;
-    double min_x = std::numeric_limits<double>::max();
-    double max_x = std::numeric_limits<double>::lowest();
-    double min_y = min_x, max_y = max_x;
-    double min_z = min_x, max_z = max_x;
-    auto expand = [&](double x, double y) {
-        min_x = std::min(min_x, x); max_x = std::max(max_x, x);
-        min_y = std::min(min_y, y); max_y = std::max(max_y, y);
-    };
+    std::vector<double> xs, ys;
+    double min_z = std::numeric_limits<double>::max();
+    double max_z = std::numeric_limits<double>::lowest();
     for (const auto& o : obs) {
         if (!o.cloud) continue;
         for (const auto& p : o.cloud->points) {
             if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
             all.push_back(p);
-            expand(p.x, p.y);
+            xs.push_back(p.x);
+            ys.push_back(p.y);
             min_z = std::min(min_z, static_cast<double>(p.z));
             max_z = std::max(max_z, static_cast<double>(p.z));
         }
     }
     if (all.empty()) return false;
-    for (const auto& o : obs) expand(o.origin.x(), o.origin.y());
+    XYBounds bb = robustXYBounds(xs, ys);
+    for (const auto& o : obs) {
+        bb.min_x = std::min(bb.min_x, o.origin.x());
+        bb.max_x = std::max(bb.max_x, o.origin.x());
+        bb.min_y = std::min(bb.min_y, o.origin.y());
+        bb.max_y = std::max(bb.max_y, o.origin.y());
+    }
+    double min_x = bb.min_x, max_x = bb.max_x;
+    double min_y = bb.min_y, max_y = bb.max_y;
 
     // 2. 网格分辨率: 超出格数上限则自适应放粗, 避免 int 溢出与内存爆炸
     const long long MAX_CELLS = 25LL * 1000 * 1000;   // 2500 万格
@@ -96,8 +102,7 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
 
     // 4. 逐帧下采样并做自适应地面检测
     std::vector<CloudType::Ptr> scans(obs.size());
-    std::vector<int> z_hist(100, 0);
-    double z_range = max_z - min_z + 0.001;
+    std::vector<double> zs;
     for (size_t i = 0; i < obs.size(); ++i) {
         scans[i].reset(new CloudType());
         if (!obs[i].cloud) continue;
@@ -111,16 +116,9 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
         vg.setInputCloud(finite);
         vg.setLeafSize(static_cast<float>(leaf), static_cast<float>(leaf), static_cast<float>(leaf));
         vg.filter(*scans[i]);
-        for (const auto& pt : scans[i]->points) {
-            int bin = static_cast<int>((pt.z - min_z) / z_range * 99);
-            if (bin >= 0 && bin < 100) z_hist[bin]++;
-        }
+        for (const auto& pt : scans[i]->points) zs.push_back(pt.z);
     }
-    int ground_bin = 0;
-    for (int i = 1; i < 100; ++i) {
-        if (z_hist[i] > z_hist[ground_bin]) ground_bin = i;
-    }
-    double ground_z = min_z + (ground_bin + 0.5) / 100.0 * z_range;
+    double ground_z = std::isnan(cfg.ground_z) ? detectGroundZ(zs) : cfg.ground_z;
     double obs_min_z = ground_z + cfg.min_height;
     double obs_max_z = ground_z + cfg.max_height;
 
@@ -154,6 +152,20 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
             }
             ++rays;
         }
+    }
+
+    // 5.5 去噪: 剔除小块占据簇 (膨胀前)
+    if (cfg.min_component_cells > 1) {
+        int before = occupied_cells;
+        removeSmallOccupiedComponents(data, width, height, cfg.min_component_cells, -1);
+        occupied_cells = 0;
+        for (auto v : data) if (v == 100) ++occupied_cells;
+        std::cout << "[RayCast] denoise: occupied " << before << " -> " << occupied_cells << std::endl;
+    }
+    if (cfg.close_radius > 0) {
+        morphCloseOccupied(data, width, height, cfg.close_radius);
+        occupied_cells = 0;
+        for (auto v : data) if (v == 100) ++occupied_cells;
     }
 
     // 6. 障碍膨胀: 连通稀疏回波, 并加厚以匹配机器人半径

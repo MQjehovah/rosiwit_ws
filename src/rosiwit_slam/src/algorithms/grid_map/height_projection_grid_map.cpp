@@ -1,5 +1,6 @@
 // src/algorithms/grid_map/height_projection_grid_map.cpp
 #include "algorithms/grid_map/height_projection_grid_map.h"
+#include "algorithms/grid_map/grid_map_utils.h"
 #include <cmath>
 #include <limits>
 #include <algorithm>
@@ -22,23 +23,26 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
     // 1. 仅保留有限坐标点并统计包围盒:
     //    建图结果发散时会出现极端离群点, NaN/Inf 会让 VoxelGrid 得到垃圾边界,
     //    进而导致下面 int 网格尺寸溢出、std::vector 分配错乱而段错误。
+    //    XY 用分位数稳健包围盒, 避免个别远端噪点把地图量程拉大.
     CloudType::Ptr finite(new CloudType());
     finite->reserve(cloud->size());
-    double min_x = std::numeric_limits<double>::max();
-    double max_x = std::numeric_limits<double>::lowest();
-    double min_y = min_x, max_y = max_x;
-    double min_z = min_x, max_z = max_x;
+    std::vector<double> xs, ys, zs;
+    xs.reserve(cloud->size());
     for (const auto& p : cloud->points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         finite->push_back(p);
-        min_x = std::min(min_x, static_cast<double>(p.x));
-        max_x = std::max(max_x, static_cast<double>(p.x));
-        min_y = std::min(min_y, static_cast<double>(p.y));
-        max_y = std::max(max_y, static_cast<double>(p.y));
-        min_z = std::min(min_z, static_cast<double>(p.z));
-        max_z = std::max(max_z, static_cast<double>(p.z));
+        xs.push_back(p.x);
+        ys.push_back(p.y);
+        zs.push_back(p.z);
     }
     if (finite->empty()) return false;
+    XYBounds bb = robustXYBounds(xs, ys);
+    double min_x = std::min(bb.min_x, origin.x());
+    double max_x = std::max(bb.max_x, origin.x());
+    double min_y = std::min(bb.min_y, origin.y());
+    double max_y = std::max(bb.max_y, origin.y());
+    auto [zmin_it, zmax_it] = std::minmax_element(zs.begin(), zs.end());
+    double min_z = *zmin_it, max_z = *zmax_it;
 
     // 2. 网格分辨率: 若按请求分辨率会超出格数上限, 自适应放粗, 避免 int 溢出与内存爆炸
     const long long MAX_CELLS = 25LL * 1000 * 1000;   // 2500 万格
@@ -64,28 +68,16 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
     vg.filter(*filtered);
     if (filtered->empty()) return false;
 
-    double gmin_x = std::min(min_x, origin.x());
-    double gmax_x = std::max(max_x, origin.x());
-    double gmin_y = std::min(min_y, origin.y());
-    double gmax_y = std::max(max_y, origin.y());
+    double gmin_x = min_x, gmax_x = max_x;
+    double gmin_y = min_y, gmax_y = max_y;
 
     int width  = static_cast<int>(std::ceil((gmax_x - gmin_x) / res)) + 3;
     int height = static_cast<int>(std::ceil((gmax_y - gmin_y) / res)) + 3;
     double origin_x = gmin_x - res;
     double origin_y = gmin_y - res;
 
-    // 自适应地面高度检测 (基于有限点包围盒)
-    std::vector<int> z_hist(100, 0);
-    double z_range = max_z - min_z + 0.001;
-    for (const auto& pt : filtered->points) {
-        int bin = static_cast<int>((pt.z - min_z) / z_range * 99);
-        if (bin >= 0 && bin < 100) z_hist[bin]++;
-    }
-    int ground_bin = 0;
-    for (int i = 1; i < 100; ++i) {
-        if (z_hist[i] > z_hist[ground_bin]) ground_bin = i;
-    }
-    double ground_z = min_z + (ground_bin + 0.5) / 100.0 * z_range;
+    // 自适应地面高度检测 (基于全部有限点 z)
+    double ground_z = std::isnan(cfg.ground_z) ? detectGroundZ(zs) : cfg.ground_z;
 
     // 障碍物高度范围: 地面以上 [min_height, max_height]
     double obs_min_z = ground_z + cfg.min_height;
@@ -116,6 +108,20 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
             data[i] = 100;
             occupied_cells++;
         }
+    }
+
+    // 去噪: 剔除小块占据簇 (膨胀前)
+    if (cfg.min_component_cells > 1) {
+        int before = occupied_cells;
+        removeSmallOccupiedComponents(data, width, height, cfg.min_component_cells, 0);
+        occupied_cells = 0;
+        for (auto v : data) if (v == 100) ++occupied_cells;
+        std::cout << "[GridMap] denoise: occupied " << before << " -> " << occupied_cells << std::endl;
+    }
+    if (cfg.close_radius > 0) {
+        morphCloseOccupied(data, width, height, cfg.close_radius);
+        occupied_cells = 0;
+        for (auto v : data) if (v == 100) ++occupied_cells;
     }
 
     // 障碍膨胀: 建图点云经体素下采样后点间距通常大于网格分辨率,
