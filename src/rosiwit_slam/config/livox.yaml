@@ -44,13 +44,13 @@ grid_min_misses: 2
 grid_mark_radius: 0
 
 # ---- 2D 后处理管道 (可组合/可关闭; 按 pipeline 顺序执行) ----
-# 可选算子: denoise | open | close | fill_holes | dilate | skeleton | line
-grid_post_pipeline: denoise,close,dilate
+# 可选算子: denoise | open | close | fill_holes | dilate | skeleton | line | metrics
+grid_post_pipeline: denoise,close,skeleton
 grid_connectivity: 8            # denoise: 4/8 连通
 grid_no_info_is_obstacle: false # denoise: unknown 是否参与占据
 grid_open_radius: 0             # open: 椭圆核半径(格), 0=关闭
 grid_fill_max_hole_cells: 0     # fill_holes: 填充 <=该面积且不接触边界的空洞, 0=关闭
-grid_skeleton_width: 0          # skeleton: >0 骨架化后按该宽度膨胀(统一细墙)
+grid_skeleton_width: 3          # skeleton: 骨架化后按该宽度膨胀(统一细墙); bag 实测~2.9格厚
 grid_line_min_len_m: 0.0        # line: >0 用 Hough 线段正则化(最小长度 m)
 grid_axis_snap: false           # line: 吸附水平/垂直
 

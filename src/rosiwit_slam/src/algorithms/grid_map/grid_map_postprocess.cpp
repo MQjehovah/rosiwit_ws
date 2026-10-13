@@ -1,5 +1,6 @@
 // src/algorithms/grid_map/grid_map_postprocess.cpp
 #include "algorithms/grid_map/grid_map_postprocess.h"
+#include "algorithms/grid_map/grid_map_metrics.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -163,6 +164,21 @@ void opLine(std::vector<int8_t>& data, int w, int h, const GridPostConfig& c, in
               << " min_len=" << min_len << std::endl;
 }
 
+void opMetrics(const std::vector<int8_t>& data, int w, int h, const GridPostConfig& c) {
+    GridInfo g;
+    g.width = w; g.height = h; g.data = data;
+    GridMetrics m = computeGridMetrics(g, c.connectivity,
+                                       std::max(2, c.min_component_cells));
+    std::cout << "[Post:metrics] occ=" << m.occupied << " free=" << m.free
+              << " unknown=" << m.unknown
+              << " comps=" << m.occupied_components
+              << " largest=" << m.largest_component
+              << " continuity=" << m.continuity
+              << " noise_comps=" << m.noise_components
+              << " free_comps=" << m.free_components
+              << " thickness=" << m.mean_thickness << std::endl;
+}
+
 } // namespace
 
 std::vector<std::string> parsePostPipeline(const std::string& s) {
@@ -196,6 +212,7 @@ void applyGridPostProcess(GridInfo& grid, const GridPostConfig& cfg) {
         else if (name == "dilate")     opDilate(grid.data, w, h, cfg, bg);
         else if (name == "skeleton")   opSkeleton(grid.data, w, h, cfg, bg);
         else if (name == "line")        opLine(grid.data, w, h, cfg, bg);
+        else if (name == "metrics")     opMetrics(grid.data, w, h, cfg);
         else std::cout << "[Post] 未知算子: " << name << " (忽略)" << std::endl;
     }
 }

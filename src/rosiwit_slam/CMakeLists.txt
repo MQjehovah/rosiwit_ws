@@ -156,6 +156,7 @@ set(GRID_MAP_SOURCES
     src/algorithms/grid_map/grid_map_io.cpp
     src/algorithms/grid_map/grid_map_factory.cpp
     src/algorithms/grid_map/grid_map_postprocess.cpp
+    src/algorithms/grid_map/grid_map_metrics.cpp
     src/algorithms/grid_map/ground_segmentation.cpp
 )
 
@@ -267,6 +268,16 @@ if(octomap_FOUND)
 endif()
 target_link_libraries(grid_map_tool ${PCL_LIBRARIES} ${OpenCV_LIBS})
 install(TARGETS grid_map_tool DESTINATION lib/${PROJECT_NAME})
+
+# 离线后处理/评估工具
+add_executable(grid_map_post tools/grid_map_post.cpp
+    src/algorithms/grid_map/grid_map_io.cpp
+    src/algorithms/grid_map/grid_map_postprocess.cpp
+    src/algorithms/grid_map/grid_map_metrics.cpp)
+target_include_directories(grid_map_post PRIVATE
+    include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+target_link_libraries(grid_map_post ${OpenCV_LIBS})
+install(TARGETS grid_map_post DESTINATION lib/${PROJECT_NAME})
 
 # ==================== 安装 ====================
 install(TARGETS ${NODE_NAME}

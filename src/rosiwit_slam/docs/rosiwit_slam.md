@@ -381,8 +381,13 @@ rosiwit_slam/
 | `dilate` | 障碍膨胀(椭圆核) | `grid_dilate_radius` |
 | `skeleton` | 骨架化+定宽膨胀(统一细墙) | `grid_skeleton_width` |
 | `line` | Hough 线段正则化(直墙) | `grid_line_min_len_m`, `grid_axis_snap` |
+| `metrics` | 仅统计(不修改): 连通域/连续性/噪点/墙厚 | `grid_connectivity`, `grid_min_component_cells` |
 
-默认管道 `denoise,close,dilate`; 追求“图纸感”可改 `grid_post_pipeline: denoise,skeleton`。
+默认管道 `denoise,close,dilate`; 追求“图纸感/细墙”用 `denoise,close,skeleton`(`grid_skeleton_width` 控厚)。
+离线评估工具 `grid_map_post`(安装于 `lib/rosiwit_slam/`) 可对 PGM 应用任意管道并打印质量指标
+(占据连通域数、最大连通域占比 continuity、噪点簇、自由连通域、平均墙厚)。bag 实测: 原始
+occupancy_logodds 有 2275 个占据簇/2185 噪点簇、墙厚~1.7 格; 经 `denoise,close,skeleton`(close1,skeleton3)
+后 ~68 簇/噪点 7、墙厚~2.9 格。
 
 策略通过 `IGridMapGenerator` 接口解耦, 新增算法只需实现接口并在 `GridMapFactory` 注册。
 `octomap` 依赖 `liboctomap-dev`(可选), 未安装时自动不注册。
