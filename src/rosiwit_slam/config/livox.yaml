@@ -28,12 +28,20 @@ map_resolution: 0.3
 map_save_voxel: 0.3
 
 # ---- 2D 占据栅格建图 (grid_map_generator: GridMapFactory 注册的生成策略) ----
-grid_map_generator: height_projection  # height_projection | ray_casting | octomap(需liboctomap)
+grid_map_generator: occupancy_logodds  # height_projection | ray_casting | occupancy_logodds | octomap
 grid_min_height: 0.1
 grid_max_height: 2.0
 grid_occupied_thresh: 1
-grid_dilate_radius: -1      # -1 按 map_save_voxel 自动连通墙体
+grid_dilate_radius: 1       # 障碍膨胀半径(格); -1 按 map_save_voxel 自动
+grid_close_radius: 1        # 形态学闭运算半径(格), 填孔
+grid_min_component_cells: 30
 grid_max_range: 0.0         # 射线有效距离(m), 0=不限
+grid_ground_method: ransac  # ransac | percentile
+grid_ransac_dist_thr: 0.10
+# 多帧证据计数 (occupancy_logodds)
+grid_min_hits: 2
+grid_min_misses: 2
+grid_mark_radius: 0
 
 # ---- GICP 定位参数 (GicpLocalization) ----
 voxel_resolution: 0.3            # 地图/扫描降采样体素

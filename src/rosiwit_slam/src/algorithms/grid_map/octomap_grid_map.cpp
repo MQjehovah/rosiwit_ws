@@ -1,6 +1,7 @@
 // src/algorithms/grid_map/octomap_grid_map.cpp
 #include "algorithms/grid_map/octomap_grid_map.h"
 #include "algorithms/grid_map/grid_map_utils.h"
+#include "algorithms/grid_map/ground_segmentation.h"
 #include <cmath>
 #include <limits>
 #include <algorithm>
@@ -30,9 +31,10 @@ bool OctomapGridMap::buildFromObservations(const std::vector<Observation>& obs,
                                            const Eigen::Vector3d& /*origin*/,
                                            const GridMapConfig& cfg,
                                            GridInfo& out) {
-    // 1. 收集有效点包围盒(含原点) + 地面检测直方图
+    // 1. 收集有效点包围盒(含原点) + 地面检测点云
     //    XY 用分位数稳健包围盒, 避免个别远端噪点把地图量程拉大.
     std::vector<double> xs, ys, zs;   // 所有有限点坐标
+    CloudType::Ptr all_pts(new CloudType());
     for (const auto& o : obs) {
         if (!o.cloud) continue;
         for (const auto& p : o.cloud->points) {
@@ -40,6 +42,7 @@ bool OctomapGridMap::buildFromObservations(const std::vector<Observation>& obs,
             xs.push_back(p.x);
             ys.push_back(p.y);
             zs.push_back(p.z);
+            all_pts->push_back(p);
         }
     }
     if (xs.empty()) return false;
@@ -71,10 +74,8 @@ bool OctomapGridMap::buildFromObservations(const std::vector<Observation>& obs,
     double origin_x = min_x - res;
     double origin_y = min_y - res;
 
-    // 3. 自适应地面检测
-    double ground_z = std::isnan(cfg.ground_z) ? detectGroundZ(zs) : cfg.ground_z;
-    double obs_min_z = ground_z + cfg.min_height;
-    double obs_max_z = ground_z + cfg.max_height;
+    // 3. 自适应地面检测 (RANSAC 平面 / 分位数)
+    GroundModel ground = fitGround(all_pts, cfg);
 
     // 4. OctoMap 累积: 逐帧 insertPointCloud (内部完成射线 free 更新)
     octomap::OcTree tree(res);
@@ -95,8 +96,10 @@ bool OctomapGridMap::buildFromObservations(const std::vector<Observation>& obs,
     }
     tree.updateInnerOccupancy();
 
-    std::cout << "[OctoMap] Ground Z=" << ground_z
-              << " obstacle: [" << obs_min_z << ", " << obs_max_z << "]"
+    std::cout << "[OctoMap] ground_method=" << cfg.ground_method
+              << " n=[" << ground.n.x() << "," << ground.n.y() << "," << ground.n.z()
+              << "] d=" << ground.d
+              << " band=[" << cfg.min_height << "," << cfg.max_height << "]"
               << " res=" << res << std::endl;
 
     // 5. 3D 占据/自由叶节点投影到 2D
@@ -108,11 +111,12 @@ bool OctomapGridMap::buildFromObservations(const std::vector<Observation>& obs,
         int row = static_cast<int>((y - origin_y) / res);
         if (col < 0 || col >= width || row < 0 || row >= height) continue;
         int idx = cellIndex(col, row, width);
+        float h = ground.height(x, y, z);
         if (tree.isNodeOccupied(*it)) {
-            if (z >= obs_min_z && z <= obs_max_z) {
+            if (h >= cfg.min_height && h <= cfg.max_height) {
                 if (data[idx] != 100) { data[idx] = 100; occupied_cells++; }
             }
-        } else if (z <= obs_max_z) {
+        } else if (h <= cfg.max_height) {
             if (data[idx] == -1) { data[idx] = 0; free_cells++; }
         }
     }

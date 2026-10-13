@@ -1,6 +1,7 @@
 // src/algorithms/grid_map/height_projection_grid_map.cpp
 #include "algorithms/grid_map/height_projection_grid_map.h"
 #include "algorithms/grid_map/grid_map_utils.h"
+#include "algorithms/grid_map/ground_segmentation.h"
 #include <cmath>
 #include <limits>
 #include <algorithm>
@@ -76,26 +77,25 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
     double origin_x = gmin_x - res;
     double origin_y = gmin_y - res;
 
-    // 自适应地面高度检测 (基于全部有限点 z)
-    double ground_z = std::isnan(cfg.ground_z) ? detectGroundZ(zs) : cfg.ground_z;
+    // 自适应地面检测 (RANSAC 平面 / 分位数)
+    GroundModel ground = fitGround(finite, cfg);
 
-    // 障碍物高度范围: 地面以上 [min_height, max_height]
-    double obs_min_z = ground_z + cfg.min_height;
-    double obs_max_z = ground_z + cfg.max_height;
-
-    std::cout << "[GridMap] Ground Z=" << ground_z
-              << " obstacle: [" << obs_min_z << ", " << obs_max_z << "]"
+    std::cout << "[GridMap] ground_method=" << cfg.ground_method
+              << " n=[" << ground.n.x() << "," << ground.n.y() << "," << ground.n.z()
+              << "] d=" << ground.d << " valid=" << ground.valid
+              << " band=[" << cfg.min_height << "," << cfg.max_height << "]"
               << " res=" << res << " leaf=" << leaf << std::endl;
 
     int total_cells = width * height;
 
-    // 统计每格的障碍物点数
+    // 统计每格的障碍物点数 (高度为相对地面的有符号高度)
     std::vector<int> obs_count(total_cells, 0);
     for (const auto& pt : filtered->points) {
         int col = static_cast<int>((pt.x - origin_x) / res);
         int row = static_cast<int>((pt.y - origin_y) / res);
         if (col < 0 || col >= width || row < 0 || row >= height) continue;
-        if (pt.z >= obs_min_z && pt.z <= obs_max_z) {
+        float h = ground.height(pt);
+        if (h >= cfg.min_height && h <= cfg.max_height) {
             obs_count[cellIndex(col, row, width)]++;
         }
     }

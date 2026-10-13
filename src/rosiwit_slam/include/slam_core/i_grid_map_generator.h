@@ -26,6 +26,13 @@ struct GridMapConfig {
     double point_spacing = 0.0;   // 建图点云平均点间距(m), 用于自动膨胀
     double max_range = 0.0;       // 射线有效距离(m); <=0 表示不限
     double ground_z = std::numeric_limits<double>::quiet_NaN();  // 地面高度(m); NaN=自适应检测
+    std::string ground_method = "ransac";  // ransac | percentile (地面估计方法)
+    double ransac_dist_thr = 0.10;         // RANSAC 平面内点距离阈值(m)
+    int    ransac_max_iter = 200;          // RANSAC 最大迭代
+    // 多帧证据计数 (occupancy_logodds 策略): 命中次数达标判占据, 未命中达标判自由
+    int    min_hits = 2;                   // 占据所需最少命中次数(独立帧)
+    int    min_misses = 2;                 // 自由所需最少未命中次数
+    int    mark_radius = 0;                // 命中端点厚化半径(格), 补掠射缝隙(0=关闭)
     int    min_component_cells = 30;      // 去噪: 小于该格数的占据连通域按噪点剔除(0/1=关闭)
     int    close_radius = 1;              // 形态学闭运算半径(格): 填补墙体筛孔/缝隙(0=关闭)
 };

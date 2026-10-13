@@ -67,6 +67,18 @@ bool PcdMapManager::init(const std::string& config_path) {
             grid_cfg_.max_range = config["grid_max_range"].as<double>();
         if (config["grid_ground_z"])
             grid_cfg_.ground_z = config["grid_ground_z"].as<double>();
+        if (config["grid_ground_method"])
+            grid_cfg_.ground_method = config["grid_ground_method"].as<std::string>();
+        if (config["grid_ransac_dist_thr"])
+            grid_cfg_.ransac_dist_thr = config["grid_ransac_dist_thr"].as<double>();
+        if (config["grid_ransac_max_iter"])
+            grid_cfg_.ransac_max_iter = config["grid_ransac_max_iter"].as<int>();
+        if (config["grid_min_hits"])
+            grid_cfg_.min_hits = config["grid_min_hits"].as<int>();
+        if (config["grid_min_misses"])
+            grid_cfg_.min_misses = config["grid_min_misses"].as<int>();
+        if (config["grid_mark_radius"])
+            grid_cfg_.mark_radius = config["grid_mark_radius"].as<int>();
         if (config["grid_min_component_cells"])
             grid_cfg_.min_component_cells = config["grid_min_component_cells"].as<int>();
         if (config["grid_close_radius"])

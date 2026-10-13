@@ -57,7 +57,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 # ==================== 第三方库依赖 ====================
 find_package(Eigen3 REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common io filters kdtree registration)
+find_package(PCL REQUIRED COMPONENTS common io filters kdtree registration segmentation sample_consensus)
 
 # Sophus - 系统库 (ros-humble-sophus)
 find_package(Sophus REQUIRED)
@@ -149,8 +149,10 @@ endif()
 set(GRID_MAP_SOURCES
     src/algorithms/grid_map/height_projection_grid_map.cpp
     src/algorithms/grid_map/ray_casting_grid_map.cpp
+    src/algorithms/grid_map/occupancy_logodds.cpp
     src/algorithms/grid_map/grid_map_io.cpp
     src/algorithms/grid_map/grid_map_factory.cpp
+    src/algorithms/grid_map/ground_segmentation.cpp
 )
 
 # octomap 策略仅在找到 octomap 时编入 (策略内部由 HAVE_OCTOMAP 条件注册)

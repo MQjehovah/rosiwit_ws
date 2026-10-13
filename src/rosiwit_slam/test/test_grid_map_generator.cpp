@@ -22,8 +22,8 @@ CloudType::Ptr makeRoomCloud(double size = 5.0) {
             cloud->push_back(PointType(static_cast<float>(x), static_cast<float>(y), 0.0f));
         }
     }
-    // 四面墙 (z 在障碍高度带内)
-    for (double t = 0.0; t <= size; t += 0.1) {
+    // 四面墙 (z 在障碍高度带内, 沿墙 0.05m 密采样使占据格连续)
+    for (double t = 0.0; t <= size; t += 0.05) {
         for (double z = 0.2; z <= 1.5; z += 0.1) {
             cloud->push_back(PointType(static_cast<float>(0.0), static_cast<float>(t), static_cast<float>(z)));
             cloud->push_back(PointType(static_cast<float>(size), static_cast<float>(t), static_cast<float>(z)));
@@ -96,6 +96,7 @@ TEST_P(GridMapContractTest, BuildsValidGrid) {
     GridMapConfig cfg;
     cfg.resolution = 0.05;
     cfg.point_spacing = 0.2;      // 模拟建图下采样点间距
+    cfg.min_component_cells = 1;  // 契约测试关闭去噪, 检查原始占据
     GridInfo out;
     ASSERT_TRUE(gen->build(makeRoomCloud(), Eigen::Vector3d::Zero(), cfg, out));
 
@@ -115,6 +116,7 @@ TEST_P(GridMapContractTest, PgmRoundTrip) {
     GridMapConfig cfg;
     cfg.resolution = 0.1;
     cfg.point_spacing = 0.2;
+    cfg.min_component_cells = 1;
     GridInfo out;
     ASSERT_TRUE(gen->build(makeRoomCloud(), Eigen::Vector3d::Zero(), cfg, out));
 
@@ -139,6 +141,7 @@ TEST(HeightProjectionGridMapTest, WallsAreContinuous) {
     GridMapConfig cfg;
     cfg.resolution = 0.05;
     cfg.point_spacing = 0.2;
+    cfg.min_component_cells = 1;
     GridInfo out;
     ASSERT_TRUE(gen.build(makeRoomCloud(5.0), Eigen::Vector3d::Zero(), cfg, out));
 
@@ -163,6 +166,8 @@ TEST(RayCastingGridMapTest, TriStateFreeOccupiedUnknown) {
     GridMapConfig cfg;
     cfg.resolution = 0.1;
     cfg.dilate_radius = 0;      // 关闭膨胀, 检验原始三态
+    cfg.min_component_cells = 1;
+    cfg.close_radius = 0;
     GridInfo out;
     ASSERT_TRUE(gen.build(makeWallScene(), Eigen::Vector3d::Zero(), cfg, out));
 

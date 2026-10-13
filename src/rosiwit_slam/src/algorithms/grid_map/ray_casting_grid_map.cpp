@@ -1,6 +1,7 @@
 // src/algorithms/grid_map/ray_casting_grid_map.cpp
 #include "algorithms/grid_map/ray_casting_grid_map.h"
 #include "algorithms/grid_map/grid_map_utils.h"
+#include "algorithms/grid_map/ground_segmentation.h"
 #include <cmath>
 #include <limits>
 #include <algorithm>
@@ -100,9 +101,9 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
     double origin_x = min_x - res;
     double origin_y = min_y - res;
 
-    // 4. 逐帧下采样并做自适应地面检测
+    // 4. 逐帧下采样并逐帧估计地面 (RANSAC 抗倾斜/漂移)
     std::vector<CloudType::Ptr> scans(obs.size());
-    std::vector<double> zs;
+    std::vector<GroundModel> grounds(obs.size());
     for (size_t i = 0; i < obs.size(); ++i) {
         scans[i].reset(new CloudType());
         if (!obs[i].cloud) continue;
@@ -116,14 +117,11 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
         vg.setInputCloud(finite);
         vg.setLeafSize(static_cast<float>(leaf), static_cast<float>(leaf), static_cast<float>(leaf));
         vg.filter(*scans[i]);
-        for (const auto& pt : scans[i]->points) zs.push_back(pt.z);
+        grounds[i] = fitGround(scans[i], cfg);
     }
-    double ground_z = std::isnan(cfg.ground_z) ? detectGroundZ(zs) : cfg.ground_z;
-    double obs_min_z = ground_z + cfg.min_height;
-    double obs_max_z = ground_z + cfg.max_height;
 
-    std::cout << "[RayCast] Ground Z=" << ground_z
-              << " obstacle: [" << obs_min_z << ", " << obs_max_z << "]"
+    std::cout << "[RayCast] ground_method=" << cfg.ground_method
+              << " band=[" << cfg.min_height << "," << cfg.max_height << "]"
               << " res=" << res << " leaf=" << leaf << std::endl;
 
     // 5. 初始化 unknown(-1), 逐帧射线投射
@@ -146,7 +144,8 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
             int row = static_cast<int>((pt.y - origin_y) / res);
             if (col < 0 || col >= width || row < 0 || row >= height) continue;
             traceFree(data, width, height, oc, orow, col, row);
-            if (pt.z >= obs_min_z && pt.z <= obs_max_z) {
+            float h = grounds[i].height(pt);
+            if (h >= cfg.min_height && h <= cfg.max_height) {
                 int idx = cellIndex(col, row, width);
                 if (data[idx] != 100) { data[idx] = 100; occupied_cells++; }
             }
