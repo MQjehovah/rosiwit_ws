@@ -1,4 +1,6 @@
 #include "algorithms/pcd_map_manager/pcd_map_manager.h"
+#include "algorithms/grid_map/grid_map_factory.h"
+#include "algorithms/grid_map/grid_map_io.h"
 #include <iostream>
 #include <fstream>
 #include <algorithm>
@@ -39,23 +41,44 @@ bool PcdMapManager::init(const std::string& config_path) {
         std::cerr << "[PcdMapManager] Config not found: " << config_path
                   << ", using defaults" << std::endl;
         map_dir_ = ".";
+        grid_gen_ = GridMapFactory::create("height_projection");
         initialized_ = true;
         return true;
     }
 
 #ifndef YAML_CPP_DISABLED
+    std::string grid_gen_name = "height_projection";
     try {
         YAML::Node config = YAML::LoadFile(config_path);
         if (config["map_directory"])
             map_dir_ = config["map_directory"].as<std::string>();
         if (config["map_save_voxel"])
             save_voxel_ = config["map_save_voxel"].as<double>();
+        if (config["grid_map_generator"])
+            grid_gen_name = config["grid_map_generator"].as<std::string>();
+        if (config["grid_min_height"])
+            grid_cfg_.min_height = config["grid_min_height"].as<double>();
+        if (config["grid_max_height"])
+            grid_cfg_.max_height = config["grid_max_height"].as<double>();
+        if (config["grid_occupied_thresh"])
+            grid_cfg_.occupied_thresh = config["grid_occupied_thresh"].as<int>();
+        if (config["grid_dilate_radius"])
+            grid_cfg_.dilate_radius = config["grid_dilate_radius"].as<int>();
+        if (config["grid_max_range"])
+            grid_cfg_.max_range = config["grid_max_range"].as<double>();
     } catch (const std::exception& e) {
         std::cerr << "[PcdMapManager] Config parse error: " << e.what() << std::endl;
         return false;
     }
+    grid_gen_ = GridMapFactory::create(grid_gen_name);
+    if (!grid_gen_) {
+        std::cerr << "[PcdMapManager] Unknown grid_map_generator '" << grid_gen_name
+                  << "', fallback to height_projection" << std::endl;
+        grid_gen_ = GridMapFactory::create("height_projection");
+    }
 #else
     (void)config_path;
+    grid_gen_ = GridMapFactory::create("height_projection");
 #endif
 
     if (map_dir_.empty()) map_dir_ = ".";
@@ -89,6 +112,7 @@ bool PcdMapManager::loadMap(const std::string& name) {
     }
     std::lock_guard<std::mutex> lock(m_mutex_);
     global_map_ = cloud;
+    observations_.clear();   // 纯 PCD 无逐帧原点, 射线类策略退回整体点云
     std::cout << "[PcdMapManager] Loaded: " << path
               << " (" << global_map_->size() << " pts)" << std::endl;
     return true;
@@ -126,6 +150,12 @@ bool PcdMapManager::addSubMap(const KeyFrame& kf) {
     if (!global_map_) global_map_.reset(new CloudType());
     *global_map_ += *transformed;
 
+    // 保存逐帧观测(原点=修正后位置), 供射线投射类栅格策略使用
+    Observation ob;
+    ob.origin = eff_pose.trans;
+    ob.cloud = transformed;
+    observations_.push_back(ob);
+
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(global_map_);
     vg.setLeafSize(save_voxel_, save_voxel_, save_voxel_);
@@ -157,6 +187,8 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
     for (size_t i = 0; i < n; ++i) used[i] = corrected[i];
 
     CloudType::Ptr rebuilt(new CloudType());
+    std::vector<Observation> rebuilt_obs;
+    rebuilt_obs.reserve(submaps_.size());
     for (size_t i = 0; i < submaps_.size(); ++i) {
         const PoseStamped* pose = (i < used.size()) ? &used[i] : &submaps_[i].pose;
         Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
@@ -165,7 +197,13 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
         CloudType::Ptr transformed(new CloudType());
         pcl::transformPointCloud(*submaps_[i].cloud, *transformed, T);
         *rebuilt += *transformed;
+
+        Observation ob;
+        ob.origin = pose->trans;
+        ob.cloud = transformed;
+        rebuilt_obs.push_back(ob);
     }
+    observations_ = std::move(rebuilt_obs);
 
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(rebuilt);
@@ -189,17 +227,27 @@ bool PcdMapManager::getCorrectionAnchor(PoseStamped& out) {
 bool PcdMapManager::generateGridMap(double resolution) {
     std::lock_guard<std::mutex> lock(m_mutex_);
     if (!global_map_ || global_map_->empty()) return false;
-    OccupancyGridConfig cfg;
+    if (!grid_gen_) grid_gen_ = GridMapFactory::create("height_projection");
+    if (!grid_gen_) return false;
+
+    GridMapConfig cfg = grid_cfg_;
     cfg.resolution = resolution;
-    OccupancyGridMap grid_map(cfg);
-    if (!grid_map.buildFromPointCloud(global_map_)) return false;
-    m_grid_data = grid_map.getData();
-    m_grid_w = grid_map.getWidth();
-    m_grid_h = grid_map.getHeight();
-    m_grid_res = resolution;
-    m_grid_ox = grid_map.getOriginX();
-    m_grid_oy = grid_map.getOriginY();
-    std::cout << "[PcdMapManager] Generated grid map: " << m_grid_w << "x" << m_grid_h << std::endl;
+    cfg.point_spacing = save_voxel_;
+
+    GridInfo info;
+    bool ok = (grid_gen_->needsObservations() && !observations_.empty())
+        ? grid_gen_->buildFromObservations(observations_, Eigen::Vector3d::Zero(), cfg, info)
+        : grid_gen_->build(global_map_, Eigen::Vector3d::Zero(), cfg, info);
+    if (!ok) return false;
+
+    m_grid_data = info.data;
+    m_grid_w = info.width;
+    m_grid_h = info.height;
+    m_grid_res = info.resolution;
+    m_grid_ox = info.origin_x;
+    m_grid_oy = info.origin_y;
+    std::cout << "[PcdMapManager] Generated grid map (" << grid_gen_->name() << "): "
+              << m_grid_w << "x" << m_grid_h << std::endl;
     return true;
 }
 
@@ -212,28 +260,40 @@ bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& 
                                   double resolution, const std::string& frame_id) {
     std::lock_guard<std::mutex> lock(m_mutex_);
     if (!global_map_ || global_map_->empty()) return false;
-    OccupancyGridConfig cfg;
+    if (!grid_gen_) grid_gen_ = GridMapFactory::create("height_projection");
+    if (!grid_gen_) return false;
+
+    GridMapConfig cfg = grid_cfg_;
     cfg.resolution = resolution;
-    OccupancyGridMap grid_map(cfg);
-    if (!grid_map.buildFromPointCloud(global_map_)) return false;
-    if (!grid_map.saveToPGM(pgm_path, yaml_path, frame_id)) return false;
-    m_grid_data = grid_map.getData();
-    m_grid_w = grid_map.getWidth();
-    m_grid_h = grid_map.getHeight();
-    m_grid_res = resolution;
-    m_grid_ox = grid_map.getOriginX();
-    m_grid_oy = grid_map.getOriginY();
-    std::cout << "[PcdMapManager] Grid map saved: " << pgm_path
+    cfg.point_spacing = save_voxel_;
+
+    GridInfo info;
+    bool ok = (grid_gen_->needsObservations() && !observations_.empty())
+        ? grid_gen_->buildFromObservations(observations_, Eigen::Vector3d::Zero(), cfg, info)
+        : grid_gen_->build(global_map_, Eigen::Vector3d::Zero(), cfg, info);
+    if (!ok) return false;
+    if (!saveGridMapPGM(info, pgm_path, yaml_path, frame_id)) return false;
+
+    m_grid_data = info.data;
+    m_grid_w = info.width;
+    m_grid_h = info.height;
+    m_grid_res = info.resolution;
+    m_grid_ox = info.origin_x;
+    m_grid_oy = info.origin_y;
+    std::cout << "[PcdMapManager] Grid map saved (" << grid_gen_->name() << "): " << pgm_path
               << " (" << m_grid_w << "x" << m_grid_h << ")" << std::endl;
     return true;
 }
 
 bool PcdMapManager::loadGridMap(const std::string& pgm_path, const std::string& yaml_path) {
-    OccupancyGridMap grid_map;
-    if (!grid_map.loadFromPGM(pgm_path, yaml_path)) return false;
-    m_grid_data = grid_map.getData();
-    m_grid_w = grid_map.getWidth();
-    m_grid_h = grid_map.getHeight();
+    GridInfo info;
+    if (!loadGridMapPGM(pgm_path, yaml_path, info)) return false;
+    m_grid_data = info.data;
+    m_grid_w = info.width;
+    m_grid_h = info.height;
+    m_grid_res = info.resolution;
+    m_grid_ox = info.origin_x;
+    m_grid_oy = info.origin_y;
     return true;
 }
 

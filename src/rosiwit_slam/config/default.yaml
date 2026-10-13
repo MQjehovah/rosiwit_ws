@@ -25,6 +25,14 @@ scan_resolution: 0.3
 map_resolution: 0.3
 map_save_voxel: 0.3
 
+# ---- 2D 占据栅格建图 (grid_map_generator: GridMapFactory 注册的生成策略) ----
+grid_map_generator: height_projection
+grid_min_height: 0.1        # 地面以上障碍最低高度(m)
+grid_max_height: 2.0        # 地面以上障碍最高高度(m)
+grid_occupied_thresh: 1     # 每格最少点数判为占据
+grid_dilate_radius: -1      # 障碍膨胀半径(格), -1 按 map_save_voxel 自动连通墙体
+grid_max_range: 0.0         # 射线有效距离(m), 0=不限
+
 # ---- GICP 定位参数 (GicpLocalization) ----
 voxel_resolution: 0.3
 fitness_threshold: 10.0

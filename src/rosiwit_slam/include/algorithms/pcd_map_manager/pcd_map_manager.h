@@ -1,8 +1,9 @@
 #pragma once
 #include <string>
 #include <mutex>
+#include <memory>
 #include "slam_core/i_map_manager.h"
-#include "algorithms/pcd_map_manager/occupancy_grid_map.h"
+#include "slam_core/i_grid_map_generator.h"
 
 namespace rosiwit_slam {
 
@@ -49,6 +50,11 @@ private:
     PoseStamped m_frontier_anchor_;      // 前沿锚点 A = G_last*P_last^{-1}, 新位姿经 A∘R 转到修正系
     std::mutex m_mutex_;                 // 保护 global_map_ / submaps_ / anchor
     double save_voxel_ = 0.3;            // 保存/重建全局地图时的体素大小(m), yaml: map_save_voxel
+
+    // 2D 占据栅格: 生成策略 + 参数 (yaml: grid_map_generator / grid_*)
+    std::unique_ptr<IGridMapGenerator> grid_gen_;
+    GridMapConfig grid_cfg_;
+    std::vector<Observation> observations_;   // 逐帧观测(原点+世界系扫描), 供射线类策略使用
 };
 
 } // namespace rosiwit_slam

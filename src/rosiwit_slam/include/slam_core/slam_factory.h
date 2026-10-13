@@ -9,6 +9,7 @@
 #include "slam_core/i_localization.h"
 #include "slam_core/i_map_manager.h"
 #include "slam_core/i_loop_closure.h"
+#include "slam_core/i_grid_map_generator.h"
 
 namespace rosiwit_slam {
 
@@ -21,6 +22,7 @@ public:
     static std::unique_ptr<ILocalization> createLocalization(const std::string& name);
     static std::unique_ptr<IMapManager> createMapManager(const std::string& name);
     static std::unique_ptr<ILoopClosure> createLoopClosure(const std::string& name);
+    static std::unique_ptr<IGridMapGenerator> createGridMapGenerator(const std::string& name);
 };
 
 } // namespace rosiwit_slam

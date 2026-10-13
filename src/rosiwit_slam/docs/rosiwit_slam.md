@@ -181,8 +181,12 @@ rosiwit_slam/
 │       │   └── scan_context_lc.cpp   回环检测逻辑
 │       ├── gicp_localization/gicp_localization.cpp
 │       └── pcd_map_manager/
-│           ├── pcd_map_manager.cpp   PCD 地图管理
-│           └── occupancy_grid_map.cpp 2D 栅格地图
+│           └── pcd_map_manager.cpp   PCD 地图管理
+│       └── grid_map/
+│           ├── grid_map_factory.cpp            2D 栅格策略工厂
+│           ├── grid_map_io.cpp                 PGM/YAML 读写
+│           ├── height_projection_grid_map.cpp  高度投影策略
+│           └── ray_casting_grid_map.cpp        射线投射策略(free/occupied/unknown)
 ├── include/                          (对应头文件, 结构同上)
 ├── config/default.yaml               统一配置
 ├── launch/slam.launch.py             启动文件
@@ -346,8 +350,17 @@ rosiwit_slam/
 **核心功能**:
 - 保存/加载 PCD 点云地图
 - `addSubMap()` 增量累积关键帧到全局地图
-- `generateGridMap()`: 将 3D 点云投影为 2D 占据栅格（投影高度范围 0.15m-1.8m，含自适应地面检测）
+- `generateGridMap()` / `saveGridMap()`: 调用可插拔的 `IGridMapGenerator` 策略生成 2D 占据栅格
+  （yaml `grid_map_generator`: `height_projection` 高度投影 / `ray_casting` 射线投射三态）
 - `saveGridMap()`: 输出 PGM + YAML 格式（兼容 ROS `map_server` / navigation stack）
+
+**2D 栅格生成策略** (`algorithms/grid_map/`, 工厂 `GridMapFactory`):
+| 策略 | 原理 | free/unknown | 输入 |
+|------|------|--------------|------|
+| `height_projection` | 障碍高度带内点数投影 + 阈值 + 膨胀 | 未占据一律 free | 合并全局点云 |
+| `ray_casting` | 逐帧原点向回波投射线(Bresenham), 途经 free/终点 occupied | 未观测 unknown(-1) | 逐帧观测(原点+扫描) |
+
+策略通过 `IGridMapGenerator` 接口解耦, 新增算法只需实现接口并在 `GridMapFactory` 注册。
 
 **优势**:
 - 标准 PCD 格式，与主流工具兼容（CloudCompare / PDAL）

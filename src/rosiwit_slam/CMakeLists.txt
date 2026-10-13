@@ -132,6 +132,14 @@ if(GTSAM_FOUND)
 endif()
 
 # ==================== 源文件 (显式列表, 避免 GLOB_RECURSE 遗漏新文件) ====================
+# 2D 栅格生成策略 (接口 slam_core/i_grid_map_generator.h)
+set(GRID_MAP_SOURCES
+    src/algorithms/grid_map/height_projection_grid_map.cpp
+    src/algorithms/grid_map/ray_casting_grid_map.cpp
+    src/algorithms/grid_map/grid_map_io.cpp
+    src/algorithms/grid_map/grid_map_factory.cpp
+)
+
 set(SOURCES
     src/main.cpp
     src/ros_interface/ros_utils.cpp
@@ -150,7 +158,7 @@ set(SOURCES
     src/algorithms/ceres_backend/ceres_backend.cpp
     src/algorithms/gicp_localization/gicp_localization.cpp
     src/algorithms/pcd_map_manager/pcd_map_manager.cpp
-    src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
+    ${GRID_MAP_SOURCES}
     # 新增算法 (2026-07)
     src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp
     src/algorithms/scan_context/scan_context.cpp
@@ -276,7 +284,7 @@ if(BUILD_TESTING)
         target_sources(test_slam_factory PRIVATE
             src/algorithms/gicp_localization/gicp_localization.cpp
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
-            src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
+            ${GRID_MAP_SOURCES}
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/scan_context/scan_context_localization.cpp
@@ -315,7 +323,7 @@ if(BUILD_TESTING)
         target_sources(test_slam_pipeline PRIVATE
             src/algorithms/gicp_localization/gicp_localization.cpp
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
-            src/algorithms/pcd_map_manager/occupancy_grid_map.cpp
+            ${GRID_MAP_SOURCES}
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/scan_context/scan_context_localization.cpp
@@ -368,7 +376,7 @@ if(BUILD_TESTING)
     ament_add_gtest(test_pcd_map_manager
         test/test_pcd_map_manager.cpp
         src/algorithms/pcd_map_manager/pcd_map_manager.cpp
-        src/algorithms/pcd_map_manager/occupancy_grid_map.cpp)
+        ${GRID_MAP_SOURCES})
     target_include_directories(test_pcd_map_manager PRIVATE
         include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
     target_link_libraries(test_pcd_map_manager ${PCL_LIBRARIES})
@@ -376,6 +384,15 @@ if(BUILD_TESTING)
         target_link_libraries(test_pcd_map_manager yaml-cpp)
     endif()
     install(TARGETS test_pcd_map_manager DESTINATION lib/${PROJECT_NAME})
+
+    # 2D 栅格生成策略契约测试 (参数化遍历所有策略)
+    ament_add_gtest(test_grid_map_generator
+        test/test_grid_map_generator.cpp
+        ${GRID_MAP_SOURCES})
+    target_include_directories(test_grid_map_generator PRIVATE
+        include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_grid_map_generator ${PCL_LIBRARIES})
+    install(TARGETS test_grid_map_generator DESTINATION lib/${PROJECT_NAME})
 
     # 注释保留: 已移除的旧测试说明 (test_scan_context_lc 已随 simple_scan_context 删除)
     # 2. IEKF/iKD-Tree 测试已移除 ...

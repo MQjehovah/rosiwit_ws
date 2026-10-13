@@ -7,6 +7,7 @@
 #include "algorithms/gicp_localization/gicp_localization.h"
 #include "algorithms/scan_context/scan_context_localization.h"
 #include "algorithms/pcd_map_manager/pcd_map_manager.h"
+#include "algorithms/grid_map/grid_map_factory.h"
 // 新增算法
 #include "algorithms/point_lio/point_lio_frontend.h"
 #include "algorithms/scan_context/scan_context_lc.h"
@@ -54,6 +55,10 @@ std::unique_ptr<IMapManager> SlamFactory::createMapManager(const std::string& na
 std::unique_ptr<ILoopClosure> SlamFactory::createLoopClosure(const std::string& name) {
     if (name == "scan_context")  return std::make_unique<ScanContextLoopClosure>();
     return nullptr;
+}
+
+std::unique_ptr<IGridMapGenerator> SlamFactory::createGridMapGenerator(const std::string& name) {
+    return GridMapFactory::create(name);
 }
 
 } // namespace rosiwit_slam
