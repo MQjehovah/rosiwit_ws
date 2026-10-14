@@ -46,21 +46,24 @@
   - 验收：门控在动态外点帧更稳；NEES 在丢帧/漂移时报警；单测。
   - 实现说明：`poseInnovation()` + `acceptMatch` Mahalanobis 门控(chi2=16.81) + `MonitorInput.nees`/`WindowedMonitor` NEES 滑窗; config `accept.mahalanobis_*` / `monitor.nees_threshold`.
 
-- [ ] **L3 静态底图清理（在线 + 离线两层）**
-  - **L3a 在线（建图阶段，已有雏形，增强）**
+- [x] **L3 静态底图清理（在线 + 离线两层）** ✅ `1436231`
+  - **L3a 在线（建图阶段，已有雏形，增强）** ✅
     - 现状：`fast_lio2/map_builder/lidar_processor.cpp` 的 `dynamic_removal`（`persist_thresh`/`persist_window`/`dynamic_residual_thresh`）：逐体素持久性过滤，只写"多帧持续观测"的点，超窗未见即剔除。
     - 增强：补**逐帧射线自由空间雕刻**（对 ikd-tree 负信息：射线穿过的体素判自由并剔除先前占据点），弥补纯持久性过滤对滞留物/局部视角的不足；亦利于 LIO 配准/回环。
     - 关键文件：`src/algorithms/fast_lio2/map_builder/lidar_processor.cpp`、`commons.*`、`config/default.yaml`。
     - 验收：移动人/叉车不入图；保存的图当场更干净；对 LIO 配准无负作用。
-  - **L3b 离线（后处理，ERASOR/Removert 式全局清洗）**
+    - 实现说明：开关 `free_space_carving`(默认关) + `carve_free_thresh`/`carve_stride`；`carveFreeSpace()` 沿射线对已占据体素累计"看到空"次数，达阈值经 `Radius_Search`+`Delete_Points` 删除。**需真机验证。**
+  - **L3b 离线（后处理，ERASOR/Removert 式全局清洗）** ✅
     - 目标：对导出的种子底图做全局可见性/伪占据清理，产出定位用干净底图（一次性精修）。
     - 数据：用 `io::readXzMap` 的关键帧位姿+点云做多视角可见性推理。
     - 关键文件：新增离线工具 `tools/map_cleanup.cpp`（复用 occupancy/可见性逻辑）。
     - 验收：清理后底图不含动态/慢速滞留物；同场地再定位更稳；工具可重复运行。
+    - 实现说明：关键帧体素投票(occ/free)，`free > free_ratio*occ` 判动态并移除输入点；`map_cleanup <in.pcd> <out.pcd> [--xzmap …]`。
 
-- [ ] **L9 真实数据回归 + 预设 + 量化**
+- [x] **L9 真实数据回归 + 预设 + 量化** ✅（预设部分） `1436231`
   - 目标：合成脚本（进狭道堆满货 → 过桥 → 发走 → 重开）量化“不丢率”；真实工厂 bag 回归；产出 `config/factory.yaml`。
   - 验收：给出不丢率/漂移指标；预设可直接用。
+  - 实现说明：工厂调参已直接写入 `config/default.yaml`（pipeline/matcher/maintainer/planar/monitor）。**真实数据回归仍待做。**
 
 ### 中优先级
 
