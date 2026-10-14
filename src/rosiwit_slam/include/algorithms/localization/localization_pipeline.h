@@ -9,6 +9,7 @@
 #include "slam_core/i_global_localizer.h"
 #include "slam_core/i_localization_monitor.h"
 #include "slam_core/i_map_maintainer.h"
+#include "algorithms/localization/constraints/planar_constraint.h"
 
 namespace rosiwit_slam {
 
@@ -56,6 +57,7 @@ private:
     MonitorConfig       m_monitor_cfg;
     AcceptConfig        m_accept_cfg;
     MaintainerConfig    m_maintainer_cfg;
+    PlanarConstraintConfig m_planar_cfg;
     std::string m_relocalizer_name = "none";
     std::string m_prior_name = "constant_velocity";
     std::string m_local_map_name = "radius_submap";
@@ -83,6 +85,8 @@ private:
     // 过桥(coasting)与重定位节流
     int m_coast_count = 0;
     int m_reloc_cooldown = 0;
+
+    PlanarConstraint m_planar;   // 地面/平面约束 (第7层视觉约束, 可选)
 
     // s2m 残差接受判据的多帧一致性状态
     V3D m_corr_prev = V3D::Zero();

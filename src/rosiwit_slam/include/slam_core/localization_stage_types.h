@@ -169,6 +169,7 @@ struct MonitorInput {
     MatchResult match;
     PoseStamped pose;
     double time = -1.0;
+    double nees = -1.0;   // 归一化估计误差平方(Mahalanobis), <0=无效
 };
 
 struct MonitorConfig {
@@ -182,6 +183,7 @@ struct MonitorConfig {
     double window_std_k = 2.0;       // windowed: 均值±kσ 门限
     double max_trans_step = 1.0;     // 单帧位移跳变门限(m)
     double max_yaw_step_deg = 20.0;  // 单帧航向跳变门限(deg)
+    double nees_threshold = 50.0;    // NEES 滑窗均值超此判不一致(DEGRADED)
 };
 
 // ==================== 配准接受判据 (s2m accept) ====================
@@ -191,6 +193,20 @@ struct AcceptConfig {
     double min_coverage = 0.5;       // 覆盖率门限
     double residual_margin = 0.10;   // 残差相对改善阈值
     int    consistent_frames = 2;    // 修正方向连续一致帧数
+    bool   mahalanobis_gate = true;  // 用匹配协方差做 Mahalanobis 门控(抑制离群)
+    double mahalanobis_chi2 = 16.81; // 6DoF 99% 卡方阈值
+};
+
+// ==================== 地面/平面约束 ====================
+// 用"地图地面模型"把位姿约束到地形: 平地锁 z/roll/pitch, 坡道自然跟随。
+// 仅用实时扫描是恒等式(无约束), 必须相对地图地面推理。
+struct PlanarConstraintConfig {
+    std::string mode = "none";   // none | lock_zrp | ground_plane
+    double z = 0.0;              // lock_zrp: 目标高度(m)
+    double sensor_height = 0.0;  // 传感器离地高(m); <=0 用首帧自动标定
+    double cell = 1.0;           // 地面模型网格单元(m)
+    double ground_band = 0.3;    // 地面点带厚度(m, 取每格最低点附近为地面)
+    double max_tilt_deg = 35.0;  // 地面法向与竖直夹角上限, 超过则本帧不约束(异常/跳变)
 };
 
 // ==================== 地图维护 (map_maintainer) ====================

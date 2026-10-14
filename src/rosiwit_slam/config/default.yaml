@@ -202,6 +202,7 @@ localization:
     window_std_k: 2.0
     max_trans_step: 1.0
     max_yaw_step_deg: 20.0
+    nees_threshold: 50.0      # NEES 滑窗均值超此判不一致(降级)
 
   # s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性)
   accept:
@@ -209,6 +210,17 @@ localization:
     min_coverage: 0.5
     residual_margin: 0.10
     consistent_frames: 2
+    mahalanobis_gate: true    # 用匹配协方差做 Mahalanobis 门控
+    mahalanobis_chi2: 16.81   # 6DoF 99% 卡方阈值
+
+  # 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane
+  planar:
+    mode: none                # 建议洗地机用 ground_plane (平地锁平/坡道跟随)
+    z: 0.0                    # lock_zrp 目标高度
+    sensor_height: 0.0        # 传感器离地高(m); 0=首帧自动标定
+    cell: 1.0
+    ground_band: 0.3
+    max_tilt_deg: 35.0
 
   # 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层
   maintainer:

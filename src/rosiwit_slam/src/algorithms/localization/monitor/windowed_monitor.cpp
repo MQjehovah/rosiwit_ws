@@ -8,6 +8,7 @@ namespace rosiwit_slam {
 
 void WindowedMonitor::reset() {
     m_fitness_hist.clear();
+    m_nees_hist.clear();
     m_low_count = 0;
     m_have_prev = false;
     m_level = MonitorLevel::INIT;
@@ -60,6 +61,16 @@ MonitorLevel WindowedMonitor::update(const MonitorInput& in) {
         if (std::fabs(in.match.fitness - mean) > m_cfg.window_std_k * stddev + 1e-6) {
             m_level = MonitorLevel::DEGRADED;
             return m_level;
+        }
+    }
+    // NEES 一致性: 滑窗均值超阈值 -> 估计与协方差不一致, 降级
+    if (in.nees >= 0.0) {
+        m_nees_hist.push_back(in.nees);
+        while (static_cast<int>(m_nees_hist.size()) > m_cfg.window_length) m_nees_hist.pop_front();
+        if (static_cast<int>(m_nees_hist.size()) >= std::max(3, m_cfg.window_length / 2)) {
+            const double nm = std::accumulate(m_nees_hist.begin(), m_nees_hist.end(), 0.0)
+                              / m_nees_hist.size();
+            if (nm > m_cfg.nees_threshold) { m_level = MonitorLevel::DEGRADED; return m_level; }
         }
     }
     m_level = MonitorLevel::CREDIBLE;

@@ -122,6 +122,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_monitor_cfg.lost_patience      = getv<int>(moc, "lost_patience", m_monitor_cfg.lost_patience);
         m_monitor_cfg.lost_patience_low  = getv<int>(moc, "lost_patience_low", m_monitor_cfg.lost_patience_low);
         m_monitor_cfg.coast_patience     = getv<int>(moc, "coast_patience", m_monitor_cfg.coast_patience);
+        m_monitor_cfg.nees_threshold     = getv<double>(moc, "nees_threshold", m_monitor_cfg.nees_threshold);
         m_monitor_cfg.window_length      = getv<int>(moc, "window_length", m_monitor_cfg.window_length);
         m_monitor_cfg.window_std_k       = getv<double>(moc, "window_std_k", m_monitor_cfg.window_std_k);
         m_monitor_cfg.max_trans_step     = getv<double>(moc, "max_trans_step", m_monitor_cfg.max_trans_step);
@@ -133,6 +134,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_accept_cfg.min_coverage      = getv<double>(ac, "min_coverage", m_accept_cfg.min_coverage);
         m_accept_cfg.residual_margin   = getv<double>(ac, "residual_margin", m_accept_cfg.residual_margin);
         m_accept_cfg.consistent_frames = getv<int>(ac, "consistent_frames", m_accept_cfg.consistent_frames);
+        m_accept_cfg.mahalanobis_gate = getv<bool>(ac, "mahalanobis_gate", m_accept_cfg.mahalanobis_gate);
+        m_accept_cfg.mahalanobis_chi2 = getv<double>(ac, "mahalanobis_chi2", m_accept_cfg.mahalanobis_chi2);
     }
     auto mtc = loc["maintainer"];
     if (mtc) {
@@ -150,6 +153,15 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_maintainer_cfg.override_base    = getv<bool>(mtc, "override_base", m_maintainer_cfg.override_base);
         m_maintainer_cfg.delta_min        = getv<double>(mtc, "delta_min", m_maintainer_cfg.delta_min);
         m_maintainer_cfg.carve_stride     = getv<int>(mtc, "carve_stride", m_maintainer_cfg.carve_stride);
+    }
+    auto plc = loc["planar"];
+    if (plc) {
+        m_planar_cfg.mode          = getv<std::string>(plc, "mode", m_planar_cfg.mode);
+        m_planar_cfg.z             = getv<double>(plc, "z", m_planar_cfg.z);
+        m_planar_cfg.sensor_height = getv<double>(plc, "sensor_height", m_planar_cfg.sensor_height);
+        m_planar_cfg.cell          = getv<double>(plc, "cell", m_planar_cfg.cell);
+        m_planar_cfg.ground_band   = getv<double>(plc, "ground_band", m_planar_cfg.ground_band);
+        m_planar_cfg.max_tilt_deg  = getv<double>(plc, "max_tilt_deg", m_planar_cfg.max_tilt_deg);
     }
 #else
     (void)config_path;
@@ -173,6 +185,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_local_map->configure(m_local_map_cfg);
     m_monitor->configure(m_monitor_cfg);
     m_relocalizer->configure(m_global_cfg);
+    m_planar.configure(m_planar_cfg);
 
     if (m_maintainer_name != "none") {
         m_maintainer = LocalizationFactory::createMapMaintainer(m_maintainer_name);
@@ -215,6 +228,7 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
     }
     std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)" << std::endl;
     if (m_local_map) m_local_map->setMap(map_name, m_map);
+    m_planar.setMap(m_map);
     if (m_maintainer) m_maintainer->setBaseMap(map_name, m_map);
 
     // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用
@@ -304,6 +318,14 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
 bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
                                        const PoseStamped& guess) {
     if (!res.converged) return false;
+    // Mahalanobis 门控: 修正量相对匹配协方差异常大 -> 判离群, 不采信
+    if (m_accept_cfg.mahalanobis_gate) {
+        Eigen::Matrix<double, 6, 1> e;
+        poseInnovation(res.pose, guess, e);
+        Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(res.cov);
+        const double d2 = e.dot(ldlt.solve(e));
+        if (std::isfinite(d2) && d2 > m_accept_cfg.mahalanobis_chi2) return false;
+    }
     if (m_accept_cfg.mode == 0)
         return res.fitness >= m_accept_cfg.min_coverage;
 
@@ -407,12 +429,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     const bool accepted = ok && acceptMatch(res, f.cloud, guess);
 
     PoseStamped out_pose = guess;
-    if (accepted) {
-        out_pose = res.pose;
-        m_prior->onMatch(out_pose);
-    }
-    // 未被采纳 -> 回退到先验预测 (过桥/coasting)
+    if (accepted) out_pose = res.pose;
     out_pose.time = f.end_time;
+    // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
+    m_planar.apply(out_pose);
+    if (accepted) m_prior->onMatch(out_pose);
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
@@ -440,6 +461,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     mi.match = res;
     mi.pose = m_pose;
     mi.time = f.end_time;
+    // NEES: 归一化估计误差平方 (一致性检验)
+    if (ok && res.converged) {
+        Eigen::Matrix<double, 6, 1> e;
+        poseInnovation(res.pose, guess, e);
+        Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(res.cov);
+        const double d2 = e.dot(ldlt.solve(e));
+        if (std::isfinite(d2)) mi.nees = d2;
+    }
     MonitorLevel lvl = m_monitor->update(mi);
     // 过桥期(连续未采纳未超 coast_patience): 不判丢失, 保持降级连续外推
     if (lvl == MonitorLevel::LOST && m_coast_count < m_monitor_cfg.coast_patience)

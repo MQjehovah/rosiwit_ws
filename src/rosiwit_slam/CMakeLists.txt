@@ -169,6 +169,7 @@ endif()
 set(LOCALIZATION_SOURCES
     src/algorithms/localization/localization_utils.cpp
     src/algorithms/localization/registration_metrics.cpp
+    src/algorithms/localization/constraints/planar_constraint.cpp
     src/algorithms/localization/localization_factory.cpp
     src/algorithms/localization/localization_pipeline.cpp
     src/algorithms/localization/matcher/gicp_matcher.cpp

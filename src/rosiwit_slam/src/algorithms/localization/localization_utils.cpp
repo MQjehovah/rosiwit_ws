@@ -41,6 +41,16 @@ void poseDelta(const PoseStamped& a, const PoseStamped& b, V3D& dt, double& angl
     angle_rad = aa.angle();
 }
 
+void poseInnovation(const PoseStamped& match, const PoseStamped& pred,
+                    Eigen::Matrix<double, 6, 1>& e) {
+    const M3D dR = pred.rot.transpose() * match.rot;
+    Eigen::AngleAxisd aa(dR);
+    V3D axis = aa.axis();
+    if (!axis.allFinite()) axis = V3D::Zero();
+    e.head<3>() = axis * aa.angle();
+    e.tail<3>() = match.trans - pred.trans;
+}
+
 void suppressBaseByOverlay(CloudType::Ptr& cloud, const CloudType::Ptr& overlay,
                            double radius) {
     if (!cloud || cloud->empty() || !overlay || overlay->empty() || radius <= 0) return;

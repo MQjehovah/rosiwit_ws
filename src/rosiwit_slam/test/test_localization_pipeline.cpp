@@ -7,6 +7,7 @@
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_pipeline.h"
 #include "algorithms/localization/localization_utils.h"
+#include "algorithms/localization/constraints/planar_constraint.h"
 #include "io/xzmap_writer.h"
 #include "io/xzmap_reader.h"
 
@@ -505,6 +506,44 @@ TEST(MaintainerTest, RayCarveRemovesStaleGoods) {
     int near5 = 0;
     for (const auto& p : ov->points) if (std::fabs(p.x - 5.0f) < 0.3f) ++near5;
     EXPECT_EQ(near5, 0);                              // (5,0,0) 处鬼影被清除
+}
+
+// ---- 地面/平面约束 ----
+TEST(PlanarConstraintTest, GroundPlaneLocksZAndLevels) {
+    CloudType::Ptr map(new CloudType());
+    for (double x = -5.0; x <= 5.0; x += 0.1)
+        for (double y = -5.0; y <= 5.0; y += 0.1)
+            map->push_back(PointType(static_cast<float>(x), static_cast<float>(y), 0.0f));
+    PlanarConstraint pc;
+    PlanarConstraintConfig cfg;
+    cfg.mode = "ground_plane";
+    cfg.cell = 1.0;
+    cfg.ground_band = 0.3;
+    cfg.sensor_height = 0.3;
+    cfg.max_tilt_deg = 35.0;
+    pc.configure(cfg);
+    pc.setMap(map);
+
+    PoseStamped p = makePose(-1.0, -1.0, 5.0, 0.0);          // z 错误
+    p.rot = Eigen::AngleAxisd(0.2, V3D::UnitX()).toRotationMatrix() * p.rot;  // 加 roll
+    pc.apply(p);
+    EXPECT_NEAR(p.trans.z(), 0.3, 1e-6);                      // 锁到地面+安装高
+    const Eigen::Vector3d up = p.rot * V3D::UnitZ();
+    EXPECT_NEAR(up.z(), 1.0, 0.05);                           // roll/pitch 锁平
+}
+
+TEST(PlanarConstraintTest, LockZrp) {
+    PlanarConstraint pc;
+    PlanarConstraintConfig cfg;
+    cfg.mode = "lock_zrp";
+    cfg.z = 1.0;
+    pc.configure(cfg);
+    PoseStamped p = makePose(2.0, 3.0, 9.0, 10.0);
+    p.rot = Eigen::AngleAxisd(0.3, V3D::UnitX()).toRotationMatrix() * p.rot;
+    pc.apply(p);
+    EXPECT_NEAR(p.trans.z(), 1.0, 1e-9);
+    const Eigen::Vector3d up = p.rot * V3D::UnitZ();
+    EXPECT_NEAR(up.z(), 1.0, 1e-6);                           // roll/pitch=0
 }
 
 // ---- 工厂注册完整性 ----

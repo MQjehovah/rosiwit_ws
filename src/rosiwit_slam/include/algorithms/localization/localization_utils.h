@@ -19,6 +19,10 @@ double yawFromRot(const M3D& R);
 /// 位姿差 (a ⊖ b): 返回 b^{-1} a 的平移与轴角
 void poseDelta(const PoseStamped& a, const PoseStamped& b, V3D& dt, double& angle_rad);
 
+/// 位姿创新 (6 维, order=[rot(3)轴角, trans(3)]): match ⊖ pred
+void poseInnovation(const PoseStamped& match, const PoseStamped& pred,
+                    Eigen::Matrix<double, 6, 1>& e);
+
 /// 用叠加层压制原图: 移除与 overlay 点距离 < radius 的 base 点 (处理结构被移除/
 /// 替换 —— 叠加层作为权威, 原图同处旧点不再参与配准)
 void suppressBaseByOverlay(CloudType::Ptr& cloud, const CloudType::Ptr& overlay,
