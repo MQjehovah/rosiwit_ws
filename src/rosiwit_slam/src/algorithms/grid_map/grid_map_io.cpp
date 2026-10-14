@@ -13,7 +13,7 @@ bool saveGridMapPGM(const GridInfo& grid,
 
     std::ofstream pgm(pgm_path, std::ios::binary);
     if (!pgm) return false;
-    pgm << "P5\n" << grid.width << " " << grid.height << "\n100\n";
+    pgm << "P5\n" << grid.width << " " << grid.height << "\n255\n";
     for (auto v : grid.data) {
         uint8_t pixel = 205;
         if (v == 0) pixel = 254;

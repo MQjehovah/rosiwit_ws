@@ -48,14 +48,17 @@ void opDenoise(std::vector<int8_t>& data, int w, int h, const GridPostConfig& c,
     cv::Mat labels, stats, centroids;
     int n = cv::connectedComponentsWithStats(mask, labels, stats, centroids,
                                              c.connectivity == 4 ? 4 : 8, CV_32S);
+    // 先标记每个连通域是否保留, 再单次遍历回写; 避免按组件重复扫描整幅图 (O(组件数*像素数)).
+    std::vector<uint8_t> keep(n, 0);
+    for (int i = 1; i < n; ++i)
+        keep[i] = (stats.at<int>(i, cv::CC_STAT_AREA) >= c.min_component_cells) ? 1 : 0;
     int removed = 0;
-    for (int i = 1; i < n; ++i) {
-        int area = stats.at<int>(i, cv::CC_STAT_AREA);
-        if (area < c.min_component_cells) {
-            for (int y = 0; y < h; ++y)
-                for (int x = 0; x < w; ++x)
-                    if (labels.at<int>(y, x) == i) { data[y * w + x] = bg; }
-            removed += area;
+    for (int y = 0; y < h; ++y) {
+        const int* lab = labels.ptr<int>(y);
+        int8_t* row = data.data() + static_cast<size_t>(y) * w;
+        for (int x = 0; x < w; ++x) {
+            int lbl = lab[x];
+            if (lbl > 0 && !keep[lbl]) { row[x] = bg; ++removed; }
         }
     }
     std::cout << "[Post:denoise] comps=" << (n - 1) << " removed_cells=" << removed
