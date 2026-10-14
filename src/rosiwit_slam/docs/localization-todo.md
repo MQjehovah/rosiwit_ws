@@ -29,7 +29,7 @@
 
 ### 高优先级
 
-- [ ] **L1 地面/平面约束（开关 + 自适应）**
+- [x] **L1 地面/平面约束（开关 + 自适应）** ✅ `89b8c8f`
   - 目标：平地上锁 `z/roll/pitch` 抗退化；坡道自动跟随地面平面。
   - 设计：配置 `planar_constraint: none | lock_zrp | ground_plane`（默认 `none`）。
     - `lock_zrp`：硬锁 `z/roll/pitch=0`（仅全平区域）。
@@ -38,11 +38,13 @@
   - 关键文件：`include/slam_core/localization_stage_types.h`、`localization_pipeline.cpp`、新增平面估计工具。
   - 验收：平地模式 `z/roll/pitch` 稳定不漂；坡道模式位姿能跟随坡度、坡底/坡顶不跳变；契约测试。
   - 备注：洗地机会过坡，**不可**硬 2D，须开关 + 自适应。
+  - 实现说明：从底图构建"地面模型"(每格高度+法向) → `ground_plane` 相对地图地面约束(平地锁平/坡道跟随); 只用实时扫描无约束(恒等式), 故必须相对地图。文件 `constraints/planar_constraint.{h,cpp}`; config `localization.planar`.
 
-- [ ] **L2 协方差门控 + NEES 一致性**
+- [x] **L2 协方差门控 + NEES 一致性** ✅ `89b8c8f`
   - 目标：用 `MatchResult.cov` + 运动协方差做 Mahalanobis 门控，替代/补充纯 fitness 阈值；NEES 判可信/丢失。
   - 关键文件：`localization_pipeline.cpp`（accept/monitor），`MatchResult.cov`（已具备）。
   - 验收：门控在动态外点帧更稳；NEES 在丢帧/漂移时报警；单测。
+  - 实现说明：`poseInnovation()` + `acceptMatch` Mahalanobis 门控(chi2=16.81) + `MonitorInput.nees`/`WindowedMonitor` NEES 滑窗; config `accept.mahalanobis_*` / `monitor.nees_threshold`.
 
 - [ ] **L3 静态底图清理（在线 + 离线两层）**
   - **L3a 在线（建图阶段，已有雏形，增强）**
