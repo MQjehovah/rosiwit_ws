@@ -21,6 +21,7 @@ public:
     bool localize(const CloudType::Ptr& scan, GlobalCandidate& out) override;
     int localizeTopK(const CloudType::Ptr& scan, int max_k,
                      std::vector<GlobalCandidate>& out) override;
+    void updateEnvironment(const CloudType::Ptr& overlay) override;
 
 private:
     struct Level {
@@ -37,10 +38,12 @@ private:
 
     double scoreNode(const Level& lv, int x, int y, int theta) const;
     bool projectScan(const CloudType::Ptr& scan);
+    bool rebuild(const CloudType::Ptr& src);
     void searchLeaves(int max_k, std::vector<Node>& out);
     bool refineCandidate(const Node& n, const CloudType::Ptr& scan_down, GlobalCandidate& out);
 
     GlobalLocalizeConfig m_cfg;
+    CloudType::Ptr m_base_map;     // 原始地图(冻结), 供 lifelong 刷新时叠加
     std::vector<Level> m_pyr;      // [0]=最细, back()=最粗
     double m_ox = 0.0, m_oy = 0.0; // 栅格世界原点
     double m_res = 0.5;            // 最细分辨率

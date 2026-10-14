@@ -29,6 +29,9 @@ public:
     /// 返回位姿附近(半径内)的 overlay 点云(世界系), 用于叠加到配准目标
     virtual CloudType::Ptr getOverlay(const PoseStamped& /*pose*/) { return nullptr; }
 
+    /// 返回全部 overlay 点云(世界系), 供刷新全局重定位器 (lifelong)
+    virtual CloudType::Ptr snapshotOverlay() { return nullptr; }
+
     /// 持久化/载入 overlay (原图不变)
     virtual bool save(const std::string& /*path*/) { return false; }
     virtual bool load(const std::string& /*path*/) { return false; }

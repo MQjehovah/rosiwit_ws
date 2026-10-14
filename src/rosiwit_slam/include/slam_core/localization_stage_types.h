@@ -110,6 +110,7 @@ struct LocalMapConfig {
     double radius = 60.0;            // radius_submap: 邻域半径(m)
     double cell_size = 10.0;         // radius_submap: 体素哈希单元边长(m)
     int    max_keyframes = 15;       // keyframe_submap: 最近关键帧数上限
+    double cache_move = 0.5;         // 位姿移动小于该值时复用上一帧局部地图(m)
 };
 
 // ==================== 关键帧 (keyframe_submap 输入) ====================
@@ -195,6 +196,7 @@ struct MaintainerConfig {
     double cell = 10.0;              // 叠加层空间分块边长(m)
     int    persist_hits = 1;         // 体素需被观测到的最少次数才并入(>1 过滤瞬态, 长期用)
     int    autosave_frames = 0;      // 每 N 帧自动落盘叠加层 (0=仅析构时)
+    int    refresh_frames = 0;       // 每 N 帧用叠加层刷新全局重定位器 (0=关闭)
 };
 
 } // namespace rosiwit_slam

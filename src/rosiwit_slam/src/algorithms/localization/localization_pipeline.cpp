@@ -77,6 +77,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_local_map_cfg.radius           = getv<double>(lmc, "radius", m_local_map_cfg.radius);
         m_local_map_cfg.cell_size        = getv<double>(lmc, "cell_size", m_local_map_cfg.cell_size);
         m_local_map_cfg.max_keyframes    = getv<int>(lmc, "max_keyframes", m_local_map_cfg.max_keyframes);
+        m_local_map_cfg.cache_move       = getv<double>(lmc, "cache_move", m_local_map_cfg.cache_move);
     }
     auto mpc = loc["motion_prior"];
     if (mpc) {
@@ -138,6 +139,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_maintainer_cfg.cell             = getv<double>(mtc, "cell", m_maintainer_cfg.cell);
         m_maintainer_cfg.persist_hits     = getv<int>(mtc, "persist_hits", m_maintainer_cfg.persist_hits);
         m_maintainer_cfg.autosave_frames  = getv<int>(mtc, "autosave_frames", m_maintainer_cfg.autosave_frames);
+        m_maintainer_cfg.refresh_frames   = getv<int>(mtc, "refresh_frames", m_maintainer_cfg.refresh_frames);
     }
 #else
     (void)config_path;
@@ -193,6 +195,7 @@ std::string LocalizationPipeline::describe() const {
 void LocalizationPipeline::setMap(const std::string& map_name) {
     m_status = INIT;
     m_initialized = false;
+    m_has_cached_target = false;
     m_map_path = map_name;
     m_map.reset(new CloudType());
     if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
@@ -306,13 +309,26 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
 
     const PoseStamped guess = m_prior->predict(f.end_time);
-    CloudType::Ptr target = m_local_map->getLocalMap(guess);
-    // 非破坏性叠加: 变化层合并进配准目标
-    if (m_maintainer) {
-        CloudType::Ptr ov = m_maintainer->getOverlay(guess);
-        if (ov && !ov->empty()) *target += *ov;
+
+    // 局部地图缓存: 无维护层且位姿小幅移动(或全图)时复用, 避免每帧重建 KD-tree/体素
+    bool rebuild_target = true;
+    if (!m_maintainer && m_has_cached_target &&
+        (m_local_map_name == "global" ||
+         (guess.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
+        rebuild_target = false;
     }
-    m_matcher->setTarget(target);
+    if (rebuild_target) {
+        CloudType::Ptr target = m_local_map->getLocalMap(guess);
+        // 非破坏性叠加: 变化层合并进配准目标
+        if (m_maintainer) {
+            CloudType::Ptr ov = m_maintainer->getOverlay(guess);
+            if (ov && !ov->empty()) *target += *ov;
+        }
+        m_cached_target = target;
+        m_cached_target_pose = guess;
+        m_has_cached_target = true;
+        m_matcher->setTarget(target);
+    }
 
     MatchResult res;
     const bool ok = m_matcher->match(f.cloud, guess, res);
@@ -331,6 +347,19 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
 
     // 地图维护: 依据本帧质量/位姿决定是否把扫描并入叠加层
     if (m_maintainer) m_maintainer->onLocalized(out_pose, f.cloud, m_last_match);
+
+    // lifelong: 周期性用叠加层(环境变化)刷新全局重定位器, 避免重定位失效
+    if (m_maintainer && m_relocalizer && m_relocalizer_name != "none" &&
+        m_maintainer_cfg.refresh_frames > 0) {
+        if (++m_refresh_counter >= m_maintainer_cfg.refresh_frames) {
+            m_refresh_counter = 0;
+            CloudType::Ptr ov = m_maintainer->snapshotOverlay();
+            if (ov && !ov->empty() && ov->size() != m_last_overlay_size) {
+                m_last_overlay_size = ov->size();
+                m_relocalizer->updateEnvironment(ov);
+            }
+        }
+    }
 
     MonitorInput mi;
     mi.match = res;

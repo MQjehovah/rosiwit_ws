@@ -227,6 +227,30 @@ TEST(GlobalLocalizerTest, BbsRecoversPoseWithoutInit) {
     EXPECT_LT(dyaw, 12.0);
 }
 
+TEST(GlobalLocalizerTest, BbsUpdateEnvironmentSmoke) {
+    auto loc = LocalizationFactory::createGlobalLocalizer("bbs");
+    ASSERT_NE(loc, nullptr);
+    GlobalLocalizeConfig cfg;
+    cfg.voxel_resolution = 0.4;
+    cfg.bbs_max_levels = 4;
+    cfg.min_score = 0.3;
+    loc->configure(cfg);
+    CloudType::Ptr map = makeScene();
+    ASSERT_TRUE(loc->setMap("", map));
+
+    // lifelong: 叠加层(环境变化)刷新后仍可正常定位(不崩溃)
+    CloudType::Ptr overlay(new CloudType());
+    for (double x = 3.0; x <= 4.0; x += 0.1)
+        for (double y = 3.0; y <= 4.0; y += 0.1)
+            for (double z = 0.2; z <= 1.0; z += 0.1)
+                overlay->push_back(PointType(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+    loc->updateEnvironment(overlay);
+
+    GlobalCandidate c;
+    loc->localize(makeScanFromMap(map, makePose(3.0, 3.0, 0.0, 20.0)), c);
+    SUCCEED();
+}
+
 TEST(GlobalLocalizerTest, NoneReturnsFalse) {
     auto loc = LocalizationFactory::createGlobalLocalizer("none");
     ASSERT_NE(loc, nullptr);

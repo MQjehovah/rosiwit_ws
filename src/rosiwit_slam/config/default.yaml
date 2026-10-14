@@ -148,6 +148,7 @@ localization:
     radius: 60.0
     cell_size: 10.0
     max_keyframes: 15   # keyframe_submap: 最近关键帧数上限
+    cache_move: 0.5     # 位姿移动小于该值复用上一帧局部地图(m, 提速)
 
   # 运动先验参数 (motion_prior: constant_velocity | imu)
   motion_prior:
@@ -211,6 +212,7 @@ localization:
     cell: 10.0
     persist_hits: 1           # >1 过滤瞬态(长期运行建议 3~5, 只保留持久变化)
     autosave_frames: 0        # 每 N 帧自动落盘叠加层 (0=仅析构时保存)
+    refresh_frames: 0         # 每 N 帧用叠加层刷新全局重定位器 (lifelong, 0=关闭)
 
   # ---- ScanContext 全局重定位参数 (localization: scan_context_localization) ----
   sc_num_rings: 20

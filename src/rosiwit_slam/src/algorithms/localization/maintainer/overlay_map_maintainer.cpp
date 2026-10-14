@@ -100,6 +100,13 @@ CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
     return out;
 }
 
+CloudType::Ptr OverlayMapMaintainer::snapshotOverlay() {
+    CloudType::Ptr out(new CloudType());
+    for (const auto& kv : m_cells)
+        if (kv.second && !kv.second->empty()) *out += *kv.second;
+    return out;
+}
+
 bool OverlayMapMaintainer::save(const std::string& path) {
     CloudType all;
     for (const auto& kv : m_cells)

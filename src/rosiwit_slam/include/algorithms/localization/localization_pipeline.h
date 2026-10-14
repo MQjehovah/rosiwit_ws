@@ -69,6 +69,15 @@ private:
     bool m_initialized = false;
     MatchResult m_last_match;
 
+    // 局部地图缓存 (位姿小幅移动时复用, 避免每帧重建 KD-tree/体素)
+    CloudType::Ptr m_cached_target;
+    PoseStamped m_cached_target_pose;
+    bool m_has_cached_target = false;
+
+    // lifelong: 用叠加层刷新全局重定位器
+    int m_refresh_counter = 0;
+    size_t m_last_overlay_size = 0;
+
     // s2m 残差接受判据的多帧一致性状态
     V3D m_corr_prev = V3D::Zero();
     bool m_corr_prev_valid = false;

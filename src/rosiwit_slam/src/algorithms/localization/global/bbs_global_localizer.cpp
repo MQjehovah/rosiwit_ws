@@ -22,10 +22,24 @@ void BbsGlobalLocalizer::configure(const GlobalLocalizeConfig& cfg) {
 bool BbsGlobalLocalizer::setMap(const std::string& map_path,
                                 const CloudType::Ptr& global_map) {
     (void)map_path;
+    if (!global_map || global_map->empty()) return false;
+    m_base_map = filterFinite(global_map);
+    return rebuild(m_base_map);
+}
+
+void BbsGlobalLocalizer::updateEnvironment(const CloudType::Ptr& overlay) {
+    if (!m_base_map) return;
+    CloudType::Ptr merged(new CloudType());
+    *merged = *m_base_map;
+    if (overlay && !overlay->empty()) *merged += *overlay;
+    rebuild(merged);
+}
+
+bool BbsGlobalLocalizer::rebuild(const CloudType::Ptr& src) {
     m_ready = false;
     m_pyr.clear();
-    if (!global_map || global_map->empty()) return false;
-    m_map = filterFinite(global_map);
+    if (!src || src->empty()) return false;
+    m_map = src;
 
     // 1) z 带投影到 2D 命中计数
     const double zmin = m_cfg.bbs_z_min, zmax = m_cfg.bbs_z_max;

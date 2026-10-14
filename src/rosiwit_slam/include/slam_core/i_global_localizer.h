@@ -38,6 +38,9 @@ public:
         return 0;
     }
 
+    /// lifelong: 用叠加层(环境变化)刷新内部地图/索引, 使全局重定位不失效. 默认无操作.
+    virtual void updateEnvironment(const CloudType::Ptr& /*overlay*/) {}
+
     virtual void configure(const GlobalLocalizeConfig& /*cfg*/) {}
 };
 

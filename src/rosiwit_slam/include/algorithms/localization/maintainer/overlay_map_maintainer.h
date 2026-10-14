@@ -20,6 +20,7 @@ public:
     void onLocalized(const PoseStamped& pose, const CloudType::Ptr& scan_body,
                      const MatchResult& match) override;
     CloudType::Ptr getOverlay(const PoseStamped& pose) override;
+    CloudType::Ptr snapshotOverlay() override;
     bool save(const std::string& path) override;
     bool load(const std::string& path) override;
 
