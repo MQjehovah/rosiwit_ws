@@ -40,6 +40,10 @@ bool PpIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     if (!m_target || m_target->size() < 5) return false;
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
+    if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
+        src = filterByMapProximity(src, m_kdtree, m_cfg.dynamic_dist);
+        if (!src || src->empty()) return false;
+    }
 
     const int n = static_cast<int>(src->size());
     std::vector<Eigen::Vector3d> bp(n);

@@ -102,6 +102,11 @@ struct ScanMatcherConfig {
     bool   degeneracy_gate = true;          // JtJ 特征值退化方向门控
     double degeneracy_eig_ratio = 1e-3;     // 退化判据: eig < ratio*max
     int    min_correspondences = 20;        // 低于该有效对应数判失败
+
+    // 动态/变化物剔除: 仅保留"贴近静态地图"的点 (人来人往/叉车/每天变的堆货
+    // 未入图即被剔除, 定位以静态结构为准); 由 maintainer 沉淀的持久变化会进入地图
+    bool   dynamic_filter = false;
+    double dynamic_dist = 1.0;              // 与地图最近距离阈值(m), 超过视为动态
 };
 
 // ==================== 局部地图配置 ====================
@@ -197,6 +202,8 @@ struct MaintainerConfig {
     int    persist_hits = 1;         // 体素需被观测到的最少次数才并入(>1 过滤瞬态, 长期用)
     int    autosave_frames = 0;      // 每 N 帧自动落盘叠加层 (0=仅析构时)
     int    refresh_frames = 0;       // 每 N 帧用叠加层刷新全局重定位器 (0=关闭)
+    int    decay_frames = 0;         // 叠加层体素超过该帧数未再观测则移除 (0=不衰减)
+    bool   override_base = false;    // 叠加层压制同位置的原图点(处理"结构被移除/被替换")
 };
 
 } // namespace rosiwit_slam

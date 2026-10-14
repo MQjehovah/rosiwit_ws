@@ -31,4 +31,10 @@ double evaluatePoint2PlaneResidual(const pcl::KdTreeFLANN<PointType>& kdtree,
                                    int max_points = 2000,
                                    double plane_valid_thr = 0.10);
 
+/// 动态/变化物剔除: 仅保留与目标地图最近距离 <= max_dist 的源点.
+/// (人来人往/叉车/未入图的新堆货 = 离地图远 -> 剔除, 定位以静态结构为准)
+CloudType::Ptr filterByMapProximity(const CloudType::Ptr& scan,
+                                    const pcl::KdTreeFLANN<PointType>& kdtree,
+                                    double max_dist);
+
 } // namespace rosiwit_slam

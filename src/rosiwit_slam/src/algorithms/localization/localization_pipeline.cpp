@@ -70,6 +70,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_matcher_cfg.degeneracy_gate         = getv<bool>(mc, "degeneracy_gate", m_matcher_cfg.degeneracy_gate);
         m_matcher_cfg.degeneracy_eig_ratio    = getv<double>(mc, "degeneracy_eig_ratio", m_matcher_cfg.degeneracy_eig_ratio);
         m_matcher_cfg.min_correspondences     = getv<int>(mc, "min_correspondences", m_matcher_cfg.min_correspondences);
+        m_matcher_cfg.dynamic_filter          = getv<bool>(mc, "dynamic_filter", m_matcher_cfg.dynamic_filter);
+        m_matcher_cfg.dynamic_dist            = getv<double>(mc, "dynamic_dist", m_matcher_cfg.dynamic_dist);
     }
     auto lmc = loc["local_map"];
     if (lmc) {
@@ -140,6 +142,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_maintainer_cfg.persist_hits     = getv<int>(mtc, "persist_hits", m_maintainer_cfg.persist_hits);
         m_maintainer_cfg.autosave_frames  = getv<int>(mtc, "autosave_frames", m_maintainer_cfg.autosave_frames);
         m_maintainer_cfg.refresh_frames   = getv<int>(mtc, "refresh_frames", m_maintainer_cfg.refresh_frames);
+        m_maintainer_cfg.decay_frames     = getv<int>(mtc, "decay_frames", m_maintainer_cfg.decay_frames);
+        m_maintainer_cfg.override_base    = getv<bool>(mtc, "override_base", m_maintainer_cfg.override_base);
     }
 #else
     (void)config_path;
@@ -319,10 +323,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
     if (rebuild_target) {
         CloudType::Ptr target = m_local_map->getLocalMap(guess);
-        // 非破坏性叠加: 变化层合并进配准目标
+        // 非破坏性叠加: 变化层合并进配准目标 (可压制同位置原图旧点)
         if (m_maintainer) {
             CloudType::Ptr ov = m_maintainer->getOverlay(guess);
-            if (ov && !ov->empty()) *target += *ov;
+            if (ov && !ov->empty()) {
+                if (m_maintainer_cfg.override_base)
+                    suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
+                *target += *ov;
+            }
         }
         m_cached_target = target;
         m_cached_target_pose = guess;

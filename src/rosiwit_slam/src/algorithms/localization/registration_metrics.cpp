@@ -69,6 +69,21 @@ CoverageStats evaluateCoverage(const pcl::KdTreeFLANN<PointType>& kdtree,
     return s;
 }
 
+CloudType::Ptr filterByMapProximity(const CloudType::Ptr& scan,
+                                    const pcl::KdTreeFLANN<PointType>& kdtree,
+                                    double max_dist) {
+    CloudType::Ptr out(new CloudType());
+    if (!scan || scan->empty()) return out;
+    const double d2 = max_dist * max_dist;
+    std::vector<int> idx(1);
+    std::vector<float> sq(1);
+    out->reserve(scan->size());
+    for (const auto& p : scan->points) {
+        if (kdtree.nearestKSearch(p, 1, idx, sq) > 0 && sq[0] <= d2) out->push_back(p);
+    }
+    return out;
+}
+
 double evaluatePoint2PlaneResidual(const pcl::KdTreeFLANN<PointType>& kdtree,
                                    const CloudType& scan,
                                    const Eigen::Matrix4d& T,

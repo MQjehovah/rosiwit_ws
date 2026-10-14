@@ -384,6 +384,72 @@ TEST(MaintainerTest, DurableChangeFilter) {
     EXPECT_GT(mnt->getOverlay(pose)->size(), 0u);   // 3 次: 并入
 }
 
+// ---- 动态/变化物剔除: 未入图的点被忽略, 定位仍以静态结构为准 ----
+TEST(MatcherDynamicFilterTest, IgnoresUnmappedPoints) {
+    auto m = LocalizationFactory::createMatcher("pp_icp");
+    ASSERT_NE(m, nullptr);
+    ScanMatcherConfig cfg;
+    cfg.voxel_resolution = 0.2;
+    cfg.max_iterations = 50;
+    cfg.corr_dist_init = 2.0;
+    cfg.corr_dist_min = 0.5;
+    cfg.dynamic_filter = true;
+    cfg.dynamic_dist = 0.5;
+    m->configure(cfg);
+
+    CloudType::Ptr map = makeScene();
+    m->setTarget(map);
+    const PoseStamped T_true = makePose(3.0, 3.0, 0.0, 8.0);
+    CloudType::Ptr scan = makeScanFromMap(map, T_true);
+    // 注入"动态物"团簇(地图中没有): 模拟人/叉车/未入图的新堆货
+    for (int i = 0; i < 800; ++i)
+        scan->push_back(PointType(0.5f * ((i % 10) - 5), 0.5f * (((i / 10) % 10) - 5),
+                                  1.0f + 0.02f * (i % 5)));
+
+    MatchResult res;
+    ASSERT_TRUE(m->match(scan, makePose(3.2, 2.8, 0.0, 11.0), res));
+    EXPECT_LT((res.pose.trans - T_true.trans).norm(), 0.2);
+}
+
+// ---- 叠加层衰减: 长期未再观测的体素被移除 ----
+TEST(MaintainerTest, DecayRemovesStaleVoxels) {
+    auto mnt = LocalizationFactory::createMapMaintainer("overlay");
+    ASSERT_NE(mnt, nullptr);
+    MaintainerConfig cfg;
+    cfg.fitness_trigger = 0.5;
+    cfg.min_confirm = 1;
+    cfg.min_keyframe_dist = 0.0;
+    cfg.voxel = 0.2;
+    cfg.radius = 5.0;
+    cfg.persist_hits = 1;
+    cfg.decay_frames = 5;
+    mnt->configure(cfg);
+    mnt->setBaseMap("", nullptr);
+
+    PoseStamped pose = makePose(0, 0, 0, 0);
+    CloudType::Ptr scan(new CloudType());
+    scan->push_back(PointType(0.0f, 0.0f, 0.0f));
+    MatchResult low; low.converged = true; low.fitness = 0.1;
+    mnt->onLocalized(pose, scan, low);
+    EXPECT_GT(mnt->getOverlay(pose)->size(), 0u);
+
+    MatchResult good; good.converged = true; good.fitness = 0.95;
+    for (int i = 0; i < 7; ++i) mnt->onLocalized(pose, scan, good);  // 帧推进, 未再观测
+    EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);
+}
+
+// ---- 叠加层压制原图 (结构被移除/替换) ----
+TEST(LocalizationUtilsTest, SuppressBaseByOverlay) {
+    CloudType::Ptr base(new CloudType());
+    for (double x = 0.0; x < 3.0; x += 0.1)
+        base->push_back(PointType(static_cast<float>(x), 0.0f, 0.0f));
+    CloudType::Ptr ov(new CloudType());
+    ov->push_back(PointType(1.5f, 0.0f, 0.0f));
+    const size_t before = base->size();
+    suppressBaseByOverlay(base, ov, 0.2);
+    EXPECT_LT(base->size(), before);
+}
+
 // ---- 工厂注册完整性 ----
 TEST(LocalizationFactoryTest, RegistersAllStages) {
     for (const auto& n : LocalizationFactory::listMatchers())          EXPECT_NE(LocalizationFactory::createMatcher(n), nullptr);

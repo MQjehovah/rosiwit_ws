@@ -35,9 +35,9 @@ private:
     std::string m_map_path;
     double m_voxel = 0.3;
     double m_cell = 10.0;
-    std::unordered_set<int64_t> m_occupied;                       // 体素去重
-    std::unordered_map<int64_t, int> m_hits;                      // 候选体素命中计数(持久化过滤)
-    std::unordered_map<int64_t, CloudType::Ptr> m_cells;          // 粗分块索引
+    std::unordered_map<int64_t, long> m_voxel_seen;   // 体素 -> 最近观测帧(去重+衰减)
+    std::unordered_map<int64_t, int> m_hits;          // 候选体素命中计数(持久化过滤)
+    std::unordered_map<int64_t, CloudType::Ptr> m_cells;  // 粗分块索引
     Eigen::Vector3d m_last_add = Eigen::Vector3d::Zero();
     bool m_have_last = false;
     int m_low_count = 0;

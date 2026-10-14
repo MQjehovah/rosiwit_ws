@@ -80,6 +80,16 @@ bool VgicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     if (m_voxels.empty()) return false;
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
+    if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
+        CloudType::Ptr f(new CloudType());
+        f->reserve(src->size());
+        for (const auto& p : src->points) {
+            Voxel* v = findVoxel(Eigen::Vector3d(p.x, p.y, p.z));
+            if (v && v->valid) f->push_back(p);
+        }
+        src = f;
+        if (src->empty()) return false;
+    }
 
     const int n = static_cast<int>(src->size());
     std::vector<Eigen::Vector3d> bp(n);

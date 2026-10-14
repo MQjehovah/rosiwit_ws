@@ -27,8 +27,8 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
     const int vy = static_cast<int>(std::floor(p.y() / m_voxel));
     const int vz = static_cast<int>(std::floor(p.z() / m_voxel));
     const int64_t vk = voxelKey(vx, vy, vz);
-    if (m_occupied.count(vk)) return;   // 体素去重
-    m_occupied.insert(vk);
+    if (m_voxel_seen.count(vk)) return;   // 体素去重
+    m_voxel_seen[vk] = m_frame;
 
     const int cx = static_cast<int>(std::floor(p.x() / m_cell));
     const int cy = static_cast<int>(std::floor(p.y() / m_cell));
@@ -52,28 +52,34 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
         save(m_map_path + ".overlay.pcd");
     }
 
-    if (match.fitness >= m_cfg.fitness_trigger) { m_low_count = 0; return; }
-    if (++m_low_count < m_cfg.min_confirm) return;
-
-    const double moved = m_have_last ? (pose.trans - m_last_add).norm() : 1e9;
-    if (moved < m_cfg.min_keyframe_dist) return;
-
-    const int persist = std::max(1, m_cfg.persist_hits);
-    for (const auto& p : scan_body->points) {
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-        const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
-        const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
-        const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
-        const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
-        const int64_t vk = voxelKey(vx, vy, vz);
-        if (m_occupied.count(vk)) continue;                 // 已并入
-        if (++m_hits[vk] >= persist) {                      // 达到持久化阈值才并入
-            addPoint(w);
-            m_hits.erase(vk);
+    if (match.fitness >= m_cfg.fitness_trigger) { m_low_count = 0; }
+    else if (++m_low_count >= m_cfg.min_confirm) {
+        const double moved = m_have_last ? (pose.trans - m_last_add).norm() : 1e9;
+        if (moved >= m_cfg.min_keyframe_dist) {
+            const int persist = std::max(1, m_cfg.persist_hits);
+            for (const auto& p : scan_body->points) {
+                if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+                const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
+                const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
+                const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
+                const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
+                const int64_t vk = voxelKey(vx, vy, vz);
+                auto it = m_voxel_seen.find(vk);
+                if (it != m_voxel_seen.end()) { it->second = m_frame; continue; }  // 已并入, 刷新活跃
+                if (++m_hits[vk] >= persist) { addPoint(w); m_hits.erase(vk); }
+            }
+            m_last_add = pose.trans;
+            m_have_last = true;
         }
     }
-    m_last_add = pose.trans;
-    m_have_last = true;
+
+    // 衰减: 长期未再观测的叠加体素移除 (每天变化的堆货不会永久残留)
+    if (m_cfg.decay_frames > 0) {
+        for (auto it = m_voxel_seen.begin(); it != m_voxel_seen.end();) {
+            if (m_frame - it->second > m_cfg.decay_frames) it = m_voxel_seen.erase(it);
+            else ++it;
+        }
+    }
 }
 
 CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
@@ -91,6 +97,10 @@ CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
                 auto it = m_cells.find(voxelKey(cx + dx, cy + dy, cz + dz));
                 if (it == m_cells.end() || !it->second) continue;
                 for (const auto& p : it->second->points) {
+                    const int vx = static_cast<int>(std::floor(p.x / m_voxel));
+                    const int vy = static_cast<int>(std::floor(p.y / m_voxel));
+                    const int vz = static_cast<int>(std::floor(p.z / m_voxel));
+                    if (!m_voxel_seen.count(voxelKey(vx, vy, vz))) continue;  // 已衰减
                     const double ddx = p.x - pose.trans.x();
                     const double ddy = p.y - pose.trans.y();
                     const double ddz = p.z - pose.trans.z();
@@ -102,17 +112,22 @@ CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
 
 CloudType::Ptr OverlayMapMaintainer::snapshotOverlay() {
     CloudType::Ptr out(new CloudType());
-    for (const auto& kv : m_cells)
-        if (kv.second && !kv.second->empty()) *out += *kv.second;
+    for (const auto& kv : m_cells) {
+        if (!kv.second) continue;
+        for (const auto& p : kv.second->points) {
+            const int vx = static_cast<int>(std::floor(p.x / m_voxel));
+            const int vy = static_cast<int>(std::floor(p.y / m_voxel));
+            const int vz = static_cast<int>(std::floor(p.z / m_voxel));
+            if (m_voxel_seen.count(voxelKey(vx, vy, vz))) out->push_back(p);
+        }
+    }
     return out;
 }
 
 bool OverlayMapMaintainer::save(const std::string& path) {
-    CloudType all;
-    for (const auto& kv : m_cells)
-        if (kv.second) all += *kv.second;
-    if (all.empty()) return false;
-    return pcl::io::savePCDFileBinary(path, all) == 0;
+    CloudType::Ptr all = snapshotOverlay();
+    if (!all || all->empty()) return false;
+    return pcl::io::savePCDFileBinary(path, *all) == 0;
 }
 
 bool OverlayMapMaintainer::load(const std::string& path) {
