@@ -193,6 +193,8 @@ struct MaintainerConfig {
     double radius = 60.0;            // 叠加层按位姿取用半径(m)
     double voxel = 0.3;              // 叠加层体素(去重)
     double cell = 10.0;              // 叠加层空间分块边长(m)
+    int    persist_hits = 1;         // 体素需被观测到的最少次数才并入(>1 过滤瞬态, 长期用)
+    int    autosave_frames = 0;      // 每 N 帧自动落盘叠加层 (0=仅析构时)
 };
 
 } // namespace rosiwit_slam

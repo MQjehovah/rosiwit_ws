@@ -46,6 +46,11 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
 void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType::Ptr& scan_body,
                                        const MatchResult& match) {
     if (!m_cfg.enabled || !scan_body || scan_body->empty()) return;
+    ++m_frame;
+    if (m_cfg.autosave_frames > 0 && !m_map_path.empty() &&
+        m_frame % m_cfg.autosave_frames == 0) {
+        save(m_map_path + ".overlay.pcd");
+    }
 
     if (match.fitness >= m_cfg.fitness_trigger) { m_low_count = 0; return; }
     if (++m_low_count < m_cfg.min_confirm) return;
@@ -53,10 +58,19 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
     const double moved = m_have_last ? (pose.trans - m_last_add).norm() : 1e9;
     if (moved < m_cfg.min_keyframe_dist) return;
 
+    const int persist = std::max(1, m_cfg.persist_hits);
     for (const auto& p : scan_body->points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
-        addPoint(w);
+        const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
+        const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
+        const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
+        const int64_t vk = voxelKey(vx, vy, vz);
+        if (m_occupied.count(vk)) continue;                 // 已并入
+        if (++m_hits[vk] >= persist) {                      // 达到持久化阈值才并入
+            addPoint(w);
+            m_hits.erase(vk);
+        }
     }
     m_last_add = pose.trans;
     m_have_last = true;

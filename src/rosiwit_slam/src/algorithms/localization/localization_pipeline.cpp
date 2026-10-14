@@ -136,6 +136,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_maintainer_cfg.radius           = getv<double>(mtc, "radius", m_maintainer_cfg.radius);
         m_maintainer_cfg.voxel            = getv<double>(mtc, "voxel", m_maintainer_cfg.voxel);
         m_maintainer_cfg.cell             = getv<double>(mtc, "cell", m_maintainer_cfg.cell);
+        m_maintainer_cfg.persist_hits     = getv<int>(mtc, "persist_hits", m_maintainer_cfg.persist_hits);
+        m_maintainer_cfg.autosave_frames  = getv<int>(mtc, "autosave_frames", m_maintainer_cfg.autosave_frames);
     }
 #else
     (void)config_path;

@@ -333,6 +333,33 @@ TEST(MaintainerTest, OverlayAccumulatesOnChange) {
     EXPECT_EQ(mnt->getOverlay(pose)->size(), before);
 }
 
+// ---- 长期: 持久化过滤, 瞬态变化不入叠加层 ----
+TEST(MaintainerTest, DurableChangeFilter) {
+    auto mnt = LocalizationFactory::createMapMaintainer("overlay");
+    ASSERT_NE(mnt, nullptr);
+    MaintainerConfig cfg;
+    cfg.fitness_trigger = 0.5;
+    cfg.min_confirm = 1;
+    cfg.min_keyframe_dist = 0.0;
+    cfg.voxel = 0.2;
+    cfg.radius = 5.0;
+    cfg.persist_hits = 3;    // 需观测 3 次才并入
+    mnt->configure(cfg);
+    mnt->setBaseMap("", nullptr);
+
+    PoseStamped pose = makePose(0, 0, 0, 0);
+    CloudType::Ptr scan(new CloudType());
+    scan->push_back(PointType(0.0f, 0.0f, 0.0f));
+    MatchResult low; low.converged = true; low.fitness = 0.1;
+
+    mnt->onLocalized(pose, scan, low);
+    EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);   // 1 次: 未达阈值
+    mnt->onLocalized(pose, scan, low);
+    EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);   // 2 次: 未达阈值
+    mnt->onLocalized(pose, scan, low);
+    EXPECT_GT(mnt->getOverlay(pose)->size(), 0u);   // 3 次: 并入
+}
+
 // ---- 工厂注册完整性 ----
 TEST(LocalizationFactoryTest, RegistersAllStages) {
     for (const auto& n : LocalizationFactory::listMatchers())          EXPECT_NE(LocalizationFactory::createMatcher(n), nullptr);

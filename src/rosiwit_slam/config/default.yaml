@@ -209,6 +209,8 @@ localization:
     radius: 60.0
     voxel: 0.3
     cell: 10.0
+    persist_hits: 1           # >1 过滤瞬态(长期运行建议 3~5, 只保留持久变化)
+    autosave_frames: 0        # 每 N 帧自动落盘叠加层 (0=仅析构时保存)
 
   # ---- ScanContext 全局重定位参数 (localization: scan_context_localization) ----
   sc_num_rings: 20
