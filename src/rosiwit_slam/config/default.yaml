@@ -117,6 +117,7 @@ localization:
     local_map: radius_submap
     matcher: pp_icp
     monitor: windowed
+    map_maintainer: none       # none | overlay (非破坏性叠加, 原图不改)
 
   # 配准器参数 (matcher: gicp | pp_icp | p2p_icp | vgicp)
   matcher:
@@ -198,6 +199,16 @@ localization:
     min_coverage: 0.5
     residual_margin: 0.10
     consistent_frames: 2
+
+  # 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层
+  maintainer:
+    enabled: true
+    fitness_trigger: 0.5      # fitness 低于此判为环境变化
+    min_keyframe_dist: 1.0    # 叠加关键帧最小间距(m)
+    min_confirm: 2            # 连续确认帧数
+    radius: 60.0
+    voxel: 0.3
+    cell: 10.0
 
   # ---- ScanContext 全局重定位参数 (localization: scan_context_localization) ----
   sc_num_rings: 20

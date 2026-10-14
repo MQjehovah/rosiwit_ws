@@ -40,6 +40,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_local_map_name   = getv<std::string>(pipe, "local_map", m_local_map_name);
     m_matcher_name     = getv<std::string>(pipe, "matcher", m_matcher_name);
     m_monitor_name     = getv<std::string>(pipe, "monitor", m_monitor_name);
+    m_maintainer_name  = getv<std::string>(pipe, "map_maintainer", m_maintainer_name);
 
     auto mc = loc["matcher"];
     if (mc) {
@@ -126,6 +127,16 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_accept_cfg.residual_margin   = getv<double>(ac, "residual_margin", m_accept_cfg.residual_margin);
         m_accept_cfg.consistent_frames = getv<int>(ac, "consistent_frames", m_accept_cfg.consistent_frames);
     }
+    auto mtc = loc["maintainer"];
+    if (mtc) {
+        m_maintainer_cfg.enabled          = getv<bool>(mtc, "enabled", m_maintainer_cfg.enabled);
+        m_maintainer_cfg.fitness_trigger  = getv<double>(mtc, "fitness_trigger", m_maintainer_cfg.fitness_trigger);
+        m_maintainer_cfg.min_keyframe_dist = getv<double>(mtc, "min_keyframe_dist", m_maintainer_cfg.min_keyframe_dist);
+        m_maintainer_cfg.min_confirm      = getv<int>(mtc, "min_confirm", m_maintainer_cfg.min_confirm);
+        m_maintainer_cfg.radius           = getv<double>(mtc, "radius", m_maintainer_cfg.radius);
+        m_maintainer_cfg.voxel            = getv<double>(mtc, "voxel", m_maintainer_cfg.voxel);
+        m_maintainer_cfg.cell             = getv<double>(mtc, "cell", m_maintainer_cfg.cell);
+    }
 #else
     (void)config_path;
 #endif
@@ -149,8 +160,22 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_monitor->configure(m_monitor_cfg);
     m_relocalizer->configure(m_global_cfg);
 
+    if (m_maintainer_name != "none") {
+        m_maintainer = LocalizationFactory::createMapMaintainer(m_maintainer_name);
+        if (!m_maintainer) {
+            std::cerr << "[LocPipeline] unknown map_maintainer: " << m_maintainer_name << std::endl;
+            return false;
+        }
+        m_maintainer->configure(m_maintainer_cfg);
+    }
+
     std::cout << "[LocPipeline] " << describe() << std::endl;
     return true;
+}
+
+LocalizationPipeline::~LocalizationPipeline() {
+    // 非破坏性: 叠加层单独落盘, 原图不改
+    if (m_maintainer && !m_map_path.empty()) m_maintainer->save(m_map_path + ".overlay.pcd");
 }
 
 std::string LocalizationPipeline::describe() const {
@@ -159,6 +184,7 @@ std::string LocalizationPipeline::describe() const {
            " local_map=" + m_local_map_name +
            " matcher=" + m_matcher_name +
            " monitor=" + m_monitor_name +
+           " map_maintainer=" + m_maintainer_name +
            " accept_mode=" + std::to_string(m_accept_cfg.mode);
 }
 
@@ -174,6 +200,7 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
     }
     std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)" << std::endl;
     if (m_local_map) m_local_map->setMap(map_name, m_map);
+    if (m_maintainer) m_maintainer->setBaseMap(map_name, m_map);
 
     // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用
     if (m_local_map) {
@@ -278,6 +305,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
 
     const PoseStamped guess = m_prior->predict(f.end_time);
     CloudType::Ptr target = m_local_map->getLocalMap(guess);
+    // 非破坏性叠加: 变化层合并进配准目标
+    if (m_maintainer) {
+        CloudType::Ptr ov = m_maintainer->getOverlay(guess);
+        if (ov && !ov->empty()) *target += *ov;
+    }
     m_matcher->setTarget(target);
 
     MatchResult res;
@@ -294,6 +326,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
+
+    // 地图维护: 依据本帧质量/位姿决定是否把扫描并入叠加层
+    if (m_maintainer) m_maintainer->onLocalized(out_pose, f.cloud, m_last_match);
 
     MonitorInput mi;
     mi.match = res;

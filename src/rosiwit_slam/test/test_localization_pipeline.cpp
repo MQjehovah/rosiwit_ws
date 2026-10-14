@@ -301,6 +301,38 @@ TEST(MatcherRobustKernelTest, RecoversWithEachKernel) {
     }
 }
 
+// ---- 地图维护: 非破坏性叠加 ----
+TEST(MaintainerTest, OverlayAccumulatesOnChange) {
+    auto mnt = LocalizationFactory::createMapMaintainer("overlay");
+    ASSERT_NE(mnt, nullptr);
+    MaintainerConfig cfg;
+    cfg.fitness_trigger = 0.5;
+    cfg.min_confirm = 2;
+    cfg.min_keyframe_dist = 0.5;
+    cfg.voxel = 0.2;
+    cfg.radius = 5.0;
+    mnt->configure(cfg);
+    mnt->setBaseMap("", nullptr);
+
+    PoseStamped pose = makePose(0, 0, 0, 0);
+    CloudType::Ptr scan(new CloudType());
+    for (double x = -1.0; x <= 1.0; x += 0.1)
+        for (double y = -1.0; y <= 1.0; y += 0.1)
+            scan->push_back(PointType(static_cast<float>(x), static_cast<float>(y), 0.0f));
+
+    MatchResult low; low.converged = true; low.fitness = 0.1;
+    mnt->onLocalized(pose, scan, low);   // 第1帧: 未达确认数
+    EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);
+    mnt->onLocalized(pose, scan, low);   // 第2帧: 并入叠加层
+    EXPECT_GT(mnt->getOverlay(pose)->size(), 0u);
+
+    // fitness 恢复 -> 不再累积
+    const size_t before = mnt->getOverlay(pose)->size();
+    MatchResult good; good.converged = true; good.fitness = 0.95;
+    for (int i = 0; i < 3; ++i) mnt->onLocalized(makePose(2, 0, 0, 0), scan, good);
+    EXPECT_EQ(mnt->getOverlay(pose)->size(), before);
+}
+
 // ---- 工厂注册完整性 ----
 TEST(LocalizationFactoryTest, RegistersAllStages) {
     for (const auto& n : LocalizationFactory::listMatchers())          EXPECT_NE(LocalizationFactory::createMatcher(n), nullptr);
@@ -308,4 +340,5 @@ TEST(LocalizationFactoryTest, RegistersAllStages) {
     for (const auto& n : LocalizationFactory::listMotionPriors())      EXPECT_NE(LocalizationFactory::createMotionPrior(n), nullptr);
     for (const auto& n : LocalizationFactory::listGlobalLocalizers())  EXPECT_NE(LocalizationFactory::createGlobalLocalizer(n), nullptr);
     for (const auto& n : LocalizationFactory::listMonitors())          EXPECT_NE(LocalizationFactory::createMonitor(n), nullptr);
+    for (const auto& n : LocalizationFactory::listMapMaintainers())    EXPECT_NE(LocalizationFactory::createMapMaintainer(n), nullptr);
 }

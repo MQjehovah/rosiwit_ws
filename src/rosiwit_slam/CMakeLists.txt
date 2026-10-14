@@ -182,6 +182,7 @@ set(LOCALIZATION_SOURCES
     src/algorithms/localization/motion_prior/imu_motion_prior.cpp
     src/algorithms/localization/monitor/threshold_monitor.cpp
     src/algorithms/localization/monitor/windowed_monitor.cpp
+    src/algorithms/localization/maintainer/overlay_map_maintainer.cpp
     src/algorithms/localization/global/scan_context_global_localizer.cpp
     src/algorithms/localization/global/bbs_global_localizer.cpp
     src/algorithms/localization/global/fpfh_ransac_global_localizer.cpp

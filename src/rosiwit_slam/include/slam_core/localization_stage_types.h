@@ -183,4 +183,16 @@ struct AcceptConfig {
     int    consistent_frames = 2;    // 修正方向连续一致帧数
 };
 
+// ==================== 地图维护 (map_maintainer) ====================
+// 非破坏性: 冻结原始地图, 将"变化"以叠加层(overlay)形式记录, 配准目标=原图+叠加层.
+struct MaintainerConfig {
+    bool   enabled = true;
+    double fitness_trigger = 0.5;    // fitness 低于此判为环境变化
+    double min_keyframe_dist = 1.0;  // 叠加关键帧最小间距(m)
+    int    min_confirm = 2;          // 连续确认帧数(抑制误检)
+    double radius = 60.0;            // 叠加层按位姿取用半径(m)
+    double voxel = 0.3;              // 叠加层体素(去重)
+    double cell = 10.0;              // 叠加层空间分块边长(m)
+};
+
 } // namespace rosiwit_slam

@@ -14,6 +14,7 @@
 #include "algorithms/localization/global/fpfh_ransac_global_localizer.h"
 #include "algorithms/localization/monitor/threshold_monitor.h"
 #include "algorithms/localization/monitor/windowed_monitor.h"
+#include "algorithms/localization/maintainer/overlay_map_maintainer.h"
 
 namespace rosiwit_slam {
 
@@ -52,10 +53,16 @@ std::unique_ptr<ILocalizationMonitor> LocalizationFactory::createMonitor(const s
     return nullptr;
 }
 
+std::unique_ptr<IMapMaintainer> LocalizationFactory::createMapMaintainer(const std::string& name) {
+    if (name == "overlay") return std::make_unique<OverlayMapMaintainer>();
+    return nullptr;
+}
+
 std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp", "p2p_icp", "vgicp"}; }
 std::vector<std::string> LocalizationFactory::listLocalMapProviders() { return {"global", "radius_submap", "keyframe_submap"}; }
 std::vector<std::string> LocalizationFactory::listMotionPriors()      { return {"constant_velocity", "imu"}; }
 std::vector<std::string> LocalizationFactory::listGlobalLocalizers()  { return {"none", "scan_context", "bbs", "fpfh_ransac"}; }
 std::vector<std::string> LocalizationFactory::listMonitors()          { return {"threshold", "windowed"}; }
+std::vector<std::string> LocalizationFactory::listMapMaintainers()    { return {"overlay"}; }
 
 } // namespace rosiwit_slam

@@ -8,6 +8,7 @@
 #include "slam_core/i_motion_prior.h"
 #include "slam_core/i_global_localizer.h"
 #include "slam_core/i_localization_monitor.h"
+#include "slam_core/i_map_maintainer.h"
 
 namespace rosiwit_slam {
 
@@ -19,12 +20,14 @@ public:
     static std::unique_ptr<IMotionPrior>         createMotionPrior(const std::string& name);
     static std::unique_ptr<IGlobalLocalizer>     createGlobalLocalizer(const std::string& name);
     static std::unique_ptr<ILocalizationMonitor> createMonitor(const std::string& name);
+    static std::unique_ptr<IMapMaintainer>       createMapMaintainer(const std::string& name);
 
     static std::vector<std::string> listMatchers();
     static std::vector<std::string> listLocalMapProviders();
     static std::vector<std::string> listMotionPriors();
     static std::vector<std::string> listGlobalLocalizers();
     static std::vector<std::string> listMonitors();
+    static std::vector<std::string> listMapMaintainers();
 };
 
 } // namespace rosiwit_slam

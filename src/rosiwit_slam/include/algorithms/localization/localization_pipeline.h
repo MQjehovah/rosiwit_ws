@@ -8,6 +8,7 @@
 #include "slam_core/i_motion_prior.h"
 #include "slam_core/i_global_localizer.h"
 #include "slam_core/i_localization_monitor.h"
+#include "slam_core/i_map_maintainer.h"
 
 namespace rosiwit_slam {
 
@@ -17,7 +18,7 @@ namespace rosiwit_slam {
 class LocalizationPipeline : public ILocalization {
 public:
     LocalizationPipeline() = default;
-    ~LocalizationPipeline() override = default;
+    ~LocalizationPipeline() override;
 
     bool init(const std::string& config_path) override;
     void setMap(const std::string& map_name) override;
@@ -43,6 +44,7 @@ private:
     std::unique_ptr<ILocalMapProvider>    m_local_map;
     std::unique_ptr<IScanMatcher>         m_matcher;
     std::unique_ptr<ILocalizationMonitor> m_monitor;
+    std::unique_ptr<IMapMaintainer>       m_maintainer;   // 第6阶段: 非破坏性叠加地图维护
 
     // 配置
     ScanMatcherConfig   m_matcher_cfg;
@@ -51,11 +53,13 @@ private:
     GlobalLocalizeConfig m_global_cfg;
     MonitorConfig       m_monitor_cfg;
     AcceptConfig        m_accept_cfg;
+    MaintainerConfig    m_maintainer_cfg;
     std::string m_relocalizer_name = "none";
     std::string m_prior_name = "constant_velocity";
     std::string m_local_map_name = "radius_submap";
     std::string m_matcher_name = "pp_icp";
     std::string m_monitor_name = "windowed";
+    std::string m_maintainer_name = "none";
 
     // 状态
     CloudType::Ptr m_map;
