@@ -112,6 +112,12 @@ struct GlobalLocalizeConfig {
     double sc_min_radius = 2.0;
     double sc_dist_thresh = 0.4;
     double sc_candidate_ratio = 0.3;
+    // BBS (branch-and-bound) 分支定界 2D 全局搜索
+    double bbs_z_min = -1.0;          // 参与 2D 投影的 z 下界(m)
+    double bbs_z_max = 1.0;           // z 上界(m)
+    int    bbs_theta_bins = 60;       // 航向离散数
+    int    bbs_max_levels = 6;        // 金字塔最大层数
+    double bbs_min_points_per_cell = 5.0;  // 单格命中密度归一化上限
 };
 
 // ==================== 健康监测 ====================

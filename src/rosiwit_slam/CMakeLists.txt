@@ -180,6 +180,7 @@ set(LOCALIZATION_SOURCES
     src/algorithms/localization/monitor/threshold_monitor.cpp
     src/algorithms/localization/monitor/windowed_monitor.cpp
     src/algorithms/localization/global/scan_context_global_localizer.cpp
+    src/algorithms/localization/global/bbs_global_localizer.cpp
 )
 
 set(SOURCES

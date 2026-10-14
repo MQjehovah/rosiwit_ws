@@ -151,7 +151,7 @@ localization:
     max_dt: 0.2
     max_vel: 10.0
 
-  # 全局重定位参数 (relocalizer: scan_context)
+  # 全局重定位参数 (relocalizer: scan_context | bbs)
   global:
     min_score: 0.5
     voxel_resolution: 0.3
@@ -164,6 +164,12 @@ localization:
     sc_min_radius: 2.0
     sc_dist_thresh: 0.4
     sc_candidate_ratio: 0.3
+    # bbs 专用
+    bbs_z_min: -1.0
+    bbs_z_max: 1.0
+    bbs_theta_bins: 60
+    bbs_max_levels: 6
+    bbs_min_points_per_cell: 5.0
 
   # 健康监测参数 (monitor: threshold | windowed)
   monitor:

@@ -7,6 +7,7 @@
 #include "algorithms/localization/motion_prior/constant_velocity_prior.h"
 #include "algorithms/localization/motion_prior/imu_motion_prior.h"
 #include "algorithms/localization/global/scan_context_global_localizer.h"
+#include "algorithms/localization/global/bbs_global_localizer.h"
 #include "algorithms/localization/monitor/threshold_monitor.h"
 #include "algorithms/localization/monitor/windowed_monitor.h"
 
@@ -33,6 +34,7 @@ std::unique_ptr<IMotionPrior> LocalizationFactory::createMotionPrior(const std::
 std::unique_ptr<IGlobalLocalizer> LocalizationFactory::createGlobalLocalizer(const std::string& name) {
     if (name == "none")         return std::make_unique<NoGlobalLocalizer>();
     if (name == "scan_context") return std::make_unique<ScanContextGlobalLocalizer>();
+    if (name == "bbs")          return std::make_unique<BbsGlobalLocalizer>();
     return nullptr;
 }
 
@@ -45,7 +47,7 @@ std::unique_ptr<ILocalizationMonitor> LocalizationFactory::createMonitor(const s
 std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp"}; }
 std::vector<std::string> LocalizationFactory::listLocalMapProviders() { return {"global", "radius_submap"}; }
 std::vector<std::string> LocalizationFactory::listMotionPriors()      { return {"constant_velocity", "imu"}; }
-std::vector<std::string> LocalizationFactory::listGlobalLocalizers()  { return {"none", "scan_context"}; }
+std::vector<std::string> LocalizationFactory::listGlobalLocalizers()  { return {"none", "scan_context", "bbs"}; }
 std::vector<std::string> LocalizationFactory::listMonitors()          { return {"threshold", "windowed"}; }
 
 } // namespace rosiwit_slam

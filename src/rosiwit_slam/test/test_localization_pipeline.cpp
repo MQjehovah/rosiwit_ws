@@ -142,6 +142,40 @@ TEST(MonitorTest, ThresholdDetectsLost) {
     EXPECT_EQ(m->update(bad), MonitorLevel::LOST);
 }
 
+// ---- 全局重定位契约 ----
+TEST(GlobalLocalizerTest, BbsRecoversPoseWithoutInit) {
+    auto loc = LocalizationFactory::createGlobalLocalizer("bbs");
+    ASSERT_NE(loc, nullptr);
+    GlobalLocalizeConfig cfg;
+    cfg.voxel_resolution = 0.4;
+    cfg.bbs_theta_bins = 60;
+    cfg.bbs_max_levels = 4;
+    cfg.bbs_z_min = -1.0;
+    cfg.bbs_z_max = 1.0;
+    cfg.min_score = 0.3;
+    loc->configure(cfg);
+
+    CloudType::Ptr map = makeScene();
+    ASSERT_TRUE(loc->setMap("", map));
+
+    const PoseStamped gt = makePose(3.0, 3.0, 0.0, 20.0);
+    CloudType::Ptr scan = makeScanFromMap(map, gt);
+
+    GlobalCandidate cand;
+    ASSERT_TRUE(loc->localize(scan, cand));
+    const double derr = (cand.pose.trans - gt.trans).norm();
+    const double dyaw = std::fabs(yawFromRot(gt.rot.transpose() * cand.pose.rot)) * 180.0 / M_PI;
+    EXPECT_LT(derr, 0.6);
+    EXPECT_LT(dyaw, 12.0);
+}
+
+TEST(GlobalLocalizerTest, NoneReturnsFalse) {
+    auto loc = LocalizationFactory::createGlobalLocalizer("none");
+    ASSERT_NE(loc, nullptr);
+    GlobalCandidate c;
+    EXPECT_FALSE(loc->localize(makeScene(), c));
+}
+
 // ---- 工厂注册完整性 ----
 TEST(LocalizationFactoryTest, RegistersAllStages) {
     for (const auto& n : LocalizationFactory::listMatchers())          EXPECT_NE(LocalizationFactory::createMatcher(n), nullptr);
