@@ -21,6 +21,9 @@ public:
     /// 喂入 IMU (仅 IMU 类先验使用)
     virtual void onImu(const IMUSample& /*s*/) {}
 
+    /// 喂入轮式里程计 (可选; 打滑时由实现自行门控)
+    virtual void onOdom(const PoseStamped& /*odom*/) {}
+
     /// 预测 t 时刻位姿
     virtual PoseStamped predict(double t) = 0;
 

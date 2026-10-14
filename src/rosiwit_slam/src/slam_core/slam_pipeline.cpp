@@ -127,6 +127,10 @@ void SlamPipeline::onVisualOdometry(double time, const PoseStamped& vo_pose) {
     if (m_visual) m_visual->addVisualOdometry(time, vo_pose);
 }
 
+void SlamPipeline::onOdom(const PoseStamped& odom) {
+    if (m_mode.load() == PipelineMode::LOCALIZATION && m_localization) m_localization->onOdom(odom);
+}
+
 void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& to_id,
                                 const PoseStamped& rel, double cov) {
     if (!m_backend) return;

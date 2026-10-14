@@ -14,6 +14,8 @@ modules:
 
 imu_topic: /imu
 lidar_topic: /lidar
+enable_odom: false          # 轮式里程计开关(供定位运动先验; 洗地机易打滑, 默认关)
+odom_topic: /odom
 body_frame: base_link
 world_frame: odom
 
@@ -157,6 +159,8 @@ localization:
   motion_prior:
     max_dt: 0.2
     max_vel: 10.0
+    use_odom: false           # 融合轮式里程计(洗地机打滑: 默认关, 朝向始终用 IMU)
+    slip_yaw_thresh: 0.3      # |odom_yaw_rate - imu_yaw_rate| 超此值判打滑并丢弃 odom(rad/s)
 
   # 全局重定位参数 (relocalizer: scan_context | bbs | fpfh_ransac)
   global:

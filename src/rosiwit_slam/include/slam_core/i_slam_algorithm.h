@@ -47,6 +47,8 @@ public:
     /// 视觉回环约束
     virtual void onVisualLoop(const std::string& /*from_id*/, const std::string& /*to_id*/,
                               const PoseStamped& /*rel*/, double /*cov*/) {}
+    /// 轮式里程计 (可选, 供定位运动先验; 默认忽略)
+    virtual void onOdom(const PoseStamped& /*odom*/) {}
 };
 
 } // namespace rosiwit_slam

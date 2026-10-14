@@ -85,6 +85,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (mpc) {
         m_motion_cfg.max_dt  = getv<double>(mpc, "max_dt", m_motion_cfg.max_dt);
         m_motion_cfg.max_vel = getv<double>(mpc, "max_vel", m_motion_cfg.max_vel);
+        m_motion_cfg.use_odom = getv<bool>(mpc, "use_odom", m_motion_cfg.use_odom);
+        m_motion_cfg.slip_yaw_thresh = getv<double>(mpc, "slip_yaw_thresh", m_motion_cfg.slip_yaw_thresh);
     }
     auto gc = loc["global"];
     if (gc) {
@@ -255,6 +257,50 @@ void LocalizationPipeline::onImu(const IMUSample& s) {
     if (m_prior) m_prior->onImu(s);
 }
 
+void LocalizationPipeline::onOdom(const PoseStamped& odom) {
+    if (m_prior) m_prior->onOdom(odom);
+}
+
+bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
+    // 出口重锁: 在推算位姿附近做有界局部多起点配准(优于全局检索; 叠加层帮助在新货环境重锁)
+    if (!m_local_map || !m_matcher) return false;
+    CloudType::Ptr target = m_local_map->getLocalMap(m_pose);
+    if (m_maintainer) {
+        CloudType::Ptr ov = m_maintainer->getOverlay(m_pose);
+        if (ov && !ov->empty()) *target += *ov;
+    }
+    if (!target || target->empty()) return false;
+    m_matcher->setTarget(target);
+
+    const double offs[3] = {-1.5, 0.0, 1.5};
+    const double yaws[3] = {-10.0, 0.0, 10.0};
+    double best_fit = m_accept_cfg.min_coverage;
+    PoseStamped best;
+    bool found = false;
+    for (double dx : offs)
+        for (double dy : offs)
+            for (double yd : yaws) {
+                PoseStamped g = m_pose;
+                g.trans += V3D(dx, dy, 0.0);
+                g.rot = m_pose.rot * Eigen::AngleAxisd(yd * M_PI / 180.0, V3D::UnitZ()).toRotationMatrix();
+                MatchResult r;
+                if (m_matcher->match(scan, g, r) && r.converged && r.fitness > best_fit) {
+                    best_fit = r.fitness;
+                    best = r.pose;
+                    found = true;
+                }
+            }
+    if (!found) return false;
+    m_pose = best;
+    m_pose.time = best.time;
+    m_prior->reset(m_pose);
+    m_monitor->reset();
+    m_has_cached_target = false;
+    m_coast_count = 0;
+    std::cout << "[LocPipeline] bounded recovery, fitness=" << best_fit << std::endl;
+    return true;
+}
+
 bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
                                        const PoseStamped& guess) {
     if (!res.converged) return false;
@@ -294,6 +340,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     if (!m_initialized || m_status == LOST) {
         if (m_reloc_cooldown > 0) {
             --m_reloc_cooldown;
+        } else if (m_initialized && tryBoundedRecovery(f.cloud)) {
+            // 出口重锁成功
+            m_status = LOCALIZED;
+            m_reloc_cooldown = 0;
+            m_last_match = MatchResult();
+            m_last_match.converged = true;
+            m_last_match.pose = m_pose;
         } else {
             std::vector<GlobalCandidate> cands;
             const int nk = m_relocalizer

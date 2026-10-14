@@ -43,6 +43,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.lidar_min_range  = cfg["lidar_min_range"].as<double>(m_cfg.lidar_min_range);
             m_cfg.lidar_max_range  = cfg["lidar_max_range"].as<double>(m_cfg.lidar_max_range);
             m_cfg.scan_period_ms   = cfg["scan_period_ms"].as<float>(m_cfg.scan_period_ms);
+            m_cfg.odom_enabled     = cfg["enable_odom"].as<bool>(m_cfg.odom_enabled);
+            m_cfg.odom_topic       = cfg["odom_topic"].as<std::string>(m_cfg.odom_topic);
             if (cfg["vision"]) {
                 m_cfg.vision_enabled = cfg["vision"]["enabled"].as<bool>(m_cfg.vision_enabled);
                 m_cfg.vo_topic       = cfg["vision"]["vo_topic"].as<std::string>(m_cfg.vo_topic);
@@ -68,6 +70,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     if (m_cfg.vision_enabled) {
         m_vo_sub = create_subscription<nav_msgs::msg::Odometry>(
             m_cfg.vo_topic, 100, std::bind(&SlamNode::voCB, this, _1), sensor_sub_opts);
+    }
+    if (m_cfg.odom_enabled) {
+        m_odom_sub = create_subscription<nav_msgs::msg::Odometry>(
+            m_cfg.odom_topic, 100, std::bind(&SlamNode::odomCB, this, _1), sensor_sub_opts);
     }
 
     m_body_cloud_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("body_cloud", 10000);
@@ -133,6 +139,15 @@ void SlamNode::voCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
     const auto& q = msg->pose.pose.orientation;
     p.rot = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
     m_algo->onVisualOdometry(p.time, p);
+}
+
+void SlamNode::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    PoseStamped p;
+    p.time = RosUtils::getSec(msg->header);
+    p.trans = V3D(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
+    const auto& q = msg->pose.pose.orientation;
+    p.rot = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
+    m_algo->onOdom(p);
 }
 
 void SlamNode::onOutput(const SlamOutput& out) {

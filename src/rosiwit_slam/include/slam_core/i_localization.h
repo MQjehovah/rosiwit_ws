@@ -14,6 +14,8 @@ public:
     virtual void setInitPose(const PoseStamped& pose) = 0;
     virtual void onImu(const IMUSample& s) = 0;
     virtual void onLidar(const LidarFrame& f) = 0;
+    /// 可选: 轮式里程计 (运动先验, 默认忽略)
+    virtual void onOdom(const PoseStamped& /*odom*/) {}
     virtual Status getStatus() = 0;
     virtual bool getPose(PoseStamped& out) = 0;
 

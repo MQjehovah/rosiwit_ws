@@ -40,11 +40,14 @@ private:
         float  scan_period_ms   = 100.0f;   // LiDAR 扫描周期 (毫秒), 用于点时间戳
         bool   vision_enabled    = false;    // 视觉松耦合开关
         std::string vo_topic     = "/visual_odometry";  // VO 库发布的里程计话题
+        bool   odom_enabled      = false;    // 轮式里程计开关(供定位运动先验)
+        std::string odom_topic   = "/odom";  // 轮式里程计话题
     };
 
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg);
     void lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void voCB(const nav_msgs::msg::Odometry::SharedPtr msg);   // 视觉里程计 (可选)
+    void odomCB(const nav_msgs::msg::Odometry::SharedPtr msg); // 轮式里程计 (可选)
     void timerCB();
     void mapTimerCB();
     void onOutput(const SlamOutput& out);
@@ -61,6 +64,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr  m_lidar_sub;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr m_init_pose_sub;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr m_vo_sub;   // 视觉里程计 (开关控制)
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr m_odom_sub; // 轮式里程计 (开关控制)
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_body_cloud_pub, m_world_cloud_pub, m_global_map_pub;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_pub;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr     m_path_pub;

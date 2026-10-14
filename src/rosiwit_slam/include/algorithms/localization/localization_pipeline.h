@@ -24,6 +24,7 @@ public:
     void setMap(const std::string& map_name) override;
     void setInitPose(const PoseStamped& pose) override;
     void onImu(const IMUSample& s) override;
+    void onOdom(const PoseStamped& odom) override;
     void onLidar(const LidarFrame& f) override;
     Status getStatus() override;
     bool getPose(PoseStamped& out) override;
@@ -37,6 +38,7 @@ public:
 private:
     bool acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
                      const PoseStamped& guess);
+    bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)
 
     // 各阶段 (由配置选择)
     std::unique_ptr<IGlobalLocalizer>     m_relocalizer;
