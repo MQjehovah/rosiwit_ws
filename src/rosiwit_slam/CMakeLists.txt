@@ -320,6 +320,13 @@ if(yaml-cpp_FOUND)
 endif()
 install(TARGETS localization_eval DESTINATION lib/${PROJECT_NAME})
 
+# ==================== 离线静态底图清理工具 (L3b) ====================
+add_executable(map_cleanup tools/map_cleanup.cpp src/io/xzmap_reader.cpp)
+target_include_directories(map_cleanup PRIVATE
+    include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+target_link_libraries(map_cleanup ${PCL_LIBRARIES})
+install(TARGETS map_cleanup DESTINATION lib/${PROJECT_NAME})
+
 # ==================== 安装 ====================
 install(TARGETS ${NODE_NAME}
     DESTINATION lib/${PROJECT_NAME}

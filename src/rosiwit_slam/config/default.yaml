@@ -89,6 +89,9 @@ robust_floor: 0.1
 dynamic_removal: true # 动态障碍物剔除建图
 persist_thresh: 2
 persist_window: 20
+free_space_carving: false # L3a 在线自由空间雕刻(删除"已移除物体"的残留地图点)
+carve_free_thresh: 3      # 同一体素被看到"空"的次数阈值
+carve_stride: 10          # 射线行进抽样步长
 dynamic_residual_thresh: 1.0
 
 # 回环检测参数
@@ -114,12 +117,12 @@ localization:
   #   matcher     : gicp | pp_icp | p2p_icp | vgicp
   #   monitor     : threshold | windowed
   pipeline:
-    relocalizer: none
+    relocalizer: bbs
     motion_prior: imu
-    local_map: radius_submap
+    local_map: keyframe_submap
     matcher: pp_icp
     monitor: windowed
-    map_maintainer: none       # none | overlay (非破坏性叠加, 原图不改)
+    map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
 
   # 配准器参数 (matcher: gicp | pp_icp | p2p_icp | vgicp)
   matcher:
@@ -134,8 +137,8 @@ localization:
     corr_dist_min: 1.0
     use_huber: true
     huber_delta: 0.25
-    robust_kernel: huber        # none | huber | cauchy | tukey
-    use_edge_feature: false
+    robust_kernel: cauchy       # 工厂: 动态点降权
+    use_edge_feature: true     # 工厂: 长直墙/货架补充 yaw
     edge_line_ratio: 0.12
     edge_valid_thr: 0.10
     edge_min_extent: 0.20
@@ -144,8 +147,8 @@ localization:
     degeneracy_eig_ratio: 0.001
     min_correspondences: 20
     # 动态/变化物剔除: 只保留贴近静态地图的点 (人来人往/叉车/未入图的新堆货被剔除)
-    dynamic_filter: false
-    dynamic_dist: 1.0
+    dynamic_filter: true       # 工厂: 人/叉车多
+    dynamic_dist: 0.4
 
   # 局部地图参数 (local_map: global | radius_submap | keyframe_submap)
   local_map:
@@ -197,7 +200,7 @@ localization:
     lost_fitness: 0.5
     lost_patience: 3
     lost_patience_low: 8
-    coast_patience: 100       # 连续未采纳帧数上限(内=降级外推, 超=判丢失)
+    coast_patience: 150       # 连续未采纳帧数上限(内=降级外推, 超=判丢失)
     window_length: 20
     window_std_k: 2.0
     max_trans_step: 1.0
@@ -215,7 +218,7 @@ localization:
 
   # 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane
   planar:
-    mode: none                # 建议洗地机用 ground_plane (平地锁平/坡道跟随)
+    mode: ground_plane        # 工厂: 平地锁平/坡道跟随 (洗地机过坡安全)
     z: 0.0                    # lock_zrp 目标高度
     sensor_height: 0.0        # 传感器离地高(m); 0=首帧自动标定
     cell: 1.0
@@ -231,11 +234,11 @@ localization:
     radius: 60.0
     voxel: 0.3
     cell: 10.0
-    persist_hits: 1           # >1 过滤瞬态(长期运行建议 3~5, 只保留持久变化)
-    autosave_frames: 0        # 每 N 帧自动落盘叠加层 (0=仅析构时保存)
-    refresh_frames: 0         # 每 N 帧用叠加层刷新全局重定位器 (lifelong, 0=关闭)
-    decay_frames: 0           # 叠加层体素 N 帧未再观测则移除 (每天变的堆货, 建议≥600)
-    override_base: false      # 叠加层压制同位置原图点 (结构被移除/替换时建议 true)
+    persist_hits: 3           # 工厂: 只沉淀持久半静态堆货
+    autosave_frames: 300      # 周期性落盘叠加层
+    refresh_frames: 300       # 周期性用叠加层刷新全局重定位器
+    decay_frames: 3000        # 长期未再观测的叠加体素移除
+    override_base: true       # 结构被移除/替换时压制原图旧点
     delta_min: 0.3            # 只沉淀"离原图 > 该距离(m)"的新结构(变化增量), 不重复静态
     carve_stride: 20          # 自由空间雕刻抽样步长 (看到空 -> 从叠加层移除鬼影)
 

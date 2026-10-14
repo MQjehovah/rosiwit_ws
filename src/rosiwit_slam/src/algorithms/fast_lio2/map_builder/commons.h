@@ -61,6 +61,10 @@ struct Config
     int persist_thresh = 2;
     int persist_window = 20;
     double dynamic_residual_thresh = 1.0;
+    // 在线自由空间雕刻 (L3a): 射线穿过已占据体素达阈值 -> 判该处物体已移除, 删除地图点
+    bool free_space_carving = false;
+    int carve_free_thresh = 3;    // 同一体素被"看到空"的次数阈值
+    int carve_stride = 10;        // 射线行进时的扫描点抽样步长
 };
 
 /// 从 YAML 配置文件中解析 FastLIO2 公共配置字段。

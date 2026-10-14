@@ -23,6 +23,8 @@ public:
 
     void incrCloudMap();
 
+    void carveFreeSpace(const State &state);
+
     void initCloudMap(PointVec &point_vec);
 
     void process(SyncPackage &package);
@@ -58,5 +60,6 @@ private:
     pcl::VoxelGrid<PointType> m_scan_filter;
     std::unordered_map<long, int> m_voxel_count;
     std::unordered_map<long, long> m_voxel_last_frame;
+    std::unordered_map<long, int> m_voxel_free;   // L3a: 体素"被穿过"计数
     long m_frame_idx = 0;
 };

@@ -175,6 +175,61 @@ void LidarProcessor::incrCloudMap()
     }
     m_ikdtree->Add_Points(point_to_add, true);
     m_ikdtree->Add_Points(point_no_need_downsample, false);
+
+    // L3a: 在线自由空间雕刻 (开关) —— 删除"已被移除物体"的残留地图点
+    if (m_config.free_space_carving)
+        carveFreeSpace(state);
+}
+
+void LidarProcessor::carveFreeSpace(const State &state)
+{
+    if (m_cloud_down_world->empty())
+        return;
+    const V3D origin = state.t_wi;
+    const double res = m_config.map_resolution;
+    const double step = std::max(0.05, res * 0.5);
+    const int n = static_cast<int>(m_cloud_down_world->size());
+    const int stride = std::max(1, m_config.carve_stride);
+
+    PointVec del;
+    for (int i = 0; i < n; i += stride)
+    {
+        const PointType &e = m_cloud_down_world->points[i];
+        const V3D d(e.x - origin(0), e.y - origin(1), e.z - origin(2));
+        const double len = d.norm();
+        if (len < step * 2.0)
+            continue;
+        const V3D u = d / len;
+        for (double t = step; t < len - res; t += step)
+        {
+            const V3D q = origin + u * t;
+            PointType qp;
+            qp.x = static_cast<float>(q(0));
+            qp.y = static_cast<float>(q(1));
+            qp.z = static_cast<float>(q(2));
+            const long key = voxelKey(qp, res);
+            // 仅当该体素此前有占据点时才计"空"
+            if (m_voxel_last_frame.find(key) == m_voxel_last_frame.end())
+                continue;
+            int &fc = m_voxel_free[key];
+            if (++fc < m_config.carve_free_thresh)
+                continue;
+            // 该体素判为已移除: 收集并删除其地图点
+            PointType center;
+            center.x = static_cast<float>((std::floor(q(0) / res) + 0.5) * res);
+            center.y = static_cast<float>((std::floor(q(1) / res) + 0.5) * res);
+            center.z = static_cast<float>((std::floor(q(2) / res) + 0.5) * res);
+            PointVec near;
+            m_ikdtree->Radius_Search(center, static_cast<float>(res), near);
+            for (auto &p : near)
+                del.push_back(p);
+            m_voxel_last_frame.erase(key);
+            m_voxel_count.erase(key);
+            m_voxel_free.erase(key);
+        }
+    }
+    if (!del.empty())
+        m_ikdtree->Delete_Points(del);
 }
 
 void LidarProcessor::collectGlobalMap(std::vector<PointType, Eigen::aligned_allocator<PointType>> &points)
@@ -200,6 +255,7 @@ void LidarProcessor::process(SyncPackage &package)
             if (m_frame_idx - it->second > m_config.persist_window)
             {
                 m_voxel_count.erase(it->first);
+                m_voxel_free.erase(it->first);
                 it = m_voxel_last_frame.erase(it);
             }
             else

@@ -46,6 +46,9 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.persist_thresh  = config["persist_thresh"].as<int>(out_cfg.persist_thresh);
         out_cfg.persist_window  = config["persist_window"].as<int>(out_cfg.persist_window);
         out_cfg.dynamic_residual_thresh = config["dynamic_residual_thresh"].as<double>(out_cfg.dynamic_residual_thresh);
+        out_cfg.free_space_carving = config["free_space_carving"].as<bool>(out_cfg.free_space_carving);
+        out_cfg.carve_free_thresh = config["carve_free_thresh"].as<int>(out_cfg.carve_free_thresh);
+        out_cfg.carve_stride = config["carve_stride"].as<int>(out_cfg.carve_stride);
         return true;
     } catch (const std::exception& e) {
         return false;
