@@ -257,6 +257,25 @@ TEST(GlobalLocalizerTest, BbsTopKReturnsCandidates) {
     }
 }
 
+// ---- FPFH-RANSAC 6DoF 重定位: 仅冒烟 (RANSAC 随机, 不强制成功) ----
+TEST(GlobalLocalizerTest, FpfhRansacSmoke) {
+    auto loc = LocalizationFactory::createGlobalLocalizer("fpfh_ransac");
+    ASSERT_NE(loc, nullptr);
+    GlobalLocalizeConfig cfg;
+    cfg.voxel_resolution = 0.5;
+    cfg.fpfh_normal_radius = 1.0;
+    cfg.fpfh_feature_radius = 4.0;
+    cfg.fpfh_max_iter = 3000;
+    cfg.min_score = 0.2;
+    loc->configure(cfg);
+    CloudType::Ptr map = makeScene();
+    ASSERT_TRUE(loc->setMap("", map));
+    CloudType::Ptr scan = makeScanFromMap(map, makePose(3.0, 3.0, 0.0, 20.0));
+    GlobalCandidate c;
+    loc->localize(scan, c);  // 不崩溃即可
+    SUCCEED();
+}
+
 // ---- 可切换鲁棒核: 各核均应稳定恢复 ----
 TEST(MatcherRobustKernelTest, RecoversWithEachKernel) {
     const RobustKernel kernels[] = {RobustKernel::NONE, RobustKernel::HUBER,

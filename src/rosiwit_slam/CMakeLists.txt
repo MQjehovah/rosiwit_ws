@@ -57,7 +57,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 # ==================== 第三方库依赖 ====================
 find_package(Eigen3 REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common io filters kdtree registration segmentation sample_consensus)
+find_package(PCL REQUIRED COMPONENTS common io filters kdtree registration segmentation sample_consensus features)
 
 # Sophus - 系统库 (ros-humble-sophus)
 find_package(Sophus REQUIRED)
@@ -174,6 +174,7 @@ set(LOCALIZATION_SOURCES
     src/algorithms/localization/matcher/gicp_matcher.cpp
     src/algorithms/localization/matcher/pp_icp_matcher.cpp
     src/algorithms/localization/matcher/p2p_icp_matcher.cpp
+    src/algorithms/localization/matcher/vgicp_matcher.cpp
     src/algorithms/localization/local_map/global_map_provider.cpp
     src/algorithms/localization/local_map/radius_submap_provider.cpp
     src/algorithms/localization/local_map/keyframe_submap_provider.cpp
@@ -183,6 +184,7 @@ set(LOCALIZATION_SOURCES
     src/algorithms/localization/monitor/windowed_monitor.cpp
     src/algorithms/localization/global/scan_context_global_localizer.cpp
     src/algorithms/localization/global/bbs_global_localizer.cpp
+    src/algorithms/localization/global/fpfh_ransac_global_localizer.cpp
 )
 
 set(SOURCES

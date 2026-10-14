@@ -106,10 +106,10 @@ localization:
   # ==================== 可编排定位流水线 (localization_pipeline) ====================
   # 各阶段按名选择算法, 便于对同一阶段的不同算法做横向性能验证.
   # 可用实现 (见 algorithms/localization/localization_factory.cpp):
-  #   relocalizer : none | scan_context
+  #   relocalizer : none | scan_context | bbs | fpfh_ransac
   #   motion_prior: constant_velocity | imu
   #   local_map   : global | radius_submap | keyframe_submap
-  #   matcher     : gicp | pp_icp | p2p_icp
+  #   matcher     : gicp | pp_icp | p2p_icp | vgicp
   #   monitor     : threshold | windowed
   pipeline:
     relocalizer: none
@@ -118,7 +118,7 @@ localization:
     matcher: pp_icp
     monitor: windowed
 
-  # 配准器参数 (matcher: gicp | pp_icp | p2p_icp)
+  # 配准器参数 (matcher: gicp | pp_icp | p2p_icp | vgicp)
   matcher:
     voxel_resolution: 0.3
     max_iterations: 32
@@ -153,7 +153,7 @@ localization:
     max_dt: 0.2
     max_vel: 10.0
 
-  # 全局重定位参数 (relocalizer: scan_context | bbs)
+  # 全局重定位参数 (relocalizer: scan_context | bbs | fpfh_ransac)
   global:
     min_score: 0.5
     top_k: 5                    # 全局重定位多候选数
@@ -173,6 +173,12 @@ localization:
     bbs_theta_bins: 60
     bbs_max_levels: 6
     bbs_min_points_per_cell: 5.0
+    # fpfh_ransac 专用
+    fpfh_normal_radius: 2.0
+    fpfh_feature_radius: 8.0
+    fpfh_max_iter: 50000
+    fpfh_inlier_fraction: 0.25
+    fpfh_similarity: 0.9
 
   # 健康监测参数 (monitor: threshold | windowed)
   monitor:

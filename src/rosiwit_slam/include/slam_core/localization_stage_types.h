@@ -145,6 +145,12 @@ struct GlobalLocalizeConfig {
     int    bbs_theta_bins = 60;       // 航向离散数
     int    bbs_max_levels = 6;        // 金字塔最大层数
     double bbs_min_points_per_cell = 5.0;  // 单格命中密度归一化上限
+    // FPFH-RANSAC 6DoF 全局重定位
+    double fpfh_normal_radius = 2.0;  // 法向估计半径(m)
+    double fpfh_feature_radius = 8.0; // FPFH 特征半径(m)
+    int    fpfh_max_iter = 50000;     // RANSAC 最大迭代
+    double fpfh_inlier_fraction = 0.25;
+    double fpfh_similarity = 0.9;     // 预拒绝相似度阈值
 };
 
 // ==================== 健康监测 ====================
