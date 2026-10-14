@@ -44,10 +44,17 @@
   - 关键文件：`localization_pipeline.cpp`（accept/monitor），`MatchResult.cov`（已具备）。
   - 验收：门控在动态外点帧更稳；NEES 在丢帧/漂移时报警；单测。
 
-- [ ] **L3 离线静态底图清理（ERASOR/Removert 式）**
-  - 目标：首次建图后，用“可见性伪占据”清洗扫进的人/货，产出干净静态底图。
-  - 关键文件：新增离线工具 `tools/map_cleanup.cpp`（或模块），复用 occupancy 逻辑。
-  - 验收：清理后底图不含动态/半静态物；同一场地再定位更稳；离线工具可重复运行。
+- [ ] **L3 静态底图清理（在线 + 离线两层）**
+  - **L3a 在线（建图阶段，已有雏形，增强）**
+    - 现状：`fast_lio2/map_builder/lidar_processor.cpp` 的 `dynamic_removal`（`persist_thresh`/`persist_window`/`dynamic_residual_thresh`）：逐体素持久性过滤，只写"多帧持续观测"的点，超窗未见即剔除。
+    - 增强：补**逐帧射线自由空间雕刻**（对 ikd-tree 负信息：射线穿过的体素判自由并剔除先前占据点），弥补纯持久性过滤对滞留物/局部视角的不足；亦利于 LIO 配准/回环。
+    - 关键文件：`src/algorithms/fast_lio2/map_builder/lidar_processor.cpp`、`commons.*`、`config/default.yaml`。
+    - 验收：移动人/叉车不入图；保存的图当场更干净；对 LIO 配准无负作用。
+  - **L3b 离线（后处理，ERASOR/Removert 式全局清洗）**
+    - 目标：对导出的种子底图做全局可见性/伪占据清理，产出定位用干净底图（一次性精修）。
+    - 数据：用 `io::readXzMap` 的关键帧位姿+点云做多视角可见性推理。
+    - 关键文件：新增离线工具 `tools/map_cleanup.cpp`（复用 occupancy/可见性逻辑）。
+    - 验收：清理后底图不含动态/慢速滞留物；同场地再定位更稳；工具可重复运行。
 
 - [ ] **L9 真实数据回归 + 预设 + 量化**
   - 目标：合成脚本（进狭道堆满货 → 过桥 → 发走 → 重开）量化“不丢率”；真实工厂 bag 回归；产出 `config/factory.yaml`。
