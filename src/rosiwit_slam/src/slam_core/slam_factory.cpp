@@ -6,6 +6,7 @@
 #include "algorithms/ceres_backend/ceres_backend.h"
 #include "algorithms/gicp_localization/gicp_localization.h"
 #include "algorithms/scan_context/scan_context_localization.h"
+#include "algorithms/localization/localization_pipeline.h"
 #include "algorithms/pcd_map_manager/pcd_map_manager.h"
 #include "algorithms/grid_map/grid_map_factory.h"
 // 新增算法
@@ -44,6 +45,7 @@ std::unique_ptr<IBackend> SlamFactory::createBackend(const std::string& name) {
 std::unique_ptr<ILocalization> SlamFactory::createLocalization(const std::string& name) {
     if (name == "gicp_localization") return std::make_unique<GicpLocalization>();
     if (name == "scan_context_localization") return std::make_unique<ScanContextLocalization>();
+    if (name == "localization_pipeline") return std::make_unique<LocalizationPipeline>();
     return nullptr;
 }
 

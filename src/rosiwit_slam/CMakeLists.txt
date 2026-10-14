@@ -165,6 +165,23 @@ if(octomap_FOUND)
     list(APPEND GRID_MAP_SOURCES src/algorithms/grid_map/octomap_grid_map.cpp)
 endif()
 
+# 可编排定位流水线 (接口 slam_core/i_scan_matcher.h 等): 各阶段可插拔策略
+set(LOCALIZATION_SOURCES
+    src/algorithms/localization/localization_utils.cpp
+    src/algorithms/localization/registration_metrics.cpp
+    src/algorithms/localization/localization_factory.cpp
+    src/algorithms/localization/localization_pipeline.cpp
+    src/algorithms/localization/matcher/gicp_matcher.cpp
+    src/algorithms/localization/matcher/pp_icp_matcher.cpp
+    src/algorithms/localization/local_map/global_map_provider.cpp
+    src/algorithms/localization/local_map/radius_submap_provider.cpp
+    src/algorithms/localization/motion_prior/constant_velocity_prior.cpp
+    src/algorithms/localization/motion_prior/imu_motion_prior.cpp
+    src/algorithms/localization/monitor/threshold_monitor.cpp
+    src/algorithms/localization/monitor/windowed_monitor.cpp
+    src/algorithms/localization/global/scan_context_global_localizer.cpp
+)
+
 set(SOURCES
     src/main.cpp
     src/ros_interface/ros_utils.cpp
@@ -184,6 +201,7 @@ set(SOURCES
     src/algorithms/gicp_localization/gicp_localization.cpp
     src/algorithms/pcd_map_manager/pcd_map_manager.cpp
     ${GRID_MAP_SOURCES}
+    ${LOCALIZATION_SOURCES}
     # 新增算法 (2026-07)
     src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp
     src/algorithms/scan_context/scan_context.cpp
@@ -279,6 +297,19 @@ target_include_directories(grid_map_post PRIVATE
 target_link_libraries(grid_map_post ${OpenCV_LIBS})
 install(TARGETS grid_map_post DESTINATION lib/${PROJECT_NAME})
 
+# ==================== 离线定位配准评估工具 ====================
+# 对同一地图/扫描依次运行各已注册配准器, 输出误差/覆盖率/残差/耗时对比
+add_executable(localization_eval tools/localization_eval.cpp
+    ${LOCALIZATION_SOURCES}
+    src/algorithms/scan_context/scan_context.cpp)
+target_include_directories(localization_eval PRIVATE
+    include src ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+target_link_libraries(localization_eval ${PCL_LIBRARIES})
+if(yaml-cpp_FOUND)
+    target_link_libraries(localization_eval yaml-cpp)
+endif()
+install(TARGETS localization_eval DESTINATION lib/${PROJECT_NAME})
+
 # ==================== 安装 ====================
 install(TARGETS ${NODE_NAME}
     DESTINATION lib/${PROJECT_NAME}
@@ -346,6 +377,7 @@ if(BUILD_TESTING)
             src/algorithms/gicp_localization/gicp_localization.cpp
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
             ${GRID_MAP_SOURCES}
+            ${LOCALIZATION_SOURCES}
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/scan_context/scan_context_localization.cpp
@@ -389,6 +421,7 @@ if(BUILD_TESTING)
             src/algorithms/gicp_localization/gicp_localization.cpp
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
             ${GRID_MAP_SOURCES}
+            ${LOCALIZATION_SOURCES}
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/scan_context/scan_context_localization.cpp
@@ -466,6 +499,19 @@ if(BUILD_TESTING)
     endif()
     target_link_libraries(test_grid_map_generator ${OpenCV_LIBS})
     install(TARGETS test_grid_map_generator DESTINATION lib/${PROJECT_NAME})
+
+    # 定位流水线各阶段契约测试 (参数化遍历所有配准器)
+    ament_add_gtest(test_localization_pipeline
+        test/test_localization_pipeline.cpp
+        ${LOCALIZATION_SOURCES}
+        src/algorithms/scan_context/scan_context.cpp)
+    target_include_directories(test_localization_pipeline PRIVATE
+        include src ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_localization_pipeline ${PCL_LIBRARIES})
+    if(yaml-cpp_FOUND)
+        target_link_libraries(test_localization_pipeline yaml-cpp)
+    endif()
+    install(TARGETS test_localization_pipeline DESTINATION lib/${PROJECT_NAME})
 
     # 注释保留: 已移除的旧测试说明 (test_scan_context_lc 已随 simple_scan_context 删除)
     # 2. IEKF/iKD-Tree 测试已移除 ...

@@ -12,6 +12,6 @@ TEST(SlamFactory, ListContainsFastLio2) {
     // 占位阶段尚未注册,先断言包含 factory 机制;A3 完成后注册 fast_lio2
     EXPECT_GE(names.size(), 1u);
     bool has_fast_lio2 = false;
-    for (auto& n : names) if (n == "fast_lio2") has_fast_lio2 = true;
+    for (auto& n : names) if (n == "fast_lio2_pipeline") has_fast_lio2 = true;
     EXPECT_TRUE(has_fast_lio2);
 }

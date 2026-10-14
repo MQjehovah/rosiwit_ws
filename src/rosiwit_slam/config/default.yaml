@@ -10,7 +10,7 @@ modules:
   backend: "gtsam_isam2"
   loop_closure: "scan_context"
   map_manager: "pcd_map_manager"
-  localization: "gicp_localization"
+  localization: "localization_pipeline"   # 可编排流水线 | gicp_localization | scan_context_localization
 
 imu_topic: /imu
 lidar_topic: /lidar
@@ -103,6 +103,88 @@ loop_closure:
 
 # ScanContext 全局重定位参数 (localization: scan_context_localization)
 localization:
+  # ==================== 可编排定位流水线 (localization_pipeline) ====================
+  # 各阶段按名选择算法, 便于对同一阶段的不同算法做横向性能验证.
+  # 可用实现 (见 algorithms/localization/localization_factory.cpp):
+  #   relocalizer : none | scan_context
+  #   motion_prior: constant_velocity | imu
+  #   local_map   : global | radius_submap
+  #   matcher     : gicp | pp_icp
+  #   monitor     : threshold | windowed
+  pipeline:
+    relocalizer: none
+    motion_prior: imu
+    local_map: radius_submap
+    matcher: pp_icp
+    monitor: windowed
+
+  # 配准器参数 (matcher: gicp | pp_icp)
+  matcher:
+    voxel_resolution: 0.3
+    max_iterations: 32
+    max_correspondence_dist: 2.0
+    transformation_epsilon: 0.000001
+    inlier_dist: 0.3
+    # pp_icp 专用
+    use_corr_decay: true
+    corr_dist_init: 4.0
+    corr_dist_min: 1.0
+    use_huber: true
+    huber_delta: 0.25
+    use_edge_feature: false
+    edge_line_ratio: 0.12
+    edge_valid_thr: 0.10
+    edge_min_extent: 0.20
+    edge_vertical_cos: 0.866
+    degeneracy_gate: true
+    degeneracy_eig_ratio: 0.001
+    min_correspondences: 20
+
+  # 局部地图参数 (local_map: global | radius_submap)
+  local_map:
+    voxel_resolution: 0.3
+    radius: 60.0
+    cell_size: 10.0
+
+  # 运动先验参数 (motion_prior: constant_velocity | imu)
+  motion_prior:
+    max_dt: 0.2
+    max_vel: 10.0
+
+  # 全局重定位参数 (relocalizer: scan_context)
+  global:
+    min_score: 0.5
+    voxel_resolution: 0.3
+    icp_max_corr_dist: 2.0
+    icp_fitness_thresh: 1.0
+    icp_max_iter: 32
+    sc_num_rings: 20
+    sc_num_sectors: 60
+    sc_max_radius: 80.0
+    sc_min_radius: 2.0
+    sc_dist_thresh: 0.4
+    sc_candidate_ratio: 0.3
+
+  # 健康监测参数 (monitor: threshold | windowed)
+  monitor:
+    enabled: true
+    credible_fitness: 0.75
+    lost_fitness: 0.5
+    lost_patience: 3
+    lost_patience_low: 8
+    window_length: 20
+    window_std_k: 2.0
+    max_trans_step: 1.0
+    max_yaw_step_deg: 20.0
+
+  # s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性)
+  accept:
+    mode: 1
+    min_coverage: 0.5
+    residual_margin: 0.10
+    consistent_frames: 2
+
+  # ---- ScanContext 全局重定位参数 (localization: scan_context_localization) ----
   sc_num_rings: 20
   sc_num_sectors: 60
   sc_max_radius: 80.0
