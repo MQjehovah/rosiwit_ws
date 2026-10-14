@@ -221,3 +221,12 @@ localization:
   icp_max_corr_dist: 2.0
   icp_fitness_thresh: 1.0
   icp_max_iter: 32
+
+# ---- 视觉松耦合 (route b): 外部 VO 库输出 -> GTSAM 后端因子 ----
+# 启用后: 通过 SlamPipeline::onVisualOdometry()/onVisualLoop() 注入;
+# VO between 因子在关键帧产生时自动生成, 视觉回环约束即时入图.
+vision:
+  enabled: false
+  assoc_dt: 0.05            # VO 与关键帧时间关联容差(s)
+  vo_trans_noise: 0.05      # VO between 平移噪声(std)
+  vo_rot_noise: 0.02        # VO between 旋转噪声(std)

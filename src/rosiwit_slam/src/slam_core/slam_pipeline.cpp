@@ -94,6 +94,17 @@ bool SlamPipeline::init(const std::string& config_path) {
     createLocalization("localization");
     createMapManager("map_manager");
 
+    // 视觉松耦合: 读 vision 节点, 启用时创建 VO 因子源
+    if (cfg["vision"] && cfg["vision"]["enabled"].as<bool>(false)) {
+        m_visual_cfg.enabled       = true;
+        m_visual_cfg.assoc_dt      = cfg["vision"]["assoc_dt"].as<double>(m_visual_cfg.assoc_dt);
+        m_visual_cfg.vo_trans_noise = cfg["vision"]["vo_trans_noise"].as<double>(m_visual_cfg.vo_trans_noise);
+        m_visual_cfg.vo_rot_noise  = cfg["vision"]["vo_rot_noise"].as<double>(m_visual_cfg.vo_rot_noise);
+        m_visual = std::make_unique<VisualConstraintSource>();
+        m_visual->configure(m_visual_cfg);
+        std::cout << "[SlamPipeline] vision loose-coupling enabled" << std::endl;
+    }
+
     if (m_mode == PipelineMode::LOCALIZATION && m_map_mgr && m_localization) {
         std::string map_name = cfg["localization_map"].as<std::string>("");
         if (!map_name.empty()) {
@@ -111,6 +122,17 @@ bool SlamPipeline::init(const std::string& config_path) {
 }
 
 void SlamPipeline::setMode(PipelineMode mode) { m_mode = mode; }
+
+void SlamPipeline::onVisualOdometry(double time, const PoseStamped& vo_pose) {
+    if (m_visual) m_visual->addVisualOdometry(time, vo_pose);
+}
+
+void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& to_id,
+                                const PoseStamped& rel, double cov) {
+    if (!m_backend) return;
+    m_backend->addConstraints({VisualConstraintSource::makeLoopConstraint(from_id, to_id, rel, cov)});
+    pushBackendTask(BackendTask::OPTIMIZE);
+}
 
 bool SlamPipeline::loadMapForLocalization(const std::string& path, const PoseStamped& init_pose) {
     if (!m_map_mgr || !m_map_mgr->loadMap(path)) return false;
@@ -222,6 +244,13 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
         // 回环检测 + 地图管理: 同步执行 (轻量)
         if (m_loop) m_loop->addKeyFrame(kf);
         if (m_map_mgr) m_map_mgr->addSubMap(kf);
+
+        // 视觉松耦合: 关键帧注册 + 相邻关键帧 VO between 因子入图
+        if (m_visual) {
+            m_visual->addKeyframe(kf.id, kf.timestamp);
+            std::vector<Constraint> vcs = m_visual->popBetweenConstraints();
+            if (!vcs.empty() && m_backend) m_backend->addConstraints(vcs);
+        }
 
         // 回环检测: 每 30 帧触发一次
         if (m_loop && m_frame_count % 30 == 0) {

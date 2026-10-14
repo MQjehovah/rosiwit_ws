@@ -215,6 +215,7 @@ set(SOURCES
     src/algorithms/scan_context/scan_context_lc.cpp
     src/algorithms/scan_context/scan_context_localization.cpp
     src/algorithms/point_lio/point_lio_frontend.cpp
+    src/algorithms/visual/visual_constraint_source.cpp
 )
 
 # ==================== 可执行目标 ====================
@@ -390,7 +391,8 @@ if(BUILD_TESTING)
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/scan_context/scan_context_localization.cpp
-            src/algorithms/point_lio/point_lio_frontend.cpp)
+            src/algorithms/point_lio/point_lio_frontend.cpp
+            src/algorithms/visual/visual_constraint_source.cpp)
         if(GTSAM_FOUND)
             target_sources(test_slam_factory PRIVATE src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp)
             target_link_libraries(test_slam_factory gtsam)
@@ -435,7 +437,8 @@ if(BUILD_TESTING)
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/scan_context/scan_context_localization.cpp
-            src/algorithms/point_lio/point_lio_frontend.cpp)
+            src/algorithms/point_lio/point_lio_frontend.cpp
+            src/algorithms/visual/visual_constraint_source.cpp)
         if(GTSAM_FOUND)
             target_sources(test_slam_pipeline PRIVATE src/algorithms/gtsam_backend/gtsam_isam2_backend.cpp)
             target_link_libraries(test_slam_pipeline gtsam)
@@ -524,6 +527,14 @@ if(BUILD_TESTING)
         target_link_libraries(test_localization_pipeline yaml-cpp)
     endif()
     install(TARGETS test_localization_pipeline DESTINATION lib/${PROJECT_NAME})
+
+    # 视觉松耦合因子源契约测试 (无 ROS/无 GTSAM 依赖)
+    ament_add_gtest(test_visual_constraint_source
+        test/test_visual_constraint_source.cpp
+        src/algorithms/visual/visual_constraint_source.cpp)
+    target_include_directories(test_visual_constraint_source PRIVATE
+        include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+    install(TARGETS test_visual_constraint_source DESTINATION lib/${PROJECT_NAME})
 
     # 注释保留: 已移除的旧测试说明 (test_scan_context_lc 已随 simple_scan_context 删除)
     # 2. IEKF/iKD-Tree 测试已移除 ...

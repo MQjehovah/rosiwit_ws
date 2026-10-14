@@ -12,6 +12,7 @@
 #include "slam_core/i_loop_closure.h"
 #include "slam_core/i_map_manager.h"
 #include "slam_core/i_localization.h"
+#include "algorithms/visual/visual_constraint_source.h"
 
 namespace rosiwit_slam {
 
@@ -39,6 +40,11 @@ public:
     void setMode(PipelineMode mode);
     bool loadMapForLocalization(const std::string& path, const PoseStamped& init_pose);
 
+    // 视觉松耦合 (route b): 外部 VO 库输出 -> 后端因子
+    void onVisualOdometry(double time, const PoseStamped& vo_pose);
+    void onVisualLoop(const std::string& from_id, const std::string& to_id,
+                      const PoseStamped& rel, double cov);
+
 public:
     bool onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) override;
     bool handleMapping(const SyncPackage& pkg, SlamOutput& out);
@@ -62,6 +68,8 @@ private:
     std::unique_ptr<ILoopClosure>  m_loop;
     std::unique_ptr<IMapManager>   m_map_mgr;
     std::unique_ptr<ILocalization> m_localization;
+    std::unique_ptr<VisualConstraintSource> m_visual;   // 视觉松耦合因子源
+    VisualConstraintConfig m_visual_cfg;
     std::atomic<PipelineMode> m_mode{PipelineMode::IDLE};
 
     // 后端线程
