@@ -228,7 +228,8 @@ localization:
 # 启用后: 通过 SlamPipeline::onVisualOdometry()/onVisualLoop() 注入;
 # VO between 因子在关键帧产生时自动生成, 视觉回环约束即时入图.
 vision:
-  enabled: false
+  enabled: false            # 视觉松耦合总开关 (false 时不订阅 VO 话题)
+  vo_topic: /visual_odometry  # 外部 VO 库发布的里程计话题 (nav_msgs/Odometry)
   assoc_dt: 0.05            # VO 与关键帧时间关联容差(s)
   vo_trans_noise: 0.05      # VO between 平移噪声(std)
   vo_rot_noise: 0.02        # VO between 旋转噪声(std)

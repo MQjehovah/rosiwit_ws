@@ -43,6 +43,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.lidar_min_range  = cfg["lidar_min_range"].as<double>(m_cfg.lidar_min_range);
             m_cfg.lidar_max_range  = cfg["lidar_max_range"].as<double>(m_cfg.lidar_max_range);
             m_cfg.scan_period_ms   = cfg["scan_period_ms"].as<float>(m_cfg.scan_period_ms);
+            if (cfg["vision"]) {
+                m_cfg.vision_enabled = cfg["vision"]["enabled"].as<bool>(m_cfg.vision_enabled);
+                m_cfg.vo_topic       = cfg["vision"]["vo_topic"].as<std::string>(m_cfg.vo_topic);
+            }
             if (cfg["output_smoothing_alpha"])
                 m_ema_alpha = cfg["output_smoothing_alpha"].as<double>();
         }
@@ -60,6 +64,11 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, 1000, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
     m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, 100, std::bind(&SlamNode::lidarCB, this, _1), sensor_sub_opts);
     m_init_pose_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10, std::bind(&SlamNode::initialPoseCB, this, _1), sensor_sub_opts);
+    // 视觉里程计 (可选): 由 vision.enabled 开关控制, 话题名可配置
+    if (m_cfg.vision_enabled) {
+        m_vo_sub = create_subscription<nav_msgs::msg::Odometry>(
+            m_cfg.vo_topic, 100, std::bind(&SlamNode::voCB, this, _1), sensor_sub_opts);
+    }
 
     m_body_cloud_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("body_cloud", 10000);
     m_world_cloud_pub = create_publisher<sensor_msgs::msg::PointCloud2>("world_cloud", 10000);
@@ -93,7 +102,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_srv_set_slam_mode = create_service<rosiwit_slam::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
 
     std::string mode_str = m_algo_raw->getPipelineMode();
-    RCLCPP_INFO(get_logger(), "SlamNode ready: algo=%s mode=%s imu=%s lidar=%s", algo_name.c_str(), mode_str.c_str(), m_cfg.imu_topic.c_str(), m_cfg.lidar_topic.c_str());
+    RCLCPP_INFO(get_logger(), "SlamNode ready: algo=%s mode=%s imu=%s lidar=%s",
+                algo_name.c_str(), mode_str.c_str(), m_cfg.imu_topic.c_str(), m_cfg.lidar_topic.c_str());
+    if (m_cfg.vision_enabled)
+        RCLCPP_INFO(get_logger(), "Vision loose-coupling ON: vo_topic=%s", m_cfg.vo_topic.c_str());
 }
 
 void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -112,6 +124,15 @@ void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     f.end_time = f.start_time + (f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0);
     m_algo->onLidar(f);
     // 只入队, 重处理交给 work 分组定时器, 保证本回调尽快返回、不阻塞后续收包
+}
+
+void SlamNode::voCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    PoseStamped p;
+    p.time = RosUtils::getSec(msg->header);
+    p.trans = V3D(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
+    const auto& q = msg->pose.pose.orientation;
+    p.rot = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
+    m_algo->onVisualOdometry(p.time, p);
 }
 
 void SlamNode::onOutput(const SlamOutput& out) {

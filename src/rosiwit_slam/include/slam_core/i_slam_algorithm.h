@@ -40,6 +40,13 @@ public:
     virtual bool setInitPose(const PoseStamped& /*pose*/) { return false; }
     /// 获取栅格地图信息 (用于定位模式发布 grid_map)
     virtual GridInfo getGridInfo() const { return {}; }
+
+    // 视觉松耦合 (route b, 默认空实现): 外部 VO 库输出注入
+    /// VO 绝对里程计 (该帧时刻)
+    virtual void onVisualOdometry(double /*time*/, const PoseStamped& /*vo_pose*/) {}
+    /// 视觉回环约束
+    virtual void onVisualLoop(const std::string& /*from_id*/, const std::string& /*to_id*/,
+                              const PoseStamped& /*rel*/, double /*cov*/) {}
 };
 
 } // namespace rosiwit_slam

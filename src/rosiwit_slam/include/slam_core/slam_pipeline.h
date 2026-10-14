@@ -41,9 +41,9 @@ public:
     bool loadMapForLocalization(const std::string& path, const PoseStamped& init_pose);
 
     // 视觉松耦合 (route b): 外部 VO 库输出 -> 后端因子
-    void onVisualOdometry(double time, const PoseStamped& vo_pose);
+    void onVisualOdometry(double time, const PoseStamped& vo_pose) override;
     void onVisualLoop(const std::string& from_id, const std::string& to_id,
-                      const PoseStamped& rel, double cov);
+                      const PoseStamped& rel, double cov) override;
 
 public:
     bool onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) override;
