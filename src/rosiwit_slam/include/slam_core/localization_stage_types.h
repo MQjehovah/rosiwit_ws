@@ -90,6 +90,13 @@ struct LocalMapConfig {
     double voxel_resolution = 0.3;   // 局部地图降采样
     double radius = 60.0;            // radius_submap: 邻域半径(m)
     double cell_size = 10.0;         // radius_submap: 体素哈希单元边长(m)
+    int    max_keyframes = 15;       // keyframe_submap: 最近关键帧数上限
+};
+
+// ==================== 关键帧 (keyframe_submap 输入) ====================
+struct LocalKeyframe {
+    PoseStamped pose;          // body -> world
+    CloudType::Ptr cloud;      // body 系点云
 };
 
 // ==================== 运动先验配置 ====================

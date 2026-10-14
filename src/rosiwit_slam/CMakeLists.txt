@@ -176,6 +176,7 @@ set(LOCALIZATION_SOURCES
     src/algorithms/localization/matcher/p2p_icp_matcher.cpp
     src/algorithms/localization/local_map/global_map_provider.cpp
     src/algorithms/localization/local_map/radius_submap_provider.cpp
+    src/algorithms/localization/local_map/keyframe_submap_provider.cpp
     src/algorithms/localization/motion_prior/constant_velocity_prior.cpp
     src/algorithms/localization/motion_prior/imu_motion_prior.cpp
     src/algorithms/localization/monitor/threshold_monitor.cpp
@@ -192,6 +193,7 @@ set(SOURCES
     src/slam_core/slam_factory.cpp
     src/slam_core/slam_pipeline.cpp
     src/io/xzmap_writer.cpp
+    src/io/xzmap_reader.cpp
     src/algorithms/fast_lio2/fast_lio2_frontend.cpp
     src/algorithms/fast_lio2/map_builder/commons.cpp
     src/algorithms/fast_lio2/map_builder/ieskf.cpp
@@ -303,6 +305,7 @@ install(TARGETS grid_map_post DESTINATION lib/${PROJECT_NAME})
 # 对同一地图/扫描依次运行各已注册配准器, 输出误差/覆盖率/残差/耗时对比
 add_executable(localization_eval tools/localization_eval.cpp
     ${LOCALIZATION_SOURCES}
+    src/io/xzmap_reader.cpp
     src/algorithms/scan_context/scan_context.cpp)
 target_include_directories(localization_eval PRIVATE
     include src ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
@@ -353,6 +356,7 @@ if(BUILD_TESTING)
             src/slam_core/slam_factory.cpp
             src/slam_core/slam_base.cpp
             src/io/xzmap_writer.cpp
+            src/io/xzmap_reader.cpp
             src/algorithms/fast_lio2/fast_lio2_frontend.cpp
             src/algorithms/fast_lio2/map_builder/commons.cpp
             src/algorithms/fast_lio2/map_builder/ieskf.cpp
@@ -397,6 +401,7 @@ if(BUILD_TESTING)
             src/slam_core/slam_base.cpp
             src/slam_core/slam_factory.cpp
             src/io/xzmap_writer.cpp
+            src/io/xzmap_reader.cpp
             src/algorithms/fast_lio2/fast_lio2_frontend.cpp
             src/algorithms/fast_lio2/map_builder/commons.cpp
             src/algorithms/fast_lio2/map_builder/ieskf.cpp
@@ -506,6 +511,8 @@ if(BUILD_TESTING)
     ament_add_gtest(test_localization_pipeline
         test/test_localization_pipeline.cpp
         ${LOCALIZATION_SOURCES}
+        src/io/xzmap_writer.cpp
+        src/io/xzmap_reader.cpp
         src/algorithms/scan_context/scan_context.cpp)
     target_include_directories(test_localization_pipeline PRIVATE
         include src ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})

@@ -4,7 +4,8 @@
 
 namespace rosiwit_slam {
 
-void GlobalMapProvider::setMap(const CloudType::Ptr& global_map) {
+void GlobalMapProvider::setMap(const std::string& map_path, const CloudType::Ptr& global_map) {
+    (void)map_path;
     m_map = downsampleCloud(filterFinite(global_map), m_cfg.voxel_resolution);
 }
 

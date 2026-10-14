@@ -7,6 +7,8 @@
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_pipeline.h"
 #include "algorithms/localization/localization_utils.h"
+#include "io/xzmap_writer.h"
+#include "io/xzmap_reader.h"
 
 using namespace rosiwit_slam;
 
@@ -103,7 +105,7 @@ TEST(LocalMapTest, GlobalReturnsWholeMap) {
     ASSERT_NE(p, nullptr);
     LocalMapConfig cfg; cfg.voxel_resolution = 0.2;
     p->configure(cfg);
-    p->setMap(makeScene());
+    p->setMap("", makeScene());
     auto sub = p->getLocalMap(makePose(3, 3, 0, 0));
     EXPECT_GT(sub->size(), 0u);
 }
@@ -113,16 +115,72 @@ TEST(LocalMapTest, RadiusSubmapLimitsSize) {
     ASSERT_NE(p, nullptr);
     LocalMapConfig cfg; cfg.voxel_resolution = 0.2; cfg.radius = 2.0; cfg.cell_size = 4.0;
     p->configure(cfg);
-    p->setMap(makeScene());
+    p->setMap("", makeScene());
     auto near_center = p->getLocalMap(makePose(3, 3, 0, 0));
     auto far_corner  = p->getLocalMap(makePose(0, 0, 0, 0));
     EXPECT_GT(near_center->size(), 0u);
     // 半径限制下局部地图远小于全图
     auto all = LocalizationFactory::createLocalMapProvider("global");
     LocalMapConfig gcfg; gcfg.voxel_resolution = 0.2;
-    all->configure(gcfg); all->setMap(makeScene());
+    all->configure(gcfg); all->setMap("", makeScene());
     EXPECT_LT(near_center->size(), all->getLocalMap(makePose(0,0,0,0))->size());
     (void)far_corner;
+}
+
+TEST(LocalMapTest, KeyframeSubmapFromInjectedKeyframes) {
+    auto p = LocalizationFactory::createLocalMapProvider("keyframe_submap");
+    ASSERT_NE(p, nullptr);
+    LocalMapConfig cfg;
+    cfg.voxel_resolution = 0.0;  // 关闭降采样, 便于断言
+    cfg.radius = 3.0;
+    cfg.max_keyframes = 5;
+    p->configure(cfg);
+    p->setMap("", makeScene());
+
+    // 注入 2x2 关键帧, 每帧一小团机体系点云
+    std::vector<LocalKeyframe> kfs;
+    for (double cx = 2.0; cx <= 6.0; cx += 4.0)
+        for (double cy = 2.0; cy <= 6.0; cy += 4.0) {
+            LocalKeyframe k;
+            k.pose.trans = V3D(cx, cy, 0.0);
+            k.pose.rot = M3D::Identity();
+            k.cloud.reset(new CloudType());
+            for (double dx = -1.0; dx <= 1.0; dx += 0.25)
+                for (double dy = -1.0; dy <= 1.0; dy += 0.25)
+                    k.cloud->push_back(PointType(static_cast<float>(dx),
+                                                 static_cast<float>(dy), 0.5f));
+            kfs.push_back(std::move(k));
+        }
+    p->setKeyframes(kfs);
+
+    // (3,3) 半径 3 内只含 (2,2) 一帧
+    auto local = p->getLocalMap(makePose(3, 3, 0, 0));
+    EXPECT_GT(local->size(), 0u);
+    EXPECT_LE(local->size(), kfs[0].cloud->size());
+}
+
+TEST(XzMapIoTest, WriteReadRoundTrip) {
+    std::vector<io::XzMapKeyframe> kfs(3);
+    for (int i = 0; i < 3; ++i) {
+        kfs[i].pose.x = static_cast<double>(i);
+        kfs[i].pose.y = 2.0;
+        kfs[i].pose.yaw = 0.1 * i;
+        kfs[i].points = {{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}};
+    }
+    const std::string path = std::string(::testing::TempDir()) + "rosiwit_roundtrip.xzmap";
+    ASSERT_TRUE(io::writeXzMap(path, "mapname", kfs));
+
+    std::vector<io::XzMapKeyframe> rd;
+    std::string name;
+    ASSERT_TRUE(io::readXzMap(path, rd, &name));
+    EXPECT_EQ(name, "mapname");
+    ASSERT_EQ(rd.size(), 3u);
+    EXPECT_NEAR(rd[0].pose.x, 0.0, 1e-6);
+    EXPECT_NEAR(rd[1].pose.x, 1.0, 1e-6);
+    EXPECT_NEAR(rd[2].pose.yaw, 0.2, 1e-3);
+    ASSERT_EQ(rd[0].points.size(), 2u);
+    EXPECT_NEAR(rd[0].points[0].x(), 1.0, 1e-3);
+    EXPECT_NEAR(rd[1].points[1].z(), 6.0, 1e-3);
 }
 
 // ---- 监测器契约 ----

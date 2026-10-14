@@ -2,6 +2,7 @@
 #include "algorithms/localization/localization_pipeline.h"
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_utils.h"
+#include "io/xzmap_reader.h"
 #include <iostream>
 #include <fstream>
 #include <pcl/io/pcd_io.h>
@@ -66,6 +67,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_local_map_cfg.voxel_resolution = getv<double>(lmc, "voxel_resolution", m_local_map_cfg.voxel_resolution);
         m_local_map_cfg.radius           = getv<double>(lmc, "radius", m_local_map_cfg.radius);
         m_local_map_cfg.cell_size        = getv<double>(lmc, "cell_size", m_local_map_cfg.cell_size);
+        m_local_map_cfg.max_keyframes    = getv<int>(lmc, "max_keyframes", m_local_map_cfg.max_keyframes);
     }
     auto mpc = loc["motion_prior"];
     if (mpc) {
@@ -157,7 +159,30 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
         return;
     }
     std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)" << std::endl;
-    if (m_local_map) m_local_map->setMap(m_map);
+    if (m_local_map) m_local_map->setMap(map_name, m_map);
+
+    // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用
+    if (m_local_map) {
+        std::vector<io::XzMapKeyframe> kfs;
+        if (io::readXzMap(map_name + ".xzmap", kfs) && !kfs.empty()) {
+            std::vector<LocalKeyframe> lkfs;
+            lkfs.reserve(kfs.size());
+            for (const auto& kf : kfs) {
+                LocalKeyframe lk;
+                lk.pose.trans = V3D(kf.pose.x, kf.pose.y, kf.pose.z);
+                lk.pose.rot = Eigen::AngleAxisd(kf.pose.yaw, V3D::UnitZ()).toRotationMatrix() *
+                              Eigen::AngleAxisd(kf.pose.pitch, V3D::UnitY()).toRotationMatrix() *
+                              Eigen::AngleAxisd(kf.pose.roll, V3D::UnitX()).toRotationMatrix();
+                lk.cloud.reset(new CloudType());
+                lk.cloud->reserve(kf.points.size());
+                for (const auto& p : kf.points) lk.cloud->push_back(PointType(p.x(), p.y(), p.z()));
+                lkfs.push_back(std::move(lk));
+            }
+            m_local_map->setKeyframes(lkfs);
+            std::cout << "[LocPipeline] loaded " << lkfs.size()
+                      << " keyframes from " << map_name << ".xzmap" << std::endl;
+        }
+    }
     if (m_relocalizer && m_relocalizer_name != "none")
         m_relocalizer->setMap(map_name, m_map);
 }

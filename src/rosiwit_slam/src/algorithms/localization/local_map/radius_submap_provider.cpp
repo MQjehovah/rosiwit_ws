@@ -13,7 +13,8 @@ int64_t RadiusSubmapProvider::cellKey(int cx, int cy, int cz) {
     return (ox << 42) | (oy << 21) | oz;
 }
 
-void RadiusSubmapProvider::setMap(const CloudType::Ptr& global_map) {
+void RadiusSubmapProvider::setMap(const std::string& map_path, const CloudType::Ptr& global_map) {
+    (void)map_path;
     m_voxel = m_cfg.voxel_resolution > 0 ? m_cfg.voxel_resolution : 0.3;
     m_cell  = m_cfg.cell_size > 0 ? m_cfg.cell_size : 10.0;
     m_cells.clear();

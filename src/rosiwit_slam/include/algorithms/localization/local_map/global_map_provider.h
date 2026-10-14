@@ -9,7 +9,7 @@ class GlobalMapProvider : public ILocalMapProvider {
 public:
     std::string name() const override { return "global"; }
     void configure(const LocalMapConfig& cfg) override { m_cfg = cfg; }
-    void setMap(const CloudType::Ptr& global_map) override;
+    void setMap(const std::string& map_path, const CloudType::Ptr& global_map) override;
     CloudType::Ptr getLocalMap(const PoseStamped& pose) override;
 
 private:

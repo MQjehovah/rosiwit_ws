@@ -108,7 +108,7 @@ localization:
   # 可用实现 (见 algorithms/localization/localization_factory.cpp):
   #   relocalizer : none | scan_context
   #   motion_prior: constant_velocity | imu
-  #   local_map   : global | radius_submap
+  #   local_map   : global | radius_submap | keyframe_submap
   #   matcher     : gicp | pp_icp | p2p_icp
   #   monitor     : threshold | windowed
   pipeline:
@@ -140,11 +140,12 @@ localization:
     degeneracy_eig_ratio: 0.001
     min_correspondences: 20
 
-  # 局部地图参数 (local_map: global | radius_submap)
+  # 局部地图参数 (local_map: global | radius_submap | keyframe_submap)
   local_map:
     voxel_resolution: 0.3
     radius: 60.0
     cell_size: 10.0
+    max_keyframes: 15   # keyframe_submap: 最近关键帧数上限
 
   # 运动先验参数 (motion_prior: constant_velocity | imu)
   motion_prior:
