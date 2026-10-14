@@ -2,6 +2,7 @@
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/matcher/gicp_matcher.h"
 #include "algorithms/localization/matcher/pp_icp_matcher.h"
+#include "algorithms/localization/matcher/p2p_icp_matcher.h"
 #include "algorithms/localization/local_map/global_map_provider.h"
 #include "algorithms/localization/local_map/radius_submap_provider.h"
 #include "algorithms/localization/motion_prior/constant_velocity_prior.h"
@@ -14,8 +15,9 @@
 namespace rosiwit_slam {
 
 std::unique_ptr<IScanMatcher> LocalizationFactory::createMatcher(const std::string& name) {
-    if (name == "gicp")   return std::make_unique<GicpMatcher>();
-    if (name == "pp_icp") return std::make_unique<PpIcpMatcher>();
+    if (name == "gicp")    return std::make_unique<GicpMatcher>();
+    if (name == "pp_icp")  return std::make_unique<PpIcpMatcher>();
+    if (name == "p2p_icp") return std::make_unique<P2pIcpMatcher>();
     return nullptr;
 }
 
@@ -44,7 +46,7 @@ std::unique_ptr<ILocalizationMonitor> LocalizationFactory::createMonitor(const s
     return nullptr;
 }
 
-std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp"}; }
+std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp", "p2p_icp"}; }
 std::vector<std::string> LocalizationFactory::listLocalMapProviders() { return {"global", "radius_submap"}; }
 std::vector<std::string> LocalizationFactory::listMotionPriors()      { return {"constant_velocity", "imu"}; }
 std::vector<std::string> LocalizationFactory::listGlobalLocalizers()  { return {"none", "scan_context", "bbs"}; }

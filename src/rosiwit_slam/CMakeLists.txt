@@ -173,6 +173,7 @@ set(LOCALIZATION_SOURCES
     src/algorithms/localization/localization_pipeline.cpp
     src/algorithms/localization/matcher/gicp_matcher.cpp
     src/algorithms/localization/matcher/pp_icp_matcher.cpp
+    src/algorithms/localization/matcher/p2p_icp_matcher.cpp
     src/algorithms/localization/local_map/global_map_provider.cpp
     src/algorithms/localization/local_map/radius_submap_provider.cpp
     src/algorithms/localization/motion_prior/constant_velocity_prior.cpp

@@ -109,7 +109,7 @@ localization:
   #   relocalizer : none | scan_context
   #   motion_prior: constant_velocity | imu
   #   local_map   : global | radius_submap
-  #   matcher     : gicp | pp_icp
+  #   matcher     : gicp | pp_icp | p2p_icp
   #   monitor     : threshold | windowed
   pipeline:
     relocalizer: none
@@ -118,7 +118,7 @@ localization:
     matcher: pp_icp
     monitor: windowed
 
-  # 配准器参数 (matcher: gicp | pp_icp)
+  # 配准器参数 (matcher: gicp | pp_icp | p2p_icp)
   matcher:
     voxel_resolution: 0.3
     max_iterations: 32
