@@ -234,6 +234,54 @@ TEST(GlobalLocalizerTest, NoneReturnsFalse) {
     EXPECT_FALSE(loc->localize(makeScene(), c));
 }
 
+TEST(GlobalLocalizerTest, BbsTopKReturnsCandidates) {
+    auto loc = LocalizationFactory::createGlobalLocalizer("bbs");
+    ASSERT_NE(loc, nullptr);
+    GlobalLocalizeConfig cfg;
+    cfg.voxel_resolution = 0.4;
+    cfg.bbs_theta_bins = 60;
+    cfg.bbs_max_levels = 4;
+    cfg.min_score = 0.3;
+    cfg.top_k = 3;
+    loc->configure(cfg);
+    CloudType::Ptr map = makeScene();
+    ASSERT_TRUE(loc->setMap("", map));
+    CloudType::Ptr scan = makeScanFromMap(map, makePose(3.0, 3.0, 0.0, 20.0));
+
+    std::vector<GlobalCandidate> cands;
+    const int n = loc->localizeTopK(scan, 3, cands);
+    EXPECT_GE(n, 1);
+    if (n > 0) {
+        const PoseStamped gt = makePose(3.0, 3.0, 0.0, 20.0);
+        EXPECT_LT((cands.front().pose.trans - gt.trans).norm(), 0.6);
+    }
+}
+
+// ---- 可切换鲁棒核: 各核均应稳定恢复 ----
+TEST(MatcherRobustKernelTest, RecoversWithEachKernel) {
+    const RobustKernel kernels[] = {RobustKernel::NONE, RobustKernel::HUBER,
+                                    RobustKernel::CAUCHY, RobustKernel::TUKEY};
+    CloudType::Ptr map = makeScene();
+    const PoseStamped T_true = makePose(3.0, 3.0, 0.0, 8.0);
+    CloudType::Ptr scan = makeScanFromMap(map, T_true);
+    for (RobustKernel k : kernels) {
+        auto m = LocalizationFactory::createMatcher("pp_icp");
+        ASSERT_NE(m, nullptr);
+        ScanMatcherConfig cfg;
+        cfg.voxel_resolution = 0.2;
+        cfg.max_iterations = 50;
+        cfg.corr_dist_init = 2.0;
+        cfg.corr_dist_min = 0.5;
+        cfg.robust_kernel = k;
+        m->configure(cfg);
+        m->setTarget(map);
+        MatchResult res;
+        ASSERT_TRUE(m->match(scan, makePose(3.2, 2.8, 0.0, 11.0), res));
+        EXPECT_LT((res.pose.trans - T_true.trans).norm(), 0.2);
+        EXPECT_TRUE(res.cov.allFinite());
+    }
+}
+
 // ---- 工厂注册完整性 ----
 TEST(LocalizationFactoryTest, RegistersAllStages) {
     for (const auto& n : LocalizationFactory::listMatchers())          EXPECT_NE(LocalizationFactory::createMatcher(n), nullptr);

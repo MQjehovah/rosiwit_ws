@@ -127,14 +127,12 @@ double BbsGlobalLocalizer::scoreNode(const Level& lv, int xi, int yi, int theta)
     return sum;
 }
 
-bool BbsGlobalLocalizer::localize(const CloudType::Ptr& scan, GlobalCandidate& out) {
-    if (!m_ready || m_pyr.empty()) return false;
-    if (!projectScan(scan)) return false;
-
+void BbsGlobalLocalizer::searchLeaves(int max_k, std::vector<Node>& out) {
+    out.clear();
+    if (m_pyr.empty()) return;
     const int top = static_cast<int>(m_pyr.size()) - 1;
     const Level& coarse = m_pyr[top];
 
-    // 初始搜索集: 最粗层全枚举 (x, y, theta)
     std::priority_queue<Node, std::vector<Node>, NodeCmp> q;
     for (int theta = 0; theta < m_theta_bins; ++theta)
         for (int x = 0; x < coarse.w; ++x)
@@ -142,54 +140,76 @@ bool BbsGlobalLocalizer::localize(const CloudType::Ptr& scan, GlobalCandidate& o
                 const double s = scoreNode(coarse, x, y, theta);
                 if (s > 0.0) q.push({s, top, x, y, theta});
             }
-    if (q.empty()) return false;
+    if (q.empty()) return;
 
-    // 分支定界
-    Node best{-1.0, -1, 0, 0, 0};
-    while (!q.empty()) {
+    const double keep_ratio = 0.85;  // 只保留接近最优的叶节点作为候选
+    double best = -1.0;
+    while (!q.empty() && static_cast<int>(out.size()) < max_k) {
         const Node n = q.top(); q.pop();
-        if (n.score < best.score) break;          // 上界剪枝 (max-heap)
-        if (n.level == 0) { best = n; break; }     // 首个叶节点即最优
+        if (best >= 0.0 && n.score < best * keep_ratio) break;
+        if (n.level == 0) { out.push_back(n); if (n.score > best) best = n.score; continue; }
         const Level& child = m_pyr[n.level - 1];
         for (int dx = 0; dx < 2; ++dx)
             for (int dy = 0; dy < 2; ++dy) {
-                const int cx = 2 * n.x + dx;
-                const int cy = 2 * n.y + dy;
+                const int cx = 2 * n.x + dx, cy = 2 * n.y + dy;
                 if (cx >= child.w || cy >= child.h) continue;
                 const double s = scoreNode(child, cx, cy, n.theta);
                 if (s > 0.0) q.push({s, n.level - 1, cx, cy, n.theta});
             }
     }
-    if (best.level != 0) return false;
+}
 
-    // 2D 结果 → 3D 位姿 (z=0, roll/pitch=0)
-    const double yaw = best.theta * m_theta_res;
+bool BbsGlobalLocalizer::refineCandidate(const Node& n, const CloudType::Ptr& scan_down,
+                                         GlobalCandidate& out) {
+    const double yaw = n.theta * m_theta_res;
     PoseStamped guess;
-    guess.trans = V3D(m_ox + best.x * m_res, m_oy + best.y * m_res, 0.0);
+    guess.trans = V3D(m_ox + n.x * m_res, m_oy + n.y * m_res, 0.0);
     guess.rot = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix();
 
-    // GICP 精配准到全图
-    CloudType::Ptr scan_down = downsampleCloud(scan, m_res);
-    if (!scan_down || scan_down->size() < 10) return false;
     m_gicp.setInputSource(scan_down);
     m_gicp.setInputTarget(m_map_down);
     CloudType aligned;
     m_gicp.align(aligned, poseToMatrix(guess).cast<float>());
 
     Eigen::Matrix4d T = poseToMatrix(guess);
-    double score = static_cast<double>(best.score);
+    double score = static_cast<double>(n.score);
     if (m_gicp.hasConverged()) {
         T = m_gicp.getFinalTransformation().cast<double>();
         const CoverageStats cs = evaluateCoverage(m_kdtree, *scan_down, T, m_res);
         score = cs.coverage;
-        if (cs.coverage < m_cfg.min_score) return false;
-    } else if (best.score <= 0.0) {
-        return false;
     }
-
     out.pose = matrixToPose(T);
     out.score = score;
     out.id = -1;
+    return true;
+}
+
+int BbsGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_k,
+                                     std::vector<GlobalCandidate>& out) {
+    out.clear();
+    if (!m_ready || m_pyr.empty()) return 0;
+    if (!projectScan(scan)) return 0;
+
+    CloudType::Ptr scan_down = downsampleCloud(scan, m_res);
+    if (!scan_down || scan_down->size() < 10) return 0;
+
+    std::vector<Node> leaves;
+    searchLeaves(std::max(1, max_k * 2), leaves);
+    for (const auto& n : leaves) {
+        GlobalCandidate c;
+        refineCandidate(n, scan_down, c);
+        if (c.score >= m_cfg.min_score) out.push_back(std::move(c));
+    }
+    std::sort(out.begin(), out.end(),
+              [](const GlobalCandidate& a, const GlobalCandidate& b) { return a.score > b.score; });
+    if (static_cast<int>(out.size()) > max_k) out.resize(max_k);
+    return static_cast<int>(out.size());
+}
+
+bool BbsGlobalLocalizer::localize(const CloudType::Ptr& scan, GlobalCandidate& out) {
+    std::vector<GlobalCandidate> cands;
+    if (localizeTopK(scan, 1, cands) < 1) return false;
+    out = cands.front();
     return true;
 }
 

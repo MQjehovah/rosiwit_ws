@@ -53,6 +53,14 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_matcher_cfg.corr_dist_min           = getv<double>(mc, "corr_dist_min", m_matcher_cfg.corr_dist_min);
         m_matcher_cfg.use_huber               = getv<bool>(mc, "use_huber", m_matcher_cfg.use_huber);
         m_matcher_cfg.huber_delta             = getv<double>(mc, "huber_delta", m_matcher_cfg.huber_delta);
+        {
+            const std::string rk = getv<std::string>(mc, "robust_kernel", "");
+            if      (rk == "none")   m_matcher_cfg.robust_kernel = RobustKernel::NONE;
+            else if (rk == "huber")  m_matcher_cfg.robust_kernel = RobustKernel::HUBER;
+            else if (rk == "cauchy") m_matcher_cfg.robust_kernel = RobustKernel::CAUCHY;
+            else if (rk == "tukey")  m_matcher_cfg.robust_kernel = RobustKernel::TUKEY;
+            else if (!m_matcher_cfg.use_huber) m_matcher_cfg.robust_kernel = RobustKernel::NONE;
+        }
         m_matcher_cfg.use_edge_feature        = getv<bool>(mc, "use_edge_feature", m_matcher_cfg.use_edge_feature);
         m_matcher_cfg.edge_line_ratio         = getv<double>(mc, "edge_line_ratio", m_matcher_cfg.edge_line_ratio);
         m_matcher_cfg.edge_valid_thr          = getv<double>(mc, "edge_valid_thr", m_matcher_cfg.edge_valid_thr);
@@ -77,6 +85,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     auto gc = loc["global"];
     if (gc) {
         m_global_cfg.min_score          = getv<double>(gc, "min_score", m_global_cfg.min_score);
+        m_global_cfg.top_k              = getv<int>(gc, "top_k", m_global_cfg.top_k);
         m_global_cfg.voxel_resolution   = getv<double>(gc, "voxel_resolution", m_global_cfg.voxel_resolution);
         m_global_cfg.icp_max_corr_dist  = getv<double>(gc, "icp_max_corr_dist", m_global_cfg.icp_max_corr_dist);
         m_global_cfg.icp_fitness_thresh = getv<double>(gc, "icp_fitness_thresh", m_global_cfg.icp_fitness_thresh);
@@ -236,10 +245,14 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
 void LocalizationPipeline::onLidar(const LidarFrame& f) {
     if (!m_map || !f.cloud || f.cloud->empty()) { m_status = LOST; return; }
 
-    // 冷启动 / 丢失恢复: 尝试全局重定位
+    // 冷启动 / 丢失恢复: 尝试全局重定位 (多候选, 取最优通过者)
     if (!m_initialized || m_status == LOST) {
-        GlobalCandidate cand;
-        if (m_relocalizer && m_relocalizer->localize(f.cloud, cand)) {
+        std::vector<GlobalCandidate> cands;
+        const int nk = m_relocalizer
+            ? m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands)
+            : 0;
+        if (nk > 0) {
+            const GlobalCandidate& cand = cands.front();
             m_pose = cand.pose;
             m_pose.time = f.end_time;
             m_prior->reset(m_pose);
@@ -251,7 +264,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_last_match.fitness = cand.score;
             m_last_match.pose = m_pose;
             std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
-                      << " score=" << cand.score << std::endl;
+                      << " cands=" << nk << " score=" << cand.score << std::endl;
         } else if (!m_initialized) {
             return;  // 尚无初值
         }
@@ -295,6 +308,13 @@ ILocalization::Status LocalizationPipeline::getStatus() { return m_status; }
 bool LocalizationPipeline::getPose(PoseStamped& out) {
     if (m_status == LOST) return false;
     out = m_pose;
+    return true;
+}
+
+bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) {
+    if (m_status == LOST) return false;
+    out = m_pose;
+    cov = m_last_match.cov;
     return true;
 }
 

@@ -44,6 +44,9 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     out.correspondences = cs.total;
     out.residual = evaluatePoint2PlaneResidual(m_kdtree, *src, T,
                                                m_cfg.max_correspondence_dist);
+    const double s = out.residual > 0 ? out.residual * out.residual
+                                      : (out.rmse > 0 ? out.rmse * out.rmse : 1.0);
+    out.cov = Eigen::Matrix<double, 6, 6>::Identity() * s;
     out.converged = true;
     return true;
 }

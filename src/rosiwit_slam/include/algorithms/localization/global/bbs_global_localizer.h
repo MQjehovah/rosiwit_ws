@@ -19,6 +19,8 @@ public:
     void configure(const GlobalLocalizeConfig& cfg) override;
     bool setMap(const std::string& map_path, const CloudType::Ptr& global_map) override;
     bool localize(const CloudType::Ptr& scan, GlobalCandidate& out) override;
+    int localizeTopK(const CloudType::Ptr& scan, int max_k,
+                     std::vector<GlobalCandidate>& out) override;
 
 private:
     struct Level {
@@ -35,6 +37,8 @@ private:
 
     double scoreNode(const Level& lv, int x, int y, int theta) const;
     bool projectScan(const CloudType::Ptr& scan);
+    void searchLeaves(int max_k, std::vector<Node>& out);
+    bool refineCandidate(const Node& n, const CloudType::Ptr& scan_down, GlobalCandidate& out);
 
     GlobalLocalizeConfig m_cfg;
     std::vector<Level> m_pyr;      // [0]=最细, back()=最粗

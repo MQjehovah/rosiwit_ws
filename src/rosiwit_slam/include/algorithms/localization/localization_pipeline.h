@@ -26,6 +26,7 @@ public:
     void onLidar(const LidarFrame& f) override;
     Status getStatus() override;
     bool getPose(PoseStamped& out) override;
+    bool getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
 
     // 供离线评估/调试: 最近一帧配准结果与置信度
     const MatchResult& lastMatch() const { return m_last_match; }

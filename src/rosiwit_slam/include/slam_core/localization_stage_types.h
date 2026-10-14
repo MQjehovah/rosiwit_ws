@@ -6,10 +6,26 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <cmath>
 #include <Eigen/Eigen>
 #include "slam_core/slam_types.h"
 
 namespace rosiwit_slam {
+
+// ==================== 鲁棒核 ====================
+enum class RobustKernel { NONE, HUBER, CAUCHY, TUKEY };
+
+inline double robustWeight(RobustKernel k, double residual, double delta) {
+    const double ar = std::fabs(residual);
+    if (delta <= 1e-12) return 1.0;
+    switch (k) {
+        case RobustKernel::HUBER:  return ar <= delta ? 1.0 : delta / ar;
+        case RobustKernel::CAUCHY: { const double t = ar / delta; return 1.0 / (1.0 + t * t); }
+        case RobustKernel::TUKEY:  { const double t = ar / delta; return t <= 1.0 ? (1.0 - t * t) * (1.0 - t * t) : 0.0; }
+        case RobustKernel::NONE:
+        default: return 1.0;
+    }
+}
 
 // ==================== SE(3) 位姿小工具 ====================
 // poseMul(a, b) = 先 b 后 a (a ∘ b)
@@ -56,6 +72,8 @@ struct MatchResult {
     bool   degenerate = false;     // 是否检测到退化方向
     int    degenerate_dirs = 0;    // 被门控的退化方向数
     double smallest_eig_ratio = 1.0; // 最小/最大特征值比 (可观测性)
+    // 位姿协方差 (order: [rot(3), trans(3)]); 默认大不确定度
+    Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Identity() * 1e3;
 };
 
 // ==================== 配准器配置 ====================
@@ -71,8 +89,9 @@ struct ScanMatcherConfig {
     bool   use_corr_decay = true;           // 迭代内对应点半径衰减
     double corr_dist_init = 4.0;            // 初始关联半径(m)
     double corr_dist_min = 1.0;             // 末次关联半径下限(m)
-    bool   use_huber = true;                // Huber 鲁棒核
-    double huber_delta = 0.25;              // 法向残差阈值(m)
+    bool   use_huber = true;                // 兼容旧字段 (若配置 robust_kernel 则以其为准)
+    double huber_delta = 0.25;              // 鲁棒核尺度(m)
+    RobustKernel robust_kernel = RobustKernel::HUBER;  // NONE|HUBER|CAUCHY|TUKEY
     bool   use_edge_feature = false;        // 点到线边缘特征
     double edge_line_ratio = 0.12;          // 邻域协方差 λ1/λ2 线判据
     double edge_valid_thr = 0.10;           // 点到拟合直线最大垂距(m)
@@ -108,6 +127,7 @@ struct MotionPriorConfig {
 // ==================== 全局重定位配置 ====================
 struct GlobalLocalizeConfig {
     double min_score = 0.5;          // 命中最低分
+    int    top_k = 5;                // 全局重定位多候选数
     double voxel_resolution = 0.3;   // 精配准降采样
     double icp_max_corr_dist = 2.0;
     double icp_fitness_thresh = 1.0;

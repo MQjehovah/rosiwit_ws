@@ -1,4 +1,5 @@
 #pragma once
+#include <Eigen/Eigen>
 #include "slam_core/slam_types.h"
 #include "slam_core/pipeline_types.h"
 
@@ -15,6 +16,12 @@ public:
     virtual void onLidar(const LidarFrame& f) = 0;
     virtual Status getStatus() = 0;
     virtual bool getPose(PoseStamped& out) = 0;
+
+    /// 位姿 + 协方差 (order: [rot(3), trans(3)]), 供下游(Nav2 等)使用.
+    /// 默认实现忽略协方差, 返回 getPose.
+    virtual bool getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& /*cov*/) {
+        return getPose(out);
+    }
 };
 
 } // namespace rosiwit_slam

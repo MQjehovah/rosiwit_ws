@@ -29,6 +29,15 @@ public:
     /// 尝试定位单帧; 命中返回 true 并填充 out
     virtual bool localize(const CloudType::Ptr& scan, GlobalCandidate& out) = 0;
 
+    /// 多候选定位: 返回 Top-K 候选(按分数降序). 默认实现退化为单候选.
+    virtual int localizeTopK(const CloudType::Ptr& scan, int /*max_k*/,
+                             std::vector<GlobalCandidate>& out) {
+        GlobalCandidate c;
+        if (localize(scan, c)) { out.assign(1, c); return 1; }
+        out.clear();
+        return 0;
+    }
+
     virtual void configure(const GlobalLocalizeConfig& /*cfg*/) {}
 };
 

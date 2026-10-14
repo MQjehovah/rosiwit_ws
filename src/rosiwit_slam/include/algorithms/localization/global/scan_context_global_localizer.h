@@ -23,6 +23,8 @@ public:
     void configure(const GlobalLocalizeConfig& cfg) override;
     bool setMap(const std::string& map_path, const CloudType::Ptr& global_map) override;
     bool localize(const CloudType::Ptr& scan, GlobalCandidate& out) override;
+    int localizeTopK(const CloudType::Ptr& scan, int max_k,
+                     std::vector<GlobalCandidate>& out) override;
 
 private:
     GlobalLocalizeConfig m_cfg;

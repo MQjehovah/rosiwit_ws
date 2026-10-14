@@ -131,6 +131,7 @@ localization:
     corr_dist_min: 1.0
     use_huber: true
     huber_delta: 0.25
+    robust_kernel: huber        # none | huber | cauchy | tukey
     use_edge_feature: false
     edge_line_ratio: 0.12
     edge_valid_thr: 0.10
@@ -155,6 +156,7 @@ localization:
   # 全局重定位参数 (relocalizer: scan_context | bbs)
   global:
     min_score: 0.5
+    top_k: 5                    # 全局重定位多候选数
     voxel_resolution: 0.3
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0
