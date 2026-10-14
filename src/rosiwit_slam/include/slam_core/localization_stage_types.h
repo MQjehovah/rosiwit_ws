@@ -134,6 +134,7 @@ struct MotionPriorConfig {
 struct GlobalLocalizeConfig {
     double min_score = 0.5;          // 命中最低分
     int    top_k = 5;                // 全局重定位多候选数
+    int    retry_interval = 30;      // 丢失后重定位尝试间隔(帧, 节流)
     double voxel_resolution = 0.3;   // 精配准降采样
     double icp_max_corr_dist = 2.0;
     double icp_fitness_thresh = 1.0;
@@ -174,6 +175,7 @@ struct MonitorConfig {
     double lost_fitness = 0.5;       // < 判 DEGRADED, 连续 patience 次判 LOST
     int    lost_patience = 3;        // 连续低 fitness 次数
     int    lost_patience_low = 8;    // fitness<lost_fitness 的连续次数
+    int    coast_patience = 100;     // 配准未采纳连续帧数上限(内=降级外推, 超=判丢失)
     int    window_length = 20;       // windowed: 滑窗长度
     double window_std_k = 2.0;       // windowed: 均值±kσ 门限
     double max_trans_step = 1.0;     // 单帧位移跳变门限(m)
@@ -204,6 +206,8 @@ struct MaintainerConfig {
     int    refresh_frames = 0;       // 每 N 帧用叠加层刷新全局重定位器 (0=关闭)
     int    decay_frames = 0;         // 叠加层体素超过该帧数未再观测则移除 (0=不衰减)
     bool   override_base = false;    // 叠加层压制同位置的原图点(处理"结构被移除/被替换")
+    double delta_min = 0.3;          // 只沉淀"离原图 > 该距离(m)"的新结构(变化增量)
+    int    carve_stride = 20;        // 自由空间雕刻时扫描点抽样步长
 };
 
 } // namespace rosiwit_slam

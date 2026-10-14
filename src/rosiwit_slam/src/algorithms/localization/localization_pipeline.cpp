@@ -90,6 +90,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (gc) {
         m_global_cfg.min_score          = getv<double>(gc, "min_score", m_global_cfg.min_score);
         m_global_cfg.top_k              = getv<int>(gc, "top_k", m_global_cfg.top_k);
+        m_global_cfg.retry_interval     = getv<int>(gc, "retry_interval", m_global_cfg.retry_interval);
         m_global_cfg.voxel_resolution   = getv<double>(gc, "voxel_resolution", m_global_cfg.voxel_resolution);
         m_global_cfg.icp_max_corr_dist  = getv<double>(gc, "icp_max_corr_dist", m_global_cfg.icp_max_corr_dist);
         m_global_cfg.icp_fitness_thresh = getv<double>(gc, "icp_fitness_thresh", m_global_cfg.icp_fitness_thresh);
@@ -118,6 +119,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_monitor_cfg.lost_fitness       = getv<double>(moc, "lost_fitness", m_monitor_cfg.lost_fitness);
         m_monitor_cfg.lost_patience      = getv<int>(moc, "lost_patience", m_monitor_cfg.lost_patience);
         m_monitor_cfg.lost_patience_low  = getv<int>(moc, "lost_patience_low", m_monitor_cfg.lost_patience_low);
+        m_monitor_cfg.coast_patience     = getv<int>(moc, "coast_patience", m_monitor_cfg.coast_patience);
         m_monitor_cfg.window_length      = getv<int>(moc, "window_length", m_monitor_cfg.window_length);
         m_monitor_cfg.window_std_k       = getv<double>(moc, "window_std_k", m_monitor_cfg.window_std_k);
         m_monitor_cfg.max_trans_step     = getv<double>(moc, "max_trans_step", m_monitor_cfg.max_trans_step);
@@ -144,6 +146,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_maintainer_cfg.refresh_frames   = getv<int>(mtc, "refresh_frames", m_maintainer_cfg.refresh_frames);
         m_maintainer_cfg.decay_frames     = getv<int>(mtc, "decay_frames", m_maintainer_cfg.decay_frames);
         m_maintainer_cfg.override_base    = getv<bool>(mtc, "override_base", m_maintainer_cfg.override_base);
+        m_maintainer_cfg.delta_min        = getv<double>(mtc, "delta_min", m_maintainer_cfg.delta_min);
+        m_maintainer_cfg.carve_stride     = getv<int>(mtc, "carve_stride", m_maintainer_cfg.carve_stride);
     }
 #else
     (void)config_path;
@@ -286,29 +290,36 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
 void LocalizationPipeline::onLidar(const LidarFrame& f) {
     if (!m_map || !f.cloud || f.cloud->empty()) { m_status = LOST; return; }
 
-    // 冷启动 / 丢失恢复: 尝试全局重定位 (多候选, 取最优通过者)
+    // 冷启动 / 丢失恢复: 尝试全局重定位 (多候选, 取最优通过者), 节流避免在未知环境刷爆
     if (!m_initialized || m_status == LOST) {
-        std::vector<GlobalCandidate> cands;
-        const int nk = m_relocalizer
-            ? m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands)
-            : 0;
-        if (nk > 0) {
-            const GlobalCandidate& cand = cands.front();
-            m_pose = cand.pose;
-            m_pose.time = f.end_time;
-            m_prior->reset(m_pose);
-            m_monitor->reset();
-            m_initialized = true;
-            m_status = LOCALIZED;
-            m_last_match = MatchResult();
-            m_last_match.converged = true;
-            m_last_match.fitness = cand.score;
-            m_last_match.pose = m_pose;
-            std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
-                      << " cands=" << nk << " score=" << cand.score << std::endl;
-        } else if (!m_initialized) {
-            return;  // 尚无初值
+        if (m_reloc_cooldown > 0) {
+            --m_reloc_cooldown;
+        } else {
+            std::vector<GlobalCandidate> cands;
+            const int nk = m_relocalizer
+                ? m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands)
+                : 0;
+            if (nk > 0) {
+                const GlobalCandidate& cand = cands.front();
+                m_pose = cand.pose;
+                m_pose.time = f.end_time;
+                m_prior->reset(m_pose);
+                m_monitor->reset();
+                m_initialized = true;
+                m_status = LOCALIZED;
+                m_coast_count = 0;
+                m_reloc_cooldown = 0;
+                m_last_match = MatchResult();
+                m_last_match.converged = true;
+                m_last_match.fitness = cand.score;
+                m_last_match.pose = m_pose;
+                std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
+                          << " cands=" << nk << " score=" << cand.score << std::endl;
+            } else {
+                m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
+            }
         }
+        if (!m_initialized && m_status != LOCALIZED) return;  // 尚无初值
         if (m_status == LOCALIZED) return;
     }
 
@@ -340,21 +351,24 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
 
     MatchResult res;
     const bool ok = m_matcher->match(f.cloud, guess, res);
+    const bool accepted = ok && acceptMatch(res, f.cloud, guess);
 
     PoseStamped out_pose = guess;
-    if (ok && acceptMatch(res, f.cloud, guess)) {
+    if (accepted) {
         out_pose = res.pose;
         m_prior->onMatch(out_pose);
-    } else {
-        // 回退到先验预测 (不采信本帧配准)
     }
+    // 未被采纳 -> 回退到先验预测 (过桥/coasting)
     out_pose.time = f.end_time;
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
 
-    // 地图维护: 依据本帧质量/位姿决定是否把扫描并入叠加层
-    if (m_maintainer) m_maintainer->onLocalized(out_pose, f.cloud, m_last_match);
+    // 地图维护: 仅在位姿可信(配准被采纳)时写入/雕刻叠加层
+    if (m_maintainer) m_maintainer->onLocalized(out_pose, f.cloud, m_last_match, accepted);
+
+    // 过桥计数: 连续未采纳帧数
+    m_coast_count = accepted ? 0 : (m_coast_count + 1);
 
     // lifelong: 周期性用叠加层(环境变化)刷新全局重定位器, 避免重定位失效
     if (m_maintainer && m_relocalizer && m_relocalizer_name != "none" &&
@@ -373,7 +387,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     mi.match = res;
     mi.pose = m_pose;
     mi.time = f.end_time;
-    const MonitorLevel lvl = m_monitor->update(mi);
+    MonitorLevel lvl = m_monitor->update(mi);
+    // 过桥期(连续未采纳未超 coast_patience): 不判丢失, 保持降级连续外推
+    if (lvl == MonitorLevel::LOST && m_coast_count < m_monitor_cfg.coast_patience)
+        lvl = MonitorLevel::DEGRADED;
     switch (lvl) {
         case MonitorLevel::INIT:     m_status = INIT; break;
         case MonitorLevel::CREDIBLE: m_status = LOCALIZED; break;

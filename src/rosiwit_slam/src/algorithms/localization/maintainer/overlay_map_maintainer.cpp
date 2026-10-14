@@ -14,10 +14,14 @@ int64_t OverlayMapMaintainer::voxelKey(int cx, int cy, int cz) {
 }
 
 void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudType::Ptr& base) {
-    (void)base;
     m_map_path = map_path;
     m_voxel = m_cfg.voxel > 0 ? m_cfg.voxel : 0.3;
     m_cell = m_cfg.cell > 0 ? m_cfg.cell : 10.0;
+    if (base && !base->empty()) {
+        m_base = downsampleCloud(filterFinite(base), m_voxel);
+        m_base_kdtree.setInputCloud(m_base);
+        m_has_base = true;
+    }
     // 尝试载入已存在的叠加层 (原图不变, 叠加层单独落盘)
     if (!map_path.empty()) load(map_path + ".overlay.pcd");
 }
@@ -43,8 +47,33 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
     ++m_overlay_count;
 }
 
+void OverlayMapMaintainer::rayCarve(const PoseStamped& pose, const CloudType::Ptr& scan_body) {
+    // 自由空间雕刻: 沿"传感器原点->扫描端点"射线前进, 途经的 overlay 体素判为自由并移除
+    // (货物被发走/过道重新开阔 -> 射线穿过 -> 清除鬼影)
+    if (scan_body->empty()) return;
+    const double step = std::max(0.05, m_voxel);
+    const int stride = std::max(1, m_cfg.carve_stride);
+    const int n = static_cast<int>(scan_body->size());
+    for (int i = 0; i < n; i += stride) {
+        const auto& p = scan_body->points[i];
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const Eigen::Vector3d end = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
+        const Eigen::Vector3d dir = end - pose.trans;
+        const double len = dir.norm();
+        if (len < step * 2) continue;
+        const Eigen::Vector3d u = dir / len;
+        for (double d = step; d < len - m_voxel; d += step) {
+            const Eigen::Vector3d q = pose.trans + u * d;
+            const int vx = static_cast<int>(std::floor(q.x() / m_voxel));
+            const int vy = static_cast<int>(std::floor(q.y() / m_voxel));
+            const int vz = static_cast<int>(std::floor(q.z() / m_voxel));
+            m_voxel_seen.erase(voxelKey(vx, vy, vz));
+        }
+    }
+}
+
 void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType::Ptr& scan_body,
-                                       const MatchResult& match) {
+                                       const MatchResult& match, bool pose_confident) {
     if (!m_cfg.enabled || !scan_body || scan_body->empty()) return;
     ++m_frame;
     if (m_cfg.autosave_frames > 0 && !m_map_path.empty() &&
@@ -52,14 +81,29 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
         save(m_map_path + ".overlay.pcd");
     }
 
+    // 过桥/漂移期(位姿不可信): 不写、不雕刻, 避免污染地图
+    if (!pose_confident) { m_low_count = 0; return; }
+
+    // 清除: 看到"本该有货的地方是空的" -> 移除该处 overlay
+    rayCarve(pose, scan_body);
+
     if (match.fitness >= m_cfg.fitness_trigger) { m_low_count = 0; }
     else if (++m_low_count >= m_cfg.min_confirm) {
         const double moved = m_have_last ? (pose.trans - m_last_add).norm() : 1e9;
         if (moved >= m_cfg.min_keyframe_dist) {
             const int persist = std::max(1, m_cfg.persist_hits);
+            const double dmin2 = m_cfg.delta_min * m_cfg.delta_min;
+            std::vector<int> idx(1);
+            std::vector<float> sq(1);
             for (const auto& p : scan_body->points) {
                 if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
                 const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
+                // 只沉淀"变化增量": 离原图 > delta_min 的新结构
+                if (m_has_base) {
+                    PointType q;
+                    q.x = static_cast<float>(w.x()); q.y = static_cast<float>(w.y()); q.z = static_cast<float>(w.z());
+                    if (m_base_kdtree.nearestKSearch(q, 1, idx, sq) > 0 && sq[0] <= dmin2) continue;
+                }
                 const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
                 const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
                 const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
@@ -73,7 +117,7 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
         }
     }
 
-    // 衰减: 长期未再观测的叠加体素移除 (每天变化的堆货不会永久残留)
+    // 衰减兜底: 长期未再观测的叠加体素移除
     if (m_cfg.decay_frames > 0) {
         for (auto it = m_voxel_seen.begin(); it != m_voxel_seen.end();) {
             if (m_frame - it->second > m_cfg.decay_frames) it = m_voxel_seen.erase(it);
@@ -100,7 +144,7 @@ CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
                     const int vx = static_cast<int>(std::floor(p.x / m_voxel));
                     const int vy = static_cast<int>(std::floor(p.y / m_voxel));
                     const int vz = static_cast<int>(std::floor(p.z / m_voxel));
-                    if (!m_voxel_seen.count(voxelKey(vx, vy, vz))) continue;  // 已衰减
+                    if (!m_voxel_seen.count(voxelKey(vx, vy, vz))) continue;  // 已衰减/被雕刻
                     const double ddx = p.x - pose.trans.x();
                     const double ddy = p.y - pose.trans.y();
                     const double ddz = p.z - pose.trans.z();

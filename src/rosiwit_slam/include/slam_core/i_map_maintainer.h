@@ -22,9 +22,11 @@ public:
     virtual void setBaseMap(const std::string& /*map_path*/, const CloudType::Ptr& /*base*/) {}
     virtual void setKeyframes(const std::vector<LocalKeyframe>& /*keyframes*/) {}
 
-    /// 每帧定位完成后调用; 依据 fitness 判据决定是否把该扫描并入 overlay
+    /// 每帧定位完成后调用.
+    /// @param pose_confident 本帧位姿是否可信(由配准采纳判据决定); false(过桥外推)时
+    ///        不写入/不雕刻, 避免把变化写到漂移位姿上而污染地图.
     virtual void onLocalized(const PoseStamped& /*pose*/, const CloudType::Ptr& /*scan_body*/,
-                             const MatchResult& /*match*/) {}
+                             const MatchResult& /*match*/, bool /*pose_confident*/) {}
 
     /// 返回位姿附近(半径内)的 overlay 点云(世界系), 用于叠加到配准目标
     virtual CloudType::Ptr getOverlay(const PoseStamped& /*pose*/) { return nullptr; }

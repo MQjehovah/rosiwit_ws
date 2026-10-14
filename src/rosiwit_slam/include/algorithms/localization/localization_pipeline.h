@@ -78,6 +78,10 @@ private:
     int m_refresh_counter = 0;
     size_t m_last_overlay_size = 0;
 
+    // 过桥(coasting)与重定位节流
+    int m_coast_count = 0;
+    int m_reloc_cooldown = 0;
+
     // s2m 残差接受判据的多帧一致性状态
     V3D m_corr_prev = V3D::Zero();
     bool m_corr_prev_valid = false;

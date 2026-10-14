@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cstdint>
+#include <pcl/kdtree/kdtree_flann.h>
 #include "slam_core/i_map_maintainer.h"
 
 namespace rosiwit_slam {
@@ -18,7 +19,7 @@ public:
     void configure(const MaintainerConfig& cfg) override { m_cfg = cfg; }
     void setBaseMap(const std::string& map_path, const CloudType::Ptr& base) override;
     void onLocalized(const PoseStamped& pose, const CloudType::Ptr& scan_body,
-                     const MatchResult& match) override;
+                     const MatchResult& match, bool pose_confident) override;
     CloudType::Ptr getOverlay(const PoseStamped& pose) override;
     CloudType::Ptr snapshotOverlay() override;
     bool save(const std::string& path) override;
@@ -29,10 +30,14 @@ public:
 private:
     static int64_t voxelKey(int cx, int cy, int cz);
     void addPoint(const Eigen::Vector3d& p);
+    void rayCarve(const PoseStamped& pose, const CloudType::Ptr& scan_body);
     void rebuildCells();
 
     MaintainerConfig m_cfg;
     std::string m_map_path;
+    CloudType::Ptr m_base;                       // 冻结原图(降采样), 用于增量/雕刻
+    pcl::KdTreeFLANN<PointType> m_base_kdtree;
+    bool m_has_base = false;
     double m_voxel = 0.3;
     double m_cell = 10.0;
     std::unordered_map<int64_t, long> m_voxel_seen;   // 体素 -> 最近观测帧(去重+衰减)

@@ -342,18 +342,20 @@ TEST(MaintainerTest, OverlayAccumulatesOnChange) {
     CloudType::Ptr scan(new CloudType());
     for (double x = -1.0; x <= 1.0; x += 0.1)
         for (double y = -1.0; y <= 1.0; y += 0.1)
-            scan->push_back(PointType(static_cast<float>(x), static_cast<float>(y), 0.0f));
+            scan->push_back(PointType(static_cast<float>(x), static_cast<float>(y), 0.5f));
 
     MatchResult low; low.converged = true; low.fitness = 0.1;
-    mnt->onLocalized(pose, scan, low);   // 第1帧: 未达确认数
+    mnt->onLocalized(pose, scan, low, true);   // 第1帧: 未达确认数
     EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);
-    mnt->onLocalized(pose, scan, low);   // 第2帧: 并入叠加层
+    mnt->onLocalized(pose, scan, low, true);   // 第2帧: 并入叠加层
     EXPECT_GT(mnt->getOverlay(pose)->size(), 0u);
 
-    // fitness 恢复 -> 不再累积
+    // fitness 恢复 -> 不再累积 (用远处理想帧, 避免雕刻干扰)
     const size_t before = mnt->getOverlay(pose)->size();
+    CloudType::Ptr scan1(new CloudType());
+    scan1->push_back(PointType(0.0f, 0.0f, 0.0f));
     MatchResult good; good.converged = true; good.fitness = 0.95;
-    for (int i = 0; i < 3; ++i) mnt->onLocalized(makePose(2, 0, 0, 0), scan, good);
+    for (int i = 0; i < 3; ++i) mnt->onLocalized(makePose(2, 0, 0, 0), scan1, good, true);
     EXPECT_EQ(mnt->getOverlay(pose)->size(), before);
 }
 
@@ -376,11 +378,11 @@ TEST(MaintainerTest, DurableChangeFilter) {
     scan->push_back(PointType(0.0f, 0.0f, 0.0f));
     MatchResult low; low.converged = true; low.fitness = 0.1;
 
-    mnt->onLocalized(pose, scan, low);
+    mnt->onLocalized(pose, scan, low, true);
     EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);   // 1 次: 未达阈值
-    mnt->onLocalized(pose, scan, low);
+    mnt->onLocalized(pose, scan, low, true);
     EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);   // 2 次: 未达阈值
-    mnt->onLocalized(pose, scan, low);
+    mnt->onLocalized(pose, scan, low, true);
     EXPECT_GT(mnt->getOverlay(pose)->size(), 0u);   // 3 次: 并入
 }
 
@@ -430,11 +432,11 @@ TEST(MaintainerTest, DecayRemovesStaleVoxels) {
     CloudType::Ptr scan(new CloudType());
     scan->push_back(PointType(0.0f, 0.0f, 0.0f));
     MatchResult low; low.converged = true; low.fitness = 0.1;
-    mnt->onLocalized(pose, scan, low);
+    mnt->onLocalized(pose, scan, low, true);
     EXPECT_GT(mnt->getOverlay(pose)->size(), 0u);
 
     MatchResult good; good.converged = true; good.fitness = 0.95;
-    for (int i = 0; i < 7; ++i) mnt->onLocalized(pose, scan, good);  // 帧推进, 未再观测
+    for (int i = 0; i < 7; ++i) mnt->onLocalized(pose, scan, good, true);  // 帧推进, 未再观测
     EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);
 }
 
@@ -448,6 +450,61 @@ TEST(LocalizationUtilsTest, SuppressBaseByOverlay) {
     const size_t before = base->size();
     suppressBaseByOverlay(base, ov, 0.2);
     EXPECT_LT(base->size(), before);
+}
+
+// ---- 置信门控: 位姿不可信(过桥)时不写入叠加层 ----
+TEST(MaintainerTest, NoCommitWhenUnconfident) {
+    auto mnt = LocalizationFactory::createMapMaintainer("overlay");
+    ASSERT_NE(mnt, nullptr);
+    MaintainerConfig cfg;
+    cfg.fitness_trigger = 0.5;
+    cfg.min_confirm = 1;
+    cfg.min_keyframe_dist = 0.0;
+    cfg.voxel = 0.2;
+    cfg.radius = 20.0;
+    cfg.persist_hits = 1;
+    mnt->configure(cfg);
+    mnt->setBaseMap("", nullptr);
+
+    PoseStamped pose = makePose(0, 0, 0, 0);
+    CloudType::Ptr scan(new CloudType());
+    scan->push_back(PointType(5.0f, 0.0f, 0.0f));
+    MatchResult low; low.converged = true; low.fitness = 0.1;
+    for (int i = 0; i < 5; ++i) mnt->onLocalized(pose, scan, low, /*pose_confident=*/false);
+    EXPECT_EQ(mnt->getOverlay(pose)->size(), 0u);   // 不可信 -> 不写
+}
+
+// ---- 自由空间雕刻: 货物被发走(看到更远) -> 清除鬼影 ----
+TEST(MaintainerTest, RayCarveRemovesStaleGoods) {
+    auto mnt = LocalizationFactory::createMapMaintainer("overlay");
+    ASSERT_NE(mnt, nullptr);
+    MaintainerConfig cfg;
+    cfg.fitness_trigger = 0.5;
+    cfg.min_confirm = 1;
+    cfg.min_keyframe_dist = 0.0;
+    cfg.voxel = 0.2;
+    cfg.radius = 20.0;
+    cfg.persist_hits = 1;
+    cfg.carve_stride = 1;
+    mnt->configure(cfg);
+    mnt->setBaseMap("", nullptr);
+
+    PoseStamped pose = makePose(0, 0, 0, 0);
+    CloudType::Ptr scan(new CloudType());
+    scan->push_back(PointType(5.0f, 0.0f, 0.0f));
+    MatchResult low; low.converged = true; low.fitness = 0.1;
+    mnt->onLocalized(pose, scan, low, true);          // 写入货墙 (5,0,0)
+    ASSERT_GT(mnt->getOverlay(pose)->size(), 0u);
+
+    // 货物被发走: 现在看到更远的 (10,0,0), 射线穿过 (5,0,0) -> 雕刻清除
+    CloudType::Ptr scan2(new CloudType());
+    scan2->push_back(PointType(10.0f, 0.0f, 0.0f));
+    mnt->onLocalized(pose, scan2, low, true);
+
+    auto ov = mnt->getOverlay(pose);
+    int near5 = 0;
+    for (const auto& p : ov->points) if (std::fabs(p.x - 5.0f) < 0.3f) ++near5;
+    EXPECT_EQ(near5, 0);                              // (5,0,0) 处鬼影被清除
 }
 
 // ---- 工厂注册完整性 ----

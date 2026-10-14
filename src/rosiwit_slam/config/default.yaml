@@ -162,6 +162,7 @@ localization:
   global:
     min_score: 0.5
     top_k: 5                    # 全局重定位多候选数
+    retry_interval: 30          # 丢失后重定位尝试间隔(帧, 节流)
     voxel_resolution: 0.3
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0
@@ -192,6 +193,7 @@ localization:
     lost_fitness: 0.5
     lost_patience: 3
     lost_patience_low: 8
+    coast_patience: 100       # 连续未采纳帧数上限(内=降级外推, 超=判丢失)
     window_length: 20
     window_std_k: 2.0
     max_trans_step: 1.0
@@ -218,6 +220,8 @@ localization:
     refresh_frames: 0         # 每 N 帧用叠加层刷新全局重定位器 (lifelong, 0=关闭)
     decay_frames: 0           # 叠加层体素 N 帧未再观测则移除 (每天变的堆货, 建议≥600)
     override_base: false      # 叠加层压制同位置原图点 (结构被移除/替换时建议 true)
+    delta_min: 0.3            # 只沉淀"离原图 > 该距离(m)"的新结构(变化增量), 不重复静态
+    carve_stride: 20          # 自由空间雕刻抽样步长 (看到空 -> 从叠加层移除鬼影)
 
   # ---- ScanContext 全局重定位参数 (localization: scan_context_localization) ----
   sc_num_rings: 20
