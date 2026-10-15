@@ -190,6 +190,14 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_hyp_reseed_frames = getv<int>(hpc, "reseed_frames", m_hyp_reseed_frames);
     }
     m_hyp.setMax(m_max_hypotheses);
+    auto abc = loc["absolute"];
+    if (abc) {
+        m_abs_cfg.enabled   = getv<bool>(abc, "enabled", m_abs_cfg.enabled);
+        m_abs_cfg.window    = getv<double>(abc, "window", m_abs_cfg.window);
+        m_abs_cfg.alpha     = getv<double>(abc, "alpha", m_abs_cfg.alpha);
+        m_abs_cfg.max_trans = getv<double>(abc, "max_trans", m_abs_cfg.max_trans);
+        m_abs_cfg.max_yaw_deg = getv<double>(abc, "max_yaw_deg", m_abs_cfg.max_yaw_deg);
+    }
     m_store_name = getv<std::string>(loc, "map_store", m_store_name);
     m_store_leaf = getv<double>(loc, "map_store_leaf", m_store_leaf);
     auto smc = loc["smoother"];
@@ -521,6 +529,22 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
 
     out_pose.time = f.end_time;
+    // L19 绝对约束融合 (门控互补): 新鲜且创新在门限内才采纳
+    if (m_abs_cfg.enabled && m_has_abs &&
+        std::fabs(f.end_time - m_abs_time) < m_abs_cfg.window) {
+        const V3D dt = m_abs_pose.trans - out_pose.trans;
+        Eigen::Quaterniond qe(Eigen::Quaterniond(out_pose.rot).conjugate() *
+                              Eigen::Quaterniond(m_abs_pose.rot));
+        const double dyaw_deg = std::fabs(2.0 * std::atan2(qe.vec().norm(), std::fabs(qe.w()))) * 57.2957795;
+        if (dt.norm() <= m_abs_cfg.max_trans && dyaw_deg <= m_abs_cfg.max_yaw_deg) {
+            const double a = m_abs_cfg.alpha;
+            out_pose.trans = (1.0 - a) * out_pose.trans + a * m_abs_pose.trans;
+            Eigen::Quaterniond q_cur(out_pose.rot);
+            out_pose.rot = q_cur.slerp(a, Eigen::Quaterniond(m_abs_pose.rot).normalized())
+                               .normalized().toRotationMatrix();
+        }
+        m_has_abs = false;   // 一次性消费
+    }
     // L4 固定滞后平滑: 融合运动先验(between) + 扫描匹配(unary, 带协方差)
     if (m_smoother.enabled()) {
         m_smoother.addFrame(f.end_time, guess, accepted, out_pose, res.cov);
@@ -624,6 +648,15 @@ bool LocalizationPipeline::predictAt(double t, PoseStamped& out) {
     if (!m_initialized || !m_prior) return false;
     out = m_prior->predict(t);   // 运动先验(IMU)从最后校正位姿传播
     return true;
+}
+
+void LocalizationPipeline::onAbsolute(const PoseStamped& pose,
+                                      const Eigen::Matrix<double, 6, 6>& cov) {
+    if (!m_abs_cfg.enabled) return;
+    (void)cov;   // 门控互补融合暂只用位姿; 协方差供后续因子图
+    m_abs_pose = pose;
+    m_abs_time = pose.time;
+    m_has_abs = true;
 }
 
 } // namespace rosiwit_slam

@@ -778,6 +778,104 @@ TEST(TrajectoryRegressionTest, SyntheticSequenceAteAndLoss) {
     EXPECT_LT(lost, 10);
 }
 
+// ---- L19 绝对约束融合: 门控互补 ----
+namespace {
+std::string writeAbsCfg(const std::string& base, double max_trans) {
+    const std::string cfg = base + "abs_cfg.yaml";
+    std::ofstream f(cfg);
+    f << "localization:\n"
+         "  pipeline:\n"
+         "    relocalizer: none\n"
+         "    motion_prior: constant_velocity\n"
+         "    local_map: global\n"
+         "    matcher: pp_icp\n"
+         "    monitor: threshold\n"
+         "    map_maintainer: none\n"
+         "  matcher:\n"
+         "    voxel_resolution: 0.2\n"
+         "    max_iterations: 50\n"
+         "    corr_dist_init: 1.5\n"
+         "    corr_dist_min: 0.5\n"
+         "    degeneracy_gate: false\n"
+         "  accept:\n"
+         "    mode: 0\n"
+         "    min_coverage: 0.4\n"
+         "  monitor:\n"
+         "    credible_fitness: 0.6\n"
+         "    lost_fitness: 0.4\n"
+         "    lost_patience_low: 30\n"
+         "  absolute:\n"
+         "    enabled: true\n"
+         "    window: 0.5\n"
+         "    alpha: 0.5\n"
+         "    max_trans: " << max_trans << "\n"
+         "    max_yaw_deg: 30.0\n";
+    return cfg;
+}
+} // namespace
+
+TEST(AbsoluteFusionTest, GatedBlendPullsTowardAbsolute) {
+    CloudType::Ptr map = makeScene();
+    const std::string base = std::string(::testing::TempDir());
+    const std::string pcd = base + "abs_map.pcd";
+    ASSERT_EQ(pcl::io::savePCDFileBinary(pcd, *map), 0);
+    const std::string cfg = writeAbsCfg(base, 2.0);
+
+    LocalizationPipeline lp;
+    ASSERT_TRUE(lp.init(cfg));
+    lp.setMap(pcd);
+    lp.setInitPose(makePose(3.0, 3.0, 0.0, 0.0));
+
+    // 第 0 帧
+    {
+        CloudType::Ptr scan = makeScanFromMap(map, makePose(3.0, 3.0, 0.0, 0.0));
+        LidarFrame f; f.cloud = scan; f.start_time = 0.0; f.end_time = 0.1;
+        lp.onLidar(f);
+    }
+    // 注入绝对观测 (在真值附近, 但在门限内拉向 +x)
+    PoseStamped a = makePose(3.5, 3.0, 0.0, 0.0);
+    a.time = 0.2;
+    lp.onAbsolute(a, Eigen::Matrix<double, 6, 6>::Identity() * 0.01);
+    // 第 1 帧 (真值 3.08) -> 融合后应向 3.5 靠拢 (alpha=0.5)
+    {
+        CloudType::Ptr scan = makeScanFromMap(map, makePose(3.08, 3.0, 0.0, 0.0));
+        LidarFrame f; f.cloud = scan; f.start_time = 0.1; f.end_time = 0.2;
+        lp.onLidar(f);
+    }
+    PoseStamped e;
+    ASSERT_TRUE(lp.getPose(e));
+    EXPECT_GT(e.trans.x(), 3.15);
+}
+
+TEST(AbsoluteFusionTest, RejectsOutlierAbsolute) {
+    CloudType::Ptr map = makeScene();
+    const std::string base = std::string(::testing::TempDir());
+    const std::string pcd = base + "abs_map2.pcd";
+    ASSERT_EQ(pcl::io::savePCDFileBinary(pcd, *map), 0);
+    const std::string cfg = writeAbsCfg(base, 0.3);   // 严门限
+
+    LocalizationPipeline lp;
+    ASSERT_TRUE(lp.init(cfg));
+    lp.setMap(pcd);
+    lp.setInitPose(makePose(3.0, 3.0, 0.0, 0.0));
+    {
+        CloudType::Ptr scan = makeScanFromMap(map, makePose(3.0, 3.0, 0.0, 0.0));
+        LidarFrame f; f.cloud = scan; f.start_time = 0.0; f.end_time = 0.1;
+        lp.onLidar(f);
+    }
+    PoseStamped a = makePose(9.0, 3.0, 0.0, 0.0);   // 离群
+    a.time = 0.2;
+    lp.onAbsolute(a, Eigen::Matrix<double, 6, 6>::Identity() * 0.01);
+    {
+        CloudType::Ptr scan = makeScanFromMap(map, makePose(3.08, 3.0, 0.0, 0.0));
+        LidarFrame f; f.cloud = scan; f.start_time = 0.1; f.end_time = 0.2;
+        lp.onLidar(f);
+    }
+    PoseStamped e;
+    ASSERT_TRUE(lp.getPose(e));
+    EXPECT_LT(e.trans.x(), 3.4);   // 未被离群观测拉走
+}
+
 // ---- 工厂注册完整性 ----
 TEST(LocalizationFactoryTest, RegistersAllStages) {
     for (const auto& n : LocalizationFactory::listMatchers())          EXPECT_NE(LocalizationFactory::createMatcher(n), nullptr);

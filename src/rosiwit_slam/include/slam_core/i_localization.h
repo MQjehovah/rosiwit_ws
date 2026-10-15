@@ -22,6 +22,9 @@ public:
     /// 高频预测: 在 t 时刻给出位姿(基于最后校正 + 运动先验传播), 供高频输出.
     virtual bool predictAt(double /*t*/, PoseStamped& /*out*/) { return false; }
 
+    /// 绝对约束 (GNSS/UWB/反光标/二维码): 地图系位姿 + 协方差 [rot(3),trans(3)]. 默认忽略.
+    virtual void onAbsolute(const PoseStamped& /*pose*/, const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
+
     /// 位姿 + 协方差 (order: [rot(3), trans(3)]), 供下游(Nav2 等)使用.
     /// 默认实现忽略协方差, 返回 getPose.
     virtual bool getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& /*cov*/) {

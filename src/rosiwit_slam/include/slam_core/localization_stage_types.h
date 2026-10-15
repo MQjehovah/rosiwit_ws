@@ -234,6 +234,16 @@ struct PlanarConstraintConfig {
     double max_tilt_deg = 35.0;  // 地面法向与竖直夹角上限, 超过则本帧不约束(异常/跳变)
 };
 
+// ==================== 绝对约束融合 (L19) ====================
+// GNSS/UWB/反光标/二维码等绝对观测, 以"门控互补融合"接入定位(防跳变).
+struct AbsoluteConfig {
+    bool   enabled = false;
+    double window = 0.5;         // 观测有效窗口(s, 超过则忽略)
+    double alpha = 0.5;          // 融合权重 (0~1; 有平滑器时由平滑器统一)
+    double max_trans = 2.0;      // 创新门限: 平移超此丢弃(m)
+    double max_yaw_deg = 30.0;   // 创新门限: 航向超此丢弃(deg)
+};
+
 // ==================== 地图维护 (map_maintainer) ====================
 // 非破坏性: 冻结原始地图, 将"变化"以叠加层(overlay)形式记录, 配准目标=原图+叠加层.
 struct MaintainerConfig {

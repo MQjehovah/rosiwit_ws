@@ -38,6 +38,7 @@ public:
     GridInfo getGridInfo() const override;
     bool getHighRatePose(double t, PoseStamped& out) override;
     bool getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
+    void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
 
     PipelineMode getMode() const { return m_mode.load(); }
     void setMode(PipelineMode mode);

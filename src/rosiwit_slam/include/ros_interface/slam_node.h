@@ -47,12 +47,16 @@ private:
         double output_filter_alpha = 0.5;    // 输出 alpha-beta 滤波 alpha
         double output_filter_beta  = 0.2;    // 输出 alpha-beta 滤波 beta
         double output_extrap_max_s = 0.3;    // 外推上限(s)
+        bool   absolute_enabled  = false;    // 绝对约束(GNSS/UWB/反光标/二维码)开关
+        std::string absolute_topic = "/absolute_pose";  // geometry_msgs/PoseWithCovarianceStamped
+        double datum_x = 0, datum_y = 0, datum_z = 0, datum_yaw_deg = 0;  // 绝对源系 -> 地图系
     };
 
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg);
     void lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void voCB(const nav_msgs::msg::Odometry::SharedPtr msg);   // 视觉里程计 (可选)
     void odomCB(const nav_msgs::msg::Odometry::SharedPtr msg); // 轮式里程计 (可选)
+    void absoluteCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);  // 绝对约束 (可选)
     void timerCB();
     void mapTimerCB();
     void highRateCB();
@@ -72,6 +76,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr m_init_pose_sub;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr m_vo_sub;   // 视觉里程计 (开关控制)
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr m_odom_sub; // 轮式里程计 (开关控制)
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr m_absolute_sub;  // 绝对约束
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_body_cloud_pub, m_world_cloud_pub, m_global_map_pub;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_pub;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr     m_path_pub;

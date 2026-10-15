@@ -34,6 +34,7 @@ public:
     bool getPose(PoseStamped& out) override;
     bool getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
     bool predictAt(double t, PoseStamped& out) override;
+    void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
 
     // 供离线评估/调试: 最近一帧配准结果与置信度
     const MatchResult& lastMatch() const { return m_last_match; }
@@ -102,6 +103,12 @@ private:
 
     FixedLagSmoother m_smoother; // 固定滞后平滑器 (L4)
     SmootherConfig m_smoother_cfg;
+
+    // L19 绝对约束融合
+    AbsoluteConfig m_abs_cfg;
+    PoseStamped m_abs_pose;
+    double m_abs_time = -1.0;
+    bool m_has_abs = false;
 
     // L8: 统一地图存储底座 (可选; 算法经 IMapStore 取数据)
     std::unique_ptr<IMapStore> m_store;

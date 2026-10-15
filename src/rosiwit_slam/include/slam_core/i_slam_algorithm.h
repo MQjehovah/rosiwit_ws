@@ -53,6 +53,8 @@ public:
     virtual bool getHighRatePose(double /*t*/, PoseStamped& /*out*/) { return false; }
     /// 位姿 + 协方差 (order [rot(3),trans(3)]; 默认不支持)
     virtual bool getPoseCov(PoseStamped& /*out*/, Eigen::Matrix<double, 6, 6>& /*cov*/) { return false; }
+    /// 绝对约束输入 (地图系位姿 + 协方差; 默认忽略)
+    virtual void onAbsolute(const PoseStamped& /*pose*/, const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
 };
 
 } // namespace rosiwit_slam

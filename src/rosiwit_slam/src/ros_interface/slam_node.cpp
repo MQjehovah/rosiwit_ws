@@ -5,6 +5,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <yaml-cpp/yaml.h>
 #include <functional>
+#include <cmath>
 #include "ros_interface/ros_utils.h"
 
 using namespace std::chrono_literals;
@@ -49,6 +50,12 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.output_filter_alpha = cfg["output_filter_alpha"].as<double>(m_cfg.output_filter_alpha);
             m_cfg.output_filter_beta  = cfg["output_filter_beta"].as<double>(m_cfg.output_filter_beta);
             m_cfg.output_extrap_max_s = cfg["output_extrap_max_s"].as<double>(m_cfg.output_extrap_max_s);
+            m_cfg.absolute_enabled = cfg["absolute_enabled"].as<bool>(m_cfg.absolute_enabled);
+            m_cfg.absolute_topic   = cfg["absolute_topic"].as<std::string>(m_cfg.absolute_topic);
+            m_cfg.datum_x = cfg["absolute_datum_x"].as<double>(m_cfg.datum_x);
+            m_cfg.datum_y = cfg["absolute_datum_y"].as<double>(m_cfg.datum_y);
+            m_cfg.datum_z = cfg["absolute_datum_z"].as<double>(m_cfg.datum_z);
+            m_cfg.datum_yaw_deg = cfg["absolute_datum_yaw_deg"].as<double>(m_cfg.datum_yaw_deg);
             if (cfg["vision"]) {
                 m_cfg.vision_enabled = cfg["vision"]["enabled"].as<bool>(m_cfg.vision_enabled);
                 m_cfg.vo_topic       = cfg["vision"]["vo_topic"].as<std::string>(m_cfg.vo_topic);
@@ -78,6 +85,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     if (m_cfg.odom_enabled) {
         m_odom_sub = create_subscription<nav_msgs::msg::Odometry>(
             m_cfg.odom_topic, 100, std::bind(&SlamNode::odomCB, this, _1), sensor_sub_opts);
+    }
+    if (m_cfg.absolute_enabled) {
+        m_absolute_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            m_cfg.absolute_topic, 100, std::bind(&SlamNode::absoluteCB, this, _1), sensor_sub_opts);
     }
 
     m_body_cloud_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("body_cloud", 10000);
@@ -158,6 +169,27 @@ void SlamNode::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
     const auto& q = msg->pose.pose.orientation;
     p.rot = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
     m_algo->onOdom(p);
+}
+
+void SlamNode::absoluteCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
+    PoseStamped meas;
+    meas.time = RosUtils::getSec(msg->header);
+    meas.trans = V3D(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
+    const auto& q = msg->pose.pose.orientation;
+    meas.rot = Eigen::Quaterniond(q.w, q.x, q.y, q.z).normalized().toRotationMatrix();
+    // datum 变换: map_T_abs ∘ 测量
+    const M3D Rd = Eigen::AngleAxisd(m_cfg.datum_yaw_deg * M_PI / 180.0, V3D::UnitZ()).toRotationMatrix();
+    PoseStamped pose;
+    pose.time = meas.time;
+    pose.rot = Rd * meas.rot;
+    pose.trans = Rd * meas.trans + V3D(m_cfg.datum_x, m_cfg.datum_y, m_cfg.datum_z);
+    // 协方差: ROS [x,y,z,rot] -> 我们 [rot(3),trans(3)]
+    Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Identity() * 1e2;
+    auto mi = [](int r) { return r < 3 ? r + 3 : r - 3; };
+    for (int r = 0; r < 6; ++r)
+        for (int c = 0; c < 6; ++c)
+            cov(r, c) = msg->pose.covariance[mi(r) * 6 + mi(c)];
+    m_algo->onAbsolute(pose, cov);
 }
 
 void SlamNode::onOutput(const SlamOutput& out) {

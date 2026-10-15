@@ -141,6 +141,10 @@ bool SlamPipeline::getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov
     return m_localization->getPoseWithCov(out, cov);
 }
 
+void SlamPipeline::onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) {
+    if (m_mode.load() == PipelineMode::LOCALIZATION && m_localization) m_localization->onAbsolute(pose, cov);
+}
+
 void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& to_id,
                                 const PoseStamped& rel, double cov) {
     if (!m_backend) return;

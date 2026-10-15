@@ -70,6 +70,13 @@ output_rate_hz: 100          # 输出频率(Hz); 0=关闭(用扫描帧)
 output_filter_alpha: 0.5     # alpha-beta alpha
 output_filter_beta: 0.2      # alpha-beta beta
 output_extrap_max_s: 0.3     # 外推上限(s)
+# L19 绝对约束 (GNSS/UWB/反光标/二维码)
+absolute_enabled: false      # 开关 (启用后订阅 absolute_topic)
+absolute_topic: /absolute_pose  # geometry_msgs/PoseWithCovarianceStamped
+absolute_datum_x: 0.0        # 绝对源系 -> 地图系 datum
+absolute_datum_y: 0.0
+absolute_datum_z: 0.0
+absolute_datum_yaw_deg: 0.0
 
 cube_len: 300
 det_range: 60
@@ -265,6 +272,14 @@ localization:
     lag_sec: 2.0
     motion_trans_sigma: 0.05
     motion_rot_sigma: 0.02
+
+  # 绝对约束融合 (L19): 门控互补融合
+  absolute:
+    enabled: false
+    window: 0.5               # 观测有效窗口(s)
+    alpha: 0.5                # 融合权重
+    max_trans: 2.0            # 创新门限(m)
+    max_yaw_deg: 30.0
 
   # 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层
   maintainer:
