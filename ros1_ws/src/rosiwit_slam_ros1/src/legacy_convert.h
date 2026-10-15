@@ -7,6 +7,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <Eigen/Eigen>
 #include <nav_msgs/OccupancyGrid.h>
@@ -47,6 +48,15 @@ xzrobot_ros_dependency::SlamInfo buildSlamInfo(int8_t slam_state,
 ///  json_warning_code.h:68 的成员默认 → "algorithm fault")。
 std::string buildWarningJson(const std::string& code, const std::string& level,
                              const std::string& name, const std::string& content);
+
+/// 一条 faults 记录
+struct WarningFault {
+    std::string code, level, name, content;
+};
+
+/// 多条合并成一个 `{"faults":[...]}` —— 对应旧实现
+/// `AlgorithmWarningCode::toJson(const std::vector<int>&)` 的形状 (多码一次成型)。
+std::string buildWarningJson(const std::vector<WarningFault>& faults);
 
 sensor_msgs::PointCloud2 toPointCloud2(const rosiwit_slam::CloudType& c,
                                        const std::string& frame, const ros::Time& stamp);

@@ -100,14 +100,28 @@ xzrobot_ros_dependency::SlamInfo buildSlamInfo(int8_t slam_state, int8_t locatio
 
 std::string buildWarningJson(const std::string& code, const std::string& level,
                              const std::string& name, const std::string& content) {
-    std::string j = "{\"faults\":[{";
-    j += "\"code\":\"" + jsonEscape(code) + "\",";
-    j += "\"content\":\"" + jsonEscape(content) + "\",";
-    j += "\"level\":\"" + jsonEscape(level) + "\",";
-    j += "\"module\":\"" + std::string(kModuleSlam) + "\",";
-    j += "\"name\":\"" + jsonEscape(name) + "\",";
-    j += "\"type\":\"" + std::string(kTypeAlgorithmFault) + "\"";
-    j += "}]}";
+    WarningFault f;
+    f.code = code; f.level = level; f.name = name; f.content = content;
+    return buildWarningJson(std::vector<WarningFault>{f});
+}
+
+std::string buildWarningJson(const std::vector<WarningFault>& faults) {
+    if (faults.empty()) return "";   // 旧实现: 空列表返回空串 (json_warning_code.cpp:57-59)
+    // 键序照 nlohmann 默认的字母序: code, content, level, module, name, type
+    std::string j = "{\"faults\":[";
+    for (size_t i = 0; i < faults.size(); ++i) {
+        const WarningFault& f = faults[i];
+        if (i) j += ",";
+        j += "{";
+        j += "\"code\":\"" + jsonEscape(f.code) + "\",";
+        j += "\"content\":\"" + jsonEscape(f.content) + "\",";
+        j += "\"level\":\"" + jsonEscape(f.level) + "\",";
+        j += "\"module\":\"" + std::string(kModuleSlam) + "\",";
+        j += "\"name\":\"" + jsonEscape(f.name) + "\",";
+        j += "\"type\":\"" + std::string(kTypeAlgorithmFault) + "\"";
+        j += "}";
+    }
+    j += "]}";
     return j;
 }
 

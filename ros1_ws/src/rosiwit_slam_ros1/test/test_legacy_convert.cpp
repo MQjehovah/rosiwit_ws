@@ -123,6 +123,20 @@ TEST(LegacyConvert, WarningJsonEscapesQuotes) {
     EXPECT_EQ(n["faults"][0]["content"].as<std::string>(), "a\\b");
 }
 
+// 5c —— 多码合并 (旧实现 toJson(vector<int>) 一次成型)
+TEST(LegacyConvert, WarningJsonMultiCode) {
+    std::vector<WarningFault> fs;
+    fs.push_back({"20003001", "WARNING", "lidar hz low", "slam subscripe lidar frequency is low!"});
+    fs.push_back({"20003002", "WARNING", "imu hz low", "slam subscripe imu frequency is low!"});
+    const YAML::Node n = YAML::Load(buildWarningJson(fs));
+    ASSERT_EQ(n["faults"].size(), 2u);
+    EXPECT_EQ(n["faults"][0]["code"].as<std::string>(), "20003001");
+    EXPECT_EQ(n["faults"][1]["code"].as<std::string>(), "20003002");
+    EXPECT_EQ(n["faults"][1]["level"].as<std::string>(), "WARNING");
+    // 空列表 -> 空串 (旧实现 json_warning_code.cpp:57-59)
+    EXPECT_EQ(buildWarningJson(std::vector<WarningFault>{}), "");
+}
+
 // 6 —— 钉住符号。对 R = Rot(Z,θ): R(0,1) = -sinθ, R(0,0) = cosθ,
 //      所以 legacyYawFromRot(Rot(Z,+π/2)) == -π/2; 旧实现随后用 AngleAxis(-yaw, Z)
 //      再取负, 合起来还原成 Rot(Z,θ) (legacy.cpp:1921-1924)。

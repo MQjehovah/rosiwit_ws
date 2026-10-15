@@ -27,10 +27,16 @@
 #include <std_msgs/String.h>
 #include <visualization_msgs/MarkerArray.h>
 
+#include <map>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "slam_core/slam_types.h"
+#include "xzrobot_ros_dependency/CommonIntRequestService.h"
 #include "xzrobot_ros_dependency/SlamInfo.h"
+#include "xzrobot_ros_dependency/SwitchMap.h"
+#include "xzrobot_ros_dependency/TagDetect.h"
 
 #include "legacy_config.h"
 #include "lost_monitor.h"
@@ -79,6 +85,26 @@ public:
     /// 值先攒着, 等下一次 publishPointMap 时一次性发出并清标志 (legacy.cpp:926-946)。
     void setGlobalGridMap(const nav_msgs::OccupancyGrid& grid);
 
+    // ---- [T11] 告警码注入 ----
+    /// 把码加进待报列表 (去重后由告警定时器统一发)。T11 用它上报 20003504(pose lost)。
+    /// 核心**不暴露**任何告警码通道 (已确认 include/ 下没有 WarningCode 相关接口),
+    /// 旧系统那个 20003504 是定位模块自己 push 出来的 (nano_gicp_localization.cpp:9403),
+    /// 所以在我们这里只能由 LostMonitor 补报 —— 是"补上", 不是重复。
+    void addWarningCode(int code);
+
+    // ---- [T8] 告警抑制窗口 ----
+    /// 复刻旧的 `warning_code_start_task_`: 初值 false, **只在 start_task 之后**置 true,
+    /// 之后 100 个 tick 不发告警 (legacy.cpp:184 与 459-468)。启动时**不**抑制。
+    void setWarningSuppression(bool on);
+
+    // ---- [T7] 3 个 service client (外部服务不在时只 WARN, 不崩) ----
+    /// get_charging_point; 失败时 charging_pile_json 为空串
+    bool callTagDetect(std::string& charging_pile_json);
+    /// set_detect_mode; 0.5s 超时 + 100ms 重试
+    bool callSetDetectMode(int mode);
+    /// switch_map_pro; 1.0s 超时
+    bool callSwitchMapPro(xzrobot_ros_dependency::SwitchMap::Request& req);
+
     /// 旧的 "重定位进行中" 标志 (legacy.cpp:1843-1853 由 isRelocalization() 驱动)
     bool relocating() const { return relocating_; }
 
@@ -86,6 +112,7 @@ private:
     void initPub();        // legacy.cpp:273-300
     void initTimerPub();   // legacy.cpp:247-271
     void initSub();        // legacy.cpp:193-215 (只补引擎没覆盖的那几个)
+    void initClients();    // legacy.cpp:243-244 + /switch_map_pro
 
     // 定时器回调
     void timerPublishLocalCloudAndSubmap(const ros::TimerEvent&);  // 0.1s -> startPub()
@@ -110,6 +137,11 @@ private:
     void chassisOdomCB(const nav_msgs::Odometry::ConstPtr& msg);     // -> 核心 onOdom
     void liftStateCB(const std_msgs::String::ConstPtr& msg);         // 存字段(核心无此接口)
     void liftTypeCB(const std_msgs::String::ConstPtr& msg);          // 存字段 + 打日志
+
+    // ---- [T7] 告警 ----
+    void loadWarningCodeTable();   // 从**本包** share 读 conf/warning_code.json (M6)
+    void timerPublishWarningCode(const ros::TimerEvent&);   // legacy.cpp:457-553
+    void tickFreqWindow(bool is_lidar);   // 1s 窗口频率判定 (legacy.cpp:629-637/740-748)
 
     ros::NodeHandle nh_, pnh_;
     SlamEngine& engine_;
@@ -168,6 +200,18 @@ private:
     ros::Time scan_window_start_;
     int scan_count_ = 0;
     double scan_hz_ = 0.0;
+
+    // ---- [T7] 告警 ----
+    struct WarningInfo { std::string level, name, content; };
+    std::map<int, WarningInfo> warning_code_table_;
+    mutable std::mutex warning_code_mtx_;
+    std::vector<int> pending_warning_codes_;
+    bool warning_code_start_task_ = false;   // 初值 false (xz_slam_ros1_interface.h:552)
+    int warning_code_suppress_ticks_ = 0;
+    struct FreqWindow { ros::Time start; int count = 0; };
+    FreqWindow imu_freq_, lidar_freq_;       // 旧实现 imu/lidar 各一个 1s 窗口
+    ros::Timer warning_code_timer_;
+    ros::ServiceClient tag_detect_client_, set_detect_mode_client_, switch_map_pro_client_;
 };
 
 } // namespace rosiwit_slam_ros1

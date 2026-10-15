@@ -1131,7 +1131,46 @@ srv 类型（来自 `ros1_ws/src/xzrobot_ros_dependency/srv/`，已核对）：
 **结论**：T7 不能照 §7.1 直接写。先把第 2 条的 lidar/odom 阈值与第 6 条的 20003504 出处读全，
 再动代码 —— 告警码是机器人监控系统消费的通道，发错了比不发更糟。
 
-**提交**：`feat(ros1): 告警码模块 + 旧接口 service client`（T7 尚未实现）
+### 7.4 T7 实测记录（已完成并提交）
+
+**状态**：`catkin_make` `exit=0`；`run_tests` `exit=0`；**gtest 52/52 全绿**
+（legacy_config 19 + realtime_grid 11 + lost_monitor 8 + legacy_convert 14）。
+
+**已落地**：
+- 告警码表从**本包 share** 读（M6）：实测 `warning_code table loaded: 28 codes from
+  .../rosiwit_slam_ros1/conf/warning_code.json`。
+- 频率窗口按 §7.3 的事实实现：imu `<= 160` → `20003002`，lidar `<= 6` → `20003001`；
+  **odom 不发码**（旧实现只打印）；两个流各自一个 1s 窗口。
+- 抑制窗口 `warning_code_start_task_` 初值 `false`，只在 `setWarningSuppression(true)`
+  （T8 的 `start_task` 会调）之后才生效 100 个 tick。
+- 告警定时器与 `rt_grid_map` 同周期（`legacy.cpp:267`）；没有码就不发（`legacy.cpp:543`）。
+- 未定义码的兜底照抄（`name="not define warning code"`、`code=begin_code_+998=20003999`）。
+- `addWarningCode(int)` 公开 seam 给 T11 用（核心**不暴露**任何告警码通道，已 grep
+  `include/` 下无 `WarningCode` 相关接口，所以 20003504 只能我们自己补报 —— 是"补上"不是重复）。
+- 3 个 service client：`get_charging_point`(TagDetect, 1.0s)、`set_detect_mode`
+  (CommonIntRequestService, 0.5s + 100ms 重试)、`/switch_map_pro`(SwitchMap, 1.0s)；
+  服务不在时只 `ROS_WARN` 并按旧逻辑给 `false` / 空串（D14）。
+
+**端到端验证**（真跑，不只看编译）：以 **2Hz** 喂 `/livox/imu` 5 秒 → 1s 窗口计数 4/3/2
+都 `<= 160` → `/slam_warning_code` 收到：
+
+```json
+{"faults":[{"code":"20003002","content":"slam subscripe imu frequency is low!",
+            "level":"WARNING","module":"xz_3d_slam","name":"imu hz low",
+            "type":"algorithm fault"}]}
+```
+
+字段集合与顺序与旧实现（nlohmann 字母序 + 补 type/module/code）**逐字一致** ✓。
+
+**有意不复刻的部分**：`20003500` / `20003501`。它们的触发条件是旧 lidar 处理循环里的
+"迭代 600 次都没拿到新帧"计数器（`legacy.cpp:3076`），语义是"收到帧但不可用"，
+我们的核心没有对应层次。**因此在本机没有雷达/IMU 数据时 `/slam_warning_code` 是静默的**
+（频率窗口只在"消息有来但偏慢"时才结束）—— 这与计划 §7 原来的验证预期不同，
+但符合我们实际实现的事实。要在真机上看到这两条码，得先有输入数据。
+
+**提交**：`feat(ros1): 告警码模块 + 旧接口 service client`
+
+
 
 ---
 
