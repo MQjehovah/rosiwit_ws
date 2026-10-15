@@ -102,6 +102,9 @@
   - 验收：契约/等价测试通过（KD 树 vs 体素最近邻距离等价 <1e-3）；`map_store` 可 A/B；默认 none 零行为变化。
   - 备注：非"绝对最优"，是研究可插拔底座；GMM/NDT 视图可在 VoxelMapStore 上按需扩展。
 
+- [x] ~~**L10 配置分层（base / lidar / scene 深合并）**~~ **暂缓（不做）**
+  - 决定：暂缓。方案已设计（内存深合并 `ConfigLoader::load`，顺序 base→scene→lidar，lidar 最高；无落盘），但先不做。当前单文件配置继续可用。
+
 ---
 
 ## 三、约定
