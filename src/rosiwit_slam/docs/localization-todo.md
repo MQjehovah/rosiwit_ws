@@ -29,6 +29,19 @@
 
 ### 高优先级
 
+- [x] **L11 IMU 零偏在线估计（陀螺 + 加速度/重力，静止标定，未静止跳过）** ✅ `62b67d9`
+  - 目标：改善过桥期 IMU 外推的朝向/姿态漂移（洗地机打滑更依赖 IMU）。
+  - 设计：`ImuMotionPrior` 增加 `gyro_bias/acc_bias` 状态；静止检测(gyro/acc 标准差+‖a‖≈g)成立才标定(均值)，未静止则跳过并继续尝试；`onMatch` 用几何观测器在线更新两零偏(夹紧)；`use_gravity` 用重力方向做 roll/pitch 校正。
+  - 关键文件：`motion_prior/imu_motion_prior.{h,cpp}`；`localization_stage_types.h`(MotionPriorConfig)；config `localization.motion_prior.*`
+  - 验收：合成(静止+常值零偏→收敛；未静止→跳过标定但在线仍收敛)；真机过桥 yaw 漂移下降。
+
+- [x] **L12 高频位姿输出（方案一高率传播 + 方案三输出滤波）** ✅ `62b67d9`
+  - 目标：LiDAR 10Hz 校正，但输出 ~100Hz 平滑位姿（≤ IMU 有效频率）。
+  - 设计：`ILocalization/SlamPipeline` 暴露 `predictAt/getHighRatePose(t)`（基于最后校正位姿 + 运动先验/IMU 传播）；node 加高频输出定时器(默认 100Hz)，odom/TF 发传播位姿；**输出用 alpha-beta/常速 Kalman 滤波替代现有 EMA**（低延迟、抑 IMU 抖动）；扫描帧校正锚点（可用 L4 平滑器）。
+  - 关键文件：`slam_core/i_localization.h`、`localization_pipeline.{h,cpp}`、`slam_pipeline.{h,cpp}`、`ros_interface/slam_node.{h,cpp}`、新增 `slam_core/pose_filter.h`；config `output_rate_hz`/`output_filter_*`
+  - 验收：单测(alpha-beta 外推命中解析值)；真机 TF/odom 平滑无阶梯；频率可配。
+  - 备注：常速 Kalman(因果低延迟) 用于 100Hz 输出流；L4 固定滞后平滑器用于扫描帧锚点(更准)，两者互补。
+
 - [x] **L1 地面/平面约束（开关 + 自适应）** ✅ `89b8c8f`
   - 目标：平地上锁 `z/roll/pitch` 抗退化；坡道自动跟随地面平面。
   - 设计：配置 `planar_constraint: none | lock_zrp | ground_plane`（默认 `none`）。
@@ -66,6 +79,16 @@
   - 实现说明：工厂调参已直接写入 `config/default.yaml`（pipeline/matcher/maintainer/planar/monitor）。**真实数据回归仍待做。**
 
 ### 中优先级
+
+- [ ] **L13 地图维护升级为位姿图（GTSAM + 可见性 replace/extend）**
+  - 目标：overlay 从"点级非破坏"升级为"变化关键帧+锚点进位姿图"，可见性/凸包判替换或扩展，周期优化后重建 store/底图。
+  - 关键文件：`localization/maintainer/*`、复用 `gtsam_backend`；config `maintainer.*`
+  - 验收：长期大范围变化下地图不退化；单测/合成。
+
+- [ ] **L14 2.5D 平面 NDT 定位（matcher: ndt2d）**
+  - 目标：货架/狭道等特征匮乏区，在平面 (x,y,yaw) 求解 + 地面约束 z/roll/pitch（复用 L1）。
+  - 关键文件：新增 `matcher/ndt2d_matcher.{h,cpp}`；config `matcher.*`
+  - 验收：狭道/重复货架区比 3D 更稳；契约测试。
 
 - [x] **L4 固定滞后平滑器（Fixed-lag smoother）** ✅ `d4f9618`
   - 目标：用 GTSAM 滑窗融合 IMU + 扫描匹配 + VO/轮速因子，替代 α 混合，输出平滑位姿 + 传播协方差。
