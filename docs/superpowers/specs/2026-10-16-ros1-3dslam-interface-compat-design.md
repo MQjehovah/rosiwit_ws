@@ -137,6 +137,9 @@ ros1_ws/src/rosiwit_slam_ros1/
 ├── scripts/legacy_interface.golden   [新] 期望的 topic/service/type 清单
 ├── srv/*.srv                       [不变]
 ├── test/                           [新] gtest：legacy_config / lost_monitor / legacy_convert / realtime_grid
+│                                      + synthetic_publisher.py（T13 合成数据发布器）
+├── scripts/                        [新] check_legacy_interface.sh + legacy_interface.golden（T12 接口一致性校验）
+│                                      + smoke_legacy.sh（T13 合成数据冒烟）
 └── src/
     ├── rosiwit_slam_ros1_node.cpp      [改] 只剩 main：装配 + spin
     ├── slam_engine.h/.cpp              [新] 核心驱动：配置、订阅缓冲、tryPopAndProcess 定时器、
