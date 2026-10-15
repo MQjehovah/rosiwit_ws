@@ -23,7 +23,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'params_file',
             default_value=PathJoinSubstitution([
-                FindPackageShare('rosiwit_navigation'), 'config', 'params.yaml'
+                FindPackageShare('rosiwit_navigation_ros2'), 'config', 'params.yaml'
             ]),
             description='Path to params yaml file'
         ),
@@ -64,7 +64,7 @@ def generate_launch_description():
     navigation_nodes = [
         # 平滑导航节点（核心导航控制）
         Node(
-            package='rosiwit_navigation',
+            package='rosiwit_navigation_ros2',
             executable='rosiwit_navigation_node',
             name='rosiwit_navigation_node',
             output='screen',

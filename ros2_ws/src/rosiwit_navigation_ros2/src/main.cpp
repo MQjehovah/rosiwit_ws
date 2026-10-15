@@ -6,7 +6,7 @@
 #include <string>
 
 #include "rclcpp/rclcpp.hpp"
-#include "rosiwit_navigation/ros_interface/navigation_node.hpp"
+#include "ros_interface/navigation_node.hpp"
 
 int main(int argc, char ** argv)
 {

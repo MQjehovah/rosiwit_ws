@@ -2,7 +2,7 @@
 // Diffbot Navigation - 平滑导航节点实现
 // ============================================================
 
-#include "rosiwit_navigation/ros_interface/navigation_node.hpp"
+#include "ros_interface/navigation_node.hpp"
 
 #include <memory>
 #include <string>

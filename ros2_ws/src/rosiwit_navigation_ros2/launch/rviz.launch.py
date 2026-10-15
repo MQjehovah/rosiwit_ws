@@ -13,7 +13,7 @@ import os
 
 def generate_launch_description():
     # 获取包路径
-    pkg_dir = FindPackageShare('rosiwit_navigation').find('rosiwit_navigation')
+    pkg_dir = FindPackageShare('rosiwit_navigation_ros2').find('rosiwit_navigation_ros2')
     
     # 声明启动参数
     declared_arguments = [

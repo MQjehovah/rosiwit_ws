@@ -23,7 +23,7 @@
 
 #include "trajectory_generator.hpp"
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
-#include "rosiwit_navigation/ros_interface/ros_utils.hpp"
+#include "ros_interface/ros_utils.hpp"
 
 namespace rosiwit_navigation
 {
