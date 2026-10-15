@@ -67,20 +67,23 @@
 
 ### 中优先级
 
-- [ ] **L4 固定滞后平滑器（Fixed-lag smoother）**
+- [x] **L4 固定滞后平滑器（Fixed-lag smoother）** ✅ `d4f9618`
   - 目标：用 GTSAM 滑窗融合 IMU + 扫描匹配 + VO/轮速因子，替代 α 混合，输出平滑位姿 + 传播协方差。
   - 关键文件：`localization_pipeline.cpp` + 复用 `gtsam_backend`；新增滑窗因子图。
   - 验收：位姿平滑、异常帧被优化器抑制；协方差合理；单测。
+  - 实现说明：`smoother/fixed_lag_smoother.{h,cpp}`（`gtsam::IncrementalFixedLagSmoother`：运动先验 between + 扫描匹配 unary 带 `MatchResult.cov`）；`smoother.enabled` 默认关；无 GTSAM 直通降级。
 
-- [ ] **L5 GNC 渐进非凸鲁棒核**
+- [x] **L5 GNC 渐进非凸鲁棒核** ✅ `d4f9618`
   - 目标：`matcher` 新鲁棒核选项，高外点比（人/叉车多）下逼近全局最优（Black-Rangarajan 对偶，逐步收紧）。
   - 关键文件：`ScanMatcherConfig.robust_kernel` 扩展 `GNC`；`pp_icp`/`p2p_icp` 权重更新。
   - 验收：高外点合成数据下位姿误差显著低于 Huber/Cauchy；单测。
+  - 实现说明：`RobustKernel::GNC` + `gncWeight()`（Geman-McClure，mu=mu0·decay^iter）；config `matcher.gnc_mu0/gnc_decay`；鲁棒核遍历测试含 GNC。
 
-- [ ] **L6 多假设 / 粒子滤波**
+- [x] **L6 多假设 / 粒子滤波** ✅ `d4f9618`
   - 目标：应对工厂重复货架/通道的错配（aliasing），保留多个位姿假设按证据淘汰。
   - 关键文件：`localization_pipeline.cpp` 或新 `hypothesis_manager`。
   - 验收：重复场景下不发生错误锁定；单测/合成。
+  - 实现说明：`hypothesis/hypothesis_manager.{h,cpp}`：重定位 Top-K 初始化假设，逐假设局部配准评分，落后连续 `stale` 帧淘汰；config `localization.hypothesis.{max,margin,stale}`。
 
 ### 低优先级
 
