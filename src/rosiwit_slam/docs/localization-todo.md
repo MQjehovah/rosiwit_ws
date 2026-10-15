@@ -150,8 +150,10 @@
 - [ ] **L18 几何动态分割 / 跟踪**
   - 目标：不止 map-proximity 剔除；用可见性/时序一致性/聚类分割动态物（人/叉车）并可选跟踪。
 
-- [ ] **L19 绝对约束融合（GNSS/UWB/反光标/二维码）**
+- [x] **L19 绝对约束融合（GNSS/UWB/反光标/二维码）** ✅ `4f6d32d`
   - 目标：把绝对观测作为因子/先验接入定位（因子图或门控先验），提升长期与开阔区。
+  - 实现：门控互补融合 `onAbsolute`(地图系位姿+协方差) + ROS 话题(PoseWithCovarianceStamped) + datum；
+    配置 `absolute_enabled/absolute_topic/absolute_datum_*` + `localization.absolute.*`。
 
 - [ ] **L20 紧耦合 LIO + VO**
   - 目标：从 loose(VO between 因子) 升级到紧耦合（LVI-SAM/R3LIVE 式）；需视觉特征与标定。
