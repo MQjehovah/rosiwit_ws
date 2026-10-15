@@ -139,6 +139,17 @@ struct MotionPriorConfig {
     double max_vel = 10.0;           // 常速外推速度上限(m/s)
     bool   use_odom = false;         // 融合轮式里程计(默认关: 洗地机打滑不可信)
     double slip_yaw_thresh = 0.3;    // 打滑判据: |odom_yaw_rate - imu_yaw_rate| > 该值(rad/s) 则丢弃 odom
+    // ---- IMU 零偏在线估计 (L11) ----
+    int    imu_calib_samples = 200;  // 静止标定窗口样本数
+    double static_gyro_std = 0.02;   // 静止判据: gyro 标准差(rad/s)
+    double static_accel_std = 0.15;  // 静止判据: ‖acc‖ 与 g 的偏差 / acc 标准差(m/s^2)
+    double gyro_bias_gain = 1.0;     // 陀螺零偏在线增益
+    double gyro_bias_max = 0.5;      // 陀螺零偏上限(rad/s)
+    double acc_bias_gain = 0.5;      // 加速度零偏在线增益
+    double acc_bias_max = 5.0;       // 加速度零偏上限(m/s^2)
+    bool   use_gravity = true;       // 用重力方向做 roll/pitch 校正
+    double gravity = 9.81;
+    double gravity_gain = 0.05;      // 重力校正融合增益
 };
 
 // ==================== 全局重定位配置 ====================

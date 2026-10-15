@@ -9,6 +9,8 @@
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/constraints/planar_constraint.h"
 #include "algorithms/localization/hypothesis/hypothesis_manager.h"
+#include "algorithms/localization/motion_prior/imu_motion_prior.h"
+#include "slam_core/pose_filter.h"
 #include "algorithms/map_store/map_store_factory.h"
 #include "io/xzmap_writer.h"
 #include "io/xzmap_reader.h"
@@ -590,6 +592,61 @@ TEST(MatcherStoreTest, MatchersViaVoxelStore) {
         ASSERT_TRUE(matcher->match(scan, makePose(3.2, 2.8, 0.0, 11.0), res)) << nm;
         EXPECT_LT((res.pose.trans - T_true.trans).norm(), 0.15) << nm;
     }
+}
+
+// ---- L11 IMU 零偏在线估计 ----
+TEST(ImuBiasTest, StaticCalibEstimatesGyroBias) {
+    ImuMotionPrior p;
+    MotionPriorConfig cfg;
+    cfg.imu_calib_samples = 50;
+    cfg.use_gravity = false;
+    cfg.static_gyro_std = 0.05;
+    cfg.static_accel_std = 0.5;
+    p.configure(cfg);
+    p.reset(makePose(0, 0, 0, 0));
+
+    const V3D tb(0.05, -0.03, 0.02);
+    for (int i = 0; i < 60; ++i) {
+        IMUSample s;
+        s.time = i * 0.01;
+        s.gyro = tb;
+        s.acc = V3D(0, 0, 9.81);
+        p.onImu(s);
+    }
+    ASSERT_TRUE(p.calibrated());
+    EXPECT_NEAR((p.gyroBias() - tb).norm(), 0.0, 1e-6);
+}
+
+TEST(ImuBiasTest, NotStaticSkipsCalibration) {
+    ImuMotionPrior p;
+    MotionPriorConfig cfg;
+    cfg.imu_calib_samples = 50;
+    cfg.use_gravity = false;
+    p.configure(cfg);
+    p.reset(makePose(0, 0, 0, 0));
+
+    for (int i = 0; i < 60; ++i) {
+        IMUSample s;
+        s.time = i * 0.01;
+        s.gyro = V3D(0.5, 0.5, 0.5) * ((i % 2) ? 1.0 : -1.0);  // 大抖动
+        s.acc = V3D(0, 0, 9.81);
+        p.onImu(s);
+    }
+    EXPECT_FALSE(p.calibrated());   // 未静止 -> 跳过标定
+}
+
+// ---- L12 输出滤波: 常速外推命中解析值 ----
+TEST(PoseOutputFilterTest, ExtrapolatesConstantVelocity) {
+    PoseOutputFilter f;
+    f.configure(1.0, 1.0, 0.5);
+    PoseStamped p0 = makePose(0, 0, 0, 0); p0.time = 0.0;
+    f.reset(p0);
+    PoseStamped p1 = makePose(1, 0, 0, 0); p1.time = 1.0;
+    f.update(1.0, p1);
+    PoseStamped o;
+    ASSERT_TRUE(f.poseAt(1.5, o));
+    EXPECT_NEAR(o.trans.x(), 1.5, 0.05);
+    EXPECT_NEAR(o.trans.y(), 0.0, 1e-6);
 }
 
 // ---- 工厂注册完整性 ----

@@ -131,6 +131,11 @@ void SlamPipeline::onOdom(const PoseStamped& odom) {
     if (m_mode.load() == PipelineMode::LOCALIZATION && m_localization) m_localization->onOdom(odom);
 }
 
+bool SlamPipeline::getHighRatePose(double t, PoseStamped& out) {
+    if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) return false;
+    return m_localization->predictAt(t, out);
+}
+
 void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& to_id,
                                 const PoseStamped& rel, double cov) {
     if (!m_backend) return;

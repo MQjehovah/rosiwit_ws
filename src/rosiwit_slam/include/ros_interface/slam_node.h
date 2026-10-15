@@ -14,6 +14,7 @@
 #include <mutex>
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_types.h"
+#include "slam_core/pose_filter.h"
 #include "rosiwit_slam/srv/save_map.hpp"
 #include "rosiwit_slam/srv/load_map.hpp"
 #include "rosiwit_slam/srv/save_grid_map.hpp"
@@ -42,6 +43,10 @@ private:
         std::string vo_topic     = "/visual_odometry";  // VO 库发布的里程计话题
         bool   odom_enabled      = false;    // 轮式里程计开关(供定位运动先验)
         std::string odom_topic   = "/odom";  // 轮式里程计话题
+        double output_rate_hz    = 100.0;    // 定位高频输出频率(Hz); <=0 关闭(用扫描帧)
+        double output_filter_alpha = 0.5;    // 输出 alpha-beta 滤波 alpha
+        double output_filter_beta  = 0.2;    // 输出 alpha-beta 滤波 beta
+        double output_extrap_max_s = 0.3;    // 外推上限(s)
     };
 
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg);
@@ -50,8 +55,10 @@ private:
     void odomCB(const nav_msgs::msg::Odometry::SharedPtr msg); // 轮式里程计 (可选)
     void timerCB();
     void mapTimerCB();
+    void highRateCB();
     void onOutput(const SlamOutput& out);
     void publish(const SlamOutput& out);
+    void publishOdomTf(const PoseStamped& pose, const builtin_interfaces::msg::Time& stamp);
     void initialPoseCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
     builtin_interfaces::msg::Time toRosTime(double sec);
 
@@ -73,7 +80,7 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_nav_pub;
     std::unique_ptr<ISlamAlgorithm> m_algo;
     ISlamAlgorithm* m_algo_raw = nullptr;
-    rclcpp::TimerBase::SharedPtr m_process_timer, m_map_timer;
+    rclcpp::TimerBase::SharedPtr m_process_timer, m_map_timer, m_output_timer;
     // 回调分组: 传感器收包与重处理解耦, 配合多线程执行器避免处理阻塞收包导致丢帧
     rclcpp::CallbackGroup::SharedPtr m_sensor_cb_group;
     rclcpp::CallbackGroup::SharedPtr m_work_cb_group;
@@ -94,6 +101,9 @@ private:
     PoseStamped m_smoothed_pose;
     bool m_has_smoothed = false;
     double m_ema_alpha = 0.3;
+
+    // L12: 高频输出滤波 (alpha-beta / 常速), 替代 EMA 用于高频流
+    PoseOutputFilter m_out_filter;
 };
 
 } // namespace rosiwit_slam

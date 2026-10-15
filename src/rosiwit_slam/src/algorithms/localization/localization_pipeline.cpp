@@ -91,6 +91,16 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_motion_cfg.max_vel = getv<double>(mpc, "max_vel", m_motion_cfg.max_vel);
         m_motion_cfg.use_odom = getv<bool>(mpc, "use_odom", m_motion_cfg.use_odom);
         m_motion_cfg.slip_yaw_thresh = getv<double>(mpc, "slip_yaw_thresh", m_motion_cfg.slip_yaw_thresh);
+        m_motion_cfg.imu_calib_samples = getv<int>(mpc, "imu_calib_samples", m_motion_cfg.imu_calib_samples);
+        m_motion_cfg.static_gyro_std = getv<double>(mpc, "static_gyro_std", m_motion_cfg.static_gyro_std);
+        m_motion_cfg.static_accel_std = getv<double>(mpc, "static_accel_std", m_motion_cfg.static_accel_std);
+        m_motion_cfg.gyro_bias_gain = getv<double>(mpc, "gyro_bias_gain", m_motion_cfg.gyro_bias_gain);
+        m_motion_cfg.gyro_bias_max = getv<double>(mpc, "gyro_bias_max", m_motion_cfg.gyro_bias_max);
+        m_motion_cfg.acc_bias_gain = getv<double>(mpc, "acc_bias_gain", m_motion_cfg.acc_bias_gain);
+        m_motion_cfg.acc_bias_max = getv<double>(mpc, "acc_bias_max", m_motion_cfg.acc_bias_max);
+        m_motion_cfg.use_gravity = getv<bool>(mpc, "use_gravity", m_motion_cfg.use_gravity);
+        m_motion_cfg.gravity = getv<double>(mpc, "gravity", m_motion_cfg.gravity);
+        m_motion_cfg.gravity_gain = getv<double>(mpc, "gravity_gain", m_motion_cfg.gravity_gain);
     }
     auto gc = loc["global"];
     if (gc) {
@@ -576,6 +586,12 @@ bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double
     if (m_status == LOST) return false;
     out = m_pose;
     cov = m_last_match.cov;
+    return true;
+}
+
+bool LocalizationPipeline::predictAt(double t, PoseStamped& out) {
+    if (!m_initialized || !m_prior) return false;
+    out = m_prior->predict(t);   // 运动先验(IMU)从最后校正位姿传播
     return true;
 }
 

@@ -36,6 +36,7 @@ public:
     std::string getPipelineMode() const override;
     bool setInitPose(const PoseStamped& pose) override;
     GridInfo getGridInfo() const override;
+    bool getHighRatePose(double t, PoseStamped& out) override;
 
     PipelineMode getMode() const { return m_mode.load(); }
     void setMode(PipelineMode mode);

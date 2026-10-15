@@ -45,6 +45,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.scan_period_ms   = cfg["scan_period_ms"].as<float>(m_cfg.scan_period_ms);
             m_cfg.odom_enabled     = cfg["enable_odom"].as<bool>(m_cfg.odom_enabled);
             m_cfg.odom_topic       = cfg["odom_topic"].as<std::string>(m_cfg.odom_topic);
+            m_cfg.output_rate_hz   = cfg["output_rate_hz"].as<double>(m_cfg.output_rate_hz);
+            m_cfg.output_filter_alpha = cfg["output_filter_alpha"].as<double>(m_cfg.output_filter_alpha);
+            m_cfg.output_filter_beta  = cfg["output_filter_beta"].as<double>(m_cfg.output_filter_beta);
+            m_cfg.output_extrap_max_s = cfg["output_extrap_max_s"].as<double>(m_cfg.output_extrap_max_s);
             if (cfg["vision"]) {
                 m_cfg.vision_enabled = cfg["vision"]["enabled"].as<bool>(m_cfg.vision_enabled);
                 m_cfg.vo_topic       = cfg["vision"]["vo_topic"].as<std::string>(m_cfg.vo_topic);
@@ -99,6 +103,12 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     // 缩短周期以降低入队->处理的延迟; 每 tick 把已同步的包一次性排空, 避免积压。
     m_process_timer = create_wall_timer(20ms, std::bind(&SlamNode::timerCB, this), m_work_cb_group);
     m_map_timer = create_wall_timer(2s,   std::bind(&SlamNode::mapTimerCB, this), m_work_cb_group);
+    // L12 高频输出: 定位模式下按 output_rate_hz 发布平滑位姿(IMU 传播 + alpha-beta)
+    m_out_filter.configure(m_cfg.output_filter_alpha, m_cfg.output_filter_beta, m_cfg.output_extrap_max_s);
+    if (m_cfg.output_rate_hz > 0.0)
+        m_output_timer = create_wall_timer(
+            std::chrono::duration<double>(1.0 / m_cfg.output_rate_hz),
+            std::bind(&SlamNode::highRateCB, this), m_work_cb_group);
     m_path.header.frame_id = m_cfg.world_frame;
 
     // 服务与处理定时器同组, 避免保存地图等操作与建图重处理并发(扫描上下文/地图非线程安全)
@@ -185,22 +195,10 @@ void SlamNode::publish(const SlamOutput& out) {
     if (out.pose.time > 0) stamp = toRosTime(out.pose.time);
     else stamp = now();
     Eigen::Quaterniond q(out.pose.rot);
-    if (m_odom_pub->get_subscription_count() > 0) {
-        nav_msgs::msg::Odometry odom;
-        odom.header.frame_id = m_cfg.world_frame; odom.child_frame_id = m_cfg.body_frame; odom.header.stamp = stamp;
-        odom.pose.pose.position.x = out.pose.trans.x(); odom.pose.pose.position.y = out.pose.trans.y(); odom.pose.pose.position.z = out.pose.trans.z();
-        odom.pose.pose.orientation.x = q.x(); odom.pose.pose.orientation.y = q.y(); odom.pose.pose.orientation.z = q.z(); odom.pose.pose.orientation.w = q.w();
-        odom.twist.twist.linear.x = out.pose.vel.x(); odom.twist.twist.linear.y = out.pose.vel.y(); odom.twist.twist.linear.z = out.pose.vel.z();
-        m_odom_pub->publish(odom);
-        if (m_odom_nav_pub->get_subscription_count() > 0) m_odom_nav_pub->publish(odom);
-    }
-    {
-        geometry_msgs::msg::TransformStamped tf;
-        tf.header.frame_id = m_cfg.world_frame; tf.child_frame_id = m_cfg.body_frame; tf.header.stamp = stamp;
-        tf.transform.translation.x = out.pose.trans.x(); tf.transform.translation.y = out.pose.trans.y(); tf.transform.translation.z = out.pose.trans.z();
-        tf.transform.rotation.x = q.x(); tf.transform.rotation.y = q.y(); tf.transform.rotation.z = q.z(); tf.transform.rotation.w = q.w();
-        m_tf->sendTransform(tf);
-    }
+    // 定位模式且开启高频输出时, odom/TF 由 highRateCB 高频发布; 此处不重复
+    const bool hr = (m_cfg.output_rate_hz > 0.0) &&
+                    (m_algo_raw && m_algo_raw->getPipelineMode() == "localization");
+    if (!hr) publishOdomTf(out.pose, stamp);
     auto pub_cloud = [&](const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& p, const CloudType::Ptr& c, const std::string& fid){
         if (!p || p->get_subscription_count() <= 0 || !c) return;
         sensor_msgs::msg::PointCloud2 m; pcl::toROSMsg(*c, m); m.header.frame_id = fid; m.header.stamp = stamp; p->publish(m);
@@ -214,6 +212,36 @@ void SlamNode::publish(const SlamOutput& out) {
         std::lock_guard<std::mutex> lock(m_out_mutex);
         m_path.poses.push_back(ps); m_path_pub->publish(m_path);
     }
+}
+
+void SlamNode::publishOdomTf(const PoseStamped& pose, const builtin_interfaces::msg::Time& stamp) {
+    const Eigen::Quaterniond q(pose.rot);
+    if (m_odom_pub->get_subscription_count() > 0) {
+        nav_msgs::msg::Odometry odom;
+        odom.header.frame_id = m_cfg.world_frame; odom.child_frame_id = m_cfg.body_frame; odom.header.stamp = stamp;
+        odom.pose.pose.position.x = pose.trans.x(); odom.pose.pose.position.y = pose.trans.y(); odom.pose.pose.position.z = pose.trans.z();
+        odom.pose.pose.orientation.x = q.x(); odom.pose.pose.orientation.y = q.y(); odom.pose.pose.orientation.z = q.z(); odom.pose.pose.orientation.w = q.w();
+        odom.twist.twist.linear.x = pose.vel.x(); odom.twist.twist.linear.y = pose.vel.y(); odom.twist.twist.linear.z = pose.vel.z();
+        m_odom_pub->publish(odom);
+        if (m_odom_nav_pub->get_subscription_count() > 0) m_odom_nav_pub->publish(odom);
+    }
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.frame_id = m_cfg.world_frame; tf.child_frame_id = m_cfg.body_frame; tf.header.stamp = stamp;
+    tf.transform.translation.x = pose.trans.x(); tf.transform.translation.y = pose.trans.y(); tf.transform.translation.z = pose.trans.z();
+    tf.transform.rotation.x = q.x(); tf.transform.rotation.y = q.y(); tf.transform.rotation.z = q.z(); tf.transform.rotation.w = q.w();
+    m_tf->sendTransform(tf);
+}
+
+void SlamNode::highRateCB() {
+    if (!m_algo_raw || m_algo_raw->getPipelineMode() != "localization") return;
+    const rclcpp::Time nowt = this->now();
+    const double t = nowt.seconds();
+    PoseStamped p;
+    if (!m_algo->getHighRatePose(t, p)) return;   // 定位未初始化/丢失时跳过
+    m_out_filter.update(t, p);
+    PoseStamped o;
+    if (!m_out_filter.poseAt(t, o)) return;
+    publishOdomTf(o, nowt);
 }
 
 void SlamNode::mapTimerCB() {

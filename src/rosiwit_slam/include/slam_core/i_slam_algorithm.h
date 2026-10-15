@@ -49,6 +49,8 @@ public:
                               const PoseStamped& /*rel*/, double /*cov*/) {}
     /// 轮式里程计 (可选, 供定位运动先验; 默认忽略)
     virtual void onOdom(const PoseStamped& /*odom*/) {}
+    /// 高频预测位姿 (定位模式; 供高频输出/TF; 默认不支持)
+    virtual bool getHighRatePose(double /*t*/, PoseStamped& /*out*/) { return false; }
 };
 
 } // namespace rosiwit_slam

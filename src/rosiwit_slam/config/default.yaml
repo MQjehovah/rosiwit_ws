@@ -65,6 +65,11 @@ pose_filter_max_xy_m: 0.5
 pose_filter_max_yaw_deg: 20.0
 
 output_smoothing_alpha: 0.3
+# L12 高频位姿输出 (定位模式): 运动先验传播 + alpha-beta 输出滤波
+output_rate_hz: 100          # 输出频率(Hz); 0=关闭(用扫描帧)
+output_filter_alpha: 0.5     # alpha-beta alpha
+output_filter_beta: 0.2      # alpha-beta beta
+output_extrap_max_s: 0.3     # 外推上限(s)
 
 cube_len: 300
 det_range: 60
@@ -166,6 +171,17 @@ localization:
     max_vel: 10.0
     use_odom: false           # 融合轮式里程计(洗地机打滑: 默认关, 朝向始终用 IMU)
     slip_yaw_thresh: 0.3      # |odom_yaw_rate - imu_yaw_rate| 超此值判打滑并丢弃 odom(rad/s)
+    # IMU 零偏在线估计 (L11)
+    imu_calib_samples: 200    # 静止标定窗口样本数
+    static_gyro_std: 0.02     # 静止判据: gyro 标准差(rad/s)
+    static_accel_std: 0.15    # 静止判据: acc 标准差 / ‖acc‖-g (m/s^2)
+    gyro_bias_gain: 1.0
+    gyro_bias_max: 0.5        # rad/s
+    acc_bias_gain: 0.5
+    acc_bias_max: 5.0         # m/s^2
+    use_gravity: true         # 重力姿态校正(roll/pitch)
+    gravity: 9.81
+    gravity_gain: 0.05
 
   # 全局重定位参数 (relocalizer: scan_context | bbs | fpfh_ransac)
   global:
