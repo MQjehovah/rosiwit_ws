@@ -1556,6 +1556,44 @@ rosrun rosiwit_slam_ros1 check_legacy_interface.sh   # 或直接 bash <pkg>/scri
 通过标准：六项符合预期，ROS 日志无 crash/异常。
 **提交**：`test(ros1): 合成数据冒烟脚本`
 
+### 13.1 T13 实测记录（已完成并提交）
+
+**状态**：`test/synthetic_publisher.py`（假 IMU 100Hz + 假 PointCloud2 10Hz，
+可调话题名，`_bias_*` 可制造"与地图不匹配"的输入）+
+`scripts/smoke_legacy.sh`（自动起节点、跑六项断言、输出 PASS/FAIL/SKIP）已落地。
+
+**实测结果：`PASS=9  FAIL=0  SKIP=3`，`exit=0`。**
+
+**最大的一条结果 —— 核心用**合成数据真的建起图了**（不是打桩）**：
+
+```
+[PASS] /map width=51 (>0)
+[PASS] /map 里有 508 个占据格(100)
+[PASS] /slam/info.map_area=234.089996338 (>0)
+[PASS] /map.origin.position.z=0.0023409   (= map_area*1e-5, 旧实现的约定) ✓
+[PASS] tf_echo map odom 查通: Translation: [0.006, 0.003, -0.070]
+```
+
+也就是说整条链路在真跑中被端到端验证了：
+**合成 PointCloud2 + IMU → 核心 FAST-LIO2 → 全局地图 → T2 的 RealtimeGrid →
+`toLegacyGrid` → `/map`(51×51@0.3m, 508 个占据格)**，
+并且 `/slam/info` 的 `map_area`、`origin.position.z` 的 `area*1e-5` 约定、
+以及 `map→odom` TF 的 `z=-0.07` 特征值全部对得上。
+（能让 LIO 初始化的关键是合成 IMU **不能完全静止**：脚本让机器人绕 Z 匀速自转
+`_yaw_rate_deg`，点云反向旋转，gyro 给上对应角速度 —— 纯静止数据 FAST-LIO2 无法初始化。）
+
+**3 项 SKIP 及其原因（都是有意为之，不是没做完）**：
+- 第 2 项（定位模式 `curr_localization_pose`）：需要一张**真地图**。核心在定位模式下
+  **先 `LOCALIZED`** 才会产出位姿（也才会有 `/slam/info`，见 §11.1）。
+- 第 5 项（`20003500`/`20003501`）：**有意不复刻** —— 它们来自旧 lidar 处理循环里
+  "迭代 600 次没拿到新帧"的计数器（`legacy.cpp:3076`），核心没有对应层次（T7 已记录）。
+- 第 6 项（`20003504`）：需要真地图 + 真数据，且只在"定位成功过、之后又丢了"时出现。
+
+**这三项都指向同一件事：真正剩下的验收只能在装了地图的实机（或喂一段真实 bag）上做。**
+本机可自动化的部分已经全绿。
+
+
+
 ---
 
 ## 收尾
