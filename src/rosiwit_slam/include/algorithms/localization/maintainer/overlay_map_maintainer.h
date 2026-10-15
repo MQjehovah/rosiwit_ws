@@ -32,6 +32,9 @@ private:
     void addPoint(const Eigen::Vector3d& p);
     void rayCarve(const PoseStamped& pose, const CloudType::Ptr& scan_body);
     void rebuildCells();
+    void commitKeyframe(const PoseStamped& pose, const CloudType::Ptr& body);
+    void flushBuffer();
+    void optimizePoses();   // GTSAM 位姿图平滑缓冲关键帧
 
     MaintainerConfig m_cfg;
     std::string m_map_path;
@@ -48,6 +51,10 @@ private:
     int m_low_count = 0;
     long m_frame = 0;
     size_t m_overlay_count = 0;
+
+    // L13 位姿图: 变化关键帧缓冲 (pose + 机体系点云)
+    struct KfBuf { PoseStamped pose; CloudType::Ptr body; };
+    std::vector<KfBuf> m_buf;
 };
 
 } // namespace rosiwit_slam

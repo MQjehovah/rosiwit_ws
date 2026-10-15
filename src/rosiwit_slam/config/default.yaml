@@ -281,6 +281,9 @@ localization:
     override_base: true       # 结构被移除/替换时压制原图旧点
     delta_min: 0.3            # 只沉淀"离原图 > 该距离(m)"的新结构(变化增量), 不重复静态
     carve_stride: 20          # 自由空间雕刻抽样步长 (看到空 -> 从叠加层移除鬼影)
+    # L13 位姿图维护 (可选): 变化关键帧缓冲后用 GTSAM 平滑再写入
+    pose_graph: false
+    pg_min_keyframes: 3
 
   # ---- ScanContext 全局重定位参数 (localization: scan_context_localization) ----
   sc_num_rings: 20

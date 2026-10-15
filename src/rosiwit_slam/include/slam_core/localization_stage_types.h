@@ -251,6 +251,9 @@ struct MaintainerConfig {
     bool   override_base = false;    // 叠加层压制同位置的原图点(处理"结构被移除/被替换")
     double delta_min = 0.3;          // 只沉淀"离原图 > 该距离(m)"的新结构(变化增量)
     int    carve_stride = 20;        // 自由空间雕刻时扫描点抽样步长
+    // ---- L13 位姿图维护 (可选) ----
+    bool   pose_graph = false;       // true: 变化关键帧缓冲后用 GTSAM 位姿图平滑再写入
+    int    pg_min_keyframes = 3;     // 触发一次位姿图优化的最少关键帧数
 };
 
 } // namespace rosiwit_slam

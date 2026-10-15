@@ -685,6 +685,34 @@ TEST(Ndt2dMatcherTest, RecoversOnAperiodicScene) {
     EXPECT_LT((r.pose.trans - T_true.trans).norm(), 0.3);
 }
 
+// ---- L13 位姿图维护模式: 缓冲关键帧后平滑写入 ----
+TEST(MaintainerTest, PoseGraphModeCommits) {
+    auto mnt = LocalizationFactory::createMapMaintainer("overlay");
+    ASSERT_NE(mnt, nullptr);
+    MaintainerConfig cfg;
+    cfg.pose_graph = true;
+    cfg.pg_min_keyframes = 2;
+    cfg.fitness_trigger = 0.5;
+    cfg.min_confirm = 1;
+    cfg.min_keyframe_dist = 0.1;
+    cfg.voxel = 0.2;
+    cfg.radius = 20.0;
+    cfg.persist_hits = 1;
+    cfg.delta_min = 0.0;
+    mnt->configure(cfg);
+    mnt->setBaseMap("", nullptr);
+
+    CloudType::Ptr scan(new CloudType());
+    for (double x = -1.0; x <= 1.0; x += 0.2)
+        for (double y = -1.0; y <= 1.0; y += 0.2)
+            scan->push_back(PointType(static_cast<float>(x), static_cast<float>(y), 0.5f));
+
+    MatchResult low; low.converged = true; low.fitness = 0.1;
+    mnt->onLocalized(makePose(0.0, 0, 0, 0), scan, low, true);
+    mnt->onLocalized(makePose(0.5, 0, 0, 0), scan, low, true);   // 达 pg_min_keyframes -> flush
+    EXPECT_GT(mnt->snapshotOverlay()->size(), 0u);
+}
+
 // ---- 工厂注册完整性 ----
 TEST(LocalizationFactoryTest, RegistersAllStages) {
     for (const auto& n : LocalizationFactory::listMatchers())          EXPECT_NE(LocalizationFactory::createMatcher(n), nullptr);

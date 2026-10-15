@@ -87,33 +87,30 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
     // 清除: 看到"本该有货的地方是空的" -> 移除该处 overlay
     rayCarve(pose, scan_body);
 
-    if (match.fitness >= m_cfg.fitness_trigger) { m_low_count = 0; }
-    else if (++m_low_count >= m_cfg.min_confirm) {
-        const double moved = m_have_last ? (pose.trans - m_last_add).norm() : 1e9;
-        if (moved >= m_cfg.min_keyframe_dist) {
-            const int persist = std::max(1, m_cfg.persist_hits);
-            const double dmin2 = m_cfg.delta_min * m_cfg.delta_min;
-            std::vector<int> idx(1);
-            std::vector<float> sq(1);
-            for (const auto& p : scan_body->points) {
-                if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-                const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
-                // 只沉淀"变化增量": 离原图 > delta_min 的新结构
-                if (m_has_base) {
-                    PointType q;
-                    q.x = static_cast<float>(w.x()); q.y = static_cast<float>(w.y()); q.z = static_cast<float>(w.z());
-                    if (m_base_kdtree.nearestKSearch(q, 1, idx, sq) > 0 && sq[0] <= dmin2) continue;
-                }
-                const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
-                const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
-                const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
-                const int64_t vk = voxelKey(vx, vy, vz);
-                auto it = m_voxel_seen.find(vk);
-                if (it != m_voxel_seen.end()) { it->second = m_frame; continue; }  // 已并入, 刷新活跃
-                if (++m_hits[vk] >= persist) { addPoint(w); m_hits.erase(vk); }
+    if (m_cfg.pose_graph) {
+        // L13: 变化关键帧缓冲, fitness 恢复或达阈值时 flush (GTSAM 位姿图平滑)
+        if (match.fitness >= m_cfg.fitness_trigger) {
+            m_low_count = 0;
+            if (!m_buf.empty()) flushBuffer();
+        } else if (++m_low_count >= m_cfg.min_confirm) {
+            const double moved = m_have_last ? (pose.trans - m_last_add).norm() : 1e9;
+            if (moved >= m_cfg.min_keyframe_dist) {
+                KfBuf k; k.pose = pose; k.body = scan_body;
+                m_buf.push_back(std::move(k));
+                m_last_add = pose.trans;
+                m_have_last = true;
+                if (static_cast<int>(m_buf.size()) >= std::max(2, m_cfg.pg_min_keyframes)) flushBuffer();
             }
-            m_last_add = pose.trans;
-            m_have_last = true;
+        }
+    } else {
+        if (match.fitness >= m_cfg.fitness_trigger) { m_low_count = 0; }
+        else if (++m_low_count >= m_cfg.min_confirm) {
+            const double moved = m_have_last ? (pose.trans - m_last_add).norm() : 1e9;
+            if (moved >= m_cfg.min_keyframe_dist) {
+                commitKeyframe(pose, scan_body);
+                m_last_add = pose.trans;
+                m_have_last = true;
+            }
         }
     }
 
@@ -124,6 +121,81 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
             else ++it;
         }
     }
+}
+
+void OverlayMapMaintainer::commitKeyframe(const PoseStamped& pose, const CloudType::Ptr& body) {
+    if (!body) return;
+    const int persist = std::max(1, m_cfg.persist_hits);
+    const double dmin2 = m_cfg.delta_min * m_cfg.delta_min;
+    std::vector<int> idx(1);
+    std::vector<float> sq(1);
+    for (const auto& p : body->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
+        if (m_has_base) {
+            PointType q;
+            q.x = static_cast<float>(w.x()); q.y = static_cast<float>(w.y()); q.z = static_cast<float>(w.z());
+            if (m_base_kdtree.nearestKSearch(q, 1, idx, sq) > 0 && sq[0] <= dmin2) continue;
+        }
+        const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
+        const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
+        const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
+        const int64_t vk = voxelKey(vx, vy, vz);
+        auto it = m_voxel_seen.find(vk);
+        if (it != m_voxel_seen.end()) { it->second = m_frame; continue; }
+        if (++m_hits[vk] >= persist) { addPoint(w); m_hits.erase(vk); }
+    }
+}
+
+void OverlayMapMaintainer::flushBuffer() {
+    if (m_buf.empty()) return;
+    optimizePoses();
+    for (auto& k : m_buf) commitKeyframe(k.pose, k.body);
+    m_buf.clear();
+}
+
+#ifdef USE_GTSAM
+#include <gtsam/geometry/Pose3.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/slam/PriorFactor.h>
+#include <gtsam/inference/Symbol.h>
+#endif
+
+void OverlayMapMaintainer::optimizePoses() {
+#ifdef USE_GTSAM
+    const int n = static_cast<int>(m_buf.size());
+    if (n < 2) return;
+    using gtsam::symbol_shorthand::X;
+    auto toPose = [](const PoseStamped& p) {
+        return gtsam::Pose3(gtsam::Rot3(p.rot), gtsam::Point3(p.trans.x(), p.trans.y(), p.trans.z()));
+    };
+    gtsam::NonlinearFactorGraph graph;
+    gtsam::Values init;
+    for (int i = 0; i < n; ++i) init.insert(X(i), toPose(m_buf[i].pose));
+    // 首帧中等先验(位置来自定位, 可信但不硬锁)
+    auto prior_noise = gtsam::noiseModel::Diagonal::Variances(
+        (gtsam::Vector6() << 1e-2, 1e-2, 1e-2, 1e-2, 1e-2, 1e-2).finished());
+    graph.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(X(0), toPose(m_buf[0].pose), prior_noise);
+    // 相邻关键帧里程约束
+    gtsam::Vector6 mv;
+    mv << 4e-4, 4e-4, 4e-4, 2.5e-3, 2.5e-3, 2.5e-3;
+    auto motion_noise = gtsam::noiseModel::Diagonal::Variances(mv);
+    for (int i = 1; i < n; ++i) {
+        const gtsam::Pose3 dp = toPose(m_buf[i - 1].pose).between(toPose(m_buf[i].pose));
+        graph.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(X(i - 1), X(i), dp, motion_noise);
+    }
+    try {
+        gtsam::LevenbergMarquardtOptimizer opt(graph, init);
+        gtsam::Values res = opt.optimize();
+        for (int i = 0; i < n; ++i) {
+            const gtsam::Pose3 g = res.at<gtsam::Pose3>(X(i));
+            m_buf[i].pose.trans = g.translation();
+            m_buf[i].pose.rot = g.rotation().matrix();
+        }
+    } catch (const std::exception&) { /* 失败则保留原缓冲位姿 */ }
+#endif
 }
 
 CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
