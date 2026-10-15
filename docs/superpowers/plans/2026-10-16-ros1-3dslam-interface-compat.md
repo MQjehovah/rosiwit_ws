@@ -784,7 +784,124 @@ double legacyYawFromRot(const Eigen::Matrix3d& R);
 | `robot_pose` | `x/y/yaw`，任一 NaN 则三者归零（`legacy.cpp:1826-1830`） |
 | `map_area` | 建图模式用 `width*height*resolution²`；其它模式 0 |
 
-**验证**：
+### 5.4 ⚠ T5 发布侧：**重新读源码后的修正**（实现前必读）
+
+上面 §5.2 的表是上一轮凭记忆/摘要整理的，**多处不准**。这一轮把
+`legacy.cpp:333-371`（`startPub`）、`826-1110`（各发布函数）逐行读了一遍，实际行为如下。
+（`warning_code` 侧已核实：`setModule(AlgorithmModule_SLAM)` → `module="xz_3d_slam"`
+且 `begin_code_=20003001`（`json_warning_code.cpp:26-29`）；`type` 成员默认就是
+`"algorithm fault"`（`json_warning_code.h:68`）；`toJson(vector<int>)` 输出
+`{"faults":[{...}]}`，每项 = `warning_code.json` 里那条 + `type`/`module`/`code`(字符串)。
+`code` 类字段全是 nlohmann 默认的**字母序**：code, content, level, module, name, type。）
+
+**1) 各话题的真实发布条件（`startPub()` + 各 publish 函数）**
+
+| 话题 | 真实条件 |
+|---|---|
+| `global_map` | **仅 `debug_publish_`**，且每次进模式只发一次（`debug_map_published_`）。定位用 `localiza.getGlobalMap()`，建图用 `mapping.getGlobalMap()`。类 latch 但不是 ROS 的 latch |
+| `global_grid_map` | 两个来源：① 定位模式 `set_grid_map_` 为真时**发一次**并清标志（`set_grid_map_` 由 `LocalizationSetGridMap()` 读 `<map_base>.pgm/.yaml` 后置真，`legacy.cpp:373-455`）；② `debug_publish_` 下走 `publishPointMap()`。**不是**简单的"跟 global_map 一起发" |
+| `/map` | `publishRealtimeGridMap()`：**只要 MAPPING，每个周期都发**（不管有没有更新）；`checkRealtimeGridMapChange()` 只决定要不要重算数据，发布是无条件的 |
+| `curr_scan_point` | 定位：**仅 `debug_publish_`**；建图：**无条件**。内容见下 |
+| `scan_f_map` | **无条件**（两种模式都发）。内容是"降采样 + z 过滤后"的点云转旧类型，不是 `curr_scan_point` 降采样 |
+| `or_curr_scan_point` | 定位：**无条件**；建图：**不发**（`legacy.cpp:1102` 那行是注释掉的） |
+| `curr_submap_point` | 仅 `debug_publish_`（建图还要 `get_imu_data_ && get_laser_data_`）→ 我们按 D2 注册不发 |
+| `loop_constraint` | 仅 `debug_publish_`，且 `publishLoopBetweenKF()` 只在有回环时才发 → 我们按 D2 注册不发 |
+| `points_2d` | 旧实现里 `scan_puber_` **从未 publish** → 注册不发 ✓（这条原表是对的） |
+| `mapping_path` | 建图且 `get_imu_data_ && get_laser_data_` 时，每 0.1s **无条件**发（整条 path 全量重发，不是增量） |
+
+**2) `curr_scan_point` / `scan_f_map` / `or_curr_scan_point` 的真实内容（`legacy.cpp:966-1110`）**
+
+定位分支（`getCurrScan()` = 当前帧**已转到 map 系**的点云）：
+- 降采样到约 2000 点：`down_sample = (N < 2000) ? 1 : round(N/2000)`，按 `i % down_sample == 0` 抽
+- **z 过滤**：`p.z > 0 && p.z < 2.0`（map 系下的 z！）
+- 过滤后的点云 → `scan_f_map`（`PointCloud2` → `PointCloud`），**无条件发**
+- 同一个过滤后的点云也是 `curr_scan_point` 的内容，但**只有 `debug_publish_` 才发**
+- `getCurrScanOr()`（原始/畸变帧）→ `down_sample *= 2`，**不做 z 过滤**，无条件发 `or_curr_scan_point`
+
+建图分支：
+- `curr_scan = getCurrUndistortPointCloud()`、`curr_or_scan = getCurrDistortPointCloud()`
+- 同样降到约 2000 点，**z 过滤是 `p.z > 0 && p.z < 1.0`**（注意是 1.0，不是定位的 2.0）
+- 过滤后的点云 → `scan_f_map`，无条件发
+- **然后 `pcl::toROSMsg(*curr_scan, curr_ros_scan)` 把 `curr_ros_scan` 覆盖成"完整的去畸变点云"**
+  （过滤白算了）→ 无条件发 `curr_scan_point`
+- `or_curr_scan_point` 不发
+
+**3) 这些差异在我们这边的处置**
+
+核心没有 `getCurrScanOr()`/`getCurrDistortPointCloud()`（原始畸变帧）这类接口，
+也没有"map 系下的当前帧"以外的中间量。所以映射关系是这样（写进代码注释）：
+
+| 旧 | 我们的等价物 |
+|---|---|
+| `localiza/mapping.getCurrScan()`、`getCurrUndistortPointCloud()` | `SlamOutput.world_cloud`（当前帧已转到世界系） |
+| `getCurrScanOr()`、`getCurrDistortPointCloud()` | **T6 订阅侧缓存的"当前帧原始输入点云"**（落在 `origin_point` 同一个缓存里） |
+| `mapping.getCurrMappingPath()` | `curr_localization_pose` 的累积 path（原表也这么写） |
+| `getGlobalMap()` | `engine.getGlobalMap()` |
+| `getRealtimeGridMap()` → `updateRealtimeGridMap()` | T2 的 `RealtimeGrid`（D17：只有 0/100，没有 10=unknown） |
+
+**但降采样阈值（约 2000 点）与 z 过滤（定位 2.0 / 建图 1.0）必须照抄** ——
+这是下游（导航/感知/可视化）习惯的数据形态，不能省。`scan_f_map` 必须保持旧类型
+`sensor_msgs/PointCloud`。
+
+**4) 顺带确认的其他事实**
+- `pub_time_gap` 硬编码 0.1s ✓（`legacy.cpp:254-255`），`publish_hz_` 真的无效（M2 成立）
+- pose 定时器 0.01s ✓、`rt_grid_map` 与 `slam_warning_code` 定时器都是
+  `1/rt_grid_map_publish_hz_` ✓（`legacy.cpp:256-267`）
+- `publishCurrPose()` 里定位分支有一个**同帧去重**：`curr_pose.time_stamp - last < 1e-4` 就 return
+  （建图分支的同类判断被注释掉了）。这会连带影响 `curr_localization_pose` 与 `slam/info` 的发布频率
+  （`publishLocationInfo()` 在 `publishCurrPose()` 末尾、去重 return 之后才会走到）。
+- `publishLocationInfo()` 的最终覆盖（`relocating_` 为真 → `slam_state=1, location_status=1`）在
+  switch **之后**，所以它同时改写了 FREE/MAPPING 分支的结果 ✓（§5.3 表已记）
+- `matching_degree` 在定位且 `status∈{0,1}` 时其实是 `localiza.getFitness()`，
+  不是"恒 0" —— 这是 D3 已知偏差。**新发现**：核心其实已经有
+  `LocalizationPipeline::confidence() const { return m_last_match.fitness; }`
+  （`localization_pipeline.h:41`），只是没通过 `ISlamAlgorithm` 暴露；将来要么给
+  `ISlamAlgorithm` 加个 getter（改核心），要么在薄层 `dynamic_cast` 到
+  `LocalizationPipeline`（耦合具体实现类）。本次仍按 D3 恒 0，先把发现记下。
+
+### 5.5 T5a 实测记录（转换层已完成并提交；发布侧待做）
+
+**状态**：`catkin_make` `exit=0`；`run_tests` `exit=0`；**gtest 50/50 全绿**
+（legacy_config 19 + realtime_grid 11 + lost_monitor 8 + legacy_convert 12）。
+
+`src/legacy_convert.{h,cpp}` + `test/test_legacy_convert.cpp` 已落地，计划 §5.1 的 6 条用例
+全部实现（计划那条 6 拆成了"恒等→0"与"+90°→符号"两条），另加 3 条补充
+（`WarningJsonEscapesQuotes`、`ScanShapeZMaxNonPositiveMeansNoFilter`、
+`ScanShapeDownsamplesToAbout2000`、`OldPointCloudHasPointsAndHeader`）。
+
+实测踩到并修正的 3 件事 —— **其中第 2 条是计划写错了**：
+
+1. **栅格转换不能设 `header.stamp = ros::Time::now()`**。
+   - 旧实现填栅格时**从没设过 stamp**（`legacy.cpp:1717-1731` 的 `updateRealtimeGridMap`、
+     `373-455` 的 `LocalizationSetGridMap` 都只设 `frame_id` 与 `info`），所以旧 `/map` 与
+     `global_grid_map` 的 stamp **一直是 0**。照抄就是**不设**，要 `now()` 的调用方自己设
+     （rosiwit 新接口的 `mapCB` 本来就是自己设的）。
+   - 顺带一个测试环境的坑：**没 `ros::init()` 的 gtest 里 `ros::Time::now()` 会抛异常**
+     （"Cannot use ros::Time::now() before the first NodeHandle has been created..."），
+     所以上面那个错误写法会让 3 条用例直接抛异常挂掉。转换层保持"无 ROS 全局状态"也更好测。
+
+2. **`legacyYawFromRot` 的符号：计划 §5.1 用例 6 的前提写反了。**
+   对 `R = Rot(Z,θ)` 有 `R(0,1) = -sinθ`、`R(0,0) = cosθ`，所以
+   `atan2(R(0,1), R(0,0)) = -θ` —— 即 `legacyYawFromRot(Rot(Z,+π/2)) = **-π/2**`，
+   而**不是**计划里写的 `+π/2`（计划说"R(0,1)=1"，实际是 -1）。
+   旧实现紧接着 `AngleAxis(-yaw, Z)`（`legacy.cpp:1922`）再取负，两者合起来正好还原成 `Rot(Z,θ)`。
+   也就是说这对 (取 yaw, 用 yaw) 必须**成对照抄**，单独看一半会以为符号写错了。
+   已改测试为：`R(0,1) == -1`、`legacyYawFromRot == -π/2`、且
+   `AngleAxis(-yaw, Z).toRotationMatrix().isApprox(R)`（把"还原"这一步也钉住）。
+
+3. 老类型转换需要 `#include <sensor_msgs/point_cloud_conversion.h>`
+   （`convertPointCloud2ToPointCloud` 在这个头里，不在 `sensor_msgs/PointCloud.h`）。
+
+计划 §5.1 里 `buildSlamInfo` 的 `update_request=0` / `matching_degree=0`(D3) 已按设计实现。
+`buildWarningJson` 已按真实的 nlohmann 输出形状实现（键序字母序、`module="xz_3d_slam"`、
+`type="algorithm fault"`、`code` 是字符串），并用 `yaml-cpp` 反解断言 —— 没有为此引入 json 库。
+
+**下一步（T5b）**：`src/legacy_xz3dslam_interface.{h,cpp}` —— 14 个话题的注册与发布，
+按上面 §5.4 修正后的真实条件实现（尤其 `debug_publish_` 门控、`scan_f_map` 的
+"降采样+z 过滤"形态、`or_curr_scan_point` 只在定位发、`/map` 每个 `rt_grid_map` 周期无条件发）。
+再按 §5.2 的表注册定时器（0.1s / 0.01s / `1/rt_grid_map_publish_hz`）。
+
+**验证**（T5b 完成后做）：
 1. 构建 + 单测。
 2. `legacy_dev.launch` 起来后：
    ```bash

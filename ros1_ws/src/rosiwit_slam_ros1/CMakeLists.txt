@@ -58,7 +58,8 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     src/lost_monitor.cpp
     src/slam_engine.cpp
     src/rosiwit_interface.cpp
-    # T5 追加 src/legacy_convert.cpp + src/legacy_xz3dslam_interface.cpp
+    src/legacy_convert.cpp
+    # T5 继续: src/legacy_xz3dslam_interface.cpp (14 话题发布侧)
 )
 add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
 target_include_directories(rosiwit_slam_ros1_lib PUBLIC src ${catkin_INCLUDE_DIRS})
@@ -93,6 +94,11 @@ if(CATKIN_ENABLE_TESTING)
     catkin_add_gtest(test_lost_monitor test/test_lost_monitor.cpp)
     if(TARGET test_lost_monitor)
         target_link_libraries(test_lost_monitor rosiwit_slam_ros1_lib)
+    endif()
+
+    catkin_add_gtest(test_legacy_convert test/test_legacy_convert.cpp)
+    if(TARGET test_legacy_convert)
+        target_link_libraries(test_legacy_convert rosiwit_slam_ros1_lib)
     endif()
 endif()
 
