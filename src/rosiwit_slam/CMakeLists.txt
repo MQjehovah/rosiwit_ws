@@ -178,6 +178,7 @@ set(LOCALIZATION_SOURCES
     src/algorithms/localization/matcher/pp_icp_matcher.cpp
     src/algorithms/localization/matcher/p2p_icp_matcher.cpp
     src/algorithms/localization/matcher/vgicp_matcher.cpp
+    src/algorithms/localization/matcher/ndt2d_matcher.cpp
     src/algorithms/localization/local_map/global_map_provider.cpp
     src/algorithms/localization/local_map/radius_submap_provider.cpp
     src/algorithms/localization/local_map/keyframe_submap_provider.cpp

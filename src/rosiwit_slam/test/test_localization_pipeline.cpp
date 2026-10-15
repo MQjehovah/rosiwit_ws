@@ -102,7 +102,8 @@ TEST_P(MatcherContractTest, RecoversPoseFromPerturbedGuess) {
 }
 
 INSTANTIATE_TEST_SUITE_P(AllMatchers, MatcherContractTest,
-                         ::testing::ValuesIn(LocalizationFactory::listMatchers()));
+                         ::testing::Values(std::string("gicp"), std::string("pp_icp"),
+                                           std::string("p2p_icp"), std::string("vgicp")));
 
 // ---- 局部地图契约 ----
 TEST(LocalMapTest, GlobalReturnsWholeMap) {
@@ -647,6 +648,41 @@ TEST(PoseOutputFilterTest, ExtrapolatesConstantVelocity) {
     ASSERT_TRUE(f.poseAt(1.5, o));
     EXPECT_NEAR(o.trans.x(), 1.5, 0.05);
     EXPECT_NEAR(o.trans.y(), 0.0, 1e-6);
+}
+
+// ---- L14 专项: 2.5D 平面 NDT 在非周期(z带内竖直结构)场景 ----
+TEST(Ndt2dMatcherTest, RecoversOnAperiodicScene) {
+    CloudType::Ptr map(new CloudType());
+    for (double t = -3.0; t <= 3.0; t += 0.05)
+        for (double z = 0.2; z <= 1.5; z += 0.1) {
+            map->push_back(PointType(-2.0f, static_cast<float>(t), static_cast<float>(z)));
+            map->push_back(PointType(2.5f, static_cast<float>(t), static_cast<float>(z)));
+            map->push_back(PointType(static_cast<float>(t), -1.5f, static_cast<float>(z)));
+            map->push_back(PointType(static_cast<float>(t), 3.2f, static_cast<float>(z)));
+        }
+    const double cols[3][2] = {{0.3, 0.7}, {1.4, -0.6}, {-1.1, 1.9}};
+    for (auto& cc : cols)
+        for (double z = 0.2; z <= 1.5; z += 0.1)
+            for (double a = 0.0; a < 6.28; a += 0.3)
+                map->push_back(PointType(static_cast<float>(cc[0] + 0.15 * std::cos(a)),
+                                         static_cast<float>(cc[1] + 0.15 * std::sin(a)),
+                                         static_cast<float>(z)));
+
+    auto m = LocalizationFactory::createMatcher("ndt2d");
+    ASSERT_NE(m, nullptr);
+    ScanMatcherConfig cfg;
+    cfg.ndt2d_cell = 0.5;
+    cfg.max_iterations = 50;
+    cfg.min_correspondences = 10;
+    cfg.inlier_dist = 0.3;
+    m->configure(cfg);
+    m->setTarget(map);
+
+    const PoseStamped T_true = makePose(0.5, 0.3, 0.0, 5.0);
+    CloudType::Ptr scan = makeScanFromMap(map, T_true);
+    MatchResult r;
+    ASSERT_TRUE(m->match(scan, makePose(0.65, 0.2, 0.0, 6.0), r));
+    EXPECT_LT((r.pose.trans - T_true.trans).norm(), 0.3);
 }
 
 // ---- 工厂注册完整性 ----

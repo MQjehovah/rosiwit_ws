@@ -4,6 +4,7 @@
 #include "algorithms/localization/matcher/pp_icp_matcher.h"
 #include "algorithms/localization/matcher/p2p_icp_matcher.h"
 #include "algorithms/localization/matcher/vgicp_matcher.h"
+#include "algorithms/localization/matcher/ndt2d_matcher.h"
 #include "algorithms/localization/local_map/global_map_provider.h"
 #include "algorithms/localization/local_map/radius_submap_provider.h"
 #include "algorithms/localization/local_map/keyframe_submap_provider.h"
@@ -23,6 +24,7 @@ std::unique_ptr<IScanMatcher> LocalizationFactory::createMatcher(const std::stri
     if (name == "pp_icp")  return std::make_unique<PpIcpMatcher>();
     if (name == "p2p_icp") return std::make_unique<P2pIcpMatcher>();
     if (name == "vgicp")   return std::make_unique<VgicpMatcher>();
+    if (name == "ndt2d")   return std::make_unique<Ndt2dMatcher>();
     return nullptr;
 }
 
@@ -58,7 +60,7 @@ std::unique_ptr<IMapMaintainer> LocalizationFactory::createMapMaintainer(const s
     return nullptr;
 }
 
-std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp", "p2p_icp", "vgicp"}; }
+std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp", "p2p_icp", "vgicp", "ndt2d"}; }
 std::vector<std::string> LocalizationFactory::listLocalMapProviders() { return {"global", "radius_submap", "keyframe_submap"}; }
 std::vector<std::string> LocalizationFactory::listMotionPriors()      { return {"constant_velocity", "imu"}; }
 std::vector<std::string> LocalizationFactory::listGlobalLocalizers()  { return {"none", "scan_context", "bbs", "fpfh_ransac"}; }

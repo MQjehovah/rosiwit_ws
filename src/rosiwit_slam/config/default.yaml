@@ -156,6 +156,10 @@ localization:
     # 动态/变化物剔除: 只保留贴近静态地图的点 (人来人往/叉车/未入图的新堆货被剔除)
     dynamic_filter: true       # 工厂: 人/叉车多
     dynamic_dist: 0.4
+    # 2.5D 平面 NDT (matcher: ndt2d)
+    ndt2d_cell: 0.5
+    ndt2d_z_min: -1.0
+    ndt2d_z_max: 1.0
 
   # 局部地图参数 (local_map: global | radius_submap | keyframe_submap)
   local_map:

@@ -116,6 +116,11 @@ struct ScanMatcherConfig {
     // 未入图即被剔除, 定位以静态结构为准); 由 maintainer 沉淀的持久变化会进入地图
     bool   dynamic_filter = false;
     double dynamic_dist = 1.0;              // 与地图最近距离阈值(m), 超过视为动态
+
+    // 2.5D 平面 NDT (matcher: ndt2d): 在 (x,y,yaw) 求解, z/roll/pitch 取自初值
+    double ndt2d_cell = 0.5;                // 2D 高斯格尺寸(m), 通常比 3D 体素粗
+    double ndt2d_z_min = -1.0;              // 参与 2D 投影的 z 下界(m)
+    double ndt2d_z_max = 1.0;               // z 上界(m)
 };
 
 // ==================== 局部地图配置 ====================
