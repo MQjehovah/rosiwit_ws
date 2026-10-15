@@ -83,13 +83,42 @@ VoxelStats PcdMapStore::statsAt(const Eigen::Vector3d& p, double radius) const {
     return s;
 }
 
-void PcdMapStore::insert(const CloudType::Ptr& world_points) {
+void PcdMapStore::insert(const CloudType::Ptr& world_points, double /*time*/) {
     if (!m_cloud) m_cloud.reset(new CloudType());
     if (!world_points) return;
     for (const auto& p : world_points->points)
         if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z)) m_cloud->push_back(p);
     m_dirty = true;
     ++m_rev;
+}
+
+bool PcdMapStore::groundAt(double x, double y, double& z, Eigen::Vector3d& normal) const {
+    // 以 (x,y) 邻域最低点带做地面: 半径 1m 内取最低 z 带点拟合
+    CloudType::Ptr nb = queryRadius(Eigen::Vector3d(x, y, 0.0), 1.5);
+    if (nb->size() < 5) return false;
+    double minz = 1e18;
+    for (const auto& p : nb->points) minz = std::min(minz, static_cast<double>(p.z));
+    Eigen::Vector3d mean = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+    int n = 0;
+    for (const auto& p : nb->points) {
+        if (p.z > minz + 0.3) continue;
+        mean += Eigen::Vector3d(p.x, p.y, p.z); ++n;
+    }
+    if (n < 3) return false;
+    mean /= n;
+    for (const auto& p : nb->points) {
+        if (p.z > minz + 0.3) continue;
+        const Eigen::Vector3d d = Eigen::Vector3d(p.x, p.y, p.z) - mean;
+        cov += d * d.transpose();
+    }
+    cov /= n;
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
+    Eigen::Vector3d nm = es.eigenvectors().col(0);
+    if (nm.z() < 0) nm = -nm;
+    z = mean.z();
+    normal = nm;
+    return true;
 }
 
 void PcdMapStore::erase(const CloudType::Ptr& world_points) {

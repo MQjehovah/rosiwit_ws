@@ -87,20 +87,33 @@ void PlanarConstraint::apply(PoseStamped& pose) {
     }
 
     if (m_cfg.mode != "ground_plane") return;
-    const Cell* c = query(pose.trans.x(), pose.trans.y());
-    if (!c) return;
+
+    double gz = 0.0;
+    Eigen::Vector3d gn = Eigen::Vector3d::UnitZ();
+    bool have = false;
+    if (m_store) {
+        if (m_store->groundAt(pose.trans.x(), pose.trans.y(), gz, gn)) {
+            if (gn.z() < std::cos(m_cfg.max_tilt_deg * M_PI / 180.0)) return;  // 倾角超限
+            have = true;
+        }
+    }
+    if (!have) {
+        const Cell* c = query(pose.trans.x(), pose.trans.y());
+        if (!c) return;
+        gz = c->z; gn = c->n; have = true;
+    }
 
     if (!m_have_sensor_h) {
         m_sensor_h = m_cfg.sensor_height > 0 ? m_cfg.sensor_height
-                                             : (pose.trans.z() - c->z);  // 首帧标定
+                                             : (pose.trans.z() - gz);  // 首帧标定
         m_have_sensor_h = true;
     }
-    pose.trans.z() = c->z + m_sensor_h;
+    pose.trans.z() = gz + m_sensor_h;
 
-    // roll/pitch: 把机体上轴对齐到地图地面法向 (平地=竖直 -> 锁平; 坡道=法向倾斜 -> 跟随)
+    // roll/pitch: 把机体上轴对齐到地面法向 (平地=竖直 -> 锁平; 坡道=法向倾斜 -> 跟随)
     const Eigen::Vector3d up = pose.rot * V3D::UnitZ();
     Eigen::Quaterniond qa;
-    qa.setFromTwoVectors(up, c->n);
+    qa.setFromTwoVectors(up, gn);
     pose.rot = qa.toRotationMatrix() * pose.rot;
 }
 

@@ -19,20 +19,29 @@ public:
                  std::vector<PointType>& points, std::vector<float>& sqdists) const override;
     double nearestDist2(const PointType& query) const override;
     VoxelStats statsAt(const Eigen::Vector3d& p, double radius) const override;
-    void insert(const CloudType::Ptr& world_points) override;
+    bool groundAt(double x, double y, double& z, Eigen::Vector3d& normal) const override;
+    void insert(const CloudType::Ptr& world_points, double time = -1.0) override;
     void erase(const CloudType::Ptr& world_points) override;
     void carve(const Eigen::Vector3d& origin, const CloudType::Ptr& endpoints) override;
+    void decay(double now) override;
+    void setDecayWindow(double w) { m_decay_window = w; }
     uint64_t revision() const override { return m_rev; }
     size_t size() const override { return m_size; }
     bool save(const std::string& path) const override;
     bool load(const std::string& path) override;
 
 private:
+    struct Cell {
+        CloudType::Ptr pts;
+        int cx = 0, cy = 0, cz = 0;
+        double t = -1.0;
+    };
     static int64_t key(int cx, int cy, int cz);
     int64_t keyOf(double x, double y, double z) const;
 
     double m_leaf = 0.3;
-    std::unordered_map<int64_t, CloudType::Ptr> m_cells;
+    std::unordered_map<int64_t, Cell> m_cells;
+    double m_decay_window = 30.0;
     uint64_t m_rev = 0;
     size_t m_size = 0;
 };

@@ -18,7 +18,8 @@ public:
                  std::vector<PointType>& points, std::vector<float>& sqdists) const override;
     double nearestDist2(const PointType& query) const override;
     VoxelStats statsAt(const Eigen::Vector3d& p, double radius) const override;
-    void insert(const CloudType::Ptr& world_points) override;
+    bool groundAt(double x, double y, double& z, Eigen::Vector3d& normal) const override;
+    void insert(const CloudType::Ptr& world_points, double time = -1.0) override;
     void erase(const CloudType::Ptr& world_points) override;
     uint64_t revision() const override { return m_rev; }
     size_t size() const override { return m_cloud ? m_cloud->size() : 0; }

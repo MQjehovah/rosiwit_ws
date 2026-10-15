@@ -4,6 +4,7 @@
 #include <memory>
 #include <cmath>
 #include "algorithms/map_store/map_store_factory.h"
+#include "algorithms/map_store/voxel_map_store.h"
 
 using namespace rosiwit_slam;
 
@@ -90,4 +91,51 @@ TEST(MapStoreTransform, InsertErase) {
 
     store->erase(add);
     EXPECT_LT(store->size(), before + add->size());
+}
+
+// ---- P5: .vxmap 持久化往返 ----
+TEST(MapStorePersist, VxMapRoundTrip) {
+    auto s = MapStoreFactory::create("voxel", 0.2);
+    ASSERT_NE(s, nullptr);
+    ASSERT_TRUE(s->buildFromCloud(makeCloud()));
+    const size_t n0 = s->size();
+    const std::string path = std::string(::testing::TempDir()) + "test_map.vxmap";
+    ASSERT_TRUE(s->save(path));
+
+    auto s2 = MapStoreFactory::create("voxel", 0.5);   // 不同 leaf, load 应以文件为准
+    ASSERT_TRUE(s2->load(path));
+    EXPECT_EQ(s2->size(), n0);
+
+    PointType q; q.x = 3.0f; q.y = 3.0f; q.z = 0.0f;
+    EXPECT_NEAR(s->nearestDist2(q), s2->nearestDist2(q), 1e-6);
+}
+
+// ---- P5: groundAt ----
+TEST(MapStoreGround, GroundAtFloor) {
+    auto s = MapStoreFactory::create("voxel", 0.2);
+    ASSERT_NE(s, nullptr);
+    ASSERT_TRUE(s->buildFromCloud(makeCloud()));
+    double z = 99.0;
+    Eigen::Vector3d n = Eigen::Vector3d::Zero();
+    ASSERT_TRUE(s->groundAt(3.0, 3.0, z, n));
+    EXPECT_NEAR(z, 0.0, 0.05);
+    EXPECT_GT(n.z(), 0.9);
+}
+
+// ---- P5: decay 移除长期未更新的体素 ----
+TEST(MapStoreDecay, RemovesStaleCells) {
+    VoxelMapStore s(0.2);
+    ASSERT_TRUE(s.buildFromCloud(makeCloud()));   // t=-1: 不参与衰减
+    const size_t base = s.size();
+
+    CloudType::Ptr add(new CloudType());
+    add->push_back(PointType(0.0f, 0.0f, 0.5f));
+    s.insert(add, 100.0);
+    const size_t after_add = s.size();
+    EXPECT_GT(after_add, base);
+
+    s.setDecayWindow(10.0);
+    s.decay(200.0);                                // 200-100 > 10 -> 该体素移除
+    EXPECT_LT(s.size(), after_add);
+    EXPECT_GT(s.size(), 0u);                        // 未记时间的底图点仍在
 }

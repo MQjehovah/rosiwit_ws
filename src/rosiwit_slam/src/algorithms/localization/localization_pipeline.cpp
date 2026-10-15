@@ -257,6 +257,7 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
     if (m_store) {
         m_store->buildFromCloud(m_map);
         if (m_matcher) m_matcher->setStore(m_store.get());
+        m_planar.setStore(m_store.get());
     }
     if (m_maintainer) m_maintainer->setBaseMap(map_name, m_map);
 

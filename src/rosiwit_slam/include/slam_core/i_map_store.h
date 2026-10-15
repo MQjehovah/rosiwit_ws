@@ -45,8 +45,8 @@ public:
         return false;
     }
 
-    /// 更新
-    virtual void insert(const CloudType::Ptr& world_points) = 0;
+    /// 更新 (time <0 表示不记录时间; 供 decay 使用)
+    virtual void insert(const CloudType::Ptr& world_points, double time = -1.0) = 0;
     virtual void erase(const CloudType::Ptr& world_points) = 0;
     virtual void carve(const Eigen::Vector3d& /*origin*/, const CloudType::Ptr& /*endpoints*/) {}
     virtual void decay(double /*now*/) {}

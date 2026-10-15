@@ -2,9 +2,16 @@
 #include "algorithms/map_store/voxel_map_store.h"
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <unordered_set>
 #include <pcl/io/pcd_io.h>
 
 namespace rosiwit_slam {
+
+namespace {
+constexpr char kMagic[8] = {'V', 'X', 'M', 'A', 'P', '1', '\n', '1'};
+} // namespace
 
 int64_t VoxelMapStore::key(int cx, int cy, int cz) {
     const int64_t ix = static_cast<int64_t>(cx) & 0x1FFFFF;
@@ -19,6 +26,13 @@ int64_t VoxelMapStore::keyOf(double x, double y, double z) const {
                static_cast<int>(std::floor(z / m_leaf)));
 }
 
+// 列索引 (cx,cy) -> 该列所有 cell key, 供 groundAt 快速取某 (x,y) 的整列
+static int64_t colKey(int cx, int cy) {
+    const int64_t ix = static_cast<int64_t>(cx) & 0x1FFFFF;
+    const int64_t iy = static_cast<int64_t>(cy) & 0x1FFFFF;
+    return (ix << 21) | iy;
+}
+
 bool VoxelMapStore::buildFromCloud(const CloudType::Ptr& cloud) {
     m_cells.clear();
     m_size = 0;
@@ -27,13 +41,23 @@ bool VoxelMapStore::buildFromCloud(const CloudType::Ptr& cloud) {
     return !m_cells.empty();
 }
 
-void VoxelMapStore::insert(const CloudType::Ptr& world_points) {
+void VoxelMapStore::insert(const CloudType::Ptr& world_points, double time) {
     if (!world_points) return;
     for (const auto& p : world_points->points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-        auto& cell = m_cells[keyOf(p.x, p.y, p.z)];
-        if (!cell) cell.reset(new CloudType());
-        cell->push_back(p);
+        const int cx = static_cast<int>(std::floor(p.x / m_leaf));
+        const int cy = static_cast<int>(std::floor(p.y / m_leaf));
+        const int cz = static_cast<int>(std::floor(p.z / m_leaf));
+        const int64_t k = key(cx, cy, cz);
+        auto it = m_cells.find(k);
+        if (it == m_cells.end()) {
+            Cell c;
+            c.pts.reset(new CloudType());
+            c.cx = cx; c.cy = cy; c.cz = cz;
+            it = m_cells.emplace(k, std::move(c)).first;
+        }
+        it->second.pts->push_back(p);
+        if (time >= 0) it->second.t = time;
         ++m_size;
     }
     ++m_rev;
@@ -51,8 +75,8 @@ CloudType::Ptr VoxelMapStore::queryRadius(const Eigen::Vector3d& center, double 
         for (int dy = -span; dy <= span; ++dy)
             for (int dz = -span; dz <= span; ++dz) {
                 auto it = m_cells.find(key(cx + dx, cy + dy, cz + dz));
-                if (it == m_cells.end() || !it->second) continue;
-                for (const auto& p : it->second->points) {
+                if (it == m_cells.end()) continue;
+                for (const auto& p : it->second.pts->points) {
                     const double ddx = p.x - center.x();
                     const double ddy = p.y - center.y();
                     const double ddz = p.z - center.z();
@@ -77,23 +101,21 @@ int VoxelMapStore::nearestK(const PointType& query, int k,
         for (int dx = -ring; dx <= ring; ++dx)
             for (int dy = -ring; dy <= ring; ++dy)
                 for (int dz = -ring; dz <= ring; ++dz) {
-                    // 只统计新扩的一层, 避免重复; 简化: 每层重算外层壳即可, 这里全取
                     auto it = m_cells.find(key(qcx + dx, qcy + dy, qcz + dz));
-                    if (it == m_cells.end() || !it->second) continue;
-                    for (const auto& p : it->second->points) {
+                    if (it == m_cells.end()) continue;
+                    for (const auto& p : it->second.pts->points) {
                         const float ddx = p.x - query.x, ddy = p.y - query.y, ddz = p.z - query.z;
                         found.emplace_back(ddx * ddx + ddy * ddy + ddz * ddz, p);
                     }
                 }
         if (static_cast<int>(found.size()) >= k) {
-            // 已找到 k 个; 再扩一圈确保边界无更近点
             std::sort(found.begin(), found.end(),
                       [](const std::pair<float, PointType>& a, const std::pair<float, PointType>& b) {
                           return a.first < b.first;
                       });
             const float kth = found[k - 1].first;
             const double shell_min = static_cast<double>(ring) * m_leaf;
-            if (kth <= static_cast<float>(shell_min * shell_min)) break;  // 剩余未搜更远, 可停
+            if (kth <= static_cast<float>(shell_min * shell_min)) break;
         }
     }
     if (found.empty()) return 0;
@@ -130,12 +152,46 @@ VoxelStats VoxelMapStore::statsAt(const Eigen::Vector3d& p, double radius) const
     return s;
 }
 
+bool VoxelMapStore::groundAt(double x, double y, double& z, Eigen::Vector3d& normal) const {
+    const int cx = static_cast<int>(std::floor(x / m_leaf));
+    const int cy = static_cast<int>(std::floor(y / m_leaf));
+    // 取 (x,y) 3x3 列的所有 cell 点
+    std::vector<Eigen::Vector3d> pts;
+    double minz = 1e18;
+    for (int dx = -1; dx <= 1; ++dx)
+        for (int dy = -1; dy <= 1; ++dy) {
+            const int64_t ck = colKey(cx + dx, cy + dy);
+            for (auto& kv : m_cells) {
+                if (colKey(kv.second.cx, kv.second.cy) != ck) continue;
+                for (const auto& p : kv.second.pts->points) {
+                    pts.emplace_back(p.x, p.y, p.z);
+                    minz = std::min(minz, static_cast<double>(p.z));
+                }
+            }
+        }
+    if (pts.size() < 5) return false;
+    Eigen::Vector3d mean = Eigen::Vector3d::Zero();
+    int n = 0;
+    for (const auto& p : pts) { if (p.z() <= minz + 0.3) { mean += p; ++n; } }
+    if (n < 3) return false;
+    mean /= n;
+    Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+    for (const auto& p : pts) { if (p.z() <= minz + 0.3) { const Eigen::Vector3d d = p - mean; cov += d * d.transpose(); } }
+    cov /= n;
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
+    Eigen::Vector3d nm = es.eigenvectors().col(0);
+    if (nm.z() < 0) nm = -nm;
+    z = mean.z();
+    normal = nm;
+    return true;
+}
+
 void VoxelMapStore::erase(const CloudType::Ptr& world_points) {
     if (!world_points || world_points->empty()) return;
     for (const auto& p : world_points->points) {
         auto it = m_cells.find(keyOf(p.x, p.y, p.z));
-        if (it == m_cells.end() || !it->second) continue;
-        m_size -= it->second->size();
+        if (it == m_cells.end()) continue;
+        m_size -= it->second.pts->size();
         m_cells.erase(it);
     }
     ++m_rev;
@@ -158,25 +214,90 @@ void VoxelMapStore::carve(const Eigen::Vector3d& origin, const CloudType::Ptr& e
     }
     for (const auto& kv : wiped) {
         auto it = m_cells.find(kv.first);
-        if (it != m_cells.end() && it->second) { m_size -= it->second->size(); m_cells.erase(it); }
+        if (it != m_cells.end()) { m_size -= it->second.pts->size(); m_cells.erase(it); }
     }
     if (!wiped.empty()) ++m_rev;
 }
 
+void VoxelMapStore::decay(double now) {
+    if (m_decay_window <= 0) return;
+    bool changed = false;
+    for (auto it = m_cells.begin(); it != m_cells.end();) {
+        if (it->second.t >= 0 && now - it->second.t > m_decay_window) {
+            m_size -= it->second.pts->size();
+            it = m_cells.erase(it);
+            changed = true;
+        } else {
+            ++it;
+        }
+    }
+    if (changed) ++m_rev;
+}
+
 bool VoxelMapStore::save(const std::string& path) const {
-    CloudType all;
-    for (const auto& kv : m_cells)
-        if (kv.second) all += *kv.second;
-    if (all.empty()) return false;
-    return pcl::io::savePCDFileBinary(path, all) == 0;
+    if (m_cells.empty()) return false;
+    FILE* fp = std::fopen(path.c_str(), "wb");
+    if (!fp) return false;
+    bool ok = true;
+    ok = ok && std::fwrite(kMagic, 1, sizeof(kMagic), fp) == sizeof(kMagic);
+    ok = ok && std::fwrite(&m_leaf, sizeof(double), 1, fp) == 1;
+    const uint64_t nc = m_cells.size();
+    ok = ok && std::fwrite(&nc, sizeof(uint64_t), 1, fp) == 1;
+    for (const auto& kv : m_cells) {
+        const Cell& c = kv.second;
+        const uint32_t n = static_cast<uint32_t>(c.pts->size());
+        const float t = static_cast<float>(c.t);
+        const int32_t hdr[3] = {c.cx, c.cy, c.cz};
+        ok = ok && std::fwrite(hdr, sizeof(int32_t), 3, fp) == 3;
+        ok = ok && std::fwrite(&n, sizeof(uint32_t), 1, fp) == 1;
+        ok = ok && std::fwrite(&t, sizeof(float), 1, fp) == 1;
+        for (const auto& p : c.pts->points) {
+            const float xyz[3] = {p.x, p.y, p.z};
+            if (std::fwrite(xyz, sizeof(float), 3, fp) != 3) { ok = false; break; }
+        }
+        if (!ok) break;
+    }
+    std::fclose(fp);
+    return ok;
 }
 
 bool VoxelMapStore::load(const std::string& path) {
-    CloudType c;
-    if (pcl::io::loadPCDFile(path, c) != 0) return false;
+    FILE* fp = std::fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    char magic[sizeof(kMagic)];
+    if (std::fread(magic, 1, sizeof(magic), fp) != sizeof(magic) ||
+        std::memcmp(magic, kMagic, sizeof(kMagic)) != 0) {
+        std::fclose(fp);
+        return false;
+    }
+    double leaf = 0.3;
+    uint64_t nc = 0;
+    std::fread(&leaf, sizeof(double), 1, fp);
+    std::fread(&nc, sizeof(uint64_t), 1, fp);
+    m_leaf = leaf > 0 ? leaf : 0.3;
     m_cells.clear();
     m_size = 0;
-    insert(CloudType::Ptr(new CloudType(c)));
+    for (uint64_t i = 0; i < nc; ++i) {
+        int32_t hdr[3]; uint32_t n; float t;
+        if (std::fread(hdr, sizeof(int32_t), 3, fp) != 3) break;
+        if (std::fread(&n, sizeof(uint32_t), 1, fp) != 1) break;
+        if (std::fread(&t, sizeof(float), 1, fp) != 1) break;
+        const int64_t k = key(hdr[0], hdr[1], hdr[2]);
+        Cell c;
+        c.pts.reset(new CloudType());
+        c.cx = hdr[0]; c.cy = hdr[1]; c.cz = hdr[2]; c.t = t;
+        c.pts->reserve(n);
+        for (uint32_t j = 0; j < n; ++j) {
+            float xyz[3];
+            if (std::fread(xyz, sizeof(float), 3, fp) != 3) break;
+            PointType p; p.x = xyz[0]; p.y = xyz[1]; p.z = xyz[2];
+            c.pts->push_back(p);
+        }
+        m_size += c.pts->size();
+        m_cells.emplace(k, std::move(c));
+    }
+    std::fclose(fp);
+    ++m_rev;
     return !m_cells.empty();
 }
 
