@@ -10,6 +10,8 @@
 #include "slam_core/i_localization_monitor.h"
 #include "slam_core/i_map_maintainer.h"
 #include "algorithms/localization/constraints/planar_constraint.h"
+#include "algorithms/localization/hypothesis/hypothesis_manager.h"
+#include "algorithms/localization/smoother/fixed_lag_smoother.h"
 
 namespace rosiwit_slam {
 
@@ -40,6 +42,7 @@ private:
     bool acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
                      const PoseStamped& guess);
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)
+    CloudType::Ptr buildTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
 
     // 各阶段 (由配置选择)
     std::unique_ptr<IGlobalLocalizer>     m_relocalizer;
@@ -87,6 +90,14 @@ private:
     int m_reloc_cooldown = 0;
 
     PlanarConstraint m_planar;   // 地面/平面约束 (第7层视觉约束, 可选)
+
+    HypothesisManager m_hyp;     // 多假设跟踪 (aliasing)
+    int m_max_hypotheses = 4;
+    double m_hyp_margin = 0.25;
+    int m_hyp_stale = 10;
+
+    FixedLagSmoother m_smoother; // 固定滞后平滑器 (L4)
+    SmootherConfig m_smoother_cfg;
 
     // s2m 残差接受判据的多帧一致性状态
     V3D m_corr_prev = V3D::Zero();

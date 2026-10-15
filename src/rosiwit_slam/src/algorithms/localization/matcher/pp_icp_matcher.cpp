@@ -64,6 +64,8 @@ bool PpIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
         iter_done = iter + 1;
         const double corr = corrDistForIter(iter);
         const double corr2 = corr * corr;
+        const double gnc_mu = (m_cfg.robust_kernel == RobustKernel::GNC)
+                                  ? m_cfg.gnc_mu0 * std::pow(m_cfg.gnc_decay, iter) : 1.0;
 
         Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
         Eigen::Matrix<double, 6, 1> g = Eigen::Matrix<double, 6, 1>::Zero();
@@ -128,7 +130,9 @@ bool PpIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
             }
 
             const double pd = nrm.dot(q - c);
-            const double w = robustWeight(m_cfg.robust_kernel, pd, m_cfg.huber_delta);
+            const double w = (m_cfg.robust_kernel == RobustKernel::GNC)
+                                 ? gncWeight(pd, m_cfg.huber_delta, gnc_mu)
+                                 : robustWeight(m_cfg.robust_kernel, pd, m_cfg.huber_delta);
             if (w <= 0.0) return;
 
             const Eigen::Vector3d a = R * bp[i];

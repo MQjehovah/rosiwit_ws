@@ -13,8 +13,7 @@
 namespace rosiwit_slam {
 
 // ==================== 鲁棒核 ====================
-enum class RobustKernel { NONE, HUBER, CAUCHY, TUKEY };
-
+enum class RobustKernel { NONE, HUBER, CAUCHY, TUKEY, GNC };
 inline double robustWeight(RobustKernel k, double residual, double delta) {
     const double ar = std::fabs(residual);
     if (delta <= 1e-12) return 1.0;
@@ -25,6 +24,14 @@ inline double robustWeight(RobustKernel k, double residual, double delta) {
         case RobustKernel::NONE:
         default: return 1.0;
     }
+}
+// GNC (渐进非凸, Geman-McClure 对偶): mu 由大到小, 早期近似 L2(凸)、后期逼近非凸.
+// 高外点比(人/叉车多)下比固定鲁棒核更接近全局最优.
+inline double gncWeight(double residual, double delta, double mu) {
+    if (delta <= 1e-12) return 1.0;
+    const double t = (residual / delta) * (residual / delta);
+    const double s = mu / (mu + t);
+    return s * s;
 }
 
 // ==================== SE(3) 位姿小工具 ====================
@@ -91,7 +98,9 @@ struct ScanMatcherConfig {
     double corr_dist_min = 1.0;             // 末次关联半径下限(m)
     bool   use_huber = true;                // 兼容旧字段 (若配置 robust_kernel 则以其为准)
     double huber_delta = 0.25;              // 鲁棒核尺度(m)
-    RobustKernel robust_kernel = RobustKernel::HUBER;  // NONE|HUBER|CAUCHY|TUKEY
+    RobustKernel robust_kernel = RobustKernel::HUBER;  // NONE|HUBER|CAUCHY|TUKEY|GNC
+    double gnc_mu0 = 1e4;      // GNC 初始 mu (大)
+    double gnc_decay = 0.6;    // GNC 每迭代衰减 (mu *= decay)
     bool   use_edge_feature = false;        // 点到线边缘特征
     double edge_line_ratio = 0.12;          // 邻域协方差 λ1/λ2 线判据
     double edge_valid_thr = 0.10;           // 点到拟合直线最大垂距(m)

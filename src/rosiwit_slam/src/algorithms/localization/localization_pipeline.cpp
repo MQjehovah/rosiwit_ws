@@ -60,8 +60,11 @@ bool LocalizationPipeline::init(const std::string& config_path) {
             else if (rk == "huber")  m_matcher_cfg.robust_kernel = RobustKernel::HUBER;
             else if (rk == "cauchy") m_matcher_cfg.robust_kernel = RobustKernel::CAUCHY;
             else if (rk == "tukey")  m_matcher_cfg.robust_kernel = RobustKernel::TUKEY;
+            else if (rk == "gnc")    m_matcher_cfg.robust_kernel = RobustKernel::GNC;
             else if (!m_matcher_cfg.use_huber) m_matcher_cfg.robust_kernel = RobustKernel::NONE;
         }
+        m_matcher_cfg.gnc_mu0 = getv<double>(mc, "gnc_mu0", m_matcher_cfg.gnc_mu0);
+        m_matcher_cfg.gnc_decay = getv<double>(mc, "gnc_decay", m_matcher_cfg.gnc_decay);
         m_matcher_cfg.use_edge_feature        = getv<bool>(mc, "use_edge_feature", m_matcher_cfg.use_edge_feature);
         m_matcher_cfg.edge_line_ratio         = getv<double>(mc, "edge_line_ratio", m_matcher_cfg.edge_line_ratio);
         m_matcher_cfg.edge_valid_thr          = getv<double>(mc, "edge_valid_thr", m_matcher_cfg.edge_valid_thr);
@@ -163,6 +166,20 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_planar_cfg.ground_band   = getv<double>(plc, "ground_band", m_planar_cfg.ground_band);
         m_planar_cfg.max_tilt_deg  = getv<double>(plc, "max_tilt_deg", m_planar_cfg.max_tilt_deg);
     }
+    auto hpc = loc["hypothesis"];
+    if (hpc) {
+        m_max_hypotheses = getv<int>(hpc, "max", m_max_hypotheses);
+        m_hyp_margin     = getv<double>(hpc, "margin", m_hyp_margin);
+        m_hyp_stale      = getv<int>(hpc, "stale", m_hyp_stale);
+    }
+    m_hyp.setMax(m_max_hypotheses);
+    auto smc = loc["smoother"];
+    if (smc) {
+        m_smoother_cfg.enabled      = getv<bool>(smc, "enabled", m_smoother_cfg.enabled);
+        m_smoother_cfg.lag_sec      = getv<double>(smc, "lag_sec", m_smoother_cfg.lag_sec);
+        m_smoother_cfg.motion_trans_sigma = getv<double>(smc, "motion_trans_sigma", m_smoother_cfg.motion_trans_sigma);
+        m_smoother_cfg.motion_rot_sigma   = getv<double>(smc, "motion_rot_sigma", m_smoother_cfg.motion_rot_sigma);
+    }
 #else
     (void)config_path;
 #endif
@@ -186,6 +203,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_monitor->configure(m_monitor_cfg);
     m_relocalizer->configure(m_global_cfg);
     m_planar.configure(m_planar_cfg);
+    m_smoother.configure(m_smoother_cfg);
 
     if (m_maintainer_name != "none") {
         m_maintainer = LocalizationFactory::createMapMaintainer(m_maintainer_name);
@@ -265,6 +283,8 @@ void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
     m_consistent_cnt = 0;
     m_initialized = true;
     m_status = INIT;
+    m_smoother.reset(m_pose);
+    m_hyp.reset(m_pose);
 }
 
 void LocalizationPipeline::onImu(const IMUSample& s) {
@@ -273,6 +293,19 @@ void LocalizationPipeline::onImu(const IMUSample& s) {
 
 void LocalizationPipeline::onOdom(const PoseStamped& odom) {
     if (m_prior) m_prior->onOdom(odom);
+}
+
+CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
+    CloudType::Ptr target = m_local_map->getLocalMap(pose);
+    if (m_maintainer) {
+        CloudType::Ptr ov = m_maintainer->getOverlay(pose);
+        if (ov && !ov->empty()) {
+            if (m_maintainer_cfg.override_base)
+                suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
+            *target += *ov;
+        }
+    }
+    return target;
 }
 
 bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
@@ -375,6 +408,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 ? m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands)
                 : 0;
             if (nk > 0) {
+                // L6: 用多候选初始化假设 (歧义时保留 Top-K)
+                std::vector<PoseStamped> hposes;
+                std::vector<double> hscores;
+                for (const auto& c : cands) { hposes.push_back(c.pose); hscores.push_back(c.score); }
+                if (nk > 1) m_hyp.seed(hposes, hscores);
+                else m_hyp.reset(cands.front().pose);
+
                 const GlobalCandidate& cand = cands.front();
                 m_pose = cand.pose;
                 m_pose.time = f.end_time;
@@ -384,12 +424,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_status = LOCALIZED;
                 m_coast_count = 0;
                 m_reloc_cooldown = 0;
+                m_has_cached_target = false;
+                m_smoother.reset(m_pose);
                 m_last_match = MatchResult();
                 m_last_match.converged = true;
                 m_last_match.fitness = cand.score;
                 m_last_match.pose = m_pose;
                 std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
-                          << " cands=" << nk << " score=" << cand.score << std::endl;
+                          << " cands=" << nk << " hypotheses=" << m_hyp.size()
+                          << " score=" << cand.score << std::endl;
             } else {
                 m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
             }
@@ -400,43 +443,65 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
 
     const PoseStamped guess = m_prior->predict(f.end_time);
 
-    // 局部地图缓存: 无维护层且位姿小幅移动(或全图)时复用, 避免每帧重建 KD-tree/体素
-    bool rebuild_target = true;
-    if (!m_maintainer && m_has_cached_target &&
-        (m_local_map_name == "global" ||
-         (guess.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
-        rebuild_target = false;
-    }
-    if (rebuild_target) {
-        CloudType::Ptr target = m_local_map->getLocalMap(guess);
-        // 非破坏性叠加: 变化层合并进配准目标 (可压制同位置原图旧点)
-        if (m_maintainer) {
-            CloudType::Ptr ov = m_maintainer->getOverlay(guess);
-            if (ov && !ov->empty()) {
-                if (m_maintainer_cfg.override_base)
-                    suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
-                *target += *ov;
-            }
-        }
-        m_cached_target = target;
-        m_cached_target_pose = guess;
-        m_has_cached_target = true;
-        m_matcher->setTarget(target);
-    }
-
     MatchResult res;
-    const bool ok = m_matcher->match(f.cloud, guess, res);
-    const bool accepted = ok && acceptMatch(res, f.cloud, guess);
-
+    bool accepted = false;
     PoseStamped out_pose = guess;
-    if (accepted) out_pose = res.pose;
+
+    if (m_hyp.ambiguous()) {
+        // L6 多假设: 逐假设局部配准并评分, 取最优, 淘汰落后
+        const int nh = m_hyp.size();
+        for (int i = 0; i < nh; ++i) {
+            const PoseStamped g = m_hyp.all()[i].pose;
+            m_matcher->setTarget(buildTarget(g));
+            MatchResult r;
+            if (m_matcher->match(f.cloud, g, r)) m_hyp.update(i, r);
+        }
+        const int bi = m_hyp.best();
+        m_hyp.prune(m_hyp_margin, m_hyp_stale);
+        if (bi >= 0 && bi < static_cast<int>(m_hyp.size())) {
+            const PoseHypothesis& h = m_hyp.all()[bi];
+            res.converged = true;
+            res.fitness = h.fitness;
+            res.pose = h.pose;
+            out_pose = h.pose;
+            accepted = h.fitness >= m_accept_cfg.min_coverage;
+        }
+        m_has_cached_target = false;
+    } else {
+        // 局部地图缓存: 无维护层且位姿小幅移动(或全图)时复用, 避免每帧重建 KD-tree/体素
+        bool rebuild_target = true;
+        if (!m_maintainer && m_has_cached_target &&
+            (m_local_map_name == "global" ||
+             (guess.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
+            rebuild_target = false;
+        }
+        if (rebuild_target) {
+            CloudType::Ptr target = buildTarget(guess);
+            m_cached_target = target;
+            m_cached_target_pose = guess;
+            m_has_cached_target = true;
+            m_matcher->setTarget(target);
+        }
+        const bool ok = m_matcher->match(f.cloud, guess, res);
+        accepted = ok && acceptMatch(res, f.cloud, guess);
+        out_pose = accepted ? res.pose : guess;
+    }
+
     out_pose.time = f.end_time;
+    // L4 固定滞后平滑: 融合运动先验(between) + 扫描匹配(unary, 带协方差)
+    if (m_smoother.enabled()) {
+        m_smoother.addFrame(f.end_time, guess, accepted, out_pose, res.cov);
+        PoseStamped sp;
+        if (m_smoother.getPose(sp)) out_pose = sp;
+    }
     // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
     m_planar.apply(out_pose);
     if (accepted) m_prior->onMatch(out_pose);
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
+    // 单假设模式下同步假设容器
+    if (!m_hyp.ambiguous()) m_hyp.reset(m_pose);
 
     // 地图维护: 仅在位姿可信(配准被采纳)时写入/雕刻叠加层
     if (m_maintainer) m_maintainer->onLocalized(out_pose, f.cloud, m_last_match, accepted);
@@ -462,7 +527,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     mi.pose = m_pose;
     mi.time = f.end_time;
     // NEES: 归一化估计误差平方 (一致性检验)
-    if (ok && res.converged) {
+    if (res.converged) {
         Eigen::Matrix<double, 6, 1> e;
         poseInnovation(res.pose, guess, e);
         Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(res.cov);

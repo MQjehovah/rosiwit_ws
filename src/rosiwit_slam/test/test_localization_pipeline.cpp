@@ -8,6 +8,7 @@
 #include "algorithms/localization/localization_pipeline.h"
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/constraints/planar_constraint.h"
+#include "algorithms/localization/hypothesis/hypothesis_manager.h"
 #include "io/xzmap_writer.h"
 #include "io/xzmap_reader.h"
 
@@ -304,7 +305,8 @@ TEST(GlobalLocalizerTest, FpfhRansacSmoke) {
 // ---- 可切换鲁棒核: 各核均应稳定恢复 ----
 TEST(MatcherRobustKernelTest, RecoversWithEachKernel) {
     const RobustKernel kernels[] = {RobustKernel::NONE, RobustKernel::HUBER,
-                                    RobustKernel::CAUCHY, RobustKernel::TUKEY};
+                                    RobustKernel::CAUCHY, RobustKernel::TUKEY,
+                                    RobustKernel::GNC};
     CloudType::Ptr map = makeScene();
     const PoseStamped T_true = makePose(3.0, 3.0, 0.0, 8.0);
     CloudType::Ptr scan = makeScanFromMap(map, T_true);
@@ -544,6 +546,23 @@ TEST(PlanarConstraintTest, LockZrp) {
     EXPECT_NEAR(p.trans.z(), 1.0, 1e-9);
     const Eigen::Vector3d up = p.rot * V3D::UnitZ();
     EXPECT_NEAR(up.z(), 1.0, 1e-6);                           // roll/pitch=0
+}
+
+// ---- 多假设跟踪: 落后的假设被淘汰 ----
+TEST(HypothesisManagerTest, SeedAndPrune) {
+    HypothesisManager hm;
+    hm.setMax(4);
+    std::vector<PoseStamped> poses = {makePose(0, 0, 0, 0), makePose(3, 0, 0, 0), makePose(6, 0, 0, 0)};
+    std::vector<double> scores = {0.9, 0.1, 0.8};
+    EXPECT_EQ(hm.seed(poses, scores), 3);
+    EXPECT_TRUE(hm.ambiguous());
+    EXPECT_EQ(hm.best(), 0);
+
+    // 第2个假设适应度持续落后 -> 淘汰
+    MatchResult r; r.converged = true; r.fitness = 0.1; r.pose = poses[1];
+    hm.update(1, r);
+    for (int i = 0; i < 11; ++i) hm.prune(0.25, 10);
+    EXPECT_EQ(hm.size(), 2);   // 假设1 被淘汰
 }
 
 // ---- 工厂注册完整性 ----

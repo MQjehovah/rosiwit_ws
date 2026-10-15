@@ -138,6 +138,8 @@ localization:
     use_huber: true
     huber_delta: 0.25
     robust_kernel: cauchy       # 工厂: 动态点降权
+    gnc_mu0: 10000.0            # GNC(robust_kernel=gnc) 初始 mu
+    gnc_decay: 0.6              # GNC 每迭代衰减
     use_edge_feature: true     # 工厂: 长直墙/货架补充 yaw
     edge_line_ratio: 0.12
     edge_valid_thr: 0.10
@@ -224,6 +226,19 @@ localization:
     cell: 1.0
     ground_band: 0.3
     max_tilt_deg: 35.0
+
+  # 多假设跟踪 (aliasing): 重定位歧义时保留 Top-K 并按每帧适应度淘汰
+  hypothesis:
+    max: 4
+    margin: 0.25
+    stale: 10
+
+  # 固定滞后平滑器 (L4): 融合运动先验 + 扫描匹配(带协方差), 替代逐帧硬替换
+  smoother:
+    enabled: false
+    lag_sec: 2.0
+    motion_trans_sigma: 0.05
+    motion_rot_sigma: 0.02
 
   # 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层
   maintainer:

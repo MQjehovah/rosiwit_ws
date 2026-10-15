@@ -170,6 +170,8 @@ set(LOCALIZATION_SOURCES
     src/algorithms/localization/localization_utils.cpp
     src/algorithms/localization/registration_metrics.cpp
     src/algorithms/localization/constraints/planar_constraint.cpp
+    src/algorithms/localization/hypothesis/hypothesis_manager.cpp
+    src/algorithms/localization/smoother/fixed_lag_smoother.cpp
     src/algorithms/localization/localization_factory.cpp
     src/algorithms/localization/localization_pipeline.cpp
     src/algorithms/localization/matcher/gicp_matcher.cpp
@@ -317,6 +319,10 @@ target_include_directories(localization_eval PRIVATE
 target_link_libraries(localization_eval ${PCL_LIBRARIES})
 if(yaml-cpp_FOUND)
     target_link_libraries(localization_eval yaml-cpp)
+endif()
+if(GTSAM_FOUND)
+    target_include_directories(localization_eval PRIVATE ${GTSAM_INCLUDE_DIRS})
+    target_link_libraries(localization_eval gtsam)
 endif()
 install(TARGETS localization_eval DESTINATION lib/${PROJECT_NAME})
 
@@ -533,6 +539,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_localization_pipeline ${PCL_LIBRARIES})
     if(yaml-cpp_FOUND)
         target_link_libraries(test_localization_pipeline yaml-cpp)
+    endif()
+    if(GTSAM_FOUND)
+        target_include_directories(test_localization_pipeline PRIVATE ${GTSAM_INCLUDE_DIRS})
+        target_link_libraries(test_localization_pipeline gtsam)
     endif()
     install(TARGETS test_localization_pipeline DESTINATION lib/${PROJECT_NAME})
 
