@@ -48,6 +48,7 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
       use_tf_(engine.legacyConfig().use_tf) {
     initPub();
     initTimerPub();
+    initSub();
 
     // 旧实现: 构造里按 slam_init_type_ 定初始 slam_mode_ (legacy.cpp:57-83)
     const std::string& init = cfg_.slam_init_type;
@@ -166,6 +167,64 @@ void LegacyXz3dSlamInterface::setGlobalGridMap(const nav_msgs::OccupancyGrid& gr
 void LegacyXz3dSlamInterface::setInputSeen(bool imu, bool laser) {
     if (imu) have_imu_ = true;
     if (laser) have_laser_ = true;
+}
+
+// ---------------------------------------------------------------- [T6] 订阅
+
+void LegacyXz3dSlamInterface::initSub() {
+    // 旧 startSub (legacy.cpp:193-215) 一共 7 个订阅:
+    //   imu + lidar (由 laser_type 分两个分支选话题)  -> 已在 SlamEngine 里按 laser_type 复刻
+    //   initialpose                                  -> 引擎已经订阅 (行为一致), 不重复
+    //   scan / odom / lift/state / lift_type         -> 这里补上
+    // 所以可观测的订阅集合与旧实现一致, 只是前 3 个的句柄在引擎里。
+    scan_sub_ = nh_.subscribe<sensor_msgs::LaserScan>(
+        "scan", 10, &LegacyXz3dSlamInterface::laserScanCB, this);
+    chassis_odom_sub_ = nh_.subscribe<nav_msgs::Odometry>(
+        "odom", 100, &LegacyXz3dSlamInterface::chassisOdomCB, this);
+    lift_state_sub_ = nh_.subscribe<std_msgs::String>(
+        "lift/state", 10, &LegacyXz3dSlamInterface::liftStateCB, this);
+    lift_type_sub_ = nh_.subscribe<std_msgs::String>(
+        "lift_type", 10, &LegacyXz3dSlamInterface::liftTypeCB, this);
+
+    // 引擎的输入钩子: 复刻旧的 get_imu_data_/get_laser_data_ 门控 + origin_point 数据源
+    engine_.setInputSeenHook([this](bool is_lidar) {
+        if (is_lidar) have_laser_ = true; else have_imu_ = true;
+    });
+    engine_.setRawLidarHook([this](const CloudType& c, const ros::Time& t) {
+        onRawInputCloud(c, t);
+    });
+    std::cout << "[legacy_iface] subscribed: scan, odom, lift/state, lift_type "
+              << "(imu/lidar/initialpose 由 SlamEngine 订阅)" << std::endl;
+}
+
+void LegacyXz3dSlamInterface::laserScanCB(const sensor_msgs::LaserScan::ConstPtr&) {
+    // 旧实现只用它做雷达频率统计 (legacy.cpp:209 -> laserScanCallBack)
+    const ros::Time now = ros::Time::now();
+    if (scan_window_start_.isZero()) { scan_window_start_ = now; scan_count_ = 0; return; }
+    ++scan_count_;
+    const double dt = (now - scan_window_start_).toSec();
+    if (dt >= 1.0) {
+        scan_hz_ = scan_count_ / dt;
+        scan_window_start_ = now;
+        scan_count_ = 0;
+        std::cout << "[legacy_iface] /scan freq = " << scan_hz_ << " Hz" << std::endl;
+    }
+}
+
+void LegacyXz3dSlamInterface::chassisOdomCB(const nav_msgs::Odometry::ConstPtr& msg) {
+    // 旧实现无条件订阅并把它当运动先验喂给定位 (legacy.cpp:210 chassisOdomCallBack)
+    engine_.onOdomMsg(msg);
+}
+
+void LegacyXz3dSlamInterface::liftStateCB(const std_msgs::String::ConstPtr& msg) {
+    lift_state_ = msg->data;   // 旧实现 localiza_ptr_->setCurrLiftState(lift_state); 核心无此接口
+}
+
+void LegacyXz3dSlamInterface::liftTypeCB(const std_msgs::String::ConstPtr& msg) {
+    if (lift_type_ != msg->data) {
+        lift_type_ = msg->data;
+        std::cout << "[legacy_iface] lift_type = " << lift_type_ << std::endl;
+    }
 }
 
 void LegacyXz3dSlamInterface::onRawInputCloud(const CloudType& world_cloud, const ros::Time& stamp) {

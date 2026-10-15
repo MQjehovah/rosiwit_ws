@@ -82,6 +82,14 @@ public:
     void addTickHook(std::function<void()> hook);
     /// 每次核心产出时调用。**在核心自己的线程上执行**, 跨线程用要自己同步。
     void setOutputHook(std::function<void(const rosiwit_slam::SlamOutput&)> hook);
+    /// [T6] 每收到一帧输入就调用 (`is_lidar=true` 表示雷达帧)。
+    /// 旧接口用它复刻 legacy 的 `get_imu_data_`/`get_laser_data_` 门控 (legacy.cpp:351)。
+    void setInputSeenHook(std::function<void(bool is_lidar)> hook);
+    /// [T6] 每收到一帧原始雷达点云(仍在该雷达自身坐标系)就调用 ——
+    /// 旧接口用它发 `origin_point` / 定位模式下的 `or_curr_scan_point`。
+    /// **在 ROS 回调线程上执行**。注意给的是已按 lidar_filter_num/min/max_range 处理过的云
+    /// (与交给核心的是同一份), 旧实现的 origin_point 是更原始的 CustomMsg 转换结果。
+    void setRawLidarHook(std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> hook);
 
     // ---- 输入 (公开给测试/其它接口复用) ----
     void onImuMsg(const sensor_msgs::Imu::ConstPtr& msg);
@@ -136,6 +144,8 @@ private:
 
     std::vector<std::function<void()>> tick_hooks_;
     std::function<void(const rosiwit_slam::SlamOutput&)> output_hook_;
+    std::function<void(bool)> input_seen_hook_;
+    std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> raw_lidar_hook_;
 };
 
 } // namespace rosiwit_slam_ros1

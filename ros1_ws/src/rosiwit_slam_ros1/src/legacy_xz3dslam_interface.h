@@ -19,7 +19,9 @@
 
 #include <geometry_msgs/PoseStamped.h>
 #include <nav_msgs/OccupancyGrid.h>
+#include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
+#include <sensor_msgs/LaserScan.h>
 #include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <std_msgs/String.h>
@@ -83,6 +85,7 @@ public:
 private:
     void initPub();        // legacy.cpp:273-300
     void initTimerPub();   // legacy.cpp:247-271
+    void initSub();        // legacy.cpp:193-215 (只补引擎没覆盖的那几个)
 
     // 定时器回调
     void timerPublishLocalCloudAndSubmap(const ros::TimerEvent&);  // 0.1s -> startPub()
@@ -101,6 +104,12 @@ private:
 
     SlamMode updateModeFromCore();   // 核心 pipeline mode -> 旧 SLAMMODE
     void applyModeToCore(SlamMode m);
+
+    // ---- [T6] 订阅回调 ----
+    void laserScanCB(const sensor_msgs::LaserScan::ConstPtr& msg);   // 只做频率统计
+    void chassisOdomCB(const nav_msgs::Odometry::ConstPtr& msg);     // -> 核心 onOdom
+    void liftStateCB(const std_msgs::String::ConstPtr& msg);         // 存字段(核心无此接口)
+    void liftTypeCB(const std_msgs::String::ConstPtr& msg);          // 存字段 + 打日志
 
     ros::NodeHandle nh_, pnh_;
     SlamEngine& engine_;
@@ -152,6 +161,13 @@ private:
     // 原始输入点云缓存 (T6 填)
     rosiwit_slam::CloudType::Ptr raw_input_;
     ros::Time raw_input_stamp_;
+
+    // ---- [T6] 额外订阅 (引擎已覆盖 imu/lidar/initialpose, 这里补 legacy 剩下的 4 个) ----
+    ros::Subscriber scan_sub_, chassis_odom_sub_, lift_state_sub_, lift_type_sub_;
+    std::string lift_state_, lift_type_;   // 旧实现存字段; 核心没有对应接口 -> 不生效
+    ros::Time scan_window_start_;
+    int scan_count_ = 0;
+    double scan_hz_ = 0.0;
 };
 
 } // namespace rosiwit_slam_ros1

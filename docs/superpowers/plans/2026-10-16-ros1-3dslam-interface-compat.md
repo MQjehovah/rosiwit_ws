@@ -950,8 +950,75 @@ double legacyYawFromRot(const Eigen::Matrix3d& R);
 **验证脚本自身的小笔误**：查 `/map` 类型时脚本拼成了 `"//map"`（变量里已带 `/`），
 所以那一行显示"<缺失>"；`rosnode info` 的发布表里 `/map [nav_msgs/OccupancyGrid]` 是在的 ✓。
 
-**下一步**：T6（10 个订阅器）—— 把原始输入点云喂给
-`LegacyXz3dSlamInterface::onRawInputCloud()`、`setInputSeen()`，建图分支才会开始发扫描类话题。
+### 5.7 T6 实测记录（订阅侧已完成）+ 你 2026-10-16 的答复
+
+**状态**：`catkin_make` `exit=0`；`run_tests` `exit=0`；**gtest 51/51 全绿**。
+`legacy_dev.launch` 真跑，`rosnode info /xz_3d_slam` 的订阅集合实测为：
+
+```
+/livox/imu   /livox/lidar   /initialpose   /scan   /odom   /lift/state   /lift_type
+```
+14 个发布话题也仍然齐全 ✓。
+
+**⚠ 修掉了 T4 的一个真机级 bug（这个不修上机完全收不到数据）**
+
+旧 `startSub`（`legacy.cpp:200-207`）选**输入话题靠的是 `laser_type`，不是 `laser_sub_name`**：
+
+```cpp
+if (laser_type_ == "mid360" || laser_type_ == "new_mid360") {
+    subscribe("livox/imu", 100, imuCallBack);
+    subscribe("livox/lidar", 0, livoxLaserCallBack, tcpNoDelay);   // 旧类型是 CustomMsg
+} else {
+    subscribe(imu_sub_name_, 100, imuWjCallBack);
+    subscribe(laser_sub_name_, 0, laserCallBack, tcpNoDelay);
+}
+```
+
+而我们实测的机型就是 `laser_type='new_mid360'`（XZ-SWGT + Livox_Mid360）。也就是说
+**发行 conf 顶层那个 `laser_sub_name: "vanjee_points722"` 对 mid360 机型根本不被使用** ——
+T4 当初按 `laser_sub_name` 订阅是错的。已改成按 `laser_type` 分支，实测日志：
+
+```
+[slam_engine] legacy laser_type='new_mid360' -> input topics: imu=livox/imu lidar=livox/lidar
+```
+
+（D4 仍然成立：我们这边 `livox/lidar` 是 `sensor_msgs/PointCloud2`，不是 livox 的 `CustomMsg`；
+queue 0 + `tcpNoDelay` 照旧。）
+
+**订阅的归属划分**（旧的一共 **7** 个，不是计划里写的 10 —— 那是把 mid360 分支与 else 分支的话题重复计数了）：
+
+| 订阅 | 谁建 | 说明 |
+|---|---|---|
+| `livox/imu` 或 `<imu_sub_name>` | **SlamEngine** | 按 `laser_type` 分支（T4 已修） |
+| `livox/lidar` 或 `<laser_sub_name>` | **SlamEngine** | queue 0 + tcpNoDelay ✓ |
+| `initialpose` | **SlamEngine** | 旧实现也是无条件订阅，行为一致，不重复建 |
+| `scan` | 本接口 | `LaserScan` 10，**只做频率统计** |
+| `odom` | 本接口 | `Odometry` 100 → `engine.onOdomMsg()`（旧实现无条件订阅当运动先验；核心 YAML 里 `enable_odom: false`，所以引擎自己没订阅它 —— 不冲突） |
+| `lift/state` | 本接口 | `String` 10，**只存字段**（旧的喂 `localiza_ptr_->setCurrLiftState()`，核心无对应接口） |
+| `lift_type` | 本接口 | `String` 10，**只存字段 + 变化时打日志** |
+
+**新增的两个引擎钩子**（`setInputSeenHook` / `setRawLidarHook`）：前者复刻旧的
+`get_imu_data_ && get_laser_data_` 门控（`legacy.cpp:351`），后者是 `origin_point` 与
+定位模式下 `or_curr_scan_point` 的数据源。
+
+**一处有意偏差**：`origin_point` 拿到的点云是**已经按 `lidar_filter_num`（默认 3）抽稀、
+并做过 min/max_range 裁剪**的那一份（与交给核心的同一份）；旧实现的 `origin_point` 是
+CustomMsg 转换后的更原始的点云。影响只在下游可视化粒度，记在这里。
+
+**你 2026-10-16 的答复（已确认，记入设计文档 §9）**：
+
+- **`slam_info.robot_pose.theta` 与 `/curr_localization_pose` 的方向差异** —— 你说明了
+  **这是激光雷达安装角度造成的**，属预期。所以 `stdYawFromRot` /
+  `atan2(R(1,0),R(0,0))` 的取值方向**不用再当待核对项**，该项关闭。
+- **A（地图文件命名）**：确认就是 `map.*`。`map_dir` 带不带结尾 `/` **不确定** ——
+  正好是我们已经做的容错写法：`legacyMapBase()` 去尾斜杠、空则退回 `/`（T1 已实现、有单测），
+  两种情形都对。**该项关闭。**
+- **B（脱敏配置）**：暂给不出，**后续直接读实机**。不影响继续开发（缺
+  `sensor_config.json` 时 `LegacyConfig` 回落 `type_3d=Livox_Mid360`，只告警不抛异常）。
+  **该项转为"上机时核对"。**
+- **C（首次上机核对生效 `acc_scale`）**：仍开放。
+
+**下一步**：T7（告警码 `slam_warning_code` + 3 个 service client）。
 
 **验证**（发布侧已过；/map 有数据要等 T13）：
 1. 构建 + 单测。

@@ -94,12 +94,24 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         std::string model;
         nh_.param<std::string>("/machine/model", model, "");
         legacy_cfg_ = LegacyConfig::load(defaultLegacyPaths(), model);
-        // 旧实现: laser_sub_name_ / imu_sub_name_ 就是它订阅的话题。
-        // 空值时保留核心 YAML 里的名字 (不应发生, 但别把订阅名清成空串)。
-        if (!legacy_cfg_.imu_sub_name.empty())   cfg_.imu_topic   = legacy_cfg_.imu_sub_name;
-        if (!legacy_cfg_.laser_sub_name.empty()) cfg_.lidar_topic = legacy_cfg_.laser_sub_name;
-        std::cout << "[slam_engine] legacy input topics: imu=" << cfg_.imu_topic
-                  << " lidar=" << cfg_.lidar_topic << std::endl;
+        // 旧实现 startSub (legacy.cpp:200-207) 选输入话题靠的是 **laser_type**,
+        // 不是 imu_sub_name/laser_sub_name:
+        //   mid360 / new_mid360 -> "livox/imu" + "livox/lidar"
+        //   其它                -> <imu_sub_name> + <laser_sub_name>
+        // 这一步很关键: 发行 conf 的顶层 laser_sub_name 是 "vanjee_points722",
+        // 但对 mid360 机型旧实现**根本不看它** —— 照 laser_sub_name 订阅会在真机上收不到数据。
+        // (D4: livox/lidar 在我们这边是 sensor_msgs/PointCloud2, 不是 livox 的 CustomMsg。)
+        const std::string& lt = legacy_cfg_.laser_type;
+        if (lt == "mid360" || lt == "new_mid360") {
+            cfg_.imu_topic = "livox/imu";
+            cfg_.lidar_topic = "livox/lidar";
+        } else {
+            // 空值时保留核心 YAML 里的名字 (不应发生, 但别把订阅名清成空串)
+            if (!legacy_cfg_.imu_sub_name.empty())   cfg_.imu_topic   = legacy_cfg_.imu_sub_name;
+            if (!legacy_cfg_.laser_sub_name.empty()) cfg_.lidar_topic = legacy_cfg_.laser_sub_name;
+        }
+        std::cout << "[slam_engine] legacy laser_type='" << lt << "' -> input topics: imu="
+                  << cfg_.imu_topic << " lidar=" << cfg_.lidar_topic << std::endl;
     }
 
     algo_ = SlamFactory::create(algo_name);
@@ -159,6 +171,7 @@ void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
     s.acc = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
     s.gyro = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
     s.time = getSec(msg->header.stamp);
+    if (input_seen_hook_) input_seen_hook_(false);
     if (algo_) algo_->onImu(s);
 }
 
@@ -169,6 +182,8 @@ void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
     if (!f.cloud || f.cloud->empty()) return;
     f.start_time = getSec(msg->header.stamp);
     f.end_time = f.start_time + cfg_.scan_period_ms / 1000.0;
+    if (input_seen_hook_) input_seen_hook_(true);
+    if (raw_lidar_hook_) raw_lidar_hook_(*f.cloud, msg->header.stamp);
     algo_->onLidar(f);
 }
 
@@ -275,6 +290,15 @@ void SlamEngine::addTickHook(std::function<void()> hook) {
 
 void SlamEngine::setOutputHook(std::function<void(const SlamOutput&)> hook) {
     output_hook_ = std::move(hook);
+}
+
+void SlamEngine::setInputSeenHook(std::function<void(bool)> hook) {
+    input_seen_hook_ = std::move(hook);
+}
+
+void SlamEngine::setRawLidarHook(
+    std::function<void(const CloudType&, const ros::Time&)> hook) {
+    raw_lidar_hook_ = std::move(hook);
 }
 
 } // namespace rosiwit_slam_ros1
