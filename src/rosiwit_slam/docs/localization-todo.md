@@ -87,21 +87,20 @@
 
 ### 低优先级
 
-- [ ] **L7 学习式 place recognition（OverlapTransformer/MinkLoc3D/BTC）**
-  - 目标：大范围/跨时段召回，作为 `relocalizer` 新策略（需训练数据/GPU）。
-  - 验收：跨时段召回率优于 ScanContext；集成到工厂 → relocalizer。
+- [x] ~~**L7 学习式 place recognition（OverlapTransformer/MinkLoc3D/BTC）**~~ **已取消（不做）**
+  - 决定：不引入学习式召回（需训练数据/GPU），重定位保留 SC/BBS/FPFH。
 
-- [~] **L8 统一地图存储底座（IMapStore 抽象 + Pcd/Voxel 实现 + 算法解耦）**
+- [x] **L8 统一地图存储底座（IMapStore 抽象 + Pcd/Voxel 实现 + 算法解耦）** ✅ P1–P5
   - 目标：让算法只依赖 `IMapStore`，换存储(PCD/KD 树 ↔ 体素哈希)不影响算法；各算法按需取"能力视图"(点/近邻/统计/地面/维护)。研究型项目便于切换方案 A/B。
   - 决策：底座 = **体素哈希 + 格内存点(iVox 思路)**（纯 GMM 不能当通用底座，pp_icp 需精确近邻）。
   - 分期：
-    - [x] **P1** `IMapStore` 接口（`slam_core/i_map_store.h`）：buildFromCloud/queryRadius/nearestK/statsAt/groundAt/insert/erase/carve/decay/revision/size/save/load ✅ `217910c`
-    - [x] **P2** `PcdMapStore`(点云+KD树) / `VoxelMapStore`(体素哈希+格内点) + `MapStoreFactory` + 等价契约测试(test_map_store) ✅ `217910c`
-    - [x] **P3** 配准器消费 store：`IScanMatcher::setStore/usesStore`；pp_icp/p2p_icp 支持 store 路径(近邻+覆盖率/残差)，数学不变、默认不变 ✅ `26bb6f0`
-    - [x] **P4** 管道接入：`map_store: none|pcd|voxel`；setMap 建 store 并 setStore；matcher 用 store 时跳过局部地图构建；叠加层刷新同步重建 store ✅ `127f2d0`
-    - [ ] **P5**（可选）`.vxmap` 持久化；把 overlay/planar/ground 一并落到 store；`groundAt`/`carve`/`decay` 接入
-  - 验收：P1–P4 契约/等价测试通过（KD 树 vs 体素最近邻距离等价 <1e-3）；`map_store` 切换可 A/B；默认 none 零行为变化。
-  - 备注：默认仍走原路径；`groundAt/carve/decay` 在 store 中为可选能力，P5 再接入。非"绝对最优"，是研究可插拔底座。
+    - [x] **P1** `IMapStore` 接口（`slam_core/i_map_store.h`）✅ `217910c`
+    - [x] **P2** `PcdMapStore` / `VoxelMapStore` + `MapStoreFactory` + 等价契约测试 ✅ `217910c`
+    - [x] **P3** 配准器消费 store：`IScanMatcher::setStore/usesStore`；pp_icp/p2p 支持 store 路径 ✅ `26bb6f0`
+    - [x] **P4** 管道接入：`map_store: none|pcd|voxel`；matcher 用 store 时跳过局部地图构建；叠加层刷新重建 store ✅ `127f2d0`
+    - [x] **P5** `.vxmap` 持久化；`VoxelMapStore::groundAt/decay`；`PlanarConstraint` 地面查询走 store ✅ `5bc5662`
+  - 验收：契约/等价测试通过（KD 树 vs 体素最近邻距离等价 <1e-3）；`map_store` 可 A/B；默认 none 零行为变化。
+  - 备注：非"绝对最优"，是研究可插拔底座；GMM/NDT 视图可在 VoxelMapStore 上按需扩展。
 
 ---
 
