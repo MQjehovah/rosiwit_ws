@@ -4,5 +4,5 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib', 'python3.10', 'site-packages'))
 
-from rosiwit_perception.avm_node import main
+from rosiwit_perception_ros2.avm_node import main
 main()

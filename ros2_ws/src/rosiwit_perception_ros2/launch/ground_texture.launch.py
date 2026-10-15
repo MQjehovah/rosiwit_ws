@@ -6,13 +6,13 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         Node(
-            package='rosiwit_perception',
+            package='rosiwit_perception_ros2',
             executable='avm_node_wrapper',
             name='avm_node',
             output='screen',
         ),
         Node(
-            package='rosiwit_perception',
+            package='rosiwit_perception_ros2',
             executable='ground_texture_mapper_wrapper',
             name='ground_texture_mapper',
             output='screen',

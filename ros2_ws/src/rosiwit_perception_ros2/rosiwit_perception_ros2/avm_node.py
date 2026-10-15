@@ -6,8 +6,12 @@ import numpy as np
 import cv2
 import message_filters
 
-from .config import CAMERA_CONFIGS
-from .birdseye import precompute_maps, precompute_maps_with_intrinsics, stitch
+from rosiwit_perception.config import CAMERA_CONFIGS
+from rosiwit_perception.birdseye import (
+    precompute_maps,
+    precompute_maps_with_intrinsics,
+    stitch,
+)
 
 
 class AVMNode(Node):

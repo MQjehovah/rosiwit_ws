@@ -1,3 +1,0 @@
-#!/usr/bin/env python3
-from rosiwit_perception.avm_node import main
-main()
