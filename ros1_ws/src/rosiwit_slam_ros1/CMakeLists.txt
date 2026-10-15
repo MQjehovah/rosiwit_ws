@@ -105,5 +105,9 @@ endif()
 
 install(TARGETS rosiwit_slam_ros1_node
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
-# scripts/ 由 T12 建立后在此追加
+# 校验脚本与它的 golden 放同一个目录, 这样脚本里用 "$(dirname $0)" 就能找到 golden
+install(PROGRAMS scripts/check_legacy_interface.sh
+    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)
+install(FILES scripts/legacy_interface.golden
+    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)
 install(DIRECTORY launch config conf DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})

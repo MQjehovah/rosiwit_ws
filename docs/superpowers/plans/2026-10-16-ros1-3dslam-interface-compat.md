@@ -1513,6 +1513,30 @@ update_map_operation              xzrobot_ros_dependency/UpdateMap
 **验证**：在有节点的环境下跑脚本 → 0 退出。
 **提交**：`test(ros1): 旧接口一致性校验脚本 + golden`
 
+### 12.1 T12 实测记录（已完成并提交）
+
+**状态**：`scripts/check_legacy_interface.sh` + `scripts/legacy_interface.golden` 已落地，
+并把两者都装到 `${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts`（脚本用 `$(dirname $0)`
+找 golden，所以必须放同目录 —— 开发目录与安装目录都成立）。
+
+**实测**（真跑）：
+- `bash -n` 语法 OK。
+- **没有节点时 `exit=2`**（环境不可用，不会误报 OK）。
+- 起 `legacy_dev.launch` 后：**检查项 23 个（14 话题 + 8 服务 + 1 参数），不符 0 个，
+  `exit=0`** ✓ —— 这就是"全都得对上"的机器可判版本。
+- **反证**：故意把 golden 里 `scan_f_map` 的期望类型改成 `sensor_msgs/PointCloud2`，
+  脚本立刻报 `[BAD] topic /scan_f_map 期望 sensor_msgs/PointCloud2, 实际
+  sensor_msgs/PointCloud` 并 `exit=1` ✓ —— 证明它真的在比对而不是只会打印 OK。
+
+**用法**（上机自检）：
+```bash
+source /opt/ros/melodic/setup.bash && source <ws>/devel/setup.bash
+roslaunch rosiwit_slam_ros1 legacy_dev.launch    # 或机器人上已在跑的 xz_3d_slam
+rosrun rosiwit_slam_ros1 check_legacy_interface.sh   # 或直接 bash <pkg>/scripts/...
+```
+
+
+
 ---
 
 ## T13. 合成数据冒烟（V3）
