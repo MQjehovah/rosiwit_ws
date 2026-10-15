@@ -14,6 +14,8 @@ public:
     std::string name() const override { return "p2p_icp"; }
     void configure(const ScanMatcherConfig& cfg) override { m_cfg = cfg; }
     void setTarget(const CloudType::Ptr& target) override;
+    void setStore(IMapStore* store) override { m_store = store; }
+    bool usesStore() const override { return m_store != nullptr; }
     bool match(const CloudType::Ptr& scan, const PoseStamped& guess,
                MatchResult& out) override;
     double evaluateResidual(const CloudType::Ptr& scan, const PoseStamped& pose) override;
@@ -24,6 +26,7 @@ private:
     ScanMatcherConfig m_cfg;
     CloudType::Ptr m_target;
     pcl::KdTreeFLANN<PointType> m_kdtree;
+    IMapStore* m_store = nullptr;
 };
 
 } // namespace rosiwit_slam

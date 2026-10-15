@@ -9,6 +9,7 @@
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/constraints/planar_constraint.h"
 #include "algorithms/localization/hypothesis/hypothesis_manager.h"
+#include "algorithms/map_store/map_store_factory.h"
 #include "io/xzmap_writer.h"
 #include "io/xzmap_reader.h"
 
@@ -563,6 +564,32 @@ TEST(HypothesisManagerTest, SeedAndPrune) {
     hm.update(1, r);
     for (int i = 0; i < 11; ++i) hm.prune(0.25, 10);
     EXPECT_EQ(hm.size(), 2);   // 假设1 被淘汰
+}
+
+// ---- P3: 配准器经统一存储底座匹配 (存储与算法解耦) ----
+TEST(MatcherStoreTest, MatchersViaVoxelStore) {
+    const char* names[] = {"pp_icp", "p2p_icp"};
+    for (const char* nm : names) {
+        auto matcher = LocalizationFactory::createMatcher(nm);
+        ASSERT_NE(matcher, nullptr);
+        ScanMatcherConfig cfg;
+        cfg.voxel_resolution = 0.2;
+        cfg.max_iterations = 50;
+        cfg.corr_dist_init = 2.0;
+        cfg.corr_dist_min = 0.5;
+        matcher->configure(cfg);
+
+        auto store = MapStoreFactory::create("voxel", 0.2);
+        ASSERT_TRUE(store->buildFromCloud(makeScene()));
+        matcher->setStore(store.get());
+        ASSERT_TRUE(matcher->usesStore());
+
+        const PoseStamped T_true = makePose(3.0, 3.0, 0.0, 8.0);
+        CloudType::Ptr scan = makeScanFromMap(makeScene(), T_true);
+        MatchResult res;
+        ASSERT_TRUE(matcher->match(scan, makePose(3.2, 2.8, 0.0, 11.0), res)) << nm;
+        EXPECT_LT((res.pose.trans - T_true.trans).norm(), 0.15) << nm;
+    }
 }
 
 // ---- 工厂注册完整性 ----

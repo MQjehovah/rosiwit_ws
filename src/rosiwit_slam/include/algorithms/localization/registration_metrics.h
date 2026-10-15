@@ -4,6 +4,7 @@
 #include <Eigen/Eigen>
 #include <pcl/kdtree/kdtree_flann.h>
 #include "slam_core/slam_types.h"
+#include "slam_core/i_map_store.h"
 
 namespace rosiwit_slam {
 
@@ -36,5 +37,13 @@ double evaluatePoint2PlaneResidual(const pcl::KdTreeFLANN<PointType>& kdtree,
 CloudType::Ptr filterByMapProximity(const CloudType::Ptr& scan,
                                     const pcl::KdTreeFLANN<PointType>& kdtree,
                                     double max_dist);
+
+// ---- 存储底座(IMapStore)版本 (P3: 存储与算法解耦) ----
+CoverageStats evaluateCoverageStore(const IMapStore& store, const CloudType& scan,
+                                    const Eigen::Matrix4d& T, double inlier_dist,
+                                    int max_points = 3000);
+double evaluatePoint2PlaneResidualStore(const IMapStore& store, const CloudType& scan,
+                                        const Eigen::Matrix4d& T, double corr_dist,
+                                        int max_points = 2000, double plane_valid_thr = 0.10);
 
 } // namespace rosiwit_slam

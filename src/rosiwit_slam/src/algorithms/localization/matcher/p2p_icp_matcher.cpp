@@ -35,10 +35,10 @@ void P2pIcpMatcher::setTarget(const CloudType::Ptr& target) {
 bool P2pIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
                           MatchResult& out) {
     out = MatchResult();
-    if (!m_target || m_target->empty()) return false;
+    if (!m_store && (!m_target || m_target->empty())) return false;
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
-    if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
+    if (!m_store && m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
         src = filterByMapProximity(src, m_kdtree, m_cfg.dynamic_dist);
         if (!src || src->empty()) return false;
     }
@@ -77,11 +77,19 @@ bool P2pIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
             qp.x = static_cast<float>(q.x());
             qp.y = static_cast<float>(q.y());
             qp.z = static_cast<float>(q.z());
-            if (m_kdtree.nearestKSearch(qp, 1, idx, sq) < 1) return;
-            if (sq[0] > corr2) return;
-
-            const auto& tp = m_target->points[idx[0]];
-            const Eigen::Vector3d ti(tp.x, tp.y, tp.z);
+            Eigen::Vector3d ti;
+            if (m_store) {
+                std::vector<PointType> npts;
+                std::vector<float> nsq;
+                if (m_store->nearestK(qp, 1, npts, nsq) < 1) return;
+                if (nsq[0] > corr2) return;
+                ti = Eigen::Vector3d(npts[0].x, npts[0].y, npts[0].z);
+            } else {
+                if (m_kdtree.nearestKSearch(qp, 1, idx, sq) < 1) return;
+                if (sq[0] > corr2) return;
+                const auto& tp = m_target->points[idx[0]];
+                ti = Eigen::Vector3d(tp.x, tp.y, tp.z);
+            }
             const Eigen::Vector3d r = q - ti;
             const double w = (m_cfg.robust_kernel == RobustKernel::GNC)
                                  ? gncWeight(r.norm(), m_cfg.huber_delta, gnc_mu)
@@ -153,13 +161,16 @@ bool P2pIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     Tf.block<3, 1>(0, 3) = t;
     out.pose = matrixToPose(Tf, guess.time);
 
-    const CoverageStats cs = evaluateCoverage(m_kdtree, *src, Tf, m_cfg.inlier_dist);
+    const CoverageStats cs = m_store
+        ? evaluateCoverageStore(*m_store, *src, Tf, m_cfg.inlier_dist)
+        : evaluateCoverage(m_kdtree, *src, Tf, m_cfg.inlier_dist);
     out.fitness = cs.coverage;
     out.rmse = cs.mean_dist;
     out.inliers = cs.inliers;
     out.correspondences = cs.total;
-    out.residual = evaluatePoint2PlaneResidual(m_kdtree, *src, Tf,
-                                               m_cfg.max_correspondence_dist);
+    out.residual = m_store
+        ? evaluatePoint2PlaneResidualStore(*m_store, *src, Tf, m_cfg.max_correspondence_dist)
+        : evaluatePoint2PlaneResidual(m_kdtree, *src, Tf, m_cfg.max_correspondence_dist);
     out.iterations = iter_done;
     out.degenerate = any_degen;
     out.degenerate_dirs = max_degen;
@@ -178,8 +189,11 @@ bool P2pIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
 }
 
 double P2pIcpMatcher::evaluateResidual(const CloudType::Ptr& scan, const PoseStamped& pose) {
-    if (!m_target || m_target->empty()) return -1.0;
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
+    if (m_store)
+        return evaluatePoint2PlaneResidualStore(*m_store, *src, poseToMatrix(pose),
+                                                m_cfg.max_correspondence_dist);
+    if (!m_target || m_target->empty()) return -1.0;
     return evaluatePoint2PlaneResidual(m_kdtree, *src, poseToMatrix(pose),
                                        m_cfg.max_correspondence_dist);
 }

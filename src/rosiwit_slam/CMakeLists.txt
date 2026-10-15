@@ -316,6 +316,9 @@ install(TARGETS grid_map_post DESTINATION lib/${PROJECT_NAME})
 add_executable(localization_eval tools/localization_eval.cpp
     ${LOCALIZATION_SOURCES}
     src/io/xzmap_reader.cpp
+    src/algorithms/map_store/pcd_map_store.cpp
+    src/algorithms/map_store/voxel_map_store.cpp
+    src/algorithms/map_store/map_store_factory.cpp
     src/algorithms/scan_context/scan_context.cpp)
 target_include_directories(localization_eval PRIVATE
     include src ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
@@ -536,6 +539,9 @@ if(BUILD_TESTING)
         ${LOCALIZATION_SOURCES}
         src/io/xzmap_writer.cpp
         src/io/xzmap_reader.cpp
+        src/algorithms/map_store/pcd_map_store.cpp
+        src/algorithms/map_store/voxel_map_store.cpp
+        src/algorithms/map_store/map_store_factory.cpp
         src/algorithms/scan_context/scan_context.cpp)
     target_include_directories(test_localization_pipeline PRIVATE
         include src ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})

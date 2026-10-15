@@ -2,6 +2,7 @@
 #pragma once
 #include <string>
 #include "slam_core/localization_stage_types.h"
+#include "slam_core/i_map_store.h"
 
 namespace rosiwit_slam {
 
@@ -19,6 +20,10 @@ public:
 
     /// 设置目标(局部)地图, 内部可建 KD-tree
     virtual void setTarget(const CloudType::Ptr& target) = 0;
+
+    /// 设置统一存储底座 (可选): 支持时匹配器直接从 store 取近邻/统计, 与存储解耦
+    virtual void setStore(IMapStore* /*store*/) {}
+    virtual bool usesStore() const { return false; }
 
     /// 以 guess 为初值配准 scan → out
     virtual bool match(const CloudType::Ptr& scan,
