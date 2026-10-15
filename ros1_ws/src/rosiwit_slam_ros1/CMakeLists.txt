@@ -55,7 +55,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam
 set(ROSIWIT_ROS1_LIB_SOURCES
     src/legacy_config.cpp
     src/realtime_grid.cpp
-    # T3 追加 src/lost_monitor.cpp;
+    src/lost_monitor.cpp
     # T4 追加 src/slam_engine.cpp + src/rosiwit_interface.cpp;
     # T5 追加 src/legacy_convert.cpp + src/legacy_xz3dslam_interface.cpp
 )
@@ -87,6 +87,11 @@ if(CATKIN_ENABLE_TESTING)
         # 本包 config 目录以宏传入, 不依赖测试进程的 CWD
         target_compile_definitions(test_realtime_grid PRIVATE
             ROSIWIT_ROS1_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
+    endif()
+
+    catkin_add_gtest(test_lost_monitor test/test_lost_monitor.cpp)
+    if(TARGET test_lost_monitor)
+        target_link_libraries(test_lost_monitor rosiwit_slam_ros1_lib)
     endif()
 endif()
 

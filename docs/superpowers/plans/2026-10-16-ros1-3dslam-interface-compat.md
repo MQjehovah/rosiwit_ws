@@ -537,6 +537,28 @@ ever_localized_ &&  cov  -> SUCCESS(0)
 **验证**：同上。
 **提交**：`feat(ros1): 定位丢失状态机(getPoseCov 驱动)`
 
+### 3.1 T3 实测记录（已完成）
+
+**状态**：`catkin_make` `exit=0`；`run_tests` `exit=0`；**gtest 38/38 全绿**
+（legacy_config 19 + realtime_grid 11 + lost_monitor 8）。
+
+计划里 T3 的 8 条用例一字未改，一次通过。计划**没写清、实现时必须自己定**的两件事（已写进代码注释）：
+
+1. **`reset()` 不能清 `map_loaded_`**。T11 的接线是"换图 → `reset()`，加载成功后再 `setMapLoaded(true)`"，
+   而"重定位 → `reset()`"根本不换地图。若 `reset()` 顺手把 `map_loaded_` 置 false，
+   重定位之后就再没任何地方把它置回 true，`update()` 会永久停在 `RECOVERING(1)`、
+   永远报不出 FAILED。所以 `reset()` 只清 `ever_localized_` / `last_failed_` / `lost_edge_`。
+2. **`update()` 走到 SUCCESS 时也要清 `lost_edge_`**（不只是 `onLocalizedPose()` 里那条）。
+   这是用例 6 `RecoveryReturnsToSuccessAndDoesNotRefire` 直接要求的：
+   `update(false)`(2) → `update(true)`(0) → `consumeLostEdge()` 必须为 false。
+   含义是"**恢复不算新丢失**"这条规则对"经由 `update` 恢复"同样成立。
+   生产上不会因此漏报：T11 里 `update()` 和 `consumeLostEdge()` 是同一个 100Hz 定时器里**紧接着**调的，
+   真实丢失必然在恢复之前就被消费掉；被作废的只是"丢失后又立刻恢复、发布方还没看过"的那种瞬时抖动
+   （这种本来也不该报故障码）。
+
+另外：`LostMonitor` **没有加锁**，因为 T11 把它全部放在同一个 100Hz 定时器里调用（`onLocalizedPose()`
+所需的 `has_new_pose` 从 `engine.latestOutput()` 的快照里读，不跨线程），已在头文件写死"单线程调用"约定。
+
 ---
 
 ## T4. `SlamEngine` + `input_profile` + launch
