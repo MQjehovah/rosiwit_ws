@@ -608,6 +608,7 @@ public:
   ```xml
   <node name="xz_3d_slam" pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" output="log">
     <param name="input_profile" value="legacy" />
+    <param name="config_file" value="$(find rosiwit_slam_ros1)/config/default.yaml" />
   </node>
   ```
   注意旧第 34 行的原始内容必须先在 T4 开始时从
@@ -632,6 +633,56 @@ public:
 3. `roslaunch rosiwit_slam_ros1 rosiwit_slam.launch` 行为与改动前一致（`lio_odom` 有输出或至少节点正常启动）。
 
 **提交**：`refactor(ros1): 抽出 SlamEngine, 新增 input_profile 与 legacy launch`
+
+### 4.3 T4 实测记录（已完成）
+
+**状态**：`catkin_make` `exit=0`；`run_tests` `exit=0`；**gtest 38/38 全绿**（无新增用例）。
+两个 launch 都在本机真跑过，用 `rosnode info` / `rostopic info` / `rosservice list` 逐项核对：
+
+| 项 | `input_profile=rosiwit` | `input_profile=legacy` |
+|---|---|---|
+| 节点名 | `/rosiwit_slam` | `/xz_3d_slam` ✓ |
+| 订阅 | `/imu`、`/lidar`、`/initialpose` | `/vanjee_points722`、`/vanjee_lidar_imu_packets`、`/initialpose` ✓ |
+| 发布 | `lio_odom`、**`odom`**、`lio_path`、`body_cloud`、`world_cloud`、`cloud_map`、`grid_map`、**`map`** | `lio_odom`、`lio_path`、`body_cloud`、`world_cloud`、`cloud_map`、`grid_map` |
+| `/odom` | 有发布者 ✓ | `rostopic info /odom` → `ERROR: Unknown topic` ✓ |
+| `/tf`、`/tf_static` | 有 ✓ | `rostopic info /tf` → `ERROR: Unknown topic` ✓ |
+| `/map` | 有 ✓ | 没有 ✓（M3：legacy 下 `/map` 归旧接口独占） |
+| 服务 | `/save_map`、`/load_map`、`/save_grid_map`、`/set_slam_mode` ✓ | 同左（旧服务 T8 再加，无重名） |
+
+实测发现并处理的 5 件事：
+
+1. **M5/M3 在 T4 就必须落成代码，不能只"把 profile 存好"**。计划 T4 正文写的是
+   "T4 只把 profile 与 LegacyConfig 存好，先不接发布器/服务"，但 `RosiwitInterface` 本身
+   是在 T4 建起来的，它一建起来就会去 advertise/publish `odom`、`map` 和两条 TF。
+   所以 T4 里就加了 profile 抑制，否则 legacy 下会立刻出现
+   "新接口的 `odom` 发布者 + 静态 `map→odom` TF" 与旧接口抢同一条边 —— 那正是 M5 要避免的。
+   - `odom` 别名：legacy 下**连 advertise 都不做**（第一次实测只 gate 了 publish，
+     `rosnode info` 里仍多出一条永远没数据的发布者，已改成不 advertise）。
+   - TF：legacy 下不建 `TransformBroadcaster` / `StaticTransformBroadcaster`。
+   - `/map`：legacy 下不 advertise 也不 publish。
+2. **drop-in launch 还必须传 `config_file`**（计划里的 launch 片段漏了）。原因：旧节点
+   没有 `config_file` 这个参数（它从 `PROJECT_PATH/conf/slam_conf.json` 读自己的配置），
+   而我们的核心需要一份**核心 YAML**。不传的话 `init("")` 走核心的内置默认，行为不可控。
+   已在本包 launch 里补 `<param name="config_file" value="$(find rosiwit_slam_ros1)/config/default.yaml" />`。
+3. **`ROS_INFO` 在 `roslaunch` 下是块缓冲的，`roslaunch ... | head` 看不到启动行**（实测确认）。
+   而"上机器人后核对生效参数"是硬需求（见 §9 的 C 项）。因此定下与 T1 那条 ASCII 规则并列的
+   第二条日志约定：**所有要被人读的启动行一律 `std::cout << ... << std::endl`**
+   （`endl` 强制 flush）。原 `rosiwit_slam_ros1 ready:` 那行保持 `ROS_INFO` 原样不动，
+   新信息另起一行 `[slam_engine] profile=... config=... imu=... lidar=...` 用 `std::cout`。
+4. **旧配置路径用 `ros::package::getPath("rosiwit_slam_ros1")` 等价替换 `PROJECT_PATH`**。
+   查了 `xz_3d_slam/CMakeLists.txt:24/26`：`PROJECT_PATH` 装机后是
+   `/opt/ros/melodic/share/xz_3d_slam`、开发时是 `${PROJECT_SOURCE_DIR}`，主配置恒为
+   `PROJECT_PATH "/conf/slam_conf.json"`。`ros::package::getPath` 在 devel/overlay 下给源码目录、
+   在 install 下给安装目录，两种情形都对得上（实测日志里打出的是源码目录下的 `conf/slam_conf.json`）。
+5. **顺手确认了话题名的来源**（本来以为 `laser_params.mid360` 会带话题名，查过才知道不是）：
+   `conf/slam_conf.json` 的**顶层**就是 `laser_sub_name: "vanjee_points722"` /
+   `imu_sub_name: "vanjee_lidar_imu_packets"`，而 `laser_params.mid360` 子树**只有 z 范围**、
+   没有话题名。所以实测日志里 `laser_type='new_mid360'` + `laser_sub='vanjee_points722'`
+   是顶层键生效，不是子树合并来的 —— 与旧实现一致，也再次印证 D21 那条
+   "发行 conf 两个键都在，故实际部署行为逐位一致"。
+
+另外：`legacy_dev.launch` 用 `model=XZ-SWGT` 起，实测日志显示
+`slam_init_type='free'`（来自发行 conf）—— 这条会影响 T5/T11 的初始 `slam_state`，先记下。
 
 ---
 

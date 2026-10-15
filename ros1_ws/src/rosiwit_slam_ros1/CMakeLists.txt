@@ -56,7 +56,8 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     src/legacy_config.cpp
     src/realtime_grid.cpp
     src/lost_monitor.cpp
-    # T4 追加 src/slam_engine.cpp + src/rosiwit_interface.cpp;
+    src/slam_engine.cpp
+    src/rosiwit_interface.cpp
     # T5 追加 src/legacy_convert.cpp + src/legacy_xz3dslam_interface.cpp
 )
 add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
