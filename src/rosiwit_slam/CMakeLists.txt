@@ -200,6 +200,7 @@ set(SOURCES
     src/slam_core/slam_factory.cpp
     src/slam_core/slam_pipeline.cpp
     src/slam_core/pose_filter.cpp
+    src/slam_core/trajectory_metrics.cpp
     src/io/xzmap_writer.cpp
     src/io/xzmap_reader.cpp
     src/algorithms/fast_lio2/fast_lio2_frontend.cpp
@@ -340,6 +341,11 @@ target_include_directories(map_cleanup PRIVATE
     include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
 target_link_libraries(map_cleanup ${PCL_LIBRARIES})
 install(TARGETS map_cleanup DESTINATION lib/${PROJECT_NAME})
+
+# 轨迹评估工具 (ATE/RPE, 读 TUM 轨迹)
+add_executable(traj_eval tools/traj_eval.cpp src/slam_core/trajectory_metrics.cpp)
+target_include_directories(traj_eval PRIVATE include ${EIGEN3_INCLUDE_DIRS})
+install(TARGETS traj_eval DESTINATION lib/${PROJECT_NAME})
 
 # ==================== 安装 ====================
 install(TARGETS ${NODE_NAME}
@@ -548,6 +554,7 @@ if(BUILD_TESTING)
         src/io/xzmap_writer.cpp
         src/io/xzmap_reader.cpp
         src/slam_core/pose_filter.cpp
+        src/slam_core/trajectory_metrics.cpp
         src/algorithms/map_store/pcd_map_store.cpp
         src/algorithms/map_store/voxel_map_store.cpp
         src/algorithms/map_store/map_store_factory.cpp

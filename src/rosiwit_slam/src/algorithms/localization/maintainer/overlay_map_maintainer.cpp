@@ -44,6 +44,8 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
     q.y = static_cast<float>(p.y());
     q.z = static_cast<float>(p.z());
     cell->push_back(q);
+    if (!m_pending_store) m_pending_store.reset(new CloudType());
+    m_pending_store->push_back(q);   // 供 store 增量插入
     ++m_overlay_count;
 }
 
@@ -224,6 +226,11 @@ CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
                 }
             }
     return out;
+}
+
+void OverlayMapMaintainer::popOverlayDelta(CloudType::Ptr& out) {
+    out = m_pending_store;
+    m_pending_store.reset();
 }
 
 CloudType::Ptr OverlayMapMaintainer::snapshotOverlay() {

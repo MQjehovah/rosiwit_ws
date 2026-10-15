@@ -194,6 +194,9 @@ void SlamNode::publish(const SlamOutput& out) {
     builtin_interfaces::msg::Time stamp;
     if (out.pose.time > 0) stamp = toRosTime(out.pose.time);
     else stamp = now();
+    // 更新最新协方差 (定位模式)
+    PoseStamped pv;
+    if (m_algo && m_algo->getPoseCov(pv, m_pose_cov)) m_has_cov = true;
     Eigen::Quaterniond q(out.pose.rot);
     // 定位模式且开启高频输出时, odom/TF 由 highRateCB 高频发布; 此处不重复
     const bool hr = (m_cfg.output_rate_hz > 0.0) &&
@@ -222,6 +225,11 @@ void SlamNode::publishOdomTf(const PoseStamped& pose, const builtin_interfaces::
         odom.pose.pose.position.x = pose.trans.x(); odom.pose.pose.position.y = pose.trans.y(); odom.pose.pose.position.z = pose.trans.z();
         odom.pose.pose.orientation.x = q.x(); odom.pose.pose.orientation.y = q.y(); odom.pose.pose.orientation.z = q.z(); odom.pose.pose.orientation.w = q.w();
         odom.twist.twist.linear.x = pose.vel.x(); odom.twist.twist.linear.y = pose.vel.y(); odom.twist.twist.linear.z = pose.vel.z();
+        // 协方差: 我们的顺序 [rot(3),trans(3)] -> ROS [x,y,z,rot(3)]
+        auto mi = [](int r) { return r < 3 ? r + 3 : r - 3; };
+        for (int r = 0; r < 6; ++r)
+            for (int c = 0; c < 6; ++c)
+                odom.pose.covariance[r * 6 + c] = m_has_cov ? m_pose_cov(mi(r), mi(c)) : 0.0;
         m_odom_pub->publish(odom);
         if (m_odom_nav_pub->get_subscription_count() > 0) m_odom_nav_pub->publish(odom);
     }

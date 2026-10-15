@@ -17,6 +17,7 @@ public:
     void setTarget(const CloudType::Ptr& target) override;
     bool match(const CloudType::Ptr& scan, const PoseStamped& guess,
                MatchResult& out) override;
+    double evaluateResidual(const CloudType::Ptr& scan, const PoseStamped& pose) override;
 
 private:
     struct Cell {

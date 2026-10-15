@@ -146,4 +146,25 @@ bool Ndt2dMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     return true;
 }
 
+double Ndt2dMatcher::evaluateResidual(const CloudType::Ptr& scan, const PoseStamped& pose) {
+    if (m_levels.empty()) return -1.0;
+    const Level& fl = m_levels.back();
+    CloudType::Ptr src = downsampleCloud(filterFinite(scan), fl.cell);
+    if (!src || src->empty()) return -1.0;
+    const double yaw = std::atan2(pose.rot(1, 0), pose.rot(0, 0));
+    const double c = std::cos(yaw), s = std::sin(yaw);
+    const double x = pose.trans.x(), y = pose.trans.y();
+    double sum = 0.0;
+    int used = 0;
+    for (const auto& p : src->points) {
+        if (p.z < m_zmin || p.z > m_zmax) continue;
+        const Eigen::Vector2d q(c * p.x - s * p.y + x, s * p.x + c * p.y + y);
+        const Cell* cell = findCell(fl, q.x(), q.y());
+        if (!cell) continue;
+        sum += (q - cell->mean).norm();
+        ++used;
+    }
+    return used >= 10 ? sum / used : -1.0;
+}
+
 } // namespace rosiwit_slam

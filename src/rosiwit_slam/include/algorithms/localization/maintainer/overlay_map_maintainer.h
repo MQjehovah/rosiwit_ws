@@ -22,6 +22,7 @@ public:
                      const MatchResult& match, bool pose_confident) override;
     CloudType::Ptr getOverlay(const PoseStamped& pose) override;
     CloudType::Ptr snapshotOverlay() override;
+    void popOverlayDelta(CloudType::Ptr& out) override;
     bool save(const std::string& path) override;
     bool load(const std::string& path) override;
 
@@ -55,6 +56,7 @@ private:
     // L13 位姿图: 变化关键帧缓冲 (pose + 机体系点云)
     struct KfBuf { PoseStamped pose; CloudType::Ptr body; };
     std::vector<KfBuf> m_buf;
+    CloudType::Ptr m_pending_store;   // 新增 overlay 点(供 store 增量插入)
 };
 
 } // namespace rosiwit_slam

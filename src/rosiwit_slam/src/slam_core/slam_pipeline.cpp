@@ -136,6 +136,11 @@ bool SlamPipeline::getHighRatePose(double t, PoseStamped& out) {
     return m_localization->predictAt(t, out);
 }
 
+bool SlamPipeline::getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) {
+    if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) return false;
+    return m_localization->getPoseWithCov(out, cov);
+}
+
 void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& to_id,
                                 const PoseStamped& rel, double cov) {
     if (!m_backend) return;

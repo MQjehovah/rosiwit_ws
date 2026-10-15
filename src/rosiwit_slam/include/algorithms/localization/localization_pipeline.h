@@ -97,6 +97,8 @@ private:
     int m_max_hypotheses = 4;
     double m_hyp_margin = 0.25;
     int m_hyp_stale = 10;
+    int m_hyp_reseed_frames = 0; // 跟踪期: 连续未采纳 N 帧后重定位重播多假设 (0=关)
+    int m_low_fit_frames = 0;
 
     FixedLagSmoother m_smoother; // 固定滞后平滑器 (L4)
     SmootherConfig m_smoother_cfg;

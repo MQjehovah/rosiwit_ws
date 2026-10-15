@@ -34,6 +34,9 @@ public:
     /// 返回全部 overlay 点云(世界系), 供刷新全局重定位器 (lifelong)
     virtual CloudType::Ptr snapshotOverlay() { return nullptr; }
 
+    /// 取出并清空"自上次调用以来新增"的 overlay 点 (供存储底座增量插入)
+    virtual void popOverlayDelta(CloudType::Ptr& out) { out.reset(); }
+
     /// 持久化/载入 overlay (原图不变)
     virtual bool save(const std::string& /*path*/) { return false; }
     virtual bool load(const std::string& /*path*/) { return false; }

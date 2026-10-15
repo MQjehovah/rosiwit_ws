@@ -257,6 +257,7 @@ localization:
     max: 4
     margin: 0.25
     stale: 10
+    reseed_frames: 0          # 跟踪期连续未采纳 N 帧后重定位重播多假设 (0=关)
 
   # 固定滞后平滑器 (L4): 融合运动先验 + 扫描匹配(带协方差), 替代逐帧硬替换
   smoother:

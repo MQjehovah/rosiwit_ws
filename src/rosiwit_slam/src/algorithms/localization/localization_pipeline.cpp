@@ -187,6 +187,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_max_hypotheses = getv<int>(hpc, "max", m_max_hypotheses);
         m_hyp_margin     = getv<double>(hpc, "margin", m_hyp_margin);
         m_hyp_stale      = getv<int>(hpc, "stale", m_hyp_stale);
+        m_hyp_reseed_frames = getv<int>(hpc, "reseed_frames", m_hyp_reseed_frames);
     }
     m_hyp.setMax(m_max_hypotheses);
     m_store_name = getv<std::string>(loc, "map_store", m_store_name);
@@ -379,10 +380,15 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
                                        const PoseStamped& guess) {
     if (!res.converged) return false;
     // Mahalanobis 门控: 修正量相对匹配协方差异常大 -> 判离群, 不采信
+    // (协方差加下限: 匹配协方差是估计自身不确定度, 极小时会误拒正常修正)
     if (m_accept_cfg.mahalanobis_gate) {
         Eigen::Matrix<double, 6, 1> e;
         poseInnovation(res.pose, guess, e);
-        Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(res.cov);
+        Eigen::Matrix<double, 6, 6> C = res.cov;
+        const double rf = 0.0175 * 0.0175, tf = 0.05 * 0.05;
+        for (int k = 0; k < 3; ++k) C(k, k) += rf;
+        for (int k = 3; k < 6; ++k) C(k, k) += tf;
+        Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(C);
         const double d2 = e.dot(ldlt.solve(e));
         if (std::isfinite(d2) && d2 > m_accept_cfg.mahalanobis_chi2) return false;
     }
@@ -536,6 +542,22 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 过桥计数: 连续未采纳帧数
     m_coast_count = accepted ? 0 : (m_coast_count + 1);
 
+    // 跟踪期歧义: 连续未采纳 N 帧后, 用重定位多候选重播假设 (aliasing 纠错)
+    m_low_fit_frames = accepted ? 0 : (m_low_fit_frames + 1);
+    if (m_hyp_reseed_frames > 0 && !m_hyp.ambiguous() &&
+        m_low_fit_frames >= m_hyp_reseed_frames &&
+        m_relocalizer && m_relocalizer_name != "none") {
+        std::vector<GlobalCandidate> cands;
+        const int nk = m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands);
+        if (nk > 1) {
+            std::vector<PoseStamped> hp;
+            std::vector<double> hs;
+            for (const auto& c : cands) { hp.push_back(c.pose); hs.push_back(c.score); }
+            m_hyp.seed(hp, hs);
+            m_low_fit_frames = 0;
+        }
+    }
+
     // lifelong: 周期性用叠加层(环境变化)刷新全局重定位器, 避免重定位失效
     if (m_maintainer && m_relocalizer && m_relocalizer_name != "none" &&
         m_maintainer_cfg.refresh_frames > 0) {
@@ -545,11 +567,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             if (ov && !ov->empty() && ov->size() != m_last_overlay_size) {
                 m_last_overlay_size = ov->size();
                 m_relocalizer->updateEnvironment(ov);
-                // 同步刷新存储底座 (base + overlay)
+                // 存储底座增量插入新增 overlay 点 (避免整体重建)
                 if (m_store) {
-                    CloudType::Ptr merged(new CloudType(*m_map));
-                    *merged += *ov;
-                    m_store->buildFromCloud(merged);
+                    CloudType::Ptr d;
+                    m_maintainer->popOverlayDelta(d);
+                    if (d && !d->empty()) m_store->insert(d);
                 }
             }
         }
@@ -563,7 +585,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     if (res.converged) {
         Eigen::Matrix<double, 6, 1> e;
         poseInnovation(res.pose, guess, e);
-        Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(res.cov);
+        Eigen::Matrix<double, 6, 6> C = res.cov;
+        const double rf = 0.0175 * 0.0175, tf = 0.05 * 0.05;
+        for (int k = 0; k < 3; ++k) C(k, k) += rf;
+        for (int k = 3; k < 6; ++k) C(k, k) += tf;
+        Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(C);
         const double d2 = e.dot(ldlt.solve(e));
         if (std::isfinite(d2)) mi.nees = d2;
     }

@@ -11,6 +11,9 @@
 #include "algorithms/localization/hypothesis/hypothesis_manager.h"
 #include "algorithms/localization/motion_prior/imu_motion_prior.h"
 #include "slam_core/pose_filter.h"
+#include "slam_core/trajectory_metrics.h"
+#include <fstream>
+#include <pcl/io/pcd_io.h>
 #include "algorithms/map_store/map_store_factory.h"
 #include "io/xzmap_writer.h"
 #include "io/xzmap_reader.h"
@@ -711,6 +714,68 @@ TEST(MaintainerTest, PoseGraphModeCommits) {
     mnt->onLocalized(makePose(0.0, 0, 0, 0), scan, low, true);
     mnt->onLocalized(makePose(0.5, 0, 0, 0), scan, low, true);   // 达 pg_min_keyframes -> flush
     EXPECT_GT(mnt->snapshotOverlay()->size(), 0u);
+}
+
+// ---- 轨迹回归: 流水线走合成序列, 量化 ATE 与不丢率 ----
+TEST(TrajectoryRegressionTest, SyntheticSequenceAteAndLoss) {
+    CloudType::Ptr map = makeScene();
+    const std::string base = std::string(::testing::TempDir());
+    const std::string pcd = base + "traj_map.pcd";
+    ASSERT_EQ(pcl::io::savePCDFileBinary(pcd, *map), 0);
+
+    const std::string cfg = base + "traj_cfg.yaml";
+    {
+        std::ofstream f(cfg);
+        f << "localization:\n"
+             "  pipeline:\n"
+             "    relocalizer: none\n"
+             "    motion_prior: constant_velocity\n"
+             "    local_map: global\n"
+             "    matcher: pp_icp\n"
+             "    monitor: threshold\n"
+             "    map_maintainer: none\n"
+             "  matcher:\n"
+             "    voxel_resolution: 0.2\n"
+             "    max_iterations: 50\n"
+             "    corr_dist_init: 1.5\n"
+             "    corr_dist_min: 0.5\n"
+             "    degeneracy_gate: false\n"
+             "  accept:\n"
+             "    mode: 0\n"
+             "    min_coverage: 0.4\n"
+             "  monitor:\n"
+             "    credible_fitness: 0.6\n"
+             "    lost_fitness: 0.4\n"
+             "    lost_patience_low: 30\n";
+    }
+
+    LocalizationPipeline lp;
+    ASSERT_TRUE(lp.init(cfg));
+    lp.setMap(pcd);
+    lp.setInitPose(makePose(3.0, 3.0, 0.0, 0.0));
+
+    std::vector<PoseStamped> est, gt;
+    int lost = 0;
+    for (int i = 0; i < 40; ++i) {
+        const PoseStamped truth = makePose(3.0 + 0.08 * i, 3.0, 0.0, 0.0);
+        CloudType::Ptr scan = makeScanFromMap(map, truth);
+        LidarFrame f;
+        f.cloud = scan;
+        f.start_time = i * 0.1;
+        f.end_time = i * 0.1 + 0.1;
+        lp.onLidar(f);
+        PoseStamped e;
+        if (lp.getStatus() == ILocalization::LOCALIZED && lp.getPose(e)) {
+            est.push_back(e);
+            gt.push_back(truth);
+        } else {
+            ++lost;
+        }
+    }
+    ASSERT_GT(est.size(), 30u);
+    const TrajMetrics tm = evaluateTrajectory(est, gt);
+    EXPECT_LT(tm.ate_rmse, 0.3) << "ATE=" << tm.ate_rmse;
+    EXPECT_LT(lost, 10);
 }
 
 // ---- 工厂注册完整性 ----

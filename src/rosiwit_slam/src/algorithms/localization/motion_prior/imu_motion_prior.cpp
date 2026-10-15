@@ -2,6 +2,7 @@
 #include "algorithms/localization/motion_prior/imu_motion_prior.h"
 #include <cmath>
 #include <numeric>
+#include <algorithm>
 
 namespace rosiwit_slam {
 
@@ -136,16 +137,17 @@ void ImuMotionPrior::onMatch(const PoseStamped& pose) {
             const V3D inst = (pose.trans - m_last_match_trans) / dt;
             m_vel_world = 0.5 * m_vel_world + 0.5 * inst;
 
-            // L11 零偏在线估计 (几何观测器; 仅在被采纳帧调用)
+            // L11 零偏在线估计 (dt 限幅: 稀疏匹配时避免过激更新)
+            const double dtb = std::min(dt, 0.5);
             const V3D err = pose.trans - m_pose.trans;
             const V3D err_body = m_pose.rot.transpose() * err;
-            m_acc_bias -= dt * m_cfg.acc_bias_gain * err_body;
+            m_acc_bias -= dtb * m_cfg.acc_bias_gain * err_body;
             m_acc_bias = m_acc_bias.cwiseMax(-m_cfg.acc_bias_max).cwiseMin(m_cfg.acc_bias_max);
 
             const M3D dR = m_pose.rot.transpose() * pose.rot;  // qe = q_pred^{-1} ⊗ q_meas
             Eigen::Quaterniond qe(dR);
             if (qe.w() < 0.0) qe.coeffs() *= -1.0;
-            m_gyro_bias -= dt * m_cfg.gyro_bias_gain * (qe.w() * qe.vec());
+            m_gyro_bias -= dtb * m_cfg.gyro_bias_gain * (qe.w() * qe.vec());
             m_gyro_bias = m_gyro_bias.cwiseMax(-m_cfg.gyro_bias_max).cwiseMin(m_cfg.gyro_bias_max);
         }
     }

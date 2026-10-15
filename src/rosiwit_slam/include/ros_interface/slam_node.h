@@ -104,6 +104,8 @@ private:
 
     // L12: 高频输出滤波 (alpha-beta / 常速), 替代 EMA 用于高频流
     PoseOutputFilter m_out_filter;
+    Eigen::Matrix<double, 6, 6> m_pose_cov = Eigen::Matrix<double, 6, 6>::Identity();  // [rot,trans]
+    bool m_has_cov = false;
 };
 
 } // namespace rosiwit_slam

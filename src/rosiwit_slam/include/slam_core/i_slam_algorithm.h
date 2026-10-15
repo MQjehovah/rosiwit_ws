@@ -51,6 +51,8 @@ public:
     virtual void onOdom(const PoseStamped& /*odom*/) {}
     /// 高频预测位姿 (定位模式; 供高频输出/TF; 默认不支持)
     virtual bool getHighRatePose(double /*t*/, PoseStamped& /*out*/) { return false; }
+    /// 位姿 + 协方差 (order [rot(3),trans(3)]; 默认不支持)
+    virtual bool getPoseCov(PoseStamped& /*out*/, Eigen::Matrix<double, 6, 6>& /*cov*/) { return false; }
 };
 
 } // namespace rosiwit_slam
