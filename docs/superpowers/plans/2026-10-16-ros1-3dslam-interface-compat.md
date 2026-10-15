@@ -425,9 +425,10 @@ public:
 `latest()` 用 `std::mutex` 保护一张 `GridInfo`。
 
 **测试** `test/test_realtime_grid.cpp`：
-1. `BuildsGridFromSyntheticWall` —— 造一堵墙：x∈[2.0,3.0] 每 0.05 m、y=0、z=1.0，`grid_max_height=2.0`
-   → `buildGridFromPoints` 返回 true；`width>0 && height>0`；`resolution≈0.05`；
-   `data` 里至少有 1 个 `100`
+1. `BuildsGridFromSyntheticWall` —— 造一堵墙：x∈[-3.0,3.0]、y=0、z=1.0、**点间距 0.01 m**，
+   `grid_max_height=2.0` → `buildGridFromPoints` 返回 true；`width>0 && height>0`；
+   `resolution≈0.05`；`data` 里至少有 1 个 `100`
+   （墙长与点间距是被实测逼出来的，见下面 T2 实测记录 —— 计划初稿写的 x∈[2.0,3.0] / 0.05 m 是错的）
 2. `ReturnsFalseOnEmptyInput` —— 空点云 → 返回 false
 3. `FloorPointsBecomeFreeNotOccupied` —— z=0.0 的点（低于 `grid_min_height=0.1`）→ 没有 `100`
 4. `RowZeroIsMinY` —— 在 y=+5 造墙，断言占据格的 row 索引大于 height/2（钉住行序，防以后被"修正"）
@@ -438,6 +439,43 @@ public:
 
 **验证**：同上构建 + 单测。
 **提交**：`feat(ros1): 建图实时栅格(复用核心公开栅格生成器)`
+
+### 2.1 T2 实测记录（已完成）
+
+**状态**：`catkin_make` `exit=0`；`catkin_make run_tests_rosiwit_slam_ros1` `exit=0`；
+**gtest 30/30 全绿**（legacy_config 19 + realtime_grid 11）。
+
+实测新增的用例（计划里 7 条 → 11 条）：`SourceReturningFalseProducesNothing`、
+`NonPositiveHzFallsBackTo1`（`hz<=0` 不能变成忙等）、`UnknownGeneratorFallsBack`
+（未知生成器名回落 `height_projection`，对齐 `pcd_map_manager.cpp:109-115`）、
+`MissingYamlUsesDefaults`。
+
+实测发现的 3 件事：
+
+1. **合成墙必须"点间距 ≪ 分辨率 + 足够长"，否则测不出任何占据格**（首次跑 4 条用例全挂）。
+   生成器自己的日志把原因说得很清楚：
+   ```
+   [GridMap] 123x3 occupied=87 total=369 res=0.05
+   [Post:denoise] comps=35 removed_cells=87 min_group=30
+   ```
+   计划初稿的"x∈[2.0,3.0] 每 0.05 m"有两个坑叠加：
+   - **点间距正好等于分辨率**时，`VoxelGrid`(leaf=0.05) 取体素质心后落点与格边界对齐，
+     会**稳定**留下空洞 → 6 m 的墙被拆成 **35 个连通域**（87 格），
+   - 每个碎片都 < `min_component_cells=30`，被后处理第一步 `denoise` **全部删除** → `100` 数为 0。
+   （即使不碎，1 m 的墙也只有 20 格 < 30，同样会被删。）
+   改为**点间距 0.01 m（分辨率的 1/5）+ 墙长 6 m（≈120 格）**后一次通过。
+   这两条已写进测试文件的注释里，防止以后有人"简化"成等间距。
+   注意：**这不是代码 bug**，是核心后处理的既定行为（我们不改核心，只镜像配置，D15），
+   真实雷达的点云比这密得多，且产线分辨率是 `map_resolution=0.3`。
+2. **`cfg.ground_z` 必须显式钉住**（测试里设 `0.0`）。`height_projection` 的高度是相对
+   **检测出的地面平面**算的（`ground_segmentation.cpp`），不钉住的话合成数据的地面拟合不可控
+   （也正因如此，`fitGround` 的 `ransac` 分支在只有一堵墙的点云上会退化）。
+3. **`height_projection` 只产 0/100，没有 10(unknown)** —— 实测确认了计划里的 D17。
+
+另外：`loadGridConfigFromYaml` 额外读了 `map_resolution` / `map_save_voxel` 两个**非 `grid_*` 键**，
+因为核心是在 `generateGridMap()` 里把 `cfg.resolution` 和 `cfg.point_spacing` 赋成这两个值的
+（`pcd_map_manager.cpp:271-281`）。薄层没有别的来源，所以在装载时一并定下来，语义与核心等价；
+代码里已注明这层耦合。
 
 ---
 
