@@ -145,6 +145,15 @@ TEST(LegacyConvert, LegacyYawFromPlus90degIsMinusHalfPi) {
     EXPECT_TRUE(R2.isApprox(R, 1e-12));
 }
 
+// 6b —— 标准航向角 (slam_info.robot_pose.theta 用它) 与 legacyYawFromRot 反号
+TEST(LegacyConvert, StdYawIsNegativeOfLegacyYaw) {
+    const Eigen::Matrix3d R =
+        Eigen::AngleAxisd(M_PI / 3.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    EXPECT_NEAR(stdYawFromRot(R), M_PI / 3.0, 1e-12);
+    EXPECT_NEAR(stdYawFromRot(R), -legacyYawFromRot(R), 1e-12);
+    EXPECT_NEAR(stdYawFromRot(Eigen::Matrix3d::Identity()), 0.0, 1e-12);
+}
+
 // 7 —— 塑形: z 过滤 + 抽稀
 TEST(LegacyConvert, ScanShapeFiltersByZ) {
     CloudType in;

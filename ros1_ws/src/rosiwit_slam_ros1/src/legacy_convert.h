@@ -63,6 +63,13 @@ sensor_msgs::PointCloud toOldPointCloud(const rosiwit_slam::CloudType& c,
 /// 两者合起来正好还原成 `Rot(Z,θ)`。所以"取 yaw"与"用 yaw"必须成对照抄, 单独看会以为符号错了。
 double legacyYawFromRot(const Eigen::Matrix3d& R);
 
+/// **标准航向角** (map 系下绕 Z 逆时针为正): `atan2(R(1,0), R(0,0))`。
+/// 旧 `slam_info.robot_pose.theta` 用的 `curr_pose.yaw` 就是它 —— 旁证: legacy.cpp:1172-1183
+/// 拿 yaw 做 `dx=0.06cos(yaw) / dy=0.06sin(yaw)` 的航向偏移, 并按 `sin(yaw/2)/cos(yaw/2)`
+/// 造 Z 轴四元数, 两者都是标准航向约定。注意它恒等于 `-legacyYawFromRot(R)`
+/// (后者是 Eigen 的 `atan2(R(0,1),R(0,0))` 约定, 旧 TF 里再取一次负才还原)。
+double stdYawFromRot(const Eigen::Matrix3d& R);
+
 /// 照抄旧实现的"当前帧点云塑形"(legacy.cpp:982-996 定位 / 1071-1085 建图):
 ///   1. 抽稀到约 2000 点: `down_sample = (N < 2000) ? 1 : round(N/2000)` (N 是输入点数)
 ///   2. 再乘 `downsample_multiplier` (旧实现给"原始帧"乘 2)

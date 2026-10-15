@@ -901,7 +901,59 @@ double legacyYawFromRot(const Eigen::Matrix3d& R);
 "降采样+z 过滤"形态、`or_curr_scan_point` 只在定位发、`/map` 每个 `rt_grid_map` 周期无条件发）。
 再按 §5.2 的表注册定时器（0.1s / 0.01s / `1/rt_grid_map_publish_hz`）。
 
-**验证**（T5b 完成后做）：
+### 5.6 T5b 实测记录（发布侧已完成并提交）
+
+**状态**：`catkin_make` `exit=0`；`run_tests` `exit=0`；**gtest 51/51 全绿**
+（legacy_config 19 + realtime_grid 11 + lost_monitor 8 + legacy_convert 13）。
+`legacy_dev.launch` 真跑，`rosnode info` / `rostopic type` / `rostopic echo` / `rosservice call` 逐项核对：
+
+- **14 个话题全部注册且类型正确** —— 关键项 `scan_f_map` 是 `sensor_msgs/PointCloud` ✓（其余 13 个与 §5.2 表一致）。
+- **FREE 模式**（`slam_init_type=free`）`/slam/info` → `slam_state=1, location_status=1`，`map_name="NULL"`，
+  `update_request=0`，`matching_degree=0` ✓ —— 与 §5.3 表逐字段对上。
+- `rosservice call /set_slam_mode "mode: 'mapping'"` 回 `success: True`；之后 `/slam/info` →
+  `slam_state=0, location_status=0` ✓（MAPPING 分支）。
+- `/map` 发布者 = `/xz_3d_slam`，在 MAPPING 下按 1Hz 出数据（无雷达数据时 `width: 0`，符合预期 ——
+  常驻对象照发上一张，`legacy.cpp:909`）。**T13 灌合成数据后再验 `width>0`（T10 的验收项）。**
+- 启动日志：`[legacy_iface] slam_init_type=free -> mode=FREE debug_publish=0 is_debug=0 use_tf=1`
+  与 `timers: pub=0.1s, pose=0.01s, rt_grid=1s (rt_grid_map_publish_hz=1, publish_hz=10 无效-硬编码 0.1)` ✓
+
+实现时定下的 4 件事：
+
+1. **`has_new_pose` 就是对的 latch 信号（已在核心源码上确认）**：定位模式下核心
+   **只在 `m_localization->getStatus() == ILocalization::LOCALIZED` 时才产出输出**
+   （`slam_pipeline.cpp:178-192`），INIT/DEGRADED 不产出。所以 T11 那条
+   "`has_new_pose && 定位模式` → `onLocalizedPose()`" 正好等价于"真的定位上过"，
+   INIT 陷阱（`getPoseCov` 在 INIT 返回 true）被绕开了。顺带确认：
+   同一处 `out.world_cloud` 就是**已转到世界系**的当前帧，正对旧 `getCurrScan()`。
+2. **`slam_mode_` 以核心为唯一权威**：每个 tick 用 `engine.pipelineMode()`
+   反推旧 `SLAMMODE`（`mapping`/`localization`/`idle` → MAPPING/LOCALIZATION/FREE）。
+   因为旧实现是"两个指针（localiza/mapping）有没有"决定行为，而我们**只有一个核心**，
+   只能靠模式区分。启动时把 `slam_init_type` 打到核心上（`free` → `setPipelineMode("idle")`，
+   核心确实支持 idle，见 `slam_pipeline.cpp:436-441`）。**这是真机上要留意的一条**：
+   `slam_init_type=free` 意味着机器人**开机后核心是 idle、什么都不跑**，
+   要等外部调 `/switch_map`（T8）或 `/set_slam_mode` 才动 —— 旧系统就是这个行为
+   （`legacy.cpp:57-83` 只赋模式、不建指针）。已在启动日志里显式打出来。
+3. **`debug_publish_` 在真机上是 false**，所以 §5.4 里那 5 个"只在 debug_publish_ 下发"的话题
+   （`global_map`、`global_grid_map`、`curr_submap_point`、`loop_constraint`、`points_2d`）
+   **在真机上本来就不出数据** —— 随包 conf 只有 `"is_debug": false` 且没有 `debug_publish` 键，
+   按旧实现回落 `is_debug`（`legacy.cpp:1470-1474`）就是 false。实测启动日志 `debug_publish=0`。
+   **这不是 bug，是照抄。** 定位模式下的 `curr_scan_point` 同理（只有 `scan_f_map` 一直发）。
+4. **`slam_info.robot_pose.theta` 用标准航向角**，新增 `stdYawFromRot(R) = atan2(R(1,0), R(0,0))`
+   （= `-legacyYawFromRot(R)`），并加了单测钉住二者反号。依据：旧实现 `curr_pose.yaw` 的旁证
+   （`legacy.cpp:1172-1183` 用 yaw 做 `0.06cos/sin` 的航向偏移 + `sin(yaw/2)/cos(yaw/2)` 造四元数）。
+   **待真机核对**：拿 `/slam/info.robot_pose.theta` 与 `/curr_localization_pose` 的 orientation 对一下。
+
+**一处有意的小偏差**：建图模式下旧实现每 0.1s 都发 `curr_localization_pose`（位姿来自
+`getCurrMappingPose()`，没数据时是零位姿）；我们在**核心还没产出任何位姿时不发位姿**
+（但 `slam/info` 照发 100Hz）。更安全（不会先给下游一串零位姿），记在这里。
+
+**验证脚本自身的小笔误**：查 `/map` 类型时脚本拼成了 `"//map"`（变量里已带 `/`），
+所以那一行显示"<缺失>"；`rosnode info` 的发布表里 `/map [nav_msgs/OccupancyGrid]` 是在的 ✓。
+
+**下一步**：T6（10 个订阅器）—— 把原始输入点云喂给
+`LegacyXz3dSlamInterface::onRawInputCloud()`、`setInputSeen()`，建图分支才会开始发扫描类话题。
+
+**验证**（发布侧已过；/map 有数据要等 T13）：
 1. 构建 + 单测。
 2. `legacy_dev.launch` 起来后：
    ```bash

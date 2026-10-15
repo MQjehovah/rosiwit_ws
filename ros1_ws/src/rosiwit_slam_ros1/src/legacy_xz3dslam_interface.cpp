@@ -1,0 +1,419 @@
+// ============================================================================
+// 旧 xz_3d_slam 发布侧实现 —— 逐条照抄 legacy.cpp, 行号见头文件。
+//
+// 生产环境下哪些话题其实是"哑"的 (重要, 别以为是 bug):
+//   随包发行的 conf/slam_conf.json 里 `is_debug: false` 且**没有** debug_publish 键,
+//   按旧实现 debug_publish_ 回落 is_debug (legacy.cpp:1470-1474) => **false**。
+//   而 global_map / global_grid_map / curr_submap_point / loop_constraint 在旧实现里
+//   就只在 debug_publish_ 为真时才发 (legacy.cpp:353-359 / 341-345),
+//   points_2d 更是一次都没发过。也就是说这 5 个话题在真机上**本来就不出数据**,
+//   我们照抄这个行为 —— 这才是"对上"。
+// ============================================================================
+#include "legacy_xz3dslam_interface.h"
+
+#include <cmath>
+#include <iostream>
+
+#include <pcl_conversions/pcl_conversions.h>
+#include <ros/package.h>
+
+#include "legacy_convert.h"
+
+using namespace rosiwit_slam;
+
+namespace rosiwit_slam_ros1 {
+
+namespace {
+constexpr const char* kMapFrame = "map";
+// 旧实现的 z 过滤上界: 定位 2.0 (legacy.cpp:989) / 建图 1.0 (legacy.cpp:1078)
+constexpr double kLocZMax = 2.0;
+constexpr double kMapZMax = 1.0;
+
+const char* modeName(SlamMode m) {
+    switch (m) {
+        case SlamMode::FREE:         return "FREE";
+        case SlamMode::MAPPING:      return "MAPPING";
+        case SlamMode::LOCALIZATION: return "LOCALIZATION";
+        default:                     return "UNKNOWN";
+    }
+}
+} // namespace
+
+LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
+                                                 SlamEngine& engine)
+    : nh_(nh), pnh_(pnh), engine_(engine),
+      cfg_(engine.legacyConfig()),
+      debug_publish_(engine.legacyConfig().debug_publish),
+      is_debug_(engine.legacyConfig().is_debug),
+      use_tf_(engine.legacyConfig().use_tf) {
+    initPub();
+    initTimerPub();
+
+    // 旧实现: 构造里按 slam_init_type_ 定初始 slam_mode_ (legacy.cpp:57-83)
+    const std::string& init = cfg_.slam_init_type;
+    SlamMode m = SlamMode::FREE;
+    if (init == "mapping")           m = SlamMode::MAPPING;
+    else if (init == "localization") m = SlamMode::LOCALIZATION;
+    setModeFromLegacy(m);
+    std::cout << "[legacy_iface] slam_init_type=" << init << " -> mode=" << modeName(m)
+              << " debug_publish=" << (debug_publish_ ? 1 : 0)
+              << " is_debug=" << (is_debug_ ? 1 : 0)
+              << " use_tf=" << (use_tf_ ? 1 : 0) << std::endl;
+
+    // 实时栅格 (T2): 数据源 = 核心的全局地图; 只在建图模式真的去算
+    GridMapConfig gcfg;
+    GridPostConfig gpost;
+    std::string gen;
+    std::string yaml = engine_.configPath();
+    if (yaml.empty()) yaml = ros::package::getPath("rosiwit_slam_ros1") + "/config/default.yaml";
+    loadGridConfigFromYaml(yaml, gcfg, gpost, gen);
+    realtime_grid_.setConfig(gcfg, gpost, gen);
+    realtime_grid_.setSource([this](PointVec& out) {
+        if (slam_mode_ != SlamMode::MAPPING) return false;   // 非建图模式没必要算
+        if (!engine_.getGlobalMap(out) || out.empty()) return false;
+        return true;
+    });
+    // 重算频率与发布频率一致 (旧实现是"发布前若变了就重算")
+    realtime_grid_.start(static_cast<double>(cfg_.rt_grid_map_publish_hz > 0
+                                                 ? cfg_.rt_grid_map_publish_hz
+                                                 : 1));
+}
+
+void LegacyXz3dSlamInterface::initPub() {
+    // legacy.cpp:282-297 逐字: 名字 / 类型 / queue / latch 都不改
+    point_map_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("global_map", 1, true);
+    grip_map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("global_grid_map", 1, true);
+    realtime_grid_map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("/map", 10);
+    pointcloud_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("curr_scan_point", 10);
+    ros1_pointcloud_puber_ = nh_.advertise<sensor_msgs::PointCloud>("scan_f_map", 10);
+    submap_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("curr_submap_point", 10);
+    or_pointcloud_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("or_curr_scan_point", 10);
+    pose_puber_ = nh_.advertise<geometry_msgs::PoseStamped>("curr_localization_pose", 10);
+    path_puber_ = nh_.advertise<nav_msgs::Path>("mapping_path", 10);
+    loop_constraint_puber_ = nh_.advertise<visualization_msgs::MarkerArray>("loop_constraint", 10);
+    slam_info_puber_ = nh_.advertise<xzrobot_ros_dependency::SlamInfo>("slam/info", 10);
+    scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
+    warning_code_puber_ = nh_.advertise<std_msgs::String>("slam_warning_code", 10);
+    point_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("origin_point", 10);
+}
+
+void LegacyXz3dSlamInterface::initTimerPub() {
+    // legacy.cpp:254-255: 先按 publish_hz_ 算, 紧接着**硬编码覆盖成 0.1** —— publish_hz 无效 (M2)
+    const double pub_time_gap = 0.1;
+    double rt_hz = static_cast<double>(cfg_.rt_grid_map_publish_hz);
+    if (!(rt_hz > 0.0)) rt_hz = 1.0;
+    const double rt_gap = 1.0 / rt_hz;
+
+    std::cout << "[legacy_iface] timers: pub=" << pub_time_gap << "s, pose=0.01s, rt_grid="
+              << rt_gap << "s (rt_grid_map_publish_hz=" << cfg_.rt_grid_map_publish_hz
+              << ", publish_hz=" << cfg_.publish_hz << " 无效-硬编码 0.1)" << std::endl;
+
+    point_cloud_mapping_timer_ = nh_.createTimer(
+        ros::Duration(pub_time_gap), &LegacyXz3dSlamInterface::timerPublishLocalCloudAndSubmap, this);
+    localization_pose_timer_ = nh_.createTimer(
+        ros::Duration(0.01), &LegacyXz3dSlamInterface::timerPublishLocalizationPose, this);
+    realtime_grid_map_timer_ = nh_.createTimer(
+        ros::Duration(rt_gap), &LegacyXz3dSlamInterface::timerPublishRealtimeGridMap, this);
+    // [T7] realtime_warning_code_timer_ = nh_.createTimer(ros::Duration(rt_gap),
+    //        &LegacyXz3dSlamInterface::timerPublishWarningCode, this);   // legacy.cpp:267
+}
+
+// ---------------------------------------------------------------- 模式
+
+SlamMode LegacyXz3dSlamInterface::updateModeFromCore() {
+    const std::string m = engine_.pipelineMode();
+    if (m == "mapping")           slam_mode_ = SlamMode::MAPPING;
+    else if (m == "localization") slam_mode_ = SlamMode::LOCALIZATION;
+    else if (m == "idle")         slam_mode_ = SlamMode::FREE;
+    else                          slam_mode_ = SlamMode::UNKNOWN;
+    return slam_mode_;
+}
+
+void LegacyXz3dSlamInterface::applyModeToCore(SlamMode m) {
+    auto* algo = engine_.algo();
+    if (!algo) return;
+    const char* core_mode = (m == SlamMode::MAPPING)      ? "mapping"
+                          : (m == SlamMode::LOCALIZATION) ? "localization"
+                                                          : "idle";
+    if (!algo->setPipelineMode(core_mode)) {
+        ROS_WARN_STREAM("[legacy_iface] core rejected pipeline mode '" << core_mode << "'");
+    }
+}
+
+void LegacyXz3dSlamInterface::setModeFromLegacy(SlamMode m) {
+    const bool changed = (slam_mode_ != m);
+    slam_mode_ = m;
+    applyModeToCore(m);
+    if (changed) {
+        debug_map_published_ = false;   // 旧实现每进模式重置
+        relocating_ = false;
+        std::cout << "[legacy_iface] mode -> " << modeName(m) << std::endl;
+    }
+}
+
+void LegacyXz3dSlamInterface::resetLocalizationLatch() {
+    relocating_ = true;
+    lost_monitor_.reset();
+}
+
+void LegacyXz3dSlamInterface::setGlobalGridMap(const nav_msgs::OccupancyGrid& grid) {
+    global_grid_map_msg_ = grid;
+    set_grid_map_ = true;
+}
+
+// ---------------------------------------------------------------- [T6] 输入
+
+void LegacyXz3dSlamInterface::setInputSeen(bool imu, bool laser) {
+    if (imu) have_imu_ = true;
+    if (laser) have_laser_ = true;
+}
+
+void LegacyXz3dSlamInterface::onRawInputCloud(const CloudType& world_cloud, const ros::Time& stamp) {
+    raw_input_.reset(new CloudType(world_cloud));
+    raw_input_stamp_ = stamp;
+    // origin_point: 每帧雷达都发 (legacy.cpp:3169/3299/3427)
+    if (!raw_input_->empty()) {
+        point_puber_.publish(toPointCloud2(*raw_input_, kMapFrame, stamp));
+    }
+}
+
+// ---------------------------------------------------------------- 定时器
+
+void LegacyXz3dSlamInterface::timerPublishLocalCloudAndSubmap(const ros::TimerEvent&) {
+    startPub();   // legacy.cpp:834
+}
+
+void LegacyXz3dSlamInterface::timerPublishLocalizationPose(const ros::TimerEvent&) {
+    publishCurrPose();   // legacy.cpp:826-827
+}
+
+void LegacyXz3dSlamInterface::timerPublishRealtimeGridMap(const ros::TimerEvent&) {
+    if (slam_mode_ == SlamMode::MAPPING) publishRealtimeGridMap();   // legacy.cpp:836-838
+}
+
+// ---------------------------------------------------------------- 0.1s 分发
+
+void LegacyXz3dSlamInterface::startPub() {
+    updateModeFromCore();   // 核心是模式的唯一权威
+    switch (slam_mode_) {
+        case SlamMode::LOCALIZATION:
+            publishCurrScan();
+            if (debug_publish_) {
+                if (!debug_map_published_) { publishPointMap(); debug_map_published_ = true; }
+                // publishCurrSubMap();  // D2: 注册不发
+            }
+            break;
+
+        case SlamMode::MAPPING:
+            if (have_imu_ && have_laser_) {
+                if (debug_publish_) {
+                    if (!debug_map_published_) { publishPointMap(); debug_map_published_ = true; }
+                    // publishCurrSubMap();  // D2
+                }
+                publishCurrScan();
+                publishMappingPath();
+                // publishLoopBetweenKF();  // D2
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+void LegacyXz3dSlamInterface::publishCurrScan() {
+    SlamOutput out;
+    if (!engine_.latestOutput(out) || !out.world_cloud || out.world_cloud->empty()) return;
+    const CloudType& world = *out.world_cloud;   // 核心给的就是 map 系下的当前帧
+    const ros::Time stamp = out.pose.time > 0 ? ros::Time(out.pose.time) : ros::Time::now();
+
+    if (slam_mode_ == SlamMode::LOCALIZATION) {
+        // scan_f_map: 抽稀到约 2000 + z∈(0,2) (legacy.cpp:982-1011), **无条件**发
+        CloudType::Ptr shaped = legacyScanShape(world, kLocZMax, 1);
+        if (shaped->empty()) return;
+        ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
+        // curr_scan_point: 同一个点云, 但只有 debug_publish_ 才发 (legacy.cpp:1007-1009)
+        if (debug_publish_) pointcloud_puber_.publish(toPointCloud2(*shaped, kMapFrame, stamp));
+        // or_curr_scan_point: 原始输入帧, 抽稀倍率 x2, **不过滤 z** (legacy.cpp:1026-1058)
+        if (raw_input_ && !raw_input_->empty()) {
+            CloudType::Ptr orc = legacyScanShape(*raw_input_, -1.0, 2);
+            if (!orc->empty())
+                or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_input_stamp_));
+        }
+    } else if (slam_mode_ == SlamMode::MAPPING) {
+        // scan_f_map: 抽稀到约 2000 + z∈(0,1) (legacy.cpp:1071-1096)
+        CloudType::Ptr shaped = legacyScanShape(world, kMapZMax, 1);
+        // curr_scan_point: **完整的**去畸变点云 (legacy.cpp:1097 把过滤结果覆盖掉了), 无条件发
+        pointcloud_puber_.publish(toPointCloud2(world, kMapFrame, stamp));
+        if (!shaped->empty()) ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
+        // or_curr_scan_point: 建图**不发** (legacy.cpp:1102 那行是注释掉的)
+    }
+}
+
+void LegacyXz3dSlamInterface::publishMappingPath() {
+    mapping_path_msg_.header.frame_id = kMapFrame;
+    path_puber_.publish(mapping_path_msg_);   // 整条重发 (legacy.cpp:885-887)
+}
+
+void LegacyXz3dSlamInterface::publishRealtimeGridMap() {
+    GridInfo gi;
+    if (realtime_grid_.latest(gi)) {
+        realtime_grid_map_ = toLegacyGrid(gi, kMapFrame);
+        realtime_grid_map_area_ =
+            static_cast<double>(gi.width) * gi.height * gi.resolution * gi.resolution;
+        // legacy.cpp:1749 把建图面积塞进 origin.position.z
+        realtime_grid_map_.info.origin.position.z = realtime_grid_map_area_ * 0.00001;
+        std::cout << "[legacy_iface] realtime grid updated: " << gi.width << "x" << gi.height
+                  << " res=" << gi.resolution << " area=" << realtime_grid_map_area_ << std::endl;
+    }
+    // 无更新也照发上一张 (legacy.cpp:909 无条件 publish)
+    realtime_grid_map_puber_.publish(realtime_grid_map_);
+}
+
+void LegacyXz3dSlamInterface::publishPointMap() {
+    PointVec pts;
+    if (engine_.getGlobalMap(pts) && !pts.empty()) {
+        CloudType cloud;
+        cloud.reserve(pts.size());
+        for (auto& p : pts) cloud.push_back(p);
+        cloud.width = cloud.size();
+        cloud.height = 1;
+        point_map_puber_.publish(toPointCloud2(cloud, kMapFrame, ros::Time::now()));
+    }
+    // global_grid_map: 由 set_grid_map_ 标志驱动, 发一次就清 (legacy.cpp:926-946)
+    if (set_grid_map_) {
+        grip_map_puber_.publish(global_grid_map_msg_);
+        std::cout << "pub once grid map" << std::endl;
+        set_grid_map_ = false;
+    }
+}
+
+// ---------------------------------------------------------------- 0.01s 位姿 + slam/info
+
+void LegacyXz3dSlamInterface::publishCurrPose() {
+    updateModeFromCore();
+
+    SlamOutput out;
+    const bool have_out = engine_.latestOutput(out) && out.has_new_pose;
+    bool publish_info = true;
+
+    if (slam_mode_ == SlamMode::LOCALIZATION) {
+        // 旧定位分支有"同帧去重", 重复帧直接 return —— 连 slam/info 都不发 (legacy.cpp:1121-1125)
+        publish_info = false;
+        if (have_out) {
+            const double t = out.pose.time;
+            const bool dup = (t - last_pose_stamp_ < 1e-4);
+            last_pose_stamp_ = t;
+            if (!dup) {
+                const double yaw = stdYawFromRot(out.pose.rot);
+                if (!std::isfinite(out.pose.trans.x()) || !std::isfinite(out.pose.trans.y()) ||
+                    !std::isfinite(yaw)) {
+                    std::cout << "XZSlamInterFace::publishCurrPose(), curr_pose has NaN, drop this frame"
+                              << std::endl;
+                    return;   // legacy.cpp:1127-1134 (连 slam/info 一起跳过)
+                }
+                curr_pose_.x = out.pose.trans.x();
+                curr_pose_.y = out.pose.trans.y();
+                curr_pose_.z = out.pose.trans.z();
+                curr_pose_.yaw = yaw;
+                curr_pose_.q = Eigen::Quaterniond(out.pose.rot);
+                curr_pose_.q.normalize();
+
+                geometry_msgs::PoseStamped ps;
+                ps.header.frame_id = kMapFrame;
+                ps.header.stamp = (t > 0) ? ros::Time(t) : ros::Time::now();
+                ps.pose.position.x = curr_pose_.x;
+                ps.pose.position.y = curr_pose_.y;
+                ps.pose.position.z = curr_pose_.z;
+                ps.pose.orientation.x = curr_pose_.q.x();
+                ps.pose.orientation.y = curr_pose_.q.y();
+                ps.pose.orientation.z = curr_pose_.q.z();
+                ps.pose.orientation.w = curr_pose_.q.w();
+                pose_puber_.publish(ps);
+
+                // INIT 陷阱的 latch 就靠这里: 核心在定位模式下**只在 LOCALIZED 时**
+                // 才产出 has_new_pose 的输出 (slam_pipeline.cpp:178-182),
+                // 所以"收到过新位姿" == "真的定位上过"。
+                lost_monitor_.onLocalizedPose();
+                publish_info = true;
+            }
+        }
+    } else if (slam_mode_ == SlamMode::MAPPING) {
+        // 建图分支没有去重, 每 tick 都发 slam/info (legacy.cpp:1170-1205)
+        if (have_out) {
+            last_pose_stamp_ = out.pose.time;
+            curr_pose_.x = out.pose.trans.x();
+            curr_pose_.y = out.pose.trans.y();
+            curr_pose_.z = out.pose.trans.z();
+            curr_pose_.yaw = stdYawFromRot(out.pose.rot);
+            curr_pose_.q = Eigen::Quaterniond(out.pose.rot);
+            curr_pose_.q.normalize();
+
+            geometry_msgs::PoseStamped ps;
+            ps.header.frame_id = kMapFrame;
+            ps.header.stamp = (out.pose.time > 0) ? ros::Time(out.pose.time) : ros::Time::now();
+            ps.pose.position.x = curr_pose_.x;
+            ps.pose.position.y = curr_pose_.y;
+            ps.pose.position.z = curr_pose_.z;
+            ps.pose.orientation.x = curr_pose_.q.x();
+            ps.pose.orientation.y = curr_pose_.q.y();
+            ps.pose.orientation.z = curr_pose_.q.z();
+            ps.pose.orientation.w = curr_pose_.q.w();
+            pose_puber_.publish(ps);
+            mapping_path_msg_.poses.push_back(ps);   // 累积, 供 publishMappingPath 整条重发
+        }
+    }
+
+    if (publish_info) publishLocationInfo();
+    // [T9] if (slam_mode_ != SlamMode::FREE && use_tf_) sendTransform();
+}
+
+void LegacyXz3dSlamInterface::publishLocationInfo() {
+    LegacyPose p = curr_pose_;
+    // legacy.cpp:1826-1830: 任一 NaN 则三者归零
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.yaw)) {
+        p.x = 0.0; p.y = 0.0; p.yaw = 0.0;
+    }
+
+    int8_t slam_state = 2;
+    int8_t location_status = 0;
+    float map_area = 0.0f;
+
+    switch (slam_mode_) {
+        case SlamMode::LOCALIZATION: {
+            slam_state = 1;   // legacy.cpp:1842
+            // 旧实现: relocating_ = isRelocalization(); 重定位中 -> 1,
+            // 否则 getLocalizationStatus() ∈{0,1} -> 0, 其它 -> 2。
+            // 核心不暴露 relocalization/status, 用 T3 的 LostMonitor 等价表达 0/1/2 (设计文档 §5.11 B)
+            PoseStamped pose;
+            Eigen::Matrix<double, 6, 6> cov;
+            const bool cov_ok = engine_.getPoseCov(pose, cov);
+            const LocStatus st = lost_monitor_.update(cov_ok);
+            location_status = static_cast<int8_t>(st);
+            relocating_ = (st == LocStatus::RECOVERING);
+            break;
+        }
+        case SlamMode::MAPPING:   // legacy.cpp:1873-1882
+            slam_state = 0;
+            location_status = 0;
+            map_area = static_cast<float>(realtime_grid_map_area_);
+            break;
+        case SlamMode::FREE:      // legacy.cpp:1883-1886
+            slam_state = 1;
+            location_status = 1;
+            break;
+        default:                  // legacy.cpp:1887-1889
+            slam_state = 2;
+            break;
+    }
+    // 最终覆盖 (legacy.cpp:1891-1894): 在 switch **之后**, 会改写 FREE/MAPPING 的结果
+    if (relocating_) {
+        slam_state = 1;
+        location_status = 1;
+    }
+
+    slam_info_puber_.publish(
+        buildSlamInfo(slam_state, location_status, curr_map_name_, p.x, p.y, p.yaw, map_area));
+}
+
+} // namespace rosiwit_slam_ros1

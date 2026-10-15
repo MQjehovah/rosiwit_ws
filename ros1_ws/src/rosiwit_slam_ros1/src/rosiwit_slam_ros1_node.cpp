@@ -9,6 +9,9 @@
 // ============================================================================
 #include <ros/ros.h>
 
+#include <memory>
+
+#include "legacy_xz3dslam_interface.h"
 #include "rosiwit_interface.h"
 #include "slam_engine.h"
 
@@ -25,8 +28,12 @@ int main(int argc, char** argv) {
     }
 
     rosiwit_slam_ros1::RosiwitInterface rosiwit_iface(nh, pnh, engine);
-    // T5..T11: input_profile=legacy 时在此挂旧 3d_slam 接口
-    //   rosiwit_slam_ros1::LegacyXz3dSlamInterface legacy_iface(nh, pnh, engine, rosiwit_iface);
+
+    // input_profile=legacy: 再把旧 xz_3d_slam 的接口挂到**同一个**核心上 (T5 起)
+    std::unique_ptr<rosiwit_slam_ros1::LegacyXz3dSlamInterface> legacy_iface;
+    if (engine.legacyProfile()) {
+        legacy_iface.reset(new rosiwit_slam_ros1::LegacyXz3dSlamInterface(nh, pnh, engine));
+    }
 
     ROS_INFO("[rosiwit_slam_ros1] node up: profile=%s", engine.inputProfile().c_str());
     ros::spin();

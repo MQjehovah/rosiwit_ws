@@ -136,6 +136,10 @@ double legacyYawFromRot(const Eigen::Matrix3d& R) {
     return std::atan2(R(0, 1), R(0, 0));
 }
 
+double stdYawFromRot(const Eigen::Matrix3d& R) {
+    return std::atan2(R(1, 0), R(0, 0));
+}
+
 rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
                                              double z_max,
                                              int downsample_multiplier) {

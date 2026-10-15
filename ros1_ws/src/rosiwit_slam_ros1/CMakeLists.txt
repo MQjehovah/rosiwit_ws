@@ -59,7 +59,8 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     src/slam_engine.cpp
     src/rosiwit_interface.cpp
     src/legacy_convert.cpp
-    # T5 继续: src/legacy_xz3dslam_interface.cpp (14 话题发布侧)
+    src/legacy_xz3dslam_interface.cpp
+    # T6 追加 src/legacy_subscribers.cpp 等
 )
 add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
 target_include_directories(rosiwit_slam_ros1_lib PUBLIC src ${catkin_INCLUDE_DIRS})
