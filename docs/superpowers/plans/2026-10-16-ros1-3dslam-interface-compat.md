@@ -1294,6 +1294,45 @@ broadcaster_.sendTransform(out);
 2. `rostopic echo /tf_static` 在 `legacy` profile 下**没有** `map→odom`。
 **提交**：`feat(ros1): 旧 map->odom 动态 TF, legacy 下抑制新 TF`
 
+### 9.1 T9 实测记录（已完成并提交）
+
+**状态**：`catkin_make` `exit=0`；**gtest 52/52 全绿**。
+
+按 `legacy.cpp:1899-1936` 实现动态 `map→odom`：
+
+```
+Tfo = lookupTransform("base_footprint", "odom", Time(0))     // T(base_footprint <- odom)
+Tmf = (origin=(x, y, -0.07), rot = AngleAxis(-yaw, Z)),  yaw = atan2(R(0,1), R(0,0))
+Tmo = Tmf * Tfo                                              // T(map <- odom)
+broadcast(map -> odom), stamp = now
+```
+调用点：`publishCurrPose()` 末尾，`slam_mode_ != FREE && use_tf_` 才发（`legacy.cpp:1208-1210`）。
+lookup 失败就 `ROS_ERROR` + `return`（旧实现同样如此），节点不会崩。
+`publishStaticTf()`（`base_link→scan`）**不实现** —— 旧实现的它从未被调用 ✓。
+
+**端到端验证**（不是只看编译）：起一个 `odom→base_footprint` 静态 TF 模拟 `robot_localization`，
+再切到建图模式 → `/tf` 里真的出现：
+
+```
+frame_id: "map"
+child_frame_id: "odom"
+translation: {x: 0.0, y: 0.0, z: **-0.07**}
+rotation:    {x: 0, y: 0, z: 0, w: 1}
+```
+`z = -0.07` 正是旧实现那个特征值 ✓（位姿全零时旋转为恒等，符合 `Tmf*Tfo`）。
+`/tf` 的发布者只有 `/xz_3d_slam` ✓ —— M5 在 T4 就已经让新接口在 legacy profile 下不发 TF，
+所以这条边只有一个发布者，不会打架。`/tf_static` 在 legacy 下没有 `map→odom` ✓。
+
+**两个实现要点（写进代码注释）**：
+
+1. **必须用 `legacyYawFromRot(q)` 再取负**，不能直接用 `curr_pose_.yaw`。
+   前者 = `atan2(R(0,1),R(0,0))` = **`-标准航向`**，旧实现紧接着 `AngleAxis(-yaw, Z)` 再取负，
+   两者成对照抄才等于 `Rot(Z, θ_std)`。直接用 `curr_pose_.yaw`（标准航向）会**把符号弄反**。
+2. **刚体复合用 Eigen 直接算**（`R=R_f·R_o`, `t=R_f·t_o+t_f`），而不是 `tf2::Transform` ——
+   语义与 `tf2` 的 `A*B` 完全一致，但省掉了为一个乘法引入 `tf2_geometry_msgs` 依赖。
+
+
+
 ---
 
 ## T10. 接上 `/map` 的 MAPPING 分支 + `map_directory` 注入

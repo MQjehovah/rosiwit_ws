@@ -45,6 +45,12 @@
 
 #include <std_srvs/Empty.h>
 
+#include <geometry_msgs/TransformStamped.h>
+#include <memory>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/transform_listener.h>
+
 #include "legacy_config.h"
 #include "lost_monitor.h"
 #include "realtime_grid.h"
@@ -171,6 +177,9 @@ private:
     /// (legacy.cpp 里只有换图那条路有; /relocation 没有)。两条路都 **z 强制 0**。
     void applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane);
 
+    // ---- [T9] 动态 map->odom TF ----
+    void sendTransform();   // legacy.cpp:1899-1936
+
     ros::NodeHandle nh_, pnh_;
     SlamEngine& engine_;
     const LegacyConfig& cfg_;        // engine_.legacyConfig()
@@ -246,6 +255,14 @@ private:
                        srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_;
     std::string curr_map_path_;    // 旧 curr_map_path_
     ros::Time last_switch_map_time_;   // /switch_map 的 10s 限流 (legacy.cpp:2121-2137)
+
+    // ---- [T9] TF ----
+    // 旧实现: listener_ = new tf2_ros::TransformListener(tfBuffer_) (legacy.cpp:94)。
+    // M5: 新接口那边在 legacy profile 下已经不发任何 TF (RosiwitInterface),
+    // 所以 map->odom 只有这里一个发布者, 不会打架。
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 };
 
 } // namespace rosiwit_slam_ros1

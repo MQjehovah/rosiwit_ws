@@ -57,6 +57,11 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
     initSub();
     initClients();
     initServer();
+
+    // [T9] TF: 旧实现构造里就建了 listener (legacy.cpp:94) 与 broadcaster
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>();
     // 旧 node main 第 73 行就是 `node->run()`, 而 run() 末尾会置
     // warning_code_start_task_ = true (legacy.cpp:184) —— 所以**开机时抑制窗口是开的**,
     // 之后 100 个告警 tick (rt_grid 周期, 默认 1s -> 100s) 不发告警。
@@ -438,7 +443,8 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
     }
 
     if (publish_info) publishLocationInfo();
-    // [T9] if (slam_mode_ != SlamMode::FREE && use_tf_) sendTransform();
+    // legacy.cpp:1208-1210: 非 FREE 且 use_tf_ 才发 (FREE 下不发)
+    if (slam_mode_ != SlamMode::FREE && use_tf_) sendTransform();
 }
 
 void LegacyXz3dSlamInterface::publishLocationInfo() {
@@ -868,6 +874,62 @@ bool LegacyXz3dSlamInterface::handleExpandMap(
     }
     res.status = ok;
     return true;
+}
+
+// ---------------------------------------------------------------- [T9] TF map->odom
+
+void LegacyXz3dSlamInterface::sendTransform() {
+    // legacy.cpp:1899-1936 逐行:
+    //   Tfo = lookupTransform("base_footprint", "odom", Time(0))     = T(base_footprint <- odom)
+    //   Tmf = (origin=(x, y, -0.07), rot=AngleAxis(-yaw, Z))         = T(map <- base_footprint)
+    //        其中 yaw = atan2(R(0,1), R(0,0))  (即 legacyYawFromRot)
+    //   Tmo = Tmf * Tfo                                             = T(map <- odom)
+    //   broadcast(map -> odom), stamp = now
+    geometry_msgs::TransformStamped tfo_msg;
+    try {
+        tfo_msg = tf_buffer_->lookupTransform("base_footprint", "odom", ros::Time(0));
+    } catch (const tf2::TransformException& ex) {
+        ROS_ERROR("%s", ex.what());
+        return;
+    }
+    if (!std::isfinite(curr_pose_.x) || !std::isfinite(curr_pose_.y) ||
+        !std::isfinite(curr_pose_.yaw)) {
+        return;
+    }
+
+    // 用 Eigen 直接做刚体复合: T(a<-b) * T(b<-c) = T(a<-c), 与 tf2::Transform 的 A*B 同义。
+    // 这样不必为一次乘法引入 tf2_geometry_msgs 依赖。
+    // 注意这里必须用 legacyYawFromRot(q)(= -标准航向) 再取负, 与旧实现成对出现 ——
+    // 直接用 curr_pose_.yaw 会把符号弄反。
+    const double legacy_yaw =
+        legacyYawFromRot(curr_pose_.q.normalized().toRotationMatrix());
+    const Eigen::Matrix3d R_f =
+        Eigen::AngleAxisd(-legacy_yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    const Eigen::Vector3d t_f(curr_pose_.x, curr_pose_.y, -0.07);
+
+    const Eigen::Quaterniond q_o(tfo_msg.transform.rotation.w, tfo_msg.transform.rotation.x,
+                                 tfo_msg.transform.rotation.y, tfo_msg.transform.rotation.z);
+    const Eigen::Matrix3d R_o = q_o.toRotationMatrix();
+    const Eigen::Vector3d t_o(tfo_msg.transform.translation.x, tfo_msg.transform.translation.y,
+                              tfo_msg.transform.translation.z);
+
+    const Eigen::Matrix3d R_mo = R_f * R_o;
+    const Eigen::Vector3d t_mo = R_f * t_o + t_f;
+    Eigen::Quaterniond q_mo(R_mo);
+    q_mo.normalize();
+
+    geometry_msgs::TransformStamped out;
+    out.header.stamp = ros::Time::now();
+    out.header.frame_id = "map";
+    out.child_frame_id = "odom";
+    out.transform.translation.x = t_mo.x();
+    out.transform.translation.y = t_mo.y();
+    out.transform.translation.z = t_mo.z();
+    out.transform.rotation.x = q_mo.x();
+    out.transform.rotation.y = q_mo.y();
+    out.transform.rotation.z = q_mo.z();
+    out.transform.rotation.w = q_mo.w();
+    tf_broadcaster_->sendTransform(out);
 }
 
 } // namespace rosiwit_slam_ros1
