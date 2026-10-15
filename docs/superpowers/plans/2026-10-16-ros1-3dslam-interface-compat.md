@@ -1111,11 +1111,17 @@ srv 类型（来自 `ros1_ws/src/xzrobot_ros_dependency/srv/`，已核对）：
    （push 前去重）。已确认的阈值：
    - IMU：`imu_fre_count_ <= 160` → `20003002`（`legacy.cpp:629-637` 与 `681-689`，两个 IMU 回调各一份）
    - lidar / odom 同型，阈值在 735-800 区段，**下次开工先把这段读了再写**
-3. **"前 100 tick 抑制"的条件和计划写的不一样**：`warning_code_start_task_` 的初值是 **`false`**
-   （`xz_slam_ros1_interface.h:552`），**只有在 `startTask()` 里才被置 true**（`legacy.cpp:184`）。
-   所以抑制窗口**只发生在 `start_task` 服务被调用之后**，节点启动时**不抑制**。
-   计划 §7.1 写的"启动/模式切换后前 100 个 tick 不发告警"是**错的**；
-   相应地 §7 的验证第 2 条（"启动约 1s 后应出现 20003500/20003501"）也不一定成立。
+3. **"前 100 tick 抑制"**：`warning_code_start_task_` 的初值是 `false`
+   （`xz_slam_ros1_interface.h:552`），但它在 **`run()` 的末尾**被置 `true`
+   （`legacy.cpp:184`，该函数是 101-191），而**旧 node main 第 73 行启动时就调了
+   `node->run()`**（`xz_slam_ros1_node.cpp:71-77` 的顺序是 run → startSub → initPub →
+   initTimerPub → initServer）。`run()` 还在 `switchToMapping`（2046）与 `/switch_map`
+   的换图分支（2345）里被调用。
+   **所以抑制窗口在开机时就是开的，切换建图模式后会重新开一次** —— 计划 §7.1 原来的
+   说法是**对的**。（我上一轮在 §7.3 曾据 `legacy.cpp:184` 的行号误判成"只在 start_task 之后"，
+   现已更正；T7 当时因为还没接上这条而能立刻看到告警，T8 接上后实测开机 100 tick 内不再发，
+   两者一致。）抑制窗口期间也解释了：`/slam_warning_code` 开机后约 100 秒内是静默的
+   （rt_grid 周期默认 1s × 100 tick）。
 4. **`20003500`（no lidar data）是从 lidar 回调内部发的**（`legacy.cpp:3078 / 3202 / 3333`，
    分别对应三个机型分支）—— 语义是"**收到了帧但不可用**（转换失败/点数太少）"，
    不是"没收到帧"。`20003501` 同型（3503）。
@@ -1214,6 +1220,45 @@ srv 类型（来自 `ros1_ws/src/xzrobot_ros_dependency/srv/`，已核对）：
    `rosservice call /slam/mode_switch "{mode: 1}"` → `result: 1`；1s 内再调一次 → 触发 `20003005`。
 4. `rostopic pub` 一个空 `map_dir` 的 `/switch_map` → `success: false`。
 **提交**：`feat(ros1): xz_3d_slam 旧接口 service server(8 个)`
+
+### 8.1 T8 实测记录（已完成并提交）
+
+**状态**：`catkin_make` `exit=0`；**gtest 52/52 全绿**。`legacy_dev.launch` 真跑核对：
+
+| 服务 | 类型 | 实测 |
+|---|---|---|
+| `/slam/mode_switch` | `SlamModeSwitchService` | `{mode: 1}` → **`result: 1`** ✓；`{mode: 5}` 被拒 ✓ |
+| `/switch_map` | `SwitchMap` | 空 `map_dir` → `success: False` ✓；10s 内再调一次被拒 ✓ |
+| `/relocation` | `Relocation` | 已注册 ✓ |
+| `/stop_map_operation` | `StopMapOperation` | 已注册 ✓ |
+| `/global_localization` | `std_srvs/Empty` | 返回空响应 ✓ |
+| `/finish_task` / `/start_task` | `CommonBoolService` | 已注册 ✓ |
+| `update_map_operation` | `UpdateMap` | 已注册 ✓（降级实现 D5） |
+
+8 个服务与 4 个新接口服务（`/save_map` 等）**无重名** ✓。
+
+**实现时核对出的 3 处与计划 §8 表格不符（已按源码实现）**：
+
+1. **10s 限流 + `20003005` 在 `/switch_map` 里，不在 `/slam/mode_switch`**。
+   计划 §8 表格把它写在 `/slam/mode_switch` 那行。源码 `legacy.cpp:2121-2137` 位于
+   `switchMap()`（函数头在 2118）。已按源码放。
+2. **`switchToMapping` 忽略 `/set_detect_mode` 的结果**：`legacy.cpp:2026` 那句
+   `// if (!success) return false;` 是**注释掉的**，所以 `mode==1` 一定 `result=1, true`
+   （实测确认）；而 `switchToLocalization` 的对应判断（2111）是活的，`mode==0`
+   **要求 `/set_detect_mode` 成功**才给 `result=1`。
+3. **`switchToLocalization` 把 `slam_mode_` 置成 `FREE` 而不是 `LOCALIZATION`**（`legacy.cpp:2062`）——
+   它先删掉定位实例，真正进定位要等随后的 `/switch_map`。已照抄。
+
+另外 `/stop_map_operation` 的 `saveMap`：旧实现的 `mapping_ptr_->saveMap()` 返回 `void`、
+**不检查结果**，所以我们也只在失败时 `ROS_ERROR`、不改 `success`（只记 D13 那条是我们
+额外把 `/switch_map` 的 `loadMap` 失败也算进 `success`）。
+
+**抑制窗口**：按 §7.3 更正后的结论，开机就开抑制窗口；实测开机后 2Hz 喂 IMU 6 秒
+**没有**告警输出（与 T7 当时的实测相反，正是因为 T8 才把它接上）—— 两条实测互相印证。
+
+**`update_map_operation` 是有意降级（D5）**：入口先打 WARN 说明不等价。
+
+
 
 ---
 

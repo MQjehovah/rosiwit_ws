@@ -33,10 +33,17 @@
 #include <vector>
 
 #include "slam_core/slam_types.h"
+#include "xzrobot_ros_dependency/CommonBoolService.h"
 #include "xzrobot_ros_dependency/CommonIntRequestService.h"
+#include "xzrobot_ros_dependency/Relocation.h"
 #include "xzrobot_ros_dependency/SlamInfo.h"
+#include "xzrobot_ros_dependency/SlamModeSwitchService.h"
+#include "xzrobot_ros_dependency/StopMapOperation.h"
 #include "xzrobot_ros_dependency/SwitchMap.h"
 #include "xzrobot_ros_dependency/TagDetect.h"
+#include "xzrobot_ros_dependency/UpdateMap.h"
+
+#include <std_srvs/Empty.h>
 
 #include "legacy_config.h"
 #include "lost_monitor.h"
@@ -103,9 +110,7 @@ public:
     /// set_detect_mode; 0.5s 超时 + 100ms 重试
     bool callSetDetectMode(int mode);
     /// switch_map_pro; 1.0s 超时
-    bool callSwitchMapPro(xzrobot_ros_dependency::SwitchMap::Request& req);
-
-    /// 旧的 "重定位进行中" 标志 (legacy.cpp:1843-1853 由 isRelocalization() 驱动)
+    bool callSwitchMapPro(xzrobot_ros_dependency::SwitchMap::Request& req);    /// 旧的 "重定位进行中" 标志 (legacy.cpp:1843-1853 由 isRelocalization() 驱动)
     bool relocating() const { return relocating_; }
 
 private:
@@ -113,6 +118,7 @@ private:
     void initTimerPub();   // legacy.cpp:247-271
     void initSub();        // legacy.cpp:193-215 (只补引擎没覆盖的那几个)
     void initClients();    // legacy.cpp:243-244 + /switch_map_pro
+    void initServer();     // legacy.cpp:229-245 (8 个 service server)
 
     // 定时器回调
     void timerPublishLocalCloudAndSubmap(const ros::TimerEvent&);  // 0.1s -> startPub()
@@ -142,6 +148,28 @@ private:
     void loadWarningCodeTable();   // 从**本包** share 读 conf/warning_code.json (M6)
     void timerPublishWarningCode(const ros::TimerEvent&);   // legacy.cpp:457-553
     void tickFreqWindow(bool is_lidar);   // 1s 窗口频率判定 (legacy.cpp:629-637/740-748)
+
+    // ---- [T8] 8 个 service server ----
+    bool handleModeSwitch(xzrobot_ros_dependency::SlamModeSwitchService::Request& req,
+                          xzrobot_ros_dependency::SlamModeSwitchService::Response& res);
+    bool handleSwitchMap(xzrobot_ros_dependency::SwitchMap::Request& req,
+                         xzrobot_ros_dependency::SwitchMap::Response& res);
+    bool handleRelocation(xzrobot_ros_dependency::Relocation::Request& req,
+                          xzrobot_ros_dependency::Relocation::Response& res);
+    bool handleStopMap(xzrobot_ros_dependency::StopMapOperation::Request& req,
+                       xzrobot_ros_dependency::StopMapOperation::Response& res);
+    bool handleGlobalLocalization(std_srvs::Empty::Request& req, std_srvs::Empty::Response& res);
+    bool handleFinishTask(xzrobot_ros_dependency::CommonBoolService::Request& req,
+                          xzrobot_ros_dependency::CommonBoolService::Response& res);
+    bool handleStartTask(xzrobot_ros_dependency::CommonBoolService::Request& req,
+                         xzrobot_ros_dependency::CommonBoolService::Response& res);
+    bool handleExpandMap(xzrobot_ros_dependency::UpdateMap::Request& req,
+                         xzrobot_ros_dependency::UpdateMap::Response& res);
+
+    /// 把 initial_pose 转成核心的 PoseStamped 并 setInitPose。
+    /// `zero_if_insane`: /switch_map 才有的 "|x| 或 |y| > 1e4 则全零" 逻辑
+    /// (legacy.cpp 里只有换图那条路有; /relocation 没有)。两条路都 **z 强制 0**。
+    void applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane);
 
     ros::NodeHandle nh_, pnh_;
     SlamEngine& engine_;
@@ -212,6 +240,12 @@ private:
     FreqWindow imu_freq_, lidar_freq_;       // 旧实现 imu/lidar 各一个 1s 窗口
     ros::Timer warning_code_timer_;
     ros::ServiceClient tag_detect_client_, set_detect_mode_client_, switch_map_pro_client_;
+
+    // ---- [T8] service server + 换图状态 ----
+    ros::ServiceServer srv_mode_switch_, srv_switch_map_, srv_relocation_, srv_stop_map_,
+                       srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_;
+    std::string curr_map_path_;    // 旧 curr_map_path_
+    ros::Time last_switch_map_time_;   // /switch_map 的 10s 限流 (legacy.cpp:2121-2137)
 };
 
 } // namespace rosiwit_slam_ros1
