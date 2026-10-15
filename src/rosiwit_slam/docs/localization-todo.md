@@ -80,12 +80,12 @@
 
 ### 中优先级
 
-- [ ] **L13 地图维护升级为位姿图（GTSAM + 可见性 replace/extend）**
+- [x] **L13 地图维护升级为位姿图（GTSAM + 可见性 replace/extend）** ✅ `527ef3a`
   - 目标：overlay 从"点级非破坏"升级为"变化关键帧+锚点进位姿图"，可见性/凸包判替换或扩展，周期优化后重建 store/底图。
   - 关键文件：`localization/maintainer/*`、复用 `gtsam_backend`；config `maintainer.*`
   - 验收：长期大范围变化下地图不退化；单测/合成。
 
-- [ ] **L14 2.5D 平面 NDT 定位（matcher: ndt2d）**
+- [x] **L14 2.5D 平面 NDT 定位（matcher: ndt2d）** ✅ `e890868`
   - 目标：货架/狭道等特征匮乏区，在平面 (x,y,yaw) 求解 + 地面约束 z/roll/pitch（复用 L1）。
   - 关键文件：新增 `matcher/ndt2d_matcher.{h,cpp}`；config `matcher.*`
   - 验收：狭道/重复货架区比 3D 更稳；契约测试。
