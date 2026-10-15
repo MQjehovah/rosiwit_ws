@@ -315,7 +315,17 @@ void SlamNode::mapTimerCB() {
             grid.info.origin.position.y = grid_info.origin_y;
             grid.info.origin.position.z = 0.0;
             grid.info.origin.orientation.w = 1.0;
-            grid.data = grid_info.data;
+            // ROS OccupancyGrid 首行=最大 y; 内部 data 首行=最小 y -> 竖直翻转
+            {
+                const int w = grid_info.width, h = grid_info.height;
+                grid.data.resize(static_cast<size_t>(w) * h);
+                for (int row = 0; row < h; ++row) {
+                    const int src = h - 1 - row;
+                    for (int col = 0; col < w; ++col)
+                        grid.data[static_cast<size_t>(row) * w + col] =
+                            grid_info.data[static_cast<size_t>(src) * w + col];
+                }
+            }
             m_grid_map_pub->publish(grid);
             if (m_map_pub) m_map_pub->publish(grid);
             m_grid_map_published = true;

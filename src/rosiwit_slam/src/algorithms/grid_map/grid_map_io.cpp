@@ -14,12 +14,16 @@ bool saveGridMapPGM(const GridInfo& grid,
     std::ofstream pgm(pgm_path, std::ios::binary);
     if (!pgm) return false;
     pgm << "P5\n" << grid.width << " " << grid.height << "\n255\n";
-    for (auto v : grid.data) {
-        uint8_t pixel = 205;
-        if (v == 0) pixel = 254;
-        else if (v >= 100) pixel = 0;
-        else pixel = static_cast<uint8_t>(205 - v * 50 / 100);
-        pgm.write(reinterpret_cast<char*>(&pixel), 1);
+    // 写盘时竖直翻转: 图像首行=最大 y (ROS map_server 约定, 与参照项目一致)
+    for (int row = grid.height - 1; row >= 0; --row) {
+        const int8_t* r = grid.data.data() + static_cast<size_t>(row) * grid.width;
+        for (int col = 0; col < grid.width; ++col) {
+            int8_t v = r[col];
+            uint8_t pixel = 128;            // unknown: 中灰 (pixel/255 与 (255-pixel)/255 两种解算下都判 unknown)
+            if (v == 0) pixel = 254;         // free: 白
+            else if (v >= 100) pixel = 0;    // occupied: 黑
+            pgm.write(reinterpret_cast<char*>(&pixel), 1);
+        }
     }
     pgm.close();
 
@@ -28,7 +32,7 @@ bool saveGridMapPGM(const GridInfo& grid,
     yaml << "image: " << pgm_path.substr(pgm_path.find_last_of("/\\") + 1) << "\n"
          << "resolution: " << grid.resolution << "\n"
          << "origin: [" << grid.origin_x << ", " << grid.origin_y << ", 0.0]\n"
-         << "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\nmode: trinary\n";
+         << "negate: 0\noccupied_thresh: 0.59\nfree_thresh: 0.49\nmode: trinary\n";
     yaml.close();
     (void)frame_id;
     return true;
@@ -58,12 +62,18 @@ bool loadGridMapPGM(const std::string& pgm_path,
     pgm.get();
     if (format != "P5") return false;
     grid.data.resize(static_cast<size_t>(grid.width) * grid.height);
-    for (int i = 0; i < grid.width * grid.height; ++i) {
-        uint8_t pixel = 0;
-        pgm.read(reinterpret_cast<char*>(&pixel), 1);
-        if (pixel == 254) grid.data[i] = 0;
-        else if (pixel == 0) grid.data[i] = 100;
-        else grid.data[i] = -1;
+    // 读入时反向翻转 (写盘时首行=最大 y), 还原为 row0=最小 y, 与内部约定一致
+    for (int row = 0; row < grid.height; ++row) {
+        const int src_row = grid.height - 1 - row;   // 文件行 src_row -> 数据行 row
+        for (int col = 0; col < grid.width; ++col) {
+            uint8_t pixel = 0;
+            pgm.read(reinterpret_cast<char*>(&pixel), 1);
+            int8_t v = -1;
+            if (pixel == 254 || pixel == 255) v = 0;         // free
+            else if (pixel == 0) v = 100;                    // occupied
+            else v = -1;                                     // unknown
+            grid.data[static_cast<size_t>(row) * grid.width + col] = v;
+        }
     }
     return true;
 }
