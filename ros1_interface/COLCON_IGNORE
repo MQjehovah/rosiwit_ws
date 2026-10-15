@@ -1,1 +1,0 @@
-# 让 colcon(ROS2) 忽略本目录; 本包为 ROS1(catkin), 需在 ROS1 工作区构建.

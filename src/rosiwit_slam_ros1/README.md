@@ -7,9 +7,8 @@
 
 ```
 src/rosiwit_slam           (算法核心: 纯 C++/PCL/Eigen, 无 ROS; 可独立 cmake+ctest)
+src/rosiwit_slam_ros1      (本包: ROS1/catkin 薄接口包; 含 COLCON_IGNORE)
 src/rosiwit_slam_ros2      (ROS2/ament 薄接口包)
-ros1_interface/
-  rosiwit_slam_ros1        (ROS1/catkin 薄接口包, 与本文件同目录)
 ```
 
 ## 独立验证核心（无需 ROS）
@@ -23,13 +22,13 @@ ctest --test-dir build --output-on-failure
 
 ## 构建本 ROS1 包
 
-本目录含 `COLCON_IGNORE`，不被 colcon(ROS2) 处理。放入 **ROS1 工作区**构建：
+本包含 `COLCON_IGNORE`，不被 colcon(ROS2) 处理。放入 **ROS1 工作区**构建：
 
 ```bash
 mkdir -p ~/ros1_ws/src && cd ~/ros1_ws/src
-ln -s <this_repo>/ros1_interface/rosiwit_slam_ros1 .
-# 本包 CMake 通过 ../../src/rosiwit_slam 内联构建核心, 故需保持仓库布局
-# (即 <this_repo>/ros1_interface/rosiwit_slam_ros1 与 <this_repo>/src/rosiwit_slam)
+ln -s <this_repo>/src/rosiwit_slam_ros1 .
+ln -s <this_repo>/src/rosiwit_slam .        # 核心 (与 ROS1 包同级)
+# 本包 CMake 通过 ../rosiwit_slam 内联构建核心
 cd ~/ros1_ws && catkin_make
 ```
 
