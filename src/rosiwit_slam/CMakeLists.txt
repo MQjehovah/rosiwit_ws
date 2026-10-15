@@ -219,6 +219,9 @@ set(SOURCES
     src/algorithms/scan_context/scan_context_localization.cpp
     src/algorithms/point_lio/point_lio_frontend.cpp
     src/algorithms/visual/visual_constraint_source.cpp
+    src/algorithms/map_store/pcd_map_store.cpp
+    src/algorithms/map_store/voxel_map_store.cpp
+    src/algorithms/map_store/map_store_factory.cpp
 )
 
 # ==================== 可执行目标 ====================
@@ -553,6 +556,17 @@ if(BUILD_TESTING)
     target_include_directories(test_visual_constraint_source PRIVATE
         include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
     install(TARGETS test_visual_constraint_source DESTINATION lib/${PROJECT_NAME})
+
+    # 地图存储底座契约测试 (P1/P2)
+    ament_add_gtest(test_map_store
+        test/test_map_store.cpp
+        src/algorithms/map_store/pcd_map_store.cpp
+        src/algorithms/map_store/voxel_map_store.cpp
+        src/algorithms/map_store/map_store_factory.cpp)
+    target_include_directories(test_map_store PRIVATE
+        include ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+    target_link_libraries(test_map_store ${PCL_LIBRARIES})
+    install(TARGETS test_map_store DESTINATION lib/${PROJECT_NAME})
 
     # 注释保留: 已移除的旧测试说明 (test_scan_context_lc 已随 simple_scan_context 删除)
     # 2. IEKF/iKD-Tree 测试已移除 ...
