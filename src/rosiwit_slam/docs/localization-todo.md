@@ -132,6 +132,11 @@
 
 ## 二·补、行业/参照缺失能力（全部要做）
 
+- [x] **高批（缺口修复/评估）** ✅ `76f9e58`
+  - 协方差输出(odom.pose.covariance) · L11 在线零偏 dt 限幅 · ndt2d evaluateResidual · store 增量插入 ·
+    跟踪期多假设 reseed · 轨迹评估(ATE/RPE + tools/traj_eval) + 合成轨迹回归测试
+  - 附带修复：**Mahalanobis 门控**直接使用匹配协方差(极小)会误拒正常修正 → 加协方差下限(rot 1°, trans 5cm)
+
 - [ ] **L15 定位期连续位姿图 + 回环约束**
   - 目标：不止"变化关键帧"(L13)，把跟踪全程 + 回环约束进位姿图，全局一致；参照 MapUpdater/LIO-SAM。
   - 关键：新增 localization 侧滑窗/回环图（复用 gtsam_backend）；回环探测复用 scan_context。
