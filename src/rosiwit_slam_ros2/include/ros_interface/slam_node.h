@@ -15,10 +15,10 @@
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_types.h"
 #include "slam_core/pose_filter.h"
-#include "rosiwit_slam/srv/save_map.hpp"
-#include "rosiwit_slam/srv/load_map.hpp"
-#include "rosiwit_slam/srv/save_grid_map.hpp"
-#include "rosiwit_slam/srv/set_slam_mode.hpp"
+#include "rosiwit_slam_ros2/srv/save_map.hpp"
+#include "rosiwit_slam_ros2/srv/load_map.hpp"
+#include "rosiwit_slam_ros2/srv/save_grid_map.hpp"
+#include "rosiwit_slam_ros2/srv/set_slam_mode.hpp"
 
 namespace rosiwit_slam {
 
@@ -66,10 +66,10 @@ private:
     void initialPoseCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
     builtin_interfaces::msg::Time toRosTime(double sec);
 
-    void handleSaveMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SaveMap::Request>, std::shared_ptr<rosiwit_slam::srv::SaveMap::Response>);
-    void handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::LoadMap::Request>, std::shared_ptr<rosiwit_slam::srv::LoadMap::Response>);
-    void handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SaveGridMap::Request>, std::shared_ptr<rosiwit_slam::srv::SaveGridMap::Response>);
-    void handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SetSlamMode::Request>, std::shared_ptr<rosiwit_slam::srv::SetSlamMode::Response>);
+    void handleSaveMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SaveMap::Response>);
+    void handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Response>);
+    void handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Response>);
+    void handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Response>);
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr          m_imu_sub;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr  m_lidar_sub;
@@ -91,10 +91,10 @@ private:
     rclcpp::CallbackGroup::SharedPtr m_work_cb_group;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> m_static_tf;
-    rclcpp::Service<rosiwit_slam::srv::SaveMap>::SharedPtr       m_srv_save_map;
-    rclcpp::Service<rosiwit_slam::srv::LoadMap>::SharedPtr       m_srv_load_map;
-    rclcpp::Service<rosiwit_slam::srv::SaveGridMap>::SharedPtr   m_srv_save_grid_map;
-    rclcpp::Service<rosiwit_slam::srv::SetSlamMode>::SharedPtr   m_srv_set_slam_mode;
+    rclcpp::Service<rosiwit_slam_ros2::srv::SaveMap>::SharedPtr       m_srv_save_map;
+    rclcpp::Service<rosiwit_slam_ros2::srv::LoadMap>::SharedPtr       m_srv_load_map;
+    rclcpp::Service<rosiwit_slam_ros2::srv::SaveGridMap>::SharedPtr   m_srv_save_grid_map;
+    rclcpp::Service<rosiwit_slam_ros2::srv::SetSlamMode>::SharedPtr   m_srv_set_slam_mode;
     NodeConfig m_cfg;
     std::mutex m_out_mutex;
     SlamOutput m_latest;

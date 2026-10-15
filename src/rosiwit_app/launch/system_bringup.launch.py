@@ -169,11 +169,11 @@ def generate_launch_description():
             slam_delay = 0.0
 
         # ========== 2. SLAM ==========
-        slam_dir = get_package_share_directory('rosiwit_slam')
+        slam_dir = get_package_share_directory('rosiwit_slam_ros2')
         slam_config_path = os.path.join(slam_dir, 'config', slam_config_str)
 
         slam_node = Node(
-            package='rosiwit_slam',
+            package='rosiwit_slam_ros2',
             executable='fast_lio2_node',
             name='fast_lio2',
             output='screen',

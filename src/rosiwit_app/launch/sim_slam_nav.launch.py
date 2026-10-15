@@ -150,11 +150,11 @@ def generate_launch_description():
 
         # ========== 2. SLAM ==========
         slam_config_path = os.path.join(
-            get_package_share_directory('rosiwit_slam'), 'config', 'velodyne_vlp16.yaml'
+            get_package_share_directory('rosiwit_slam_ros2'), 'config', 'velodyne_vlp16.yaml'
         )
 
         slam = Node(
-            package='rosiwit_slam',
+            package='rosiwit_slam_ros2',
             executable='fast_lio2_node',
             name='fast_lio2',
             output='screen',

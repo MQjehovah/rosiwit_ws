@@ -20,7 +20,7 @@
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
 
-  <depend>rosiwit_slam</depend>
+  <depend>rosiwit_slam_ros2</depend>
   <depend>rosiwit_simulator</depend>
   <depend>rosiwit_navigation</depend>
 

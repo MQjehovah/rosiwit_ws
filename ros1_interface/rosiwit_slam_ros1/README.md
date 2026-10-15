@@ -1,35 +1,36 @@
 # rosiwit_slam_ros1 — rosiwit_slam 的 ROS1 接口层
 
-与 ROS2 节点（`src/rosiwit_slam/src/ros_interface/slam_node.cpp`）**共享同一套 ROS 无关的算法核心**
-（`SlamFactory` / `SlamPipeline` / `ILocalization` 等）。本包只做 ROS1 ↔ 核心的桥接，
-因此 ROS1/ROS2 **同时可用、且行为一致**。
+与 ROS2 包（`rosiwit_slam_ros2`）**完全等价**，都只是薄接口：链接同一个 **ROS 无关的算法核心**
+`../src/rosiwit_slam`（通过 CMake `add_subdirectory` 内联构建）。核心可**独立开发/测试/验证**。
 
 ## 结构
 
 ```
-rosiwit_slam              (ROS2/ament, 含算法核心 + ROS2 节点)
+src/rosiwit_slam           (算法核心: 纯 C++/PCL/Eigen, 无 ROS; 可独立 cmake+ctest)
+src/rosiwit_slam_ros2      (ROS2/ament 薄接口包)
 ros1_interface/
-  rosiwit_slam_ros1       (ROS1/catkin, 复用核心源码, 仅桥接)
-    src/rosiwit_slam_ros1_node.cpp
-    srv/{SaveMap,LoadMap,SaveGridMap,SetSlamMode}.srv
-    launch/rosiwit_slam.launch
-    config/default.yaml   (与 ROS2 config 同格式)
+  rosiwit_slam_ros1        (ROS1/catkin 薄接口包, 与本文件同目录)
 ```
 
-构建本包时，CMake 直接**编译核心源码**（`src/rosiwit_slam/src/**/*.cpp`，排除 `ros_interface/` 与 `main.cpp`），
-与 ROS2 共享同一份代码，避免分叉。
-
-## 构建（ROS1）
-
-本目录含 `COLCON_IGNORE`，不被 colcon(ROS2) 处理。请放入 **ROS1 工作区**构建：
+## 独立验证核心（无需 ROS）
 
 ```bash
-# 假设 ROS1 (noetic/melodic) 环境
+cd src/rosiwit_slam
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+## 构建本 ROS1 包
+
+本目录含 `COLCON_IGNORE`，不被 colcon(ROS2) 处理。放入 **ROS1 工作区**构建：
+
+```bash
 mkdir -p ~/ros1_ws/src && cd ~/ros1_ws/src
 ln -s <this_repo>/ros1_interface/rosiwit_slam_ros1 .
-# 需要同时能看到算法核心源码 (本 CMake 用相对路径 ../../src/rosiwit_slam)
-#   做法: 让本包位于 <repo>/ros1_interface/ 下 (即保持当前仓库布局), 或修改 CMake 中 SLAM_PKG
-cd ~/ros1_ws && catkin_make   # 或 catkin build
+# 本包 CMake 通过 ../../src/rosiwit_slam 内联构建核心, 故需保持仓库布局
+# (即 <this_repo>/ros1_interface/rosiwit_slam_ros1 与 <this_repo>/src/rosiwit_slam)
+cd ~/ros1_ws && catkin_make
 ```
 
 ## 接口

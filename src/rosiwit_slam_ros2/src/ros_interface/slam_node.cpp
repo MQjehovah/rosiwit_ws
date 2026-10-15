@@ -123,10 +123,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_path.header.frame_id = m_cfg.world_frame;
 
     // 服务与处理定时器同组, 避免保存地图等操作与建图重处理并发(扫描上下文/地图非线程安全)
-    m_srv_save_map = create_service<rosiwit_slam::srv::SaveMap>("save_map", std::bind(&SlamNode::handleSaveMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
-    m_srv_load_map = create_service<rosiwit_slam::srv::LoadMap>("load_map", std::bind(&SlamNode::handleLoadMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
-    m_srv_save_grid_map = create_service<rosiwit_slam::srv::SaveGridMap>("save_grid_map", std::bind(&SlamNode::handleSaveGridMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
-    m_srv_set_slam_mode = create_service<rosiwit_slam::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_save_map = create_service<rosiwit_slam_ros2::srv::SaveMap>("save_map", std::bind(&SlamNode::handleSaveMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_load_map = create_service<rosiwit_slam_ros2::srv::LoadMap>("load_map", std::bind(&SlamNode::handleLoadMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_save_grid_map = create_service<rosiwit_slam_ros2::srv::SaveGridMap>("save_grid_map", std::bind(&SlamNode::handleSaveGridMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_set_slam_mode = create_service<rosiwit_slam_ros2::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
 
     std::string mode_str = m_algo_raw->getPipelineMode();
     RCLCPP_INFO(get_logger(), "SlamNode ready: algo=%s mode=%s imu=%s lidar=%s",
@@ -347,17 +347,17 @@ void SlamNode::initialPoseCB(const geometry_msgs::msg::PoseWithCovarianceStamped
 
 builtin_interfaces::msg::Time SlamNode::toRosTime(double sec) { return RosUtils::getTime(sec); }
 
-void SlamNode::handleSaveMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SaveMap::Request> req, std::shared_ptr<rosiwit_slam::srv::SaveMap::Response> res) {
+void SlamNode::handleSaveMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveMap::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::SaveMap::Response> res) {
     res->success = m_algo_raw->saveMap(req->path);
     res->message = res->success ? "Saved" : "Failed";
 }
 
-void SlamNode::handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::LoadMap::Request> req, std::shared_ptr<rosiwit_slam::srv::LoadMap::Response> res) {
+void SlamNode::handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Response> res) {
     res->success = m_algo_raw->loadMap(req->path);
     res->message = res->success ? "Loaded" : "Failed";
 }
 
-void SlamNode::handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SaveGridMap::Request> req, std::shared_ptr<rosiwit_slam::srv::SaveGridMap::Response> res) {
+void SlamNode::handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Response> res) {
     if (!req->generator.empty() && !m_algo_raw->setGridMapGenerator(req->generator)) {
         res->success = false;
         res->message = "Unknown generator: " + req->generator;
@@ -367,7 +367,7 @@ void SlamNode::handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const 
     res->message = res->success ? "Saved" : "Failed";
 }
 
-void SlamNode::handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam::srv::SetSlamMode::Request> req, std::shared_ptr<rosiwit_slam::srv::SetSlamMode::Response> res) {
+void SlamNode::handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Response> res) {
     if (req->mode == "mapping" || req->mode == "localization") {
         std::lock_guard<std::mutex> lock(m_out_mutex);
         m_have_output = false; m_path.poses.clear();

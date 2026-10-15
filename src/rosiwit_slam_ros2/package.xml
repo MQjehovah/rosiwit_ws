@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>rosiwit_slam</name>
+  <name>rosiwit_slam_ros2</name>
   <version>1.0.0</version>
   <description>ROS2 SLAM package for multi-sensor fusion localization and mapping</description>
 
