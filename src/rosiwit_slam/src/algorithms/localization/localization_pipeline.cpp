@@ -299,7 +299,16 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
                               Eigen::AngleAxisd(kf.pose.roll, V3D::UnitX()).toRotationMatrix();
                 lk.cloud.reset(new CloudType());
                 lk.cloud->reserve(kf.points.size());
-                for (const auto& p : kf.points) lk.cloud->push_back(PointType(p.x(), p.y(), p.z()));
+                // 注意: PCL 1.8 (melodic/18.04) 的 pcl::PointXYZINormal 没有 (x,y,z)
+                // 三参构造 (PCL 1.12+ 才有), 因此逐字段赋值。默认构造已把 intensity /
+                // curvature / normal_* 置零, data[3] 置 1, 与新版本三参构造语义一致。
+                for (const auto& p : kf.points) {
+                    PointType pt;
+                    pt.x = p.x();
+                    pt.y = p.y();
+                    pt.z = p.z();
+                    lk.cloud->push_back(pt);
+                }
                 lkfs.push_back(std::move(lk));
             }
             m_local_map->setKeyframes(lkfs);
