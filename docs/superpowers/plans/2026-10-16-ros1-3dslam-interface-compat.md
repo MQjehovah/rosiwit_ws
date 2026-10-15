@@ -1369,6 +1369,43 @@ rotation:    {x: 0, y: 0, z: 0, w: 1}
 4. `cat ~/.ros/rosiwit_slam_ros1/compat_legacy.yaml | grep map_directory` → `"/"`
 **提交**：`feat(ros1): 建图模式 /map 实时栅格 + map_directory 注入`
 
+### 10.3 T10 实测记录（已完成并提交）
+
+**状态**：`catkin_make` `exit=0`；**gtest 52/52 全绿**。
+
+§10.2 的实时栅格接线**在 T5b 就已经做完了**（`RealtimeGrid::setSource` 取核心全局地图、
+`start(rt_grid_map_publish_hz)`、`/map` MAPPING 分支 `toLegacyGrid` + `origin.z = area*1e-5`
+无条件发布）。所以 T10 这轮只补 §10.1 的 override YAML 与诊断。
+
+**已完成**：
+- legacy profile 下生成 `~/.ros/rosiwit_slam_ros1/compat_legacy.yaml` = **基底原文 + 末尾追加
+  `map_directory: "/"`**。做法是**按文本复制再追加**，不是 `YAML::Dump` 重排整个 Node ——
+  原文件的注释与排版都保留（实测注入文件里原有 16 行 `#` 注释仍在），也不会被重排改掉语义。
+- `~config_file` 为空时（legacy profile）回落到本包 `config/default.yaml` 并告警，
+  避免把核心指向空路径而退化成内置默认。
+- 打印 D7 / §5.10 B / **待办项 C** 需要的三行 + 一条告警：
+  ```
+  [compat] core yaml = /home/jmq/.ros/rosiwit_slam_ros1/compat_legacy.yaml
+  [compat] effective acc_scale=1 r_il=[1.0, 0.0, ...] t_il=[0.0, 0.0, 0.0905]
+  [compat] ignored legacy keys: roll_new=0 pitch_new=45 yaw_new=90 imu_in_car_frame_yaw_livox=65
+           (M13: 外参/单位按核心 YAML, 不采纳旧实现的 9.81 与安装角)
+  [compat] WARN acc_scale=1.0 —— 若雷达内置 IMU 的加速度是 g 单位, 这里应为 9.81
+           (待办项 C: 首次上机必须核对本行)
+  ```
+  **待办项 C 至此变成"看一行日志"**：核心 `acc_scale` 默认 1.0
+  （`fast_lio2/map_builder/commons.h:47`，注释明确说"Livox 内置 IMU 若以 g 为单位要设 9.81"），
+  而我们的 `config/default.yaml` 里**没有**这个键，所以上机第一件事就是看这条 WARN。
+- `input_profile=rosiwit` 下**不注入、不打这些行**（实测 `[compat]` 行数 0、注入文件不存在）✓。
+
+**一处与计划 §10.2 的有意差别**：计划写 `/map` 要 `header.stamp = now()`，**我们保持 stamp=0**。
+理由：旧实现 `updateRealtimeGridMap()`（`legacy.cpp:1717-1731`）从头到尾**没设过 stamp**，
+旧 `/map` 的 stamp 一直是 0 —— "对上"优先。若将来 costmap 之类的消费者因为 stamp=0 报错，
+再改成 `now()`（改一行），但那就是有意的偏差了。
+
+**验证**：真跑两个 launch，逐项核对上面这些行与文件；注入文件的 `map_directory: "/"` 在第 329 行。
+
+
+
 ---
 
 ## T11. 接上定位丢失上报

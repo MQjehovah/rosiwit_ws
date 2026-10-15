@@ -13,7 +13,11 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include "slam_core/slam_factory.h"
 
@@ -43,6 +47,63 @@ LegacyConfPaths defaultLegacyPaths() {
     p.opt_slam_json = "/opt/xzrobot/configs/3d_slam/slam_conf.json";
     return p;
 }
+
+namespace {
+
+/// legacy profile: 给核心一份 override YAML —— 只加 `map_directory: "/"` 一个键 (M8/D9)。
+/// 做法是把基底文件**按文本**复制过来再在末尾追加一行, 而不是重新 Dump 整个 Node ——
+/// 这样原文件里的注释与排版都保留, 也不会被 YAML 重排改变语义。
+std::string writeLegacyOverrideYaml(const std::string& base_yaml) {
+    const char* home = std::getenv("HOME");
+    const std::string dir = std::string(home ? home : ".") + "/.ros/rosiwit_slam_ros1";
+    ::mkdir(dir.c_str(), 0755);                 // 失败也无所谓(可能已存在)
+    ::mkdir((std::string(home ? home : ".") + "/.ros").c_str(), 0755);
+    const std::string out_path = dir + "/compat_legacy.yaml";
+
+    std::ifstream in(base_yaml);
+    std::ofstream out(out_path, std::ios::trunc);
+    if (!out.good()) {
+        ROS_ERROR_STREAM("[slam_engine] cannot write override yaml: " << out_path);
+        return base_yaml;   // 写不出来就退回基底, 至少不把 core 指向不存在的文件
+    }
+    if (in.good()) out << in.rdbuf();
+    out << "\n# --- injected by rosiwit_slam_ros1 (legacy profile, M8) ---\n"
+           "# 旧实现的地图读写都是 <dir>/map.pcd|.xzmap|.pgm|.yaml 的绝对路径, 而核心的\n"
+           "# PcdMapManager 是 map_dir_ + \"/\" + name; 置成 \"/\" 让拼接退化为绝对路径。\n"
+           "map_directory: \"/\"\n";
+    out.close();
+    return out_path;
+}
+
+/// D7 / §5.10 B / 待办项 C 要的可诊断性: 把核心**实际生效**的外参与 acc_scale 打出来,
+/// 因为"完全没位姿"最常见的两个原因就是加速度单位(acc_scale)与雷达-IMU 外参(r_il/t_il)。
+/// 用 std::cout + endl (ROS_INFO 在 roslaunch 下是块缓冲的, 看不到)。
+void printCompatDiagnostics(const std::string& base_yaml, const std::string& injected_yaml,
+                            const LegacyConfig& lc) {
+    double acc_scale = 1.0;                  // 核心默认 (fast_lio2/map_builder/commons.h:47)
+    std::string r_il = "(缺省)", t_il = "(缺省)";
+    try {
+        const YAML::Node c = YAML::LoadFile(base_yaml);
+        if (c && c["acc_scale"]) acc_scale = c["acc_scale"].as<double>(acc_scale);
+        if (c && c["r_il"]) r_il = YAML::Dump(c["r_il"]);
+        if (c && c["t_il"]) t_il = YAML::Dump(c["t_il"]);
+    } catch (const std::exception& e) {
+        ROS_WARN_STREAM("[slam_engine] compat diagnostics: cannot read base yaml (" << e.what() << ")");
+    }
+    std::cout << "[compat] core yaml = " << injected_yaml << std::endl;
+    std::cout << "[compat] effective acc_scale=" << acc_scale << " r_il=" << r_il
+              << " t_il=" << t_il << std::endl;
+    std::cout << "[compat] ignored legacy keys: roll_new=" << lc.roll_new
+              << " pitch_new=" << lc.pitch_new << " yaw_new=" << lc.yaw_new
+              << " imu_in_car_frame_yaw_livox=" << lc.imu_in_car_frame_yaw_livox
+              << " (M13: 外参/单位按核心 YAML, 不采纳旧实现的 9.81 与安装角)" << std::endl;
+    if (std::fabs(acc_scale - 1.0) < 1e-12) {
+        std::cout << "[compat] WARN acc_scale=1.0 —— 若雷达内置 IMU 的加速度是 g 单位, "
+                     "这里应为 9.81 (待办项 C: 首次上机必须核对本行)" << std::endl;
+    }
+}
+
+} // namespace
 
 SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
     // ---- input_profile (M12: 默认 rosiwit, 只有 drop-in launch 显式传 legacy) ----
@@ -112,6 +173,16 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         }
         std::cout << "[slam_engine] legacy laser_type='" << lt << "' -> input topics: imu="
                   << cfg_.imu_topic << " lidar=" << cfg_.lidar_topic << std::endl;
+
+        // ---- M8: 给核心注入 map_directory: "/" 的 override YAML ----
+        std::string base = config_path_;
+        if (base.empty()) {
+            base = ros::package::getPath("rosiwit_slam_ros1") + "/config/default.yaml";
+            ROS_WARN_STREAM("[slam_engine] legacy profile: ~config_file 未设置, 核心 YAML 回落到 "
+                            << base);
+        }
+        config_path_ = writeLegacyOverrideYaml(base);
+        printCompatDiagnostics(base, config_path_, legacy_cfg_);
     }
 
     algo_ = SlamFactory::create(algo_name);
