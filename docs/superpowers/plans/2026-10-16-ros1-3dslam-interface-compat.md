@@ -1,0 +1,966 @@
+# 实施计划：rosiwit_slam_ros1 承接 xz_3d_slam 的 ROS1 接口
+
+**对应设计文档**：`docs/superpowers/specs/2026-10-16-ros1-3dslam-interface-compat-design.md`
+（本计划只写"怎么做"；"为什么这么定"在设计文档 §5/§6/§8。凡本计划给出具体值的地方，
+那个值就是**决定**，不要另行推断。）
+
+**目标**：让整机把 `3d_slam` 换成 `rosiwit_slam` 后，`rosiwit_slam_ros1` 这一个进程同时暴露
+两套接口（新的 `rosiwit` 接口 + 旧的 `xz_3d_slam` 接口），话题名 / 服务名 / 消息类型 /
+参数名 / frame_id / TF 树形状全部与旧 `xz_3d_slam` 对上。改动只落在
+`ros1_ws/src/rosiwit_slam_ros1/`（外加上一轮已做的环境修复，见 T0）。
+
+**参考实现（权威来源，只读）**：
+- 旧接口行为：`E:\workspace_slam\3d_slam\src\xz_3d_slam\xz_slam_ros1_interface.cpp`
+  （下文引用为 `legacy.cpp:<行号>`）
+- 旧接口声明：`E:\workspace_slam\3d_slam\src\xz_3d_slam\xz_slam_ros1_interface.h`
+- 旧配置默认值：`E:\workspace_slam\3d_slam\src\xz_3d_slam\conf\slam_conf.json`、
+  `conf\warning_code.json`
+- 旧 launch：`E:\workspace_slam\3d_slam\src\xz_3d_slam\launch\xz_3d_slam.launch`
+
+---
+
+## T0. 环境前置（**已发现的问题，前 3 项已修，第 4 项需你执行**）
+
+`ros1_ws` 此前从未构建成功过。构建前必须满足：
+
+1. **cmake ≥ 3.16** —— 核心 `src/rosiwit_slam/CMakeLists.txt` 写的是
+   `cmake_minimum_required(VERSION 3.16)`，而 melodic 自带 cmake 是 3.10.2（连 `-S/-B` 都不支持）。
+   **已做**：安装 cmake 3.16.9 到 `~/.local/cmake-3.16.9-Linux-x86_64`，
+   在 `~/.local/bin` 建了 `cmake`/`ctest`/`cpack` 软链，并把 `~/.local/bin` 加进 `~/.bashrc` 的 PATH。
+2. **`ros1_ws/src/rosiwit_slam_ros1/COLCON_IGNORE` 会让 catkin 静默跳过整个包** ——
+   `catkin_pkg 0.5.2` 认这个文件，后果是 `catkin_make` 返回 0 但什么都没编译。
+   **已做**：移动到 `COLCON_IGNORE.removed-by-setup`（`ros1_ws/COLCON_IGNORE` 已挡住 colcon，包内那个是多余且有害的）。
+3. **`catkin_package(INCLUDE_DIRS include)` 但包里没有 `include/` 目录** —— CMake 直接报错。
+   **已做**：从 `catkin_package()` 删掉 `INCLUDE_DIRS include`（本包不对外导出头文件）。
+4. **核心缺少 Ceres 与 Sophus 的头文件**（`ceres_backend.h:7` 无条件 include `<ceres/ceres.h>`、
+   `ieskf.h:3` 无条件 include `<sophus/so3.hpp>`；核心 CMake 里 `find_package(... QUIET)` 只管链接，
+   不管这两个无条件 include）。
+   **已做**（你已安装）：`libceres-dev` + `ros-melodic-sophus` 已就位，且正好匹配：
+   `libceres-dev 1.13.0` 提供 `/usr/include/ceres/ceres.h` + `/usr/lib/cmake/Ceres/CeresConfig.cmake`
+   （→ `find_package(Ceres)` 命中）；`ros-melodic-sophus 1.0.1` 提供
+   `/opt/ros/melodic/include/sophus/so3.hpp` + `/opt/ros/melodic/share/sophus/cmake/SophusConfig.cmake`
+   （→ `find_package(Sophus)` 命中，名字大小写正好对上）。
+   GTSAM / octomap **不需要**：源码里 gtsam 全部在 `#ifdef USE_GTSAM` 内，octomap 的 .cpp 被 CMake 过滤掉。
+5. **Ceres 1.13 没有 `Ceres::ceres` 目标** —— 核心 CMake 写的是
+   `target_link_libraries(rosiwit_slam PUBLIC Ceres::ceres)`，而带命名空间的目标自 Ceres 1.14 才有；
+   18.04 的 1.13 只导出无命名空间的导入目标 `ceres` 与变量 `CERES_INCLUDE_DIRS`/`CERES_LIBRARIES`。
+   **已做**：在薄层 `CMakeLists.txt` 的 `add_subdirectory(核心)` **之前**加垫片
+   （`find_package(Ceres QUIET)` + `NOT TARGET Ceres::ceres` 守卫 + `INTERFACE IMPORTED GLOBAL` 桥接）。
+   Ceres ≥ 1.14 时守卫为假 → 整段跳过，无副作用。**纯薄层改动，核心一字未动。**
+   （不能写成 `add_library(Ceres::ceres ALIAS ceres)`：CMake 不允许对**非 GLOBAL** 的导入目标建 ALIAS。）
+6. **核心有 2 处依赖"较新版本"才能编过**（**你已批准改核心**）—— 核心是照 ROS2 Humble/22.04 写的
+   （`docker/slam-mapping/Dockerfile` = `ros:humble-ros-base`，`scripts/install_deps.sh` 全是 `ros-humble-*` + colcon），
+   18.04/melodic 的依赖更老。`make -k` 全量核对过：核心 57 个编译单元**只有这 2 个文件**编不过，其余 55 个全过。
+   a. `src/algorithms/fast_lio2/map_builder/ieskf.cpp`：`Sophus::SO3d::leftJacobian` /
+      `leftJacobianInverse` 是较新 Sophus 才有的静态成员（melodic 的 sophus 1.0.1 没有）。
+      **改法**：文件内加编译期探测（`decltype` SFINAE，C++17）；**有就走 Sophus 原实现**（新版环境逐位不变），
+      没有就走闭式解：
+      `J_l(φ) = I + (1-cosθ)/θ²·φ^ + (θ-sinθ)/θ³·φ^²`（θ→0 取级数极限，避免除零），
+      然后 `Jr = J_lᵀ`、`JrInv = (J_l⁻¹)ᵀ`（与原代码 `leftJacobian(...).transpose()` 语义一致）。
+      **已用有限差分独立验证**（只用老 Sophus 也有的 `SO3d::exp`/`log`，300 个随机 φ∈(-3.13,3.13)）：
+      `JrInv` vs 右扰动有限差分 = 3.66e-08；`Jr` vs 其逆 = 3.21e-08；
+      `Jr` vs (左扰动⁻¹)ᵀ = 3.15e-08；`Jr·JrInv - I` = 7.29e-15；
+      小角度级数分支同量级（2.8e-14）；`Jr(0) - I = JrInv(0) - I = 0`。
+      （3e-08 就是 h=1e-7 有限差分自身的噪声底。）
+      该检查将固化为 T1 的 gtest —— 薄层能 `#include "ieskf.h"`，可直接调 `Jr`/`JrInv`，无需改核心测试。
+   b. `src/algorithms/localization/localization_pipeline.cpp:302`：`pcl::PointXYZINormal(p.x(),p.y(),p.z())`
+      的三参构造是 PCL 1.12+ 才有的（已查 PCL 官方文档确认 1.15 提供
+      `PointXYZINormal(float _x, float _y, float _z, float _intensity = 0.f)`），
+      而 18.04 是 PCL 1.8.1（`pcl::PointXYZINormal` 只有默认构造 + 拷贝构造）。
+      **改法**：改为默认构造 + 逐字段赋值 `pt.x/pt.y/pt.z`。默认构造已把
+      `intensity`/`curvature`/`normal_*` 置零、`data[3]` 置 1，与新版本三参构造语义一致；无行为差异。
+7. **薄层 `CMakeLists.txt` 自身有个从未编过的错** ——
+   `target_compile_definitions(rosiwit_slam_ros1_node PRIVATE -pipe -pthread)` 会产生
+   `-D-pipe` / `-D-pthread`，g++ 报 `<command-line>:0:1: error: macro names must be identifiers`。
+   **已做**：改成 `target_compile_options(...)`。
+
+**基线状态（已验证，T1 的起点）**：上述 1–7 修完后
+
+```bash
+catkin_make -j$(nproc) -DCATKIN_WHITELIST_PACKAGES="rosiwit_slam_ros1;xzrobot_ros_dependency"
+```
+
+返回 `exit=0`。核心 **57/57** 个 `.o` 全部产出，`devel/lib/librosiwit_slam.so`（2.29 MB）与
+`devel/lib/rosiwit_slam_ros1/rosiwit_slam_ros1_node`（533 KB）均生成；日志中可见
+`-- rosiwit_slam_ros1: shimmed Ceres::ceres (Ceres 1.13.0, CERES_LIBRARIES='ceres')`。
+即：**核心在 melodic/bionic + 全 apt 依赖下可编译**（此前从未验证过）。
+
+**统一构建命令**（后续每个任务都用它）：
+```bash
+bash -lc 'source ~/.bashrc; source /opt/ros/melodic/setup.bash; \
+  cd ~/rosiwit_ws/ros1_ws && \
+  catkin_make -j$(nproc) -DCATKIN_WHITELIST_PACKAGES="rosiwit_slam_ros1;xzrobot_ros_dependency"'
+```
+测试：
+```bash
+bash -lc 'source ~/.bashrc; source /opt/ros/melodic/setup.bash; \
+  cd ~/rosiwit_ws/ros1_ws && catkin_make run_tests_rosiwit_slam_ros1'
+```
+（用 whitelist 是因为 `rosiwit_navigation_ros1` 也在同一个工作空间里，
+它不是本任务范围，先把它排除，避免它的构建噪音干扰。）
+
+---
+
+## 目标文件布局（T1 建立，后续任务往里面填）
+
+```
+ros1_ws/src/rosiwit_slam_ros1/
+├── CMakeLists.txt                       [改] 拆 lib + exe + gtest
+├── package.xml                          [改] 加 xzrobot_ros_dependency / yaml-cpp 测试依赖
+├── config/default.yaml                  [不变]
+├── conf/slam_conf.json                  [新] 旧配置默认值（从 3d_slam conf 原样搬）
+├── conf/warning_code.json               [新] 告警码表（原样搬）
+├── launch/rosiwit_slam.launch           [不变]
+├── launch/xz_3d_slam.launch             [新] 旧子系统 launch 的 drop-in（只改第 34 行）
+├── launch/legacy_dev.launch             [新] 只起本节点(input_profile:=legacy)，供开发机测试
+├── scripts/check_legacy_interface.sh    [新] V2 接口一致性校验
+├── scripts/legacy_interface.golden      [新] 期望的 topic/service/type 清单
+├── srv/*.srv                            [不变]
+├── test/
+│   ├── fixtures/                        [新] 配置 fixture
+│   ├── test_legacy_config.cpp           [新]
+│   ├── test_lost_monitor.cpp            [新]
+│   ├── test_legacy_convert.cpp          [新]
+│   └── test_realtime_grid.cpp           [新]
+└── src/
+    ├── rosiwit_slam_ros1_node.cpp       [改] 只剩 main
+    ├── legacy_config.h/.cpp             [新] 旧 JSON 配置装载（纯逻辑，无 ROS）
+    ├── legacy_convert.h/.cpp            [新] 旧消息构造（纯逻辑，只依赖 ROS 消息类型）
+    ├── lost_monitor.h/.cpp              [新] 定位丢失/恢复状态机（纯逻辑，无 ROS）
+    ├── realtime_grid.h/.cpp             [新] 建图实时栅格（复用核心公开生成器 + worker 线程）
+    ├── slam_engine.h/.cpp               [新] 唯一的核心持有者
+    ├── rosiwit_interface.h/.cpp         [新] 现有新接口原样搬迁
+    └── legacy_xz3dslam_interface.h/.cpp [新] 旧 xz_3d_slam 接口全套
+```
+
+---
+
+## T1. 构建骨架 + `LegacyConfig`
+
+**目标**：`catkin_make` 能把核心编过；旧 JSON 配置能按旧覆盖链读出来并全部有默认值；
+旧地图路径契约可单测。
+
+**文件**：`CMakeLists.txt`、`package.xml`、`conf/slam_conf.json`、`conf/warning_code.json`、
+`src/legacy_config.h`、`src/legacy_config.cpp`、`test/test_legacy_config.cpp`、`test/fixtures/*`
+
+### 1.1 `conf/` 资源
+- 把 `E:\workspace_slam\3d_slam\src\xz_3d_slam\conf\slam_conf.json` **原样复制**为
+  `conf/slam_conf.json`（它就是"旧配置默认值"的权威来源，含 `laser_params` 子树）。
+- 把 `conf\warning_code.json` **原样复制**为 `conf/warning_code.json`（155 行，内容不改）。
+
+### 1.2 `src/legacy_config.h`（无 ROS 依赖，只用 yaml-cpp）
+
+```cpp
+// 旧 xz_3d_slam 的配置装载。JSON 用 yaml-cpp 解析(JSON 是 YAML 子集, 不额外引 json 库)。
+namespace rosiwit_slam_ros1 {
+
+struct LegacyConfPaths {
+    std::string proj_conf_json;    // PROJECT_PATH/conf/slam_conf.json (优先)
+    std::string pkg_conf_json;     // 本包 conf/slam_conf.json (兜底)
+    std::string opt_sensor_json;   // /opt/xzrobot/configs/sensor_config.json
+    std::string opt_slam_json;     // /opt/xzrobot/configs/3d_slam/slam_conf.json (深合并覆盖)
+};
+
+struct LegacyConfig {
+    std::string laser_type = "";            // mid360|new_mid360|vanjee|new_vanjee|new_robosense|""(见下)
+    std::string slam_init_type = "localization";
+    bool   is_debug = false;
+    bool   debug_publish = false;           // 未配时回落到 is_debug
+    double roll_new = 0, pitch_new = 0, yaw_new = 90, x_new = 0, z_new = 0;
+    double imu_in_car_frame_yaw_livox = 65, imu_in_car_frame_yaw_wj = 60;
+    std::string laser_sub_name = "rslidar_points";
+    std::string imu_sub_name = "zyz_imu_data";
+    int    publish_hz = 20;                 // 解析出来但发布周期硬编码 0.1s (legacy.cpp:254-255)
+    int    rt_grid_map_publish_hz = 1;
+    double yaw_calib = 0;                   // 读入时已按 *M_PI/180 转弧度 (legacy.cpp:1563-1565)
+    double x_calib = 0, y_calib = 0;
+    bool   use_tf = true;
+    bool   use_filter_odom = false;
+    bool   use_2d_undistort = true;
+    double th_2d_range_min = 0.5, th_2d_range_max = 3.0;
+    int    test_wait_time = 30;
+    bool   use_delete_pts = true;           // 装载后还要 && isSkywalker50(model)
+    double delete_pt_in_car_max_x = 0.5,  delete_pt_in_car_min_x = -1.2;
+    double delete_pt_in_car_max_y = 0.5,  delete_pt_in_car_min_y = -0.5;
+    double delete_pt_in_car_max_z = 0.8,  delete_pt_in_car_min_z = -0.5;
+    double use_3d_z_min = 0.0, use_3d_z_max = 20.0;
+    double mapping_z_min = 0.0, mapping_z_max = 20.0;   // 缺省取 use_3d_*
+    double loc_z_min = 0.0,     loc_z_max = 20.0;       // 缺省取 use_3d_*
+    bool   lidar_pts_monitor = true;
+    int    lidar_pts_monitor_interval = 10;             // <1 时强制 10
+    std::string xz_log_path = "/opt/xzrobot/logs/xzrobot_3d_slam/xz_3d_slam.log";
+    bool   print_xz_log_to_file = true;
+
+    /// 按旧顺序装载: sensor_config.json -> 主 slam_conf -> /opt 覆盖 -> laser_params.<base> 合并
+    /// 任何文件缺失/解析失败只 WARN, 用内置默认值, 绝不抛异常
+    static LegacyConfig load(const LegacyConfPaths& paths, const std::string& machine_model);
+};
+
+/// legacy.cpp:12-20 原样: model=="XZ-SW50" / "XZ-SWGT"
+bool isSkywalker50(const std::string& model);
+bool isSkywalkerGT(const std::string& model);
+
+/// 旧地图路径契约 (设计文档 §5.10 A)
+/// base = (map_dir 去掉尾斜杠) + "/map"   // 基名恒为 map, map_name 只是显示标签
+std::string legacyMapBase(const std::string& map_dir);
+
+} // namespace rosiwit_slam_ros1
+```
+
+### 1.3 `src/legacy_config.cpp` —— 逐条照抄旧实现（**不允许"顺手改正"**）
+
+装载顺序与来源（照抄 `legacy.cpp:32-43` + `loadConfigJson` 1373-1407 + `loadConfFromJsonFile` 1409-1708）：
+
+1. `laser_type` 由 `sensor_config.json` 的 `type_3d` **和** model 共同决定（`legacy.cpp:1377-1404`）：
+   - `type_3d` 缺失 → `"Livox_Mid360"`；`type_3d == "Livox"` → `"Livox_Mid360"`
+   - `WLR_722` + `isSkywalkerGT` → `new_vanjee`；`WLR_722` + `isSkywalker50` → `vanjee`
+   - `Livox_Mid360`/`Livox_Mid360s` + GT → `new_mid360`；+ 50 → `mid360`
+   - `Robosense` + GT → `new_robosense`，**并同时**把 `laser_sub_name` 置 `rslidar_points`、`imu_sub_name` 置 `rslidar_imu`
+   - 都不命中时 `laser_type` **保持空串**（`legacy.h:368` 初值），后续走 else 分支订阅
+2. 主配置 = `proj_conf_json`（旧 `PROJECT_PATH/conf/slam_conf.json`）；本包 `pkg_conf_json` 作兜底。
+   **先存在的胜**：两个都试，谁存在用谁；都不存在 → 全默认值 + WARN。
+3. 若 `opt_slam_json` 存在 → 用 `merge_patch` 式**深合并**覆盖（嵌套子树按 key 合并，不是整块替换；
+   `legacy.cpp:1429`）。
+4. 若 `laser_type` 非空且存在 `laser_params` → 取 `base_type`（`new_mid360→mid360`、`new_vanjee→vanjee`、
+   `new_robosense→robosense`）子树深合并到根（`legacy.cpp:1441-1452`）。
+5. 逐键读取，缺键用上表默认值（`legacy.cpp:1454-1701`）。**注意这几个"看起来不合理但必须照抄"的默认**：
+   `pitch_new=0`、`yaw_new=90`、`imu_in_car_frame_yaw_livox=65`、`use_2d_undistort=true`、
+   `th_2d_range_min=0.5`、`test_wait_time=30`、`delete_pt_in_car_min_z=-0.5`（不是文件里的 -10）。
+6. `yaw_calib` 读入后立即 `* M_PI / 180`（仅在存在该键时；缺键时是 `0`，不乘）。
+7. 装载完成后在 `LegacyConfig::load` 内做：`use_delete_pts = use_delete_pts && isSkywalker50(model)`
+   （照抄 `legacy.cpp:43`）。**注意这一步发生在装载之后**，所以 fixture 测试要覆盖"配置说 true 但 model 是
+   XZ-SWGT → false"。
+
+实现细节：`deepMerge(YAML::Node dst, const YAML::Node& src)` 递归合并映射节点（标量/序列整体覆盖）。
+全部用 `try/catch(...)` 包住文件读与解析，异常只 `ROS_WARN`。
+
+`legacyMapBase`：
+```cpp
+std::string legacyMapBase(const std::string& map_dir) {
+    size_t e = map_dir.size();
+    while (e > 0 && map_dir[e-1] == '/') --e;   // 去掉结尾的 '/'; "/" 会得到空串
+    const std::string dir = map_dir.substr(0, e);
+    if (dir.empty()) return "/map";             // 根 "/" (或空串) -> "/map"
+    return dir + "/map";
+}
+```
+**注意**（T1 实测修正）：计划初稿写的是 `while (e > 1 && ...)`，对 `map_dir == "/"` 会拼出
+`"//map"`。已改为 `e > 0` 并对空结果特判，使 `/` → `/map`（与 T1 的 `LegacyMapBaseRoot` 用例一致）。
+空 `map_dir` 也按根处理（宁可拼出绝对路径 `/map` 让写盘权限报错，也不拼成相对路径把地图写到 CWD）。
+
+### 1.4 `test/test_legacy_config.cpp` + `test/fixtures/`
+
+fixtures（提交到仓库，实际落地的清单）：
+- `fixtures/slam_conf_min.json` — 只含 `pitch_new: 10`
+- `fixtures/slam_conf_override.json` — `pitch_new: 33` + `laser_params.mid360.loc_z_max: 5`
+  + `laser_params.vanjee.laser_sub_name: "vanjee_points722"`
+- `fixtures/slam_conf_yaw_calib.json` — `{"yaw_calib": 90}`
+- `fixtures/slam_conf_tiny_interval.json` — `{"lidar_pts_monitor_interval": 0}`
+- `fixtures/slam_conf_log.json` — `xz_log_path` + `print_xz_log_to_file: true`
+- `fixtures/sensor_vanjee_gt.json` — `{"type_3d": "WLR_722"}`
+- `fixtures/sensor_robosense.json` — `{"type_3d": "Robosense"}`
+- `fixtures/sensor_mid360.json` — `{"type_3d": "Livox_Mid360"}`
+
+fixture 路径以编译宏 `LEGACY_FIXTURE_DIR` 传入（不依赖测试进程 CWD）。
+
+测试用例（每个都是一个 `TEST`）：
+1. `DefaultsWhenNothingExists` —— 传入全不存在的路径：`pitch_new==0`、`yaw_new==90`、
+   `imu_in_car_frame_yaw_livox==65`、`laser_sub_name=="rslidar_points"`、`use_2d_undistort==true`、
+   `lidar_pts_monitor_interval==10`、`yaw_calib==0`
+2. `ProjConfOverridesDefaults` —— `proj_conf_json=fixtures/slam_conf_min.json` → `pitch_new==10`，其余仍默认
+3. `OptSlamConfDeepMergesOverProj` —— 主配置 + `opt_slam_json=fixtures/slam_conf_override.json`
+   → `pitch_new==33`；`laser_params.mid360` 子树合并生效（`loc_z_max==5`，需要机型命中
+   `new_mid360`：model=`XZ-SWGT` + sensor 缺失 → `type_3d` 默认 `Livox_Mid360`）
+4. `LaserParamsSubtreeMergedForBaseType` —— model=`XZ-SWGT`、`type_3d="WLR_722"` →
+   `laser_type=="new_vanjee"`；`laser_params.vanjee.laser_sub_name` 生效（fixture 里给
+   `laser_params.vanjee.laser_sub_name="vanjee_points722"`）→ `laser_sub_name=="vanjee_points722"`
+5. `Mid360BaseTypeStripsNewPrefix` —— `new_mid360` → 合并 `laser_params.mid360` 子树
+6. `RobosenseGtForcesTopicNames` —— `type_3d="Robosense"` + `XZ-SWGT` → `laser_type=="new_robosense"`、
+   `laser_sub_name=="rslidar_points"`、`imu_sub_name=="rslidar_imu"`
+7. `UnknownModelLeavesLaserTypeEmpty` —— model=`""`、`type_3d="Robosense"` → `laser_type==""`
+8. `UseDeletePtsGatedByModel` —— 配置 `use_delete_pts: true`，model=`XZ-SWGT` → `false`；
+   model=`XZ-SW50` → `true`
+9. `YawCalibConvertedToRadiansWhenPresent` —— fixture `yaw_calib: 90` → `yaw_calib ≈ π/2`
+10. `PkgConfUsedAsFallback` —— 只给 `pkg_conf_json`
+11. `LegacyMapBaseStripsTrailingSlash` —— `/a/b/` → `/a/b/map`
+12. `LegacyMapBaseWithoutTrailingSlash` —— `/a/b` → `/a/b/map`
+13. `LegacyMapBaseLongPathNotTruncated` —— 40 字符目录 → 原样保留（旧实现 `substr(0,32)` 会截断，这是 D9 的有意修正）
+14. `LegacyMapBaseRoot` —— `/` → `/map`
+
+### 1.5 `CMakeLists.txt` 结构
+
+```cmake
+set(ROSIWIT_ROS1_LIB_SOURCES
+    src/legacy_config.cpp
+    # T2 追加 src/realtime_grid.cpp; T3 追加 src/lost_monitor.cpp;
+    # T4 追加 src/slam_engine.cpp + src/rosiwit_interface.cpp;
+    # T5 追加 src/legacy_convert.cpp + src/legacy_xz3dslam_interface.cpp
+)
+add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
+target_include_directories(rosiwit_slam_ros1_lib PUBLIC src ${catkin_INCLUDE_DIRS})
+target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam)
+
+add_executable(rosiwit_slam_ros1_node src/rosiwit_slam_ros1_node.cpp)
+target_link_libraries(rosiwit_slam_ros1_node rosiwit_slam_ros1_lib)
+add_dependencies(rosiwit_slam_ros1_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+```
+
+`package.xml` 增加：`<depend>xzrobot_ros_dependency</depend>`、`<build_depend>yaml-cpp</build_depend>`、
+`<test_depend>gtest</test_depend>`。
+`find_package(catkin ...)` 增加 `xzrobot_ros_dependency`，`catkin_package(CATKIN_DEPENDS ...)` 也加。
+yaml-cpp 头文件：核心的 `rosiwit_slam` 目标把 `${yaml-cpp_INCLUDE_DIRS}` 声明为 **PRIVATE**
+（`src/rosiwit_slam/CMakeLists.txt:60`），薄层不继承；但该路径就是 `/usr/include`（默认搜索路径），
+所以 `#include <yaml-cpp/yaml.h>` 直接可用，且核心已 `PUBLIC` 链接 `yaml-cpp`，链接期也无需重复声明。
+**不要**为此去改核心的 `PRIVATE`/`PUBLIC`。
+
+gtest（每个测试文件一个 target，`catkin_add_gtest` 在 `CATKIN_ENABLE_TESTING` 下才生成）：
+```cmake
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_legacy_config test/test_legacy_config.cpp)
+  if(TARGET test_legacy_config)
+    target_link_libraries(test_legacy_config rosiwit_slam_ros1_lib)
+  endif()
+endif()
+```
+
+**安装**：`install(DIRECTORY conf DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})`、
+`install(DIRECTORY scripts DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})`。
+
+**验证**：T0 的构建命令 + `catkin_make run_tests_rosiwit_slam_ros1` 全绿。
+**提交**：`feat(ros1): 构建骨架 + xz_3d_slam 旧配置装载器`
+
+### 1.6 T1 实测记录（已完成）
+
+**状态**：`catkin_make`（含 `CATKIN_ENABLE_TESTING=ON`）`exit=0`；
+`catkin_make run_tests_rosiwit_slam_ros1` `exit=0`；**gtest 19/19 全绿**（计划里 14 条 + 实测新增 5 条）。
+
+实测新增的用例：
+`ProjConfBeatsPkgConf`（proj 优先于 pkg）、`MonitorIntervalBelowOneForcedToTen`
+（`<1` 强制 10）、`LogKeysFromConfAndDefaults`（`xz_log_path`/`print_xz_log_to_file`
+来自 conf；缺失时用旧 node main 的回落值）、`LegacyMapBaseEmptyDir`、`LegacyMapBaseMultipleTrailingSlashes`。
+
+实测发现并修正的 4 件事：
+
+1. **计划初稿漏了两行逐键读取** —— 旧实现 `legacy.cpp:1535-1547` 会从主配置读
+   `laser_sub_name` / `imu_sub_name`。初稿只保留了 `sensor_config` 阶段推出的值，导致
+   `laser_params.vanjee.laser_sub_name` 这类覆盖根本不生效（被 `LaserParamsSubtreeMergedForBaseType` 抓到）。
+   已补齐两行读取。
+2. **`legacyMapBase` 初稿对根路径拼错**（`"/"` → `"//map"`），已按上文修正（`e > 0` + 空结果特判）。
+3. **`laser_sub_name` / `imu_sub_name` 键缺失时的回落值有一个有意差别（记作 D21）**：
+   旧实现回落硬编码 `"rslidar_points"`/`"zyz_imu_data"`，会**盖掉** `sensor_config` 阶段为
+   Robosense 强制写入的话题名；我们改为保留上一步的结果（仅当 conf 里没有该键时）。
+   随包发行的 `conf/slam_conf.json` 这两个键都在，故**实际部署行为与旧实现逐位一致**。
+4. **`ROS_WARN_STREAM` 打印中文会变 `??????`**（melodic 的 ROS console 按 locale 处理非 ASCII）。
+   已把全部 `ROS_WARN` 文案改为 ASCII 英文；`std::cout` 的启动日志保留中文（直写字节，显示正常）。
+   这条是"上机器人后读日志"的硬要求，后续任务的所有 ROS 日志都照此办理。
+
+其余偏差：`install(DIRECTORY scripts ...)` 推迟到 T12（`scripts/` 目录那时才建立，
+提前写会让 `make install` 失败）。
+
+---
+
+## T2. `RealtimeGrid`：建图模式实时栅格
+
+**目标**：建图模式下能周期产出一张真实数据的 2D 占据栅格（设计文档 §5.11 A）。
+
+**为什么可以不改核心**：核心的栅格生成器与后处理都是**公开头文件**
+（`include/slam_core/i_grid_map_generator.h`、`include/algorithms/grid_map/grid_map_factory.h`、
+`include/algorithms/grid_map/grid_map_postprocess.h`），且核心被打成**单个** `rosiwit_slam` 库
+（`file(GLOB_RECURSE src/*.cpp)`）、include 目录是 `PUBLIC`，薄层已经 `target_link_libraries(... rosiwit_slam)`。
+核心私有的只有 `PcdMapManager::generateGridMap()`。
+
+**关键事实（决定测试怎么写）**：
+- `GridMapFactory::create("height_projection")` 返回 `IGridMapGenerator`；
+  `build(cloud, origin, cfg, info)` 签名见 `i_grid_map_generator.h:62-65`。
+- `height_projection_grid_map.cpp:94-95` 的索引是 `col=(x-origin_x)/res`、`row=(y-origin_y)/res`，
+  **row 0 = 最小 y**。
+- `height_projection` 只产出 **0(自由) / 100(占据)**，没有 unknown（`height_projection_grid_map.cpp:105-112`）。
+  旧 `/map` 还有 **10(unknown)**（`legacy.cpp:1745`）—— 这是无法避免的偏差，记 D17。
+- `applyGridPostProcess(GridInfo&, const GridPostConfig&)` 在
+  `include/algorithms/grid_map/grid_map_postprocess.h:41`；`parsePostPipeline("a,b,c")` 在同文件 :44。
+- 核心的栅格配置键（`config/default.yaml:30-51`）：`grid_map_generator`、`grid_min_height`、
+  `grid_max_height`、`grid_occupied_thresh`、`grid_dilate_radius`、`grid_close_radius`、
+  `grid_min_component_cells`、`grid_max_range`、`grid_ground_method`、`grid_ransac_dist_thr`、
+  `grid_min_hits`、`grid_min_misses`、`grid_mark_radius`、`grid_post_pipeline`、`grid_connectivity`、
+  `grid_open_radius`、`grid_fill_max_hole_cells`、`grid_skeleton_width`、`grid_line_min_len_m`、
+  `grid_axis_snap`。
+  映射到 `GridMapConfig`/`GridPostConfig` 的字段名必须**逐字段对照**这两个头文件，
+  这就是 D15 说的"镜像配置"——在代码里用注释标出耦合点。
+
+**文件**：`src/realtime_grid.h`、`src/realtime_grid.cpp`、`test/test_realtime_grid.cpp`
+
+`src/realtime_grid.h`：
+```cpp
+namespace rosiwit_slam_ros1 {
+
+/// 纯计算部分: 从世界点云生成栅格 (与核心同一生成器 + 同一后处理)
+bool buildGridFromPoints(const rosiwit_slam::PointVec& pts,
+                         const rosiwit_slam::GridMapConfig& cfg,
+                         const rosiwit_slam::GridPostConfig& post,
+                         const std::string& generator,
+                         rosiwit_slam::GridInfo& out);
+
+/// 从 YAML 读栅格配置 (键名见 config/default.yaml:30-51)
+void loadGridConfigFromYaml(const std::string& yaml_path,
+                            rosiwit_slam::GridMapConfig& cfg,
+                            rosiwit_slam::GridPostConfig& post,
+                            std::string& generator);
+
+/// worker 线程封装: 按 hz 节流, 调 source() 取点云并重算, 结果加锁给发布方
+class RealtimeGrid {
+public:
+    using Source = std::function<bool(rosiwit_slam::PointVec&)>;
+    RealtimeGrid();  ~RealtimeGrid();
+    void setConfig(const rosiwit_slam::GridMapConfig&,
+                   const rosiwit_slam::GridPostConfig&, const std::string& generator);
+    void setSource(Source s);
+    void start(double hz);          // hz<=0 时用 1.0
+    void stop();
+    bool latest(rosiwit_slam::GridInfo& out) const;   // 有就用最新一张, 返回是否有效
+};
+} // namespace
+```
+实现要点：单独 `std::thread` + `std::condition_variable` 定时；`getGlobalMap` 与重算是 O(点数)，
+**绝不能跑在 ROS 回调线程上**（否则拖累 100Hz 的 `curr_localization_pose` 与 `map→odom` TF）。
+`latest()` 用 `std::mutex` 保护一张 `GridInfo`。
+
+**测试** `test/test_realtime_grid.cpp`：
+1. `BuildsGridFromSyntheticWall` —— 造一堵墙：x∈[2.0,3.0] 每 0.05 m、y=0、z=1.0，`grid_max_height=2.0`
+   → `buildGridFromPoints` 返回 true；`width>0 && height>0`；`resolution≈0.05`；
+   `data` 里至少有 1 个 `100`
+2. `ReturnsFalseOnEmptyInput` —— 空点云 → 返回 false
+3. `FloorPointsBecomeFreeNotOccupied` —— z=0.0 的点（低于 `grid_min_height=0.1`）→ 没有 `100`
+4. `RowZeroIsMinY` —— 在 y=+5 造墙，断言占据格的 row 索引大于 height/2（钉住行序，防以后被"修正"）
+5. `LatestIsNullBeforeStart` / `LatestHasDataAfterStart` —— 用 `setSource` 喂固定点云，
+   `start(20)` 后 sleep 200ms，`latest()` 为真
+6. `LoadsGridConfigFromDefaultYaml` —— 读本包 `config/default.yaml` → `generator=="height_projection"`、
+   `cfg.min_height≈0.1`、`cfg.max_height≈2.0`、`post.pipeline=={"denoise","close","dilate"}`
+
+**验证**：同上构建 + 单测。
+**提交**：`feat(ros1): 建图实时栅格(复用核心公开栅格生成器)`
+
+---
+
+## T3. `LostMonitor`：定位丢失状态机
+
+**目标**：产出旧 `SlamInfo.location_status` 的 0/1/2，并在 0→2 的边沿发出一次"丢失"信号。
+
+**信号来源**（设计文档 §5.11 B）：`ISlamAlgorithm::getPoseCov()` 在核心 `m_status == LOST` 时返回
+`false`（`localization_pipeline.cpp:641`），而 `m_status` 由真正的 `MonitorLevel` 驱动
+（`localization_pipeline.cpp:620-629`）。`rosiwit_slam_ws` 无需改核心。
+
+**必须处理的两个副作用**（写进代码注释，别只写在文档里）：
+- `m_status == INIT`（刚加载地图、还没定位上）时 `getPoseWithCov` 返回 **true** 并给出默认位姿 →
+  必须用"是否曾经 LOCALIZED 过"的 latch 区分，否则把 INIT 误报成 SUCCESS。
+- 核心把 `MonitorLevel::DEGRADED` 映射成 `LOCALIZED`（`localization_pipeline.cpp:627`）→
+  区分不出 CREDIBLE / DEGRADED，所以 1(RECOVERING) 只用于"重定位进行中"，不用于"降级"（D11）。
+
+**文件**：`src/lost_monitor.h`、`src/lost_monitor.cpp`、`test/test_lost_monitor.cpp`
+
+```cpp
+namespace rosiwit_slam_ros1 {
+
+enum class LocStatus : int8_t { SUCCESS = 0, RECOVERING = 1, FAILED = 2 };
+
+class LostMonitor {
+public:
+    /// 进入定位/换图/重定位时调用: 清 latch, 回到"还没定位上"的初始态
+    void reset();
+    /// 收到一次真实定位输出(SlamOutput.has_new_pose 且处于定位模式)时调用
+    void onLocalizedPose();
+    /// 地图是否已加载(FAILED 的使能条件)
+    void setMapLoaded(bool loaded);
+    /// 每个 tick 调一次, 传入 core.getPoseCov() 的结果
+    LocStatus update(bool pose_cov_ok);
+    /// 一次性边沿: 上一次 update 从"非 FAILED"翻到 FAILED 时返回 true 并清标志
+    bool consumeLostEdge();
+};
+} // namespace
+```
+`update` 规则：
+```
+!map_loaded              -> RECOVERING(1)      // 定位链路还没就绪
+!ever_localized_         -> RECOVERING(1)      // 等价于旧 relocating_==true
+ever_localized_ && !cov  -> FAILED(2)  (+ 置 lost_edge)
+ever_localized_ &&  cov  -> SUCCESS(0)
+```
+`onLocalizedPose()`：`ever_localized_=true`，并且若当前是 FAILED 则清 lost_edge（恢复不算新丢失）。
+
+**测试**：
+1. `NotLoadedIsRecovering` —— `setMapLoaded(false)` → 恒 1，`consumeLostEdge()` 恒 false
+2. `LoadedButNeverLocalizedIsRecovering` —— `setMapLoaded(true)`、`update(true)` → 1（**这条就是 INIT 陷阱的回归测试**）
+3. `AfterLocalizedIsSuccess` —— `onLocalizedPose(); update(true)` → 0
+4. `LostAfterLocalizedIsFailed` —— `onLocalizedPose(); update(false)` → 2
+5. `LostEdgeFiresExactlyOnce` —— 连续 3 次 `update(false)` → `consumeLostEdge()` 依次 true/false/false
+6. `RecoveryReturnsToSuccessAndDoesNotRefire` —— `update(false)`(2) → `update(true)`(0) → `consumeLostEdge()` false
+7. `ResetReturnsToRecovering` —— 定位成功后再 `reset()` → `update(true)` 得 1
+8. `LostAgainAfterRecoveryFiresAgain` —— 2 → 0 → 2，第二次边沿仍要能报
+
+**验证**：同上。
+**提交**：`feat(ros1): 定位丢失状态机(getPoseCov 驱动)`
+
+---
+
+## T4. `SlamEngine` + `input_profile` + launch
+
+**目标**：把核心驱动从 `rosiwit_slam_ros1_node.cpp` 抽成 `SlamEngine`（唯一核心持有者），
+新增 `~input_profile`，产出两个 launch。
+
+**基线文件**：`src/rosiwit_slam_ros1_node.cpp`（现 376 行，单类 `RosiwitSlamRos1Node`，
+`main` 在 369-376）。搬移是**纯重构**：`rosiwit` profile 下行为必须和现在完全一致。
+
+`src/slam_engine.h` 需要暴露给两套 interface 的东西：
+```cpp
+class SlamEngine {
+public:
+    SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh);
+    bool ok() const;                                   // init 失败时为 false
+    rosiwit_slam::ISlamAlgorithm* algo() const;        // 可能为 nullptr
+    rosiwit_slam::SlamBase* base() const;              // 用于 tryPopAndProcess
+    const std::string& inputProfile() const;           // "rosiwit" | "legacy"
+    const std::string& configPath() const;             // 交给 core.init 的路径(可能已被 override)
+    // 输出快照(线程安全)
+    bool latestOutput(rosiwit_slam::SlamOutput& out) const;
+    bool getGlobalMap(rosiwit_slam::PointVec& out) const;
+    bool getGridInfo(rosiwit_slam::GridInfo& out) const;
+    bool getPoseCov(rosiwit_slam::PoseStamped& out, Eigen::Matrix<double,6,6>& cov) const;
+    void onImuMsg(const sensor_msgs::Imu::ConstPtr&);
+    void onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr&);
+    void onOdomMsg(const nav_msgs::Odometry::ConstPtr&);
+    void onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr&);
+    void setOutputHook(std::function<void(const rosiwit_slam::SlamOutput&)>);  // legacy 侧挂载
+    // 新接口的发布器/服务句柄, 供 rosiwit_interface 使用
+    ...
+};
+```
+
+### 4.1 `~input_profile`
+- 默认 `rosiwit`（M12）。`pnh_.param<std::string>("input_profile", profile, "rosiwit")`。
+- `rosiwit`：完全按现状（`~config_file` YAML → `config_path`，订阅 `imu_topic`/`lidar_topic`）。
+- `legacy`：`config_path` 仍是 `~config_file`（核心 YAML），但**额外**用 T1 的 `LegacyConfig` 读出旧配置，
+  并以此决定输入话题名/频率/栅格参数。注入核心的 override YAML（`map_directory: "/"`）在 **T10** 做。
+  T4 只把 `profile` 与 `LegacyConfig` 存好，先不接发布器/服务。
+
+### 4.2 launch
+- `launch/rosiwit_slam.launch`：**不改**（但显式补 `input_profile:=rosiwit`？**不要**——
+  它是"不变"档，靠默认值即可）。
+- `launch/xz_3d_slam.launch`（drop-in）：逐字复制旧 launch 的第 1-33 行，只把第 34 行改成
+  ```xml
+  <node name="xz_3d_slam" pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" output="log">
+    <param name="input_profile" value="legacy" />
+  </node>
+  ```
+  注意旧第 34 行的原始内容必须先在 T4 开始时从
+  `E:\workspace_slam\3d_slam\src\xz_3d_slam\launch\xz_3d_slam.launch` 读出来（行 34 是 SLAM 节点那行），
+  不要凭印象写。
+- `launch/legacy_dev.launch`（开发机用，不含机器人上的外部节点，让我们能单独起 legacy 模式）：
+  ```xml
+  <launch>
+    <arg name="model" default="XZ-SWGT" />
+    <param name="/machine/model" type="string" value="$(arg model)" />
+    <node pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" name="xz_3d_slam" output="screen">
+      <param name="input_profile" value="legacy" />
+    </node>
+  </launch>
+  ```
+
+**验证**：
+1. 构建通过。
+2. `roslaunch rosiwit_slam_ros1 legacy_dev.launch` 能起来，`rosnode info /xz_3d_slam` 显示
+   节点名正确；`rostopic list` 里仍出现现有新接口话题（`lio_odom`、`cloud_map`、`grid_map`、
+   `body_cloud`、`world_cloud`、`lio_path`）。此阶段 legacy 话题还没加，属预期。
+3. `roslaunch rosiwit_slam_ros1 rosiwit_slam.launch` 行为与改动前一致（`lio_odom` 有输出或至少节点正常启动）。
+
+**提交**：`refactor(ros1): 抽出 SlamEngine, 新增 input_profile 与 legacy launch`
+
+---
+
+## T5. `legacy_convert` + 旧接口发布器（14 话题）
+
+**目标**：14 个旧话题全部注册并按旧条件发布；新旧 `/map` 冲突按模式分流解决。
+
+### 5.1 `src/legacy_convert.h/.cpp`（纯逻辑，只依赖 ROS 消息类型，可单测）
+
+```cpp
+namespace rosiwit_slam_ros1 {
+
+/// 旧 /map 语义: 行序 = 核心栅格原样 (row 0 = 最小 y), 不翻转
+nav_msgs::OccupancyGrid toLegacyGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame);
+/// 新语义: 竖直翻转 (row 0 = 最大 y), 值域保留核心的 0/100/-1
+nav_msgs::OccupancyGrid toFlippedGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame);
+
+/// 按设计文档 §5.4 组装 slam/info。matching_degree 恒 0(D3), update_request 恒 0
+xzrobot_ros_dependency::SlamInfo buildSlamInfo(
+    int8_t slam_state, int8_t location_status, const std::string& map_name,
+    double x, double y, double yaw, float map_area);
+
+/// 告警 JSON (legacy.cpp 的 faults 结构, module 恒 "xz_3d_slam")
+std::string buildWarningJson(const std::string& code, const std::string& level,
+                             const std::string& name, const std::string& content);
+
+/// 点云转换: 核心 CloudType -> PointCloud2; 以及 -> 旧的 sensor_msgs/PointCloud
+sensor_msgs::PointCloud2 toPointCloud2(const rosiwit_slam::CloudType& c,
+                                       const std::string& frame, const ros::Time& stamp);
+sensor_msgs::PointCloud  toOldPointCloud(const rosiwit_slam::CloudType& c,
+                                         const std::string& frame, const ros::Time& stamp);
+
+/// 旧 TF 用的 yaw: atan2(R(0,1), R(0,0))  (legacy.cpp:1921)
+double legacyYawFromRot(const Eigen::Matrix3d& R);
+} // namespace
+```
+
+**测试** `test/test_legacy_convert.cpp`：
+1. `LegacyGridKeepsRowOrder` —— 造 3x2 的 `GridInfo`（width=3,height=2，data[0..5] 互不相同）
+   → `toLegacyGrid(...).data == 原 data`
+2. `FlippedGridFlipsRows` —— 同一个 `GridInfo` → 首行等于原最后一行
+3. `LegacyGridHeaderAndInfo` —— `frame=="map"`、`resolution`/`origin_x`/`origin_y` 透传、`width/height` 正确
+4. `SlamInfoFieldMapping` —— 逐字段断言（含 `map_name`、`robot_pose.theta`）
+5. `WarningJsonShape` —— 用 `yaml-cpp` 反解（或字符串包含）断言
+   `faults[0].module == "xz_3d_slam"`、`code`/`level`/`name`/`content` 都在
+6. `LegacyYawFromIdentityIsZero` / `LegacyYawFromPlus90degIsPlusHalfPi`
+   —— 钉住 `atan2(R(0,1), R(0,0))`：绕 Z 转 +90° 时 R(0,1)=1、R(0,0)=0 → `legacyYawFromRot` 返回 **+π/2**；
+   而 TF 里用的是 **`-yaw`**（`legacy.cpp:1922`），这条测试保证以后不把符号弄反
+
+### 5.2 `src/legacy_xz3dslam_interface.h/.cpp` —— 发布侧
+
+逐条照抄 `legacy.cpp:273-300`（advertise）与 `legacy.cpp:333-511`（发布逻辑）：
+
+| 话题 | 类型 | queue | latch | frame | 频率 | 实现 |
+|---|---|---|---|---|---|---|
+| `global_map` | PointCloud2 | 1 | **true** | `map` | 进程内一次（`debug_publish` 或定位模式） | `engine.getGlobalMap()` |
+| `global_grid_map` | OccupancyGrid | 1 | **true** | `map` | 同上 | `toFlippedGrid(engine.getGridInfo())` |
+| `/map` | OccupancyGrid | 10 | **false** | `map` | 见下 | **模式分流** |
+| `curr_scan_point` | PointCloud2 | 10 | false | `map` | 0.1s | `SlamOutput.world_cloud`（无则用 body→map 变换） |
+| `scan_f_map` | **`sensor_msgs/PointCloud`** | 10 | false | `map` | 0.1s | `curr_scan_point` 降采样后转旧类型 |
+| `curr_submap_point` | PointCloud2 | 10 | false | `map` | 0.1s + `debug_publish` | **注册不发**（D2） |
+| `or_curr_scan_point` | PointCloud2 | 10 | false | `map` | 0.1s，仅定位 | 当前帧原始输入点云 |
+| `curr_localization_pose` | PoseStamped | 10 | false | `map` | **0.01s** | `SlamOutput.pose`，**两种模式都发**（`legacy.cpp:1117-1205`） |
+| `mapping_path` | Path | 10 | false | `map` | 0.1s，仅建图 | 累积位姿 |
+| `loop_constraint` | MarkerArray | 10 | false | `map` | 0.1s，仅建图 | **注册不发**（D2） |
+| `slam/info` | `xzrobot_ros_dependency/SlamInfo` | 10 | false | 无 header | **0.01s** | 见 §5.3 字段表 |
+| `points_2d` | PointCloud2 | 10 | false | `map` | — | **注册不发**（旧实现本身也没发过） |
+| `slam_warning_code` | String | 10 | false | — | 周期同 `rt_grid_map`（缺省 1s） | T7 |
+| `origin_point` | PointCloud2 | 10 | false | `map` | 每帧雷达 | 原始输入点云 |
+
+**定时器**（照抄 `legacy.cpp:247-271`）：
+- `pub_time_gap` **硬编码 0.1s**（`legacy.cpp:254-255` 先按 `publish_hz` 算完又覆盖为 0.1，
+  `publish_hz` 实际无效 —— 保留这个行为，见 M2）
+- pose 定时器 **0.01s**
+- `rt_grid_map` 定时器 = `1.0 / rt_grid_map_publish_hz`（缺省 1s）
+- `slam_warning_code` 定时器与 `rt_grid_map` 同周期
+
+**`/map` 模式分流（设计文档 §5.3 冲突 1）**：
+- `legacy` profile 下本接口注册 `/map`（queue 10，**不 latch**）：
+  - **MAPPING** → 用 T2 的 `RealtimeGrid` 产出的栅格，`toLegacyGrid()`（**不翻转**），
+    并按旧实现把 `map_area` 塞进 `origin.position.z = map_area * 1e-5`（`legacy.cpp:1749`），
+    周期 = `1/rt_grid_map_publish_hz`
+  - **LOCALIZATION** → `toFlippedGrid(engine.getGridInfo())`，**周期重发**（不 latch，见下方偏差注）
+- `rosiwit` profile 下 `/map` 仍由 `SlamEngine` 持有（现状：latch，2s 定时器只发一次），本接口不注册 `/map`
+
+> **偏差注（记 D18）**：`legacy` profile 下定位模式的 `/map` 改为**周期不 latch**重发，
+> 而不是旧实现的"一次"（旧实现其实是 MAPPING 才周期发）。原因：`/map` 只有一个发布器，
+> 不能既 latch 又不 latch。副作用是晚订阅者最多等一个周期（≤1s）拿到数据，比 latch 更安全（不会拿到旧模式残留）。
+
+### 5.3 `/slam/info` 字段映射（照抄 `legacy.cpp:1823-1896`）
+
+| 字段 | 值 |
+|---|---|
+| `slam_state` | 定位模式→1；建图模式→0；无核心/异常→2；FREE 时期→1；**`relocating_` 为真时强制 1**（`legacy.cpp:1891-1892`） |
+| `location_status` | **分模式**（`legacy.cpp:1839-1894`）：<br>• **MAPPING** → 恒 `0`<br>• **FREE** → 恒 `1`<br>• **LOCALIZATION** → `relocating_`（= 核心 `isRelocalization()`）为真 → `1`；否则 `getLocalizationStatus()` ∈ {0,1} → `0`，其它 → `2`。我们用 T3 的 `LostMonitor` 等价表达（`0/1/2`）<br>• 最后统一覆盖：`relocating_` 为真时**强制** `1` |
+| `update_request` | 恒 0 |
+| `matching_degree` | 恒 0（D3） |
+| `map_name` | `curr_map_name_`，初值 `"NULL"`，`/switch_map` 时置 `request.map_name` |
+| `robot_pose` | `x/y/yaw`，任一 NaN 则三者归零（`legacy.cpp:1826-1830`） |
+| `map_area` | 建图模式用 `width*height*resolution²`；其它模式 0 |
+
+**验证**：
+1. 构建 + 单测。
+2. `legacy_dev.launch` 起来后：
+   ```bash
+   rostopic list -v | grep -E 'global_map|global_grid_map|curr_scan_point|scan_f_map|curr_submap_point|or_curr_scan_point|curr_localization_pose|mapping_path|loop_constraint|slam/info|points_2d|slam_warning_code|origin_point|/map'
+   ```
+   14 个话题都在，且 `scan_f_map` 类型是 `sensor_msgs/PointCloud`。
+   **T12 会把这一步固化成脚本**，本任务先手工过一遍。
+3. `/map`：切到建图模式、喂合成数据后 `rostopic echo -n1 /map` 的 `info.width>0`
+   （真正建图数据的验证在 T10）。
+
+**提交**：`feat(ros1): xz_3d_slam 旧接口发布器(14 话题)`
+
+---
+
+## T6. 旧接口订阅器（10 个）
+
+照抄 `legacy.cpp:193-215`（`startSub`）。
+
+- `laser_type ∈ {mid360, new_mid360}` 分支：
+  - `livox/imu`（`sensor_msgs/Imu`，queue 100）→ `engine.onImuMsg`
+  - `livox/lidar`：旧类型是 `livox_ros_driver2/CustomMsg`（queue 0 + `tcpNoDelay`）。
+    **我们按 D1 用 `sensor_msgs/PointCloud2`**，同样 queue 0 + `ros::TransportHints().tcpNoDelay()` → `engine.onLidarMsg`
+- else 分支：
+  - `<imu_sub_name>`（`Imu`，100）
+  - `<laser_sub_name>`（`PointCloud2`，0 + tcpNoDelay）
+- 无条件订阅：`initialpose`（`PoseWithCovarianceStamped`，100）、`scan`（`LaserScan`，10，**只做频率统计**）、
+  `odom`（`Odometry`，100 → `engine.onOdomMsg`）、`lift/state`（`String`，10，**存字段不生效**）、
+  `lift_type`（`String`，10，**存字段不生效**，打日志）
+
+要点：
+- `scan` / `odom` 的订阅与 T9 的频率告警共用计数器，所以回调里先把计数写好。
+- `odom` 与 `rosiwit` profile 的输出 `odom` 是**同名**的（设计文档 §5.3 冲突 2）：
+  `legacy` profile 下 `SlamEngine` 的 `odom` 别名**默认关闭**（参数 `~publish_odom_alias`，
+  `rosiwit` profile 下默认 true）——这条在 T4 的 engine 里实现，本任务只保证不会自环。
+- `initialpose`：定位模式下 `setInitPose`，**z 强制 0**（照旧）。
+
+**验证**：`legacy_dev.launch` 起来后 `rostopic info /livox/imu`、
+`rostopic info /vanjee_points722`（取决于 model）显示本节点是订阅者；
+`rosnode info /xz_3d_slam` 的 Subscription 列表包含全部 10 项。
+**提交**：`feat(ros1): xz_3d_slam 旧接口订阅器(10 话题)`
+
+---
+
+## T7. 告警码 + 3 个 service client
+
+### 7.1 告警（照抄 `legacy.cpp:457-...` 的 `timerPublishWarningCode` + `legacy.cpp:302-305` 的 `checkTime` 线程）
+
+- `conf/warning_code.json` 已随包（T1）。**从包 share 读，不读 `/opt`**（M6）。
+- 频率监视：`lidar` / `imu` / `odom` 三个回调计数，1s 窗口比对阈值 →
+  `20003001`(lidar hz low) / `20003002`(imu hz low) / `20003003`(odom hz low)
+- 无数据：`20003500`(no lidar data) / `20003501`(no imu data) / `20003502`(no odom data)
+- `20003005`(set mode frequent) 由 T8 的 `/slam/mode_switch` 限流触发
+- **保留**旧行为的"启动/模式切换后前 100 个 tick 不发告警"（`warning_code_start_task_`
+  抑制窗口，`legacy.cpp:184`）
+- 发布结构用 `buildWarningJson()`（T5），`module` 恒 `"xz_3d_slam"`
+
+### 7.2 clients（照抄 `legacy.cpp:243-244` + `2140`）
+
+```cpp
+get_charging_point_ = nh.serviceClient<xzrobot_ros_dependency::TagDetect>("get_charging_point");
+set_detect_mode_   = nh.serviceClient<xzrobot_ros_dependency::CommonIntRequestService>("set_detect_mode");
+switch_map_server_ = nh.serviceClient<xzrobot_ros_dependency::SwitchMap>("/switch_map_pro");
+```
+超时/重试照抄：`set_detect_mode` 0.5s 超时 + 100ms 重试；`switch_map_pro` 1.0s；
+`get_charging_point` 1.0s。不可用时 `ROS_WARN` 并按旧逻辑给出 `success=false` / 空 `charging_pile_json`
+（D14：外部服务在旧 launch 里与 SLAM 同文件启动，按"还在"实现）。
+
+srv 类型（来自 `ros1_ws/src/xzrobot_ros_dependency/srv/`，已核对）：
+- `TagDetect.srv`: 请求空 → 响应 `string charging_pile_json`
+- `CommonIntRequestService.srv`: 请求 `int8 mode` → 响应 `bool result`
+- `SwitchMap.srv`: 请求 `string map_name, string map_dir, float64 map_resolution, float64[] map_origin,
+  bool map_negate, float64 map_occupied_thresh, float64 map_free_thresh,
+  geometry_msgs/PoseWithCovarianceStamped initial_pose, string vir_obs` → 响应 `bool success`
+
+**验证**：
+1. 构建 + 单测（`buildWarningJson` 在 T5 已测）。
+2. `legacy_dev.launch` 后 `rostopic echo -n1 /slam_warning_code`：
+   在没有任何雷达/IMU 的机器上，**启动约 1s 后**应出现 `20003500`/`20003501`（注意 100-tick 抑制窗口）。
+3. `rosservice info /set_detect_mode` 不存在时本节点不崩（只 WARN）。
+**提交**：`feat(ros1): 告警码模块 + 旧接口 service client`
+
+---
+
+## T8. 旧接口 service server（8 个）
+
+照抄 `legacy.cpp:235-242` 的 advertise 与各自回调。
+
+| 服务 | 类型 | 实现 |
+|---|---|---|
+| `/slam/mode_switch` | `SlamModeSwitchService` | `mode==0→localization`、`mode==1→mapping`（**与 `SlamInfo` 常量相反**）；非法值 `result` 留 0 并返回 false；**10s 限流**（`legacy.cpp:2121-2137`，不足 10s 直接返回并报 `20003005`）；照旧调 `/set_detect_mode` |
+| `/switch_map` | `SwitchMap` | 三分支照抄（见下） |
+| `/relocation` | `Relocation` | `setInitPose`：**z 强制 0**；`success` 恒 true、`return true`（`legacy.cpp:2394-2418`）。注意**没有** `>1e4` 归零逻辑（那只在 `/switch_map`） |
+| `/stop_map_operation` | `StopMapOperation` | ① `mkdir(req.map_dir, 0755)`（已存在则跳过；**创建失败即 `return false` 且 `success` 留 false**，`legacy.cpp:2424-2454`）② `engine.algo()->saveMap(legacyMapBase(req.map_dir))`（旧实现是 `saveMap(folderPath, "map")`，等价）③ `get_charging_point_`：失败只打日志，`response.charging_pile_json` 取默认构造的空串（`legacy.cpp:2471-2489,2505`）④ `current_pose` 用 `frame_id="map"` + 当前位姿的 xyz + 四元数（`z` 用**真实 z**，不是 -0.07）⑤ `success=true`（仅当 `mapping_ptr_` 非空，否则 `return false`）⑥ `map_resolution`/`map_origin`/`map_negate`/`*_thresh`/`error` **全部留默认空值**（旧代码里那几行是注释掉的，`legacy.cpp:2506-2515`）—— 照旧留空 |
+| `/global_localization` | `std_srvs/Empty` | **空实现 `return true`**（`legacy.cpp:2634` 就这一行） |
+| `/finish_task` | `CommonBoolService` | 有定位实例时 `updateMap()` → `status=true`；**无定位实例则 `return false` 且 `status` 留 false**（`legacy.cpp:2601-2609`）。我们的降级：定位模式且有核心 → `true` |
+| `/start_task` | `CommonBoolService` | 同上（旧实现是 `setUpdateMapFlag()`，`legacy.cpp:2591-2599`） |
+| `update_map_operation` | `UpdateMap` | **有意降级（D5）**。旧实现（`legacy.cpp:2538-2589`）是"重建建图实例 + `setIncreaseMapFlag()` + `loadCurrentMap(req.map_dir + \"/map.xzmap\")` + `setInitPose(pos, rot*AngleAxis(angle,Z))`"—— 核心没有"增量扩图后写回"的能力。我们的替代：`engine.algo()->loadMap(legacyMapBase(req.map_dir))` + `setPipelineMode("localization")`，`status` 按加载结果；**入口先打 WARN 说明是降级实现** |
+
+`/switch_map` 三个分支（`legacy.cpp:2140-2340`）：
+1. `req.map_dir` 或 `req.map_name` 为空 → `success=false` 直接返回
+2. `req.map_dir == curr_map_path_` 且已在定位 → 只重设初始位姿 + 转发 `/switch_map_pro`，
+   `success` 取外部结果
+3. 换图 → `relocating_=true`；调 `/set_detect_mode`（mode=0，0.5s 超时 + 100ms 重试），
+   **该结果单独决定 `success`**；然后：
+   ```cpp
+   const std::string base = legacyMapBase(req.map_dir);   // "/dir/map"
+   if (!engine.algo()->loadMap(base)) { success = false; ROS_ERROR(...); }   // D13: 旧实现不检查加载结果
+   engine.algo()->setPipelineMode("localization");
+   curr_map_path_ = req.map_dir;
+   curr_map_name_ = req.map_name;
+   init_pose = 若 |x|,|y| 任一 > 1e4 则全零, 否则用 req.initial_pose; z 强制 0
+   engine.algo()->setInitPose(init_pose);
+   lost_monitor_.reset();
+   ```
+   `map_directory` 的 `"/"` 注入（M8）在 T5/T10 的 engine override YAML 里做。
+
+**验证**：
+1. 构建。
+2. `rosnode info /xz_3d_slam` 的 Services 列表含全部 8 个；类型与上表一致。
+3. `rosservice call /global_localization` 返回 `{}`；
+   `rosservice call /slam/mode_switch "{mode: 1}"` → `result: 1`；1s 内再调一次 → 触发 `20003005`。
+4. `rostopic pub` 一个空 `map_dir` 的 `/switch_map` → `success: false`。
+**提交**：`feat(ros1): xz_3d_slam 旧接口 service server(8 个)`
+
+---
+
+## T9. TF `map→odom` + `legacy` profile 的 TF/odom 抑制
+
+照抄 `legacy.cpp:1899-1936`（`sendTransform`）：
+
+```cpp
+geometry_msgs::TransformStamped t;
+try { t = tf_buffer_.lookupTransform("base_footprint", "odom", ros::Time(0)); }
+catch (tf2::TransformException& ex) { ROS_ERROR("%s", ex.what()); return; }   // 失败直接不发
+if (isnan(curr_pose_.x) || isnan(curr_pose_.y) || isnan(curr_pose_.yaw)) return;
+
+tf2::Transform Tmf, Tfo, Tmo;
+Tmf.setOrigin(tf2::Vector3(curr_pose_.x, curr_pose_.y, -0.07));               // 注意 z=-0.07
+double yaw = atan2(R(0,1), R(0,0));                                           // 用 legacyYawFromRot()
+Tmf.setRotation(tf2::Quaternion(Eigen::Quaterniond(Eigen::AngleAxisd(-yaw, UnitZ()))));
+tf2::fromMsg(t.transform, Tfo);
+Tmo = Tmf * Tfo;                                                              // T_mo = T_mf * T_fo
+out.header.stamp = ros::Time::now();                                          // 不是位姿时间戳
+out.header.frame_id = "map"; out.child_frame_id = "odom";
+broadcaster_.sendTransform(out);
+```
+- `legacy` profile：**停发**静态 `map→odom`（否则与动态边互撞）、**停发**动态 `world_frame→body_frame`；
+  只保留上面这条，100Hz（挂在 pose 定时器上），条件 `slam_mode_ != FREE && use_tf_`。
+- `rosiwit` profile：保持现状（静态 `map→odom` + 动态 `world_frame→body_frame`）。
+- `publishStaticTf()`（`base_link→scan`）**不实现** —— 旧实现的它从未被调用。
+
+**验证**：
+1. `legacy_dev.launch` + 手工 `rosrun tf static_transform_publisher` 伪造一条
+   `base_footprint→odom`，再喂合成位姿 → `rosrun tf tf_echo map odom` 能查到，
+   且 `rosrun tf view_frames` 里 `map→odom` 是 **dynamic**。
+2. `rostopic echo /tf_static` 在 `legacy` profile 下**没有** `map→odom`。
+**提交**：`feat(ros1): 旧 map->odom 动态 TF, legacy 下抑制新 TF`
+
+---
+
+## T10. 接上 `/map` 的 MAPPING 分支 + `map_directory` 注入
+
+**目标**：把 T2 的 `RealtimeGrid` 接进 T5 的 `/map` MAPPING 分支；`legacy` profile 下给
+`core.init()` 一份 override YAML，其中 `map_directory: "/"`（M8）。
+
+### 10.1 override YAML（`slam_engine.cpp`，`legacy` profile 才做）
+- 基底 = `~config_file`（缺省本包 `config/default.yaml`）
+- 只改一个键：`map_directory: "/"`，写到
+  `~/.ros/rosiwit_slam_ros1/compat_legacy.yaml`（进程内唯一路径，启动时覆盖写）
+- **不做** `acc_scale`/`r_il`/`t_il` 推导（M13 已改：按"现在"的来）
+- **必须打印**核心最终生效的值以便诊断"完全没位姿"这类症状：
+  ```
+  [compat] core yaml = <path>
+  [compat] effective acc_scale=<..> r_il=[..] t_il=[..]
+  [compat] ignored legacy keys: roll_new=.. pitch_new=.. yaw_new=.. imu_in_car_frame_yaw_livox=..
+  ```
+  （这就是 D7 要求的"已读未生效"清单 + §5.10 B 的可诊断性）
+- `~input_profile=rosiwit` 时**不注入任何 override**，行为与现状一致
+
+### 10.2 接上实时栅格
+- `RealtimeGrid::setSource([this](PointVec& p){ return engine_.getGlobalMap(p); })`
+- 只在 `legacy` profile 且模式为 MAPPING 时 `start(1.0/rt_grid_map_publish_hz)`；切走时 `stop()`
+- `/map` MAPPING 分支：`RealtimeGrid::latest(gi)` → `toLegacyGrid(gi, "map")` →
+  `origin.position.z = map_area * 1e-5`，`header.stamp = now()`，非 latch 发布
+- `map_area` 同时供 `/slam/info`
+
+**验证**：
+1. 构建 + 单测。
+2. 用 T13 的合成数据发布器（或先手工 `rostopic pub` 一段 PointCloud2 + Imu）：
+   切到建图模式 → `rostopic hz /map` 约 1Hz、`rostopic echo -n1 /map/info` 的 `width/height > 0`。
+3. `legacy_dev.launch` 启动日志里能看到 `[compat] core yaml = ...` 与 `effective acc_scale=...` 那一组行。
+4. `cat ~/.ros/rosiwit_slam_ros1/compat_legacy.yaml | grep map_directory` → `"/"`
+**提交**：`feat(ros1): 建图模式 /map 实时栅格 + map_directory 注入`
+
+---
+
+## T11. 接上定位丢失上报
+
+- `LegacyXz3dSlamInterface` 持有 `LostMonitor`；在一处高频回调（pose 定时器，100Hz）调
+  `engine.getPoseCov(pose, cov)` → `lost_monitor_.update(ok)`
+- **分流**（照 `legacy.cpp:1839-1894`）：只有 **LOCALIZATION** 用 `LostMonitor` 的结果；
+  **MAPPING** 恒 `0`；**FREE** 恒 `1`；最后若"重定位进行中"则强制 `1`
+- `consumeLostEdge()` 为真时把 `20003504` 加入待报列表（`level=FAULT`，来自 `warning_code.json`）
+- latch 控制点：
+  - `engine` 输出回调里，`SlamOutput.has_new_pose && 定位模式` → `lost_monitor_.onLocalizedPose()`
+  - 地图加载成功（`/switch_map`、`update_map_operation`）→ `lost_monitor_.setMapLoaded(true)`
+  - 进入定位/换图/重定位 → `lost_monitor_.reset()`
+
+**验证**：
+1. 构建 + 单测（T3 已覆盖状态机；这里验证接线）。
+2. `legacy_dev.launch` + 加载一张真地图（T13 可用合成的 `map.pcd`+`map.xzmap` 或跳过）：
+   - 定位未建立时 `rostopic echo -n1 /slam/info` 的 `location_status == 1`
+   - 喂与地图不匹配的雷达数据直到丢失 → `location_status == 2`，且 `slam_warning_code` 里出现 `20003504`
+   （这条最难构造，至少验证 latch 逻辑：INIT 阶段不得报 0）
+**提交**：`feat(ros1): 定位丢失上报(location_status=2 + 20003504)`
+
+---
+
+## T12. 接口一致性校验脚本（V2）
+
+**目标**：把"对上"变成机器可判的检查。
+
+`scripts/check_legacy_interface.sh`：
+- 前置：`roslaunch rosiwit_slam_ros1 legacy_dev.launch`（或已运行的 `/xz_3d_slam`）
+- 采集 `rostopic list -v`、`rosservice list` + 每个服务的 `rosservice info` 类型、
+  `rosnode info /xz_3d_slam`、`rosparam get /machine/model`
+- 与 `scripts/legacy_interface.golden` 逐项比对；缺项/类型不符 → 非 0 退出并打印差异
+
+`scripts/legacy_interface.golden`（人可读，两段）：
+```
+[topics]
+global_map                        sensor_msgs/PointCloud2
+global_grid_map                   nav_msgs/OccupancyGrid
+/map                              nav_msgs/OccupancyGrid
+curr_scan_point                   sensor_msgs/PointCloud2
+scan_f_map                        sensor_msgs/PointCloud
+curr_submap_point                 sensor_msgs/PointCloud2
+or_curr_scan_point                sensor_msgs/PointCloud2
+curr_localization_pose            geometry_msgs/PoseStamped
+mapping_path                      nav_msgs/Path
+loop_constraint                   visualization_msgs/MarkerArray
+slam/info                         xzrobot_ros_dependency/SlamInfo
+points_2d                         sensor_msgs/PointCloud2
+slam_warning_code                 std_msgs/String
+origin_point                      sensor_msgs/PointCloud2
+[services]
+/slam/mode_switch                 xzrobot_ros_dependency/SlamModeSwitchService
+/switch_map                       xzrobot_ros_dependency/SwitchMap
+/relocation                       xzrobot_ros_dependency/Relocation
+/stop_map_operation               xzrobot_ros_dependency/StopMapOperation
+/global_localization              std_srvs/Empty
+/finish_task                      xzrobot_ros_dependency/CommonBoolService
+/start_task                       xzrobot_ros_dependency/CommonBoolService
+update_map_operation              xzrobot_ros_dependency/UpdateMap
+[params]
+/machine/model                    string
+```
+
+**验证**：在有节点的环境下跑脚本 → 0 退出。
+**提交**：`test(ros1): 旧接口一致性校验脚本 + golden`
+
+---
+
+## T13. 合成数据冒烟（V3）
+
+**目标**：不需要机器人、不需要真实雷达，就能验证行为面。产出
+`test/synthetic_publisher.py`（假 IMU 100Hz + 假 PointCloud2 10Hz，可调话题名，
+可注入"与地图不匹配"的偏置以触发丢失）。
+
+按设计文档 §7 V3 的六项逐项跑：
+1. **建图**：切 mapping、喂 5s → `/map` 有 `width>0` 且 `data` 含 100
+2. 定位模式 → `curr_localization_pose` 有输出且 `frame_id == "map"`
+3. `/slam/info.slam_state` 随 `/slam/mode_switch` 正确切换（mapping↔localization）
+4. `map→odom` TF 能查通（脚本同时伪造 `base_footprint→odom`）
+5. 停掉雷达/IMU → 约 1s 后 `slam_warning_code` 报 `20003500`/`20003501`
+6. 定位模式下喂不匹配雷达 → `location_status==2` 且报 `20003504`
+
+通过标准：六项符合预期，ROS 日志无 crash/异常。
+**提交**：`test(ros1): 合成数据冒烟脚本`
+
+---
+
+## 收尾
+
+- 更新设计文档 §5.1 的文件布局（`legacy_config`/`legacy_convert`/`lost_monitor`/`scripts`/`test`/`launch/legacy_dev.launch`），
+  并补记本轮新发现的偏差 **D17**（实时栅格无 unknown=10）与 **D18**（legacy 定位模式 `/map` 改为周期不 latch）。
+- 已知未做（明确非目标，见设计文档 §3）：电梯/楼层联动、`points_2d`、回环 `MarkerArray`、
+  地图自更新写回、2D 去畸变、车体框删点、标定、`matching_degree`/`fitness` getter。
+- 交付形态两条路都给：就地改旧 launch 第 34 行，或把整机 bringup 的
+  `$(find xz_3d_slam)/launch/...` 指向本包的 drop-in —— 由你在现场挑。

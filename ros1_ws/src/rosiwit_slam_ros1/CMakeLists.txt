@@ -15,31 +15,73 @@ endif()
 find_package(catkin REQUIRED COMPONENTS
     roscpp sensor_msgs nav_msgs geometry_msgs std_msgs std_srvs
     tf tf2 tf2_ros pcl_conversions pcl_ros visualization_msgs
-    message_generation)
+    message_generation
+    xzrobot_ros_dependency)
 
 add_service_files(FILES SaveMap.srv LoadMap.srv SaveGridMap.srv SetSlamMode.srv)
 generate_messages(DEPENDENCIES std_msgs geometry_msgs)
 
+# 本包是纯接口层(仅一个可执行 + 一个内部静态库), 不对外导出头文件, 因此不声明 INCLUDE_DIRS
 catkin_package(
-    INCLUDE_DIRS include
     CATKIN_DEPENDS roscpp sensor_msgs nav_msgs geometry_msgs std_msgs std_srvs
-                   tf tf2 tf2_ros pcl_conversions visualization_msgs message_runtime)
+                   tf tf2 tf2_ros pcl_conversions visualization_msgs message_runtime
+                   xzrobot_ros_dependency)
+
+# ==================== Ceres 兼容垫片 (薄层专属, 不改核心) ====================
+# Ubuntu 18.04 / melodic 的 libceres-dev 是 1.13.0: 其 CeresConfig.cmake 只定义了
+# 无命名空间的 IMPORTED 目标 `ceres` 与变量 CERES_INCLUDE_DIRS/CERES_LIBRARIES,
+# 而带命名空间的 `Ceres::ceres` 自 Ceres 1.14 才有。核心 CMakeLists 用的是 Ceres::ceres,
+# 所以这里在 add_subdirectory 之前补一个等价目标。
+# Ceres >= 1.14 时 NOT TARGET 为假 -> 整段自动跳过, 无副作用。
+find_package(Ceres QUIET)
+if(Ceres_FOUND AND NOT TARGET Ceres::ceres)
+    # Ceres 1.13 的 CeresConfig.cmake 只导出无命名空间的 IMPORTED 目标 `ceres`,
+    # 且它不是 GLOBAL 的(因此不能直接 add_library(... ALIAS ...))。
+    # 这里补一个 GLOBAL 的 INTERFACE 目标桥接过去:
+    #   INTERFACE_LINK_LIBRARIES 里的 `ceres` 会解析到上面那个导入目标
+    #   (解析不到时退化为 -lceres, /usr/lib/libceres.so 存在, 同样可用)。
+    add_library(Ceres::ceres INTERFACE IMPORTED GLOBAL)
+    set_target_properties(Ceres::ceres PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${CERES_INCLUDE_DIRS}"
+        INTERFACE_LINK_LIBRARIES "${CERES_LIBRARIES}")
+    message(STATUS "rosiwit_slam_ros1: shimmed Ceres::ceres (Ceres ${CERES_VERSION}, CERES_LIBRARIES='${CERES_LIBRARIES}')")
+endif()
 
 # ==================== 算法核心 (源码共享, 独立开发, 此处内联构建) ====================
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam
                  ${CMAKE_CURRENT_BINARY_DIR}/rosiwit_slam_core)
 
+# ==================== 接口层静态库 (便于 gtest 直接链接) ====================
+set(ROSIWIT_ROS1_LIB_SOURCES
+    src/legacy_config.cpp
+    # T2 追加 src/realtime_grid.cpp; T3 追加 src/lost_monitor.cpp;
+    # T4 追加 src/slam_engine.cpp + src/rosiwit_interface.cpp;
+    # T5 追加 src/legacy_convert.cpp + src/legacy_xz3dslam_interface.cpp
+)
+add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
+target_include_directories(rosiwit_slam_ros1_lib PUBLIC src ${catkin_INCLUDE_DIRS})
+target_compile_options(rosiwit_slam_ros1_lib PRIVATE -pipe -pthread)
+target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam)
+add_dependencies(rosiwit_slam_ros1_lib ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 # ==================== ROS1 节点 (薄) ====================
 add_executable(rosiwit_slam_ros1_node src/rosiwit_slam_ros1_node.cpp)
+target_compile_options(rosiwit_slam_ros1_node PRIVATE -pipe -pthread)
+target_link_libraries(rosiwit_slam_ros1_node rosiwit_slam_ros1_lib)
 add_dependencies(rosiwit_slam_ros1_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_include_directories(rosiwit_slam_ros1_node PRIVATE
-    include ${catkin_INCLUDE_DIRS})
-target_compile_definitions(rosiwit_slam_ros1_node PRIVATE -pipe -pthread)
-target_link_libraries(rosiwit_slam_ros1_node
-    ${catkin_LIBRARIES}
-    rosiwit_slam)                      # 核心库 (含 PCL/OpenCV/GTSAM/Ceres/Sophus 等传递依赖)
+
+# ==================== 测试 ====================
+if(CATKIN_ENABLE_TESTING)
+    catkin_add_gtest(test_legacy_config test/test_legacy_config.cpp)
+    if(TARGET test_legacy_config)
+        target_link_libraries(test_legacy_config rosiwit_slam_ros1_lib)
+        # fixture 路径以宏传入, 不依赖测试进程的 CWD
+        target_compile_definitions(test_legacy_config PRIVATE
+            LEGACY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures")
+    endif()
+endif()
 
 install(TARGETS rosiwit_slam_ros1_node
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
-install(DIRECTORY launch DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
-install(DIRECTORY config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+# scripts/ 由 T12 建立后在此追加
+install(DIRECTORY launch config conf DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})

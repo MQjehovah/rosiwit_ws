@@ -18,3 +18,7 @@ AGENTS.md
 
 docs/map/
 data/
+# catkin 生成物 (catkin_make)
+devel/
+ros1_ws/.catkin_workspace
+ros1_ws/src/CMakeLists.txt

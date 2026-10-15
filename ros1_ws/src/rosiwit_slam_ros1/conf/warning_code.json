@@ -1,0 +1,155 @@
+{
+    "20003001": {
+        "level": "WARNING",
+        "name": "lidar hz low",
+        "content": "slam subscripe lidar frequency is low!"
+    },
+    "20003002": {
+        "level": "WARNING",
+        "name": "imu hz low",
+        "content": "slam subscripe imu frequency is low!"
+    },
+    "20003003": {
+        "level": "WARNING",
+        "name": "odom hz low",
+        "content": "slam subscripe odom frequency is low!"
+    },
+    "20003004": {
+        "level": "WARNING",
+        "name": "save map operation repetition",
+        "content": "slam save map operate repetition!"
+    },
+    "20003005": {
+        "level": "WARNING",
+        "name": "set mode operation frequent",
+        "content": "slam set mode operation frequent!"
+    },
+    "20003006": {
+        "level": "WARNING",
+        "name": "mapping operate repetition",
+        "content": "slam mapping operate repetition!"
+    },
+    "20003007": {
+        "level": "WARNING",
+        "name": "save map when localization",
+        "content": "slam save map when localization!"
+    },
+    "20003008": {
+        "level": "WARNING",
+        "name": "init pose when mapping",
+        "content": "slam init pose when mapping!"
+    },
+    "20003009": {
+        "level": "WARNING",
+        "name": "set mode when mapping",
+        "content": "slam set mode when mapping!"
+    },
+    "20003010": {
+        "level": "WARNING",
+        "name": "pub pose hz low",
+        "content": "slam pub pose hz low!"
+    },
+    "20003011": {
+        "level": "WARNING",
+        "name": "lidar time error",
+        "content": "slam subscripe lidar time error!"
+    },
+    "20003012": { 
+        "level": "WARNING",
+        "name": "imu time error",
+        "content": "slam subscripe imu time error!"
+    },
+    "20003013": { 
+        "level": "WARNING",
+        "name": "mapping pose error",
+        "content": "pose error when mapping!"
+    },
+    "20003014": {
+        "level": "WARNING",
+        "name": "timestemp not sync",
+        "content": "slam lidar and imu timestemp not sync!"
+    },
+    "20003015": {
+        "level": "WARNING",
+        "name": "set map is using in slam",
+        "content": "set map is using in slam!"
+    },
+
+
+
+
+
+    "20003500": {
+        "level": "WARNING",
+        "name": "no lidar data",
+        "content": "slam not subscripe lidar data!"
+    },
+    "20003501": {
+        "level": "FAULT",
+        "name": "no imu data",
+        "content": "slam not subscripe imu data!"
+    },
+    "20003502": {
+        "level": "FAULT",
+        "name": "no odom data",
+        "content": "slam not subscripe odom data!"
+    },
+    "20003503": {
+        "level": "FAULT",
+        "name": "no map data",
+        "content": "slam not load map!"
+    },
+    "20003504": {
+        "level": "FAULT",
+        "name": "pose lost",
+        "content": "slam localization lost post!"
+    },
+    "20003505": {
+        "level": "FAULT",
+        "name": "map file not exit",
+        "content": "load map file not exit!"
+    },
+    "20003506": {
+        "level": "FAULT",
+        "name": "lidar hz too low",
+        "content": "slam subscripe lidar frequency is too low!"
+    },
+    "20003507": {
+        "level": "FAULT",
+        "name": "imu hz too low",
+        "content": "slam subscripe imu frequency is too low!"
+    },
+    "20003508": {
+        "level": "FAULT",
+        "name": "odom hz too low",
+        "content": "slam subscripe odom frequency is too low!"
+    },
+    "20003509": {
+        "level": "FAULT",
+        "name": "can not load params",
+        "content": "slam can not load params!"
+    },
+    "20003510": {
+        "level": "FAULT",
+        "name": "can not save map",
+        "content": "slam can not save map!"
+    },
+    "20003511": {
+        "level": "FAULT",
+        "name": "save map path not exit",
+        "content": "slam save map path not exit!"
+    },
+    
+
+
+
+
+
+
+
+    "20003999": {
+        "level": "WARNING",
+        "name": "not define warning code",
+        "content": "slam not define this warning code!"
+    }
+}
