@@ -1428,6 +1428,46 @@ rotation:    {x: 0, y: 0, z: 0, w: 1}
    （这条最难构造，至少验证 latch 逻辑：INIT 阶段不得报 0）
 **提交**：`feat(ros1): 定位丢失上报(location_status=2 + 20003504)`
 
+### 11.1 T11 实测记录（已完成并提交）
+
+**状态**：`catkin_make` `exit=0`；**gtest 52/52 全绿**。
+
+**这轮实际只需要补一处** —— `consumeLostEdge()` → `20003504`；T11 计划里的其余接线
+在 T5b/T8 就已经落地了（`publishLocationInfo()` 里用 `lost_monitor_.update(getPoseCov())`、
+`relocating_ = (status==RECOVERING)`、`relocating_` 的最终覆盖、新位姿时 `onLocalizedPose()`、
+`/switch_map` 与 `update_map_operation` 里的 `setMapLoaded(true)` + `reset()`）。
+本轮新增：`publishLocationInfo()` 末尾消费边沿 → `addWarningCode(20003504)`；
+`/relocation` 里也 `lost_monitor_.reset()`（计划 §11 的"进入重定位 → reset"）。
+
+**实测发现（重要，且**不是** bug）**：**定位模式下，在"第一次真正定位成功"之前，
+`/slam/info` 一条都不发** —— 切到 localization 后 `rostopic echo -n1 /slam/info` 拿不到数据。
+
+原因在旧实现里就是这样：`publishCurrPose()` 的定位分支走"同帧去重"后**直接 `return`**
+（`legacy.cpp:1121-1125`），而 `publishLocationInfo()` 在该函数**末尾**（1207），
+所以去重命中时连 `slam/info` 一起跳过。刚进定位时 `getCurrPose().time_stamp` 与
+`last_pose_frame_stamp` 都是 0 → `0-0 < 1e-4` → 命中去重 → 不发。
+我们这边等价地由 `out.has_new_pose` 把关，行为一致 ✓。
+
+**所以计划 §11 的验证第 2 条（"定位未建立时 `/slam/info` 的 `location_status == 1`"）是错的** ——
+定位未建立时根本收不到 `/slam/info`。这条的含义要改写成：
+- `/slam/info` 在 **FREE** 与 **MAPPING** 下按 `legacy.cpp` 的节奏一直发（FREE：每个 tick；
+  MAPPING：100Hz）。实测 FREE → `slam_state=1, location_status=1` ✓。
+- **LOCALIZATION 下，只有"曾经定位成功过"之后才会有 `/slam/info`**。
+  因此 `location_status=2`(丢失) 与 `20003504` 都**只可能出现在"定位成功过、之后又丢了"的情形**，
+  这正好与 T3 的 `ever_localized_` latch 语义自洽。
+- 运维含义：**机器人切到定位但一直没定上时，监控端不会收到任何 `/slam/info`**（旧系统同理）。
+
+**本机实测到的部分**：
+- FREE 基线 → `slam_state=1, location_status=1` ✓
+- `/switch_map` 指不存在的图 → `success: False` + ERROR 日志
+  `loadMap failed: /tmp/no_such_map_dir_xyz/map` ✓（顺带证明了 `legacyMapBase()` 拼出的
+  `<dir>/map` 路径是对的）
+- 切 localization 后 → `/slam/info` 静默（如上，符合旧实现）；`/slam_warning_code` 也没有
+  误报 `20003504` ✓（INIT 期不算丢失，latch 生效）
+- **完整跑通"定位成功→丢失→20003504"需要真地图 + 真数据**，属于 T13/上机的范围。
+
+
+
 ---
 
 ## T12. 接口一致性校验脚本（V2）

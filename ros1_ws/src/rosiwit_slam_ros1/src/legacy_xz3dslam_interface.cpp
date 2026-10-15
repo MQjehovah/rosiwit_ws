@@ -491,6 +491,16 @@ void LegacyXz3dSlamInterface::publishLocationInfo() {
         location_status = 1;
     }
 
+    // [T11] 丢失边沿 -> 20003504 (pose lost, level=FAULT, 取自 conf/warning_code.json)。
+    // 与 update() 同一 tick 消费(同线程), 所以真实的丢失不会被漏报;
+    // 被作废的只是"丢失后又立刻恢复、发布方还没看过"的瞬时抖动 (T3 的设计)。
+    // 核心不暴露告警码通道, 旧系统的 20003504 是定位模块自己 push 的
+    // (nano_gicp_localization.cpp:9403) —— 这里是我们**补上**。
+    if (lost_monitor_.consumeLostEdge()) {
+        addWarningCode(20003504);
+        std::cout << "[legacy_iface] localization LOST -> warning 20003504 (pose lost)" << std::endl;
+    }
+
     slam_info_puber_.publish(
         buildSlamInfo(slam_state, location_status, curr_map_name_, p.x, p.y, p.yaw, map_area));
 }
@@ -776,6 +786,8 @@ bool LegacyXz3dSlamInterface::handleRelocation(
     relocating_ = true;
     applyInitPose(req.initial_pose, false);
     relocating_ = false;
+    // [T11] 进入重定位 -> 清 latch (下次真的定位上之前报 1, 不报 0)
+    lost_monitor_.reset();
     res.success = true;
     return true;
 }
