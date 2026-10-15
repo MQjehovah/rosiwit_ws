@@ -33,7 +33,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 # ==================== 算法核心 (源码共享, 独立开发, 此处内联构建) ====================
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../rosiwit_slam
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam
                  ${CMAKE_CURRENT_BINARY_DIR}/rosiwit_slam_core)
 
 # ==================== ROS2 节点 (薄) ====================
