@@ -3,6 +3,7 @@
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_utils.h"
 #include "io/xzmap_reader.h"
+#include "algorithms/map_store/map_store_factory.h"
 #include <iostream>
 #include <fstream>
 #include <pcl/io/pcd_io.h>
@@ -173,6 +174,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_hyp_stale      = getv<int>(hpc, "stale", m_hyp_stale);
     }
     m_hyp.setMax(m_max_hypotheses);
+    m_store_name = getv<std::string>(loc, "map_store", m_store_name);
+    m_store_leaf = getv<double>(loc, "map_store_leaf", m_store_leaf);
     auto smc = loc["smoother"];
     if (smc) {
         m_smoother_cfg.enabled      = getv<bool>(smc, "enabled", m_smoother_cfg.enabled);
@@ -204,6 +207,10 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_relocalizer->configure(m_global_cfg);
     m_planar.configure(m_planar_cfg);
     m_smoother.configure(m_smoother_cfg);
+    if (m_store_name != "none") {
+        m_store = MapStoreFactory::create(m_store_name, m_store_leaf);
+        if (!m_store) std::cerr << "[LocPipeline] unknown map_store: " << m_store_name << std::endl;
+    }
 
     if (m_maintainer_name != "none") {
         m_maintainer = LocalizationFactory::createMapMaintainer(m_maintainer_name);
@@ -247,6 +254,10 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
     std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)" << std::endl;
     if (m_local_map) m_local_map->setMap(map_name, m_map);
     m_planar.setMap(m_map);
+    if (m_store) {
+        m_store->buildFromCloud(m_map);
+        if (m_matcher) m_matcher->setStore(m_store.get());
+    }
     if (m_maintainer) m_maintainer->setBaseMap(map_name, m_map);
 
     // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用
@@ -452,7 +463,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         const int nh = m_hyp.size();
         for (int i = 0; i < nh; ++i) {
             const PoseStamped g = m_hyp.all()[i].pose;
-            m_matcher->setTarget(buildTarget(g));
+            if (!m_matcher->usesStore()) m_matcher->setTarget(buildTarget(g));
             MatchResult r;
             if (m_matcher->match(f.cloud, g, r)) m_hyp.update(i, r);
         }
@@ -475,7 +486,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
              (guess.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
             rebuild_target = false;
         }
-        if (rebuild_target) {
+        if (!m_matcher->usesStore() && rebuild_target) {
             CloudType::Ptr target = buildTarget(guess);
             m_cached_target = target;
             m_cached_target_pose = guess;
@@ -518,6 +529,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             if (ov && !ov->empty() && ov->size() != m_last_overlay_size) {
                 m_last_overlay_size = ov->size();
                 m_relocalizer->updateEnvironment(ov);
+                // 同步刷新存储底座 (base + overlay)
+                if (m_store) {
+                    CloudType::Ptr merged(new CloudType(*m_map));
+                    *merged += *ov;
+                    m_store->buildFromCloud(merged);
+                }
             }
         }
     }

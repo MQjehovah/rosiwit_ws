@@ -12,6 +12,7 @@
 #include "algorithms/localization/constraints/planar_constraint.h"
 #include "algorithms/localization/hypothesis/hypothesis_manager.h"
 #include "algorithms/localization/smoother/fixed_lag_smoother.h"
+#include "slam_core/i_map_store.h"
 
 namespace rosiwit_slam {
 
@@ -98,6 +99,11 @@ private:
 
     FixedLagSmoother m_smoother; // 固定滞后平滑器 (L4)
     SmootherConfig m_smoother_cfg;
+
+    // L8: 统一地图存储底座 (可选; 算法经 IMapStore 取数据)
+    std::unique_ptr<IMapStore> m_store;
+    std::string m_store_name = "none";   // none | pcd | voxel
+    double m_store_leaf = 0.3;
 
     // s2m 残差接受判据的多帧一致性状态
     V3D m_corr_prev = V3D::Zero();

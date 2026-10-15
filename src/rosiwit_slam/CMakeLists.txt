@@ -408,6 +408,9 @@ if(BUILD_TESTING)
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
             ${GRID_MAP_SOURCES}
             ${LOCALIZATION_SOURCES}
+            src/algorithms/map_store/pcd_map_store.cpp
+            src/algorithms/map_store/voxel_map_store.cpp
+            src/algorithms/map_store/map_store_factory.cpp
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/scan_context/scan_context_localization.cpp
@@ -454,6 +457,9 @@ if(BUILD_TESTING)
             src/algorithms/pcd_map_manager/pcd_map_manager.cpp
             ${GRID_MAP_SOURCES}
             ${LOCALIZATION_SOURCES}
+            src/algorithms/map_store/pcd_map_store.cpp
+            src/algorithms/map_store/voxel_map_store.cpp
+            src/algorithms/map_store/map_store_factory.cpp
             src/algorithms/scan_context/scan_context.cpp
             src/algorithms/scan_context/scan_context_lc.cpp
             src/algorithms/scan_context/scan_context_localization.cpp

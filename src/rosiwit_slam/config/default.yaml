@@ -209,6 +209,11 @@ localization:
     max_yaw_step_deg: 20.0
     nees_threshold: 50.0      # NEES 滑窗均值超此判不一致(降级)
 
+  # 统一地图存储底座 (L8): none | pcd | voxel
+  # 设为 pcd/voxel 时, 支持 store 的配准器(pp_icp/p2p_icp)直接从 store 取近邻, 与存储解耦
+  map_store: none
+  map_store_leaf: 0.3
+
   # s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性)
   accept:
     mode: 1
