@@ -436,11 +436,15 @@ bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
     // 旧 xz_3d_slam 每次切建图都 DELETE_PTR(mapping_ptr_) 再 new 一个, 所以上一轮绝不残留;
     // 我们是单核心实例, 只能显式重建内部模块达到同样效果。
     //
-    // 1) **先停后端线程并 join** —— 否则重新 init() 会在 slam_pipeline.cpp:69 再起一个线程
-    //    (旧线程还活着 -> 两个后端线程同时跑, 比残留更糟)。
+    // 1) 停后端线程 —— **必须用核心自己的停止协议**: 后端线程的 wait 谓词只看"队列非空"
+    //    (backendThreadLoop), 唯一退出路径是取出一个 BackendTask::STOP。
+    //    实测教训: 只置 m_backend_running=false + notify_all **叫不醒**它, join 会永久阻塞,
+    //    整个 ROS 线程卡死在 /slam/mode_switch 里(节点假死: /slam/info 停发)。
+    if (m_backend_thread.joinable()) {
+        pushBackendTask(BackendTask::STOP);
+        m_backend_thread.join();
+    }
     m_backend_running = false;
-    m_queue_cv.notify_all();
-    if (m_backend_thread.joinable()) m_backend_thread.join();
 
     // 2) 丢掉所有模块 + 队列/锚点状态 (= "删掉建图实例")
     m_frontend.reset();
