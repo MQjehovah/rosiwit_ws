@@ -366,6 +366,10 @@ bool SlamEngine::getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) 
     return algo_raw_->getPoseCov(out, cov);
 }
 
+double SlamEngine::getMatchingDegree() const {
+    return algo_raw_ ? algo_raw_->getMatchingDegree() : 0.0;
+}
+
 std::string SlamEngine::pipelineMode() const {
     return algo_raw_ ? algo_raw_->getPipelineMode() : std::string();
 }

@@ -471,6 +471,10 @@ void LegacyXz3dSlamInterface::publishLocationInfo() {
     int8_t slam_state = 2;
     int8_t location_status = 0;
     float map_area = 0.0f;
+    // 定位匹配度: 旧实现在 LOCALIZATION 且**不在重定位中**时取 localiza.getFitness()
+    // (legacy.cpp:1866, 在 status 的 if/else **之后**, 所以 status=2 时也会带上真值 ——
+    //  实机实测正是 location_status=2 且 matching_degree=0.831)。其它模式留 0。
+    float matching_degree = 0.0f;
 
     switch (slam_mode_) {
         case SlamMode::LOCALIZATION: {
@@ -484,6 +488,9 @@ void LegacyXz3dSlamInterface::publishLocationInfo() {
             const LocStatus st = lost_monitor_.update(cov_ok);
             location_status = static_cast<int8_t>(st);
             relocating_ = (st == LocStatus::RECOVERING);
+            if (!relocating_) {
+                matching_degree = static_cast<float>(engine_.getMatchingDegree());
+            }
             break;
         }
         case SlamMode::MAPPING:   // legacy.cpp:1873-1882
@@ -516,7 +523,8 @@ void LegacyXz3dSlamInterface::publishLocationInfo() {
     }
 
     slam_info_puber_.publish(
-        buildSlamInfo(slam_state, location_status, curr_map_name_, p.x, p.y, p.yaw, map_area));
+        buildSlamInfo(slam_state, location_status, curr_map_name_, p.x, p.y, p.yaw, map_area,
+                      matching_degree));
 }
 
 // ---------------------------------------------------------------- [T7] 告警

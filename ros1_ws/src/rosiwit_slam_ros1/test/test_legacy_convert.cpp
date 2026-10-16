@@ -91,7 +91,16 @@ TEST(LegacyConvert, SlamInfoFieldMapping) {
     EXPECT_NEAR(si.robot_pose.theta, 0.7, 1e-12);
     EXPECT_NEAR(si.map_area, 12.5f, 1e-6);
     EXPECT_EQ(static_cast<int>(si.update_request), 0);
-    EXPECT_NEAR(si.matching_degree, 0.0f, 1e-9);   // D3
+    EXPECT_NEAR(si.matching_degree, 0.0f, 1e-9);   // 不传时代码默认 0 (MAPPING/FREE 就该是 0)
+}
+
+// 4b —— matching_degree 要能带出**真实**匹配度 (实机实测是 0.831 这种值, 不是 0;
+//       D3 那条"恒 0"的偏差已按实机填实, 见计划 §14)
+TEST(LegacyConvert, SlamInfoCarriesMatchingDegree) {
+    const auto si = buildSlamInfo(1, 2, "map_alpha", 0.0, 0.0, 0.0, 0.0f, 0.831f);
+    EXPECT_NEAR(si.matching_degree, 0.831f, 1e-6);
+    // 实机就是这么一组: 丢失(status=2)时 matching_degree 仍是真值
+    EXPECT_EQ(static_cast<int>(si.location_status), 2);
 }
 
 // 5

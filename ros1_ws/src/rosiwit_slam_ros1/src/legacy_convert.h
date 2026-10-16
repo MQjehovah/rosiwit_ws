@@ -38,7 +38,8 @@ xzrobot_ros_dependency::SlamInfo buildSlamInfo(int8_t slam_state,
                                                int8_t location_status,
                                                const std::string& map_name,
                                                double x, double y, double yaw,
-                                               float map_area);
+                                               float map_area,
+                                               float matching_degree = 0.0f);
 
 /// 告警 JSON —— 与旧 `json_warning_code::AlgorithmWarningCode::toJson(vector<int>)` 同形:
 ///   {"faults":[{"code":"..","content":"..","level":"..","module":"xz_3d_slam",

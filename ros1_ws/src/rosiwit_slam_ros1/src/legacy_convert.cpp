@@ -84,7 +84,8 @@ nav_msgs::OccupancyGrid toFlippedGrid(const rosiwit_slam::GridInfo& gi, const st
 
 xzrobot_ros_dependency::SlamInfo buildSlamInfo(int8_t slam_state, int8_t location_status,
                                                const std::string& map_name,
-                                               double x, double y, double yaw, float map_area) {
+                                               double x, double y, double yaw, float map_area,
+                                               float matching_degree) {
     xzrobot_ros_dependency::SlamInfo si;
     si.slam_state = slam_state;
     si.location_status = location_status;
@@ -93,8 +94,8 @@ xzrobot_ros_dependency::SlamInfo buildSlamInfo(int8_t slam_state, int8_t locatio
     si.robot_pose.y = y;
     si.robot_pose.theta = yaw;
     si.map_area = map_area;
-    si.update_request = 0;      // 恒 0
-    si.matching_degree = 0.0f;  // D3
+    si.update_request = 0;               // 恒 0
+    si.matching_degree = matching_degree;   // 定位模式下的真实 fitness (见 §5.3 / D3 已填实)
     return si;
 }
 

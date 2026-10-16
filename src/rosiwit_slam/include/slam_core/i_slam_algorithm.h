@@ -53,6 +53,9 @@ public:
     virtual bool getHighRatePose(double /*t*/, PoseStamped& /*out*/) { return false; }
     /// 位姿 + 协方差 (order [rot(3),trans(3)]; 默认不支持)
     virtual bool getPoseCov(PoseStamped& /*out*/, Eigen::Matrix<double, 6, 6>& /*cov*/) { return false; }
+    /// 定位匹配度 [0,1] (定位模式下才有意义; 默认 0).
+    /// 旧 xz_3d_slam 的 slam/info.matching_degree 就是它 —— 实机实测是真值(如 0.831), 不是 0.
+    virtual double getMatchingDegree() const { return 0.0; }
     /// 绝对约束输入 (地图系位姿 + 协方差; 默认忽略)
     virtual void onAbsolute(const PoseStamped& /*pose*/, const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
 };
