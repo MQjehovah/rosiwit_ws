@@ -1616,15 +1616,24 @@ rosrun rosiwit_slam_ros1 check_legacy_interface.sh   # 或直接 bash <pkg>/scri
 3. **告警抑制窗口是真的**：`/switch_map` 之后约 120s 才出现第一条告警（100 tick × rt_grid 1s），
    与 T8 的分析完全吻合。
 
-**⚠ 本轮发现一个真缺口（建议补，尚未实现）**：`/stop_map_operation` 落盘只有
+**✅ 本轮发现并已修复一个真缺口**：`/stop_map_operation` 原先只落盘
 `map` / `map.scdb` / `map.xzmap`，**缺 `map.pgm` 与 `map.yaml`**；
 而旧实现的地图目录里这两个文件是存在的，且旧代码 `LocalizationSetGridMap()`
 （`legacy.cpp:373-455`）会 `imread(<base>.pgm)` 并读 `<base>.yaml` 取 `resolution`/`origin`。
 若现场导航/地图管理读这两个文件，换包后建图存盘会缺文件。
-修法：在 `handleStopMap()` 里补一次
-`engine_.algo()->saveGridMap(base + ".pgm", base + ".yaml", <resolution>)`
-（核心的 `ISlamAlgorithm::saveGridMap` 已存在）。`test_localization_roundtrip.sh` 里已加了
-对这一项的断言，补上后该项会从 FAIL 变 PASS。
+
+**已修（commit `ae6601e`）**：`handleStopMap()` 里在 `saveMap` 之后补一次
+`engine_.algo()->saveGridMap(base + ".pgm", base + ".yaml", grid_resolution_)`。
+核心的 `saveGridMap` 写的正是旧读者要的格式（`grid_map_io.cpp:7-39`：P5 且首行=最大 y；
+yaml 含 `image`/`resolution`/`origin`/`negate`/`occupied_thresh`/`free_thresh`/`mode`）。
+`grid_resolution_` 取自 `config/default.yaml` 的 `map_resolution`，与实时 `/map` 同一个分辨率。
+实测落盘文件变为 **`map` / `map.pgm` / `map.scdb` / `map.xzmap` / `map.yaml`**，
+`test_localization_roundtrip.sh` 由 `PASS=6 FAIL=2` 变成 **`PASS=8 FAIL=0`**。
+
+> 同时修掉自测脚本里的一个**变量名 typo**：赋值写 `ls_`、读取写 `${ls:-}`，
+> 导致 `location_status` 永远读成空 → 一直假 FAIL（从脚本第一版就存在）。
+> 上一轮加的"断言失败时打印原始证据"正好让它现形 —— 原文里 `location_status: 0` 明明在。
+
 
 **⚠ SKIP 第 6 项仍未关闭**：想把"丢失 → `location_status=2` + `20003504`"也验掉，试了两种扰动都没能让核心判 LOST：
 - 点云整体平移 3m → 定位把它当成"机器人换了个位置"重新定上（`location_status` 一直 0）
