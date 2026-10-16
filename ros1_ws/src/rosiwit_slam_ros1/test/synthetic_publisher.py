@@ -60,6 +60,10 @@ def main():
 
     imu_topic = rospy.get_param('~imu_topic', '/livox/imu')
     lidar_topic = rospy.get_param('~lidar_topic', '/livox/lidar')
+    # 逗号分隔可发布到多个话题 —— 机器人上 legacy profile 到底订 /livox/* 还是 vanjee_*
+    # 取决于 sensor_config.json + /machine/model, 一次发到全部候选最稳。
+    imu_topics = [t for t in imu_topic.split(',') if t]
+    lidar_topics = [t for t in lidar_topic.split(',') if t]
     rate_imu = float(rospy.get_param('~rate_imu', 100.0))
     rate_lidar = float(rospy.get_param('~rate_lidar', 10.0))
     yaw_rate_deg = float(rospy.get_param('~yaw_rate_deg', 11.5))   # 约 0.2 rad/s
@@ -67,14 +71,17 @@ def main():
     bias_y = float(rospy.get_param('~bias_y', 0.0))
     bias_yaw_deg = float(rospy.get_param('~bias_yaw_deg', 0.0))
     half = float(rospy.get_param('~room_half', 5.0))
+    # 点间距必须**远小于**栅格分辨率, 否则墙会变成点虚线、被 denoise 当噪点清掉。
+    # map_resolution=0.05 时用 0.05; 分辨率 0.3 时可放宽到 0.1。
+    step = float(rospy.get_param('~step', 0.05))
 
     yaw_rate = math.radians(yaw_rate_deg)
     bias_yaw = math.radians(bias_yaw_deg)
 
-    imu_pub = rospy.Publisher(imu_topic, Imu, queue_size=200)
-    lidar_pub = rospy.Publisher(lidar_topic, PointCloud2, queue_size=10)
+    imu_pub = [rospy.Publisher(t, Imu, queue_size=200) for t in imu_topics]
+    lidar_pub = [rospy.Publisher(t, PointCloud2, queue_size=10) for t in lidar_topics]
 
-    room = make_room_points(half=half)
+    room = make_room_points(half=half, step=step)
 
     # PointCloud2 布局: x, y, z, intensity (均为 float32)
     fields = [
@@ -110,7 +117,8 @@ def main():
         msg.row_step = 16 * len(room)
         msg.is_dense = True
         msg.data = bytes(buf)
-        lidar_pub.publish(msg)
+        for p in lidar_pub:
+            p.publish(msg)
 
     def publish_imu(_evt=None):
         now = rospy.Time.now()
@@ -124,7 +132,8 @@ def main():
         msg.angular_velocity.x = 0.0
         msg.angular_velocity.y = 0.0
         msg.angular_velocity.z = yaw_rate
-        imu_pub.publish(msg)
+        for p in imu_pub:
+            p.publish(msg)
 
     rospy.Timer(rospy.Duration(1.0 / rate_lidar), publish_lidar)
     rospy.Timer(rospy.Duration(1.0 / rate_imu), publish_imu)

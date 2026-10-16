@@ -44,17 +44,21 @@ if [ "${st:-}" = "0" ]; then ok "切建图后 slam_state=0"; else no "切建图�
 echo
 echo "--- 第 1 项: 建图 + 合成数据 -> /map 有真实栅格 ---"
 rosrun rosiwit_slam_ros1 synthetic_publisher.py \
-    _imu_topic:=/livox/imu _lidar_topic:=/livox/lidar > /tmp/smoke_syn.log 2>&1 &
+    _imu_topic:=/livox/imu,vanjee_lidar_imu_packets \
+    _lidar_topic:=/livox/lidar,vanjee_points722 \
+    _room_half:=1.5 _step:=0.05 > /tmp/smoke_syn.log 2>&1 &
 SP=$!
 sleep 5
+# 注意: 这里只能证明"发布器在发", 不能证明节点订阅的就是这些话题 —— legacy profile 到底
+# 订 /livox/* 还是 vanjee_* 取决于实机 sensor_config.json + /machine/model, 所以上面两个都发。
 if timeout 6 rostopic hz /livox/lidar 2>&1 | grep -q "average rate"; then
     ok "合成数据在发 (/livox/lidar + /livox/imu)"
 else
     no "合成数据没发出来"
 fi
-echo "    (等 25s 让 LIO 初始化建图)"
-sleep 25
-mapmsg="$(timeout 15 rostopic echo -n1 /map 2>/dev/null)"
+echo "    (等 35s 让 LIO 初始化建图)"
+sleep 35
+mapmsg="$(timeout 40 rostopic echo -n1 /map 2>/dev/null)"
 w=$(echo "$mapmsg" | awk '/^  width/{print $2; exit}')
 occ=$(echo "$mapmsg" | tr ',' '\n' | grep -c '^ *100$')
 area=$(timeout 10 rostopic echo -n1 /slam/info 2>/dev/null | awk '/^map_area/{print $2}')
