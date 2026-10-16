@@ -35,7 +35,10 @@ grid_max_height: 2.0        # 地面以上障碍最高高度(m)
 grid_occupied_thresh: 1     # 每格最少点数判为占据(height_projection)
 grid_dilate_radius: 1       # 障碍膨胀半径(格), -1 按 map_save_voxel 自动
 grid_close_radius: 1        # 形态学闭运算半径(格), 填孔
-grid_min_component_cells: 30
+grid_min_component_cells: 0  # 实机实测: 0.05 分辨率下真实扫描的点很散, 占据格会碎成几千个
+                             # 小连通域, 阈值 30 会把**全部**占据格删掉 -> /map 全白。
+                             # (<=1 表示关闭该算子; 旧的实时栅格是多帧 log-odds 累积出来的所以不碎,
+                             #  我们是从当前全局地图重算, 必须关掉 denoise 才留得住)
 grid_max_range: 0.0         # 射线有效距离(m), 0=不限
 grid_ground_method: ransac  # ransac | percentile
 grid_ransac_dist_thr: 0.10

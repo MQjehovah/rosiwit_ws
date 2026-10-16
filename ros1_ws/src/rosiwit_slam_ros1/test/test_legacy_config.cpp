@@ -176,6 +176,24 @@ TEST(LegacyConfig, LogKeysFromConfAndDefaults) {
 }
 
 // 11
+// 实机实测: UI 传的 map_dir 其实是**文件路径** (".../map.yaml"),
+// 旧实现靠 substr(0,32) 恰好切掉后缀; 我们泛化成剥后缀。
+TEST(LegacyConfig, LegacyMapBaseAcceptsMapYamlFilePath) {
+    EXPECT_EQ(legacyMapBase("/opt/xzrobot/maps/1789354050210/map.yaml"),
+              "/opt/xzrobot/maps/1789354050210/map");
+    EXPECT_EQ(legacyMapBase("/opt/xzrobot/maps/1789354050210/map.pgm"),
+              "/opt/xzrobot/maps/1789354050210/map");
+    EXPECT_EQ(legacyMapBase("/opt/xzrobot/maps/1789354050210/map.xzmap"),
+              "/opt/xzrobot/maps/1789354050210/map");
+    // 目录形式(带/不带尾斜杠)与已是基名 的形式都仍然对
+    EXPECT_EQ(legacyMapBase("/opt/xzrobot/maps/1789354050210/"),
+              "/opt/xzrobot/maps/1789354050210/map");
+    EXPECT_EQ(legacyMapBase("/opt/xzrobot/maps/1789354050210"),
+              "/opt/xzrobot/maps/1789354050210/map");
+    EXPECT_EQ(legacyMapBase("/opt/xzrobot/maps/1789354050210/map"),
+              "/opt/xzrobot/maps/1789354050210/map");
+}
+
 TEST(LegacyConfig, LegacyMapBaseStripsTrailingSlash) {
     EXPECT_EQ(legacyMapBase("/a/b/"), "/a/b/map");
 }
