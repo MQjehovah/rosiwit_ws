@@ -112,6 +112,8 @@ install(FILES scripts/legacy_interface.golden
     DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)
 install(PROGRAMS scripts/smoke_legacy.sh
     DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)
+install(PROGRAMS scripts/test_localization_roundtrip.sh
+    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)
 # 合成数据发布器装在 bin, 这样 `rosrun rosiwit_slam_ros1 synthetic_publisher.py` 在
 # devel 与 install 两种布局下都能找到
 install(PROGRAMS test/synthetic_publisher.py

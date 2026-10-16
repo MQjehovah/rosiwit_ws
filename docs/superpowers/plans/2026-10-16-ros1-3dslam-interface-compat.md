@@ -1592,6 +1592,51 @@ rosrun rosiwit_slam_ros1 check_legacy_interface.sh   # 或直接 bash <pkg>/scri
 **这三项都指向同一件事：真正剩下的验收只能在装了地图的实机（或喂一段真实 bag）上做。**
 本机可自动化的部分已经全绿。
 
+### 13.2 定位回路自测（用自己建的地图回喂定位）—— 已跑通并固化成脚本
+
+**做法**（`scripts/test_localization_roundtrip.sh`，无需真雷达/真地图）：
+建图 30s → `/stop_map_operation` 存图 → `/switch_map` 加载这张图 → 再喂同样的合成数据 → 看定位。
+
+**实测结果（PASS，定位真的定上了）**：
+```
+建图    /slam/info.map_area = 234.09
+存图    success: True;  落盘 map / map.scdb / map.xzmap
+加载    [LocPipeline] loaded map: /tmp/synth_map_.../map (1657 pts)
+        [LocPipeline] loaded 30 keyframes from .../map.xzmap
+定位    /slam/info: slam_state=1, location_status=0, map_name="synth"
+        位姿 x=0.0012 y=0.0031 theta=-0.120
+        /curr_localization_pose: frame_id="map", seq=3010
+```
+
+这一步一并确认了三件此前没验证过的事：
+1. **`core.loadMap` 的"成功路径"** —— 顺带证明 `legacyMapBase()` + `map_directory:"/"` 拼出的
+   `//tmp/.../map` 在**真文件**上可用（此前只在"加载失败"路径上打过日志）。
+2. **定位链路端到端**：重定位 → 位姿 → `/slam/info.location_status=0` → `curr_localization_pose`。
+   **§13.1 里 SKIP 的第 2 项就此关闭。**
+3. **告警抑制窗口是真的**：`/switch_map` 之后约 120s 才出现第一条告警（100 tick × rt_grid 1s），
+   与 T8 的分析完全吻合。
+
+**⚠ 本轮发现一个真缺口（建议补，尚未实现）**：`/stop_map_operation` 落盘只有
+`map` / `map.scdb` / `map.xzmap`，**缺 `map.pgm` 与 `map.yaml`**；
+而旧实现的地图目录里这两个文件是存在的，且旧代码 `LocalizationSetGridMap()`
+（`legacy.cpp:373-455`）会 `imread(<base>.pgm)` 并读 `<base>.yaml` 取 `resolution`/`origin`。
+若现场导航/地图管理读这两个文件，换包后建图存盘会缺文件。
+修法：在 `handleStopMap()` 里补一次
+`engine_.algo()->saveGridMap(base + ".pgm", base + ".yaml", <resolution>)`
+（核心的 `ISlamAlgorithm::saveGridMap` 已存在）。`test_localization_roundtrip.sh` 里已加了
+对这一项的断言，补上后该项会从 FAIL 变 PASS。
+
+**⚠ SKIP 第 6 项仍未关闭**：想把"丢失 → `location_status=2` + `20003504`"也验掉，试了两种扰动都没能让核心判 LOST：
+- 点云整体平移 3m → 定位把它当成"机器人换了个位置"重新定上（`location_status` 一直 0）
+- 换成结构不同的房间（5m → 2m）→ 还是一直 0
+
+说明**核心的监测器（windowed monitor / pp_icp）对这类扰动相当宽容**（对产品是好事）。
+结论：**这最后一跳要靠真数据或更对抗的输入（完全无关的点云/走廊）才能验**；
+机制本身有 `LostMonitor` 的 8 条单测兜底、接线已在（T11），但"核心真报 LOST → 真发出
+20003504"尚未在真跑中观察到。别把它当成已验证。
+
+
+
 
 
 ---
