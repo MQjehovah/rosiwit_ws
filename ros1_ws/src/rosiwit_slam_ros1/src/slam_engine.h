@@ -76,6 +76,8 @@ public:
     bool getPoseCov(rosiwit_slam::PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const;
     /// 定位匹配度 [0,1] (旧接口 slam/info.matching_degree); 非定位/未支持时为 0
     double getMatchingDegree() const;
+    /// 丢掉核心的建图状态并重建 (= 旧实现的"删掉建图实例再 new"), 用于进建图模式前清干净。
+    bool resetCore();
     std::string pipelineMode() const;
 
     // ---- 泵 / 钩子 ----

@@ -56,6 +56,10 @@ public:
     /// 定位匹配度 [0,1] (定位模式下才有意义; 默认 0).
     /// 旧 xz_3d_slam 的 slam/info.matching_degree 就是它 —— 实机实测是真值(如 0.831), 不是 0.
     virtual double getMatchingDegree() const { return 0.0; }
+    /// 丢掉当前建图结果并重建内部模块, 用于"退出建图后再进建图"**不残留上一轮地图**。
+    /// 旧 xz_3d_slam 每次进建图都会 DELETE_PTR(mapping_ptr_) 重建实例; 我们是单核心实例,
+    /// 只能用显式重建达到同样效果。默认不支持。
+    virtual bool resetForNewMapping(const std::string& /*config_path*/) { return false; }
     /// 绝对约束输入 (地图系位姿 + 协方差; 默认忽略)
     virtual void onAbsolute(const PoseStamped& /*pose*/, const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
 };

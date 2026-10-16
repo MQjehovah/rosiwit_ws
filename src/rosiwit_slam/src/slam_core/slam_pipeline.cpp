@@ -432,6 +432,44 @@ bool SlamPipeline::loadMap(const std::string& path) {
     return true;
 }
 
+bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
+    // 旧 xz_3d_slam 每次切建图都 DELETE_PTR(mapping_ptr_) 再 new 一个, 所以上一轮绝不残留;
+    // 我们是单核心实例, 只能显式重建内部模块达到同样效果。
+    //
+    // 1) **先停后端线程并 join** —— 否则重新 init() 会在 slam_pipeline.cpp:69 再起一个线程
+    //    (旧线程还活着 -> 两个后端线程同时跑, 比残留更糟)。
+    m_backend_running = false;
+    m_queue_cv.notify_all();
+    if (m_backend_thread.joinable()) m_backend_thread.join();
+
+    // 2) 丢掉所有模块 + 队列/锚点状态 (= "删掉建图实例")
+    m_frontend.reset();
+    m_backend.reset();
+    m_loop.reset();
+    m_localization.reset();
+    m_map_mgr.reset();
+    m_visual.reset();
+    {
+        std::lock_guard<std::mutex> lk(m_queue_mutex);
+        std::queue<BackendItem> empty;
+        std::swap(m_backend_queue, empty);
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_anchor_mutex);
+        m_out_anchor_ = PoseStamped();
+        m_have_anchor_ = false;
+    }
+    // 先置 IDLE 再 init: 否则 init() 里那段 "m_mode == LOCALIZATION 就自动载图" 会误触发
+    m_mode = PipelineMode::IDLE;
+    m_frame_count = 0;
+
+    // 3) 重建 (与启动时同一条路径)
+    const bool ok = init(config_path);
+    std::cout << "[SlamPipeline] resetForNewMapping: modules rebuilt (" << (ok ? "ok" : "FAILED")
+              << ")" << std::endl;
+    return ok;
+}
+
 bool SlamPipeline::saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) {
     if (!m_map_mgr) return false;
     return m_map_mgr->saveGridMap(pgm_path, yaml_path, resolution);

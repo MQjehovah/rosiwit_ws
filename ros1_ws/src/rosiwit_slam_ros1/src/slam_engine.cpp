@@ -370,6 +370,20 @@ double SlamEngine::getMatchingDegree() const {
     return algo_raw_ ? algo_raw_->getMatchingDegree() : 0.0;
 }
 
+bool SlamEngine::resetCore() {
+    if (!algo_raw_) return false;
+    // 先复位 latch/快照类状态, 免得重建后还带着上一轮的位姿
+    {
+        std::lock_guard<std::mutex> lk(out_mutex_);
+        latest_ = SlamOutput();
+        have_output_ = false;
+    }
+    // 旧实现切模式时会删掉建图/定位实例; 我们重建核心模块达到同样效果。
+    const bool ok = algo_raw_->resetForNewMapping(config_path_);
+    std::cout << "[slam_engine] resetCore -> " << (ok ? "ok" : "unsupported/failed") << std::endl;
+    return ok;
+}
+
 std::string SlamEngine::pipelineMode() const {
     return algo_raw_ ? algo_raw_->getPipelineMode() : std::string();
 }

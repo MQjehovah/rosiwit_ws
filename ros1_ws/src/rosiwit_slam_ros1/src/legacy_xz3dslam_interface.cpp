@@ -736,6 +736,8 @@ bool LegacyXz3dSlamInterface::handleModeSwitch(
     if (req.mode == 0) {
         // 旧 switchToLocalization (legacy.cpp:2060-2115): 先置 FREE, 再调 /set_detect_mode(0),
         // **要求成功** —— 失败就 result=0 + return false。
+        // 旧实现同时 DELETE_PTR 掉了建图/定位实例 -> 我们在这里也重建核心(丢上一轮地图)。
+        engine_.resetCore();
         setModeFromLegacy(SlamMode::FREE);
         const bool ok = callSetDetectMode(0);
         res.result = ok ? 1 : 0;
@@ -745,6 +747,9 @@ bool LegacyXz3dSlamInterface::handleModeSwitch(
         // 旧 switchToMapping (legacy.cpp:1974-2058): 也调 /set_detect_mode(1), 但
         // "if (!success) return false;" 那行在 2026 是**注释掉的** -> 结果不影响返回值;
         // 随后 run() -> warning_code_start_task_ = true (184), 即重新开启抑制窗口。
+        // **关键**: 旧实现先 DELETE_PTR(mapping_ptr_) 再 new 一个全新实例, 所以退出建图再
+        // 进建图**不会残留上一轮地图**; 我们单核心实例, 必须显式重建。
+        engine_.resetCore();
         callSetDetectMode(1);
         setModeFromLegacy(SlamMode::MAPPING);
         setWarningSuppression(true);
@@ -779,6 +784,8 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     }
     // 分支 3: 换图
     relocating_ = true;
+    // 旧实现这里 DELETE_PTR 掉了建图实例 (legacy.cpp:2245-2246) -> 我们也重建核心
+    engine_.resetCore();
     const bool detect_ok = callSetDetectMode(0);
     res.success = detect_ok;   // 旧实现: **该结果单独决定** success
 
