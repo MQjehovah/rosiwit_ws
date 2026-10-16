@@ -83,7 +83,7 @@ SP=$!
 # 定位收敛要几十秒 (BBS 重定位 + 监测窗口), 所以轮询而不是单次 echo ——
 # 单次 echo 很容易在"还没定上"的空窗里超时, 造成假 FAIL。
 echo "  (轮询 /slam/info, 最多约 2 分钟等定位收敛)"
-info=""; ls_=""; ss=""
+info=""; loc_st=""; ss=""
 for i in $(seq 1 8); do
     sleep 2
     # 先落到文件再解析: 直接把 rostopic echo 的输出塞进 $(...) 在本机偶发拿到不完整的
@@ -91,14 +91,14 @@ for i in $(seq 1 8); do
     timeout 15 rostopic echo -n1 /slam/info > /tmp/lorun_info.txt 2>&1
     info="$(cat /tmp/lorun_info.txt)"
     ss=$(awk '/^slam_state/{print $2}' /tmp/lorun_info.txt)
-    ls_=$(awk '/^location_status/{print $2}' /tmp/lorun_info.txt)
-    if [ "${ls:-}" = "0" ]; then break; fi
-    echo "    t+$((i*2))s: slam_state=${ss:-<无>} location_status=${ls:-<无>}"
+    loc_st=$(awk '/^location_status/{print $2}' /tmp/lorun_info.txt)
+    if [ "${loc_st:-}" = "0" ]; then break; fi
+    echo "    t+$((i*2))s: slam_state=${ss:-<无>} location_status=${loc_st:-<无>}"
 done
-if [ "${ls:-}" = "0" ] && [ "${ss:-}" = "1" ]; then
+if [ "${loc_st:-}" = "0" ] && [ "${ss:-}" = "1" ]; then
     ok "/slam/info 出现: slam_state=1, location_status=0 (定位成功)"
 else
-    no "/slam/info: slam_state=${ss:-?} location_status=${ls:-?} (期望 1/0)"
+    no "/slam/info: slam_state=${ss:-?} location_status=${loc_st:-?} (期望 1/0)"
     echo "      原始输出(便于诊断):"
     sed 's/^/        | /' /tmp/lorun_info.txt 2>/dev/null | head -12
 fi

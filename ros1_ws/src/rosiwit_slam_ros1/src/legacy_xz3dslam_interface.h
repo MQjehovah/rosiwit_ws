@@ -197,6 +197,7 @@ private:
     double realtime_grid_map_area_ = 0.0;
     bool relocating_ = false;                       // 旧 relocating_ (legacy.cpp:1843-1853)
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)
+    double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= config 的 map_resolution)
     nav_msgs::OccupancyGrid global_grid_map_msg_;   // 旧 global_grid_map_ (latch 一次)
     nav_msgs::Path mapping_path_msg_;               // 建图轨迹 (累积后整条重发)
 

@@ -85,6 +85,7 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
     std::string yaml = engine_.configPath();
     if (yaml.empty()) yaml = ros::package::getPath("rosiwit_slam_ros1") + "/config/default.yaml";
     loadGridConfigFromYaml(yaml, gcfg, gpost, gen);
+    grid_resolution_ = gcfg.resolution;   // 存 pgm/yaml 时用同一个分辨率
     realtime_grid_.setConfig(gcfg, gpost, gen);
     realtime_grid_.setSource([this](PointVec& out) {
         if (slam_mode_ != SlamMode::MAPPING) return false;   // 非建图模式没必要算
@@ -810,10 +811,23 @@ bool LegacyXz3dSlamInterface::handleStopMap(
     if (slam_mode_ != SlamMode::MAPPING || !engine_.algo()) return false;
 
     // 旧: mapping_ptr_->saveMap(folderPath, "map") -> 等价于 saveMap("<dir>/map")
-    if (!engine_.algo()->saveMap(legacyMapBase(req.map_dir))) {
+    const std::string base = legacyMapBase(req.map_dir);
+    if (!engine_.algo()->saveMap(base)) {
         // 旧实现的 saveMap 返回 void, **不检查**结果 -> 我们只报错, 不改 success
-        ROS_ERROR_STREAM("[legacy_iface] /stop_map_operation: saveMap failed: "
-                         << legacyMapBase(req.map_dir));
+        ROS_ERROR_STREAM("[legacy_iface] /stop_map_operation: saveMap failed: " << base);
+    }
+
+    // 同时补 map.pgm / map.yaml: 旧实现的地图目录里有这两个文件, 且旧
+    // LocalizationSetGridMap() (legacy.cpp:373-455) 会 imread("<base>.pgm") 并读
+    // "<base>.yaml" 的 resolution/origin/occupied_thresh。核心的 saveGridMap 写的正是
+    // 这个格式 (grid_map_io.cpp:7-39: P5, 首行=最大 y; yaml 含 image/resolution/
+    // origin/negate/occupied_thresh/free_thresh/mode)。
+    if (!engine_.algo()->saveGridMap(base + ".pgm", base + ".yaml", grid_resolution_)) {
+        // 与 saveMap 同理: 失败只报错, 不改 success (旧实现也没有这一步可对照)
+        ROS_ERROR_STREAM("[legacy_iface] /stop_map_operation: saveGridMap failed: " << base);
+    } else {
+        std::cout << "[legacy_iface] saved grid map: " << base << ".pgm / " << base
+                  << ".yaml (resolution=" << grid_resolution_ << ")" << std::endl;
     }
 
     std::string charging_json;
