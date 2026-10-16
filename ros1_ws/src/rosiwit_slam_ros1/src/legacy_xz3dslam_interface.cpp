@@ -171,8 +171,20 @@ void LegacyXz3dSlamInterface::setModeFromLegacy(SlamMode m) {
     }
 }
 
-void LegacyXz3dSlamInterface::resetLocalizationLatch() {
-    relocating_ = true;
+void LegacyXz3dSlamInterface::resetCoreAndCaches() {
+    engine_.resetCore();   // 注意: 这里必须是 engine_.resetCore(), 不是本函数自己
+    // 本层缓存一并复位 (见头文件注释)
+    realtime_grid_.clear();
+    realtime_grid_map_ = nav_msgs::OccupancyGrid();
+    realtime_grid_map_area_ = 0.0;
+    curr_pose_ = LegacyPose();
+    last_pose_stamp_ = 0.0;
+    mapping_path_msg_ = nav_msgs::Path();
+    debug_map_published_ = false;
+    std::cout << "[legacy_iface] core rebuilt + local caches cleared" << std::endl;
+}
+
+void LegacyXz3dSlamInterface::resetLocalizationLatch() {    relocating_ = true;
     lost_monitor_.reset();
 }
 
@@ -737,7 +749,7 @@ bool LegacyXz3dSlamInterface::handleModeSwitch(
         // 旧 switchToLocalization (legacy.cpp:2060-2115): 先置 FREE, 再调 /set_detect_mode(0),
         // **要求成功** —— 失败就 result=0 + return false。
         // 旧实现同时 DELETE_PTR 掉了建图/定位实例 -> 我们在这里也重建核心(丢上一轮地图)。
-        engine_.resetCore();
+        resetCoreAndCaches();
         setModeFromLegacy(SlamMode::FREE);
         const bool ok = callSetDetectMode(0);
         res.result = ok ? 1 : 0;
@@ -749,7 +761,7 @@ bool LegacyXz3dSlamInterface::handleModeSwitch(
         // 随后 run() -> warning_code_start_task_ = true (184), 即重新开启抑制窗口。
         // **关键**: 旧实现先 DELETE_PTR(mapping_ptr_) 再 new 一个全新实例, 所以退出建图再
         // 进建图**不会残留上一轮地图**; 我们单核心实例, 必须显式重建。
-        engine_.resetCore();
+        resetCoreAndCaches();
         callSetDetectMode(1);
         setModeFromLegacy(SlamMode::MAPPING);
         setWarningSuppression(true);
@@ -785,7 +797,7 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     // 分支 3: 换图
     relocating_ = true;
     // 旧实现这里 DELETE_PTR 掉了建图实例 (legacy.cpp:2245-2246) -> 我们也重建核心
-    engine_.resetCore();
+    resetCoreAndCaches();
     const bool detect_ok = callSetDetectMode(0);
     res.success = detect_ok;   // 旧实现: **该结果单独决定** success
 

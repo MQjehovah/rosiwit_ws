@@ -170,10 +170,14 @@ private:
     bool handleExpandMap(xzrobot_ros_dependency::UpdateMap::Request& req,
                          xzrobot_ros_dependency::UpdateMap::Response& res);
 
-    /// 把 initial_pose 转成核心的 PoseStamped 并 setInitPose。
-    /// `zero_if_insane`: /switch_map 才有的 "|x| 或 |y| > 1e4 则全零" 逻辑
+    /// 把 initial_pose 转成核心的 PoseStamped 并 setInitPose。    /// `zero_if_insane`: /switch_map 才有的 "|x| 或 |y| > 1e4 则全零" 逻辑
     /// (legacy.cpp 里只有换图那条路有; /relocation 没有)。两条路都 **z 强制 0**。
     void applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane);
+
+    /// 重建核心 + 同步清掉**本层**的缓存。
+    /// 只重建核心是不够的: 我们的 RealtimeGrid 与 /map 的常驻对象/面积都还留着上一轮,
+    /// 核心清空后 worker 取不到新栅格就会继续发旧的那张 -> 表现为"切回来还有残留"。
+    void resetCoreAndCaches();
 
     // ---- [T9] 动态 map->odom TF ----
     void sendTransform();   // legacy.cpp:1899-1936

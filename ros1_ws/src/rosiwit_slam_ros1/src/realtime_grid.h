@@ -70,6 +70,9 @@ public:
     /// 有结果就拷到 out 并返回 true; 从没算出过返回 false
     bool latest(rosiwit_slam::GridInfo& out) const;
 
+    /// 丢掉缓存的最新栅格 (核心重建/重新进建图时调用) —— 否则会一直发上一轮那张。
+    void clear();
+
 private:
     void run();
 

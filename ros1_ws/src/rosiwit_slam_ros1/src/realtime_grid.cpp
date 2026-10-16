@@ -168,6 +168,12 @@ bool RealtimeGrid::latest(rosiwit_slam::GridInfo& out) const {
     return true;
 }
 
+void RealtimeGrid::clear() {
+    std::lock_guard<std::mutex> lk(m_out_mtx_);
+    m_latest_ = rosiwit_slam::GridInfo();
+    m_has_ = false;
+}
+
 void RealtimeGrid::run() {
     std::unique_lock<std::mutex> lk(m_mtx_);
     while (!m_stop_) {
