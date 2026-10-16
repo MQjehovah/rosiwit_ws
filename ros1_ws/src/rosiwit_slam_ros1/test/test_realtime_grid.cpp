@@ -200,8 +200,10 @@ TEST(RealtimeGrid, LoadsGridConfigFromDefaultYaml) {
     EXPECT_EQ(post.close_radius, 1);
     EXPECT_EQ(post.dilate_radius, 1); // grid_dilate_radius 同时喂给生成配置与后处理
     EXPECT_EQ(post.min_component_cells, 30);
-    // 分辨率/点间距来自 map_resolution / map_save_voxel (核心在 generateGridMap() 里赋)
-    EXPECT_NEAR(cfg.resolution, 0.3, 1e-9);
+    // 分辨率/点间距来自 map_resolution / map_save_voxel (核心在 generateGridMap() 里赋)。
+    // map_resolution 已按**实机地图**对齐: 机器人 /opt/xzrobot/maps/*/map.yaml 实测
+    // resolution = 0.05 (3 张地图一致), 详见计划 §14。
+    EXPECT_NEAR(cfg.resolution, 0.05, 1e-9);
     EXPECT_NEAR(cfg.point_spacing, 0.3, 1e-9);
     EXPECT_NEAR(post.point_spacing, 0.3, 1e-9);
 }

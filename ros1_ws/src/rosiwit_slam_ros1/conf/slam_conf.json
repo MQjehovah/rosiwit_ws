@@ -20,7 +20,7 @@
     "x_calib": 0.0011939,
     "y_calib": 0.009333,
 
-    "use_delete_pts": true,
+    "use_delete_pts": false,
     "delete_pt_in_car_max_x": 0.5,
     "delete_pt_in_car_min_x": -1.2,
     "delete_pt_in_car_max_y": 0.5,
@@ -30,11 +30,7 @@
 
     "use_3d_z_min": 0.0,
     "use_3d_z_max": 10,
-    "mapping_z_min": 0.0,
-    "mapping_z_max": 10,
-    "loc_z_min": 0.0,
-    "loc_z_max": 10,
-
+    
     "use_tf": true,
     "use_filter_odom": false,
     "use_2d_undistort": false,
@@ -42,30 +38,5 @@
     "th_2d_range_min": 0.1,
     "xz_log_path": "/opt/xzrobot/logs/xzrobot_3d_slam/xz_3d_slam.log",
     "print_xz_log_to_file": true,
-    "test_wait_time":5,
-    "laser_params": {
-        "mid360": {
-            "mapping_z_min": 0.0,
-            "mapping_z_max": 10,
-            "loc_z_min": 0.0,
-            "loc_z_max": 10
-        },
-        "vanjee": {
-            "mapping_z_min": 0.0,
-            "mapping_z_max": 10,
-            "loc_z_min": 0.0,
-            "loc_z_max": 10,
-            "laser_sub_name":"vanjee_points722",
-            "imu_sub_name":"vanjee_lidar_imu_packets"
-        },
-        "robosense":{
-            "mapping_z_min": 0.0,
-            "mapping_z_max": 10,
-            "loc_z_min": 0.0,
-            "loc_z_max": 10,
-            "laser_sub_name":"rslidar_points",
-            "imu_sub_name":"rslidar_imu"
-        }
-    }
-
+    "test_wait_time":5
 }

@@ -7,7 +7,8 @@ pipeline_mode: mapping          # mapping | localization | idle
 
 modules:
   frontend: "fast_lio2_frontend"
-  backend: "gtsam_isam2"
+  backend: "ceres_pose_graph"  # 机器人上没有 gtsam (apt 里也没有 libgtsam-dev), gtsam_isam2 会解析成 null;
+                               # ceres_pose_graph 用机器人上已有的 Ceres 1.13, 是"真实后端" 见计划 §14
   loop_closure: "scan_context"
   map_manager: "pcd_map_manager"
   localization: "localization_pipeline"   # 可编排流水线 | gicp_localization | scan_context_localization
@@ -24,7 +25,7 @@ lidar_min_range: 0.5
 lidar_max_range: 100.0
 scan_period_ms: 100.0
 scan_resolution: 0.3
-map_resolution: 0.3
+map_resolution: 0.05
 map_save_voxel: 0.3
 
 # ---- 2D 占据栅格建图 (grid_map_generator: GridMapFactory 注册的生成策略) ----
