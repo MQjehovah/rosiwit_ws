@@ -271,11 +271,34 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
     m_map_path = map_name;
     m_map.reset(new CloudType());
     if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
-        std::cerr << "[LocPipeline] failed to load map: " << map_name << std::endl;
-        m_map.reset();
-        return;
+        // **没有 PCD 的兼容回退**: 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml,
+        // 关键帧里自带点 —— 直接从关键帧重建基准点云。
+        // 这样"切图/定位"就**不再要求 PCD 文件** (旧实现 localiza_ptr_->run("<dir>/map")
+        // 也只是读它自己那份 xzmap, 从来不看 PCD)。
+        m_map->clear();
+        std::vector<io::XzMapKeyframe> kfs_fb;
+        if (io::readXzMap(map_name + ".xzmap", kfs_fb) && !kfs_fb.empty()) {
+            for (const auto& kf : kfs_fb) {
+                for (const auto& p : kf.points) {
+                    PointType pt;   // PCL 1.8 无 (x,y,z) 三参构造, 逐字段赋值
+                    pt.x = p.x();
+                    pt.y = p.y();
+                    pt.z = p.z();
+                    m_map->push_back(pt);
+                }
+            }
+            std::cout << "[LocPipeline] no PCD at " << map_name << "; rebuilt base map from "
+                      << map_name << ".xzmap (" << m_map->size() << " pts, " << kfs_fb.size()
+                      << " kfs)" << std::endl;
+        } else {
+            std::cerr << "[LocPipeline] failed to load map: " << map_name << std::endl;
+            m_map.reset();
+            return;
+        }
+    } else {
+        std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)"
+                  << std::endl;
     }
-    std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)" << std::endl;
     if (m_local_map) m_local_map->setMap(map_name, m_map);
     m_planar.setMap(m_map);
     if (m_store) {

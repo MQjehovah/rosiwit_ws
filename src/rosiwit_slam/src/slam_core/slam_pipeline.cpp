@@ -153,8 +153,17 @@ void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& t
 }
 
 bool SlamPipeline::loadMapForLocalization(const std::string& path, const PoseStamped& init_pose) {
-    if (!m_map_mgr || !m_map_mgr->loadMap(path)) return false;
-    if (m_localization) { m_localization->setMap(path); m_localization->setInitPose(init_pose); }
+    if (!m_localization) return false;
+    // 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml, **没有 PCD** ——
+    // 所以这里不能把"PCD 加载失败"当成致命错误 (旧实现 localiza_ptr_->run("<dir>/map")
+    // 也只看它自己那份 xzmap)。定位入口 setMap() 会在没有 PCD 时从关键帧重建基准点云。
+    if (m_map_mgr && !m_map_mgr->loadMap(path)) {
+        std::cout << "[SlamPipeline] no PCD at " << path
+                  << " (legacy xzmap-only map); localization map is loaded from <base>.xzmap"
+                  << std::endl;
+    }
+    m_localization->setMap(path);
+    m_localization->setInitPose(init_pose);
     return true;
 }
 
