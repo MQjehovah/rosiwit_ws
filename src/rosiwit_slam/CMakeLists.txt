@@ -4,7 +4,11 @@
 #   ROS 接口包(rosiwit_slam_ros1 / rosiwit_slam_ros2) 以 add_subdirectory 内联复用本库, 保持薄接口且等价。
 #   本目录含 COLCON_IGNORE, 不被 colcon 单独构建 (由接口包内联构建)。
 # ============================================================================
-cmake_minimum_required(VERSION 3.16)
+# 3.10 而不是 3.16: 本仓库的 ROS1 目标机 (Ubuntu 18.04 / melodic, 如机器人 192.168.51.19)
+# 自带 cmake 只有 3.10.2, 而核心并没有用到 3.10 之后才有的 CMake 功能 —— 已在实机上
+# 把本值降到 3.10 后全量编译通过 (2026-10-16, aarch64)。3.16 那个限制会让目标机必须
+# 自行升级 cmake (实测 apt/github/cmake.org 在机器人上都走不通), 纯属无谓门槛。
+cmake_minimum_required(VERSION 3.10)
 project(rosiwit_slam VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
