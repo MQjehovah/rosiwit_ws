@@ -185,7 +185,13 @@ bool RosiwitInterface::handleLoadMap(rosiwit_slam_ros1::LoadMap::Request& req,
 
 bool RosiwitInterface::handleSaveGridMap(rosiwit_slam_ros1::SaveGridMap::Request& req,
                                          rosiwit_slam_ros1::SaveGridMap::Response& res) {
-    res.success = engine_.algo() && engine_.algo()->saveGridMap(req.pgm_path, req.yaml_path, req.resolution);
+    if (!engine_.algo()) { res.success = false; res.message = "failed"; return true; }
+    // 请求里带了 generator 就临时切到该 2D 栅格策略再落盘 (空则沿用当前策略)
+    if (!req.generator.empty() && !engine_.algo()->setGridMapGenerator(req.generator)) {
+        ROS_WARN_STREAM("[rosiwit_interface] save_grid_map: unknown grid_map_generator '"
+                        << req.generator << "', using current generator");
+    }
+    res.success = engine_.algo()->saveGridMap(req.pgm_path, req.yaml_path, req.resolution);
     res.message = res.success ? "ok" : "failed";
     return true;
 }

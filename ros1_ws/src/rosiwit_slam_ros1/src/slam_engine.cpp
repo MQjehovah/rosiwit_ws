@@ -141,7 +141,12 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
                 cfg_.lidar_filter_num = c["lidar_filter_num"].as<int>(cfg_.lidar_filter_num);
                 cfg_.lidar_min_range = c["lidar_min_range"].as<double>(cfg_.lidar_min_range);
                 cfg_.lidar_max_range = c["lidar_max_range"].as<double>(cfg_.lidar_max_range);
-                if (c["vision"]) vo_enabled = c["vision"]["enabled"].as<bool>(false);
+                cfg_.odom_topic = c["odom_topic"].as<std::string>(cfg_.odom_topic);
+                cfg_.absolute_topic = c["absolute_topic"].as<std::string>(cfg_.absolute_topic);
+                if (c["vision"]) {
+                    vo_enabled = c["vision"]["enabled"].as<bool>(false);
+                    cfg_.vo_topic = c["vision"]["vo_topic"].as<std::string>(cfg_.vo_topic);
+                }
                 odom_enabled = c["enable_odom"].as<bool>(false);
                 absolute_enabled = c["absolute_enabled"].as<bool>(false);
             }
@@ -196,9 +201,12 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     imu_sub_  = nh_.subscribe(cfg_.imu_topic, 1000, &SlamEngine::imuCB, this);
     lidar_sub_ = nh_.subscribe(cfg_.lidar_topic, 100, &SlamEngine::lidarCB, this);
     init_pose_sub_ = nh_.subscribe("/initialpose", 10, &SlamEngine::initialPoseCB, this);
-    if (odom_enabled) odom_sub_ = nh_.subscribe("/odom", 100, &SlamEngine::odomCB, this);
-    if (vo_enabled) vo_sub_ = nh_.subscribe("/visual_odometry", 100, &SlamEngine::voCB, this);
-    if (absolute_enabled) absolute_sub_ = nh_.subscribe("/absolute_pose", 100, &SlamEngine::absoluteCB, this);
+    // 轮式里程计: legacy profile 下由 LegacyXz3dSlamInterface 独占订阅 (它无条件喂核心),
+    // 引擎这里就不再重复订阅, 免得同一份 /odom 被注入两次。
+    if (odom_enabled && !legacyProfile())
+        odom_sub_ = nh_.subscribe(cfg_.odom_topic, 100, &SlamEngine::odomCB, this);
+    if (vo_enabled) vo_sub_ = nh_.subscribe(cfg_.vo_topic, 100, &SlamEngine::voCB, this);
+    if (absolute_enabled) absolute_sub_ = nh_.subscribe(cfg_.absolute_topic, 100, &SlamEngine::absoluteCB, this);
 
     // ---- 泵 (0.02s = 50Hz): 排空核心输出 + 跑各接口挂的 tick ----
     process_timer_ = nh_.createTimer(ros::Duration(0.02), &SlamEngine::processCB, this);

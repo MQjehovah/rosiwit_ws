@@ -7,11 +7,8 @@
 // publishRealtimeGridMap) 与 1112-1211 (publishCurrPose) 与 1823-1897
 // (publishLocationInfo)。行号以 E:\workspace_slam\3d_slam 那份为准。
 //
-// **本任务只做发布侧**; 订阅侧 T6、告警码 T7、服务 T8、TF T9、丢失上报接线 T11。
-// 因此下面留了三处 seam (都标了 [T6]/[T8]/[T9]):
-//   - 原始输入点云缓存: T6 的订阅回调往里塞 (or_curr_scan_point / origin_point 的数据源)
-//   - 模式切换: T8 的服务调 setModeFromLegacy()
-//   - TF: T9 实现 sendTransform()
+// 发布侧 / 订阅侧(T6) / 告警码(T7) / 服务(T8) / TF(T9) / 丢失上报(T11) 均已实现;
+// 全部算法由 SlamEngine 里的核心提供, 本类只负责复刻旧接口的对外形状与状态粘合。
 // ============================================================================
 #pragma once
 
@@ -73,9 +70,11 @@ public:
     LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine);
 
     // ---- [T6] 订阅侧往这里喂数据 ----
-    /// 每收到一帧**原始输入**点云就调一次(点云需已转到 map 系):
+    /// 每收到一帧**原始输入**(未配准、在传感器自身坐标系)点云就调一次:
     /// 它是 `origin_point`(每帧雷达) 与定位模式下 `or_curr_scan_point` 的数据源。
-    void onRawInputCloud(const rosiwit_slam::CloudType& world_cloud, const ros::Time& stamp);
+    /// 这两个话题都以 `frame_id="map"` 发布 —— 照抄旧实现 (xz_slam_ros1_interface.cpp:1053/3115),
+    /// 即 frame_id 只是兼容标记, 点本身并未转到 map 系, 消费方需知悉。
+    void onRawInputCloud(const rosiwit_slam::CloudType& raw_cloud, const ros::Time& stamp);
     /// [T6] 记录"收到过 IMU / 激光" —— 旧实现建图分支要求两者都为真才发布 (legacy.cpp:351)
     void setInputSeen(bool imu, bool laser);
 
@@ -116,7 +115,8 @@ public:
     /// set_detect_mode; 0.5s 超时 + 100ms 重试
     bool callSetDetectMode(int mode);
     /// switch_map_pro; 1.0s 超时
-    bool callSwitchMapPro(xzrobot_ros_dependency::SwitchMap::Request& req);    /// 旧的 "重定位进行中" 标志 (legacy.cpp:1843-1853 由 isRelocalization() 驱动)
+    bool callSwitchMapPro(xzrobot_ros_dependency::SwitchMap::Request& req);
+    /// 旧的 "重定位进行中" 标志 (legacy.cpp:1843-1853 由 isRelocalization() 驱动)
     bool relocating() const { return relocating_; }
 
 private:
@@ -138,8 +138,6 @@ private:
     void publishPointMap();          // legacy.cpp:912-964
     void publishCurrPose();          // legacy.cpp:1112-1211
     void publishLocationInfo();      // legacy.cpp:1823-1897
-    // [T9] void sendTransform();    // legacy.cpp:1899-1936
-    // [T7] void timerPublishWarningCode(const ros::TimerEvent&);  // legacy.cpp:457-553
 
     SlamMode updateModeFromCore();   // 核心 pipeline mode -> 旧 SLAMMODE
     void applyModeToCore(SlamMode m);
@@ -228,7 +226,10 @@ private:
     // 它是**常驻**的 —— 没有新数据时也照发上一张 (legacy.cpp:909 无条件 publish)
     nav_msgs::OccupancyGrid realtime_grid_map_;
 
-    // 原始输入点云缓存 (T6 填)
+    // 原始输入点云缓存 (T6 填)。
+    // 写入方 = 雷达回调线程 (engine 的 raw lidar hook); 读取方 = 0.1s/0.01s 定时器线程。
+    // 当前 main 用单线程 ros::spin() 本就安全; 加锁是为了换 AsyncSpinner/多线程执行器时也安全。
+    mutable std::mutex raw_input_mtx_;
     rosiwit_slam::CloudType::Ptr raw_input_;
     ros::Time raw_input_stamp_;
 

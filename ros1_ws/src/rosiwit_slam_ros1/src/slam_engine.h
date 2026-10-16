@@ -85,10 +85,13 @@ public:
     /// [T6] 每收到一帧输入就调用 (`is_lidar=true` 表示雷达帧)。
     /// 旧接口用它复刻 legacy 的 `get_imu_data_`/`get_laser_data_` 门控 (legacy.cpp:351)。
     void setInputSeenHook(std::function<void(bool is_lidar)> hook);
-    /// [T6] 每收到一帧原始雷达点云(仍在该雷达自身坐标系)就调用 ——
-    /// 旧接口用它发 `origin_point` / 定位模式下的 `or_curr_scan_point`。
-    /// **在 ROS 回调线程上执行**。注意给的是已按 lidar_filter_num/min/max_range 处理过的云
-    /// (与交给核心的是同一份), 旧实现的 origin_point 是更原始的 CustomMsg 转换结果。
+    /// [T6] 每收到一帧雷达点云就调用 —— 旧接口用它发 `origin_point` /
+    /// 定位模式下的 `or_curr_scan_point`。
+    /// **在 ROS 回调线程上执行**。给的是已按 lidar_filter_num/min/max_range 处理过的、
+    /// **仍在雷达自身坐标系**的云 (与交给核心的是同一份)。旧实现这两个话题也用
+    /// `frame_id="map"` 发布 (xz_slam_ros1_interface.cpp:1053/3115), 薄层照抄该约定;
+    /// 即这两个"原始点"话题的点是**未配准到 map 系**的输入点, frame_id 仅作兼容标记。
+    /// 另注: 旧实现的 origin_point 是更原始的 CustomMsg 转换结果 (含 delete/z 过滤差异)。
     void setRawLidarHook(std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> hook);
 
     // ---- 输入 (公开给测试/其它接口复用) ----
@@ -103,6 +106,10 @@ private:
         std::string lidar_topic = "/velodyne_points";
         std::string body_frame = "base_link";
         std::string world_frame = "odom";
+        // 可选输入话题 (与核心 YAML 的 odom_topic / absolute_topic / vision.vo_topic 对应)
+        std::string odom_topic = "/odom";
+        std::string vo_topic = "/visual_odometry";
+        std::string absolute_topic = "/absolute_pose";
         float scan_period_ms = 100.0f;
         int lidar_filter_num = 3;
         double lidar_min_range = 0.5, lidar_max_range = 100.0;

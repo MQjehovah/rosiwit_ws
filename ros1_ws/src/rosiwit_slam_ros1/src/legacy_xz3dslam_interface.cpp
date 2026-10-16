@@ -247,12 +247,17 @@ void LegacyXz3dSlamInterface::liftTypeCB(const std_msgs::String::ConstPtr& msg) 
     }
 }
 
-void LegacyXz3dSlamInterface::onRawInputCloud(const CloudType& world_cloud, const ros::Time& stamp) {
-    raw_input_.reset(new CloudType(world_cloud));
-    raw_input_stamp_ = stamp;
-    // origin_point: 每帧雷达都发 (legacy.cpp:3169/3299/3427)
-    if (!raw_input_->empty()) {
-        point_puber_.publish(toPointCloud2(*raw_input_, kMapFrame, stamp));
+void LegacyXz3dSlamInterface::onRawInputCloud(const CloudType& raw_cloud, const ros::Time& stamp) {
+    CloudType::Ptr snapshot(new CloudType(raw_cloud));
+    {
+        std::lock_guard<std::mutex> lk(raw_input_mtx_);
+        raw_input_ = snapshot;
+        raw_input_stamp_ = stamp;
+    }
+    // origin_point: 每帧雷达都发 (legacy.cpp:3169/3299/3427)。
+    // frame_id 用 "map" 是照抄旧实现 (xz_slam_ros1_interface.cpp:3115) —— 点其实是未配准的输入点。
+    if (!snapshot->empty()) {
+        point_puber_.publish(toPointCloud2(*snapshot, kMapFrame, stamp));
     }
 }
 
@@ -313,11 +318,19 @@ void LegacyXz3dSlamInterface::publishCurrScan() {
         ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
         // curr_scan_point: 同一个点云, 但只有 debug_publish_ 才发 (legacy.cpp:1007-1009)
         if (debug_publish_) pointcloud_puber_.publish(toPointCloud2(*shaped, kMapFrame, stamp));
-        // or_curr_scan_point: 原始输入帧, 抽稀倍率 x2, **不过滤 z** (legacy.cpp:1026-1058)
-        if (raw_input_ && !raw_input_->empty()) {
-            CloudType::Ptr orc = legacyScanShape(*raw_input_, -1.0, 2);
+        // or_curr_scan_point: 原始输入帧, 抽稀倍率 x2, **不过滤 z** (legacy.cpp:1026-1058)。
+        // frame_id "map" 照抄旧实现 (xz_slam_ros1_interface.cpp:1053)。
+        CloudType::Ptr raw_snapshot;
+        ros::Time raw_stamp;
+        {
+            std::lock_guard<std::mutex> lk(raw_input_mtx_);
+            raw_snapshot = raw_input_;
+            raw_stamp = raw_input_stamp_;
+        }
+        if (raw_snapshot && !raw_snapshot->empty()) {
+            CloudType::Ptr orc = legacyScanShape(*raw_snapshot, -1.0, 2);
             if (!orc->empty())
-                or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_input_stamp_));
+                or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_stamp));
         }
     } else if (slam_mode_ == SlamMode::MAPPING) {
         // scan_f_map: 抽稀到约 2000 + z∈(0,1) (legacy.cpp:1071-1096)
