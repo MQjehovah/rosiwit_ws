@@ -37,7 +37,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('rosiwit_slam_ros2')
 
     config_default = PathJoinSubstitution(
-        [FindPackageShare('rosiwit_slam'), 'config', LaunchConfiguration('config_file')])
+        [FindPackageShare('rosiwit_slam_ros2'), 'config', LaunchConfiguration('config_file')])
     rviz_config = os.path.join(pkg_share, 'rviz', 'slam.rviz')
 
     slam_node = Node(
