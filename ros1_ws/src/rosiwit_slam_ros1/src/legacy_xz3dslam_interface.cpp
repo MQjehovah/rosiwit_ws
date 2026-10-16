@@ -86,6 +86,8 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
     initSub();
     initClients();
     initServer();
+    // ⚠ 默认关 (见 resetCoreAndCaches 的注释): 重建核心会让建图停摆
+    pnh_.param<bool>("reset_on_mode_switch", reset_on_mode_switch_, false);
 
     // [T9] TF: 旧实现构造里就建了 listener (legacy.cpp:94) 与 broadcaster
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
@@ -201,6 +203,15 @@ void LegacyXz3dSlamInterface::setModeFromLegacy(SlamMode m) {
 }
 
 void LegacyXz3dSlamInterface::resetCoreAndCaches() {
+    // ⚠ 默认关闭: 实测"重建核心"会把**建图**搞坏 —— 重建后核心不再累积地图
+    // (/cloud_map 点数与 map_area 完全不动), 连正常启动后第一次进建图都是一样
+    // (因为进建图这个动作本身就会调到这里)。在查清 init() 的可重入性之前,
+    // 默认不做重建, 保证建图可用。要复现/排查时用 _reset_on_mode_switch:=true 打开。
+    if (!reset_on_mode_switch_) {
+        std::cout << "[legacy_iface] skip core rebuild (mode switch) —— 建图优先, 见代码注释"
+                  << std::endl;
+        return;
+    }
     engine_.resetCore();   // 注意: 这里必须是 engine_.resetCore(), 不是本函数自己
     // 本层缓存一并复位 (见头文件注释)
     realtime_grid_.clear();

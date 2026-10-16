@@ -177,6 +177,8 @@ private:
     /// 重建核心 + 同步清掉**本层**的缓存。
     /// 只重建核心是不够的: 我们的 RealtimeGrid 与 /map 的常驻对象/面积都还留着上一轮,
     /// 核心清空后 worker 取不到新栅格就会继续发旧的那张 -> 表现为"切回来还有残留"。
+    /// ⚠ **默认关闭**: 实测重建会让建图停摆 (见 .cpp 里的注释), 用
+    /// `_reset_on_mode_switch:=true` 打开以便复现/排查。
     void resetCoreAndCaches();
 
     // ---- [T9] 动态 map->odom TF ----
@@ -198,6 +200,7 @@ private:
     bool debug_map_published_ = false;              // 每进一次模式只发一次 global_map
     double realtime_grid_map_area_ = 0.0;
     bool relocating_ = false;                       // 旧 relocating_ (legacy.cpp:1843-1853)
+    bool reset_on_mode_switch_ = false;             // 默认关: 重建会让建图停摆 (见 .cpp)
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= config 的 map_resolution)
     nav_msgs::OccupancyGrid global_grid_map_msg_;   // 旧 global_grid_map_ (latch 一次)
