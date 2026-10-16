@@ -22,6 +22,8 @@
 #include <ros/package.h>
 #include <yaml-cpp/yaml.h>
 
+#include <opencv2/opencv.hpp>
+
 #include "legacy_convert.h"
 
 using namespace rosiwit_slam;
@@ -41,6 +43,33 @@ const char* modeName(SlamMode m) {
         case SlamMode::LOCALIZATION: return "LOCALIZATION";
         default:                     return "UNKNOWN";
     }
+}
+
+/// 从我们刚写出的 `<base>.pgm` 生成 `<base>.jpg` 与 `<dir>/thumb.png`。
+/// 照抄旧实现 (multilayer_grid_map.cpp:284-288): jpg 与 pgm 是**同一张图**,
+/// thumb 是它的 0.2 倍缩放 (App 用来显示地图缩略图)。
+/// 旧的那批 grid_map_fused_*/grid_map_of_layer_* 属于旧的"多层栅格"模块,
+/// 现场已确认**不需要**, 故不生成。
+void writeMapThumbnails(const std::string& base) {
+    const std::string pgm = base + ".pgm";
+    const cv::Mat img = cv::imread(pgm, cv::IMREAD_GRAYSCALE);
+    if (img.empty()) {
+        ROS_WARN_STREAM("[legacy_iface] cannot read " << pgm << " -> skip jpg/thumb");
+        return;
+    }
+    if (!cv::imwrite(base + ".jpg", img)) {
+        ROS_WARN_STREAM("[legacy_iface] imwrite failed: " << base + ".jpg");
+    }
+    cv::Mat thumb;
+    cv::resize(img, thumb, cv::Size(0, 0), 0.2, 0.2);
+    const size_t slash = base.find_last_of('/');
+    const std::string dir = (slash == std::string::npos) ? std::string(".") : base.substr(0, slash);
+    const std::string tpath = dir + "/thumb.png";
+    if (!cv::imwrite(tpath, thumb)) {
+        ROS_WARN_STREAM("[legacy_iface] imwrite failed: " << tpath);
+    }
+    std::cout << "[legacy_iface] wrote " << base << ".jpg and " << tpath << " (thumb "
+              << thumb.cols << "x" << thumb.rows << ")" << std::endl;
 }
 } // namespace
 
@@ -868,6 +897,8 @@ bool LegacyXz3dSlamInterface::handleStopMap(
     } else {
         std::cout << "[legacy_iface] saved grid map: " << base << ".pgm / " << base
                   << ".yaml (resolution=" << grid_resolution_ << ")" << std::endl;
+        // 旧实现还会从同一张灰度图导出 <base>.jpg 与 <dir>/thumb.png (App 的缩略图)
+        writeMapThumbnails(base);
     }
 
     std::string charging_json;

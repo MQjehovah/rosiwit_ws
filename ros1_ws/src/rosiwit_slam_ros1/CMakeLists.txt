@@ -21,6 +21,9 @@ find_package(catkin REQUIRED COMPONENTS
 add_service_files(FILES SaveMap.srv LoadMap.srv SaveGridMap.srv SetSlamMode.srv)
 generate_messages(DEPENDENCIES std_msgs geometry_msgs)
 
+# 生成 map.jpg / thumb.png 要用 OpenCV (核心已依赖它; 这里显式声明, 供薄层直接用)
+find_package(OpenCV REQUIRED)
+
 # 本包是纯接口层(仅一个可执行 + 一个内部静态库), 不对外导出头文件, 因此不声明 INCLUDE_DIRS
 catkin_package(
     CATKIN_DEPENDS roscpp sensor_msgs nav_msgs geometry_msgs std_msgs std_srvs
@@ -63,9 +66,9 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     # T6 追加 src/legacy_subscribers.cpp 等
 )
 add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
-target_include_directories(rosiwit_slam_ros1_lib PUBLIC src ${catkin_INCLUDE_DIRS})
+target_include_directories(rosiwit_slam_ros1_lib PUBLIC src ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 target_compile_options(rosiwit_slam_ros1_lib PRIVATE -pipe -pthread)
-target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam)
+target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam ${OpenCV_LIBS})
 add_dependencies(rosiwit_slam_ros1_lib ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 # ==================== ROS1 节点 (薄) ====================
