@@ -86,10 +86,12 @@ echo "  (轮询 /slam/info, 最多约 2 分钟等定位收敛)"
 info=""; ls_=""; ss=""
 for i in $(seq 1 8); do
     sleep 2
-    # 注意 timeout 不能太紧: rostopic echo 建连+打印需要时间, 卡到 5s 会拿到被截断的输出
-    info="$(timeout 15 rostopic echo -n1 /slam/info 2>/dev/null)"
-    ss=$(echo "$info" | awk '/^slam_state/{print $2}')
-    ls_=$(echo "$info" | awk '/^location_status/{print $2}')
+    # 先落到文件再解析: 直接把 rostopic echo 的输出塞进 $(...) 在本机偶发拿到不完整的
+    # 文本(slam_state 有、location_status 没有) —— 落文件读取更稳。
+    timeout 15 rostopic echo -n1 /slam/info > /tmp/lorun_info.txt 2>&1
+    info="$(cat /tmp/lorun_info.txt)"
+    ss=$(awk '/^slam_state/{print $2}' /tmp/lorun_info.txt)
+    ls_=$(awk '/^location_status/{print $2}' /tmp/lorun_info.txt)
     if [ "${ls:-}" = "0" ]; then break; fi
     echo "    t+$((i*2))s: slam_state=${ss:-<无>} location_status=${ls:-<无>}"
 done
@@ -97,6 +99,8 @@ if [ "${ls:-}" = "0" ] && [ "${ss:-}" = "1" ]; then
     ok "/slam/info 出现: slam_state=1, location_status=0 (定位成功)"
 else
     no "/slam/info: slam_state=${ss:-?} location_status=${ls:-?} (期望 1/0)"
+    echo "      原始输出(便于诊断):"
+    sed 's/^/        | /' /tmp/lorun_info.txt 2>/dev/null | head -12
 fi
 pose="$(timeout 12 rostopic echo -n1 /curr_localization_pose 2>/dev/null)"
 if echo "$pose" | grep -q 'frame_id: "map"'; then
