@@ -77,7 +77,22 @@ std::string writeLegacyOverrideYaml(const std::string& base_yaml,
         ROS_ERROR_STREAM("[slam_engine] cannot write override yaml: " << out_path);
         return base_yaml;   // 写不出来就退回基底, 至少不把 core 指向不存在的文件
     }
-    if (in.good()) out << in.rdbuf();
+    if (in.good()) {
+        // 写外参时**跳过基底里原有的 r_il/t_il 行**: 同一个键在 YAML 里出现两次属重复键,
+        // yaml-cpp 取哪一份是未定义行为 (实测就出现了"注入成功但生效值还是老值")。
+        // 先丢掉旧行, 再在末尾写推导值, 保证唯一。
+        std::string line;
+        while (std::getline(in, line)) {
+            if (write_extrinsic) {
+                const size_t b = line.find_first_not_of(" \t");
+                if (b != std::string::npos) {
+                    const std::string t = line.substr(b);
+                    if (t.rfind("r_il:", 0) == 0 || t.rfind("t_il:", 0) == 0) continue;
+                }
+            }
+            out << line << "\n";
+        }
+    }
     out << "\n# --- injected by rosiwit_slam_ros1 (legacy profile, M8) ---\n"
            "# 旧实现的地图读写都是 <dir>/map.pcd|.xzmap|.pgm|.yaml 的绝对路径, 而核心的\n"
            "# PcdMapManager 是 map_dir_ + \"/\" + name; 置成 \"/\" 让拼接退化为绝对路径。\n"
@@ -152,7 +167,8 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
     double acc_scale = 1.0;                  // 核心默认 (fast_lio2/map_builder/commons.h:47)
     std::string r_il = "(缺省)", t_il = "(缺省)";
     try {
-        const YAML::Node c = YAML::LoadFile(base_yaml);
+        // **读注入后的文件**: 那才是核心实际拿到的配置 (基底里的 r_il/t_il 可能已被覆盖)。
+        const YAML::Node c = YAML::LoadFile(injected_yaml);
         if (c && c["acc_scale"]) acc_scale = c["acc_scale"].as<double>(acc_scale);
         if (c && c["r_il"]) r_il = YAML::Dump(c["r_il"]);
         if (c && c["t_il"]) t_il = YAML::Dump(c["t_il"]);
