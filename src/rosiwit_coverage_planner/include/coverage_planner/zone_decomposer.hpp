@@ -9,8 +9,8 @@
 #include <cmath>
 #include <algorithm>
 #include <memory>
-#include "nav_msgs/msg/occupancy_grid.hpp"
-#include "geometry_msgs/msg/point.hpp"
+#include "coverage_planner/msg_types.hpp"
+#include "coverage_planner/msg_types.hpp"
 #include "opencv2/opencv.hpp"
 
 namespace coverage_planner
@@ -150,7 +150,7 @@ public:
      * @return DecompositionResult 分解结果
      */
     DecompositionResult decompose(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const ZoneDecomposerConfig & config = ZoneDecomposerConfig());
 
     /**
@@ -162,7 +162,7 @@ public:
      * @return std::vector<cv::Point> 栅格路径点
      */
     std::vector<cv::Point> getZonePath(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const Zone & zone,
         int scan_direction);
 
@@ -193,7 +193,7 @@ private:
      * @return std::vector<Zone> 连通域列表
      */
     std::vector<Zone> findConnectedComponents(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         int min_area);
     
     /**
@@ -207,7 +207,7 @@ private:
      * @return std::vector<cv::Point> 区域内的所有点
      */
     std::vector<cv::Point> floodFill(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         int start_x,
         int start_y,
         int label,
@@ -224,7 +224,7 @@ private:
      */
     int computeOptimalScanDirection(
         const Zone & zone,
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
     
     /**
      * @brief 执行PCA分析
@@ -250,7 +250,7 @@ private:
      */
     std::vector<ConnectionChannel> findConnectionChannels(
         const std::vector<Zone> & zones,
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         int search_radius);
     
     /**
@@ -280,7 +280,7 @@ private:
      * @brief 检查点是否在地图范围内
      */
     bool isInBounds(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         int x, int y) const
     {
         return x >= 0 && x < static_cast<int>(map.info.width) &&
@@ -291,7 +291,7 @@ private:
      * @brief 检查点是否为空闲区域
      */
     bool isFree(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         int x, int y,
         int threshold = 50) const
     {
@@ -316,7 +316,7 @@ private:
     bool areNeighbors(
         const Zone & zone_a,
         const Zone & zone_b,
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         int search_radius);
 };
 

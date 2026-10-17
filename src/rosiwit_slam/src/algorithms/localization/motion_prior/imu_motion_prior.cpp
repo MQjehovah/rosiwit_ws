@@ -109,6 +109,10 @@ void ImuMotionPrior::onOdom(const PoseStamped& odom) {
         if (dt > 1e-3) {
             const M3D dR = odom.rot * m_odom.rot.transpose();
             m_odom_yaw_rate = std::atan2(dR(1, 0), dR(0, 0)) / dt;
+            // 平移滑移门控: 轮子打滑/里程毛刺会给出物理上不可能的速度, 整包丢弃
+            // (只靠偏航一致性挡不住平移打滑: 直行打滑时 yaw_rate 两边都是 0)
+            const double v_odom = (odom.trans - m_odom.trans).norm() / dt;
+            if (m_cfg.max_odom_speed > 0 && v_odom > m_cfg.max_odom_speed) return;
         }
     }
     m_odom = odom;

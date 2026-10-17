@@ -10,6 +10,7 @@
 #include "algorithms/localization/local_map/keyframe_submap_provider.h"
 #include "algorithms/localization/motion_prior/constant_velocity_prior.h"
 #include "algorithms/localization/motion_prior/imu_motion_prior.h"
+#include "algorithms/localization/motion_prior/ekf_motion_prior.h"
 #include "algorithms/localization/global/scan_context_global_localizer.h"
 #include "algorithms/localization/global/bbs_global_localizer.h"
 #include "algorithms/localization/global/fpfh_ransac_global_localizer.h"
@@ -38,6 +39,7 @@ std::unique_ptr<ILocalMapProvider> LocalizationFactory::createLocalMapProvider(c
 std::unique_ptr<IMotionPrior> LocalizationFactory::createMotionPrior(const std::string& name) {
     if (name == "constant_velocity") return std::make_unique<ConstantVelocityPrior>();
     if (name == "imu")               return std::make_unique<ImuMotionPrior>();
+    if (name == "imu_ekf")           return std::make_unique<EkfMotionPrior>();
     return nullptr;
 }
 
@@ -62,7 +64,7 @@ std::unique_ptr<IMapMaintainer> LocalizationFactory::createMapMaintainer(const s
 
 std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp", "p2p_icp", "vgicp", "ndt2d"}; }
 std::vector<std::string> LocalizationFactory::listLocalMapProviders() { return {"global", "radius_submap", "keyframe_submap"}; }
-std::vector<std::string> LocalizationFactory::listMotionPriors()      { return {"constant_velocity", "imu"}; }
+std::vector<std::string> LocalizationFactory::listMotionPriors()      { return {"constant_velocity", "imu", "imu_ekf"}; }
 std::vector<std::string> LocalizationFactory::listGlobalLocalizers()  { return {"none", "scan_context", "bbs", "fpfh_ransac"}; }
 std::vector<std::string> LocalizationFactory::listMonitors()          { return {"threshold", "windowed"}; }
 std::vector<std::string> LocalizationFactory::listMapMaintainers()    { return {"overlay"}; }

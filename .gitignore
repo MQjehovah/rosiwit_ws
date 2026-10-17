@@ -18,3 +18,10 @@ AGENTS.md
 
 docs/map/
 data/
+# catkin 生成物 (catkin_make)
+devel/
+ros1_ws/.catkin_workspace
+ros1_ws/src/CMakeLists.txt
+
+# 厂商依赖包(66MB, 含二进制/参数), 不作为源码入库; 需要时单独分发
+ros1_ws/src/xzrobot_ros_dependency/

@@ -25,9 +25,9 @@ protected:
         config_.direction_optimization = 2;
     }
 
-    nav_msgs::msg::OccupancyGrid createEmptyMap(int width, int height, double resolution = 0.1)
+    coverage_planner::GridMap createEmptyMap(int width, int height, double resolution = 0.1)
     {
-        nav_msgs::msg::OccupancyGrid map;
+        coverage_planner::GridMap map;
         map.info.width = width;
         map.info.height = height;
         map.info.resolution = resolution;
@@ -36,15 +36,14 @@ protected:
         map.info.origin.position.z = 0.0;
         map.info.origin.orientation.w = 1.0;
         map.header.frame_id = "map";
-        map.header.stamp.sec = 0;
-        map.header.stamp.nanosec = 0;
+        map.header.stamp = 0.0;
         map.data.resize(width * height, 0);  // 全部空闲
         return map;
     }
 
-    nav_msgs::msg::OccupancyGrid createMapWithObstacles(int width, int height)
+    coverage_planner::GridMap createMapWithObstacles(int width, int height)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
 
         // 添加多个障碍物
         for (int y = height/3; y < height/3 + height/6; ++y) {
@@ -62,9 +61,9 @@ protected:
         return map;
     }
 
-    geometry_msgs::msg::Pose createStartPose(double x, double y)
+    coverage_planner::Pose createStartPose(double x, double y)
     {
-        geometry_msgs::msg::Pose pose;
+        coverage_planner::Pose pose;
         pose.position.x = x;
         pose.position.y = y;
         pose.position.z = 0.0;
@@ -82,8 +81,8 @@ TEST_F(IntegrationTest, ZigzagEmptyMapCoverage100Percent)
     auto planner = context_->selectPlanner("zigzag");
     ASSERT_NE(planner, nullptr);
 
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -98,8 +97,8 @@ TEST_F(IntegrationTest, ZigzagObstacleMapCoverage90Percent)
     auto planner = context_->selectPlanner("zigzag");
     ASSERT_NE(planner, nullptr);
 
-    nav_msgs::msg::OccupancyGrid map = createMapWithObstacles(50, 50);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.0, 1.0);
+    coverage_planner::GridMap map = createMapWithObstacles(50, 50);
+    coverage_planner::Pose start_pose = createStartPose(1.0, 1.0);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -114,8 +113,8 @@ TEST_F(IntegrationTest, SpiralEmptyMapCoverage100Percent)
     auto planner = context_->selectPlanner("spiral");
     ASSERT_NE(planner, nullptr);
 
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -130,8 +129,8 @@ TEST_F(IntegrationTest, SpiralObstacleMapCoverage95Percent)
     auto planner = context_->selectPlanner("spiral");
     ASSERT_NE(planner, nullptr);
 
-    nav_msgs::msg::OccupancyGrid map = createMapWithObstacles(50, 50);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.0, 1.0);
+    coverage_planner::GridMap map = createMapWithObstacles(50, 50);
+    coverage_planner::Pose start_pose = createStartPose(1.0, 1.0);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -143,8 +142,8 @@ TEST_F(IntegrationTest, SpiralObstacleMapCoverage95Percent)
 // 测试5：算法切换功能
 TEST_F(IntegrationTest, AlgorithmSwitch)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
 
     // 切换到弓字形
     auto zigzag_planner = context_->selectPlanner("zigzag");
@@ -170,8 +169,8 @@ TEST_F(IntegrationTest, PathContinuity)
 {
     auto planner = context_->selectPlanner("zigzag");
 
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -196,8 +195,8 @@ TEST_F(IntegrationTest, PathLengthReasonable)
 {
     auto planner = context_->selectPlanner("zigzag");
 
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -216,8 +215,8 @@ TEST_F(IntegrationTest, TurnCountReasonable)
 {
     auto planner = context_->selectPlanner("zigzag");
 
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -234,7 +233,7 @@ TEST_F(IntegrationTest, ComplexMapHandling)
     auto planner = context_->selectPlanner("spiral");
 
     // 创建复杂的L形地图
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
 
     // 添加L形障碍物
     for (int y = 0; y < 25; ++y) {
@@ -248,7 +247,7 @@ TEST_F(IntegrationTest, ComplexMapHandling)
         }
     }
 
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -265,8 +264,8 @@ TEST_F(IntegrationTest, DifferentResolution)
 
     for (double res : resolutions) {
         auto planner = context_->selectPlanner("zigzag");
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50, res);
-        geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+        coverage_planner::GridMap map = createEmptyMap(50, 50, res);
+        coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
 
         PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -280,10 +279,10 @@ TEST_F(IntegrationTest, StartPoseAtBoundary)
 {
     auto planner = context_->selectPlanner("zigzag");
 
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
 
     // 起点在地图边缘（考虑机器人半径）
-    geometry_msgs::msg::Pose start_pose = createStartPose(0.5, 0.5);
+    coverage_planner::Pose start_pose = createStartPose(0.5, 0.5);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 
@@ -296,8 +295,8 @@ TEST_F(IntegrationTest, VerySmallMap)
 {
     auto planner = context_->selectPlanner("zigzag");
 
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(10, 10);
-    geometry_msgs::msg::Pose start_pose = createStartPose(0.5, 0.5);
+    coverage_planner::GridMap map = createEmptyMap(10, 10);
+    coverage_planner::Pose start_pose = createStartPose(0.5, 0.5);
 
     PlannerResult result = planner->plan(map, start_pose, config_);
 

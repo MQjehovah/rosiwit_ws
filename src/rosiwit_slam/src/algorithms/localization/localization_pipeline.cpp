@@ -4,8 +4,12 @@
 #include "algorithms/localization/localization_utils.h"
 #include "io/xzmap_reader.h"
 #include "algorithms/map_store/map_store_factory.h"
+#include <cmath>
+#include <Eigen/Geometry>
 #include <iostream>
 #include <fstream>
+#include <algorithm>
+#include <chrono>
 #include <pcl/io/pcd_io.h>
 
 #ifndef YAML_CPP_DISABLED
@@ -47,6 +51,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (mc) {
         m_matcher_cfg.voxel_resolution        = getv<double>(mc, "voxel_resolution", m_matcher_cfg.voxel_resolution);
         m_matcher_cfg.max_iterations          = getv<int>(mc, "max_iterations", m_matcher_cfg.max_iterations);
+        m_matcher_cfg.min_match_points        = getv<int>(mc, "min_match_points", m_matcher_cfg.min_match_points);
         m_matcher_cfg.max_correspondence_dist = getv<double>(mc, "max_correspondence_dist", m_matcher_cfg.max_correspondence_dist);
         m_matcher_cfg.transformation_epsilon  = getv<double>(mc, "transformation_epsilon", m_matcher_cfg.transformation_epsilon);
         m_matcher_cfg.inlier_dist             = getv<double>(mc, "inlier_dist", m_matcher_cfg.inlier_dist);
@@ -93,6 +98,12 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_motion_cfg.max_dt  = getv<double>(mpc, "max_dt", m_motion_cfg.max_dt);
         m_motion_cfg.max_vel = getv<double>(mpc, "max_vel", m_motion_cfg.max_vel);
         m_motion_cfg.use_odom = getv<bool>(mpc, "use_odom", m_motion_cfg.use_odom);
+        m_motion_cfg.max_odom_speed =
+            getv<double>(mpc, "max_odom_speed", m_motion_cfg.max_odom_speed);
+        m_motion_cfg.ekf_q_v     = getv<double>(mpc, "ekf_q_v", m_motion_cfg.ekf_q_v);
+        m_motion_cfg.ekf_r_odom  = getv<double>(mpc, "ekf_r_odom", m_motion_cfg.ekf_r_odom);
+        m_motion_cfg.ekf_r_match = getv<double>(mpc, "ekf_r_match", m_motion_cfg.ekf_r_match);
+        m_motion_cfg.ekf_chi2    = getv<double>(mpc, "ekf_chi2", m_motion_cfg.ekf_chi2);
         m_motion_cfg.slip_yaw_thresh = getv<double>(mpc, "slip_yaw_thresh", m_motion_cfg.slip_yaw_thresh);
         m_motion_cfg.imu_calib_samples = getv<int>(mpc, "imu_calib_samples", m_motion_cfg.imu_calib_samples);
         m_motion_cfg.static_gyro_std = getv<double>(mpc, "static_gyro_std", m_motion_cfg.static_gyro_std);
@@ -109,6 +120,10 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (gc) {
         m_global_cfg.min_score          = getv<double>(gc, "min_score", m_global_cfg.min_score);
         m_global_cfg.top_k              = getv<int>(gc, "top_k", m_global_cfg.top_k);
+        m_global_cfg.reloc_accept_score =
+            getv<double>(gc, "reloc_accept_score", m_global_cfg.reloc_accept_score);
+        m_ambiguity_margin = getv<double>(gc, "ambiguity_margin", m_ambiguity_margin);
+        m_reseed_radius    = getv<double>(gc, "reseed_radius", m_reseed_radius);
         m_global_cfg.retry_interval     = getv<int>(gc, "retry_interval", m_global_cfg.retry_interval);
         m_global_cfg.voxel_resolution   = getv<double>(gc, "voxel_resolution", m_global_cfg.voxel_resolution);
         m_global_cfg.icp_max_corr_dist  = getv<double>(gc, "icp_max_corr_dist", m_global_cfg.icp_max_corr_dist);
@@ -121,6 +136,24 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_global_cfg.sc_dist_thresh     = getv<double>(gc, "sc_dist_thresh", m_global_cfg.sc_dist_thresh);
         m_global_cfg.sc_candidate_ratio = getv<double>(gc, "sc_candidate_ratio", m_global_cfg.sc_candidate_ratio);
         m_global_cfg.bbs_z_min          = getv<double>(gc, "bbs_z_min", m_global_cfg.bbs_z_min);
+                // 安装矩阵由 ROS 层注入在 override YAML 的**顶层**(与 r_il/map_directory 同级);
+    // 这里同时接受 localization.global 与顶层两种位置(顶层优先取不到时回退)。
+    YAML::Node mr_node = gc["bbs_mount_r"];
+    if (!mr_node) {
+        try {
+            YAML::Node root = YAML::LoadFile(config_path);
+            if (root["bbs_mount_r"]) mr_node = root["bbs_mount_r"];
+        } catch (const std::exception&) {}
+    }
+    if (mr_node && mr_node.size() == 9) {
+            for (size_t bi = 0; bi < 9; ++bi)
+                m_global_cfg.bbs_mount_r[bi] = mr_node[bi].as<double>();
+        } else {
+            m_global_cfg.bbs_mount_r = {{1,0,0,0,1,0,0,0,1}};
+        }
+m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_global_cfg.bbs_mount_roll_deg);
+        m_global_cfg.bbs_mount_pitch_deg = getv<double>(gc, "bbs_mount_pitch_deg", m_global_cfg.bbs_mount_pitch_deg);
+        m_global_cfg.bbs_mount_yaw_deg = getv<double>(gc, "bbs_mount_yaw_deg", m_global_cfg.bbs_mount_yaw_deg);
         m_global_cfg.bbs_z_max          = getv<double>(gc, "bbs_z_max", m_global_cfg.bbs_z_max);
         m_global_cfg.bbs_theta_bins     = getv<int>(gc, "bbs_theta_bins", m_global_cfg.bbs_theta_bins);
         m_global_cfg.bbs_max_levels     = getv<int>(gc, "bbs_max_levels", m_global_cfg.bbs_max_levels);
@@ -135,6 +168,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (moc) {
         m_monitor_cfg.enabled            = getv<bool>(moc, "enabled", m_monitor_cfg.enabled);
         m_monitor_cfg.credible_fitness   = getv<double>(moc, "credible_fitness", m_monitor_cfg.credible_fitness);
+        m_monitor_cfg.mediocre_patience  = getv<int>(moc, "mediocre_patience", m_monitor_cfg.mediocre_patience);
         m_monitor_cfg.lost_fitness       = getv<double>(moc, "lost_fitness", m_monitor_cfg.lost_fitness);
         m_monitor_cfg.lost_patience      = getv<int>(moc, "lost_patience", m_monitor_cfg.lost_patience);
         m_monitor_cfg.lost_patience_low  = getv<int>(moc, "lost_patience_low", m_monitor_cfg.lost_patience_low);
@@ -250,6 +284,13 @@ bool LocalizationPipeline::init(const std::string& config_path) {
 }
 
 LocalizationPipeline::~LocalizationPipeline() {
+    // 后台构建线程: 先停再收 (worker 可能正持有 45s 的构建)
+    {
+        std::lock_guard<std::mutex> lk(m_reloc_mu);
+        m_reloc_stop = true;
+    }
+    m_reloc_cv.notify_all();
+    if (m_reloc_thread.joinable()) m_reloc_thread.join();
     // 非破坏性: 叠加层单独落盘, 原图不改
     if (m_maintainer && !m_map_path.empty()) m_maintainer->save(m_map_path + ".overlay.pcd");
 }
@@ -265,30 +306,70 @@ std::string LocalizationPipeline::describe() const {
 }
 
 void LocalizationPipeline::setMap(const std::string& map_name) {
+    // 分段计时: /switch_map 曾实测 48s, 必须知道钱花在哪 (每阶段一行, 只在切图时打)
+    const auto t_total0 = std::chrono::steady_clock::now();
+    auto stage_ms = [](const std::chrono::steady_clock::time_point& t) {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+    };
+    std::string timing;
+    auto mark = [&timing, &t_total0, &stage_ms](const char* name) {
+        timing += std::string(" ") + name + "=" + std::to_string(stage_ms(t_total0));
+    };
     m_status = INIT;
     m_initialized = false;
     m_has_cached_target = false;
     m_map_path = map_name;
     m_map.reset(new CloudType());
+    // ⚠ xzmap 只解析一次(46MB 手写 JSON 解析单次数秒, 之前回退路径解析两遍,
+    //    /switch_map 被直接拖慢一倍): 回退路径解析出的关键帧同时供两处使用 ——
+    //    重建基准点云 + setKeyframes; PCD 路径下后面才第一次读 xzmap。
+    std::vector<io::XzMapKeyframe> kfs;
     if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
-        std::cerr << "[LocPipeline] failed to load map: " << map_name << std::endl;
-        m_map.reset();
-        return;
+        // **没有 PCD 的兼容回退**: 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml,
+        // 关键帧里自带点 —— 直接从关键帧重建基准点云。
+        // 这样"切图/定位"就**不再要求 PCD 文件** (旧实现 localiza_ptr_->run("<dir>/map")
+        // 也只是读它自己那份 xzmap, 从来不看 PCD)。
+        m_map->clear();
+        if (io::readXzMap(map_name + ".xzmap", kfs) && !kfs.empty()) {
+            for (const auto& kf : kfs) {
+                for (const auto& p : kf.points) {
+                    PointType pt;   // PCL 1.8 无 (x,y,z) 三参构造, 逐字段赋值
+                    pt.x = p.x();
+                    pt.y = p.y();
+                    pt.z = p.z();
+                    m_map->push_back(pt);
+                }
+            }
+            std::cout << "[LocPipeline] no PCD at " << map_name << "; rebuilt base map from "
+                      << map_name << ".xzmap (" << m_map->size() << " pts, " << kfs.size()
+                      << " kfs)" << std::endl;
+        } else {
+            std::cerr << "[LocPipeline] failed to load map: " << map_name << std::endl;
+            m_map.reset();
+            return;
+        }
+    } else {
+        std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)"
+                  << std::endl;
     }
-    std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)" << std::endl;
+    mark("parse");
     if (m_local_map) m_local_map->setMap(map_name, m_map);
     m_planar.setMap(m_map);
+    mark("locmap_planar");
     if (m_store) {
         m_store->buildFromCloud(m_map);
         if (m_matcher) m_matcher->setStore(m_store.get());
         m_planar.setStore(m_store.get());
     }
+    mark("store");
     if (m_maintainer) m_maintainer->setBaseMap(map_name, m_map);
+    mark("maintainer");
 
-    // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用
+    // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用。
+    // 回退路径已经在上面解析过 kfs, 直接复用 (省一整遍 46MB 解析); PCD 路径这里才第一次读。
     if (m_local_map) {
-        std::vector<io::XzMapKeyframe> kfs;
-        if (io::readXzMap(map_name + ".xzmap", kfs) && !kfs.empty()) {
+        if (kfs.empty()) io::readXzMap(map_name + ".xzmap", kfs);
+        if (!kfs.empty()) {
             std::vector<LocalKeyframe> lkfs;
             lkfs.reserve(kfs.size());
             for (const auto& kf : kfs) {
@@ -299,7 +380,16 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
                               Eigen::AngleAxisd(kf.pose.roll, V3D::UnitX()).toRotationMatrix();
                 lk.cloud.reset(new CloudType());
                 lk.cloud->reserve(kf.points.size());
-                for (const auto& p : kf.points) lk.cloud->push_back(PointType(p.x(), p.y(), p.z()));
+                // 注意: PCL 1.8 (melodic/18.04) 的 pcl::PointXYZINormal 没有 (x,y,z)
+                // 三参构造 (PCL 1.12+ 才有), 因此逐字段赋值。默认构造已把 intensity /
+                // curvature / normal_* 置零, data[3] 置 1, 与新版本三参构造语义一致。
+                for (const auto& p : kf.points) {
+                    PointType pt;
+                    pt.x = p.x();
+                    pt.y = p.y();
+                    pt.z = p.z();
+                    lk.cloud->push_back(pt);
+                }
                 lkfs.push_back(std::move(lk));
             }
             m_local_map->setKeyframes(lkfs);
@@ -307,14 +397,70 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
                       << " keyframes from " << map_name << ".xzmap" << std::endl;
         }
     }
-    if (m_relocalizer && m_relocalizer_name != "none")
-        m_relocalizer->setMap(map_name, m_map);
+    mark("kfs");
+    // 全局重定位库**后台**预建: FPFH 对全图算特征+建树实测 ~45s(aarch64)。
+    // 演进史: ①最初 setMap 里同步建(切图 48.5s) ②改懒建(切图 3.2s, 但构建被推迟到
+    // 首次冷启动的 onLidar 回调里 —— 2026-10-17 推行丢失事故: 判丢后回调内构建
+    // 44.6s, 单线程 spinner 冻结, 雷达停处理+界面冻住) ③现在: setMap 后立即后台
+    // 线程构建, 切图依旧 3s, 回调永不阻塞, 构建完成前冷启动按节流自动重试。
+    {
+        std::lock_guard<std::mutex> lk(m_reloc_mu);
+        m_reloc_request = true;
+        m_reloc_ready = false;
+        m_reloc_map_snap = m_map;
+        m_reloc_path_snap = m_map_path;
+    }
+    if (!m_reloc_thread.joinable())
+        m_reloc_thread = std::thread([this] { relocBuildWorker(); });
+    m_reloc_cv.notify_all();
+    mark("relocalizer_bg");
+    std::cout << "[LocPipeline] setMap profile(ms, 累计):" << timing
+              << " total=" << std::to_string(stage_ms(t_total0)) << std::endl;
+}
+
+void LocalizationPipeline::relocBuildWorker() {
+    std::unique_lock<std::mutex> lk(m_reloc_mu);
+    while (!m_reloc_stop) {
+        m_reloc_cv.wait(lk, [this] { return m_reloc_stop || m_reloc_request; });
+        if (m_reloc_stop) break;
+        const CloudType::Ptr map = m_reloc_map_snap;
+        const std::string path = m_reloc_path_snap;
+        m_reloc_request = false;
+        lk.unlock();
+        m_reloc_building.store(true);
+        const auto t0 = std::chrono::steady_clock::now();
+        bool ok = false;
+        if (m_relocalizer && m_relocalizer_name != "none" && map && !map->empty())
+            ok = m_relocalizer->setMap(path, map);
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0).count();
+        lk.lock();
+        m_reloc_building.store(false);
+        // 构建期间又切图(request 已再次置位)则快照已更新, 循环继续重建
+        m_reloc_ready = ok && m_reloc_map_snap == map;
+        std::cout << "[LocPipeline] global reloc map built in background, " << ms
+                  << "ms ok=" << ok << std::endl;
+    }
+}
+
+bool LocalizationPipeline::ensureRelocalizerMap() {
+    if (!m_relocalizer || m_relocalizer_name == "none" || !m_map) return false;
+    if (m_reloc_building.load()) return false;   // 构建中: 本帧跳过(回调绝不阻塞)
+    std::lock_guard<std::mutex> lk(m_reloc_mu);
+    if (m_reloc_ready && m_reloc_map_snap == m_map) return true;
+    // 未建或地图已换: 置请求让 worker 建, 立刻返回 false
+    m_reloc_request = true;
+    m_reloc_map_snap = m_map;
+    m_reloc_path_snap = m_map_path;
+    m_reloc_cv.notify_all();
+    return false;
 }
 
 void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
     m_pose = pose;
     if (m_prior) m_prior->reset(pose);
     if (m_monitor) m_monitor->reset();
+    m_mediocre_streak = 0;
     m_corr_prev_valid = false;
     m_consistent_cnt = 0;
     m_initialized = true;
@@ -327,12 +473,30 @@ void LocalizationPipeline::onImu(const IMUSample& s) {
     if (m_prior) m_prior->onImu(s);
 }
 
+void LocalizationPipeline::requestRelocalization() {
+    // 上层 /global_localization 触发: 强制回到未定位状态, 下一次 onLidar 走冷启动分支
+    // (relocalizer=bbs 时即全局检索; =none 时退化为 tryBoundedRecovery 的有界局部重锁)
+    m_status = LOST;
+    m_initialized = false;
+    m_reloc_cooldown = 0;
+    std::cout << "[LocPipeline] relocalization requested by service" << std::endl;
+}
+
 void LocalizationPipeline::onOdom(const PoseStamped& odom) {
     if (m_prior) m_prior->onOdom(odom);
 }
 
 CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     CloudType::Ptr target = m_local_map->getLocalMap(pose);
+    // [LocProbe] 诊断: 局部地图到底取到多少点 (NO Effective Points 排查)
+    {
+        static int probe_n = 0;
+        if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
+            std::cout << "[LocProbe] local_map=" << (target ? target->size() : 0)
+                      << " pose=(" << pose.trans.x() << ", " << pose.trans.y() << ")"
+                      << " local_map_name=" << m_local_map_name << std::endl;
+        }
+    }
     if (m_maintainer) {
         CloudType::Ptr ov = m_maintainer->getOverlay(pose);
         if (ov && !ov->empty()) {
@@ -355,13 +519,26 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     if (!target || target->empty()) return false;
     m_matcher->setTarget(target);
 
+    // 27 次多起点 GICP 单帧可耗 3~13s; 之前没有预算/提前退出, 一旦位姿偏了
+    // 每帧都全量跑满, 单线程 spinner 被独占 -> /relocation 等服务排队"很慢"。
+    // 现在两条停止条件: 覆盖率已达标(0.97)即停 / 墙钟预算(3s)耗尽即停。
+    const auto t0 = std::chrono::steady_clock::now();
     const double offs[3] = {-1.5, 0.0, 1.5};
     const double yaws[3] = {-10.0, 0.0, 10.0};
-    double best_fit = m_accept_cfg.min_coverage;
+    // 达标线用"健康线"(credible 0.75)而非最低接受线(min_coverage 0.35):
+    // 2026-10-17 推行复测死循环 —— 判丢后 bounded recovery 以 0.73"成功"(>0.35)
+    // -> 回到僵尸态 -> 10s 后再判丢 -> 再截胡, FPFH 冷启动永远轮不到, 位姿/点云
+    // 十几秒跳一次。恢复不出健康分数 = 失败, 放行给全局重定位。
+    double best_fit = std::max(m_accept_cfg.min_coverage,
+                               m_monitor_cfg.enabled ? m_monitor_cfg.credible_fitness
+                                                     : m_accept_cfg.min_coverage);
     PoseStamped best;
     bool found = false;
-    for (double dx : offs)
-        for (double dy : offs)
+    bool stop = false;
+    for (double dx : offs) {
+        if (stop) break;
+        for (double dy : offs) {
+            if (stop) break;
             for (double yd : yaws) {
                 PoseStamped g = m_pose;
                 g.trans += V3D(dx, dy, 0.0);
@@ -372,12 +549,23 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
                     best = r.pose;
                     found = true;
                 }
+                const double ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - t0).count();
+                if (best_fit >= 0.97 || ms > 3000.0) { stop = true; break; }
             }
-    if (!found) return false;
+        }
+    }
+    if (!found) {
+        // 失败可见: 之前静默返回, 现场看不出"有界恢复试过但没到健康线"
+        std::cout << "[LocPipeline] bounded recovery failed (bar=" << best_fit
+                  << ") -> fall through to global relocalization" << std::endl;
+        return false;
+    }
     m_pose = best;
     m_pose.time = best.time;
     m_prior->reset(m_pose);
     m_monitor->reset();
+    m_mediocre_streak = 0;
     m_has_cached_target = false;
     m_coast_count = 0;
     std::cout << "[LocPipeline] bounded recovery, fitness=" << best_fit << std::endl;
@@ -426,6 +614,18 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
     if (improve > 3.0 * m_accept_cfg.residual_margin) return true;
     if (improve > m_accept_cfg.residual_margin &&
         m_consistent_cnt >= m_accept_cfg.consistent_frames) return true;
+    // [LocProbe] 拒绝原因 (每 10 帧一行): 定位"匹配成功但不输出"时靠它定位是哪道门限
+    {
+        static int probe_n = 0;
+        if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
+            std::cout << "[LocProbe] REJECT fitness=" << res.fitness
+                      << " (min_coverage=" << m_accept_cfg.min_coverage << ")"
+                      << " improve=" << improve
+                      << " margin=" << m_accept_cfg.residual_margin
+                      << " consistent=" << m_consistent_cnt << "/"
+                      << m_accept_cfg.consistent_frames << std::endl;
+        }
+    }
     return false;
 }
 
@@ -445,10 +645,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_last_match.pose = m_pose;
         } else {
             std::vector<GlobalCandidate> cands;
-            const int nk = m_relocalizer
+            const int nk = ensureRelocalizerMap()
                 ? m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands)
                 : 0;
             if (nk > 0) {
+                // 分数降序: 正确候选几乎总是分最高的, 先精配它 -> 命中即提前停
+                std::sort(cands.begin(), cands.end(),
+                          [](const GlobalCandidate& a, const GlobalCandidate& b) {
+                              return a.score > b.score;
+                          });
                 // L6: 用多候选初始化假设 (歧义时保留 Top-K)
                 std::vector<PoseStamped> hposes;
                 std::vector<double> hscores;
@@ -456,24 +661,146 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 if (nk > 1) m_hyp.seed(hposes, hscores);
                 else m_hyp.reset(cands.front().pose);
 
-                const GlobalCandidate& cand = cands.front();
+                // **多候选一起验**: BBS 只给粗候选(常含"看起来相似的另一处"), 而正确地点
+                // 的覆盖率能到 0.99、错地点稳定卡在 ~0.6。所以每个候选都做多起点精配,
+                // 取覆盖率最高的那个; 全部都不够高就判定未定位(不给假位姿)。
+                double best_fit = -1.0;
+                double second_fit = -1.0;   // 次优精配分: 消歧需要 top1-top2 差值
+                PoseStamped best_pose;
+                for (const auto& cand : cands) {
                 m_pose = cand.pose;
                 m_pose.time = f.end_time;
                 m_prior->reset(m_pose);
                 m_monitor->reset();
+                m_mediocre_streak = 0;
                 m_initialized = true;
                 m_status = LOCALIZED;
                 m_coast_count = 0;
                 m_reloc_cooldown = 0;
                 m_has_cached_target = false;
                 m_smoother.reset(m_pose);
+
+                // **BBS 是粗搜(0.3m / 6 层)**: 实机重锁后覆盖率只有 ~0.71, 而用正确位姿
+                // 初始化时是 0.99。这里用当前 matcher 在候选位姿处反复精配(gicp),
+                // 只接受"覆盖率更高"的结果, 把粗搜的位姿收敛到 ~0.95+。
+                // **BBS 是粗搜(0.3m / 6 层)**: 实机重锁后覆盖率只有 ~0.61~0.71, 而正确位姿
+                // 初始化时是 0.99。单点精配无效(候选已落在 gicp 的局部极小里, 第一次迭代
+                // 覆盖率不升就退出), 所以这里做**小范围多起点**: ±0.4m / ±6°, 共 45 个起点,
+                // 每个都跑一次 gicp, 取覆盖率最高者。
+                double refined_fit = cand.score;
+                {
+                    // **两级搜索**: BBS 候选的误差实测可达 ~1.4m / 数度, 只搜 ±0.4m
+                    // 会把正确位姿排除在搜索范围外(45 个起点全部停在同一个局部极大)。
+                    // 第一级 ±2.0m(步长1.0) × ±12°(步长6°); 第二级在最优处 ±0.5m(0.25) × ±3°。
+                    const PoseStamped base_pose = m_pose;
+                    auto evalAt = [&](const double dx, const double dy, const double dth_deg,
+                                      PoseStamped& best_pose) -> bool {
+                        PoseStamped g = base_pose;
+                        g.trans = base_pose.trans + V3D(dx, dy, 0.0);
+                        g.rot = Eigen::AngleAxisd(dth_deg * M_PI / 180.0, V3D::UnitZ())
+                                    .toRotationMatrix() * base_pose.rot;
+                        CloudType::Ptr target = buildTarget(g);
+                        if (!target || target->empty()) return false;
+                        m_matcher->setTarget(target);
+                        MatchResult r;
+                        if (!m_matcher->match(f.cloud, g, r) || !r.converged) return false;
+                        if (r.fitness <= refined_fit) return false;
+                        refined_fit = r.fitness;
+                        best_pose = r.pose;
+                        return true;
+                    };
+
+                    PoseStamped best_pose = base_pose;
+                    bool have_best = false;
+                    double best_dx = 0.0, best_dy = 0.0, best_dth = 0.0;
+                    // 墙钟预算 + 达标即停: 全量两级 = 每候选 200 次 GICP, 多候选时
+                    // 单帧回调被拖到分钟级, 单线程 spinner 饿死(实机 /relocation
+                    // 排队数十秒、输出停更)。正确候选通常前几个起点就到 0.95+。
+                    const auto t0 = std::chrono::steady_clock::now();
+                    auto budget_left = [&]() {
+                        return std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - t0).count() < 3000.0;
+                    };
+                    bool stop = false;
+                    for (double a = -12.0; a <= 12.01 && !stop; a += 6.0) {
+                        for (double dx = -2.0; dx <= 2.01 && !stop; dx += 1.0) {
+                            for (double dy = -2.0; dy <= 2.01; dy += 1.0) {
+                                if (evalAt(dx, dy, a, best_pose)) {
+                                    have_best = true;
+                                    best_dx = dx; best_dy = dy; best_dth = a;
+                                }
+                                stop = (refined_fit >= 0.95) || !budget_left();
+                            }
+                        }
+                    }
+                    if (have_best) {
+                        // 第二级: 在粗搜最优附近细化 (已足够好或预算耗尽则跳过)
+                        if (refined_fit < 0.97 && budget_left()) {
+                            stop = false;
+                            for (double a = best_dth - 3.0; a <= best_dth + 3.01 && !stop; a += 3.0) {
+                                for (double dx = best_dx - 0.5; dx <= best_dx + 0.51 && !stop; dx += 0.25) {
+                                    for (double dy = best_dy - 0.5; dy <= best_dy + 0.51; dy += 0.25) {
+                                        evalAt(dx, dy, a, best_pose);
+                                        stop = (refined_fit >= 0.97) || !budget_left();
+                                    }
+                                }
+                            }
+                        }
+                        m_pose = best_pose;
+                        m_prior->reset(m_pose);
+                        m_smoother.reset(m_pose);
+                    }
+                    std::cout << "[LocPipeline] relocalization refine: " << cand.score
+                              << " -> " << refined_fit << " (two-stage ±2m/±12deg)" << std::endl;
+                }
+
+                    if (refined_fit > best_fit) {
+                        second_fit = best_fit;   // 原最优降为次优
+                        best_fit = refined_fit;
+                        best_pose = m_pose;
+                    } else if (refined_fit > second_fit) {
+                        second_fit = refined_fit;
+                    }
+                    // 已锁定(≥0.95)且**已评出第二名** -> 不再精配其余候选, 把 spinner
+                    // 还给服务/发布。消歧必须评出第二名: 重复结构下错候选一样能到
+                    // 0.99+ (2026-10-17 推行事故: 单候选 0.999 锁进相似车位)。
+                    if (best_fit >= 0.95 && second_fit > 0.0) break;
+                }   // for (const auto& cand : cands)
+
+                // 全部候选都不够高 -> 判定未定位, 绝不给"看起来对但覆盖率只有 0.6"的假位姿。
+                // 接受线 = reloc_accept_score(0.85): 弱重定位宁可保持 LOST(界面如实显示、
+                // 人工点选兜底), 也不接受后进入"僵尸-判丢-再弱接受"的循环(2026-10-17 实测)。
+                if (best_fit < m_global_cfg.reloc_accept_score) {
+                    m_status = LOST;
+                    m_initialized = false;
+                    // 冷却: 之前这里漏设, 下一帧立刻又是一场全量全局风暴(fpfh top_k=5
+                    // × 两级 200 GICP), 单线程 spinner 被连续独占
+                    m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
+                    std::cout << "[LocPipeline] relocalization weak: best_fit=" << best_fit
+                              << " < " << m_global_cfg.reloc_accept_score
+                              << " -> keep LOST" << std::endl;
+                    return;
+                }
+                m_pose = best_pose;
+                m_pose.time = f.end_time;
+                m_prior->reset(m_pose);
+                m_smoother.reset(m_pose);
+                m_initialized = true;
+                m_status = LOCALIZED;
                 m_last_match = MatchResult();
                 m_last_match.converged = true;
-                m_last_match.fitness = cand.score;
+                m_last_match.fitness = best_fit;
                 m_last_match.pose = m_pose;
+                const double gap = (second_fit > 0.0) ? (best_fit - second_fit) : 1.0;
+                if (nk == 1)
+                    std::cout << "[LocPipeline] WARNING: single-candidate reloc, "
+                                 "no disambiguation source, best_fit="
+                              << best_fit << std::endl;
                 std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
                           << " cands=" << nk << " hypotheses=" << m_hyp.size()
-                          << " score=" << cand.score << std::endl;
+                          << " best_fit=" << best_fit << " second=" << second_fit
+                          << (gap < m_ambiguity_margin ? " AMBIGUOUS(multi-hyp kept)" : "")
+                          << std::endl;
             } else {
                 m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
             }
@@ -509,21 +836,51 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
         m_has_cached_target = false;
     } else {
-        // 局部地图缓存: 无维护层且位姿小幅移动(或全图)时复用, 避免每帧重建 KD-tree/体素
+        // 局部地图缓存: 位姿小幅移动(或全图)且**叠加层未变**时复用, 避免每帧重建
+        // 降采样+KD-tree。之前配了维护层(m_maintainer)就直接放弃缓存 —— 但 overlay
+        // 只在真正写入新点时变(revision 自增), 静态环境基本不增长; 而每帧重建 10k 目标
+        // 的降采样+建树是把位姿输出拖到 10Hz 的主因之一(雷达 15.8Hz, 2026-10-17 实测)。
         bool rebuild_target = true;
-        if (!m_maintainer && m_has_cached_target &&
+        const uint64_t maint_rev = m_maintainer ? m_maintainer->revision() : 0;
+        if (m_has_cached_target && maint_rev == m_cached_target_rev &&
             (m_local_map_name == "global" ||
              (guess.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
             rebuild_target = false;
         }
         if (!m_matcher->usesStore() && rebuild_target) {
             CloudType::Ptr target = buildTarget(guess);
+            // **逸出保护 (fail fast)**: 局部地图为空 => 猜测位姿已经在图外(或该处无关键帧)。
+            // 以前会拿空目标去匹配: 空 KD-tree 报错、ok=0、然后运动先验继续积分 ->
+            // 位姿越漂越远(实机漂到 -96m), 从此永远匹配不上, 界面上角标彻底冻结。
+            // 这里回退到最近一次被接受的位姿并复位运动先验, 让下一次仍有匹配机会。
+            if (!target || target->empty()) {
+                if (m_have_last_accepted) {
+                    m_pose = m_last_accepted;
+                    if (m_prior) m_prior->reset(m_pose);
+                    out_pose = m_last_accepted;
+                } else {
+                    out_pose = guess;
+                }
+                out_pose.time = f.end_time;
+                return;      // 本次判定为未定位, 让上层报"丢失"而不是静默
+            }
             m_cached_target = target;
             m_cached_target_pose = guess;
+            m_cached_target_rev = m_maintainer ? m_maintainer->revision() : 0;
             m_has_cached_target = true;
             m_matcher->setTarget(target);
         }
         const bool ok = m_matcher->match(f.cloud, guess, res);
+        // [LocProbe] 诊断: 输入扫描点数 / 匹配结果 (NO Effective Points 排查)
+        {
+            static int probe_n = 0;
+            if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
+                std::cout << "[LocProbe] scan=" << (f.cloud ? f.cloud->size() : 0)
+                          << " target=" << (m_cached_target ? m_cached_target->size() : 0)
+                          << " ok=" << (ok ? 1 : 0) << " converged=" << (res.converged ? 1 : 0)
+                          << " fitness=" << res.fitness << std::endl;
+            }
+        }
         accepted = ok && acceptMatch(res, f.cloud, guess);
         out_pose = accepted ? res.pose : guess;
     }
@@ -553,10 +910,28 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
     // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
     m_planar.apply(out_pose);
-    if (accepted) m_prior->onMatch(out_pose);
+    if (accepted) {
+        m_prior->onMatch(out_pose);
+        m_last_accepted = out_pose;      // 逸出保护用的回退锚点
+        m_have_last_accepted = true;
+    }
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
+    // [DropProbe] 低fitness/被拒帧逐帧打印 (推行丢定位根因取证; 正常帧仍走10帧一条的LocProbe)。
+    //   lag = 匹配修正量|配准-先验猜测|: 推行时逐帧增大 => 预测跟不上(假设A: 常速外推滞后)
+    //   corr 骤降 => 动态滤波螺旋(滞后>0.4m 时删掉的恰是真实位置的证据)
+    //   tgt 变化 => 目标子图换源(假设B: 关键帧覆盖缺口)
+    if (res.fitness < 0.90 || !accepted) {
+        const double lag = (out_pose.trans - guess.trans).norm();
+        std::cout << "[DropProbe] fit=" << res.fitness
+                  << " lag=" << lag
+                  << " corr=" << res.correspondences
+                  << " inl=" << res.inliers
+                  << " tgt=" << (m_has_cached_target && m_cached_target ? m_cached_target->size() : 0)
+                  << " acc=" << (accepted ? 1 : 0)
+                  << " coast=" << m_coast_count << std::endl;
+    }
     // 单假设模式下同步假设容器
     if (!m_hyp.ambiguous()) m_hyp.reset(m_pose);
 
@@ -570,15 +945,24 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     m_low_fit_frames = accepted ? 0 : (m_low_fit_frames + 1);
     if (m_hyp_reseed_frames > 0 && !m_hyp.ambiguous() &&
         m_low_fit_frames >= m_hyp_reseed_frames &&
-        m_relocalizer && m_relocalizer_name != "none") {
+        ensureRelocalizerMap()) {
         std::vector<GlobalCandidate> cands;
         const int nk = m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands);
         if (nk > 1) {
             std::vector<PoseStamped> hp;
             std::vector<double> hs;
-            for (const auto& c : cands) { hp.push_back(c.pose); hs.push_back(c.score); }
-            m_hyp.seed(hp, hs);
-            m_low_fit_frames = 0;
+            for (const auto& c : cands) {
+                // 可达性门控: 只有当前位姿附近 reseed_radius 米内的候选才有资格进
+                // 假设池。2026-10-17 教训: 无距离约束的全局候选 = 0.3s 内"瞬移"31m。
+                if (m_reseed_radius > 0 &&
+                    (c.pose.trans - m_pose.trans).norm() > m_reseed_radius)
+                    continue;
+                hp.push_back(c.pose); hs.push_back(c.score);
+            }
+            if (hp.size() > 1) {
+                m_hyp.seed(hp, hs);
+                m_low_fit_frames = 0;
+            }
         }
     }
 
@@ -621,6 +1005,21 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 过桥期(连续未采纳未超 coast_patience): 不判丢失, 保持降级连续外推
     if (lvl == MonitorLevel::LOST && m_coast_count < m_monitor_cfg.coast_patience)
         lvl = MonitorLevel::DEGRADED;
+    // 僵尸带直通判丢(管线层, 不受过桥钳制): monitor 的平庸升级会被上面的过桥
+    // 条款吞掉 —— acc 偶尔通过(0.6 > min_coverage 0.35)清零 coast, LOST 永远
+    // 被降级(2026-10-17 实测: fitness 0.64 僵尸 4 分钟不判丢不恢复)。这里用
+    // res.fitness 独立计数: 连续 mediocre_patience 帧上不了 credible 线直接
+    // LOST -> 触发冷启动重定位(要么确认要么纠正, 代价一次几秒尝试)。
+    m_mediocre_streak =
+        (res.converged && res.fitness < m_monitor_cfg.credible_fitness)
+            ? (m_mediocre_streak + 1) : 0;
+    if (m_monitor_cfg.mediocre_patience > 0 &&
+        m_mediocre_streak >= m_monitor_cfg.mediocre_patience) {
+        m_status = LOST;
+        std::cout << "[LocPipeline] zombie-band LOST: fitness<" << m_monitor_cfg.credible_fitness
+                  << " sustained " << m_mediocre_streak << " frames -> relocate" << std::endl;
+        return;
+    }
     switch (lvl) {
         case MonitorLevel::INIT:     m_status = INIT; break;
         case MonitorLevel::CREDIBLE: m_status = LOCALIZED; break;

@@ -30,7 +30,12 @@ public:
 
     bool saveMap(const std::string& path) override;
     bool loadMap(const std::string& path) override;
+    bool resetForNewMapping(const std::string& config_path) override;
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) override;
+    /// 与 saveGridMap 同一条生成路径 (逐帧观测 + 地面处理), 结果给实时 /map 用。
+    bool getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out) override;
+    /// 按需触发一次全局重定位 (转发给定位流水线)
+    void requestRelocalization() override;
     bool setGridMapGenerator(const std::string& name) override;
     bool setPipelineMode(const std::string& mode) override;
     std::string getPipelineMode() const override;
@@ -38,7 +43,7 @@ public:
     GridInfo getGridInfo() const override;
     bool getHighRatePose(double t, PoseStamped& out) override;
     bool getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
-    void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
+    double getMatchingDegree() const override;    void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
 
     PipelineMode getMode() const { return m_mode.load(); }
     void setMode(PipelineMode mode);

@@ -20,6 +20,7 @@ private:
     std::deque<double> m_fitness_hist;
     std::deque<double> m_nees_hist;
     int m_low_count = 0;
+    int m_mediocre_count = 0;
     bool m_have_prev = false;
     PoseStamped m_prev;
     MonitorLevel m_level = MonitorLevel::INIT;

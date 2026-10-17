@@ -6,8 +6,8 @@
 
 #include <vector>
 #include <string>
-#include "geometry_msgs/msg/pose_stamped.hpp"
-#include "nav_msgs/msg/occupancy_grid.hpp"
+#include "coverage_planner/msg_types.hpp"
+#include "coverage_planner/msg_types.hpp"
 
 namespace coverage_planner
 {
@@ -18,7 +18,7 @@ namespace coverage_planner
 struct PlannerResult
 {
     bool success;                                          // 规划是否成功
-    std::vector<geometry_msgs::msg::PoseStamped> path;    // 规划路径
+    std::vector<coverage_planner::PoseStamped> path;    // 规划路径
     double coverage_rate;                                  // 覆盖率 (0.0-1.0)
     double path_length;                                    // 路径长度 (米)
     int turn_count;                                        // 转弯次数
@@ -137,8 +137,8 @@ public:
      * @return PlannerResult 规划结果
      */
     virtual PlannerResult plan(
-        const nav_msgs::msg::OccupancyGrid & map,
-        const geometry_msgs::msg::Pose & start_pose,
+        const coverage_planner::GridMap & map,
+        const coverage_planner::Pose & start_pose,
         const PlannerConfig & config) = 0;
 
     /**

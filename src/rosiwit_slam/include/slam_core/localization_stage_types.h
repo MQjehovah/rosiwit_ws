@@ -92,6 +92,12 @@ struct ScanMatcherConfig {
     // 质量评估
     double inlier_dist = 0.3;               // 内点最近邻阈值(m)
 
+    // 退化输入守卫: 降采样/动态滤除后点数低于该值直接判配准失败。
+    // PCL 1.8 GICP 的 computeCovariances 要求点数 >= k_correspondences(20),
+    // 实测 16 点输入会**直接段错误崩掉整个节点**(2026-10-17 20:06 实机死亡,
+    // 单测 test_gicp_matcher_guard 复现 exit 139)。
+    int    min_match_points = 50;
+
     // ---- Point-to-Plane (pp_icp) 专用 ----
     bool   use_corr_decay = true;           // 迭代内对应点半径衰减
     double corr_dist_init = 4.0;            // 初始关联半径(m)
@@ -144,6 +150,12 @@ struct MotionPriorConfig {
     double max_vel = 10.0;           // 常速外推速度上限(m/s)
     bool   use_odom = false;         // 融合轮式里程计(默认关: 洗地机打滑不可信)
     double slip_yaw_thresh = 0.3;    // 打滑判据: |odom_yaw_rate - imu_yaw_rate| > 该值(rad/s) 则丢弃 odom
+    double max_odom_speed = 3.0;     // odom 平移速度物理上限(m/s), 超出 = 打滑/毛刺样本, 整包丢弃
+    // ---- imu_ekf 先验 (误差状态 EKF, 状态=[vx,vy] 体系速度) ----
+    double ekf_q_v = 1.0;            // 过程噪声: 速度随机游走 (m/s)²/s
+    double ekf_r_odom = 0.15;        // odom 速度观测噪声 (m/s)
+    double ekf_r_match = 0.8;        // 激光位移速度观测噪声 (m/s, 低频弱观测)
+    double ekf_chi2 = 5.99;          // 卡方门控阈值 (2 自由度 95%); 0=关
     // ---- IMU 零偏在线估计 (L11) ----
     int    imu_calib_samples = 200;  // 静止标定窗口样本数
     double static_gyro_std = 0.02;   // 静止判据: gyro 标准差(rad/s)
@@ -160,6 +172,9 @@ struct MotionPriorConfig {
 // ==================== 全局重定位配置 ====================
 struct GlobalLocalizeConfig {
     double min_score = 0.5;          // 命中最低分
+    double reloc_accept_score = 0.85; // 冷启动接受线: 低于此值宁可保持 LOST 也不给假位姿
+                                       // (2026-10-17: 曾用 min_score*0.9=0.45, 0.68 的弱
+                                       //  重定位被反复接受 -> 僵尸循环: 接受->10s判丢->再接受)
     int    top_k = 5;                // 全局重定位多候选数
     int    retry_interval = 30;      // 丢失后重定位尝试间隔(帧, 节流)
     double voxel_resolution = 0.3;   // 精配准降采样
@@ -174,6 +189,14 @@ struct GlobalLocalizeConfig {
     double sc_dist_thresh = 0.4;
     double sc_candidate_ratio = 0.3;
     // BBS (branch-and-bound) 分支定界 2D 全局搜索
+    // 安装角 (base<-lidar 的 rpy, 度)。BBS 的 2D 搜索要求"水平安装":
+    // 先把扫描与地图都转到 base(车体)系再投影, 最后把结果换回雷达系。0 = 不转换。
+    // **首选**: base<-lidar 旋转矩阵(行优先9元素), 由 ROS 层从 TF 直接注入,
+    // 彻底避免欧拉角顺序歧义(URDF rpy / Eigen eulerAngles / 打印顺序 三套约定)。
+    std::array<double, 9> bbs_mount_r{{1, 0, 0, 0, 1, 0, 0, 0, 1}};
+    double bbs_mount_roll_deg = 0.0;
+    double bbs_mount_pitch_deg = 0.0;
+    double bbs_mount_yaw_deg = 0.0;
     double bbs_z_min = -1.0;          // 参与 2D 投影的 z 下界(m)
     double bbs_z_max = 1.0;           // z 上界(m)
     int    bbs_theta_bins = 60;       // 航向离散数
@@ -201,6 +224,9 @@ struct MonitorConfig {
     bool   enabled = true;
     double credible_fitness = 0.75;  // >= 判 CREDIBLE
     double lost_fitness = 0.5;       // < 判 DEGRADED, 连续 patience 次判 LOST
+    int    mediocre_patience = 100;  // 持续平庸升级: fit∈[lost,credible) 连续 N 帧判 LOST
+                                     // (0=关。僵尸带防御: 2026-10-17 推行事故 fitness
+                                     //  0.5~0.67 徘徊 330s, 永不判丢也永不恢复)
     int    lost_patience = 3;        // 连续低 fitness 次数
     int    lost_patience_low = 8;    // fitness<lost_fitness 的连续次数
     int    coast_patience = 100;     // 配准未采纳连续帧数上限(内=降级外推, 超=判丢失)

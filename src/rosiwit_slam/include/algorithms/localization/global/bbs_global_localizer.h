@@ -40,6 +40,12 @@ private:
     bool projectScan(const CloudType::Ptr& scan);
     bool rebuild(const CloudType::Ptr& src);
     void searchLeaves(int max_k, std::vector<Node>& out);
+    /// 车体系投影支持: base<-lidar 安装旋转
+    CloudType::Ptr toCarFrame(const CloudType::Ptr& in) const;
+    PoseStamped toLidarPose(const PoseStamped& in) const;
+    Eigen::Matrix3d m_r_bl = Eigen::Matrix3d::Identity();
+    bool m_have_mount = false;
+
     bool refineCandidate(const Node& n, const CloudType::Ptr& scan_down, GlobalCandidate& out);
 
     GlobalLocalizeConfig m_cfg;

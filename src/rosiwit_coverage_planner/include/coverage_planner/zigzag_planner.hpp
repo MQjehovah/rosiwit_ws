@@ -52,8 +52,8 @@ public:
      * @brief 规划全覆盖路径
      */
     PlannerResult plan(
-        const nav_msgs::msg::OccupancyGrid & map,
-        const geometry_msgs::msg::Pose & start_pose,
+        const coverage_planner::GridMap & map,
+        const coverage_planner::Pose & start_pose,
         const PlannerConfig & config) override;
 
     /**
@@ -90,8 +90,8 @@ private:
     double turn_merge_distance_;
 
     // 内部状态
-    nav_msgs::msg::OccupancyGrid inflated_map_;
-    nav_msgs::msg::OccupancyGrid preprocessed_map_;
+    coverage_planner::GridMap inflated_map_;
+    coverage_planner::GridMap preprocessed_map_;
     std::vector<std::vector<bool>> visited_mask_;
 
     // 优化器实例
@@ -105,8 +105,8 @@ private:
     /**
      * @brief 执行扫描线规划
      */
-    std::vector<geometry_msgs::msg::PoseStamped> performScanlinePlanning(
-        const nav_msgs::msg::OccupancyGrid & map,
+    std::vector<coverage_planner::PoseStamped> performScanlinePlanning(
+        const coverage_planner::GridMap & map,
         const Point2D & start_grid,
         int scan_direction);
 
@@ -114,14 +114,14 @@ private:
      * @brief 提取扫描线段
      */
     std::vector<ScanLine> extractScanlines(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         int scan_direction);
 
     /**
      * @brief 连接扫描线段形成完整路径
      */
     std::vector<Point2D> connectScanlines(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const std::vector<ScanLine> & scanlines,
         const Point2D & start);
 
@@ -129,7 +129,7 @@ private:
      * @brief BFS寻路连接两点
      */
     std::vector<Point2D> findConnectionPath(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const Point2D & start,
         const Point2D & goal);
 
@@ -137,20 +137,20 @@ private:
      * @brief 找到最近的可达扫描线起点
      */
     Point2D findNearestScanlineStart(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const std::vector<ScanLine> & scanlines,
         const Point2D & start);
 
     /**
      * @brief 选择最优扫描方向（传统方法）
      */
-    int selectOptimalDirection(const nav_msgs::msg::OccupancyGrid & map);
+    int selectOptimalDirection(const coverage_planner::GridMap & map);
 
     /**
      * @brief 选择最优扫描方向（P0优化方法）
      */
     int selectOptimalDirectionOptimized(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const ScanDirectionConfig & config,
         ScanDirectionResult & result_info);
 
@@ -162,23 +162,23 @@ private:
     /**
      * @brief 将栅格路径转换为世界坐标路径
      */
-    std::vector<geometry_msgs::msg::PoseStamped> convertToPath(
-        const nav_msgs::msg::OccupancyGrid & map,
+    std::vector<coverage_planner::PoseStamped> convertToPath(
+        const coverage_planner::GridMap & map,
         const std::vector<Point2D> & grid_path);
 
     /**
      * @brief 检查两点之间是否有视线（无障碍物）
      */
     bool hasLineOfSight(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const Point2D & p1,
         const Point2D & p2);
 
     /**
      * @brief 预处理地图（P0优化）
      */
-    nav_msgs::msg::OccupancyGrid preprocessMap(
-        const nav_msgs::msg::OccupancyGrid & map,
+    coverage_planner::GridMap preprocessMap(
+        const coverage_planner::GridMap & map,
         const PlannerConfig & config);
 
     /**
@@ -186,18 +186,18 @@ private:
      *
      * 将复杂地图分解为多个简单区域，分别规划
      */
-    std::vector<geometry_msgs::msg::PoseStamped> performZonePlanning(
-        const nav_msgs::msg::OccupancyGrid & map,
-        const geometry_msgs::msg::Pose & start_pose,
+    std::vector<coverage_planner::PoseStamped> performZonePlanning(
+        const coverage_planner::GridMap & map,
+        const coverage_planner::Pose & start_pose,
         const PlannerConfig & config,
         int scan_direction);
 
     /**
      * @brief 优化路径转弯（P0优化）
      */
-    std::vector<geometry_msgs::msg::PoseStamped> optimizeTurns(
-        const std::vector<geometry_msgs::msg::PoseStamped> & path,
-        const nav_msgs::msg::OccupancyGrid & map,
+    std::vector<coverage_planner::PoseStamped> optimizeTurns(
+        const std::vector<coverage_planner::PoseStamped> & path,
+        const coverage_planner::GridMap & map,
         const PlannerConfig & config);
 };  // class ZigzagPlanner
 

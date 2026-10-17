@@ -1,0 +1,4 @@
+{
+    "xz_log_path": "/opt/xzrobot/logs/xzrobot_3d_slam/xz_3d_slam.log",
+    "print_xz_log_to_file": true
+}

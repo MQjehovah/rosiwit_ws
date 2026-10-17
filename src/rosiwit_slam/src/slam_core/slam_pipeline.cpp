@@ -109,8 +109,10 @@ bool SlamPipeline::init(const std::string& config_path) {
         std::string map_name = cfg["localization_map"].as<std::string>("");
         if (!map_name.empty()) {
             PoseStamped init; init.trans = V3D::Zero(); init.rot = M3D::Identity();
+            init.time = -1.0;   // 无 init_pose 配置时走冷启动全局重定位
             if (cfg["init_pose"]) {
                 auto p = cfg["init_pose"];
+                init.time = 0.0;
                 init.trans.x() = p["x"].as<double>(0.0);
                 init.trans.y() = p["y"].as<double>(0.0);
                 init.trans.z() = p["z"].as<double>(0.0);
@@ -153,8 +155,25 @@ void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& t
 }
 
 bool SlamPipeline::loadMapForLocalization(const std::string& path, const PoseStamped& init_pose) {
-    if (!m_map_mgr || !m_map_mgr->loadMap(path)) return false;
-    if (m_localization) { m_localization->setMap(path); m_localization->setInitPose(init_pose); }
+    if (!m_localization) return false;
+    // 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml, **没有 PCD** ——
+    // 所以这里不能把"PCD 加载失败"当成致命错误 (旧实现 localiza_ptr_->run("<dir>/map")
+    // 也只看它自己那份 xzmap)。定位入口 setMap() 会在没有 PCD 时从关键帧重建基准点云。
+    if (m_map_mgr && !m_map_mgr->loadMap(path)) {
+        std::cout << "[SlamPipeline] no PCD at " << path
+                  << " (legacy xzmap-only map); localization map is loaded from <base>.xzmap"
+                  << std::endl;
+    }
+    m_localization->setMap(path);
+    // init_pose.time < 0 = "无初始位姿": 不 setInitPose, 走冷启动全局重定位。
+    // (2026-10-17 实测: 这里曾无条件用伪造的 identity 位姿初始化 -> /switch_map
+    //  不带 initpose 时从原点僵尸跟踪, fitness 0.74 既不判丢也不恢复)
+    if (init_pose.time >= 0.0) {
+        m_localization->setInitPose(init_pose);
+    } else {
+        std::cout << "[SlamPipeline] no init pose given: cold-start global relocalization"
+                  << std::endl;
+    }
     return true;
 }
 
@@ -175,6 +194,26 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
     if (mode == PipelineMode::LOCALIZATION) {
         if (m_localization) {
             m_localization->onLidar(f);
+            // 若未定位(含刚丢失/重定位中途), 仍然对外输出**最后一次有效位姿**并标记状态,
+            // 否则上层看到的是"完全没数据"(界面冻结), 且无法区分"丢失"与"节点挂了"。
+            // 实机教训: 重定位锁定后一旦某帧匹配失败, 以前就静默停发, 现场无法判断。
+            if (m_localization->getStatus() != ILocalization::LOCALIZED) {
+                SlamOutput loose;
+                if (m_localization->getPose(loose.pose)) {
+                    loose.state = SlamState::LOST;
+                    loose.has_new_pose = true;
+                    if (f.cloud && !f.cloud->empty()) {
+                        CloudType::Ptr world_scan(new CloudType());
+                        Eigen::Affine3d T = Eigen::Affine3d::Identity();
+                        T.translate(loose.pose.trans);
+                        T.rotate(loose.pose.rot);
+                        pcl::transformPointCloud(*f.cloud, *world_scan, T);
+                        loose.world_cloud = world_scan;
+                        loose.body_cloud = f.cloud;
+                    }
+                    emitOutput(loose);
+                }
+            }
             if (m_localization->getStatus() == ILocalization::LOCALIZED) {
                 SlamOutput out;
                 m_localization->getPose(out.pose);
@@ -192,7 +231,12 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
                 emitOutput(out);
             }
         }
-        if (m_frontend) m_frontend->onLidar(f);
+        // ⚠ **定位模式下不再喂建图前端**: 之前这里无条件调 m_frontend->onLidar(f),
+        // 导致 FAST-LIO 前端与定位流水线**同时**吃同一份数据 —— 实机表现为
+        // "NO Effective Points!" 刷屏(165+ 次)、ikd-tree 线程空转(KD_TREE::multi_thread_rebuild)、
+        // CPU 被白白吃掉, 而定位结果反而发不出来。现在严格二选一。
+        // (核心库不依赖 ROS, 所以这里不做参数化; 若将来要"前端热备"再加成员开关)
+        (void)0;
     } else {
         SlamBase::onLidar(f);
     }
@@ -415,17 +459,81 @@ bool SlamPipeline::exportXzMap(const std::string& pcd_path) {
 
 bool SlamPipeline::loadMap(const std::string& path) {
     if (!m_map_mgr) return false;
+    // 无初始位姿 (time<0 标记): 加载后由冷启动全局重定位接管, 不再伪造 identity 起点
     PoseStamped init;
     init.trans = V3D::Zero();
     init.rot = M3D::Identity();
+    init.time = -1.0;
     if (!loadMapForLocalization(path, init)) return false;
     m_map_mgr->generateGridMap(0.05);
     return true;
 }
 
+bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
+    // 旧 xz_3d_slam 每次切建图都 DELETE_PTR(mapping_ptr_) 再 new 一个, 所以上一轮绝不残留;
+    // 我们是单核心实例, 只能显式重建内部模块达到同样效果。
+    //
+    // 1) 停后端线程 —— **必须用核心自己的停止协议**: 后端线程的 wait 谓词只看"队列非空"
+    //    (backendThreadLoop), 唯一退出路径是取出一个 BackendTask::STOP。
+    //    实测教训: 只置 m_backend_running=false + notify_all **叫不醒**它, join 会永久阻塞,
+    //    整个 ROS 线程卡死在 /slam/mode_switch 里(节点假死: /slam/info 停发)。
+    if (m_backend_thread.joinable()) {
+        pushBackendTask(BackendTask::STOP);
+        // ⚠ **不能 join**: 后端可能正卡在一次 optimize() 里(或定位匹配占满 CPU), join 会把
+        // 调用线程(ROS 服务线程)一起挂住 -> 现场表现"切图/切模式卡住"。实测复现过两次。
+        // STOP 入队后线程会在本轮结束时自行退出; 它持有的是自己那份模块 shared_ptr,
+        // 与随后重建的新实例互不影响。
+        m_backend_thread.detach();
+        std::cout << "[SlamPipeline] backend thread detached (STOP queued, no join)"
+                  << std::endl;
+    }
+    m_backend_running = false;
+
+    // 2) 丢掉所有模块 + 队列/锚点状态 (= "删掉建图实例")
+    m_frontend.reset();
+    m_backend.reset();
+    m_loop.reset();
+    m_localization.reset();
+    m_map_mgr.reset();
+    m_visual.reset();
+    {
+        std::lock_guard<std::mutex> lk(m_queue_mutex);
+        std::queue<BackendItem> empty;
+        std::swap(m_backend_queue, empty);
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_anchor_mutex);
+        m_out_anchor_ = PoseStamped();
+        m_have_anchor_ = false;
+    }
+    // 先置 IDLE 再 init: 否则 init() 里那段 "m_mode == LOCALIZATION 就自动载图" 会误触发
+    m_mode = PipelineMode::IDLE;
+    m_frame_count = 0;
+
+    // 3) 重建 (与启动时同一条路径)
+    const bool ok = init(config_path);
+    std::cout << "[SlamPipeline] resetForNewMapping: modules rebuilt (" << (ok ? "ok" : "FAILED")
+              << ")" << std::endl;
+    return ok;
+}
+
 bool SlamPipeline::saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) {
     if (!m_map_mgr) return false;
     return m_map_mgr->saveGridMap(pgm_path, yaml_path, resolution);
+}
+
+void SlamPipeline::requestRelocalization() {
+    if (m_localization) m_localization->requestRelocalization();
+}
+
+bool SlamPipeline::getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out) {
+    // **必须走 generateGridMap**, 它内部用的是 buildFromObservations(逐帧观测) ——
+    // 和 saveGridMap 完全同一条路径, 有逐帧地面处理。薄层以前是自己拿合并后的全局点云
+    // 调 gen->build(), 没有地面处理 -> 实时 /map 有地面噪点, 而存下来的 pgm 干净。
+    if (!m_map_mgr) return false;
+    if (!m_map_mgr->generateGridMap(resolution)) return false;
+    out = m_map_mgr->getGridInfo();
+    return out.width > 0 && out.height > 0;
 }
 
 bool SlamPipeline::setGridMapGenerator(const std::string& name) {
@@ -457,6 +565,13 @@ bool SlamPipeline::setInitPose(const PoseStamped& pose) {
 GridInfo SlamPipeline::getGridInfo() const {
     if (!m_map_mgr) return {};
     return m_map_mgr->getGridInfo();
+}
+
+double SlamPipeline::getMatchingDegree() const {
+    // 定位匹配度: 透传定位流水线的 confidence() (= m_last_match.fitness, 覆盖率 [0,1]).
+    // 旧 xz_3d_slam 的 slam/info.matching_degree = localiza.getFitness(), 实机实测为 0.83 这种真值
+    // (不是 0) —— 所以这里必须给出真值, 否则监控端看到的匹配度永远是 0.
+    return m_localization ? m_localization->confidence() : 0.0;
 }
 
 } // namespace rosiwit_slam

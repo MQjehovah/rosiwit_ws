@@ -17,6 +17,69 @@ void BbsGlobalLocalizer::configure(const GlobalLocalizeConfig& cfg) {
     m_gicp.setMaxCorrespondenceDistance(cfg.icp_max_corr_dist);
     m_gicp.setTransformationEpsilon(1e-8);
     m_gicp.setEuclideanFitnessEpsilon(1e-6);
+
+    // 安装旋转 base<-lidar (rpy 度, ZYX)。BBS 的 2D(yaw-only) 模型要求"水平安装":
+    // 雷达有安装角时(本机 pitch 41.67°), 先把扫描/地图都转到 base 系再投影,
+    // 最后把候选位姿换回雷达系(见 toLidarPose)。全部为 0 时等价于原行为。
+    m_r_bl = (Eigen::AngleAxisd(m_cfg.bbs_mount_yaw_deg * M_PI / 180.0, V3D::UnitZ())
+              * Eigen::AngleAxisd(m_cfg.bbs_mount_pitch_deg * M_PI / 180.0, V3D::UnitY())
+              * Eigen::AngleAxisd(m_cfg.bbs_mount_roll_deg * M_PI / 180.0, V3D::UnitX()))
+                 .toRotationMatrix();
+    {
+        const auto& rr = m_cfg.bbs_mount_r;
+        const bool identity = std::fabs(rr[0] - 1.0) < 1e-9 && std::fabs(rr[4] - 1.0) < 1e-9 &&
+                              std::fabs(rr[8] - 1.0) < 1e-9 && std::fabs(rr[1]) < 1e-9 &&
+                              std::fabs(rr[2]) < 1e-9 && std::fabs(rr[3]) < 1e-9 &&
+                              std::fabs(rr[5]) < 1e-9 && std::fabs(rr[6]) < 1e-9 &&
+                              std::fabs(rr[7]) < 1e-9;
+        if (!identity) {
+            // 注入的是 R_base<-lidar; 这里要用它的**逆**(=转置) 把点云从雷达系换到车体系,
+            // 判据: 车体系下 2D 足迹应 ≈ pgm 的 40x28m (@0.3 即 ~133x93), 否则方向反了。
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c) m_r_bl(r, c) = rr[r * 3 + c];   // R_base<-lidar (不转置)
+            m_have_mount = true;   // ⚠ 之前漏了这一句: 矩阵设了但开关没开 -> toCarFrame 原样返回
+            std::cout << "[BBS] mount from matrix (TF): "
+                      << m_r_bl.row(0) << " | " << m_r_bl.row(1) << " | "
+                      << m_r_bl.row(2) << std::endl;
+        }
+    }
+    // 注意: **不能用欧拉角覆盖**前面的矩阵判定 —— 矩阵注入时三个角度都是 0,
+    // 直接赋值会把 m_have_mount 又置回 false(实测: 注入成功但车体系投影没生效)。
+    const bool euler_nonzero = (std::fabs(m_cfg.bbs_mount_roll_deg)
+                                + std::fabs(m_cfg.bbs_mount_pitch_deg)
+                                + std::fabs(m_cfg.bbs_mount_yaw_deg)) > 1e-6;
+    m_have_mount = m_have_mount || euler_nonzero;
+    // setMap() 可能在 configure() 之前被调用(那时安装矩阵还没设), 地图就是按雷达系建的。
+    // 这里在拿到矩阵后**强制重建一次** 2D 金字塔, 保证地图与扫描都在车体系。
+    if (m_have_mount && m_base_map && !m_base_map->empty()) {
+        rebuild(m_base_map);
+    }
+    if (!m_have_mount) {
+        std::cout << "[BBS] WARN: 未获得安装变换(也没注入 bbs_mount_r) -> 按雷达系投影; "
+                     "俯装/侧装雷达下候选会偏, 请改用 fpfh_ransac 或修好 TF" << std::endl;
+    }
+    std::cout << "[BBS] mount rpy(deg)=[" << m_cfg.bbs_mount_roll_deg << " "
+              << m_cfg.bbs_mount_pitch_deg << " " << m_cfg.bbs_mount_yaw_deg
+              << "] car-frame projection=" << (m_have_mount ? 1 : 0) << std::endl;
+}
+
+CloudType::Ptr BbsGlobalLocalizer::toCarFrame(const CloudType::Ptr& in) const {
+    if (!m_have_mount || !in) return in;
+    Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+    T.block<3, 3>(0, 0) = m_r_bl.cast<float>();
+    CloudType::Ptr out(new CloudType());
+    pcl::transformPointCloud(*in, *out, T);
+    return out;
+}
+
+PoseStamped BbsGlobalLocalizer::toLidarPose(const PoseStamped& in) const {
+    if (!m_have_mount) return in;
+    // T_mapL<-curL = R_bl^-1 * T_mapB<-curB * R_bl  (conjugation: 两帧相差一个常量安装旋转)
+    const Eigen::Matrix3d Rb = m_r_bl;
+    PoseStamped out = in;
+    out.rot = Rb.transpose() * in.rot * Rb;
+    out.trans = Rb.transpose() * in.trans;
+    return out;
 }
 
 bool BbsGlobalLocalizer::setMap(const std::string& map_path,
@@ -39,7 +102,11 @@ bool BbsGlobalLocalizer::rebuild(const CloudType::Ptr& src) {
     m_ready = false;
     m_pyr.clear();
     if (!src || src->empty()) return false;
-    m_map = src;
+    if (m_have_mount) {
+        m_map = toCarFrame(src);       // 2D 金字塔 + GICP 目标都在车体系
+    } else {
+        m_map = src;
+    }
 
     // 1) z 带投影到 2D 命中计数
     const double zmin = m_cfg.bbs_z_min, zmax = m_cfg.bbs_z_max;
@@ -105,6 +172,7 @@ bool BbsGlobalLocalizer::rebuild(const CloudType::Ptr& src) {
 
     m_ready = true;
     std::cout << "[BBS] map " << w0 << "x" << h0 << " res=" << m_res
+              << " origin=(" << m_ox << ", " << m_oy << ")"
               << " levels=" << m_pyr.size() << std::endl;
     return true;
 }
@@ -202,9 +270,10 @@ int BbsGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_k,
                                      std::vector<GlobalCandidate>& out) {
     out.clear();
     if (!m_ready || m_pyr.empty()) return 0;
-    if (!projectScan(scan)) return 0;
+    CloudType::Ptr scan_c = toCarFrame(scan);   // 与地图同一(车体)系
+    if (!projectScan(scan_c)) return 0;
 
-    CloudType::Ptr scan_down = downsampleCloud(scan, m_res);
+    CloudType::Ptr scan_down = downsampleCloud(scan_c, m_res);
     if (!scan_down || scan_down->size() < 10) return 0;
 
     std::vector<Node> leaves;
@@ -212,10 +281,25 @@ int BbsGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_k,
     for (const auto& n : leaves) {
         GlobalCandidate c;
         refineCandidate(n, scan_down, c);
+        c.pose = toLidarPose(c.pose);   // 换回雷达系(核心/上层约定)
         if (c.score >= m_cfg.min_score) out.push_back(std::move(c));
     }
     std::sort(out.begin(), out.end(),
               [](const GlobalCandidate& a, const GlobalCandidate& b) { return a.score > b.score; });
+    for (size_t i = 0; i < out.size() && i < 5; ++i) {
+        const double yaw = std::atan2(out[i].pose.rot(1, 0), out[i].pose.rot(0, 0)) * 180.0 / M_PI;
+        std::cout << "[BBS] cand[" << i << "] score=" << out[i].score
+                  << " pose=(" << out[i].pose.trans.x() << ", " << out[i].pose.trans.y()
+                  << ") yaw_deg=" << yaw << " z=" << out[i].pose.trans.z() << std::endl;
+    }
+    // 一个候选都没过门限时**必须留痕**: 否则现场看到的就是"重定位没反应"
+    if (out.empty()) {
+        double best_leaf = 0.0;
+        for (const auto& n : leaves) best_leaf = std::max(best_leaf, n.score);
+        std::cout << "[BBS] no candidate above min_score=" << m_cfg.min_score
+                  << " (best_leaf=" << best_leaf << ", leaves=" << leaves.size()
+                  << ")" << std::endl;
+    }
     if (static_cast<int>(out.size()) > max_k) out.resize(max_k);
     return static_cast<int>(out.size());
 }

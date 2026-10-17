@@ -28,9 +28,9 @@ protected:
         config_.direction_optimization = 2;
     }
 
-    nav_msgs::msg::OccupancyGrid createEmptyMap(int width, int height, double resolution = 0.1)
+    coverage_planner::GridMap createEmptyMap(int width, int height, double resolution = 0.1)
     {
-        nav_msgs::msg::OccupancyGrid map;
+        coverage_planner::GridMap map;
         map.info.width = width;
         map.info.height = height;
         map.info.resolution = resolution;
@@ -39,15 +39,14 @@ protected:
         map.info.origin.position.z = 0.0;
         map.info.origin.orientation.w = 1.0;
         map.header.frame_id = "map";
-        map.header.stamp.sec = 0;
-        map.header.stamp.nanosec = 0;
+        map.header.stamp = 0.0;
         map.data.resize(width * height, 0);  // 全部空闲
         return map;
     }
 
-    nav_msgs::msg::OccupancyGrid createMapWithObstacles(int width, int height)
+    coverage_planner::GridMap createMapWithObstacles(int width, int height)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
 
         // 添加障碍物（约占20%面积）
         for (int y = height/4; y < height/4 + height/6; ++y) {
@@ -65,9 +64,9 @@ protected:
         return map;
     }
 
-    geometry_msgs::msg::Pose createStartPose(double x, double y)
+    coverage_planner::Pose createStartPose(double x, double y)
     {
-        geometry_msgs::msg::Pose pose;
+        coverage_planner::Pose pose;
         pose.position.x = x;
         pose.position.y = y;
         pose.position.z = 0.0;
@@ -78,8 +77,8 @@ protected:
     // 测量规划时间（毫秒）
     double measurePlanningTime(
         IPlanner* planner,
-        const nav_msgs::msg::OccupancyGrid& map,
-        const geometry_msgs::msg::Pose& start_pose)
+        const coverage_planner::GridMap& map,
+        const coverage_planner::Pose& start_pose)
     {
         auto start = std::chrono::high_resolution_clock::now();
         PlannerResult result = planner->plan(map, start_pose, config_);
@@ -97,8 +96,8 @@ protected:
 // 性能测试1：100x100地图规划耗时<500ms（弓字形）
 TEST_F(PerformanceTest, Zigzag100x100MapUnder500ms)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(5.0, 5.0);
+    coverage_planner::GridMap map = createEmptyMap(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(5.0, 5.0);
 
     double planning_time = measurePlanningTime(zigzag_planner_.get(), map, start_pose);
 
@@ -113,8 +112,8 @@ TEST_F(PerformanceTest, Zigzag100x100MapUnder500ms)
 // 性能测试2：100x100地图规划耗时<500ms（回字形）
 TEST_F(PerformanceTest, Spiral100x100MapUnder500ms)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(5.0, 5.0);
+    coverage_planner::GridMap map = createEmptyMap(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(5.0, 5.0);
 
     double planning_time = measurePlanningTime(spiral_planner_.get(), map, start_pose);
 
@@ -129,8 +128,8 @@ TEST_F(PerformanceTest, Spiral100x100MapUnder500ms)
 // 性能测试3：500x500地图规划耗时<3s（弓字形）
 TEST_F(PerformanceTest, Zigzag500x500MapUnder3Seconds)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(500, 500);
-    geometry_msgs::msg::Pose start_pose = createStartPose(25.0, 25.0);
+    coverage_planner::GridMap map = createEmptyMap(500, 500);
+    coverage_planner::Pose start_pose = createStartPose(25.0, 25.0);
 
     double planning_time = measurePlanningTime(zigzag_planner_.get(), map, start_pose);
 
@@ -145,8 +144,8 @@ TEST_F(PerformanceTest, Zigzag500x500MapUnder3Seconds)
 // 性能测试4：500x500地图规划耗时<3s（回字形）
 TEST_F(PerformanceTest, Spiral500x500MapUnder3Seconds)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(500, 500);
-    geometry_msgs::msg::Pose start_pose = createStartPose(25.0, 25.0);
+    coverage_planner::GridMap map = createEmptyMap(500, 500);
+    coverage_planner::Pose start_pose = createStartPose(25.0, 25.0);
 
     double planning_time = measurePlanningTime(spiral_planner_.get(), map, start_pose);
 
@@ -162,8 +161,8 @@ TEST_F(PerformanceTest, Spiral500x500MapUnder3Seconds)
 // 性能测试5：含障碍物的100x100地图性能
 TEST_F(PerformanceTest, ZigzagObstacleMap100x100)
 {
-    nav_msgs::msg::OccupancyGrid map = createMapWithObstacles(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::GridMap map = createMapWithObstacles(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
 
     double planning_time = measurePlanningTime(zigzag_planner_.get(), map, start_pose);
 
@@ -174,8 +173,8 @@ TEST_F(PerformanceTest, ZigzagObstacleMap100x100)
 // 性能测试6：含障碍物的500x500地图性能
 TEST_F(PerformanceTest, ZigzagObstacleMap500x500)
 {
-    nav_msgs::msg::OccupancyGrid map = createMapWithObstacles(500, 500);
-    geometry_msgs::msg::Pose start_pose = createStartPose(12.5, 12.5);
+    coverage_planner::GridMap map = createMapWithObstacles(500, 500);
+    coverage_planner::Pose start_pose = createStartPose(12.5, 12.5);
 
     double planning_time = measurePlanningTime(zigzag_planner_.get(), map, start_pose);
 
@@ -186,8 +185,8 @@ TEST_F(PerformanceTest, ZigzagObstacleMap500x500)
 // 性能测试7：多次规划性能稳定性
 TEST_F(PerformanceTest, MultiplePlansPerformance)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(5.0, 5.0);
+    coverage_planner::GridMap map = createEmptyMap(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(5.0, 5.0);
 
     std::vector<double> planning_times;
 
@@ -229,8 +228,8 @@ TEST_F(PerformanceTest, DifferentMapSizesPerformance)
     std::vector<double> planning_times;
 
     for (auto& size : map_sizes) {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(size.first, size.second);
-        geometry_msgs::msg::Pose start_pose = createStartPose(
+        coverage_planner::GridMap map = createEmptyMap(size.first, size.second);
+        coverage_planner::Pose start_pose = createStartPose(
             size.first * 0.1 / 2.0,
             size.second * 0.1 / 2.0);
 
@@ -250,8 +249,8 @@ TEST_F(PerformanceTest, DifferentMapSizesPerformance)
 // 性能测试9：内存占用测试（估算）
 TEST_F(PerformanceTest, MemoryUsageEstimate)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(500, 500);
-    geometry_msgs::msg::Pose start_pose = createStartPose(25.0, 25.0);
+    coverage_planner::GridMap map = createEmptyMap(500, 500);
+    coverage_planner::Pose start_pose = createStartPose(25.0, 25.0);
 
     PlannerResult result = zigzag_planner_->plan(map, start_pose, config_);
 
@@ -261,7 +260,7 @@ TEST_F(PerformanceTest, MemoryUsageEstimate)
     //             约250000 * 64 = 16MB（粗略估计）
     // 验收标准：内存占用<50MB，路径数据应该远小于此
 
-    size_t path_size_bytes = result.path.size() * sizeof(geometry_msgs::msg::PoseStamped);
+    size_t path_size_bytes = result.path.size() * sizeof(coverage_planner::PoseStamped);
     double path_size_mb = path_size_bytes / (1024.0 * 1024.0);
 
     // 路径数据应该小于20MB
@@ -271,8 +270,8 @@ TEST_F(PerformanceTest, MemoryUsageEstimate)
 // 性能测试10：算法性能对比（弓字形 vs 回字形）
 TEST_F(PerformanceTest, AlgorithmComparison)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(5.0, 5.0);
+    coverage_planner::GridMap map = createEmptyMap(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(5.0, 5.0);
 
     // 测量弓字形性能
     double zigzag_time = measurePlanningTime(zigzag_planner_.get(), map, start_pose);
@@ -291,8 +290,8 @@ TEST_F(PerformanceTest, AlgorithmComparison)
 // 性能测试11：路径优化对性能的影响
 TEST_F(PerformanceTest, OptimizationImpact)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(5.0, 5.0);
+    coverage_planner::GridMap map = createEmptyMap(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(5.0, 5.0);
 
     // 开启优化
     config_.enable_optimization = true;
@@ -310,8 +309,8 @@ TEST_F(PerformanceTest, OptimizationImpact)
 // 性能测试12：实时性测试（连续规划）
 TEST_F(PerformanceTest, ContinuousPlanning)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(5.0, 5.0);
+    coverage_planner::GridMap map = createEmptyMap(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(5.0, 5.0);
 
     auto start = std::chrono::high_resolution_clock::now();
 

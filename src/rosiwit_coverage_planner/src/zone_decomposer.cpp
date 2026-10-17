@@ -2,7 +2,7 @@
 // Licensed under the Apache-2.0 license.
 
 #include "coverage_planner/zone_decomposer.hpp"
-#include <rclcpp/rclcpp.hpp>
+
 #include <algorithm>
 #include <queue>
 #include <limits>
@@ -23,7 +23,7 @@ void ZoneDecomposer::reset()
 }
 
 DecompositionResult ZoneDecomposer::decompose(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const ZoneDecomposerConfig & config)
 {
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -48,7 +48,7 @@ DecompositionResult ZoneDecomposer::decompose(
 
     // VULN-004修复：Zone数量上限检查，防止资源耗尽DoS（Critical安全漏洞）
     if (static_cast<int>(zones.size()) > config.max_zone_count) {
-        RCLCPP_WARN(rclcpp::get_logger("zone_decomposer"),
+        COV_WARN(
             "Zone count (%zu) exceeds max limit (%d), truncating to prevent DoS",
             zones.size(), config.max_zone_count);
         // 截断zones到最大数量，保留最大的区域
@@ -89,7 +89,7 @@ DecompositionResult ZoneDecomposer::decompose(
 }
 
 std::vector<Zone> ZoneDecomposer::findConnectedComponents(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     int min_area)
 {
     std::vector<Zone> zones;
@@ -150,7 +150,7 @@ std::vector<Zone> ZoneDecomposer::findConnectedComponents(
 }
 
 std::vector<cv::Point> ZoneDecomposer::floodFill(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     int start_x,
     int start_y,
     int label,
@@ -191,7 +191,7 @@ std::vector<cv::Point> ZoneDecomposer::floodFill(
 
 int ZoneDecomposer::computeOptimalScanDirection(
     const Zone & zone,
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     if (zone.free_cells.size() < 10) {
         return 0;  // 默认水平扫描
@@ -281,7 +281,7 @@ void ZoneDecomposer::performPCA(
 
 std::vector<ConnectionChannel> ZoneDecomposer::findConnectionChannels(
     const std::vector<Zone> & zones,
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     int search_radius)
 {
     std::vector<ConnectionChannel> channels;
@@ -322,7 +322,7 @@ std::vector<ConnectionChannel> ZoneDecomposer::findConnectionChannels(
 bool ZoneDecomposer::areNeighbors(
     const Zone & zone_a,
     const Zone & zone_b,
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     int search_radius)
 {
     // 快速检查：外接矩形是否相邻
@@ -424,7 +424,7 @@ std::vector<int> ZoneDecomposer::computeVisitOrder(
 }
 
 std::vector<cv::Point> ZoneDecomposer::getZonePath(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const Zone & zone,
     int scan_direction)
 {

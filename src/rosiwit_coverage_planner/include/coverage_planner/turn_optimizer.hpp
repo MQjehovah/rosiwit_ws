@@ -7,9 +7,9 @@
 #include <vector>
 #include <cmath>
 #include <memory>
-#include "geometry_msgs/msg/pose_stamped.hpp"
-#include "geometry_msgs/msg/point.hpp"
-#include "nav_msgs/msg/occupancy_grid.hpp"
+#include "coverage_planner/msg_types.hpp"
+#include "coverage_planner/msg_types.hpp"
+#include "coverage_planner/msg_types.hpp"
 
 namespace coverage_planner
 {
@@ -36,7 +36,7 @@ struct TurnPoint
     TurnType type;                  // 转弯类型
     double angle;                   // 转弯角度 (弧度)
     double angle_change;            // 方向变化量 (弧度)
-    geometry_msgs::msg::Point position; // 转弯位置
+    coverage_planner::Point position; // 转弯位置
     
     // 优化相关
     bool can_merge;                 // 是否可合并
@@ -87,7 +87,7 @@ struct TurnOptimizerConfig
 struct TurnOptimizeResult
 {
     bool success;                           // 优化是否成功
-    std::vector<geometry_msgs::msg::PoseStamped> optimized_path; // 优化后的路径
+    std::vector<coverage_planner::PoseStamped> optimized_path; // 优化后的路径
     int original_turn_count;                // 原始转弯次数
     int optimized_turn_count;               // 优化后转弯次数
     double reduction_rate;                  // 转弯减少率
@@ -140,8 +140,8 @@ public:
      * @return TurnOptimizeResult 优化结果
      */
     TurnOptimizeResult optimize(
-        const std::vector<geometry_msgs::msg::PoseStamped> & path,
-        const nav_msgs::msg::OccupancyGrid & map,
+        const std::vector<coverage_planner::PoseStamped> & path,
+        const coverage_planner::GridMap & map,
         const TurnOptimizerConfig & config = TurnOptimizerConfig());
     
     /**
@@ -152,7 +152,7 @@ public:
      * @return int 转弯次数
      */
     int countTurns(
-        const std::vector<geometry_msgs::msg::PoseStamped> & path,
+        const std::vector<coverage_planner::PoseStamped> & path,
         double angle_threshold = 0.1) const;
     
     /**
@@ -163,7 +163,7 @@ public:
      * @return std::vector<TurnPoint> 转弯点列表
      */
     std::vector<TurnPoint> detectTurnPoints(
-        const std::vector<geometry_msgs::msg::PoseStamped> & path,
+        const std::vector<coverage_planner::PoseStamped> & path,
         double angle_threshold = 0.1) const;
     
     /**
@@ -183,8 +183,8 @@ private:
      * @return double 方向角（弧度，范围[0, 2π)）
      */
     double computeDirection(
-        const geometry_msgs::msg::Point & p1,
-        const geometry_msgs::msg::Point & p2) const;
+        const coverage_planner::Point & p1,
+        const coverage_planner::Point & p2) const;
     
     /**
      * @brief 计算两个方向角之间的角度差
@@ -220,10 +220,10 @@ private:
      * @param original_path 原始路径
      * @param turns 原始转弯点
      * @param merged_turns 合并后的转弯点
-     * @return std::vector<geometry_msgs::msg::PoseStamped> 重建后的路径
+     * @return std::vector<coverage_planner::PoseStamped> 重建后的路径
      */
-    std::vector<geometry_msgs::msg::PoseStamped> rebuildPath(
-        const std::vector<geometry_msgs::msg::PoseStamped> & original_path,
+    std::vector<coverage_planner::PoseStamped> rebuildPath(
+        const std::vector<coverage_planner::PoseStamped> & original_path,
         const std::vector<TurnPoint> & turns,
         const std::vector<TurnPoint> & merged_turns) const;
     
@@ -231,8 +231,8 @@ private:
      * @brief 计算两点之间的距离
      */
     double distance(
-        const geometry_msgs::msg::Point & p1,
-        const geometry_msgs::msg::Point & p2) const
+        const coverage_planner::Point & p1,
+        const coverage_planner::Point & p2) const
     {
         return std::sqrt(
             std::pow(p1.x - p2.x, 2) +
@@ -249,7 +249,7 @@ private:
      * @return double 方向角
      */
     double computeSegmentDirection(
-        const std::vector<geometry_msgs::msg::PoseStamped> & path,
+        const std::vector<coverage_planner::PoseStamped> & path,
         size_t index,
         int window_size = 3) const;
     
@@ -261,11 +261,11 @@ private:
      * @param angle1 起点方向
      * @param angle2 终点方向
      * @param num_points 插值点数
-     * @return std::vector<geometry_msgs::msg::Point> 插值点列表
+     * @return std::vector<coverage_planner::Point> 插值点列表
      */
-    std::vector<geometry_msgs::msg::Point> interpolateSmooth(
-        const geometry_msgs::msg::Point & p1,
-        const geometry_msgs::msg::Point & p2,
+    std::vector<coverage_planner::Point> interpolateSmooth(
+        const coverage_planner::Point & p1,
+        const coverage_planner::Point & p2,
         double angle1,
         double angle2,
         int num_points) const;

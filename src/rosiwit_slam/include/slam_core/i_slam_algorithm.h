@@ -30,6 +30,11 @@ public:
     virtual bool loadMap(const std::string& /*path*/) { return false; }
     /// 保存栅格地图 (PGM + YAML)
     virtual bool saveGridMap(const std::string& /*pgm_path*/, const std::string& /*yaml_path*/, double /*resolution*/) { return false; }
+    /// 生成并返回 2D 占据栅格 (与 saveGridMap 内部**同一条路径**: 逐帧观测 + 地面处理)。
+    /// 供实时 /map 使用, 保证"实时看到的"与"存下来的 pgm"一致。
+    virtual bool getRealtimeGrid(double /*resolution*/, rosiwit_slam::GridInfo& /*out*/) { return false; }
+    /// 按需触发一次全局重定位 (上层 /global_localization 调用)
+    virtual void requestRelocalization() {}
     /// 运行时切换 2D 栅格生成策略 (GridMapFactory 注册名); 默认不支持
     virtual bool setGridMapGenerator(const std::string& /*name*/) { return false; }
     /// 设置管线模式: "idle" / "mapping" / "localization"
@@ -53,6 +58,13 @@ public:
     virtual bool getHighRatePose(double /*t*/, PoseStamped& /*out*/) { return false; }
     /// 位姿 + 协方差 (order [rot(3),trans(3)]; 默认不支持)
     virtual bool getPoseCov(PoseStamped& /*out*/, Eigen::Matrix<double, 6, 6>& /*cov*/) { return false; }
+    /// 定位匹配度 [0,1] (定位模式下才有意义; 默认 0).
+    /// 旧 xz_3d_slam 的 slam/info.matching_degree 就是它 —— 实机实测是真值(如 0.831), 不是 0.
+    virtual double getMatchingDegree() const { return 0.0; }
+    /// 丢掉当前建图结果并重建内部模块, 用于"退出建图后再进建图"**不残留上一轮地图**。
+    /// 旧 xz_3d_slam 每次进建图都会 DELETE_PTR(mapping_ptr_) 重建实例; 我们是单核心实例,
+    /// 只能用显式重建达到同样效果。默认不支持。
+    virtual bool resetForNewMapping(const std::string& /*config_path*/) { return false; }
     /// 绝对约束输入 (地图系位姿 + 协方差; 默认忽略)
     virtual void onAbsolute(const PoseStamped& /*pose*/, const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
 };

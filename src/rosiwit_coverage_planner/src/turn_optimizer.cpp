@@ -20,8 +20,8 @@ void TurnOptimizer::reset()
 }
 
 TurnOptimizeResult TurnOptimizer::optimize(
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
-    const nav_msgs::msg::OccupancyGrid & map,
+    const std::vector<coverage_planner::PoseStamped> & path,
+    const coverage_planner::GridMap & map,
     const TurnOptimizerConfig & config)
 {
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -80,7 +80,7 @@ TurnOptimizeResult TurnOptimizer::optimize(
 }
 
 int TurnOptimizer::countTurns(
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
+    const std::vector<coverage_planner::PoseStamped> & path,
     double angle_threshold) const
 {
     if (path.size() < 3) {
@@ -105,7 +105,7 @@ int TurnOptimizer::countTurns(
 }
 
 std::vector<TurnPoint> TurnOptimizer::detectTurnPoints(
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
+    const std::vector<coverage_planner::PoseStamped> & path,
     double angle_threshold) const
 {
     std::vector<TurnPoint> turns;
@@ -154,8 +154,8 @@ std::vector<TurnPoint> TurnOptimizer::detectTurnPoints(
 }
 
 double TurnOptimizer::computeDirection(
-    const geometry_msgs::msg::Point & p1,
-    const geometry_msgs::msg::Point & p2) const
+    const coverage_planner::Point & p1,
+    const coverage_planner::Point & p2) const
 {
     double dx = p2.x - p1.x;
     double dy = p2.y - p1.y;
@@ -255,8 +255,8 @@ std::vector<TurnPoint> TurnOptimizer::mergeTurnPoints(
     return merged;
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> TurnOptimizer::rebuildPath(
-    const std::vector<geometry_msgs::msg::PoseStamped> & original_path,
+std::vector<coverage_planner::PoseStamped> TurnOptimizer::rebuildPath(
+    const std::vector<coverage_planner::PoseStamped> & original_path,
     const std::vector<TurnPoint> & turns,
     const std::vector<TurnPoint> & merged_turns) const
 {
@@ -270,7 +270,7 @@ std::vector<geometry_msgs::msg::PoseStamped> TurnOptimizer::rebuildPath(
 }
 
 double TurnOptimizer::computeSegmentDirection(
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
+    const std::vector<coverage_planner::PoseStamped> & path,
     size_t index,
     int window_size) const
 {
@@ -304,21 +304,21 @@ double TurnOptimizer::computeSegmentDirection(
     return angle;
 }
 
-std::vector<geometry_msgs::msg::Point> TurnOptimizer::interpolateSmooth(
-    const geometry_msgs::msg::Point & p1,
-    const geometry_msgs::msg::Point & p2,
+std::vector<coverage_planner::Point> TurnOptimizer::interpolateSmooth(
+    const coverage_planner::Point & p1,
+    const coverage_planner::Point & p2,
     double angle1,
     double angle2,
     int num_points) const
 {
-    std::vector<geometry_msgs::msg::Point> points;
+    std::vector<coverage_planner::Point> points;
     
     // 简化实现：线性插值
     // 完整实现需要使用贝塞尔曲线或Dubins曲线
     
     for (int i = 0; i <= num_points; ++i) {
         double t = static_cast<double>(i) / num_points;
-        geometry_msgs::msg::Point pt;
+        coverage_planner::Point pt;
         pt.x = p1.x + t * (p2.x - p1.x);
         pt.y = p1.y + t * (p2.y - p1.y);
         pt.z = 0.0;

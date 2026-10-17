@@ -59,8 +59,20 @@ bool IMUProcessor::initialize(SyncPackage &package)
     m_kf->P().setIdentity();
     m_kf->P().block<3, 3>(6, 6) = M3D::Identity() * 0.00001;
     m_kf->P().block<3, 3>(9, 9) = M3D::Identity() * 0.00001;
-    m_kf->P().block<3, 3>(15, 15) = M3D::Identity() * 0.0001;
-    m_kf->P().block<3, 3>(18, 18) = M3D::Identity() * 0.0001;
+    if (m_config.esti_il)
+    {
+        // esti_il=true: 给 IMU-雷达外参一个**足够松**的先验, 否则 EKF 根本动不了它。
+        // 背景: 这台车旧实现的 conf 里雷达装车 yaw=90°、IMU 装车 yaw=60°, 暗示两者之间
+        // 可能有约 30° 的偏航差; 而实测现象正是"旋转时叠图"(平移时不显现)。
+        // std=20° 让它有空间收敛到 30° 量级的偏差, 又不至于乱跑。
+        m_kf->P().block<3, 3>(15, 15) = M3D::Identity() * 0.12;   // (0.35 rad)^2
+        m_kf->P().block<3, 3>(18, 18) = M3D::Identity() * 0.04;   // 平移 0.2 m
+    }
+    else
+    {
+        m_kf->P().block<3, 3>(15, 15) = M3D::Identity() * 0.0001;
+        m_kf->P().block<3, 3>(18, 18) = M3D::Identity() * 0.0001;
+    }
     // IMU 有空洞, 初始化姿态存在不确定性, 放大初始姿态协方差让 lidar 校正
     m_kf->P().block<3, 3>(0, 0) = M3D::Identity() * 0.001;
 

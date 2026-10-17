@@ -60,9 +60,9 @@ protected:
     /**
      * @brief 创建测试地图
      */
-    nav_msgs::msg::OccupancyGrid createTestMap(int width, int height, double resolution = 0.05)
+    coverage_planner::GridMap createTestMap(int width, int height, double resolution = 0.05)
     {
-        nav_msgs::msg::OccupancyGrid map;
+        coverage_planner::GridMap map;
         map.info.width = width;
         map.info.height = height;
         map.info.resolution = resolution;
@@ -71,8 +71,7 @@ protected:
         map.info.origin.position.z = 0.0;
         map.info.origin.orientation.w = 1.0;
         map.header.frame_id = "map";
-        map.header.stamp.sec = 0;
-        map.header.stamp.nanosec = 0;
+        map.header.stamp = 0.0;
         map.data.resize(width * height, 0);  // 全部空闲
         return map;
     }
@@ -92,10 +91,10 @@ protected:
      * 
      * 验收标准：覆盖率 ≥95%
      */
-    nav_msgs::msg::OccupancyGrid createLShapedRoomMap()
+    coverage_planner::GridMap createLShapedRoomMap()
     {
         // 100x100栅格，每格0.05米 → 5米x5米房间
-        nav_msgs::msg::OccupancyGrid map = createTestMap(100, 100, 0.05);
+        coverage_planner::GridMap map = createTestMap(100, 100, 0.05);
         
         // 设置右上角为障碍物（形成L型空闲区域）
         int corner_x = 66;  // 2/3位置
@@ -123,9 +122,9 @@ protected:
      * 
      * 验收标准：覆盖率 ≥90%
      */
-    nav_msgs::msg::OccupancyGrid createRoomWithColumnMap()
+    coverage_planner::GridMap createRoomWithColumnMap()
     {
-        nav_msgs::msg::OccupancyGrid map = createTestMap(100, 100, 0.05);
+        coverage_planner::GridMap map = createTestMap(100, 100, 0.05);
         
         // 在中心添加柱子（10x10栅格）
         int column_size = 10;
@@ -156,9 +155,9 @@ protected:
      * 
      * 验收标准：覆盖率 ≥85%
      */
-    nav_msgs::msg::OccupancyGrid createMultiRoomMap()
+    coverage_planner::GridMap createMultiRoomMap()
     {
-        nav_msgs::msg::OccupancyGrid map = createTestMap(100, 100, 0.05);
+        coverage_planner::GridMap map = createTestMap(100, 100, 0.05);
         
         // 创建分隔墙（中间留有通道）
         int wall_x = 50;
@@ -184,10 +183,10 @@ protected:
      * 
      * 验收标准：覆盖率 >99%，PCA优化生效
      */
-    nav_msgs::msg::OccupancyGrid createCorridorMap()
+    coverage_planner::GridMap createCorridorMap()
     {
         // 走廊：宽度20栅格，长度200栅格
-        nav_msgs::msg::OccupancyGrid map = createTestMap(200, 20, 0.05);
+        coverage_planner::GridMap map = createTestMap(200, 20, 0.05);
         
         return map;
     }
@@ -195,17 +194,17 @@ protected:
     /**
      * @brief 创建模拟弓字形路径（用于转弯测试）
      */
-    std::vector<geometry_msgs::msg::PoseStamped> createSimulatedZigzagPath(
+    std::vector<coverage_planner::PoseStamped> createSimulatedZigzagPath(
         int num_lines, int points_per_line, double line_spacing = 5.0, double step = 0.3)
     {
-        std::vector<geometry_msgs::msg::PoseStamped> path;
+        std::vector<coverage_planner::PoseStamped> path;
         
         for (int line = 0; line < num_lines; ++line) {
             double y = line * line_spacing;
             bool going_right = (line % 2 == 0);
             
             for (int i = 0; i < points_per_line; ++i) {
-                geometry_msgs::msg::PoseStamped pose;
+                coverage_planner::PoseStamped pose;
                 pose.header.frame_id = "map";
                 
                 if (going_right) {
@@ -227,7 +226,7 @@ protected:
     /**
      * @brief 计算路径总长度
      */
-    double calculatePathLength(const std::vector<geometry_msgs::msg::PoseStamped>& path)
+    double calculatePathLength(const std::vector<coverage_planner::PoseStamped>& path)
     {
         double length = 0.0;
         for (size_t i = 1; i < path.size(); ++i) {
@@ -259,7 +258,7 @@ protected:
  */
 TEST_F(AcceptanceTest, LShapedRoomDecomposition)
 {
-    nav_msgs::msg::OccupancyGrid map = createLShapedRoomMap();
+    coverage_planner::GridMap map = createLShapedRoomMap();
     
     // 执行分区规划
     DecompositionResult result = decomposer_->decompose(map, zone_config_);
@@ -282,7 +281,7 @@ TEST_F(AcceptanceTest, LShapedRoomDecomposition)
  */
 TEST_F(AcceptanceTest, RoomWithColumnDecomposition)
 {
-    nav_msgs::msg::OccupancyGrid map = createRoomWithColumnMap();
+    coverage_planner::GridMap map = createRoomWithColumnMap();
     
     // 执行分区规划
     DecompositionResult result = decomposer_->decompose(map, zone_config_);
@@ -306,7 +305,7 @@ TEST_F(AcceptanceTest, RoomWithColumnDecomposition)
  */
 TEST_F(AcceptanceTest, MultiRoomDecomposition)
 {
-    nav_msgs::msg::OccupancyGrid map = createMultiRoomMap();
+    coverage_planner::GridMap map = createMultiRoomMap();
     
     // 执行分区规划
     DecompositionResult result = decomposer_->decompose(map, zone_config_);
@@ -330,7 +329,7 @@ TEST_F(AcceptanceTest, MultiRoomDecomposition)
  */
 TEST_F(AcceptanceTest, CorridorDecomposition)
 {
-    nav_msgs::msg::OccupancyGrid map = createCorridorMap();
+    coverage_planner::GridMap map = createCorridorMap();
     
     // 执行分区规划
     DecompositionResult result = decomposer_->decompose(map, zone_config_);
@@ -359,7 +358,7 @@ TEST_F(AcceptanceTest, CorridorDecomposition)
  */
 TEST_F(AcceptanceTest, PlanningTimePerformance)
 {
-    nav_msgs::msg::OccupancyGrid map = createTestMap(100, 100, 0.05);
+    coverage_planner::GridMap map = createTestMap(100, 100, 0.05);
     
     auto start = std::chrono::high_resolution_clock::now();
     
@@ -392,10 +391,10 @@ TEST_F(AcceptanceTest, PlanningTimePerformance)
 TEST_F(AcceptanceTest, TurnCountReduction)
 {
     // 创建模拟弓字形路径
-    std::vector<geometry_msgs::msg::PoseStamped> path = createSimulatedZigzagPath(20, 50);
+    std::vector<coverage_planner::PoseStamped> path = createSimulatedZigzagPath(20, 50);
     
     // 创建默认地图
-    nav_msgs::msg::OccupancyGrid default_map = createTestMap(100, 50, 0.3);
+    coverage_planner::GridMap default_map = createTestMap(100, 50, 0.3);
     
     // 检测原始转弯
     int original_turn_count = optimizer_->countTurns(path, turn_config_.angle_threshold);
@@ -420,10 +419,10 @@ TEST_F(AcceptanceTest, TurnCountReduction)
 TEST_F(AcceptanceTest, PathLengthIncrease)
 {
     // 创建模拟路径
-    std::vector<geometry_msgs::msg::PoseStamped> path = createSimulatedZigzagPath(10, 30);
+    std::vector<coverage_planner::PoseStamped> path = createSimulatedZigzagPath(10, 30);
     
     // 创建默认地图
-    nav_msgs::msg::OccupancyGrid default_map = createTestMap(60, 30, 0.3);
+    coverage_planner::GridMap default_map = createTestMap(60, 30, 0.3);
     
     // 计算原始路径长度
     double original_length = calculatePathLength(path);
@@ -458,7 +457,7 @@ TEST_F(AcceptanceTest, BackwardCompatibility)
     no_optimization_config.enable_pca_direction = false;
     
     // 创建矩形地图
-    nav_msgs::msg::OccupancyGrid rect_map = createTestMap(50, 50, 0.05);
+    coverage_planner::GridMap rect_map = createTestMap(50, 50, 0.05);
     
     // 禁用优化时的分区
     DecompositionResult result = decomposer_->decompose(rect_map, no_optimization_config);
@@ -486,7 +485,7 @@ TEST_F(AcceptanceTest, BackwardCompatibility)
 TEST_F(AcceptanceTest, EndToEndPlanningWorkflow)
 {
     // 创建L型房间地图
-    nav_msgs::msg::OccupancyGrid map = createLShapedRoomMap();
+    coverage_planner::GridMap map = createLShapedRoomMap();
     
     EXPECT_NO_THROW({
         // Step 1: 分区规划
@@ -497,7 +496,7 @@ TEST_F(AcceptanceTest, EndToEndPlanningWorkflow)
         EXPECT_GE(zone_result.zones.size(), static_cast<size_t>(1));
         
         // Step 2: 转弯优化（使用模拟路径）
-        std::vector<geometry_msgs::msg::PoseStamped> simulated_path = 
+        std::vector<coverage_planner::PoseStamped> simulated_path = 
             createSimulatedZigzagPath(10, 20);
         
         TurnOptimizeResult turn_result = optimizer_->optimize(simulated_path, map, turn_config_);
@@ -516,7 +515,7 @@ TEST_F(AcceptanceTest, EndToEndPlanningWorkflow)
  */
 TEST_F(AcceptanceTest, MultipleScenarioPlanning)
 {
-    std::vector<nav_msgs::msg::OccupancyGrid> test_maps = {
+    std::vector<coverage_planner::GridMap> test_maps = {
         createLShapedRoomMap(),
         createRoomWithColumnMap(),
         createMultiRoomMap(),
@@ -556,7 +555,7 @@ TEST_F(AcceptanceTest, MultipleScenarioPlanning)
 TEST_F(AcceptanceTest, InvalidInputHandling)
 {
     // 空地图测试
-    nav_msgs::msg::OccupancyGrid empty_map;
+    coverage_planner::GridMap empty_map;
     empty_map.info.width = 0;
     empty_map.info.height = 0;
     
@@ -565,7 +564,7 @@ TEST_F(AcceptanceTest, InvalidInputHandling)
     });
     
     // 全障碍物地图测试
-    nav_msgs::msg::OccupancyGrid full_obstacle_map = createTestMap(10, 10);
+    coverage_planner::GridMap full_obstacle_map = createTestMap(10, 10);
     for (int i = 0; i < 100; ++i) {
         full_obstacle_map.data[i] = 100;
     }
@@ -577,8 +576,8 @@ TEST_F(AcceptanceTest, InvalidInputHandling)
     });
     
     // 空路径转弯测试
-    std::vector<geometry_msgs::msg::PoseStamped> empty_path;
-    nav_msgs::msg::OccupancyGrid default_map = createTestMap(50, 50);
+    std::vector<coverage_planner::PoseStamped> empty_path;
+    coverage_planner::GridMap default_map = createTestMap(50, 50);
     
     EXPECT_NO_THROW({
         TurnOptimizeResult result = optimizer_->optimize(empty_path, default_map, turn_config_);
@@ -595,7 +594,7 @@ TEST_F(AcceptanceTest, InvalidInputHandling)
  */
 TEST_F(AcceptanceTest, RectangularRoomRegression)
 {
-    nav_msgs::msg::OccupancyGrid rect_map = createTestMap(100, 100, 0.05);
+    coverage_planner::GridMap rect_map = createTestMap(100, 100, 0.05);
     
     DecompositionResult result = decomposer_->decompose(rect_map, zone_config_);
     
@@ -612,7 +611,7 @@ TEST_F(AcceptanceTest, RectangularRoomRegression)
  */
 TEST_F(AcceptanceTest, SingleConnectedComponentRegression)
 {
-    nav_msgs::msg::OccupancyGrid simple_map = createTestMap(50, 50, 0.1);
+    coverage_planner::GridMap simple_map = createTestMap(50, 50, 0.1);
     
     DecompositionResult result = decomposer_->decompose(simple_map, zone_config_);
     

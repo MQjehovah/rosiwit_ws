@@ -6,8 +6,8 @@
 
 #include <vector>
 #include <opencv2/opencv.hpp>
-#include "nav_msgs/msg/occupancy_grid.hpp"
-#include "geometry_msgs/msg/point.hpp"
+#include "coverage_planner/msg_types.hpp"
+#include "coverage_planner/msg_types.hpp"
 
 namespace coverage_planner
 {
@@ -81,10 +81,10 @@ public:
      * 
      * @param map 输入地图
      * @param config 预处理配置
-     * @return nav_msgs::msg::OccupancyGrid 处理后的地图
+     * @return coverage_planner::GridMap 处理后的地图
      */
-    nav_msgs::msg::OccupancyGrid preprocess(
-        const nav_msgs::msg::OccupancyGrid & map,
+    coverage_planner::GridMap preprocess(
+        const coverage_planner::GridMap & map,
         const PreprocessConfig & config = PreprocessConfig());
 
     /**
@@ -93,10 +93,10 @@ public:
      * @param map 输入地图
      * @param kernel_size 核大小
      * @param iterations 迭代次数
-     * @return nav_msgs::msg::OccupancyGrid 处理后的地图
+     * @return coverage_planner::GridMap 处理后的地图
      */
-    nav_msgs::msg::OccupancyGrid morphologicalOpening(
-        const nav_msgs::msg::OccupancyGrid & map,
+    coverage_planner::GridMap morphologicalOpening(
+        const coverage_planner::GridMap & map,
         int kernel_size = 3,
         int iterations = 1);
 
@@ -106,10 +106,10 @@ public:
      * @param map 输入地图
      * @param kernel_size 核大小
      * @param iterations 迭代次数
-     * @return nav_msgs::msg::OccupancyGrid 处理后的地图
+     * @return coverage_planner::GridMap 处理后的地图
      */
-    nav_msgs::msg::OccupancyGrid morphologicalClosing(
-        const nav_msgs::msg::OccupancyGrid & map,
+    coverage_planner::GridMap morphologicalClosing(
+        const coverage_planner::GridMap & map,
         int kernel_size = 3,
         int iterations = 1);
 
@@ -119,10 +119,10 @@ public:
      * @param map 输入地图
      * @param merge_distance 合并距离阈值（栅格数）
      * @param min_obstacle_size 最小障碍物尺寸
-     * @return nav_msgs::msg::OccupancyGrid 处理后的地图
+     * @return coverage_planner::GridMap 处理后的地图
      */
-    nav_msgs::msg::OccupancyGrid mergeNearbyObstacles(
-        const nav_msgs::msg::OccupancyGrid & map,
+    coverage_planner::GridMap mergeNearbyObstacles(
+        const coverage_planner::GridMap & map,
         double merge_distance = 3.0,
         int min_obstacle_size = 2);
 
@@ -131,10 +131,10 @@ public:
      * 
      * @param map 输入地图
      * @param max_hole_size 最大空洞尺寸
-     * @return nav_msgs::msg::OccupancyGrid 处理后的地图
+     * @return coverage_planner::GridMap 处理后的地图
      */
-    nav_msgs::msg::OccupancyGrid fillSmallHoles(
-        const nav_msgs::msg::OccupancyGrid & map,
+    coverage_planner::GridMap fillSmallHoles(
+        const coverage_planner::GridMap & map,
         int max_hole_size = 5);
 
     /**
@@ -142,10 +142,10 @@ public:
      * 
      * @param map 输入地图
      * @param min_neighbors 最小邻居数（少于此值视为噪点）
-     * @return nav_msgs::msg::OccupancyGrid 处理后的地图
+     * @return coverage_planner::GridMap 处理后的地图
      */
-    nav_msgs::msg::OccupancyGrid removeIsolatedNoise(
-        const nav_msgs::msg::OccupancyGrid & map,
+    coverage_planner::GridMap removeIsolatedNoise(
+        const coverage_planner::GridMap & map,
         int min_neighbors = 2);
 
     /**
@@ -155,7 +155,7 @@ public:
      * @return std::vector<RegionInfo> 障碍物区域信息列表
      */
     std::vector<RegionInfo> extractObstacleRegions(
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
 
     /**
      * @brief 提取空闲区域
@@ -164,7 +164,7 @@ public:
      * @return std::vector<RegionInfo> 空闲区域信息列表
      */
     std::vector<RegionInfo> extractFreeRegions(
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
 
     /**
      * @brief 将OccupancyGrid转换为OpenCV Mat
@@ -172,18 +172,18 @@ public:
      * @param map 输入地图
      * @return cv::Mat OpenCV图像（0=空闲，255=障碍物）
      */
-    static cv::Mat occupancyGridToMat(const nav_msgs::msg::OccupancyGrid & map);
+    static cv::Mat occupancyGridToMat(const coverage_planner::GridMap & map);
 
     /**
      * @brief 将OpenCV Mat转换为OccupancyGrid
      * 
      * @param mat OpenCV图像（0=空闲，255=障碍物）
      * @param original_map 原始地图（用于获取元数据）
-     * @return nav_msgs::msg::OccupancyGrid 输出地图
+     * @return coverage_planner::GridMap 输出地图
      */
-    static nav_msgs::msg::OccupancyGrid matToOccupancyGrid(
+    static coverage_planner::GridMap matToOccupancyGrid(
         const cv::Mat & mat,
-        const nav_msgs::msg::OccupancyGrid & original_map);
+        const coverage_planner::GridMap & original_map);
 
 private:
     /**

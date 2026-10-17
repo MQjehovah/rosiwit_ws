@@ -1,0 +1,26 @@
+[topics]
+global_map                        sensor_msgs/PointCloud2
+global_grid_map                   nav_msgs/OccupancyGrid
+/map                              nav_msgs/OccupancyGrid
+curr_scan_point                   sensor_msgs/PointCloud2
+scan_f_map                        sensor_msgs/PointCloud
+curr_submap_point                 sensor_msgs/PointCloud2
+or_curr_scan_point                sensor_msgs/PointCloud2
+curr_localization_pose            geometry_msgs/PoseStamped
+mapping_path                      nav_msgs/Path
+loop_constraint                   visualization_msgs/MarkerArray
+slam/info                         xzrobot_ros_dependency/SlamInfo
+points_2d                         sensor_msgs/PointCloud2
+slam_warning_code                 std_msgs/String
+origin_point                      sensor_msgs/PointCloud2
+[services]
+/slam/mode_switch                 xzrobot_ros_dependency/SlamModeSwitchService
+/switch_map                       xzrobot_ros_dependency/SwitchMap
+/relocation                       xzrobot_ros_dependency/Relocation
+/stop_map_operation               xzrobot_ros_dependency/StopMapOperation
+/global_localization              std_srvs/Empty
+/finish_task                      xzrobot_ros_dependency/CommonBoolService
+/start_task                       xzrobot_ros_dependency/CommonBoolService
+update_map_operation              xzrobot_ros_dependency/UpdateMap
+[params]
+/machine/model                    string

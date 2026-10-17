@@ -62,8 +62,8 @@ public:
      * @brief 规划全覆盖路径
      */
     PlannerResult plan(
-        const nav_msgs::msg::OccupancyGrid & map,
-        const geometry_msgs::msg::Pose & start_pose,
+        const coverage_planner::GridMap & map,
+        const coverage_planner::Pose & start_pose,
         const PlannerConfig & config) override;
 
     /**
@@ -92,14 +92,14 @@ private:
     TurnOptimizer turn_optimizer_;
 
     // 内部状态
-    nav_msgs::msg::OccupancyGrid inflated_map_;
+    coverage_planner::GridMap inflated_map_;
     std::vector<std::vector<bool>> coverage_mask_;
 
     /**
      * @brief 执行螺旋规划
      */
-    std::vector<geometry_msgs::msg::PoseStamped> performSpiralPlanning(
-        const nav_msgs::msg::OccupancyGrid & map,
+    std::vector<coverage_planner::PoseStamped> performSpiralPlanning(
+        const coverage_planner::GridMap & map,
         const Point2D & start_grid,
         const RegionBoundary & region);
 
@@ -107,7 +107,7 @@ private:
      * @brief 生成螺旋路径
      */
     std::vector<Point2D> generateSpiralPath(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const RegionBoundary & region,
         const Point2D & start);
 
@@ -115,25 +115,25 @@ private:
      * @brief 分解非凸区域
      */
     std::vector<RegionBoundary> decomposeRegion(
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
 
     /**
      * @brief 检测区域是否为凸区域
      */
     bool isConvexRegion(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const RegionBoundary & region);
 
     /**
      * @brief 获取区域的边界
      */
-    RegionBoundary getRegionBoundary(const nav_msgs::msg::OccupancyGrid & map);
+    RegionBoundary getRegionBoundary(const coverage_planner::GridMap & map);
 
     /**
      * @brief 沿着边界移动一格
      */
     Point2D moveAlongBoundary(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const Point2D & current,
         const RegionBoundary & boundary,
         int & direction);
@@ -149,14 +149,14 @@ private:
      * @brief 检查边界是否有效
      */
     bool isValidBoundary(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const RegionBoundary & boundary);
 
     /**
      * @brief 连接多个螺旋区域
      */
     std::vector<Point2D> connectSpiralRegions(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const std::vector<std::vector<Point2D>> & spiral_paths,
         const Point2D & start);
 
@@ -164,15 +164,15 @@ private:
      * @brief BFS寻路连接两点
      */
     std::vector<Point2D> findPath(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const Point2D & start,
         const Point2D & goal);
 
     /**
      * @brief 将栅格点转换为路径点
      */
-    std::vector<geometry_msgs::msg::PoseStamped> convertToPath(
-        const nav_msgs::msg::OccupancyGrid & map,
+    std::vector<coverage_planner::PoseStamped> convertToPath(
+        const coverage_planner::GridMap & map,
         const std::vector<Point2D> & grid_points);
 
     /**
@@ -184,15 +184,15 @@ private:
      * @brief 降级到弓字形算法
      */
     PlannerResult fallbackToZigzag(
-        const nav_msgs::msg::OccupancyGrid & map,
-        const geometry_msgs::msg::Pose & start_pose,
+        const coverage_planner::GridMap & map,
+        const coverage_planner::Pose & start_pose,
         const PlannerConfig & config);
 
     /**
      * @brief 填充螺旋内部未被覆盖的区域
      */
     std::vector<Point2D> fillUncoveredAreas(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const std::vector<Point2D> & spiral_path);
 };
 

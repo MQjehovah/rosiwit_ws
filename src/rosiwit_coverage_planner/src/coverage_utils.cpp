@@ -2,9 +2,7 @@
 // Licensed under the Apache-2.0 license.
 
 #include "coverage_planner/coverage_utils.hpp"
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <rclcpp/rclcpp.hpp>
+
 #include <cmath>
 #include <limits>
 
@@ -13,13 +11,13 @@ namespace coverage_planner
 
 // ==================== MapUtils实现 ====================
 
-bool MapUtils::isInBounds(const nav_msgs::msg::OccupancyGrid & map, int x, int y)
+bool MapUtils::isInBounds(const coverage_planner::GridMap & map, int x, int y)
 {
     return x >= 0 && x < static_cast<int>(map.info.width) &&
            y >= 0 && y < static_cast<int>(map.info.height);
 }
 
-bool MapUtils::isObstacle(const nav_msgs::msg::OccupancyGrid & map, int x, int y, int threshold)
+bool MapUtils::isObstacle(const coverage_planner::GridMap & map, int x, int y, int threshold)
 {
     if (!isInBounds(map, x, y)) {
         return true;  // 边界外视为障碍物
@@ -28,7 +26,7 @@ bool MapUtils::isObstacle(const nav_msgs::msg::OccupancyGrid & map, int x, int y
     return map.data[index] >= threshold || map.data[index] < 0;
 }
 
-bool MapUtils::isFree(const nav_msgs::msg::OccupancyGrid & map, int x, int y, int threshold)
+bool MapUtils::isFree(const coverage_planner::GridMap & map, int x, int y, int threshold)
 {
     if (!isInBounds(map, x, y)) {
         return false;
@@ -37,11 +35,11 @@ bool MapUtils::isFree(const nav_msgs::msg::OccupancyGrid & map, int x, int y, in
     return map.data[index] >= 0 && map.data[index] < threshold;
 }
 
-nav_msgs::msg::OccupancyGrid MapUtils::inflateMap(
-    const nav_msgs::msg::OccupancyGrid & map,
+coverage_planner::GridMap MapUtils::inflateMap(
+    const coverage_planner::GridMap & map,
     double robot_radius)
 {
-    nav_msgs::msg::OccupancyGrid inflated = map;
+    coverage_planner::GridMap inflated = map;
 
     int inflation_cells = static_cast<int>(std::ceil(robot_radius / map.info.resolution));
     std::vector<int> obstacle_indices;
@@ -78,7 +76,7 @@ nav_msgs::msg::OccupancyGrid MapUtils::inflateMap(
 }
 
 std::vector<Point2D> MapUtils::getReachableCells(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const Point2D & start)
 {
     std::vector<Point2D> reachable;
@@ -119,7 +117,7 @@ std::vector<Point2D> MapUtils::getReachableCells(
 }
 
 Point2D MapUtils::worldToGrid(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     double world_x, double world_y)
 {
     int grid_x = static_cast<int>((world_x - map.info.origin.position.x) / map.info.resolution);
@@ -128,7 +126,7 @@ Point2D MapUtils::worldToGrid(
 }
 
 void MapUtils::gridToWorld(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     int grid_x, int grid_y,
     double & world_x, double & world_y)
 {
@@ -136,7 +134,7 @@ void MapUtils::gridToWorld(
     world_y = map.info.origin.position.y + (grid_y + 0.5) * map.info.resolution;
 }
 
-std::vector<Point2D> MapUtils::getFreeCells(const nav_msgs::msg::OccupancyGrid & map)
+std::vector<Point2D> MapUtils::getFreeCells(const coverage_planner::GridMap & map)
 {
     std::vector<Point2D> free_cells;
 
@@ -151,7 +149,7 @@ std::vector<Point2D> MapUtils::getFreeCells(const nav_msgs::msg::OccupancyGrid &
     return free_cells;
 }
 
-int MapUtils::getOptimalScanDirection(const nav_msgs::msg::OccupancyGrid & map)
+int MapUtils::getOptimalScanDirection(const coverage_planner::GridMap & map)
 {
     // 计算水平方向的扫描线数量
     int horizontal_scans = 0;
@@ -191,7 +189,7 @@ int MapUtils::getOptimalScanDirection(const nav_msgs::msg::OccupancyGrid & map)
 
 // ==================== PathUtils实现 ====================
 
-double PathUtils::calculatePathLength(const std::vector<geometry_msgs::msg::PoseStamped> & path)
+double PathUtils::calculatePathLength(const std::vector<coverage_planner::PoseStamped> & path)
 {
     if (path.size() < 2) {
         return 0.0;
@@ -205,7 +203,7 @@ double PathUtils::calculatePathLength(const std::vector<geometry_msgs::msg::Pose
     return total_length;
 }
 
-int PathUtils::calculateTurnCount(const std::vector<geometry_msgs::msg::PoseStamped> & path)
+int PathUtils::calculateTurnCount(const std::vector<coverage_planner::PoseStamped> & path)
 {
     if (path.size() < 3) {
         return 0;
@@ -224,15 +222,15 @@ int PathUtils::calculateTurnCount(const std::vector<geometry_msgs::msg::PoseStam
     return turn_count;
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> PathUtils::smoothPath(
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
+std::vector<coverage_planner::PoseStamped> PathUtils::smoothPath(
+    const std::vector<coverage_planner::PoseStamped> & path,
     double resolution)
 {
     if (path.size() < 3) {
         return path;
     }
 
-    std::vector<geometry_msgs::msg::PoseStamped> smoothed;
+    std::vector<coverage_planner::PoseStamped> smoothed;
     smoothed.push_back(path.front());
 
     for (size_t i = 1; i < path.size() - 1; ++i) {
@@ -251,15 +249,15 @@ std::vector<geometry_msgs::msg::PoseStamped> PathUtils::smoothPath(
     return smoothed;
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> PathUtils::interpolatePath(
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
+std::vector<coverage_planner::PoseStamped> PathUtils::interpolatePath(
+    const std::vector<coverage_planner::PoseStamped> & path,
     double max_distance)
 {
     if (path.size() < 2) {
         return path;
     }
 
-    std::vector<geometry_msgs::msg::PoseStamped> interpolated;
+    std::vector<coverage_planner::PoseStamped> interpolated;
     interpolated.push_back(path.front());
 
     for (size_t i = 1; i < path.size(); ++i) {
@@ -270,7 +268,7 @@ std::vector<geometry_msgs::msg::PoseStamped> PathUtils::interpolatePath(
 
             for (int j = 1; j <= num_points; ++j) {
                 double t = static_cast<double>(j) / (num_points + 1);
-                geometry_msgs::msg::PoseStamped interp_pose;
+                coverage_planner::PoseStamped interp_pose;
                 interp_pose.header = path[i].header;
                 interp_pose.pose.position.x = path[i - 1].pose.position.x +
                     t * (path[i].pose.position.x - path[i - 1].pose.position.x);
@@ -283,10 +281,7 @@ std::vector<geometry_msgs::msg::PoseStamped> PathUtils::interpolatePath(
                     path[i].pose.position.y - path[i - 1].pose.position.y,
                     path[i].pose.position.x - path[i - 1].pose.position.x);
 
-                tf2::Quaternion q;
-                q.setRPY(0, 0, yaw);
-                // 使用 tf2_geometry_msgs 的 toMsg 函数
-                interp_pose.pose.orientation = tf2::toMsg(q);
+                interp_pose.pose.orientation = coverage_planner::quaternionFromYaw(yaw);
 
                 interpolated.push_back(interp_pose);
             }
@@ -299,8 +294,8 @@ std::vector<geometry_msgs::msg::PoseStamped> PathUtils::interpolatePath(
 }
 
 double PathUtils::distanceBetween(
-    const geometry_msgs::msg::PoseStamped & pose1,
-    const geometry_msgs::msg::PoseStamped & pose2)
+    const coverage_planner::PoseStamped & pose1,
+    const coverage_planner::PoseStamped & pose2)
 {
     double dx = pose2.pose.position.x - pose1.pose.position.x;
     double dy = pose2.pose.position.y - pose1.pose.position.y;
@@ -309,30 +304,27 @@ double PathUtils::distanceBetween(
 }
 
 double PathUtils::angleBetween(
-    const geometry_msgs::msg::PoseStamped & pose1,
-    const geometry_msgs::msg::PoseStamped & pose2)
+    const coverage_planner::PoseStamped & pose1,
+    const coverage_planner::PoseStamped & pose2)
 {
     double dx = pose2.pose.position.x - pose1.pose.position.x;
     double dy = pose2.pose.position.y - pose1.pose.position.y;
     return std::atan2(dy, dx);
 }
 
-geometry_msgs::msg::PoseStamped PathUtils::createPoseStamped(
+coverage_planner::PoseStamped PathUtils::createPoseStamped(
     double x, double y, double yaw,
     const std::string & frame_id)
 {
-    geometry_msgs::msg::PoseStamped pose;
+    coverage_planner::PoseStamped pose;
     pose.header.frame_id = frame_id;
-    pose.header.stamp.sec = 0;
-    pose.header.stamp.nanosec = 0;
+    pose.header.stamp = 0.0;
 
     pose.pose.position.x = x;
     pose.pose.position.y = y;
     pose.pose.position.z = 0.0;
 
-    tf2::Quaternion q;
-    q.setRPY(0, 0, yaw);
-    pose.pose.orientation = tf2::toMsg(q);
+    pose.pose.orientation = coverage_planner::quaternionFromYaw(yaw);
 
     return pose;
 }
@@ -340,8 +332,8 @@ geometry_msgs::msg::PoseStamped PathUtils::createPoseStamped(
 // ==================== CoverageCalculator实现 ====================
 
 CoverageStats CoverageCalculator::calculateCoverage(
-    const nav_msgs::msg::OccupancyGrid & map,
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
+    const coverage_planner::GridMap & map,
+    const std::vector<coverage_planner::PoseStamped> & path,
     double robot_radius)
 {
     CoverageStats stats;
@@ -349,7 +341,7 @@ CoverageStats CoverageCalculator::calculateCoverage(
     // VULN-001修复：防止整数溢出（Critical安全漏洞）
     // 检查地图尺寸是否超过安全限制（46340x46340是32位int的最大安全值）
     if (map.info.width > 46340 || map.info.height > 46340) {
-        RCLCPP_ERROR(rclcpp::get_logger("coverage_utils"),
+        COV_ERROR(
             "Map size (%u x %u) exceeds safe limit (max 46340x46340), rejecting to prevent integer overflow",
             map.info.width, map.info.height);
         stats.coverage_rate = 0.0;
@@ -391,8 +383,8 @@ CoverageStats CoverageCalculator::calculateCoverage(
 }
 
 std::vector<std::vector<bool>> CoverageCalculator::markCoverage(
-    const nav_msgs::msg::OccupancyGrid & map,
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
+    const coverage_planner::GridMap & map,
+    const std::vector<coverage_planner::PoseStamped> & path,
     double robot_radius)
 {
     std::vector<std::vector<bool>> coverage_mask(
@@ -423,7 +415,7 @@ std::vector<std::vector<bool>> CoverageCalculator::markCoverage(
 }
 
 double CoverageCalculator::calculateCoverageRate(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const std::vector<std::vector<bool>> & coverage_mask)
 {
     int free_cells = 0;

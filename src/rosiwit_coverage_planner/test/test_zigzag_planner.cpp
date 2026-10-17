@@ -23,9 +23,9 @@ protected:
         config_.direction_optimization = 2;
     }
     
-    nav_msgs::msg::OccupancyGrid createEmptyMap(int width, int height, double resolution = 0.1)
+    coverage_planner::GridMap createEmptyMap(int width, int height, double resolution = 0.1)
     {
-        nav_msgs::msg::OccupancyGrid map;
+        coverage_planner::GridMap map;
         map.info.width = width;
         map.info.height = height;
         map.info.resolution = resolution;
@@ -34,18 +34,17 @@ protected:
         map.info.origin.position.z = 0.0;
         map.info.origin.orientation.w = 1.0;
         map.header.frame_id = "map";
-        map.header.stamp.sec = 0;
-        map.header.stamp.nanosec = 0;
+        map.header.stamp = 0.0;
         
         map.data.resize(width * height, 0);  // 全部空闲
         
         return map;
     }
     
-    nav_msgs::msg::OccupancyGrid createMapWithCentralObstacle(
+    coverage_planner::GridMap createMapWithCentralObstacle(
         int width, int height, int obstacle_size)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
         
         int center_x = width / 2;
         int center_y = height / 2;
@@ -62,9 +61,9 @@ protected:
         return map;
     }
     
-    nav_msgs::msg::OccupancyGrid createLShapedMap(int width, int height)
+    coverage_planner::GridMap createLShapedMap(int width, int height)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
         
         // 创建L形障碍物（右上角和右下角）
         for (int y = height - height / 4; y < height; ++y) {
@@ -82,9 +81,9 @@ protected:
         return map;
     }
     
-    geometry_msgs::msg::Pose createStartPose(double x, double y)
+    coverage_planner::Pose createStartPose(double x, double y)
     {
-        geometry_msgs::msg::Pose pose;
+        coverage_planner::Pose pose;
         pose.position.x = x;
         pose.position.y = y;
         pose.position.z = 0.0;
@@ -99,8 +98,8 @@ protected:
 // 测试：空旷地图上的弓字形规划
 TEST_F(ZigzagPlannerTest, TestEmptyMapPlanning)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -113,8 +112,8 @@ TEST_F(ZigzagPlannerTest, TestEmptyMapPlanning)
 // 测试：带障碍物的地图规划
 TEST_F(ZigzagPlannerTest, TestMapWithObstacle)
 {
-    nav_msgs::msg::OccupancyGrid map = createMapWithCentralObstacle(50, 50, 10);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::GridMap map = createMapWithCentralObstacle(50, 50, 10);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -126,8 +125,8 @@ TEST_F(ZigzagPlannerTest, TestMapWithObstacle)
 // 测试：小尺寸地图
 TEST_F(ZigzagPlannerTest, TestSmallMap)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(10, 10);
-    geometry_msgs::msg::Pose start_pose = createStartPose(0.5, 0.5);
+    coverage_planner::GridMap map = createEmptyMap(10, 10);
+    coverage_planner::Pose start_pose = createStartPose(0.5, 0.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -138,8 +137,8 @@ TEST_F(ZigzagPlannerTest, TestSmallMap)
 // 测试：大尺寸地图
 TEST_F(ZigzagPlannerTest, TestLargeMap)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(5.0, 5.0);
+    coverage_planner::GridMap map = createEmptyMap(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(5.0, 5.0);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -157,8 +156,8 @@ TEST_F(ZigzagPlannerTest, TestPlannerName)
 // 测试：规划器重置
 TEST_F(ZigzagPlannerTest, TestReset)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(20, 20);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.0, 1.0);
+    coverage_planner::GridMap map = createEmptyMap(20, 20);
+    coverage_planner::Pose start_pose = createStartPose(1.0, 1.0);
     
     PlannerResult result1 = planner_->plan(map, start_pose, config_);
     EXPECT_TRUE(result1.success);
@@ -172,10 +171,10 @@ TEST_F(ZigzagPlannerTest, TestReset)
 // 测试：无效起始位置（在障碍物上）
 TEST_F(ZigzagPlannerTest, TestInvalidStartPosition)
 {
-    nav_msgs::msg::OccupancyGrid map = createMapWithCentralObstacle(50, 50, 20);
+    coverage_planner::GridMap map = createMapWithCentralObstacle(50, 50, 20);
     
     // 将起始位置放在障碍物中心
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -187,8 +186,8 @@ TEST_F(ZigzagPlannerTest, TestInvalidStartPosition)
 // 测试：不同分辨率地图
 TEST_F(ZigzagPlannerTest, TestDifferentResolution)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50, 0.05);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.25, 1.25);
+    coverage_planner::GridMap map = createEmptyMap(50, 50, 0.05);
+    coverage_planner::Pose start_pose = createStartPose(1.25, 1.25);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -201,8 +200,8 @@ TEST_F(ZigzagPlannerTest, TestHorizontalScanDirection)
 {
     config_.direction_optimization = 0;  // 强制水平
     
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 20);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.0);
+    coverage_planner::GridMap map = createEmptyMap(30, 20);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.0);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -215,8 +214,8 @@ TEST_F(ZigzagPlannerTest, TestVerticalScanDirection)
 {
     config_.direction_optimization = 1;  // 强制垂直
     
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 20);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.0);
+    coverage_planner::GridMap map = createEmptyMap(30, 20);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.0);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -230,15 +229,15 @@ TEST_F(ZigzagPlannerTest, TestAutoDirectionSelection)
     config_.direction_optimization = 2;  // 自动
     
     // 宽地图（水平应该更优）
-    nav_msgs::msg::OccupancyGrid wide_map = createEmptyMap(40, 20);
-    geometry_msgs::msg::Pose start_pose1 = createStartPose(2.0, 1.0);
+    coverage_planner::GridMap wide_map = createEmptyMap(40, 20);
+    coverage_planner::Pose start_pose1 = createStartPose(2.0, 1.0);
     
     PlannerResult result1 = planner_->plan(wide_map, start_pose1, config_);
     EXPECT_TRUE(result1.success);
     
     // 高地图（垂直应该更优）
-    nav_msgs::msg::OccupancyGrid tall_map = createEmptyMap(20, 40);
-    geometry_msgs::msg::Pose start_pose2 = createStartPose(1.0, 2.0);
+    coverage_planner::GridMap tall_map = createEmptyMap(20, 40);
+    coverage_planner::Pose start_pose2 = createStartPose(1.0, 2.0);
     
     PlannerResult result2 = planner_->plan(tall_map, start_pose2, config_);
     EXPECT_TRUE(result2.success);
@@ -249,8 +248,8 @@ TEST_F(ZigzagPlannerTest, TestOptimizationDisabled)
 {
     config_.enable_optimization = false;
     
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -261,8 +260,8 @@ TEST_F(ZigzagPlannerTest, TestOptimizationDisabled)
 // 测试：转弯次数统计
 TEST_F(ZigzagPlannerTest, TestTurnCount)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -276,8 +275,8 @@ TEST_F(ZigzagPlannerTest, TestTurnCount)
 // 测试：复杂障碍物布局
 TEST_F(ZigzagPlannerTest, TestComplexObstacles)
 {
-    nav_msgs::msg::OccupancyGrid map = createLShapedMap(50, 50);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::GridMap map = createLShapedMap(50, 50);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     

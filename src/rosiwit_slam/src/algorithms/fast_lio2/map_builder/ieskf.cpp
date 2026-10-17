@@ -1,14 +1,115 @@
 #include "ieskf.h"
 
+#include <cmath>
+#include <type_traits>
+#include <utility>
+
 double State::gravity = 9.81;
+
+namespace
+{
+// ===========================================================================
+// Sophus 版本兼容垫片
+//   Sophus::SO3::leftJacobian / leftJacobianInverse 是较新版本才提供的静态成员
+//   (melodic/18.04 的 sophus 1.0.1 没有)。这里编译期探测: 有就走 Sophus 原实现
+//   (保证 Humble 等新环境的行为逐位不变), 没有就走下面的闭式解, 两者数学等价。
+// ===========================================================================
+template <typename T, typename = void>
+struct has_left_jacobian : std::false_type
+{
+};
+
+template <typename T>
+struct has_left_jacobian<T, decltype(void(T::leftJacobian(std::declval<V3D>())))> : std::true_type
+{
+};
+
+template <typename T, typename = void>
+struct has_left_jacobian_inverse : std::false_type
+{
+};
+
+template <typename T>
+struct has_left_jacobian_inverse<T, decltype(void(T::leftJacobianInverse(std::declval<V3D>())))>
+    : std::true_type
+{
+};
+
+// SO(3) 左雅可比闭式解 (与 Sophus::SO3::leftJacobian(phi) 等价):
+//   J_l(phi) = I + (1-cos t)/t^2 * phi^ + (t-sin t)/t^3 * phi^^2,   t = |phi|
+// t -> 0 时取级数极限以避免除零: (1-cos t)/t^2 -> 1/2 - t^2/24,
+//                               (t-sin t)/t^3 -> 1/6 - t^2/120
+M3D so3LeftJacobian(const V3D &phi)
+{
+    const double t2 = phi.squaredNorm();
+    const double t = std::sqrt(t2);
+    const M3D phi_hat = Sophus::SO3d::hat(phi);
+    const M3D phi_hat2 = phi_hat * phi_hat;
+
+    double a; // (1 - cos t) / t^2
+    double b; // (t - sin t) / t^3
+    if (t > 1e-4)
+    {
+        a = (1.0 - std::cos(t)) / t2;
+        b = (t - std::sin(t)) / (t2 * t);
+    }
+    else
+    {
+        a = 0.5 - t2 / 24.0;
+        b = 1.0 / 6.0 - t2 / 120.0;
+    }
+    return M3D::Identity() + a * phi_hat + b * phi_hat2;
+}
+
+// SO(3) 左雅可比之逆闭式解 (与 Sophus::SO3::leftJacobianInverse(phi) 等价):
+//   J_l^-1(phi) = I - 1/2 * phi^ + (1/t^2 - (1+cos t)/(2 t sin t)) * phi^^2
+// t -> 0 时上式中括号 -> 1/12 + t^2/720
+M3D so3LeftJacobianInverse(const V3D &phi)
+{
+    const double t2 = phi.squaredNorm();
+    const double t = std::sqrt(t2);
+    const M3D phi_hat = Sophus::SO3d::hat(phi);
+    const M3D phi_hat2 = phi_hat * phi_hat;
+
+    double c; // 1/t^2 - (1 + cos t) / (2 t sin t)
+    if (t > 1e-4)
+    {
+        c = 1.0 / t2 - (1.0 + std::cos(t)) / (2.0 * t * std::sin(t));
+    }
+    else
+    {
+        c = 1.0 / 12.0 + t2 / 720.0;
+    }
+    return M3D::Identity() - 0.5 * phi_hat + c * phi_hat2;
+}
+
+// 右雅可比 = 左雅可比的转置
+template <typename T>
+M3D jacobianRight(const V3D &inp)
+{
+    if constexpr (has_left_jacobian<T>::value)
+        return T::leftJacobian(inp).transpose();
+    else
+        return so3LeftJacobian(inp).transpose();
+}
+
+template <typename T>
+M3D jacobianRightInverse(const V3D &inp)
+{
+    if constexpr (has_left_jacobian_inverse<T>::value)
+        return T::leftJacobianInverse(inp).transpose();
+    else
+        return so3LeftJacobianInverse(inp).transpose();
+}
+} // namespace
 
 M3D Jr(const V3D &inp)
 {
-    return Sophus::SO3d::leftJacobian(inp).transpose();
+    return jacobianRight<Sophus::SO3d>(inp);
 }
 M3D JrInv(const V3D &inp)
 {
-    return Sophus::SO3d::leftJacobianInverse(inp).transpose();
+    return jacobianRightInverse<Sophus::SO3d>(inp);
 }
 
 void State::operator+=(const V21D &delta)

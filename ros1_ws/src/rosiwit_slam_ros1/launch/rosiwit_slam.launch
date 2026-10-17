@@ -1,0 +1,10 @@
+<launch>
+  <!-- rosiwit_slam ROS1 接口层启动 -->
+  <arg name="slam_algorithm" default="fast_lio2_pipeline"/>
+  <arg name="config_file" default="$(find rosiwit_slam_ros1)/config/default.yaml"/>
+
+  <node pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" name="rosiwit_slam" output="screen">
+    <param name="slam_algorithm" value="$(arg slam_algorithm)"/>
+    <param name="config_file"    value="$(arg config_file)"/>
+  </node>
+</launch>

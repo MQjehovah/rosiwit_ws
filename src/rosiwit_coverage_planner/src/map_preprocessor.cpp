@@ -13,11 +13,11 @@ MapPreprocessor::MapPreprocessor()
 {
 }
 
-nav_msgs::msg::OccupancyGrid MapPreprocessor::preprocess(
-    const nav_msgs::msg::OccupancyGrid & map,
+coverage_planner::GridMap MapPreprocessor::preprocess(
+    const coverage_planner::GridMap & map,
     const PreprocessConfig & config)
 {
-    nav_msgs::msg::OccupancyGrid result = map;
+    coverage_planner::GridMap result = map;
 
     // 步骤1：去除孤立噪点
     if (config.min_obstacle_size > 0) {
@@ -58,8 +58,8 @@ nav_msgs::msg::OccupancyGrid MapPreprocessor::preprocess(
     return result;
 }
 
-nav_msgs::msg::OccupancyGrid MapPreprocessor::morphologicalOpening(
-    const nav_msgs::msg::OccupancyGrid & map,
+coverage_planner::GridMap MapPreprocessor::morphologicalOpening(
+    const coverage_planner::GridMap & map,
     int kernel_size,
     int iterations)
 {
@@ -79,8 +79,8 @@ nav_msgs::msg::OccupancyGrid MapPreprocessor::morphologicalOpening(
     return matToOccupancyGrid(result, map);
 }
 
-nav_msgs::msg::OccupancyGrid MapPreprocessor::morphologicalClosing(
-    const nav_msgs::msg::OccupancyGrid & map,
+coverage_planner::GridMap MapPreprocessor::morphologicalClosing(
+    const coverage_planner::GridMap & map,
     int kernel_size,
     int iterations)
 {
@@ -100,8 +100,8 @@ nav_msgs::msg::OccupancyGrid MapPreprocessor::morphologicalClosing(
     return matToOccupancyGrid(result, map);
 }
 
-nav_msgs::msg::OccupancyGrid MapPreprocessor::mergeNearbyObstacles(
-    const nav_msgs::msg::OccupancyGrid & map,
+coverage_planner::GridMap MapPreprocessor::mergeNearbyObstacles(
+    const coverage_planner::GridMap & map,
     double merge_distance,
     int min_obstacle_size)
 {
@@ -152,8 +152,8 @@ nav_msgs::msg::OccupancyGrid MapPreprocessor::mergeNearbyObstacles(
     return matToOccupancyGrid(mat, map);
 }
 
-nav_msgs::msg::OccupancyGrid MapPreprocessor::fillSmallHoles(
-    const nav_msgs::msg::OccupancyGrid & map,
+coverage_planner::GridMap MapPreprocessor::fillSmallHoles(
+    const coverage_planner::GridMap & map,
     int max_hole_size)
 {
     // 转换为OpenCV格式
@@ -198,8 +198,8 @@ nav_msgs::msg::OccupancyGrid MapPreprocessor::fillSmallHoles(
     return matToOccupancyGrid(result, map);
 }
 
-nav_msgs::msg::OccupancyGrid MapPreprocessor::removeIsolatedNoise(
-    const nav_msgs::msg::OccupancyGrid & map,
+coverage_planner::GridMap MapPreprocessor::removeIsolatedNoise(
+    const coverage_planner::GridMap & map,
     int min_neighbors)
 {
     // 转换为OpenCV格式
@@ -240,7 +240,7 @@ nav_msgs::msg::OccupancyGrid MapPreprocessor::removeIsolatedNoise(
 }
 
 std::vector<RegionInfo> MapPreprocessor::extractObstacleRegions(
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     // 转换为OpenCV格式
     cv::Mat mat = occupancyGridToMat(map);
@@ -250,7 +250,7 @@ std::vector<RegionInfo> MapPreprocessor::extractObstacleRegions(
 }
 
 std::vector<RegionInfo> MapPreprocessor::extractFreeRegions(
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     // 转换为OpenCV格式
     cv::Mat mat = occupancyGridToMat(map);
@@ -263,7 +263,7 @@ std::vector<RegionInfo> MapPreprocessor::extractFreeRegions(
     return analyzeConnectedComponents(inverted, 8);
 }
 
-cv::Mat MapPreprocessor::occupancyGridToMat(const nav_msgs::msg::OccupancyGrid & map)
+cv::Mat MapPreprocessor::occupancyGridToMat(const coverage_planner::GridMap & map)
 {
     // 创建输出图像
     cv::Mat mat(map.info.height, map.info.width, CV_8UC1);
@@ -281,11 +281,11 @@ cv::Mat MapPreprocessor::occupancyGridToMat(const nav_msgs::msg::OccupancyGrid &
     return mat;
 }
 
-nav_msgs::msg::OccupancyGrid MapPreprocessor::matToOccupancyGrid(
+coverage_planner::GridMap MapPreprocessor::matToOccupancyGrid(
     const cv::Mat & mat,
-    const nav_msgs::msg::OccupancyGrid & original_map)
+    const coverage_planner::GridMap & original_map)
 {
-    nav_msgs::msg::OccupancyGrid result;
+    coverage_planner::GridMap result;
     
     // 复制元数据
     result.header = original_map.header;

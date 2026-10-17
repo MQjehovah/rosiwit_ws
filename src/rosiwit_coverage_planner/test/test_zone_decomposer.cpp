@@ -40,9 +40,9 @@ protected:
     /**
      * @brief 创建空白地图
      */
-    nav_msgs::msg::OccupancyGrid createEmptyMap(int width, int height, double resolution = 0.1)
+    coverage_planner::GridMap createEmptyMap(int width, int height, double resolution = 0.1)
     {
-        nav_msgs::msg::OccupancyGrid map;
+        coverage_planner::GridMap map;
         map.info.width = width;
         map.info.height = height;
         map.info.resolution = resolution;
@@ -51,8 +51,7 @@ protected:
         map.info.origin.position.z = 0.0;
         map.info.origin.orientation.w = 1.0;
         map.header.frame_id = "map";
-        map.header.stamp.sec = 0;
-        map.header.stamp.nanosec = 0;
+        map.header.stamp = 0.0;
         map.data.resize(width * height, 0);  // 全部空闲
 
         return map;
@@ -61,10 +60,10 @@ protected:
     /**
      * @brief 创建带中心障碍物的地图
      */
-    nav_msgs::msg::OccupancyGrid createMapWithCentralObstacle(
+    coverage_planner::GridMap createMapWithCentralObstacle(
         int width, int height, int obstacle_size)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
 
         int center_x = width / 2;
         int center_y = height / 2;
@@ -93,9 +92,9 @@ protected:
      * │          │      │
      * └──────────┴──────┘
      */
-    nav_msgs::msg::OccupancyGrid createLShapedMap(int width, int height)
+    coverage_planner::GridMap createLShapedMap(int width, int height)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
 
         // 设置右上角区域为障碍物（形成L型空闲区域）
         int l_corner_x = width * 2 / 3;
@@ -113,9 +112,9 @@ protected:
     /**
      * @brief 创建多连通域地图（两个独立房间）
      */
-    nav_msgs::msg::OccupancyGrid createMultiRoomMap(int width, int height)
+    coverage_planner::GridMap createMultiRoomMap(int width, int height)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
 
         // 创建两个房间之间的分隔墙
         int wall_x = width / 2;
@@ -133,9 +132,9 @@ protected:
     /**
      * @brief 创建带多个障碍物的复杂地图
      */
-    nav_msgs::msg::OccupancyGrid createComplexMap(int width, int height)
+    coverage_planner::GridMap createComplexMap(int width, int height)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
 
         // 添加多个小障碍物
         // 障碍物1
@@ -178,7 +177,7 @@ protected:
  */
 TEST_F(ZoneDecomposerTest, EmptyMapDecomposition)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
     
     DecompositionResult result = decomposer_->decompose(map, config_);
     
@@ -207,7 +206,7 @@ TEST_F(ZoneDecomposerTest, EmptyMapDecomposition)
  */
 TEST_F(ZoneDecomposerTest, MapWithCentralObstacle)
 {
-    nav_msgs::msg::OccupancyGrid map = createMapWithCentralObstacle(100, 100, 20);
+    coverage_planner::GridMap map = createMapWithCentralObstacle(100, 100, 20);
     
     DecompositionResult result = decomposer_->decompose(map, config_);
     
@@ -233,7 +232,7 @@ TEST_F(ZoneDecomposerTest, MapWithCentralObstacle)
  */
 TEST_F(ZoneDecomposerTest, LShapedRoomDecomposition)
 {
-    nav_msgs::msg::OccupancyGrid map = createLShapedMap(100, 100);
+    coverage_planner::GridMap map = createLShapedMap(100, 100);
     
     DecompositionResult result = decomposer_->decompose(map, config_);
     
@@ -258,7 +257,7 @@ TEST_F(ZoneDecomposerTest, LShapedRoomDecomposition)
  */
 TEST_F(ZoneDecomposerTest, MultiRoomDecomposition)
 {
-    nav_msgs::msg::OccupancyGrid map = createMultiRoomMap(100, 100);
+    coverage_planner::GridMap map = createMultiRoomMap(100, 100);
     
     DecompositionResult result = decomposer_->decompose(map, config_);
     
@@ -289,7 +288,7 @@ TEST_F(ZoneDecomposerTest, MultiRoomDecomposition)
  */
 TEST_F(ZoneDecomposerTest, ComplexObstacleMap)
 {
-    nav_msgs::msg::OccupancyGrid map = createComplexMap(100, 100);
+    coverage_planner::GridMap map = createComplexMap(100, 100);
     
     // 不应抛出异常
     EXPECT_NO_THROW({
@@ -312,7 +311,7 @@ TEST_F(ZoneDecomposerTest, ComplexObstacleMap)
  */
 TEST_F(ZoneDecomposerTest, ConnectionChannelDetection)
 {
-    nav_msgs::msg::OccupancyGrid map = createMultiRoomMap(100, 100);
+    coverage_planner::GridMap map = createMultiRoomMap(100, 100);
     
     DecompositionResult result = decomposer_->decompose(map, config_);
     
@@ -339,7 +338,7 @@ TEST_F(ZoneDecomposerTest, ConnectionChannelDetection)
  */
 TEST_F(ZoneDecomposerTest, OptimalScanDirection)
 {
-    nav_msgs::msg::OccupancyGrid map = createLShapedMap(100, 100);
+    coverage_planner::GridMap map = createLShapedMap(100, 100);
     
     DecompositionResult result = decomposer_->decompose(map, config_);
     
@@ -364,7 +363,7 @@ TEST_F(ZoneDecomposerTest, OptimalScanDirection)
  */
 TEST_F(ZoneDecomposerTest, VerySmallMap)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(5, 5);
+    coverage_planner::GridMap map = createEmptyMap(5, 5);
     
     EXPECT_NO_THROW({
         DecompositionResult result = decomposer_->decompose(map, config_);
@@ -381,7 +380,7 @@ TEST_F(ZoneDecomposerTest, VerySmallMap)
  */
 TEST_F(ZoneDecomposerTest, FullObstacleMap)
 {
-    nav_msgs::msg::OccupancyGrid map;
+    coverage_planner::GridMap map;
     map.info.width = 50;
     map.info.height = 50;
     map.info.resolution = 0.1;
@@ -402,7 +401,7 @@ TEST_F(ZoneDecomposerTest, FullObstacleMap)
  */
 TEST_F(ZoneDecomposerTest, SingleRowMap)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 1);
+    coverage_planner::GridMap map = createEmptyMap(100, 1);
     
     EXPECT_NO_THROW({
         DecompositionResult result = decomposer_->decompose(map, config_);
@@ -419,7 +418,7 @@ TEST_F(ZoneDecomposerTest, SingleRowMap)
  */
 TEST_F(ZoneDecomposerTest, SingleColumnMap)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(1, 100);
+    coverage_planner::GridMap map = createEmptyMap(1, 100);
     
     EXPECT_NO_THROW({
         DecompositionResult result = decomposer_->decompose(map, config_);
@@ -437,7 +436,7 @@ TEST_F(ZoneDecomposerTest, SingleColumnMap)
  */
 TEST_F(ZoneDecomposerTest, MinZoneAreaParameter)
 {
-    nav_msgs::msg::OccupancyGrid map = createComplexMap(100, 100);
+    coverage_planner::GridMap map = createComplexMap(100, 100);
     
     // 小面积阈值
     ZoneDecomposerConfig small_config;
@@ -461,7 +460,7 @@ TEST_F(ZoneDecomposerTest, MinZoneAreaParameter)
  */
 TEST_F(ZoneDecomposerTest, MaxZonesParameter)
 {
-    nav_msgs::msg::OccupancyGrid map = createComplexMap(100, 100);
+    coverage_planner::GridMap map = createComplexMap(100, 100);
     
     ZoneDecomposerConfig limited_config;
     limited_config.max_zone_count = 2;
@@ -484,7 +483,7 @@ TEST_F(ZoneDecomposerTest, MaxZonesParameter)
  */
 TEST_F(ZoneDecomposerTest, LargeMapPerformance)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(500, 500);
+    coverage_planner::GridMap map = createEmptyMap(500, 500);
     
     auto start = std::chrono::high_resolution_clock::now();
     DecompositionResult result = decomposer_->decompose(map, config_);
@@ -510,7 +509,7 @@ TEST_F(ZoneDecomposerTest, LargeMapPerformance)
  */
 TEST_F(ZoneDecomposerTest, VisitOrderCalculation)
 {
-    nav_msgs::msg::OccupancyGrid map = createMultiRoomMap(100, 100);
+    coverage_planner::GridMap map = createMultiRoomMap(100, 100);
     
     DecompositionResult result = decomposer_->decompose(map, config_);
     
@@ -537,7 +536,7 @@ TEST_F(ZoneDecomposerTest, VisitOrderCalculation)
  */
 TEST_F(ZoneDecomposerTest, ResetFunctionality)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
     DecompositionResult result1 = decomposer_->decompose(map, config_);
     
     EXPECT_NO_THROW({

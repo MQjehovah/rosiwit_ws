@@ -20,6 +20,12 @@ public:
     bool setMap(const std::string& map_path, const CloudType::Ptr& global_map) override;
     bool localize(const CloudType::Ptr& scan, GlobalCandidate& out) override;
 
+    /// 多候选: 随机子集多轮 RANSAC, 按 3m 聚类去重, 每簇取分最高者。
+    /// 2026-10-17 事故教训: 基类默认实现只有单候选, 地库重复结构下单候选 0.999
+    /// 锁进相似车位(推行丢失事故), 上层连"存在歧义"都不知道。多候选是消歧前提。
+    int localizeTopK(const CloudType::Ptr& scan, int max_k,
+                     std::vector<GlobalCandidate>& out) override;
+
 private:
     GlobalLocalizeConfig m_cfg;
     CloudType::Ptr m_map_down;                              // 供 GICP 精配准

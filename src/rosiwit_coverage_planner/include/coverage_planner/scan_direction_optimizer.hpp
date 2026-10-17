@@ -6,7 +6,7 @@
 
 #include <vector>
 #include <cmath>
-#include "nav_msgs/msg/occupancy_grid.hpp"
+#include "coverage_planner/msg_types.hpp"
 #include "opencv2/opencv.hpp"
 
 namespace coverage_planner
@@ -86,7 +86,7 @@ public:
      * @return ScanDirectionResult 分析结果
      */
     ScanDirectionResult analyzeOptimalDirection(
-        const nav_msgs::msg::OccupancyGrid & map,
+        const coverage_planner::GridMap & map,
         const ScanDirectionConfig & config = ScanDirectionConfig());
 
     /**
@@ -98,7 +98,7 @@ public:
      * @return double 主方向角度 (弧度，0表示水平方向)
      */
     double detectPrincipalDirectionPCA(
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
 
     /**
      * @brief 计算最小外接矩形
@@ -109,7 +109,7 @@ public:
      * @return double 最小外接矩形长轴角度 (弧度)
      */
     double calculateMinBoundingRectAngle(
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
 
     /**
      * @brief 计算地图长宽比
@@ -120,7 +120,7 @@ public:
      * @return double 长宽比 (>=1.0)
      */
     double calculateAspectRatio(
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
 
     /**
      * @brief 根据角度确定扫描方向
@@ -139,7 +139,7 @@ public:
      * @return std::vector<cv::Point2f> 空闲区域点集
      */
     static std::vector<cv::Point2f> getFreeRegionPoints(
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
 
     /**
      * @brief 将OccupancyGrid转换为OpenCV Mat
@@ -148,7 +148,7 @@ public:
      * @return cv::Mat 二值图像 (0=空闲，255=障碍物)
      */
     static cv::Mat occupancyGridToMat(
-        const nav_msgs::msg::OccupancyGrid & map);
+        const coverage_planner::GridMap & map);
 
 private:
     /**

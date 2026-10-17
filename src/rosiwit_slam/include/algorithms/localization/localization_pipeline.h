@@ -2,6 +2,10 @@
 #pragma once
 #include <memory>
 #include <string>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 #include "slam_core/i_localization.h"
 #include "slam_core/i_scan_matcher.h"
 #include "slam_core/i_local_map_provider.h"
@@ -30,6 +34,8 @@ public:
     void onImu(const IMUSample& s) override;
     void onOdom(const PoseStamped& odom) override;
     void onLidar(const LidarFrame& f) override;
+    /// 按需触发全局重定位: 置 LOST 并清冷却, 下一次 onLidar 进入冷启动/重定位分支
+    void requestRelocalization() override;
     Status getStatus() override;
     bool getPose(PoseStamped& out) override;
     bool getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
@@ -46,6 +52,8 @@ private:
                      const PoseStamped& guess);
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)
     CloudType::Ptr buildTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
+    bool ensureRelocalizerMap();   // 全局重定位库就绪检查(后台构建中返回 false, 绝不阻塞)
+    void relocBuildWorker();       // 后台构建线程: FPFH 全图特征+建树(~45s, 不进回调)
 
     // 各阶段 (由配置选择)
     std::unique_ptr<IGlobalLocalizer>     m_relocalizer;
@@ -75,6 +83,10 @@ private:
     CloudType::Ptr m_map;
     std::string m_map_path;
     PoseStamped m_pose;
+    /// 逸出保护: 最后一次**被接受**的匹配位姿。位姿跑出地图(局部地图为空)时回退到这里,
+    /// 避免运动先验在无修正情况下一直积分, 越漂越远(实机曾漂到离图 96m, 从此再也匹配不上)。
+    PoseStamped m_last_accepted;
+    bool m_have_last_accepted = false;
     Status m_status = INIT;
     bool m_initialized = false;
     MatchResult m_last_match;
@@ -83,6 +95,26 @@ private:
     CloudType::Ptr m_cached_target;
     PoseStamped m_cached_target_pose;
     bool m_has_cached_target = false;
+    uint64_t m_cached_target_rev = 0;   // 建缓存时的维护层版本号(overlay 变更 -> 失效)
+
+    // 全局重定位库后台构建 (2026-10-17 推行丢失事故: 懒建把 44.6s 的 FPFH 全图特征
+    // 构建塞进 onLidar 回调, 单线程 spinner 冻结, 雷达停处理/界面冻住。行业惯例:
+    // 重活不进实时路径 -> setMap 后立即后台线程预建, 回调只查结果)
+    std::thread m_reloc_thread;
+    std::mutex m_reloc_mu;
+    std::condition_variable m_reloc_cv;
+    std::atomic<bool> m_reloc_building{false};
+    bool m_reloc_request = false;       // setMap 置位, worker 消费
+    bool m_reloc_stop = false;
+    bool m_reloc_ready = false;         // 构建完成且对应当前地图
+    CloudType::Ptr m_reloc_map_snap;    // 构建目标的地图快照(指针比对判断是否过期)
+    std::string m_reloc_path_snap;
+    // 冷启动消歧: top1-top2 精配分差小于该值 => 保留多假设跟踪(重复结构双解)
+    double m_ambiguity_margin = 0.02;
+    // 跟踪期重播种可达性门控: 候选离当前位姿超该值不进假设池(31m 瞬移教训)
+    double m_reseed_radius = 5.0;
+    // 僵尸带直通计数: 连续平庸(<credible)帧数, 超 mediocre_patience 直接 LOST
+    int m_mediocre_streak = 0;
 
     // lifelong: 用叠加层刷新全局重定位器
     int m_refresh_counter = 0;

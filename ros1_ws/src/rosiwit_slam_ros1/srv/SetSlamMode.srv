@@ -1,0 +1,5 @@
+# mode: "mapping" or "localization" or "idle"
+string mode
+---
+bool success
+string message

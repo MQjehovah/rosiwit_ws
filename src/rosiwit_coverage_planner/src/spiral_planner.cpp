@@ -29,8 +29,8 @@ void SpiralPlanner::reset()
 }
 
 PlannerResult SpiralPlanner::plan(
-    const nav_msgs::msg::OccupancyGrid & map,
-    const geometry_msgs::msg::Pose & start_pose,
+    const coverage_planner::GridMap & map,
+    const coverage_planner::Pose & start_pose,
     const PlannerConfig & config)
 {
     PlannerResult result;
@@ -163,7 +163,7 @@ PlannerResult SpiralPlanner::plan(
     return result;
 }
 
-RegionBoundary SpiralPlanner::getRegionBoundary(const nav_msgs::msg::OccupancyGrid & map)
+RegionBoundary SpiralPlanner::getRegionBoundary(const coverage_planner::GridMap & map)
 {
     RegionBoundary boundary;
     boundary.x_min = map.info.width;
@@ -193,7 +193,7 @@ RegionBoundary SpiralPlanner::getRegionBoundary(const nav_msgs::msg::OccupancyGr
 }
 
 bool SpiralPlanner::isConvexRegion(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const RegionBoundary & region)
 {
     // 简化的凸性检查：检查每行每列是否有连续的自由空间
@@ -222,7 +222,7 @@ bool SpiralPlanner::isConvexRegion(
 }
 
 std::vector<RegionBoundary> SpiralPlanner::decomposeRegion(
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     std::vector<RegionBoundary> regions;
 
@@ -281,8 +281,8 @@ std::vector<RegionBoundary> SpiralPlanner::decomposeRegion(
     return regions;
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> SpiralPlanner::performSpiralPlanning(
-    const nav_msgs::msg::OccupancyGrid & map,
+std::vector<coverage_planner::PoseStamped> SpiralPlanner::performSpiralPlanning(
+    const coverage_planner::GridMap & map,
     const Point2D & start_grid,
     const RegionBoundary & region)
 {
@@ -300,7 +300,7 @@ std::vector<geometry_msgs::msg::PoseStamped> SpiralPlanner::performSpiralPlannin
 }
 
 std::vector<Point2D> SpiralPlanner::generateSpiralPath(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const RegionBoundary & region,
     const Point2D & start)
 {
@@ -451,7 +451,7 @@ RegionBoundary SpiralPlanner::shrinkBoundary(
 }
 
 bool SpiralPlanner::isValidBoundary(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const RegionBoundary & boundary)
 {
     if (boundary.x_min >= boundary.x_max || boundary.y_min >= boundary.y_max) {
@@ -477,7 +477,7 @@ bool SpiralPlanner::isValidBoundary(
 }
 
 std::vector<Point2D> SpiralPlanner::fillUncoveredAreas(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const std::vector<Point2D> & spiral_path)
 {
     std::vector<Point2D> full_path = spiral_path;
@@ -549,7 +549,7 @@ std::vector<Point2D> SpiralPlanner::fillUncoveredAreas(
 }
 
 std::vector<Point2D> SpiralPlanner::connectSpiralRegions(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const std::vector<std::vector<Point2D>> & spiral_paths,
     const Point2D & start)
 {
@@ -600,7 +600,7 @@ std::vector<Point2D> SpiralPlanner::connectSpiralRegions(
 }
 
 std::vector<Point2D> SpiralPlanner::findPath(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const Point2D & start,
     const Point2D & goal)
 {
@@ -686,11 +686,11 @@ std::vector<Point2D> SpiralPlanner::simplifyPath(const std::vector<Point2D> & pa
     return simplified;
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> SpiralPlanner::convertToPath(
-    const nav_msgs::msg::OccupancyGrid & map,
+std::vector<coverage_planner::PoseStamped> SpiralPlanner::convertToPath(
+    const coverage_planner::GridMap & map,
     const std::vector<Point2D> & grid_points)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path;
+    std::vector<coverage_planner::PoseStamped> path;
 
     if (grid_points.empty()) {
         return path;
@@ -720,8 +720,8 @@ std::vector<geometry_msgs::msg::PoseStamped> SpiralPlanner::convertToPath(
 }
 
 PlannerResult SpiralPlanner::fallbackToZigzag(
-    const nav_msgs::msg::OccupancyGrid & map,
-    const geometry_msgs::msg::Pose & start_pose,
+    const coverage_planner::GridMap & map,
+    const coverage_planner::Pose & start_pose,
     const PlannerConfig & config)
 {
     ZigzagPlanner zigzag;

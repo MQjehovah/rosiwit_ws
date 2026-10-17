@@ -15,7 +15,7 @@ ScanDirectionOptimizer::ScanDirectionOptimizer()
 }
 
 ScanDirectionResult ScanDirectionOptimizer::analyzeOptimalDirection(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const ScanDirectionConfig & config)
 {
     ScanDirectionResult result;
@@ -71,7 +71,7 @@ ScanDirectionResult ScanDirectionOptimizer::analyzeOptimalDirection(
 }
 
 double ScanDirectionOptimizer::detectPrincipalDirectionPCA(
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     std::vector<cv::Point2f> points = getFreeRegionPoints(map);
     if (points.size() < 10) {
@@ -83,7 +83,7 @@ double ScanDirectionOptimizer::detectPrincipalDirectionPCA(
 }
 
 double ScanDirectionOptimizer::calculateMinBoundingRectAngle(
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     std::vector<cv::Point2f> points = getFreeRegionPoints(map);
     if (points.size() < 10) {
@@ -95,7 +95,7 @@ double ScanDirectionOptimizer::calculateMinBoundingRectAngle(
 }
 
 double ScanDirectionOptimizer::calculateAspectRatio(
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     // 获取空闲区域点集
     std::vector<cv::Point2f> points = getFreeRegionPoints(map);
@@ -138,7 +138,7 @@ int ScanDirectionOptimizer::angleToScanDirection(double angle)
 }
 
 std::vector<cv::Point2f> ScanDirectionOptimizer::getFreeRegionPoints(
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     std::vector<cv::Point2f> points;
     
@@ -161,7 +161,7 @@ std::vector<cv::Point2f> ScanDirectionOptimizer::getFreeRegionPoints(
 }
 
 cv::Mat ScanDirectionOptimizer::occupancyGridToMat(
-    const nav_msgs::msg::OccupancyGrid & map)
+    const coverage_planner::GridMap & map)
 {
     cv::Mat mat(map.info.height, map.info.width, CV_8UC1);
     

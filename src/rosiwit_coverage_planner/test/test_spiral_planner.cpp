@@ -23,9 +23,9 @@ protected:
         config_.direction_optimization = 2;
     }
     
-    nav_msgs::msg::OccupancyGrid createEmptyMap(int width, int height, double resolution = 0.1)
+    coverage_planner::GridMap createEmptyMap(int width, int height, double resolution = 0.1)
     {
-        nav_msgs::msg::OccupancyGrid map;
+        coverage_planner::GridMap map;
         map.info.width = width;
         map.info.height = height;
         map.info.resolution = resolution;
@@ -34,18 +34,17 @@ protected:
         map.info.origin.position.z = 0.0;
         map.info.origin.orientation.w = 1.0;
         map.header.frame_id = "map";
-        map.header.stamp.sec = 0;
-        map.header.stamp.nanosec = 0;
+        map.header.stamp = 0.0;
         
         map.data.resize(width * height, 0);  // 全部空闲
         
         return map;
     }
     
-    nav_msgs::msg::OccupancyGrid createMapWithCentralObstacle(
+    coverage_planner::GridMap createMapWithCentralObstacle(
         int width, int height, int obstacle_size)
     {
-        nav_msgs::msg::OccupancyGrid map = createEmptyMap(width, height);
+        coverage_planner::GridMap map = createEmptyMap(width, height);
         
         int center_x = width / 2;
         int center_y = height / 2;
@@ -62,14 +61,14 @@ protected:
         return map;
     }
     
-    nav_msgs::msg::OccupancyGrid createRectangularRoomMap(int width, int height)
+    coverage_planner::GridMap createRectangularRoomMap(int width, int height)
     {
         return createEmptyMap(width, height);
     }
     
-    geometry_msgs::msg::Pose createStartPose(double x, double y)
+    coverage_planner::Pose createStartPose(double x, double y)
     {
-        geometry_msgs::msg::Pose pose;
+        coverage_planner::Pose pose;
         pose.position.x = x;
         pose.position.y = y;
         pose.position.z = 0.0;
@@ -84,8 +83,8 @@ protected:
 // 测试：空旷矩形地图的回字形规划
 TEST_F(SpiralPlannerTest, TestEmptyMapPlanning)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -98,8 +97,8 @@ TEST_F(SpiralPlannerTest, TestEmptyMapPlanning)
 // 测试：带障碍物的地图规划
 TEST_F(SpiralPlannerTest, TestMapWithObstacle)
 {
-    nav_msgs::msg::OccupancyGrid map = createMapWithCentralObstacle(50, 50, 10);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::GridMap map = createMapWithCentralObstacle(50, 50, 10);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -111,8 +110,8 @@ TEST_F(SpiralPlannerTest, TestMapWithObstacle)
 // 测试：小尺寸地图
 TEST_F(SpiralPlannerTest, TestSmallMap)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(10, 10);
-    geometry_msgs::msg::Pose start_pose = createStartPose(0.5, 0.5);
+    coverage_planner::GridMap map = createEmptyMap(10, 10);
+    coverage_planner::Pose start_pose = createStartPose(0.5, 0.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -123,8 +122,8 @@ TEST_F(SpiralPlannerTest, TestSmallMap)
 // 测试：大尺寸地图
 TEST_F(SpiralPlannerTest, TestLargeMap)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(100, 100);
-    geometry_msgs::msg::Pose start_pose = createStartPose(5.0, 5.0);
+    coverage_planner::GridMap map = createEmptyMap(100, 100);
+    coverage_planner::Pose start_pose = createStartPose(5.0, 5.0);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -142,8 +141,8 @@ TEST_F(SpiralPlannerTest, TestPlannerName)
 // 测试：规划器重置
 TEST_F(SpiralPlannerTest, TestReset)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(20, 20);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.0, 1.0);
+    coverage_planner::GridMap map = createEmptyMap(20, 20);
+    coverage_planner::Pose start_pose = createStartPose(1.0, 1.0);
     
     PlannerResult result1 = planner_->plan(map, start_pose, config_);
     EXPECT_TRUE(result1.success);
@@ -157,8 +156,8 @@ TEST_F(SpiralPlannerTest, TestReset)
 // 测试：矩形房间（凸区域）
 TEST_F(SpiralPlannerTest, TestRectangularRoom)
 {
-    nav_msgs::msg::OccupancyGrid map = createRectangularRoomMap(30, 40);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 2.0);
+    coverage_planner::GridMap map = createRectangularRoomMap(30, 40);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 2.0);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -170,8 +169,8 @@ TEST_F(SpiralPlannerTest, TestRectangularRoom)
 // 测试：不同分辨率地图
 TEST_F(SpiralPlannerTest, TestDifferentResolution)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50, 0.05);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.25, 1.25);
+    coverage_planner::GridMap map = createEmptyMap(50, 50, 0.05);
+    coverage_planner::Pose start_pose = createStartPose(1.25, 1.25);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -182,10 +181,10 @@ TEST_F(SpiralPlannerTest, TestDifferentResolution)
 // 测试：无效起始位置（在障碍物上）
 TEST_F(SpiralPlannerTest, TestInvalidStartPosition)
 {
-    nav_msgs::msg::OccupancyGrid map = createMapWithCentralObstacle(50, 50, 20);
+    coverage_planner::GridMap map = createMapWithCentralObstacle(50, 50, 20);
     
     // 将起始位置放在障碍物中心
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.5, 2.5);
+    coverage_planner::Pose start_pose = createStartPose(2.5, 2.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -200,7 +199,7 @@ TEST_F(SpiralPlannerTest, TestInvalidStartPosition)
 TEST_F(SpiralPlannerTest, TestNonConvexRegionFallback)
 {
     // 创建非凸区域地图（有多个障碍物）
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
     
     // 添加多个障碍物，使区域不凸
     for (int y = 10; y < 20; ++y) {
@@ -215,7 +214,7 @@ TEST_F(SpiralPlannerTest, TestNonConvexRegionFallback)
         }
     }
     
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.25, 1.25);
+    coverage_planner::Pose start_pose = createStartPose(1.25, 1.25);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -227,8 +226,8 @@ TEST_F(SpiralPlannerTest, TestNonConvexRegionFallback)
 // 测试：转弯次数统计
 TEST_F(SpiralPlannerTest, TestTurnCount)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -242,8 +241,8 @@ TEST_F(SpiralPlannerTest, TestTurnCount)
 // 测试：覆盖率统计
 TEST_F(SpiralPlannerTest, TestCoverageRate)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(40, 40);
-    geometry_msgs::msg::Pose start_pose = createStartPose(2.0, 2.0);
+    coverage_planner::GridMap map = createEmptyMap(40, 40);
+    coverage_planner::Pose start_pose = createStartPose(2.0, 2.0);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -257,8 +256,8 @@ TEST_F(SpiralPlannerTest, TestOptimizationDisabled)
 {
     config_.enable_optimization = false;
     
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -269,7 +268,7 @@ TEST_F(SpiralPlannerTest, TestOptimizationDisabled)
 // 测试：复杂障碍物布局
 TEST_F(SpiralPlannerTest, TestComplexObstacles)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(50, 50);
+    coverage_planner::GridMap map = createEmptyMap(50, 50);
     
     // 创建复杂的障碍物布局
     // 左上角障碍物
@@ -286,7 +285,7 @@ TEST_F(SpiralPlannerTest, TestComplexObstacles)
         }
     }
     
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.25, 1.25);
+    coverage_planner::Pose start_pose = createStartPose(1.25, 1.25);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     
@@ -299,8 +298,8 @@ TEST_F(SpiralPlannerTest, TestComplexObstacles)
 // 测试：路径连续性
 TEST_F(SpiralPlannerTest, TestPathContinuity)
 {
-    nav_msgs::msg::OccupancyGrid map = createEmptyMap(30, 30);
-    geometry_msgs::msg::Pose start_pose = createStartPose(1.5, 1.5);
+    coverage_planner::GridMap map = createEmptyMap(30, 30);
+    coverage_planner::Pose start_pose = createStartPose(1.5, 1.5);
     
     PlannerResult result = planner_->plan(map, start_pose, config_);
     

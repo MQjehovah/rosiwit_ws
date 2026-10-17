@@ -2,6 +2,9 @@
 #include "lidar_processor.h"
 #include "commons.h"
 
+#include <cmath>
+#include <iostream>
+
 namespace rosiwit_slam {
 
 bool FastLio2Frontend::init(const std::string& config_path) {
@@ -65,6 +68,21 @@ bool FastLio2Frontend::getClouds(CloudType::Ptr& body, CloudType::Ptr& world) {
 
 bool FastLio2Frontend::getKeyFrame(KeyFrame& out) {
     if (!m_inited || m_builder->status() != BuilderStatus::MAPPING || !m_current_cloud) return false;
+
+    // 诊断: 打印**当前实际在用**的 IMU-雷达外参 (rpy 度)。esti_il=true 时这里是 EKF 在线
+    // 估计出来的值 (会随运动收敛); false 时就是配置里的定值。约每 100 帧 (≈10s) 一条。
+    // 用途: 实机"旋转时叠图"排查 —— 若这里收敛到明显的非 0 角度, 说明原来的 identity 是错的。
+    {
+        static int est_log_i = 0;
+        if (++est_log_i % 100 == 0) {
+            const auto& xe = m_kf->x();
+            const Eigen::Vector3d rpy = xe.r_il.eulerAngles(2, 1, 0);   // yaw,pitch,roll
+            std::cout << "[FLIO2] extrinsic(used) esti_il=" << (m_config.esti_il ? 1 : 0)
+                      << " rpy_deg=[" << rpy.z() * 180.0 / M_PI << " "
+                      << rpy.y() * 180.0 / M_PI << " " << rpy.x() * 180.0 / M_PI
+                      << "] t_il=[" << xe.t_il.transpose() << "]" << std::endl;
+        }
+    }
 
     const auto& x = m_kf->x();
     if (m_has_last_kf) {

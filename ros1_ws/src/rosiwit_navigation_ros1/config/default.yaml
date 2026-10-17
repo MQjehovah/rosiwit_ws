@@ -1,0 +1,36 @@
+# ============================================================
+# rosiwit_navigation_ros1 默认参数 (与 ROS2 config/params.yaml 对应)
+# ============================================================
+# 速度限制
+max_velocity_x: 0.5
+min_velocity_x: 0.0
+max_velocity_theta: 1.0
+
+# 频率
+controller_frequency: 20.0
+planner_frequency: 1.0
+
+# 规划器 / 控制器
+planner_name: "astar"
+controller_name: "dwa"
+
+# 坐标系
+global_frame: "odom"
+robot_frame: "base_link"
+map_frame: "map"
+
+# 导航容差
+goal_tolerance_xy: 0.1
+goal_tolerance_yaw: 0.1
+
+# Pure Pursuit 前瞻距离
+lookahead_distance: 0.8
+min_lookahead_distance: 0.4
+max_lookahead_distance: 1.2
+
+# 机器人 / 膨胀半径 (m)
+robot_radius: 0.30
+inflation_radius: 1.0
+
+# 里程计话题
+odom_topic: /odom

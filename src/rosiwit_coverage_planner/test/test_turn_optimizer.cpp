@@ -48,13 +48,13 @@ protected:
     /**
      * @brief 创建直线路径
      */
-    std::vector<geometry_msgs::msg::PoseStamped> createStraightPath(
+    std::vector<coverage_planner::PoseStamped> createStraightPath(
         int num_points, double step = 1.0)
     {
-        std::vector<geometry_msgs::msg::PoseStamped> path;
+        std::vector<coverage_planner::PoseStamped> path;
 
         for (int i = 0; i < num_points; ++i) {
-            geometry_msgs::msg::PoseStamped pose;
+            coverage_planner::PoseStamped pose;
             pose.header.frame_id = "map";
             pose.pose.position.x = i * step;
             pose.pose.position.y = 0.0;
@@ -75,17 +75,17 @@ protected:
      * ↓
      * ──→───→───→
      */
-    std::vector<geometry_msgs::msg::PoseStamped> createZigzagPath(
+    std::vector<coverage_planner::PoseStamped> createZigzagPath(
         int num_lines, int points_per_line, double line_spacing = 5.0, double step = 1.0)
     {
-        std::vector<geometry_msgs::msg::PoseStamped> path;
+        std::vector<coverage_planner::PoseStamped> path;
 
         for (int line = 0; line < num_lines; ++line) {
             double y = line * line_spacing;
             bool going_right = (line % 2 == 0);
 
             for (int i = 0; i < points_per_line; ++i) {
-                geometry_msgs::msg::PoseStamped pose;
+                coverage_planner::PoseStamped pose;
                 pose.header.frame_id = "map";
 
                 if (going_right) {
@@ -106,7 +106,7 @@ protected:
 
             // 添加过渡点
             if (line < num_lines - 1) {
-                geometry_msgs::msg::PoseStamped transition;
+                coverage_planner::PoseStamped transition;
                 transition.header.frame_id = "map";
                 transition.pose.position.y = (line + 1) * line_spacing;
 
@@ -129,13 +129,13 @@ protected:
     /**
      * @brief 创建多转弯路径
      */
-    std::vector<geometry_msgs::msg::PoseStamped> createMultiTurnPath()
+    std::vector<coverage_planner::PoseStamped> createMultiTurnPath()
     {
-        std::vector<geometry_msgs::msg::PoseStamped> path;
+        std::vector<coverage_planner::PoseStamped> path;
 
         // 第一段：向右
         for (int i = 0; i < 10; ++i) {
-            geometry_msgs::msg::PoseStamped pose;
+            coverage_planner::PoseStamped pose;
             pose.header.frame_id = "map";
             pose.pose.position.x = i * 1.0;
             pose.pose.position.y = 0.0;
@@ -146,7 +146,7 @@ protected:
 
         // 转弯1：向下（90度）
         for (int i = 0; i < 10; ++i) {
-            geometry_msgs::msg::PoseStamped pose;
+            coverage_planner::PoseStamped pose;
             pose.header.frame_id = "map";
             pose.pose.position.x = 10.0;
             pose.pose.position.y = i * 1.0;
@@ -158,7 +158,7 @@ protected:
 
         // 转弯2：向左（90度）
         for (int i = 0; i < 10; ++i) {
-            geometry_msgs::msg::PoseStamped pose;
+            coverage_planner::PoseStamped pose;
             pose.header.frame_id = "map";
             pose.pose.position.x = 10.0 - i * 1.0;
             pose.pose.position.y = 10.0;
@@ -170,7 +170,7 @@ protected:
 
         // 转弯3：向上（90度）
         for (int i = 0; i < 10; ++i) {
-            geometry_msgs::msg::PoseStamped pose;
+            coverage_planner::PoseStamped pose;
             pose.header.frame_id = "map";
             pose.pose.position.x = 0.0;
             pose.pose.position.y = 10.0 - i * 1.0;
@@ -186,13 +186,13 @@ protected:
     /**
      * @brief 创建密集小转弯路径
      */
-    std::vector<geometry_msgs::msg::PoseStamped> createDenseTurnPath()
+    std::vector<coverage_planner::PoseStamped> createDenseTurnPath()
     {
-        std::vector<geometry_msgs::msg::PoseStamped> path;
+        std::vector<coverage_planner::PoseStamped> path;
 
         // 创建锯齿形路径
         for (int i = 0; i < 50; ++i) {
-            geometry_msgs::msg::PoseStamped pose;
+            coverage_planner::PoseStamped pose;
             pose.header.frame_id = "map";
             pose.pose.position.x = i * 1.0;
             pose.pose.position.y = (i % 2 == 0) ? 0.5 : 0.0;
@@ -211,7 +211,7 @@ protected:
 
     std::unique_ptr<TurnOptimizer> optimizer_;
     TurnOptimizerConfig config_;
-    nav_msgs::msg::OccupancyGrid default_map_;
+    coverage_planner::GridMap default_map_;
 };
 
 // ==================== 转弯计数测试 ====================
@@ -224,7 +224,7 @@ protected:
  */
 TEST_F(TurnOptimizerTest, StraightPathTurnCount)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createStraightPath(100);
+    std::vector<coverage_planner::PoseStamped> path = createStraightPath(100);
 
     int turn_count = optimizer_->countTurns(path, config_.angle_threshold);
 
@@ -241,7 +241,7 @@ TEST_F(TurnOptimizerTest, StraightPathTurnCount)
 TEST_F(TurnOptimizerTest, ZigzagPathTurnCount)
 {
     int num_lines = 5;
-    std::vector<geometry_msgs::msg::PoseStamped> path = createZigzagPath(num_lines, 10);
+    std::vector<coverage_planner::PoseStamped> path = createZigzagPath(num_lines, 10);
 
     int turn_count = optimizer_->countTurns(path, config_.angle_threshold);
 
@@ -257,7 +257,7 @@ TEST_F(TurnOptimizerTest, ZigzagPathTurnCount)
  */
 TEST_F(TurnOptimizerTest, MultiTurnPathCount)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createMultiTurnPath();
+    std::vector<coverage_planner::PoseStamped> path = createMultiTurnPath();
 
     int turn_count = optimizer_->countTurns(path, config_.angle_threshold);
 
@@ -277,7 +277,7 @@ TEST_F(TurnOptimizerTest, MultiTurnPathCount)
 TEST_F(TurnOptimizerTest, TurnClassificationThroughOptimization)
 {
     // 创建包含各种转弯类型的路径
-    std::vector<geometry_msgs::msg::PoseStamped> path = createMultiTurnPath();
+    std::vector<coverage_planner::PoseStamped> path = createMultiTurnPath();
 
     // 执行优化，通过优化结果验证转弯分类
     TurnOptimizeResult result = optimizer_->optimize(path, default_map_, config_);
@@ -312,7 +312,7 @@ TEST_F(TurnOptimizerTest, TurnClassificationThroughOptimization)
  */
 TEST_F(TurnOptimizerTest, TurnMergeFunctionality)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createDenseTurnPath();
+    std::vector<coverage_planner::PoseStamped> path = createDenseTurnPath();
 
     // 首先计算原始转弯数
     int original_turn_count = optimizer_->countTurns(path, config_.angle_threshold);
@@ -342,7 +342,7 @@ TEST_F(TurnOptimizerTest, TurnMergeFunctionality)
  */
 TEST_F(TurnOptimizerTest, MergeDistanceThreshold)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createDenseTurnPath();
+    std::vector<coverage_planner::PoseStamped> path = createDenseTurnPath();
 
     // 小阈值
     TurnOptimizerConfig small_config = config_;
@@ -363,7 +363,7 @@ TEST_F(TurnOptimizerTest, MergeDistanceThreshold)
  */
 TEST_F(TurnOptimizerTest, MergeAngleThreshold)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createDenseTurnPath();
+    std::vector<coverage_planner::PoseStamped> path = createDenseTurnPath();
 
     // 小角度阈值
     TurnOptimizerConfig small_config = config_;
@@ -389,7 +389,7 @@ TEST_F(TurnOptimizerTest, MergeAngleThreshold)
  */
 TEST_F(TurnOptimizerTest, PathRebuildCorrectness)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createZigzagPath(5, 10);
+    std::vector<coverage_planner::PoseStamped> path = createZigzagPath(5, 10);
 
     TurnOptimizeResult result = optimizer_->optimize(path, default_map_, config_);
 
@@ -428,7 +428,7 @@ TEST_F(TurnOptimizerTest, PathRebuildCorrectness)
  */
 TEST_F(TurnOptimizerTest, EnableMergeSwitch)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createDenseTurnPath();
+    std::vector<coverage_planner::PoseStamped> path = createDenseTurnPath();
 
     // 禁用合并
     TurnOptimizerConfig no_merge_config = config_;
@@ -449,7 +449,7 @@ TEST_F(TurnOptimizerTest, EnableMergeSwitch)
  */
 TEST_F(TurnOptimizerTest, AngleThresholdEffect)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createDenseTurnPath();
+    std::vector<coverage_planner::PoseStamped> path = createDenseTurnPath();
 
     // 小角度阈值（检测更多转弯）
     int sensitive_count = optimizer_->countTurns(path, 0.05);
@@ -468,7 +468,7 @@ TEST_F(TurnOptimizerTest, AngleThresholdEffect)
  */
 TEST_F(TurnOptimizerTest, EmptyPath)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> empty_path;
+    std::vector<coverage_planner::PoseStamped> empty_path;
 
     EXPECT_NO_THROW({
         int turn_count = optimizer_->countTurns(empty_path, config_.angle_threshold);
@@ -486,8 +486,8 @@ TEST_F(TurnOptimizerTest, EmptyPath)
  */
 TEST_F(TurnOptimizerTest, SinglePointPath)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> single_path;
-    geometry_msgs::msg::PoseStamped pose;
+    std::vector<coverage_planner::PoseStamped> single_path;
+    coverage_planner::PoseStamped pose;
     pose.header.frame_id = "map";
     pose.pose.position.x = 0.0;
     pose.pose.position.y = 0.0;
@@ -504,7 +504,7 @@ TEST_F(TurnOptimizerTest, SinglePointPath)
  */
 TEST_F(TurnOptimizerTest, TwoPointsPath)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> two_point_path = createStraightPath(2);
+    std::vector<coverage_planner::PoseStamped> two_point_path = createStraightPath(2);
 
     EXPECT_NO_THROW({
         int turn_count = optimizer_->countTurns(two_point_path, config_.angle_threshold);
@@ -519,7 +519,7 @@ TEST_F(TurnOptimizerTest, TwoPointsPath)
  */
 TEST_F(TurnOptimizerTest, LargePathPerformance)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createZigzagPath(100, 100);
+    std::vector<coverage_planner::PoseStamped> path = createZigzagPath(100, 100);
 
     auto start = std::chrono::high_resolution_clock::now();
     TurnOptimizeResult result = optimizer_->optimize(path, default_map_, config_);
@@ -545,7 +545,7 @@ TEST_F(TurnOptimizerTest, LargePathPerformance)
  */
 TEST_F(TurnOptimizerTest, TurnOptimizationEffect)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createZigzagPath(20, 20);
+    std::vector<coverage_planner::PoseStamped> path = createZigzagPath(20, 20);
 
     // 原始转弯数量
     int original_turn_count = optimizer_->countTurns(path, config_.angle_threshold);
@@ -570,7 +570,7 @@ TEST_F(TurnOptimizerTest, TurnOptimizationEffect)
  */
 TEST_F(TurnOptimizerTest, FullOptimizationWorkflow)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createZigzagPath(10, 10);
+    std::vector<coverage_planner::PoseStamped> path = createZigzagPath(10, 10);
 
     // Step 1: 计算原始转弯数
     int original_count = optimizer_->countTurns(path, config_.angle_threshold);
@@ -595,7 +595,7 @@ TEST_F(TurnOptimizerTest, FullOptimizationWorkflow)
  */
 TEST_F(TurnOptimizerTest, ResetFunctionality)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path = createStraightPath(50);
+    std::vector<coverage_planner::PoseStamped> path = createStraightPath(50);
 
     EXPECT_NO_THROW({
         optimizer_->reset();

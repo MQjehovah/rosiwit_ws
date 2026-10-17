@@ -7,7 +7,7 @@
 #include <cmath>
 #include <chrono>
 #include <limits>
-#include "rclcpp/rclcpp.hpp"
+
 
 namespace coverage_planner
 {
@@ -30,16 +30,16 @@ ZigzagPlanner::ZigzagPlanner()
 
 void ZigzagPlanner::reset()
 {
-    inflated_map_ = nav_msgs::msg::OccupancyGrid();
-    preprocessed_map_ = nav_msgs::msg::OccupancyGrid();
+    inflated_map_ = coverage_planner::GridMap();
+    preprocessed_map_ = coverage_planner::GridMap();
     visited_mask_.clear();
     zone_decomposer_.reset();
     turn_optimizer_.reset();
 }
 
 PlannerResult ZigzagPlanner::plan(
-    const nav_msgs::msg::OccupancyGrid & map,
-    const geometry_msgs::msg::Pose & start_pose,
+    const coverage_planner::GridMap & map,
+    const coverage_planner::Pose & start_pose,
     const PlannerConfig & config)
 {
     // 开始计时
@@ -74,7 +74,7 @@ PlannerResult ZigzagPlanner::plan(
     turn_merge_distance_ = config.turn_merge_distance;
 
     // === P0优化：地图预处理 ===
-    nav_msgs::msg::OccupancyGrid working_map;
+    coverage_planner::GridMap working_map;
     if (config.enable_map_preprocessing) {
         // 创建预处理配置
         PreprocessConfig preprocess_config;
@@ -198,7 +198,7 @@ PlannerResult ZigzagPlanner::plan(
 
     // 输出统计信息
     if (config.enable_statistics_output) {
-        RCLCPP_INFO(rclcpp::get_logger("zigzag_planner"),
+        COV_INFO(
             "Coverage planning completed: %.2f%% coverage, %d turns, %.2f m path, %.1f ms",
             result.coverage_rate * 100.0,
             result.turn_count,
@@ -206,7 +206,7 @@ PlannerResult ZigzagPlanner::plan(
             result.planning_time_ms);
 
         if (config.enable_pca_direction && direction_result.confidence > 0) {
-            RCLCPP_INFO(rclcpp::get_logger("zigzag_planner"),
+            COV_INFO(
                 "Direction optimization: method=%s, confidence=%.2f, aspect_ratio=%.2f",
                 direction_result.method_used.c_str(),
                 direction_result.confidence,
@@ -217,14 +217,14 @@ PlannerResult ZigzagPlanner::plan(
     return result;
 }
 
-int ZigzagPlanner::selectOptimalDirection(const nav_msgs::msg::OccupancyGrid & map)
+int ZigzagPlanner::selectOptimalDirection(const coverage_planner::GridMap & map)
 {
     // 传统方法：使用扫描线数量统计
     return MapUtils::getOptimalScanDirection(map);
 }
 
 int ZigzagPlanner::selectOptimalDirectionOptimized(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const ScanDirectionConfig & config,
     ScanDirectionResult & result_info)
 {
@@ -250,7 +250,7 @@ int ZigzagPlanner::selectOptimalDirectionOptimized(
 }
 
 std::vector<ScanLine> ZigzagPlanner::extractScanlines(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     int scan_direction)
 {
     std::vector<ScanLine> scanlines;
@@ -319,7 +319,7 @@ std::vector<ScanLine> ZigzagPlanner::extractScanlines(
 }
 
 std::vector<Point2D> ZigzagPlanner::connectScanlines(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const std::vector<ScanLine> & scanlines,
     const Point2D & start)
 {
@@ -384,7 +384,7 @@ std::vector<Point2D> ZigzagPlanner::connectScanlines(
 }
 
 std::vector<Point2D> ZigzagPlanner::findConnectionPath(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const Point2D & start,
     const Point2D & goal)
 {
@@ -449,7 +449,7 @@ std::vector<Point2D> ZigzagPlanner::findConnectionPath(
 }
 
 Point2D ZigzagPlanner::findNearestScanlineStart(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const std::vector<ScanLine> & scanlines,
     const Point2D & start)
 {
@@ -522,18 +522,18 @@ std::vector<Point2D> ZigzagPlanner::simplifyPath(const std::vector<Point2D> & pa
     return simplified;
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::convertToPath(
-    const nav_msgs::msg::OccupancyGrid & map,
+std::vector<coverage_planner::PoseStamped> ZigzagPlanner::convertToPath(
+    const coverage_planner::GridMap & map,
     const std::vector<Point2D> & grid_path)
 {
-    std::vector<geometry_msgs::msg::PoseStamped> path;
+    std::vector<coverage_planner::PoseStamped> path;
 
     // 如果启用优化，先简化路径
     std::vector<Point2D> working_path = enable_optimization_ ?
         simplifyPath(grid_path) : grid_path;
 
     for (const Point2D & pt : working_path) {
-        geometry_msgs::msg::PoseStamped pose;
+        coverage_planner::PoseStamped pose;
 
         // 转换为世界坐标
         double world_x, world_y;
@@ -559,7 +559,7 @@ std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::convertToPath(
 }
 
 bool ZigzagPlanner::hasLineOfSight(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const coverage_planner::GridMap & map,
     const Point2D & p1,
     const Point2D & p2)
 {
@@ -592,8 +592,8 @@ bool ZigzagPlanner::hasLineOfSight(
     return true;
 }
 
-nav_msgs::msg::OccupancyGrid ZigzagPlanner::preprocessMap(
-    const nav_msgs::msg::OccupancyGrid & map,
+coverage_planner::GridMap ZigzagPlanner::preprocessMap(
+    const coverage_planner::GridMap & map,
     const PlannerConfig & config)
 {
     PreprocessConfig preprocess_config;
@@ -608,8 +608,8 @@ nav_msgs::msg::OccupancyGrid ZigzagPlanner::preprocessMap(
     return map_preprocessor_.preprocess(map, preprocess_config);
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::performScanlinePlanning(
-    const nav_msgs::msg::OccupancyGrid & map,
+std::vector<coverage_planner::PoseStamped> ZigzagPlanner::performScanlinePlanning(
+    const coverage_planner::GridMap & map,
     const Point2D & start_grid,
     int scan_direction)
 {
@@ -617,7 +617,7 @@ std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::performScanlinePlann
     std::vector<ScanLine> scanlines = extractScanlines(map, scan_direction);
 
     if (scanlines.empty()) {
-        return std::vector<geometry_msgs::msg::PoseStamped>();
+        return std::vector<coverage_planner::PoseStamped>();
     }
 
     // 连接扫描线形成路径
@@ -627,9 +627,9 @@ std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::performScanlinePlann
     return convertToPath(map, grid_path);
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::performZonePlanning(
-    const nav_msgs::msg::OccupancyGrid & map,
-    const geometry_msgs::msg::Pose & start_pose,
+std::vector<coverage_planner::PoseStamped> ZigzagPlanner::performZonePlanning(
+    const coverage_planner::GridMap & map,
+    const coverage_planner::Pose & start_pose,
     const PlannerConfig & config,
     int scan_direction)
 {
@@ -645,12 +645,12 @@ std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::performZonePlanning(
     DecompositionResult decomp_result = zone_decomposer_.decompose(map, zone_config);
 
     if (!decomp_result.success || decomp_result.zones.empty()) {
-        RCLCPP_WARN(rclcpp::get_logger("zigzag_planner"),
+        COV_WARN(
                     "Zone decomposition failed: %s", decomp_result.error_message.c_str());
-        return std::vector<geometry_msgs::msg::PoseStamped>();
+        return std::vector<coverage_planner::PoseStamped>();
     }
 
-    RCLCPP_INFO(rclcpp::get_logger("zigzag_planner"),
+    COV_INFO(
                 "Zone decomposition successful: %d zones, %.1fms",
                 static_cast<int>(decomp_result.zones.size()),
                 decomp_result.decomposition_time_ms);
@@ -660,7 +660,7 @@ std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::performZonePlanning(
     cv::Point start_point(start_grid.x, start_grid.y);
 
     // 按访问顺序规划各区域
-    std::vector<geometry_msgs::msg::PoseStamped> full_path;
+    std::vector<coverage_planner::PoseStamped> full_path;
 
     for (int zone_id : decomp_result.visit_order) {
         // 找到对应的Zone
@@ -683,7 +683,7 @@ std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::performZonePlanning(
 
         // 转换为世界坐标路径
         for (const auto & grid_pt : zone_grid_path) {
-            geometry_msgs::msg::PoseStamped pose;
+            coverage_planner::PoseStamped pose;
 
             double world_x, world_y;
             MapUtils::gridToWorld(map, grid_pt.x, grid_pt.y, world_x, world_y);
@@ -709,9 +709,9 @@ std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::performZonePlanning(
     return full_path;
 }
 
-std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::optimizeTurns(
-    const std::vector<geometry_msgs::msg::PoseStamped> & path,
-    const nav_msgs::msg::OccupancyGrid & map,
+std::vector<coverage_planner::PoseStamped> ZigzagPlanner::optimizeTurns(
+    const std::vector<coverage_planner::PoseStamped> & path,
+    const coverage_planner::GridMap & map,
     const PlannerConfig & config)
 {
     if (path.size() < 3) {
@@ -729,12 +729,12 @@ std::vector<geometry_msgs::msg::PoseStamped> ZigzagPlanner::optimizeTurns(
     TurnOptimizeResult optimize_result = turn_optimizer_.optimize(path, map, turn_config);
 
     if (!optimize_result.success) {
-        RCLCPP_WARN(rclcpp::get_logger("zigzag_planner"),
+        COV_WARN(
                     "Turn optimization failed");
         return path;
     }
 
-    RCLCPP_INFO(rclcpp::get_logger("zigzag_planner"),
+    COV_INFO(
                 "Turn optimization: %d -> %d turns (%.1f%% reduction)",
                 optimize_result.original_turn_count,
                 optimize_result.optimized_turn_count,

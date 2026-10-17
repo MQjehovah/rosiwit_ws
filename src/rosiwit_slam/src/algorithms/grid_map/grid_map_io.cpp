@@ -1,6 +1,7 @@
 // src/algorithms/grid_map/grid_map_io.cpp
 #include "algorithms/grid_map/grid_map_io.h"
 #include <fstream>
+#include <sstream>
 
 namespace rosiwit_slam {
 
@@ -52,6 +53,20 @@ bool loadGridMapPGM(const std::string& pgm_path,
         auto val = line.substr(pos + 1);
         while (!val.empty() && val[0] == ' ') val = val.substr(1);
         if (key == "resolution") grid.resolution = std::stod(val);
+        // ⚠ **origin 必须读**。旧实现只读了 resolution, 导致重新载入的 pgm 永远落在 (0,0),
+        // 与 yaml 里声明的原点 (例如 [-32.947, -7.591]) 相差几十米 —— 对外发布的地图整体位移。
+        if (key == "origin") {
+            const auto lb = val.find('[');
+            const auto rb = val.find(']');
+            if (lb != std::string::npos && rb != std::string::npos) {
+                std::string s = val.substr(lb + 1, rb - lb - 1);
+                for (auto& c : s) if (c == ',') c = ' ';
+                std::istringstream iss(s);
+                double ox = 0.0, oy = 0.0, oz = 0.0;
+                if (iss >> ox >> oy) { grid.origin_x = ox; grid.origin_y = oy; }
+                (void)oz;
+            }
+        }
     }
 
     std::ifstream pgm(pgm_path, std::ios::binary);

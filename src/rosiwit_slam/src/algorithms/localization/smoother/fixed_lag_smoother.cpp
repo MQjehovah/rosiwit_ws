@@ -4,7 +4,7 @@
 
 #ifdef USE_GTSAM
 #include <gtsam/geometry/Pose3.h>
-#include <gtsam/nonlinear/IncrementalFixedLagSmoother.h>
+#include <gtsam_unstable/nonlinear/IncrementalFixedLagSmoother.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>

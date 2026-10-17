@@ -1,0 +1,11 @@
+{
+    "pitch_new": 33,
+    "laser_params": {
+        "mid360": {
+            "loc_z_max": 5
+        },
+        "vanjee": {
+            "laser_sub_name": "vanjee_points722"
+        }
+    }
+}

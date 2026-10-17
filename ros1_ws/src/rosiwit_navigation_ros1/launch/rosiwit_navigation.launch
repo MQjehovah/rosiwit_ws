@@ -1,0 +1,10 @@
+<launch>
+  <!-- rosiwit_navigation ROS1 薄接口节点 -->
+  <arg name="config_file" default="$(find rosiwit_navigation_ros1)/config/default.yaml"/>
+
+  <node pkg="rosiwit_navigation_ros1" type="rosiwit_navigation_ros1_node"
+        name="rosiwit_navigation_ros1_node" output="screen">
+    <!-- 参数加载到节点私有命名空间 (~) -->
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+</launch>
