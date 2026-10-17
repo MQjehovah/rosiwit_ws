@@ -358,6 +358,7 @@ CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg
     CloudType::Ptr out(new CloudType());
     out->reserve(cloud->size() / filter_num + 1);
     const double min2 = min_r * min_r, max2 = max_r * max_r;
+    double curv_min = 1e9, curv_max = -1e9;
     for (size_t i = 0; i < cloud->size(); ++i) {
         if (i % filter_num != 0) continue;
         const auto& p = cloud->points[i];
@@ -365,7 +366,19 @@ CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg
         const double d2 = static_cast<double>(p.x) * p.x + static_cast<double>(p.y) * p.y +
                           static_cast<double>(p.z) * p.z;
         if (d2 < min2 || d2 > max2) continue;
+        if (p.curvature < curv_min) curv_min = p.curvature;
+        if (p.curvature > curv_max) curv_max = p.curvature;
         out->push_back(p);
+    }
+    // 一次性核对日志: 确认逐点时间真的进来了 (0 表示没填上 -> 去畸变失效)
+    {
+        static int once = 0;
+        if (once++ == 0 && !out->empty()) {
+            std::cout << "[slam_engine] point-time check: src=" << msg->width << "x" << msg->height
+                      << " kept=" << out->size()
+                      << " has_timestamp_field=" << (has_pt_time ? 1 : 0)
+                      << " curvature_ms=[" << curv_min << " .. " << curv_max << "]" << std::endl;
+        }
     }
     return out;
 }
