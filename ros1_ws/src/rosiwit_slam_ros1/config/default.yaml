@@ -235,7 +235,7 @@ localization:
     min_score: 0.5
     top_k: 5                    # 全局重定位多候选数
     retry_interval: 30          # 丢失后重定位尝试间隔(帧, 节流)
-    voxel_resolution: 0.3
+    voxel_resolution: 0.2      # BBS 2D 栅格分辨率: 0.3->0.2 (定位精度, 代价是慢一些)
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0
     icp_max_iter: 32
@@ -253,7 +253,7 @@ localization:
     bbs_mount_yaw_deg: 89.89
     bbs_z_min: -1.0
     bbs_z_max: 1.0
-    bbs_theta_bins: 60
+    bbs_theta_bins: 120         # 角分辨率 6deg -> 3deg (重定位精度)
     bbs_max_levels: 6
     bbs_min_points_per_cell: 5.0
     # fpfh_ransac 专用
