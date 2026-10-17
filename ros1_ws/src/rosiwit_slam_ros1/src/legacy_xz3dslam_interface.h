@@ -282,6 +282,9 @@ private:
     Eigen::Matrix3d r_lb_ = Eigen::Matrix3d::Identity();   // base <- lidar
     Eigen::Vector3d t_lb_ = Eigen::Vector3d::Zero();
     bool have_lidar_mount_ = false;
+    /// 地面在地图系里的 z。地图系原点是起始时刻的雷达 -> 地面 ≈ -雷达安装高度。
+    /// 发布 scan_f_map / curr_scan_point 时用它做 z 参考, 保证与栅格 0.1~2.0m(相对地面)同带。
+    double scan_ground_z_ = -0.898;
 };
 
 } // namespace rosiwit_slam_ros1

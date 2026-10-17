@@ -84,11 +84,15 @@ double stdYawFromRot(const Eigen::Matrix3d& R);
 /// 照抄旧实现的"当前帧点云塑形"(legacy.cpp:982-996 定位 / 1071-1085 建图):
 ///   1. 抽稀到约 2000 点: `down_sample = (N < 2000) ? 1 : round(N/2000)` (N 是输入点数)
 ///   2. 再乘 `downsample_multiplier` (旧实现给"原始帧"乘 2)
-///   3. `z ∈ (0, z_max)` 过滤 —— 定位用 2.0、建图用 1.0
+///   3. `z - z_ref ∈ (0, z_max)` 过滤 —— 定位用 2.0、建图用 1.0
 ///      (旧实现给"原始帧"的 z 过滤是注释掉的, 用 `z_max <= 0` 表示不过滤)
+///      **z_ref 必须传"地面在地图系里的 z"**: 我们的地图系原点是起始时刻的雷达
+///      (地面在 -0.898m), 用绝对 z 会把 0~0.9m 的墙面全砍掉, 与栅格的
+///      0.1~2.0m(相对地面)高度带对不上。传 `-t_lb_.z()` 即可。
 /// 这是下游(导航/感知/可视化)习惯的数据形态, 不能省。
 rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
                                              double z_max,
-                                             int downsample_multiplier = 1);
+                                             int downsample_multiplier = 1,
+                                             double z_ref = 0.0);
 
 } // namespace rosiwit_slam_ros1

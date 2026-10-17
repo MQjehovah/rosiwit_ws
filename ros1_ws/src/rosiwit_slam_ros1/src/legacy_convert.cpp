@@ -157,7 +157,8 @@ double stdYawFromRot(const Eigen::Matrix3d& R) {
 
 rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
                                              double z_max,
-                                             int downsample_multiplier) {
+                                             int downsample_multiplier,
+                                             double z_ref) {
     rosiwit_slam::CloudType::Ptr out(new rosiwit_slam::CloudType());
     const size_t n = in.size();
 
@@ -173,8 +174,13 @@ rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
     out->reserve(n / static_cast<size_t>(down_sample) + 1);
     int scan_count = 1;
     const bool use_z = (z_max > 0.0);
+    // ⚠ z_ref = **地面在地图系里的 z**。旧实现假设地面就是 z=0 才写死 `p.z > 0`,
+    // 而我们的地图系原点是起始时刻的雷达 -> 地面在 -0.898m。用绝对 z 过滤会把
+    // 0~0.9m 的墙面全部砍掉(只剩天花板/上部), 与栅格的 0.1~2.0m 高度带对不上,
+    // 表现就是"看不清点云和墙体的贴合情况"。这里改成相对地面过滤, 与栅格同带。
     for (const auto& p : in) {
-        if (!use_z || (p.z > 0 && p.z < z_max)) {
+        const double z = p.z - z_ref;
+        if (!use_z || (z > 0 && z < z_max)) {
             if (scan_count % down_sample == 0) out->push_back(p);
         }
         ++scan_count;

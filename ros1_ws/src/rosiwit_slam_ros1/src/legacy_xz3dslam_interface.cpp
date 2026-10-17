@@ -215,6 +215,7 @@ void LegacyXz3dSlamInterface::computeLidarToBase() {
     // 不会出现"一边换算一边不换算"的不一致。
     if (have_lidar_mount_) return;
     have_lidar_mount_ = engine_.lidarToBase(&r_lb_, &t_lb_);
+    if (have_lidar_mount_) scan_ground_z_ = -t_lb_.z();   // 地面在地图系里的 z (雷达起始高度即原点)
 }
 
 void LegacyXz3dSlamInterface::resetCoreAndCaches() {
@@ -388,7 +389,7 @@ void LegacyXz3dSlamInterface::publishCurrScan() {
 
     if (slam_mode_ == SlamMode::LOCALIZATION) {
         // scan_f_map: 抽稀到约 2000 + z∈(0,2) (legacy.cpp:982-1011), **无条件**发
-        CloudType::Ptr shaped = legacyScanShape(world, kLocZMax, 1);
+        CloudType::Ptr shaped = legacyScanShape(world, kLocZMax, 1, scan_ground_z_);
         if (shaped->empty()) return;
         ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
         // curr_scan_point: 同一个点云, 但只有 debug_publish_ 才发 (legacy.cpp:1007-1009)
@@ -403,13 +404,13 @@ void LegacyXz3dSlamInterface::publishCurrScan() {
             raw_stamp = raw_input_stamp_;
         }
         if (raw_snapshot && !raw_snapshot->empty()) {
-            CloudType::Ptr orc = legacyScanShape(*raw_snapshot, -1.0, 2);
+            CloudType::Ptr orc = legacyScanShape(*raw_snapshot, -1.0, 2, scan_ground_z_);
             if (!orc->empty())
                 or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_stamp));
         }
     } else if (slam_mode_ == SlamMode::MAPPING) {
         // scan_f_map: 抽稀到约 2000 + z∈(0,1) (legacy.cpp:1071-1096)
-        CloudType::Ptr shaped = legacyScanShape(world, kMapZMax, 1);
+        CloudType::Ptr shaped = legacyScanShape(world, kMapZMax, 1, scan_ground_z_);
         // curr_scan_point: **完整的**去畸变点云 (legacy.cpp:1097 把过滤结果覆盖掉了), 无条件发
         pointcloud_puber_.publish(toPointCloud2(world, kMapFrame, stamp));
         if (!shaped->empty()) ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
