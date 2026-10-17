@@ -529,9 +529,36 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_reloc_cooldown = 0;
                 m_has_cached_target = false;
                 m_smoother.reset(m_pose);
+
+                // **BBS 是粗搜(0.3m / 6 层)**: 实机重锁后覆盖率只有 ~0.71, 而用正确位姿
+                // 初始化时是 0.99。这里用当前 matcher 在候选位姿处反复精配(gicp),
+                // 只接受"覆盖率更高"的结果, 把粗搜的位姿收敛到 ~0.95+。
+                double refined_fit = cand.score;
+                {
+                    const int kRefineIters = 12;
+                    PoseStamped cur = m_pose;
+                    MatchResult rr;
+                    for (int it = 0; it < kRefineIters; ++it) {
+                        CloudType::Ptr target = buildTarget(cur);
+                        if (!target || target->empty()) break;
+                        m_matcher->setTarget(target);
+                        if (!m_matcher->match(f.cloud, cur, rr) || !rr.converged) break;
+                        if (rr.fitness <= refined_fit) break;   // 不再变好就停
+                        refined_fit = rr.fitness;
+                        cur = rr.pose;
+                    }
+                    if (refined_fit > cand.score) {
+                        m_pose = cur;
+                        m_prior->reset(m_pose);
+                        m_smoother.reset(m_pose);
+                    }
+                    std::cout << "[LocPipeline] relocalization refine: " << cand.score
+                              << " -> " << refined_fit << std::endl;
+                }
+
                 m_last_match = MatchResult();
                 m_last_match.converged = true;
-                m_last_match.fitness = cand.score;
+                m_last_match.fitness = refined_fit;
                 m_last_match.pose = m_pose;
                 std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
                           << " cands=" << nk << " hypotheses=" << m_hyp.size()
