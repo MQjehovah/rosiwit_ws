@@ -42,6 +42,10 @@ void BbsGlobalLocalizer::configure(const GlobalLocalizeConfig& cfg) {
     }
     m_have_mount = (std::fabs(m_cfg.bbs_mount_roll_deg) + std::fabs(m_cfg.bbs_mount_pitch_deg)
                     + std::fabs(m_cfg.bbs_mount_yaw_deg)) > 1e-6;
+    if (!m_have_mount) {
+        std::cout << "[BBS] WARN: 未获得安装变换(也没注入 bbs_mount_r) -> 按雷达系投影; "
+                     "俯装/侧装雷达下候选会偏, 请改用 fpfh_ransac 或修好 TF" << std::endl;
+    }
     std::cout << "[BBS] mount rpy(deg)=[" << m_cfg.bbs_mount_roll_deg << " "
               << m_cfg.bbs_mount_pitch_deg << " " << m_cfg.bbs_mount_yaw_deg
               << "] car-frame projection=" << (m_have_mount ? 1 : 0) << std::endl;

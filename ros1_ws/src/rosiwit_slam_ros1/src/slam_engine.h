@@ -189,7 +189,7 @@ private:
     Eigen::Matrix3d r_lb_ = Eigen::Matrix3d::Identity();   // base <- lidar
     Eigen::Vector3d t_lb_ = Eigen::Vector3d::Zero();
     bool have_lidar_mount_ = false;
-    bool mount_attempted_ = false;      // TF 只查一次 (避免在 100Hz 回调里反复阻塞 3s)
+    ros::Time mount_last_try_;          // 上次尝试查询安装变换的时刻 (2s 节流)
     std::string mount_lidar_frame_ = "lidar";
     std::string mount_base_frame_ = "base_link";
 };

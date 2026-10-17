@@ -173,11 +173,13 @@ bool SlamEngine::computeLegacyExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
 bool SlamEngine::computeLidarToBase() {
     // 从 TF 取 base_link <- lidar 的安装变换 (与 LegacyXz3dSlamInterface 里那份同源同值)
     if (have_lidar_mount_) return true;
-    // ⚠ **只尝试一次**: 本函数在 100Hz 的位姿定时器里被调用; 若 TF 迟迟拿不到,
-    // 每次 lookupTransform 最多阻塞 3s -> 定时器被彻底拖死 (/slam/info 与位姿全停发)。
-    // 失败后就把 mount_attempted_ 置位, 不再重试 (需要时重启节点即可)。
-    if (mount_attempted_) return false;
-    mount_attempted_ = true;
+    // 失败后**限频重试**(每 2s 最多一次), 不一次性放弃:
+    //   - 每帧重试: lookupTransform 最多阻塞 3s, 会把 100Hz 定时器拖死(实测 /slam/info 停发);
+    //   - 只试一次: 启动瞬间 robot_state_publisher 还没发 /tf_static 就永远失败,
+    //     安装变换一直是单位阵 -> BBS 静默按"雷达系"跑, 结果全错(实测踩过)。
+    const ros::Time now_try = ros::Time::now();
+    if (!mount_last_try_.isZero() && (now_try - mount_last_try_).toSec() < 2.0) return false;
+    mount_last_try_ = now_try;
     if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
     if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     pnh_.param<std::string>("lidar_frame", mount_lidar_frame_, mount_lidar_frame_);
