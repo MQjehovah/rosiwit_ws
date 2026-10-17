@@ -125,11 +125,6 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
         if (slam_mode_ != SlamMode::MAPPING) return false;   // 非建图模式没必要算
         return engine_.getRealtimeGrid(grid_resolution_, out);
     });
-    realtime_grid_.setSource([this](PointVec& out) {
-        if (slam_mode_ != SlamMode::MAPPING) return false;   // 非建图模式没必要算
-        if (!engine_.getGlobalMap(out) || out.empty()) return false;
-        return true;
-    });
     // 重算频率与发布频率一致 (旧实现是"发布前若变了就重算")
     realtime_grid_.start(static_cast<double>(cfg_.rt_grid_map_publish_hz > 0
                                                  ? cfg_.rt_grid_map_publish_hz
@@ -250,11 +245,6 @@ void LegacyXz3dSlamInterface::resetCoreAndCaches() {
 
 void LegacyXz3dSlamInterface::resetLocalizationLatch() {    relocating_ = true;
     lost_monitor_.reset();
-}
-
-void LegacyXz3dSlamInterface::setGlobalGridMap(const nav_msgs::OccupancyGrid& grid) {
-    global_grid_map_msg_ = grid;
-    set_grid_map_ = true;
 }
 
 // ---------------------------------------------------------------- [T6] 输入
@@ -468,7 +458,7 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
     // 用于区分"输出链路被锁住"与"核心根本没产出新位姿"(这两种现象的界面表现一样)。
     {
         static int pub_n = 0;
-        if (++pub_n % 100 == 0) {
+        if (++pub_n % 1000 == 0) {   // 10s 一条心跳
             std::cout << "[PubProbe] tick=" << pub_n << " mode=" << modeName(slam_mode_)
                       << " have_new_pose=" << (have_out ? 1 : 0)
                       << " pose_time=" << out.pose.time << std::endl;

@@ -17,54 +17,14 @@
 #include "algorithms/grid_map/grid_map_postprocess.h"  // applyGridPostProcess / parsePostPipeline
 
 namespace rosiwit_slam_ros1 {
-namespace {
 
-constexpr const char* kDefaultGenerator = "height_projection";
-
-/// 与核心一致: 未知生成器名时回落 height_projection (pcd_map_manager.cpp:109-115)
-std::unique_ptr<rosiwit_slam::IGridMapGenerator> createGenerator(const std::string& name) {
-    auto gen = rosiwit_slam::GridMapFactory::create(name);
-    if (!gen) {
-        ROS_WARN_STREAM("[realtime_grid] unknown grid_map_generator '" << name
-                        << "', falling back to " << kDefaultGenerator);
-        gen = rosiwit_slam::GridMapFactory::create(kDefaultGenerator);
-    }
-    return gen;
-}
-
-} // namespace
-
-bool buildGridFromPoints(const rosiwit_slam::PointVec& pts,
-                         const rosiwit_slam::GridMapConfig& cfg,
-                         const rosiwit_slam::GridPostConfig& post,
-                         const std::string& generator,
-                         rosiwit_slam::GridInfo& out) {
-    auto gen = createGenerator(generator);
-    if (!gen) return false;
-
-    // PointVec 与 CloudType 是同一种点 (pcl::PointXYZINormal), 直接搬进 PCL 容器。
-    // build() 对空点云返回 false (height_projection_grid_map.cpp:22), 与这里语义一致。
-    rosiwit_slam::CloudType::Ptr cloud(new rosiwit_slam::CloudType());
-    cloud->reserve(pts.size());
-    for (const auto& p : pts) cloud->push_back(p);
-
-    // 原点取 (0,0,0): 与核心 generateGridMap() 一致 (pcd_map_manager.cpp:277)
-    if (!gen->build(cloud, Eigen::Vector3d::Zero(), cfg, out)) return false;
-
-    // 后处理要用**实际**分辨率 (生成器可能因格数上限放粗), 见 pcd_map_manager.cpp:280。
-    // 核心是改自己的成员变量, 这里用局部副本, 语义等价。
-    rosiwit_slam::GridPostConfig p = post;
-    p.resolution = out.resolution;
-    rosiwit_slam::applyGridPostProcess(out, p);
-    return true;
-}
 
 void loadGridConfigFromYaml(const std::string& yaml_path,
                             rosiwit_slam::GridMapConfig& cfg,
                             rosiwit_slam::GridPostConfig& post,
                             std::string& generator) {
     // 先落到与核心 GridMapConfig/GridPostConfig 相同的默认值
-    generator = kDefaultGenerator;
+    generator = "height_projection";
 
     std::ifstream fin(yaml_path);
     if (!fin.good()) {
@@ -139,11 +99,6 @@ void RealtimeGrid::setConfig(const rosiwit_slam::GridMapConfig& cfg,
     m_generator_ = generator;
 }
 
-void RealtimeGrid::setSource(Source s) {
-    std::lock_guard<std::mutex> lk(m_mtx_);
-    m_source_ = std::move(s);
-}
-
 void RealtimeGrid::setGridSource(GridSource s) {
     std::lock_guard<std::mutex> lk(m_mtx_);
     m_grid_source_ = std::move(s);
@@ -183,7 +138,6 @@ void RealtimeGrid::run() {
     std::unique_lock<std::mutex> lk(m_mtx_);
     while (!m_stop_) {
         // 快照配置后放开锁: 重算是 O(点数), 不能占着锁, 否则 setConfig/stop 会被卡住
-        const Source src = m_source_;
         const GridSource gsrc = m_grid_source_;
         const rosiwit_slam::GridMapConfig cfg = m_cfg_;
         const rosiwit_slam::GridPostConfig post = m_post_;
@@ -191,17 +145,11 @@ void RealtimeGrid::run() {
         const double hz = m_hz_;
         lk.unlock();
 
-        if (src || gsrc) {
+        if (gsrc) {
             try {
                 rosiwit_slam::GridInfo info;
-                bool ok = false;
-                if (gsrc) {
-                    // 直接取核心生成好的栅格 (与存 pgm 同一条路径, 有逐帧地面处理)
-                    ok = gsrc(info);
-                } else {
-                    rosiwit_slam::PointVec pts;
-                    ok = src(pts) && buildGridFromPoints(pts, cfg, post, gen, info);
-                }
+                // 直接取核心生成好的栅格 (与存 pgm 同一条路径, 有逐帧地面处理)
+                const bool ok = gsrc(info);
                 if (ok) {
                     std::lock_guard<std::mutex> out_lk(m_out_mtx_);
                     m_latest_ = std::move(info);

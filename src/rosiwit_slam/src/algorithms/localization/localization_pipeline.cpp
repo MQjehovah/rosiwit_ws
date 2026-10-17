@@ -368,7 +368,7 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     // [LocProbe] 诊断: 局部地图到底取到多少点 (NO Effective Points 排查)
     {
         static int probe_n = 0;
-        if (++probe_n % 10 == 0) {
+        if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
             std::cout << "[LocProbe] local_map=" << (target ? target->size() : 0)
                       << " pose=(" << pose.trans.x() << ", " << pose.trans.y() << ")"
                       << " local_map_name=" << m_local_map_name << std::endl;
@@ -470,7 +470,7 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
     // [LocProbe] 拒绝原因 (每 10 帧一行): 定位"匹配成功但不输出"时靠它定位是哪道门限
     {
         static int probe_n = 0;
-        if (++probe_n % 10 == 0) {
+        if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
             std::cout << "[LocProbe] REJECT fitness=" << res.fitness
                       << " (min_coverage=" << m_accept_cfg.min_coverage << ")"
                       << " improve=" << improve
@@ -595,7 +595,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // [LocProbe] 诊断: 输入扫描点数 / 匹配结果 (NO Effective Points 排查)
         {
             static int probe_n = 0;
-            if (++probe_n % 10 == 0) {
+            if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
                 std::cout << "[LocProbe] scan=" << (f.cloud ? f.cloud->size() : 0)
                           << " target=" << (m_cached_target ? m_cached_target->size() : 0)
                           << " ok=" << (ok ? 1 : 0) << " converged=" << (res.converged ? 1 : 0)

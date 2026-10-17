@@ -25,18 +25,6 @@
 
 namespace rosiwit_slam_ros1 {
 
-/// 纯计算部分: 世界系点云 -> 2D 占据栅格.
-/// 与核心 PcdMapManager::generateGridMap(resolution) 同一条路径:
-///   GridMapFactory::create(generator) -> build(cloud, origin=(0,0,0), cfg, out)
-///   -> post.resolution = out.resolution -> applyGridPostProcess(out, post)
-/// 值的域与原生成器一致: 目前 height_projection 只产 0(自由) / 100(占据), 没有 unknown
-/// (设计文档 D17)。
-bool buildGridFromPoints(const rosiwit_slam::PointVec& pts,
-                         const rosiwit_slam::GridMapConfig& cfg,
-                         const rosiwit_slam::GridPostConfig& post,
-                         const std::string& generator,
-                         rosiwit_slam::GridInfo& out);
-
 /// 从 YAML 读栅格配置. 键名 -> 字段的映射**逐字段对照**核心:
 ///   src/algorithms/pcd_map_manager/pcd_map_manager.cpp:52-104 (grid_* 键)
 ///   以及 generateGridMap() 里的 cfg.resolution / point_spacing 赋值 (同文件 271-281)
@@ -51,9 +39,6 @@ void loadGridConfigFromYaml(const std::string& yaml_path,
 /// start() 后**立即**先算一张 (避免 1Hz 时首张要等满一秒), 之后按周期重算。
 class RealtimeGrid {
 public:
-    /// 取点云的回调: 成功填好 pts 返回 true; 返回 false 时本周期不更新栅格
-    using Source = std::function<bool(rosiwit_slam::PointVec&)>;
-
     RealtimeGrid();
     ~RealtimeGrid();
     RealtimeGrid(const RealtimeGrid&) = delete;
@@ -62,7 +47,6 @@ public:
     void setConfig(const rosiwit_slam::GridMapConfig& cfg,
                    const rosiwit_slam::GridPostConfig& post,
                    const std::string& generator);
-    void setSource(Source s);
     /// 改为直接取**已经生成好的栅格** (走核心 generateGridMap): 与存 pgm 完全同一条路径,
     /// 因此实时 /map 不会有地面噪点。设置后 setSource 的点云路径不再使用。
     using GridSource = std::function<bool(rosiwit_slam::GridInfo&)>;
@@ -84,7 +68,6 @@ private:
     std::condition_variable m_cv_;
     bool m_stop_ = true;
     double m_hz_ = 1.0;
-    Source m_source_;
     GridSource m_grid_source_;
     rosiwit_slam::GridMapConfig m_cfg_;
     rosiwit_slam::GridPostConfig m_post_;

@@ -95,7 +95,6 @@ public:
     /// [T8] /switch_map 里读完 `<map_base>.pgm/.yaml` 后调
     /// (对应旧实现 LocalizationSetGridMap, legacy.cpp:373-455)。
     /// 值先攒着, 等下一次 publishPointMap 时一次性发出并清标志 (legacy.cpp:926-946)。
-    void setGlobalGridMap(const nav_msgs::OccupancyGrid& grid);
 
     // ---- [T11] 告警码注入 ----
     /// 把码加进待报列表 (去重后由告警定时器统一发)。T11 用它上报 20003504(pose lost)。
