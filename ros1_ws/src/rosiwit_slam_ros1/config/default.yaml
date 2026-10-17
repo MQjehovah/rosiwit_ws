@@ -152,9 +152,13 @@ localization:
   #   monitor     : threshold | windowed
   pipeline:
     # **按需全局重定位**: /global_localization 服务会触发它。
-    # 手动重定位(给位姿)仍走 applyInitPose, 不会被 BBS 覆盖——两件事互不干扰。
-    # 若只想保留"有界局部重锁"、完全不跑 BBS, 改成 none 即可(服务仍可用, 只是搜索范围有限)。
-    relocalizer: bbs
+    # 手动重定位(给位姿)仍走 applyInitPose, 不会被覆盖——两件事互不干扰。
+    #
+    # 为什么不用 bbs: 本机雷达**俯装 41.67°**, 而 BBS 的模型是"点云投影到 xy + 只搜 yaw",
+    # 俯仰分量的存在使 2D 假设不成立 —— 实机候选稳定卡在 0.62, 候选附近 ±2m/±12° 穷举
+    # 也上不去, 而手动给完整 3D 位姿能到 0.9+。fpfh_ransac 是 **3D 特征匹配**, 无此假设。
+    # (若之后把 BBS 改成"先转到车体系再投影", 可以再切回来以换取速度)
+    relocalizer: fpfh_ransac
     motion_prior: imu
     local_map: keyframe_submap
     matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有
