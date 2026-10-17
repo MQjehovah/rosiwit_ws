@@ -442,7 +442,13 @@ bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
     //    整个 ROS 线程卡死在 /slam/mode_switch 里(节点假死: /slam/info 停发)。
     if (m_backend_thread.joinable()) {
         pushBackendTask(BackendTask::STOP);
-        m_backend_thread.join();
+        // ⚠ **不能 join**: 后端可能正卡在一次 optimize() 里(或定位匹配占满 CPU), join 会把
+        // 调用线程(ROS 服务线程)一起挂住 -> 现场表现"切图/切模式卡住"。实测复现过两次。
+        // STOP 入队后线程会在本轮结束时自行退出; 它持有的是自己那份模块 shared_ptr,
+        // 与随后重建的新实例互不影响。
+        m_backend_thread.detach();
+        std::cout << "[SlamPipeline] backend thread detached (STOP queued, no join)"
+                  << std::endl;
     }
     m_backend_running = false;
 

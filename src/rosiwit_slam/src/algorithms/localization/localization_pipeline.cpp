@@ -365,6 +365,15 @@ void LocalizationPipeline::onOdom(const PoseStamped& odom) {
 
 CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     CloudType::Ptr target = m_local_map->getLocalMap(pose);
+    // [LocProbe] 诊断: 局部地图到底取到多少点 (NO Effective Points 排查)
+    {
+        static int probe_n = 0;
+        if (++probe_n % 10 == 0) {
+            std::cout << "[LocProbe] local_map=" << (target ? target->size() : 0)
+                      << " pose=(" << pose.trans.x() << ", " << pose.trans.y() << ")"
+                      << " local_map_name=" << m_local_map_name << std::endl;
+        }
+    }
     if (m_maintainer) {
         CloudType::Ptr ov = m_maintainer->getOverlay(pose);
         if (ov && !ov->empty()) {
@@ -556,6 +565,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_matcher->setTarget(target);
         }
         const bool ok = m_matcher->match(f.cloud, guess, res);
+        // [LocProbe] 诊断: 输入扫描点数 / 匹配结果 (NO Effective Points 排查)
+        {
+            static int probe_n = 0;
+            if (++probe_n % 10 == 0) {
+                std::cout << "[LocProbe] scan=" << (f.cloud ? f.cloud->size() : 0)
+                          << " target=" << (m_cached_target ? m_cached_target->size() : 0)
+                          << " ok=" << (ok ? 1 : 0) << " converged=" << (res.converged ? 1 : 0)
+                          << " fitness=" << res.fitness << std::endl;
+            }
+        }
         accepted = ok && acceptMatch(res, f.cloud, guess);
         out_pose = accepted ? res.pose : guess;
     }
