@@ -100,6 +100,10 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_motion_cfg.use_odom = getv<bool>(mpc, "use_odom", m_motion_cfg.use_odom);
         m_motion_cfg.max_odom_speed =
             getv<double>(mpc, "max_odom_speed", m_motion_cfg.max_odom_speed);
+        m_motion_cfg.ekf_q_v     = getv<double>(mpc, "ekf_q_v", m_motion_cfg.ekf_q_v);
+        m_motion_cfg.ekf_r_odom  = getv<double>(mpc, "ekf_r_odom", m_motion_cfg.ekf_r_odom);
+        m_motion_cfg.ekf_r_match = getv<double>(mpc, "ekf_r_match", m_motion_cfg.ekf_r_match);
+        m_motion_cfg.ekf_chi2    = getv<double>(mpc, "ekf_chi2", m_motion_cfg.ekf_chi2);
         m_motion_cfg.slip_yaw_thresh = getv<double>(mpc, "slip_yaw_thresh", m_motion_cfg.slip_yaw_thresh);
         m_motion_cfg.imu_calib_samples = getv<int>(mpc, "imu_calib_samples", m_motion_cfg.imu_calib_samples);
         m_motion_cfg.static_gyro_std = getv<double>(mpc, "static_gyro_std", m_motion_cfg.static_gyro_std);
@@ -116,6 +120,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (gc) {
         m_global_cfg.min_score          = getv<double>(gc, "min_score", m_global_cfg.min_score);
         m_global_cfg.top_k              = getv<int>(gc, "top_k", m_global_cfg.top_k);
+        m_global_cfg.reloc_accept_score =
+            getv<double>(gc, "reloc_accept_score", m_global_cfg.reloc_accept_score);
         m_ambiguity_margin = getv<double>(gc, "ambiguity_margin", m_ambiguity_margin);
         m_reseed_radius    = getv<double>(gc, "reseed_radius", m_reseed_radius);
         m_global_cfg.retry_interval     = getv<int>(gc, "retry_interval", m_global_cfg.retry_interval);
@@ -519,7 +525,13 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     const auto t0 = std::chrono::steady_clock::now();
     const double offs[3] = {-1.5, 0.0, 1.5};
     const double yaws[3] = {-10.0, 0.0, 10.0};
-    double best_fit = m_accept_cfg.min_coverage;
+    // 达标线用"健康线"(credible 0.75)而非最低接受线(min_coverage 0.35):
+    // 2026-10-17 推行复测死循环 —— 判丢后 bounded recovery 以 0.73"成功"(>0.35)
+    // -> 回到僵尸态 -> 10s 后再判丢 -> 再截胡, FPFH 冷启动永远轮不到, 位姿/点云
+    // 十几秒跳一次。恢复不出健康分数 = 失败, 放行给全局重定位。
+    double best_fit = std::max(m_accept_cfg.min_coverage,
+                               m_monitor_cfg.enabled ? m_monitor_cfg.credible_fitness
+                                                     : m_accept_cfg.min_coverage);
     PoseStamped best;
     bool found = false;
     bool stop = false;
@@ -543,7 +555,12 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
             }
         }
     }
-    if (!found) return false;
+    if (!found) {
+        // 失败可见: 之前静默返回, 现场看不出"有界恢复试过但没到健康线"
+        std::cout << "[LocPipeline] bounded recovery failed (bar=" << best_fit
+                  << ") -> fall through to global relocalization" << std::endl;
+        return false;
+    }
     m_pose = best;
     m_pose.time = best.time;
     m_prior->reset(m_pose);
@@ -750,15 +767,18 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     if (best_fit >= 0.95 && second_fit > 0.0) break;
                 }   // for (const auto& cand : cands)
 
-                // 全部候选都不够高 -> 判定未定位, 绝不给"看起来对但覆盖率只有 0.6"的假位姿
-                if (best_fit < m_global_cfg.min_score * 0.9) {
+                // 全部候选都不够高 -> 判定未定位, 绝不给"看起来对但覆盖率只有 0.6"的假位姿。
+                // 接受线 = reloc_accept_score(0.85): 弱重定位宁可保持 LOST(界面如实显示、
+                // 人工点选兜底), 也不接受后进入"僵尸-判丢-再弱接受"的循环(2026-10-17 实测)。
+                if (best_fit < m_global_cfg.reloc_accept_score) {
                     m_status = LOST;
                     m_initialized = false;
                     // 冷却: 之前这里漏设, 下一帧立刻又是一场全量全局风暴(fpfh top_k=5
                     // × 两级 200 GICP), 单线程 spinner 被连续独占
                     m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
                     std::cout << "[LocPipeline] relocalization weak: best_fit=" << best_fit
-                              << " < 0.75 -> keep LOST" << std::endl;
+                              << " < " << m_global_cfg.reloc_accept_score
+                              << " -> keep LOST" << std::endl;
                     return;
                 }
                 m_pose = best_pose;

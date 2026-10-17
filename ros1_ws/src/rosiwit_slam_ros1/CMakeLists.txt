@@ -114,6 +114,11 @@ if(CATKIN_ENABLE_TESTING)
     if(TARGET test_reloc_disambig)
         target_link_libraries(test_reloc_disambig rosiwit_slam_ros1_lib)
     endif()
+
+    catkin_add_gtest(test_ekf_prior test/test_ekf_prior.cpp)
+    if(TARGET test_ekf_prior)
+        target_link_libraries(test_ekf_prior rosiwit_slam_ros1_lib)
+    endif()
 endif()
 
 install(TARGETS rosiwit_slam_ros1_node

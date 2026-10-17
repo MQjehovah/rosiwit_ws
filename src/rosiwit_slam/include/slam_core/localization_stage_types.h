@@ -151,6 +151,11 @@ struct MotionPriorConfig {
     bool   use_odom = false;         // 融合轮式里程计(默认关: 洗地机打滑不可信)
     double slip_yaw_thresh = 0.3;    // 打滑判据: |odom_yaw_rate - imu_yaw_rate| > 该值(rad/s) 则丢弃 odom
     double max_odom_speed = 3.0;     // odom 平移速度物理上限(m/s), 超出 = 打滑/毛刺样本, 整包丢弃
+    // ---- imu_ekf 先验 (误差状态 EKF, 状态=[vx,vy] 体系速度) ----
+    double ekf_q_v = 1.0;            // 过程噪声: 速度随机游走 (m/s)²/s
+    double ekf_r_odom = 0.15;        // odom 速度观测噪声 (m/s)
+    double ekf_r_match = 0.8;        // 激光位移速度观测噪声 (m/s, 低频弱观测)
+    double ekf_chi2 = 5.99;          // 卡方门控阈值 (2 自由度 95%); 0=关
     // ---- IMU 零偏在线估计 (L11) ----
     int    imu_calib_samples = 200;  // 静止标定窗口样本数
     double static_gyro_std = 0.02;   // 静止判据: gyro 标准差(rad/s)
@@ -167,6 +172,9 @@ struct MotionPriorConfig {
 // ==================== 全局重定位配置 ====================
 struct GlobalLocalizeConfig {
     double min_score = 0.5;          // 命中最低分
+    double reloc_accept_score = 0.85; // 冷启动接受线: 低于此值宁可保持 LOST 也不给假位姿
+                                       // (2026-10-17: 曾用 min_score*0.9=0.45, 0.68 的弱
+                                       //  重定位被反复接受 -> 僵尸循环: 接受->10s判丢->再接受)
     int    top_k = 5;                // 全局重定位多候选数
     int    retry_interval = 30;      // 丢失后重定位尝试间隔(帧, 节流)
     double voxel_resolution = 0.3;   // 精配准降采样

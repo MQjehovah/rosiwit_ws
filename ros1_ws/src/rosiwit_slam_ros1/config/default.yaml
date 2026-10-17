@@ -161,7 +161,7 @@ localization:
     # bbs 已支持"车体系投影"(见下面 bbs_mount_*): 先转到车体系再 2D 搜索, 结果换回雷达系。
     # 若发现异常, 切回 fpfh_ransac (3D, 已验证 0.99+) 即可。
     relocalizer: fpfh_ransac
-    motion_prior: imu
+    motion_prior: imu_ekf   # odom+IMU 误差状态EKF (2026-10-17); 退回旧版改 imu
     local_map: keyframe_submap
     matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
@@ -226,6 +226,11 @@ localization:
                               # odom 平移让预测跟着推走。朝向始终用 IMU)
     slip_yaw_thresh: 0.3      # |odom_yaw_rate - imu_yaw_rate| 超此值判打滑并丢弃 odom(rad/s)
     max_odom_speed: 3.0       # odom 平移速度物理上限(m/s), 超出=打滑/毛刺, 整包丢弃
+    # ---- imu_ekf 参数 ----
+    ekf_q_v: 1.0              # 速度过程噪声 (m/s)²/s —— 越大跟得越快越抖
+    ekf_r_odom: 0.15          # odom 速度观测噪声 (m/s)
+    ekf_r_match: 0.8          # 激光位移速度观测噪声 (m/s, 低频弱观测)
+    ekf_chi2: 5.99            # 卡方门控 (2 自由度 95 分位; 0=关)
     # IMU 零偏在线估计 (L11)
     imu_calib_samples: 200    # 静止标定窗口样本数
     static_gyro_std: 0.02     # 静止判据: gyro 标准差(rad/s)
@@ -241,6 +246,7 @@ localization:
   # 全局重定位参数 (relocalizer: scan_context | bbs | fpfh_ransac)
   global:
     min_score: 0.5
+    reloc_accept_score: 0.85  # 冷启动接受线: 低于此值保持 LOST(诚实), 不接受弱重定位进僵尸态
     top_k: 5                    # 全局重定位多候选数 (按分数降序精配, 命中 0.95+ 即停)
     # 丢失后重定位尝试间隔(帧, 节流)。30 帧(~2s)太密: 每次尝试含多起点 GICP
     # (预算 3s), 连续尝试会把单线程 spinner 独占, /relocation 等服务排队数十秒。
