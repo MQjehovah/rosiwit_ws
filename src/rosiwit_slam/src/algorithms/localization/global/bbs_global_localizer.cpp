@@ -40,8 +40,12 @@ void BbsGlobalLocalizer::configure(const GlobalLocalizeConfig& cfg) {
                       << m_r_bl.row(2) << std::endl;
         }
     }
-    m_have_mount = (std::fabs(m_cfg.bbs_mount_roll_deg) + std::fabs(m_cfg.bbs_mount_pitch_deg)
-                    + std::fabs(m_cfg.bbs_mount_yaw_deg)) > 1e-6;
+    // 注意: **不能用欧拉角覆盖**前面的矩阵判定 —— 矩阵注入时三个角度都是 0,
+    // 直接赋值会把 m_have_mount 又置回 false(实测: 注入成功但车体系投影没生效)。
+    const bool euler_nonzero = (std::fabs(m_cfg.bbs_mount_roll_deg)
+                                + std::fabs(m_cfg.bbs_mount_pitch_deg)
+                                + std::fabs(m_cfg.bbs_mount_yaw_deg)) > 1e-6;
+    m_have_mount = m_have_mount || euler_nonzero;
     if (!m_have_mount) {
         std::cout << "[BBS] WARN: 未获得安装变换(也没注入 bbs_mount_r) -> 按雷达系投影; "
                      "俯装/侧装雷达下候选会偏, 请改用 fpfh_ransac 或修好 TF" << std::endl;
