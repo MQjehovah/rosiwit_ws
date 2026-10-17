@@ -202,6 +202,41 @@ void LegacyXz3dSlamInterface::setModeFromLegacy(SlamMode m) {
     }
 }
 
+void LegacyXz3dSlamInterface::computeLidarToBase() {
+    if (have_lidar_mount_) return;
+    std::string lidar_frame = "lidar";
+    pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
+    std::string base_frame = "base_link";
+    pnh_.param<std::string>("base_frame", base_frame, base_frame);
+    // 等最多 3 秒 (启动时 robot_state_publisher 的 /tf_static 可能还没到)
+    for (int i = 0; i < 30; ++i) {
+        try {
+            const geometry_msgs::TransformStamped t =
+                tf_buffer_->lookupTransform(base_frame, lidar_frame, ros::Time(0), ros::Duration(0.1));
+            Eigen::Quaterniond q(t.transform.rotation.w, t.transform.rotation.x,
+                                 t.transform.rotation.y, t.transform.rotation.z);
+            q.normalize();
+            r_lb_ = q.toRotationMatrix();                 // base <- lidar
+            t_lb_ = Eigen::Vector3d(t.transform.translation.x, t.transform.translation.y,
+                                    t.transform.translation.z);
+            have_lidar_mount_ = true;
+            char b[400];
+            const Eigen::Vector3d rpy = r_lb_.eulerAngles(2, 1, 0);   // yaw,pitch,roll
+            std::snprintf(b, sizeof(b),
+                          "[legacy_iface] lidar mount from TF ('%s' <- '%s'): rpy(deg)=[%.2f %.2f %.2f] xyz=[%.3f %.3f %.3f]",
+                          base_frame.c_str(), lidar_frame.c_str(),
+                          rpy.z() * 180 / M_PI, rpy.y() * 180 / M_PI, rpy.x() * 180 / M_PI,
+                          t_lb_.x(), t_lb_.y(), t_lb_.z());
+            std::cout << b << std::endl;
+            return;
+        } catch (const tf2::TransformException&) {
+            ros::Duration(0.05).sleep();
+        }
+    }
+    ROS_WARN_STREAM("[legacy_iface] TF '" << base_frame << "' <- '" << lidar_frame
+                    << "' unavailable; pose will be published in the LIDAR frame (heading may be off)");
+}
+
 void LegacyXz3dSlamInterface::resetCoreAndCaches() {
     // ⚠ 默认关闭: 实测"重建核心"会把**建图**搞坏 —— 重建后核心不再累积地图
     // (/cloud_map 点数与 map_area 完全不动), 连正常启动后第一次进建图都是一样
@@ -439,6 +474,21 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
 
     SlamOutput out;
     const bool have_out = engine_.latestOutput(out) && out.has_new_pose;
+
+    // **核心估的是"雷达/IMU 刚体"的位姿**, 而这辆车的雷达偏航 90°、俯装 41.67°、抬高 0.9m。
+    // 直接当车身位姿发出去 -> 朝向差 90° 且带 42° 俯仰 (实测就是这个现象)。
+    // 这里用 TF 里的安装变换换到车身 (base_link) 系:
+    //   T_world_base = T_world_lidar * T_lidar_base,  T_lidar_base = inv(T_base_lidar)
+    //   R_base = R_lidar * R_lb^T ;  t_base = t_lidar - R_base * t_lb
+    if (have_out) {
+        computeLidarToBase();
+        if (have_lidar_mount_) {
+            const Eigen::Matrix3d R_body = out.pose.rot * r_lb_.transpose();
+            out.pose.trans = out.pose.trans - R_body * t_lb_;
+            out.pose.rot = R_body;
+        }
+    }
+
     bool publish_info = true;
 
     if (slam_mode_ == SlamMode::LOCALIZATION) {

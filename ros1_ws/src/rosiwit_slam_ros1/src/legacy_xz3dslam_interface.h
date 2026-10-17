@@ -272,6 +272,16 @@ private:
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
+    /// 雷达刚体 -> 车身(`base_link`) 的安装变换 (缓存在 T_lidar_base 里)。
+    /// 核心估出来的是**雷达/IMU 刚体**的位姿; 这辆车雷达偏航 90°、俯装 41.67°、抬高 0.9m,
+    /// 直接当车身位姿发出去就会**朝向差 90°**且带 42° 俯仰 (旧系统用 conf 里的
+    /// roll/pitch/yaw/x/z 做这件事, M13 当初跳过了)。
+    /// 这里改成从 TF (`base_link <- ~lidar_frame`) 读, 换车/换装自动正确。
+    void computeLidarToBase();                    // 启动/首次用时取一次, 失败则单位阵
+    Eigen::Matrix3d r_lb_ = Eigen::Matrix3d::Identity();   // base <- lidar
+    Eigen::Vector3d t_lb_ = Eigen::Vector3d::Zero();
+    bool have_lidar_mount_ = false;
 };
 
 } // namespace rosiwit_slam_ros1
