@@ -176,6 +176,9 @@ struct GlobalLocalizeConfig {
     // BBS (branch-and-bound) 分支定界 2D 全局搜索
     // 安装角 (base<-lidar 的 rpy, 度)。BBS 的 2D 搜索要求"水平安装":
     // 先把扫描与地图都转到 base(车体)系再投影, 最后把结果换回雷达系。0 = 不转换。
+    // **首选**: base<-lidar 旋转矩阵(行优先9元素), 由 ROS 层从 TF 直接注入,
+    // 彻底避免欧拉角顺序歧义(URDF rpy / Eigen eulerAngles / 打印顺序 三套约定)。
+    std::array<double, 9> bbs_mount_r{{1, 0, 0, 0, 1, 0, 0, 0, 1}};
     double bbs_mount_roll_deg = 0.0;
     double bbs_mount_pitch_deg = 0.0;
     double bbs_mount_yaw_deg = 0.0;

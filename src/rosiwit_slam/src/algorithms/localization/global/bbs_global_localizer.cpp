@@ -25,6 +25,21 @@ void BbsGlobalLocalizer::configure(const GlobalLocalizeConfig& cfg) {
               * Eigen::AngleAxisd(m_cfg.bbs_mount_pitch_deg * M_PI / 180.0, V3D::UnitY())
               * Eigen::AngleAxisd(m_cfg.bbs_mount_roll_deg * M_PI / 180.0, V3D::UnitX()))
                  .toRotationMatrix();
+    {
+        const auto& rr = m_cfg.bbs_mount_r;
+        const bool identity = std::fabs(rr[0] - 1.0) < 1e-9 && std::fabs(rr[4] - 1.0) < 1e-9 &&
+                              std::fabs(rr[8] - 1.0) < 1e-9 && std::fabs(rr[1]) < 1e-9 &&
+                              std::fabs(rr[2]) < 1e-9 && std::fabs(rr[3]) < 1e-9 &&
+                              std::fabs(rr[5]) < 1e-9 && std::fabs(rr[6]) < 1e-9 &&
+                              std::fabs(rr[7]) < 1e-9;
+        if (!identity) {
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c) m_r_bl(r, c) = rr[r * 3 + c];
+            std::cout << "[BBS] mount from matrix (TF): "
+                      << m_r_bl.row(0) << " | " << m_r_bl.row(1) << " | "
+                      << m_r_bl.row(2) << std::endl;
+        }
+    }
     m_have_mount = (std::fabs(m_cfg.bbs_mount_roll_deg) + std::fabs(m_cfg.bbs_mount_pitch_deg)
                     + std::fabs(m_cfg.bbs_mount_yaw_deg)) > 1e-6;
     std::cout << "[BBS] mount rpy(deg)=[" << m_cfg.bbs_mount_roll_deg << " "

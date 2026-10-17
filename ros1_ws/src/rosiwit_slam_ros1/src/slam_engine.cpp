@@ -65,7 +65,8 @@ namespace {
 std::string writeLegacyOverrideYaml(const std::string& base_yaml,
                                     const Eigen::Matrix3d& r_il,
                                     const Eigen::Vector3d& t_il,
-                                    bool write_extrinsic) {
+                                    bool write_extrinsic,
+                                    const Eigen::Matrix3d* r_bl) {
     const char* home = std::getenv("HOME");
     const std::string dir = std::string(home ? home : ".") + "/.ros/rosiwit_slam_ros1";
     ::mkdir(dir.c_str(), 0755);                 // 失败也无所谓(可能已存在)
@@ -111,6 +112,17 @@ std::string writeLegacyOverrideYaml(const std::string& base_yaml,
                       r_il(2, 0), r_il(2, 1), r_il(2, 2),
                       t_il.x(), t_il.y(), t_il.z());
         out << buf;
+    }
+    // 安装旋转 (base<-lidar) 以**矩阵**注入: 规避欧拉角顺序歧义, 供 BBS 车体系投影使用
+    if (r_bl) {
+        char rb[512];
+        std::snprintf(rb, sizeof(rb),
+                      "\n# base<-lidar 旋转(direct from TF), BBS 车体系投影用\n"
+                      "bbs_mount_r: [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n",
+                      (*r_bl)(0, 0), (*r_bl)(0, 1), (*r_bl)(0, 2),
+                      (*r_bl)(1, 0), (*r_bl)(1, 1), (*r_bl)(1, 2),
+                      (*r_bl)(2, 0), (*r_bl)(2, 1), (*r_bl)(2, 2));
+        out << rb;
     }
     out.close();
     return out_path;
@@ -326,7 +338,10 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         std::string extr_src;
         const bool have_extr = computeLegacyExtrinsic(r_il, t_il, extr_src);
         if (!have_extr) extr_src = "config (core yaml)";
-        config_path_ = writeLegacyOverrideYaml(base, r_il, t_il, have_extr);
+        // 安装变换先取一次(TF), 用于注入 bbs_mount_r; 取不到则注入单位阵(核心侧回退到欧拉角配置)
+        computeLidarToBase();
+        config_path_ = writeLegacyOverrideYaml(base, r_il, t_il, have_extr,
+                                              have_lidar_mount_ ? &r_lb_ : nullptr);
         std::cout << "[compat] extrinsic source = " << extr_src << std::endl;
         if (have_extr) {
             char eb[320];
