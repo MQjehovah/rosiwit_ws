@@ -4,6 +4,15 @@
 #include <cmath>
 #include <pcl/io/pcd_io.h>
 
+#ifdef USE_GTSAM
+#include <gtsam/geometry/Pose3.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/slam/PriorFactor.h>
+#include <gtsam/inference/Symbol.h>
+#endif
+
 namespace rosiwit_slam {
 
 int64_t OverlayMapMaintainer::voxelKey(int cx, int cy, int cz) {
@@ -155,15 +164,6 @@ void OverlayMapMaintainer::flushBuffer() {
     for (auto& k : m_buf) commitKeyframe(k.pose, k.body);
     m_buf.clear();
 }
-
-#ifdef USE_GTSAM
-#include <gtsam/geometry/Pose3.h>
-#include <gtsam/nonlinear/NonlinearFactorGraph.h>
-#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
-#include <gtsam/slam/BetweenFactor.h>
-#include <gtsam/slam/PriorFactor.h>
-#include <gtsam/inference/Symbol.h>
-#endif
 
 void OverlayMapMaintainer::optimizePoses() {
 #ifdef USE_GTSAM
