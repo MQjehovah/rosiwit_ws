@@ -209,19 +209,64 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
     std::lock_guard<std::mutex> lock(m_mutex_);
     if (submaps_.empty()) return;
 
-    // corrected 与 submaps_ 按同一关键帧交付顺序对齐; 后端可能尚未消化最末几帧.
-    // 若后端比本地多出(不应发生), 截断到本地数量.
-    const size_t n = std::min(corrected.size(), submaps_.size());
-    if (n == 0) return;
+    // ⚠ **必须按帧对齐, 不能按下标**: 后端是异步的、可能只消化了前 k 个关键帧,
+    // 而 submaps_ 是本地全部关键帧。按下标配对会把"第 i 个后端位姿"套到"第 i 个本地点云"上,
+    // 一旦后端滞后几帧, 第 i 个其实不是同一帧 -> 整张图错位/旋转叠加。
+    // 实机症状正是: 平时正常, **一触发重建就突然全糊、像全部旋转叠加**(重建前后 anchor 跳 5~36m)。
+    // 每个关键帧的 pose.time 唯一, 用时间戳匹配 (容差 0.2s)。
+    std::vector<int> kf_of_corr(corrected.size(), -1);
+    for (size_t i = 0; i < corrected.size(); ++i) {
+        int best = -1;
+        double best_dt = 1e9;
+        for (size_t j = 0; j < submaps_.size(); ++j) {
+            const double dt = std::fabs(submaps_[j].pose.time - corrected[i].time);
+            if (dt < best_dt) { best_dt = dt; best = static_cast<int>(j); }
+        }
+        if (best >= 0 && best_dt <= 0.2) kf_of_corr[i] = best;
+    }
+    // 匹配上的帧数太少 -> 说明本地/后端两套数据没法对齐, 宁可不重建也不能出错图
+    size_t matched = 0;
+    for (int v : kf_of_corr) if (v >= 0) ++matched;
+    if (matched < 2) {
+        std::cout << "[PcdMapManager] skip rebuild: only " << matched
+                  << "/" << corrected.size() << " backend poses matched local keyframes by time"
+                  << std::endl;
+        return;
+    }
 
-    // 前沿锚点 A = G_last * P_last^{-1}: 供 pipeline 把"之后"的原始位姿 R 平移到修正系
-    // A∘R, 使 odom/tf/path 与重建后的地图连续. (P_last 取与 G_last 同序号的本地原始位姿)
-    const PoseStamped& raw_last = submaps_[n - 1].pose;
-    m_frontier_anchor_ = poseMul(corrected[n - 1], poseInv(raw_last));
+    // 每个本地关键帧的最终位姿: 后端修正优先, 未匹配(后端还没消化)的用原始位姿
+    std::vector<PoseStamped> used(submaps_.size());
+    for (size_t j = 0; j < submaps_.size(); ++j) used[j] = submaps_[j].pose;
+    for (size_t i = 0; i < corrected.size(); ++i) {
+        if (kf_of_corr[i] >= 0) used[kf_of_corr[i]] = corrected[i];
+    }
 
-    // 关键帧直接用后端修正位姿 G_i(均在 odom/图坐标系), 尾部未交付后端的帧用原始位姿占位
-    std::vector<PoseStamped> used(n);
-    for (size_t i = 0; i < n; ++i) used[i] = corrected[i];
+    // 前沿锚点 A = G_last * P_last^{-1} (同一帧!), 供 pipeline 把之后的新位姿换到修正系
+    const int last_matched_kf = [&]() {
+        for (size_t i = corrected.size(); i-- > 0;)
+            if (kf_of_corr[i] >= 0) return kf_of_corr[i];
+        return -1;
+    }();
+    if (last_matched_kf < 0) return;
+    const PoseStamped& raw_last = submaps_[last_matched_kf].pose;
+    PoseStamped anchor_new = poseMul(used[last_matched_kf], poseInv(raw_last));
+
+    // 兜底: 相邻两帧之间的真实修正量不应有多大。超过阈值说明对齐/后端出了问题,
+    // 保留上一次的锚点并告警, 避免把整张图瞬间平移旋转出去 (这才是"突然全糊"的直接表现)。
+    const double dt_anchor = (anchor_new.trans - m_frontier_anchor_.trans).norm();
+    const Eigen::AngleAxisd aa(anchor_new.rot * m_frontier_anchor_.rot.transpose());
+    if (dt_anchor > m_max_correction_trans_m || std::fabs(aa.angle()) > m_max_correction_rot_rad) {
+        std::cout << "[PcdMapManager] WARN reject correction: d_trans=" << dt_anchor
+                  << "m d_rot=" << std::fabs(aa.angle()) * 180.0 / M_PI
+                  << "deg (limits " << m_max_correction_trans_m << "m/"
+                  << m_max_correction_rot_rad * 180.0 / M_PI << "deg); keep previous anchor"
+                  << std::endl;
+        return;
+    }
+    m_frontier_anchor_ = anchor_new;
+
+    // 尾部未匹配的本地帧用原始位姿占位 (见上)
+    (void)raw_last;
 
     CloudType::Ptr rebuilt(new CloudType());
     std::vector<Observation> rebuilt_obs;
@@ -249,7 +294,8 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
     vg.filter(*filtered);
     global_map_ = filtered;
 
-    std::cout << "[PcdMapManager] Rebuilt map from backend poses: " << n << " kfs"
+    std::cout << "[PcdMapManager] Rebuilt map from backend poses: " << used.size() << " kfs"
+              << " (matched " << matched << "/" << corrected.size() << " backend poses)"
               << " (" << global_map_->size() << " pts), anchor trans="
               << m_frontier_anchor_.trans.norm() << " m" << std::endl;
 }
