@@ -13,6 +13,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -60,7 +61,10 @@ namespace {
 /// legacy profile: 给核心一份 override YAML —— 只加 `map_directory: "/"` 一个键 (M8/D9)。
 /// 做法是把基底文件**按文本**复制过来再在末尾追加一行, 而不是重新 Dump 整个 Node ——
 /// 这样原文件里的注释与排版都保留, 也不会被 YAML 重排改变语义。
-std::string writeLegacyOverrideYaml(const std::string& base_yaml) {
+std::string writeLegacyOverrideYaml(const std::string& base_yaml,
+                                    const Eigen::Matrix3d& r_il,
+                                    const Eigen::Vector3d& t_il,
+                                    bool write_extrinsic) {
     const char* home = std::getenv("HOME");
     const std::string dir = std::string(home ? home : ".") + "/.ros/rosiwit_slam_ros1";
     ::mkdir(dir.c_str(), 0755);                 // 失败也无所谓(可能已存在)
@@ -78,9 +82,67 @@ std::string writeLegacyOverrideYaml(const std::string& base_yaml) {
            "# 旧实现的地图读写都是 <dir>/map.pcd|.xzmap|.pgm|.yaml 的绝对路径, 而核心的\n"
            "# PcdMapManager 是 map_dir_ + \"/\" + name; 置成 \"/\" 让拼接退化为绝对路径。\n"
            "map_directory: \"/\"\n";
+    // 雷达-IMU 外参: 由启动时按 TF 推导 (见 computeLegacyExtrinsic), 写在这里覆盖基底配置。
+    // write_extrinsic=false 表示 TF 推导失败 -> 不写, 让基底配置里的值生效。
+    if (write_extrinsic) {
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+                      "\n# --- r_il/t_il 由启动时推导 (TF/同名帧), 不是手工写死 ---\n"
+                      "r_il: [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n"
+                      "t_il: [%.8f, %.8f, %.8f]\n",
+                      r_il(0, 0), r_il(0, 1), r_il(0, 2),
+                      r_il(1, 0), r_il(1, 1), r_il(1, 2),
+                      r_il(2, 0), r_il(2, 1), r_il(2, 2),
+                      t_il.x(), t_il.y(), t_il.z());
+        out << buf;
+    }
     out.close();
     return out_path;
 }
+
+} // namespace  <-- 临时收起匿名 namespace: 成员函数必须定义在 rosiwit_slam_ros1 里
+
+bool SlamEngine::computeLegacyExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
+                                       std::string& source) {
+    // 帧名可配; 默认都是 lidar —— 本机点云与 IMU 由同一个万集 SDK 节点发布, frame_id 相同
+    std::string lidar_frame = "lidar", imu_frame = "lidar";
+    pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
+    pnh_.param<std::string>("imu_frame", imu_frame, imu_frame);
+
+    if (lidar_frame == imu_frame) {
+        // **同一个 frame 就是同一个坐标系** -> 恒等变换。
+        // 雷达内置 IMU 正是这种情形 (frame_id 都是 lidar), 此时任何旋转都是错的。
+        R = Eigen::Matrix3d::Identity();
+        t = Eigen::Vector3d::Zero();
+        source = std::string("identity (lidar_frame == imu_frame == '") + lidar_frame + "')";
+        return true;
+    }
+
+    // 独立 IMU: 从 TF 取 T_(imu <- lidar)。启动时 /tf_static 可能还没到, 等最多 3 秒。
+    if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
+    if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    for (int i = 0; i < 30; ++i) {
+        try {
+            const geometry_msgs::TransformStamped tf =
+                tf_buffer_->lookupTransform(imu_frame, lidar_frame, ros::Time(0), ros::Duration(0.1));
+            Eigen::Quaterniond q(tf.transform.rotation.w, tf.transform.rotation.x,
+                                 tf.transform.rotation.y, tf.transform.rotation.z);
+            q.normalize();
+            R = q.toRotationMatrix();
+            t = Eigen::Vector3d(tf.transform.translation.x, tf.transform.translation.y,
+                                tf.transform.translation.z);
+            source = "TF lookupTransform('" + imu_frame + "' <- '" + lidar_frame + "')";
+            return true;
+        } catch (const tf2::TransformException&) {
+            ros::Duration(0.05).sleep();
+        }
+    }
+    ROS_WARN_STREAM("[slam_engine] TF '" << imu_frame << "' <- '" << lidar_frame
+                    << "' unavailable within 3s; keeping r_il/t_il from the core yaml");
+    return false;
+}
+
+namespace {  // 重新打开匿名 namespace, 供下面的 printCompatDiagnostics 使用
 
 /// D7 / §5.10 B / 待办项 C 要的可诊断性: 把核心**实际生效**的外参与 acc_scale 打出来,
 /// 因为"完全没位姿"最常见的两个原因就是加速度单位(acc_scale)与雷达-IMU 外参(r_il/t_il)。
@@ -193,8 +255,22 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
             ROS_WARN_STREAM("[slam_engine] legacy profile: ~config_file 未设置, 核心 YAML 回落到 "
                             << base);
         }
-        config_path_ = writeLegacyOverrideYaml(base);
-        printCompatDiagnostics(base, config_path_, legacy_cfg_);
+        // 雷达-IMU 外参: 优先按 TF / 同名帧自动推导; 推不出来就保留基底配置里的值。
+        Eigen::Matrix3d r_il = Eigen::Matrix3d::Identity();
+        Eigen::Vector3d t_il = Eigen::Vector3d::Zero();
+        std::string extr_src;
+        const bool have_extr = computeLegacyExtrinsic(r_il, t_il, extr_src);
+        if (!have_extr) extr_src = "config (core yaml)";
+        config_path_ = writeLegacyOverrideYaml(base, r_il, t_il, have_extr);
+        std::cout << "[compat] extrinsic source = " << extr_src << std::endl;
+        if (have_extr) {
+            char eb[320];
+            std::snprintf(eb, sizeof(eb),
+                          "[compat] r_il(t_il) = [%.6f %.6f %.6f | %.6f %.6f %.6f | %.6f %.6f %.6f] t=[%.6f %.6f %.6f]",
+                          r_il(0,0), r_il(0,1), r_il(0,2), r_il(1,0), r_il(1,1), r_il(1,2),
+                          r_il(2,0), r_il(2,1), r_il(2,2), t_il.x(), t_il.y(), t_il.z());
+            std::cout << eb << std::endl;
+        }        printCompatDiagnostics(base, config_path_, legacy_cfg_);
     }
 
     algo_ = SlamFactory::create(algo_name);

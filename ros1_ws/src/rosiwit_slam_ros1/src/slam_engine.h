@@ -27,6 +27,9 @@
 #include <string>
 #include <vector>
 
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_base.h"
 #include "slam_core/slam_types.h"
@@ -157,6 +160,13 @@ private:
     std::function<void(const rosiwit_slam::SlamOutput&)> output_hook_;
     std::function<void(bool)> input_seen_hook_;
     std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> raw_lidar_hook_;
+
+    // legacy profile: 优先从 TF 推导 r_il/t_il (雷达-IMU 外参), 而不是写死在配置里
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    /// 推导 T_(imu <- lidar). 顺序: ① 两帧同名 -> 恒等; ② TF 里查得到 -> 用 TF;
+    /// ③ 都没有 -> 回落到核心 YAML 里的值。source 说明用了哪一种。
+    bool computeLegacyExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t, std::string& source);
 };
 
 } // namespace rosiwit_slam_ros1
