@@ -75,6 +75,10 @@ private:
     CloudType::Ptr m_map;
     std::string m_map_path;
     PoseStamped m_pose;
+    /// 逸出保护: 最后一次**被接受**的匹配位姿。位姿跑出地图(局部地图为空)时回退到这里,
+    /// 避免运动先验在无修正情况下一直积分, 越漂越远(实机曾漂到离图 96m, 从此再也匹配不上)。
+    PoseStamped m_last_accepted;
+    bool m_have_last_accepted = false;
     Status m_status = INIT;
     bool m_initialized = false;
     MatchResult m_last_match;

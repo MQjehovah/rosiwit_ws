@@ -559,6 +559,21 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
         if (!m_matcher->usesStore() && rebuild_target) {
             CloudType::Ptr target = buildTarget(guess);
+            // **逸出保护 (fail fast)**: 局部地图为空 => 猜测位姿已经在图外(或该处无关键帧)。
+            // 以前会拿空目标去匹配: 空 KD-tree 报错、ok=0、然后运动先验继续积分 ->
+            // 位姿越漂越远(实机漂到 -96m), 从此永远匹配不上, 界面上角标彻底冻结。
+            // 这里回退到最近一次被接受的位姿并复位运动先验, 让下一次仍有匹配机会。
+            if (!target || target->empty()) {
+                if (m_have_last_accepted) {
+                    m_pose = m_last_accepted;
+                    if (m_prior) m_prior->reset(m_pose);
+                    out_pose = m_last_accepted;
+                } else {
+                    out_pose = guess;
+                }
+                out_pose.time = f.end_time;
+                return;      // 本次判定为未定位, 让上层报"丢失"而不是静默
+            }
             m_cached_target = target;
             m_cached_target_pose = guess;
             m_has_cached_target = true;
@@ -604,7 +619,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
     // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
     m_planar.apply(out_pose);
-    if (accepted) m_prior->onMatch(out_pose);
+    if (accepted) {
+        m_prior->onMatch(out_pose);
+        m_last_accepted = out_pose;      // 逸出保护用的回退锚点
+        m_have_last_accepted = true;
+    }
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
