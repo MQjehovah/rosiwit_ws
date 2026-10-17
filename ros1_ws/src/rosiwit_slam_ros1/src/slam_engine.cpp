@@ -449,24 +449,51 @@ void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
 
 void SlamEngine::onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
     if (!algo_raw_ || algo_raw_->getPipelineMode() != "localization") return;
-    PoseStamped p;
-    p.trans = V3D(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
-    Eigen::Quaterniond q(msg->pose.pose.orientation.w, msg->pose.pose.orientation.x,
-                         msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
-    p.rot = q.toRotationMatrix();
-    p.time = getSec(msg->header.stamp);
+    // 与 /switch_map、/relocation 共用同一份实现 (换算只写一次)
+    applyInitPose(*msg, /*zero_if_insane=*/false, /*force_z_zero=*/false);
+}
 
-    // ⚠ **上层 app 下发的是车身(base_link)位姿, 核心内部是雷达系**。
-    // 不换算就会差一个安装角 (本机 yaw 89.9° / pitch 41.7°) —— 实机表现正是
-    // "一切到定位, 角标立刻偏转 90°"。换算: T_world_lidar = T_world_base * T_base_lidar。
+void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
+                               bool zero_if_insane, bool force_z_zero) {
+    if (!algo_raw_) return;
+    double x = in.pose.pose.position.x;
+    double y = in.pose.pose.position.y;
+    double z = in.pose.pose.position.z;
+    if (zero_if_insane && (std::fabs(x) > 1e4 || std::fabs(y) > 1e4)) { x = 0.0; y = 0.0; }
+    if (force_z_zero) z = 0.0;
+
+    Eigen::Quaterniond q(in.pose.pose.orientation.w, in.pose.pose.orientation.x,
+                         in.pose.pose.orientation.y, in.pose.pose.orientation.z);
+    q.normalize();
+
+    PoseStamped p;
+    p.trans = V3D(x, y, z);
+    p.rot = q.toRotationMatrix();
+    p.time = in.header.stamp.toSec();
+
+    // ⚠ **上层 app 下发的是车身(base_link)系位姿, 核心内部是雷达系**。
+    // 不换算就差一个安装角 (本机 yaw 89.9° / pitch 41.7°), 实机表现: 一切到定位角标立刻偏 90°。
+    //   T_world_lidar = T_world_base * T_base_lidar  ->  t += R_base*t_lb, R = R_base*r_lb
+    // force_z_zero 时换算后仍把 z 归零 (旧实现 /switch_map 的约定: 地图系里雷达起始高度即 0,
+    // 地面在 -0.898m)。
     Eigen::Matrix3d r_lb;
     Eigen::Vector3d t_lb;
     if (lidarToBase(&r_lb, &t_lb)) {
         const Eigen::Matrix3d R_base = p.rot;
-        p.trans = p.trans + R_base * t_lb;
+        V3D t = p.trans + R_base * t_lb;
+        if (force_z_zero) t.z() = 0.0;
+        p.trans = t;
         p.rot = R_base * r_lb;
-        std::cout << "[slam_engine] initial pose converted base->lidar (mount applied)"
-                  << std::endl;
+        char b[256];
+        const double yaw_b = std::atan2(R_base(1, 0), R_base(0, 0)) * 180 / M_PI;
+        const double yaw_a = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
+        std::snprintf(b, sizeof(b),
+                      "[slam_engine] init pose converted base->lidar: yaw_before=%.1fdeg yaw_after=%.1fdeg",
+                      yaw_b, yaw_a);
+        std::cout << b << std::endl;
+    } else {
+        ROS_WARN_STREAM("[slam_engine] lidar mount unavailable; init pose left in base frame"
+                        " (heading may be off by the lidar mount)");
     }
     algo_raw_->setInitPose(p);
 }

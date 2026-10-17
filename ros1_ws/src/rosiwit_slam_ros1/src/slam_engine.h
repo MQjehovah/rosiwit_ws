@@ -77,6 +77,13 @@ public:
     bool getGlobalMap(rosiwit_slam::PointVec& out) const;
     /// 实时栅格: 走核心 generateGridMap (逐帧观测 + 地面处理), 与存 pgm 同一条路径。
     bool getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out);
+    /// **唯一的初始位姿入口** (/initialpose 话题与 /switch_map、/relocation 服务都走这里)。
+    /// 负责: ① insane 值归零(可选) ② z 归零(可选, 旧实现的 /switch_map 约定)
+    ///       ③ 车身(base_link) -> 雷达 的安装变换换算 ④ setInitPose。
+    /// zero_if_insane / force_z_zero 是旧实现里**两类调用方**的差异, 作为参数保留,
+    /// 但换算逻辑只有这一份。
+    void applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
+                       bool zero_if_insane, bool force_z_zero = false);
     bool getGridInfo(rosiwit_slam::GridInfo& out) const;
     bool getPoseCov(rosiwit_slam::PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const;
     /// 定位匹配度 [0,1] (旧接口 slam/info.matching_degree); 非定位/未支持时为 0
