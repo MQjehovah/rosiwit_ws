@@ -123,9 +123,18 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_global_cfg.sc_dist_thresh     = getv<double>(gc, "sc_dist_thresh", m_global_cfg.sc_dist_thresh);
         m_global_cfg.sc_candidate_ratio = getv<double>(gc, "sc_candidate_ratio", m_global_cfg.sc_candidate_ratio);
         m_global_cfg.bbs_z_min          = getv<double>(gc, "bbs_z_min", m_global_cfg.bbs_z_min);
-                if (gc["bbs_mount_r"] && gc["bbs_mount_r"].size() == 9) {
+                // 安装矩阵由 ROS 层注入在 override YAML 的**顶层**(与 r_il/map_directory 同级);
+    // 这里同时接受 localization.global 与顶层两种位置(顶层优先取不到时回退)。
+    YAML::Node mr_node = gc["bbs_mount_r"];
+    if (!mr_node) {
+        try {
+            YAML::Node root = YAML::LoadFile(config_path);
+            if (root["bbs_mount_r"]) mr_node = root["bbs_mount_r"];
+        } catch (const std::exception&) {}
+    }
+    if (mr_node && mr_node.size() == 9) {
             for (size_t bi = 0; bi < 9; ++bi)
-                m_global_cfg.bbs_mount_r[bi] = gc["bbs_mount_r"][bi].as<double>();
+                m_global_cfg.bbs_mount_r[bi] = mr_node[bi].as<double>();
         } else {
             m_global_cfg.bbs_mount_r = {{1,0,0,0,1,0,0,0,1}};
         }
