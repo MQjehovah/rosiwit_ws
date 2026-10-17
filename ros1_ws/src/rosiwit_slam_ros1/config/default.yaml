@@ -1,5 +1,21 @@
 # rosiwit_slam - Default Configuration
 # 默认 mapping 模式, 可通过 service (set_slam_mode) 切换到 localization / idle
+#
+# ============================================================================
+# 关键参数表 (实测依据见右侧; 改动必须写进提交信息, 见 docs/superpowers/specs/
+# 2026-10-17-slam-dev-constraints.md 第 4 条)
+#   planar.mode                none   雷达俯装 41.67°, 约束拉平 -> 覆盖率 0.43; 关掉 0.99
+#   accept.min_coverage        0.35   实测覆盖率 0.43~0.99; 0.5 会拒掉有效匹配
+#   matcher.max_iterations     12     32 迭代单帧 0.7s(输出 1.4Hz); 12 -> 10Hz 且精度 0.99
+#   matcher.voxel_resolution   0.4    与迭代数配套
+#   matcher.max_correspondence_dist 1.0  收紧后精度由 inlier_dist=0.3 保证
+#   pipeline.relocalizer       none   手动重定位不跑 BBS(用户要求); /global_localization 仍可显式调用
+#   reset_on_mode_switch       true   进建图清上一轮残留(旧实现语义)
+#   modules.backend            ceres_pose_graph   机器人无 gtsam
+#   esti_il                    false  实测会发散到 ~180°
+#   r_il / t_il                identity / 0   两话题 frame_id 同名(雷达内置 IMU)
+#   map_resolution             0.05   与现网 map.yaml 一致
+# ============================================================================
 
 slam_algorithm: fast_lio2_pipeline
 pipeline: "rosiwit_slam"
