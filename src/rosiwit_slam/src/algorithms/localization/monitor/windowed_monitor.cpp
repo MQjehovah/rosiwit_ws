@@ -10,6 +10,7 @@ void WindowedMonitor::reset() {
     m_fitness_hist.clear();
     m_nees_hist.clear();
     m_low_count = 0;
+    m_mediocre_count = 0;
     m_have_prev = false;
     m_level = MonitorLevel::INIT;
 }
@@ -47,9 +48,18 @@ MonitorLevel WindowedMonitor::update(const MonitorInput& in) {
         m_fitness_hist.pop_front();
 
     if (in.match.fitness < m_cfg.credible_fitness) {
+        // 持续平庸升级判丢: 单帧 0.5~0.75 可能是环境合法降级(注释见 MonitorConfig),
+        // 但健康跟踪一旦建立, 连续 mediocre_patience 帧上不了 credible 线 = 大概率
+        // 锁错位姿。升级 LOST 触发重定位(要么确认要么纠正, 代价一次几秒尝试)。
+        if (m_cfg.mediocre_patience > 0 &&
+            ++m_mediocre_count >= m_cfg.mediocre_patience) {
+            m_level = MonitorLevel::LOST;
+            return m_level;
+        }
         m_level = MonitorLevel::DEGRADED;
         return m_level;
     }
+    m_mediocre_count = 0;
 
     if (static_cast<int>(m_fitness_hist.size()) >= std::max(3, m_cfg.window_length / 2)) {
         const double mean = std::accumulate(m_fitness_hist.begin(), m_fitness_hist.end(), 0.0)

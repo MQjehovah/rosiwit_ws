@@ -283,6 +283,9 @@ localization:
     enabled: true
     credible_fitness: 0.75
     lost_fitness: 0.5
+    mediocre_patience: 100    # 持续平庸升级: fit∈[0.5,0.75) 连续 N 帧(~10s@10Hz)判丢触发重定位
+                              # (僵尸带防御: 2026-10-17 推行事故 fitness 0.5~0.67 徘徊
+                              #  330s 永不判丢, 位姿被 0.35 的低接受阈值放行散步 18m)
     lost_patience: 3
     lost_patience_low: 8
     coast_patience: 150       # 连续未采纳帧数上限(内=降级外推, 超=判丢失)

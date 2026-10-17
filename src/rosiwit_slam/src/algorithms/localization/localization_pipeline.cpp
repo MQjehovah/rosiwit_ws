@@ -162,6 +162,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     if (moc) {
         m_monitor_cfg.enabled            = getv<bool>(moc, "enabled", m_monitor_cfg.enabled);
         m_monitor_cfg.credible_fitness   = getv<double>(moc, "credible_fitness", m_monitor_cfg.credible_fitness);
+        m_monitor_cfg.mediocre_patience  = getv<int>(moc, "mediocre_patience", m_monitor_cfg.mediocre_patience);
         m_monitor_cfg.lost_fitness       = getv<double>(moc, "lost_fitness", m_monitor_cfg.lost_fitness);
         m_monitor_cfg.lost_patience      = getv<int>(moc, "lost_patience", m_monitor_cfg.lost_patience);
         m_monitor_cfg.lost_patience_low  = getv<int>(moc, "lost_patience_low", m_monitor_cfg.lost_patience_low);
@@ -453,6 +454,7 @@ void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
     m_pose = pose;
     if (m_prior) m_prior->reset(pose);
     if (m_monitor) m_monitor->reset();
+    m_mediocre_streak = 0;
     m_corr_prev_valid = false;
     m_consistent_cnt = 0;
     m_initialized = true;
@@ -546,6 +548,7 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     m_pose.time = best.time;
     m_prior->reset(m_pose);
     m_monitor->reset();
+    m_mediocre_streak = 0;
     m_has_cached_target = false;
     m_coast_count = 0;
     std::cout << "[LocPipeline] bounded recovery, fitness=" << best_fit << std::endl;
@@ -652,6 +655,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_pose.time = f.end_time;
                 m_prior->reset(m_pose);
                 m_monitor->reset();
+                m_mediocre_streak = 0;
                 m_initialized = true;
                 m_status = LOCALIZED;
                 m_coast_count = 0;
@@ -894,6 +898,20 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
+    // [DropProbe] 低fitness/被拒帧逐帧打印 (推行丢定位根因取证; 正常帧仍走10帧一条的LocProbe)。
+    //   lag = 匹配修正量|配准-先验猜测|: 推行时逐帧增大 => 预测跟不上(假设A: 常速外推滞后)
+    //   corr 骤降 => 动态滤波螺旋(滞后>0.4m 时删掉的恰是真实位置的证据)
+    //   tgt 变化 => 目标子图换源(假设B: 关键帧覆盖缺口)
+    if (res.fitness < 0.90 || !accepted) {
+        const double lag = (out_pose.trans - guess.trans).norm();
+        std::cout << "[DropProbe] fit=" << res.fitness
+                  << " lag=" << lag
+                  << " corr=" << res.correspondences
+                  << " inl=" << res.inliers
+                  << " tgt=" << (m_has_cached_target && m_cached_target ? m_cached_target->size() : 0)
+                  << " acc=" << (accepted ? 1 : 0)
+                  << " coast=" << m_coast_count << std::endl;
+    }
     // 单假设模式下同步假设容器
     if (!m_hyp.ambiguous()) m_hyp.reset(m_pose);
 
@@ -967,6 +985,21 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 过桥期(连续未采纳未超 coast_patience): 不判丢失, 保持降级连续外推
     if (lvl == MonitorLevel::LOST && m_coast_count < m_monitor_cfg.coast_patience)
         lvl = MonitorLevel::DEGRADED;
+    // 僵尸带直通判丢(管线层, 不受过桥钳制): monitor 的平庸升级会被上面的过桥
+    // 条款吞掉 —— acc 偶尔通过(0.6 > min_coverage 0.35)清零 coast, LOST 永远
+    // 被降级(2026-10-17 实测: fitness 0.64 僵尸 4 分钟不判丢不恢复)。这里用
+    // res.fitness 独立计数: 连续 mediocre_patience 帧上不了 credible 线直接
+    // LOST -> 触发冷启动重定位(要么确认要么纠正, 代价一次几秒尝试)。
+    m_mediocre_streak =
+        (res.converged && res.fitness < m_monitor_cfg.credible_fitness)
+            ? (m_mediocre_streak + 1) : 0;
+    if (m_monitor_cfg.mediocre_patience > 0 &&
+        m_mediocre_streak >= m_monitor_cfg.mediocre_patience) {
+        m_status = LOST;
+        std::cout << "[LocPipeline] zombie-band LOST: fitness<" << m_monitor_cfg.credible_fitness
+                  << " sustained " << m_mediocre_streak << " frames -> relocate" << std::endl;
+        return;
+    }
     switch (lvl) {
         case MonitorLevel::INIT:     m_status = INIT; break;
         case MonitorLevel::CREDIBLE: m_status = LOCALIZED; break;

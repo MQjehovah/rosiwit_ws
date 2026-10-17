@@ -109,8 +109,10 @@ bool SlamPipeline::init(const std::string& config_path) {
         std::string map_name = cfg["localization_map"].as<std::string>("");
         if (!map_name.empty()) {
             PoseStamped init; init.trans = V3D::Zero(); init.rot = M3D::Identity();
+            init.time = -1.0;   // 无 init_pose 配置时走冷启动全局重定位
             if (cfg["init_pose"]) {
                 auto p = cfg["init_pose"];
+                init.time = 0.0;
                 init.trans.x() = p["x"].as<double>(0.0);
                 init.trans.y() = p["y"].as<double>(0.0);
                 init.trans.z() = p["z"].as<double>(0.0);
@@ -163,7 +165,15 @@ bool SlamPipeline::loadMapForLocalization(const std::string& path, const PoseSta
                   << std::endl;
     }
     m_localization->setMap(path);
-    m_localization->setInitPose(init_pose);
+    // init_pose.time < 0 = "无初始位姿": 不 setInitPose, 走冷启动全局重定位。
+    // (2026-10-17 实测: 这里曾无条件用伪造的 identity 位姿初始化 -> /switch_map
+    //  不带 initpose 时从原点僵尸跟踪, fitness 0.74 既不判丢也不恢复)
+    if (init_pose.time >= 0.0) {
+        m_localization->setInitPose(init_pose);
+    } else {
+        std::cout << "[SlamPipeline] no init pose given: cold-start global relocalization"
+                  << std::endl;
+    }
     return true;
 }
 
@@ -449,9 +459,11 @@ bool SlamPipeline::exportXzMap(const std::string& pcd_path) {
 
 bool SlamPipeline::loadMap(const std::string& path) {
     if (!m_map_mgr) return false;
+    // 无初始位姿 (time<0 标记): 加载后由冷启动全局重定位接管, 不再伪造 identity 起点
     PoseStamped init;
     init.trans = V3D::Zero();
     init.rot = M3D::Identity();
+    init.time = -1.0;
     if (!loadMapForLocalization(path, init)) return false;
     m_map_mgr->generateGridMap(0.05);
     return true;

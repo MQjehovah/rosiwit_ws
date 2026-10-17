@@ -15,6 +15,7 @@ public:
 private:
     MonitorConfig m_cfg;
     int m_low_count = 0;
+    int m_mediocre_count = 0;
     MonitorLevel m_level = MonitorLevel::INIT;
 };
 

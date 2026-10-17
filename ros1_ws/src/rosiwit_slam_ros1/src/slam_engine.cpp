@@ -513,6 +513,14 @@ void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& i
 
     Eigen::Quaterniond q(in.pose.pose.orientation.w, in.pose.pose.orientation.x,
                          in.pose.pose.orientation.y, in.pose.pose.orientation.z);
+    // 退化四元数(全零/近零) = "无初始位姿": 不 setInitPose, 让冷启动全局重定位接管。
+    // (2026-10-17 实测: 全零四元数 normalize 后成 NaN, setInitPose 造出 NaN 起点,
+    //  跟踪从垃圾位姿开始 -> 僵尸带)
+    if (q.norm() < 0.5) {
+        std::cout << "[slam_engine] degenerate initial pose (|q|<0.5): skip setInitPose,"
+                     " global relocalization will take over" << std::endl;
+        return;
+    }
     q.normalize();
 
     PoseStamped p;
