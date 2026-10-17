@@ -210,38 +210,11 @@ void LegacyXz3dSlamInterface::setModeFromLegacy(SlamMode m) {
 }
 
 void LegacyXz3dSlamInterface::computeLidarToBase() {
+    // **不重复实现 TF 查询**: 与 SlamEngine 共用同一份 (首次用时取一次, 那里会打日志)。
+    // 输出侧(位姿/点云换到车身系)与输入侧(初始位姿换到雷达系)因此保证用同一个安装角,
+    // 不会出现"一边换算一边不换算"的不一致。
     if (have_lidar_mount_) return;
-    std::string lidar_frame = "lidar";
-    pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
-    std::string base_frame = "base_link";
-    pnh_.param<std::string>("base_frame", base_frame, base_frame);
-    // 等最多 3 秒 (启动时 robot_state_publisher 的 /tf_static 可能还没到)
-    for (int i = 0; i < 30; ++i) {
-        try {
-            const geometry_msgs::TransformStamped t =
-                tf_buffer_->lookupTransform(base_frame, lidar_frame, ros::Time(0), ros::Duration(0.1));
-            Eigen::Quaterniond q(t.transform.rotation.w, t.transform.rotation.x,
-                                 t.transform.rotation.y, t.transform.rotation.z);
-            q.normalize();
-            r_lb_ = q.toRotationMatrix();                 // base <- lidar
-            t_lb_ = Eigen::Vector3d(t.transform.translation.x, t.transform.translation.y,
-                                    t.transform.translation.z);
-            have_lidar_mount_ = true;
-            char b[400];
-            const Eigen::Vector3d rpy = r_lb_.eulerAngles(2, 1, 0);   // yaw,pitch,roll
-            std::snprintf(b, sizeof(b),
-                          "[legacy_iface] lidar mount from TF ('%s' <- '%s'): rpy(deg)=[%.2f %.2f %.2f] xyz=[%.3f %.3f %.3f]",
-                          base_frame.c_str(), lidar_frame.c_str(),
-                          rpy.z() * 180 / M_PI, rpy.y() * 180 / M_PI, rpy.x() * 180 / M_PI,
-                          t_lb_.x(), t_lb_.y(), t_lb_.z());
-            std::cout << b << std::endl;
-            return;
-        } catch (const tf2::TransformException&) {
-            ros::Duration(0.05).sleep();
-        }
-    }
-    ROS_WARN_STREAM("[legacy_iface] TF '" << base_frame << "' <- '" << lidar_frame
-                    << "' unavailable; pose will be published in the LIDAR frame (heading may be off)");
+    have_lidar_mount_ = engine_.lidarToBase(&r_lb_, &t_lb_);
 }
 
 void LegacyXz3dSlamInterface::resetCoreAndCaches() {
@@ -833,18 +806,11 @@ void LegacyXz3dSlamInterface::initServer() {
 
 void LegacyXz3dSlamInterface::applyInitPose(
     const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane) {
+    // **不在这里重复实现**: /switch_map、/relocation 与 /initialpose 共用
+    // SlamEngine::applyInitPose() —— insane 归零、z 归零、车身->雷达安装变换换算、setInitPose
+    // 全部只有一份。这里只保留本路径的差异: z 强制归零。
     if (!engine_.algo()) return;
-    double x = in.pose.pose.position.x;
-    double y = in.pose.pose.position.y;
-    if (zero_if_insane && (std::fabs(x) > 1e4 || std::fabs(y) > 1e4)) { x = 0.0; y = 0.0; }
-    Eigen::Quaterniond q(in.pose.pose.orientation.w, in.pose.pose.orientation.x,
-                         in.pose.pose.orientation.y, in.pose.pose.orientation.z);
-    q.normalize();
-    PoseStamped p;
-    p.trans = V3D(x, y, 0.0);   // z 强制 0: /switch_map 与 /relocation 都是
-    p.rot = q.toRotationMatrix();
-    p.time = in.header.stamp.toSec();
-    engine_.algo()->setInitPose(p);
+    engine_.applyInitPose(in, zero_if_insane, /*force_z_zero=*/true);
 }
 
 bool LegacyXz3dSlamInterface::handleModeSwitch(
