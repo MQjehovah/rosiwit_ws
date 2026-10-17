@@ -158,6 +158,49 @@ bool SlamEngine::computeLegacyExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
     return false;
 }
 
+bool SlamEngine::computeLidarToBase() {
+    // 从 TF 取 base_link <- lidar 的安装变换 (与 LegacyXz3dSlamInterface 里那份同源同值)
+    if (have_lidar_mount_) return true;
+    if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
+    if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    pnh_.param<std::string>("lidar_frame", mount_lidar_frame_, mount_lidar_frame_);
+    pnh_.param<std::string>("base_frame", mount_base_frame_, mount_base_frame_);
+    for (int i = 0; i < 30; ++i) {
+        try {
+            const geometry_msgs::TransformStamped t = tf_buffer_->lookupTransform(
+                mount_base_frame_, mount_lidar_frame_, ros::Time(0), ros::Duration(0.1));
+            Eigen::Quaterniond q(t.transform.rotation.w, t.transform.rotation.x,
+                                 t.transform.rotation.y, t.transform.rotation.z);
+            q.normalize();
+            r_lb_ = q.toRotationMatrix();
+            t_lb_ = Eigen::Vector3d(t.transform.translation.x, t.transform.translation.y,
+                                    t.transform.translation.z);
+            have_lidar_mount_ = true;
+            char b[320];
+            const Eigen::Vector3d rpy = r_lb_.eulerAngles(2, 1, 0);
+            std::snprintf(b, sizeof(b),
+                          "[slam_engine] lidar mount from TF ('%s' <- '%s'): rpy(deg)=[%.2f %.2f %.2f] xyz=[%.3f %.3f %.3f]",
+                          mount_base_frame_.c_str(), mount_lidar_frame_.c_str(),
+                          rpy.z() * 180 / M_PI, rpy.y() * 180 / M_PI, rpy.x() * 180 / M_PI,
+                          t_lb_.x(), t_lb_.y(), t_lb_.z());
+            std::cout << b << std::endl;
+            return true;
+        } catch (const tf2::TransformException&) {
+            ros::Duration(0.05).sleep();
+        }
+    }
+    ROS_WARN_STREAM("[slam_engine] TF '" << mount_base_frame_ << "' <- '" << mount_lidar_frame_
+                    << "' unavailable; initial pose will NOT be converted (may be rotated)");
+    return false;
+}
+
+bool SlamEngine::lidarToBase(Eigen::Matrix3d* R, Eigen::Vector3d* t) {
+    computeLidarToBase();
+    if (R) *R = r_lb_;
+    if (t) *t = t_lb_;
+    return have_lidar_mount_;
+}
+
 namespace {  // 重新打开匿名 namespace, 供下面的 printCompatDiagnostics 使用
 
 /// D7 / §5.10 B / 待办项 C 要的可诊断性: 把核心**实际生效**的外参与 acc_scale 打出来,
@@ -412,6 +455,19 @@ void SlamEngine::onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStamped
                          msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
     p.rot = q.toRotationMatrix();
     p.time = getSec(msg->header.stamp);
+
+    // ⚠ **上层 app 下发的是车身(base_link)位姿, 核心内部是雷达系**。
+    // 不换算就会差一个安装角 (本机 yaw 89.9° / pitch 41.7°) —— 实机表现正是
+    // "一切到定位, 角标立刻偏转 90°"。换算: T_world_lidar = T_world_base * T_base_lidar。
+    Eigen::Matrix3d r_lb;
+    Eigen::Vector3d t_lb;
+    if (lidarToBase(&r_lb, &t_lb)) {
+        const Eigen::Matrix3d R_base = p.rot;
+        p.trans = p.trans + R_base * t_lb;
+        p.rot = R_base * r_lb;
+        std::cout << "[slam_engine] initial pose converted base->lidar (mount applied)"
+                  << std::endl;
+    }
     algo_raw_->setInitPose(p);
 }
 
@@ -490,6 +546,11 @@ bool SlamEngine::getGridInfo(GridInfo& out) const {
     if (!algo_raw_) return false;
     out = algo_raw_->getGridInfo();
     return true;
+}
+
+bool SlamEngine::getRealtimeGrid(double resolution, GridInfo& out) {
+    if (!algo_raw_) return false;
+    return algo_raw_->getRealtimeGrid(resolution, out);
 }
 
 bool SlamEngine::getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const {

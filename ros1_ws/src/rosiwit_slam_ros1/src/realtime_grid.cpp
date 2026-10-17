@@ -144,6 +144,11 @@ void RealtimeGrid::setSource(Source s) {
     m_source_ = std::move(s);
 }
 
+void RealtimeGrid::setGridSource(GridSource s) {
+    std::lock_guard<std::mutex> lk(m_mtx_);
+    m_grid_source_ = std::move(s);
+}
+
 void RealtimeGrid::start(double hz) {
     std::lock_guard<std::mutex> lk(m_mtx_);
     if (!m_stop_) return;  // 已经在跑
@@ -179,17 +184,25 @@ void RealtimeGrid::run() {
     while (!m_stop_) {
         // 快照配置后放开锁: 重算是 O(点数), 不能占着锁, 否则 setConfig/stop 会被卡住
         const Source src = m_source_;
+        const GridSource gsrc = m_grid_source_;
         const rosiwit_slam::GridMapConfig cfg = m_cfg_;
         const rosiwit_slam::GridPostConfig post = m_post_;
         const std::string gen = m_generator_;
         const double hz = m_hz_;
         lk.unlock();
 
-        if (src) {
+        if (src || gsrc) {
             try {
-                rosiwit_slam::PointVec pts;
                 rosiwit_slam::GridInfo info;
-                if (src(pts) && buildGridFromPoints(pts, cfg, post, gen, info)) {
+                bool ok = false;
+                if (gsrc) {
+                    // 直接取核心生成好的栅格 (与存 pgm 同一条路径, 有逐帧地面处理)
+                    ok = gsrc(info);
+                } else {
+                    rosiwit_slam::PointVec pts;
+                    ok = src(pts) && buildGridFromPoints(pts, cfg, post, gen, info);
+                }
+                if (ok) {
                     std::lock_guard<std::mutex> out_lk(m_out_mtx_);
                     m_latest_ = std::move(info);
                     m_has_ = true;

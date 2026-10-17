@@ -479,6 +479,16 @@ bool SlamPipeline::saveGridMap(const std::string& pgm_path, const std::string& y
     return m_map_mgr->saveGridMap(pgm_path, yaml_path, resolution);
 }
 
+bool SlamPipeline::getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out) {
+    // **必须走 generateGridMap**, 它内部用的是 buildFromObservations(逐帧观测) ——
+    // 和 saveGridMap 完全同一条路径, 有逐帧地面处理。薄层以前是自己拿合并后的全局点云
+    // 调 gen->build(), 没有地面处理 -> 实时 /map 有地面噪点, 而存下来的 pgm 干净。
+    if (!m_map_mgr) return false;
+    if (!m_map_mgr->generateGridMap(resolution)) return false;
+    out = m_map_mgr->getGridInfo();
+    return out.width > 0 && out.height > 0;
+}
+
 bool SlamPipeline::setGridMapGenerator(const std::string& name) {
     if (!m_map_mgr) return false;
     return m_map_mgr->setGridMapGenerator(name);

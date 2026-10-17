@@ -30,6 +30,9 @@ public:
     virtual bool loadMap(const std::string& /*path*/) { return false; }
     /// 保存栅格地图 (PGM + YAML)
     virtual bool saveGridMap(const std::string& /*pgm_path*/, const std::string& /*yaml_path*/, double /*resolution*/) { return false; }
+    /// 生成并返回 2D 占据栅格 (与 saveGridMap 内部**同一条路径**: 逐帧观测 + 地面处理)。
+    /// 供实时 /map 使用, 保证"实时看到的"与"存下来的 pgm"一致。
+    virtual bool getRealtimeGrid(double /*resolution*/, rosiwit_slam::GridInfo& /*out*/) { return false; }
     /// 运行时切换 2D 栅格生成策略 (GridMapFactory 注册名); 默认不支持
     virtual bool setGridMapGenerator(const std::string& /*name*/) { return false; }
     /// 设置管线模式: "idle" / "mapping" / "localization"

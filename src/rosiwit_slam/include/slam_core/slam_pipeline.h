@@ -32,6 +32,8 @@ public:
     bool loadMap(const std::string& path) override;
     bool resetForNewMapping(const std::string& config_path) override;
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) override;
+    /// 与 saveGridMap 同一条生成路径 (逐帧观测 + 地面处理), 结果给实时 /map 用。
+    bool getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out) override;
     bool setGridMapGenerator(const std::string& name) override;
     bool setPipelineMode(const std::string& mode) override;
     std::string getPipelineMode() const override;

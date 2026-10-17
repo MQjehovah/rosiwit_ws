@@ -75,6 +75,8 @@ public:
     /// (与重构前的 processCB 一致: 反复发布最后一份输出)。
     bool latestOutput(rosiwit_slam::SlamOutput& out) const;
     bool getGlobalMap(rosiwit_slam::PointVec& out) const;
+    /// 实时栅格: 走核心 generateGridMap (逐帧观测 + 地面处理), 与存 pgm 同一条路径。
+    bool getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out);
     bool getGridInfo(rosiwit_slam::GridInfo& out) const;
     bool getPoseCov(rosiwit_slam::PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const;
     /// 定位匹配度 [0,1] (旧接口 slam/info.matching_degree); 非定位/未支持时为 0
@@ -167,6 +169,19 @@ private:
     /// 推导 T_(imu <- lidar). 顺序: ① 两帧同名 -> 恒等; ② TF 里查得到 -> 用 TF;
     /// ③ 都没有 -> 回落到核心 YAML 里的值。source 说明用了哪一种。
     bool computeLegacyExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t, std::string& source);
+
+public:
+    /// 车身(base_link) <- 雷达 的安装变换, 来自 TF, 首次用时取一次。
+    /// 用于把**上层下发的车身系初始位姿**换算成核心要的雷达系 (见 onInitialPoseMsg)。
+    bool lidarToBase(Eigen::Matrix3d* R = nullptr, Eigen::Vector3d* t = nullptr);
+    bool computeLidarToBase();                    // 取一次, 失败则保持单位阵
+
+private:
+    Eigen::Matrix3d r_lb_ = Eigen::Matrix3d::Identity();   // base <- lidar
+    Eigen::Vector3d t_lb_ = Eigen::Vector3d::Zero();
+    bool have_lidar_mount_ = false;
+    std::string mount_lidar_frame_ = "lidar";
+    std::string mount_base_frame_ = "base_link";
 };
 
 } // namespace rosiwit_slam_ros1

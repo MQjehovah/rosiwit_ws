@@ -63,6 +63,10 @@ public:
                    const rosiwit_slam::GridPostConfig& post,
                    const std::string& generator);
     void setSource(Source s);
+    /// 改为直接取**已经生成好的栅格** (走核心 generateGridMap): 与存 pgm 完全同一条路径,
+    /// 因此实时 /map 不会有地面噪点。设置后 setSource 的点云路径不再使用。
+    using GridSource = std::function<bool(rosiwit_slam::GridInfo&)>;
+    void setGridSource(GridSource s);
 
     void start(double hz);  // hz <= 0 时按 1.0 处理; 重复调用无副作用
     void stop();            // 幂等; 析构时自动调用
@@ -81,6 +85,7 @@ private:
     bool m_stop_ = true;
     double m_hz_ = 1.0;
     Source m_source_;
+    GridSource m_grid_source_;
     rosiwit_slam::GridMapConfig m_cfg_;
     rosiwit_slam::GridPostConfig m_post_;
     std::string m_generator_ = "height_projection";

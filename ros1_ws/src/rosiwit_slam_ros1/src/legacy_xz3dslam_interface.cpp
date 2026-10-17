@@ -119,6 +119,12 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
     loadGridConfigFromYaml(yaml, gcfg, gpost, gen);
     grid_resolution_ = gcfg.resolution;   // 存 pgm/yaml 时用同一个分辨率
     realtime_grid_.setConfig(gcfg, gpost, gen);
+    // **实时 /map 走核心的 generateGridMap 路径** (逐帧观测 + 地面处理), 与存 pgm 完全一致。
+    // 之前是自己拿合并后的全局点云 gen->build(), 没有地面处理 -> 实时图有地面噪点而 pgm 干净。
+    realtime_grid_.setGridSource([this](rosiwit_slam::GridInfo& out) {
+        if (slam_mode_ != SlamMode::MAPPING) return false;   // 非建图模式没必要算
+        return engine_.getRealtimeGrid(grid_resolution_, out);
+    });
     realtime_grid_.setSource([this](PointVec& out) {
         if (slam_mode_ != SlamMode::MAPPING) return false;   // 非建图模式没必要算
         if (!engine_.getGlobalMap(out) || out.empty()) return false;
