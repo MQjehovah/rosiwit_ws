@@ -105,6 +105,7 @@ bool BbsGlobalLocalizer::rebuild(const CloudType::Ptr& src) {
 
     m_ready = true;
     std::cout << "[BBS] map " << w0 << "x" << h0 << " res=" << m_res
+              << " origin=(" << m_ox << ", " << m_oy << ")"
               << " levels=" << m_pyr.size() << std::endl;
     return true;
 }
@@ -216,6 +217,12 @@ int BbsGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_k,
     }
     std::sort(out.begin(), out.end(),
               [](const GlobalCandidate& a, const GlobalCandidate& b) { return a.score > b.score; });
+    for (size_t i = 0; i < out.size() && i < 5; ++i) {
+        const double yaw = std::atan2(out[i].pose.rot(1, 0), out[i].pose.rot(0, 0)) * 180.0 / M_PI;
+        std::cout << "[BBS] cand[" << i << "] score=" << out[i].score
+                  << " pose=(" << out[i].pose.trans.x() << ", " << out[i].pose.trans.y()
+                  << ") yaw_deg=" << yaw << " z=" << out[i].pose.trans.z() << std::endl;
+    }
     if (static_cast<int>(out.size()) > max_k) out.resize(max_k);
     return static_cast<int>(out.size());
 }
