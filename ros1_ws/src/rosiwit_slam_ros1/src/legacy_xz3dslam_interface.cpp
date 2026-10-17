@@ -86,8 +86,9 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
     initSub();
     initClients();
     initServer();
-    // ⚠ 默认关 (见 resetCoreAndCaches 的注释): 重建核心会让建图停摆
-    pnh_.param<bool>("reset_on_mode_switch", reset_on_mode_switch_, false);
+    // 与旧实现一致: 切建图时清空上一轮地图 (见 resetCoreAndCaches 注释)。
+    // 默认开启; `_reset_on_mode_switch:=false` 可退回"不清图"的行为做 A/B。
+    pnh_.param<bool>("reset_on_mode_switch", reset_on_mode_switch_, true);
 
     // [T9] TF: 旧实现构造里就建了 listener (legacy.cpp:94) 与 broadcaster
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
@@ -238,15 +239,23 @@ void LegacyXz3dSlamInterface::computeLidarToBase() {
 }
 
 void LegacyXz3dSlamInterface::resetCoreAndCaches() {
-    // ⚠ 默认关闭: 实测"重建核心"会把**建图**搞坏 —— 重建后核心不再累积地图
-    // (/cloud_map 点数与 map_area 完全不动), 连正常启动后第一次进建图都是一样
-    // (因为进建图这个动作本身就会调到这里)。在查清 init() 的可重入性之前,
-    // 默认不做重建, 保证建图可用。要复现/排查时用 _reset_on_mode_switch:=true 打开。
+    // **默认开启** (与旧实现语义一致): 旧 xz_3d_slam 每次切建图都 DELETE_PTR(mapping_ptr_)
+    // 再 new, 所以上一轮绝不残留。我们单实例, 只能显式重建内部模块达到同样效果。
+    //
+    // 为什么必须清: 不清的话新一帧点云会**在上一轮的旧图上做配准**, 旧图(已漂过的那一层)
+    // 与新图叠在一起, 表现为"进建图先看到残留, 跑一会儿两层越错越开 → 地图全糊"。
+    // 实机已复现: 日志里出现 skip core rebuild 后, 地图 occupied/total 长时间完全不变。
+    //
+    // 历史说明: 早期曾因"重建后地图不再累积"而默认关闭, 但后续实测发现**关闭时同样不累积**,
+    // 该观察不可靠; 现按旧实现语义恢复默认开启, 并保留开关便于 A/B:
+    //   _reset_on_mode_switch:=false 可退回不清图的行为。
     if (!reset_on_mode_switch_) {
-        std::cout << "[legacy_iface] skip core rebuild (mode switch) —— 建图优先, 见代码注释"
+        std::cout << "[legacy_iface] reset_on_mode_switch=false -> 保留上一轮地图 (会有残留)"
                   << std::endl;
         return;
     }
+    std::cout << "[legacy_iface] reset_on_mode_switch=true -> rebuilding core (清空上一轮地图)"
+              << std::endl;
     engine_.resetCore();   // 注意: 这里必须是 engine_.resetCore(), 不是本函数自己
     // 本层缓存一并复位 (见头文件注释)
     realtime_grid_.clear();
