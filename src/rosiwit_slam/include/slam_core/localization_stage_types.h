@@ -174,6 +174,11 @@ struct GlobalLocalizeConfig {
     double sc_dist_thresh = 0.4;
     double sc_candidate_ratio = 0.3;
     // BBS (branch-and-bound) 分支定界 2D 全局搜索
+    // 安装角 (base<-lidar 的 rpy, 度)。BBS 的 2D 搜索要求"水平安装":
+    // 先把扫描与地图都转到 base(车体)系再投影, 最后把结果换回雷达系。0 = 不转换。
+    double bbs_mount_roll_deg = 0.0;
+    double bbs_mount_pitch_deg = 0.0;
+    double bbs_mount_yaw_deg = 0.0;
     double bbs_z_min = -1.0;          // 参与 2D 投影的 z 下界(m)
     double bbs_z_max = 1.0;           // z 上界(m)
     int    bbs_theta_bins = 60;       // 航向离散数

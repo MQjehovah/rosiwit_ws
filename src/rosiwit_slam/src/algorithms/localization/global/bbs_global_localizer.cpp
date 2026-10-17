@@ -17,6 +17,38 @@ void BbsGlobalLocalizer::configure(const GlobalLocalizeConfig& cfg) {
     m_gicp.setMaxCorrespondenceDistance(cfg.icp_max_corr_dist);
     m_gicp.setTransformationEpsilon(1e-8);
     m_gicp.setEuclideanFitnessEpsilon(1e-6);
+
+    // 安装旋转 base<-lidar (rpy 度, ZYX)。BBS 的 2D(yaw-only) 模型要求"水平安装":
+    // 雷达有安装角时(本机 pitch 41.67°), 先把扫描/地图都转到 base 系再投影,
+    // 最后把候选位姿换回雷达系(见 toLidarPose)。全部为 0 时等价于原行为。
+    m_r_bl = (Eigen::AngleAxisd(m_cfg.bbs_mount_yaw_deg * M_PI / 180.0, V3D::UnitZ())
+              * Eigen::AngleAxisd(m_cfg.bbs_mount_pitch_deg * M_PI / 180.0, V3D::UnitY())
+              * Eigen::AngleAxisd(m_cfg.bbs_mount_roll_deg * M_PI / 180.0, V3D::UnitX()))
+                 .toRotationMatrix();
+    m_have_mount = (std::fabs(m_cfg.bbs_mount_roll_deg) + std::fabs(m_cfg.bbs_mount_pitch_deg)
+                    + std::fabs(m_cfg.bbs_mount_yaw_deg)) > 1e-6;
+    std::cout << "[BBS] mount rpy(deg)=[" << m_cfg.bbs_mount_roll_deg << " "
+              << m_cfg.bbs_mount_pitch_deg << " " << m_cfg.bbs_mount_yaw_deg
+              << "] car-frame projection=" << (m_have_mount ? 1 : 0) << std::endl;
+}
+
+CloudType::Ptr BbsGlobalLocalizer::toCarFrame(const CloudType::Ptr& in) const {
+    if (!m_have_mount || !in) return in;
+    Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+    T.block<3, 3>(0, 0) = m_r_bl.cast<float>();
+    CloudType::Ptr out(new CloudType());
+    pcl::transformPointCloud(*in, *out, T);
+    return out;
+}
+
+PoseStamped BbsGlobalLocalizer::toLidarPose(const PoseStamped& in) const {
+    if (!m_have_mount) return in;
+    // T_mapL<-curL = R_bl^-1 * T_mapB<-curB * R_bl  (conjugation: 两帧相差一个常量安装旋转)
+    const Eigen::Matrix3d Rb = m_r_bl;
+    PoseStamped out = in;
+    out.rot = Rb.transpose() * in.rot * Rb;
+    out.trans = Rb.transpose() * in.trans;
+    return out;
 }
 
 bool BbsGlobalLocalizer::setMap(const std::string& map_path,
@@ -39,7 +71,11 @@ bool BbsGlobalLocalizer::rebuild(const CloudType::Ptr& src) {
     m_ready = false;
     m_pyr.clear();
     if (!src || src->empty()) return false;
-    m_map = src;
+    if (m_have_mount) {
+        m_map = toCarFrame(src);       // 2D 金字塔 + GICP 目标都在车体系
+    } else {
+        m_map = src;
+    }
 
     // 1) z 带投影到 2D 命中计数
     const double zmin = m_cfg.bbs_z_min, zmax = m_cfg.bbs_z_max;
@@ -203,9 +239,10 @@ int BbsGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_k,
                                      std::vector<GlobalCandidate>& out) {
     out.clear();
     if (!m_ready || m_pyr.empty()) return 0;
-    if (!projectScan(scan)) return 0;
+    CloudType::Ptr scan_c = toCarFrame(scan);   // 与地图同一(车体)系
+    if (!projectScan(scan_c)) return 0;
 
-    CloudType::Ptr scan_down = downsampleCloud(scan, m_res);
+    CloudType::Ptr scan_down = downsampleCloud(scan_c, m_res);
     if (!scan_down || scan_down->size() < 10) return 0;
 
     std::vector<Node> leaves;
@@ -213,6 +250,7 @@ int BbsGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_k,
     for (const auto& n : leaves) {
         GlobalCandidate c;
         refineCandidate(n, scan_down, c);
+        c.pose = toLidarPose(c.pose);   // 换回雷达系(核心/上层约定)
         if (c.score >= m_cfg.min_score) out.push_back(std::move(c));
     }
     std::sort(out.begin(), out.end(),

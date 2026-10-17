@@ -158,7 +158,9 @@ localization:
     # 俯仰分量的存在使 2D 假设不成立 —— 实机候选稳定卡在 0.62, 候选附近 ±2m/±12° 穷举
     # 也上不去, 而手动给完整 3D 位姿能到 0.9+。fpfh_ransac 是 **3D 特征匹配**, 无此假设。
     # (若之后把 BBS 改成"先转到车体系再投影", 可以再切回来以换取速度)
-    relocalizer: fpfh_ransac
+    # bbs 已支持"车体系投影"(见下面 bbs_mount_*): 先转到车体系再 2D 搜索, 结果换回雷达系。
+    # 若发现异常, 切回 fpfh_ransac (3D, 已验证 0.99+) 即可。
+    relocalizer: bbs
     motion_prior: imu
     local_map: keyframe_submap
     matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有
@@ -244,6 +246,11 @@ localization:
     sc_dist_thresh: 0.4
     sc_candidate_ratio: 0.3
     # bbs 专用
+    # 安装角(base<-lidar, 度): 来自 TF (base_link <- lidar), 本机实测 rpy=[1.82, 41.67, 89.89]
+    # ⚠ 顺序: roll, pitch, yaw (与 TF 打印一致)。全 0 时退化为"假设水平安装"。
+    bbs_mount_roll_deg: 1.82
+    bbs_mount_pitch_deg: 41.67
+    bbs_mount_yaw_deg: 89.89
     bbs_z_min: -1.0
     bbs_z_max: 1.0
     bbs_theta_bins: 60

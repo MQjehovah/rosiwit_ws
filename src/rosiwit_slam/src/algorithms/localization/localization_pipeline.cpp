@@ -123,6 +123,9 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_global_cfg.sc_dist_thresh     = getv<double>(gc, "sc_dist_thresh", m_global_cfg.sc_dist_thresh);
         m_global_cfg.sc_candidate_ratio = getv<double>(gc, "sc_candidate_ratio", m_global_cfg.sc_candidate_ratio);
         m_global_cfg.bbs_z_min          = getv<double>(gc, "bbs_z_min", m_global_cfg.bbs_z_min);
+        m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_global_cfg.bbs_mount_roll_deg);
+        m_global_cfg.bbs_mount_pitch_deg = getv<double>(gc, "bbs_mount_pitch_deg", m_global_cfg.bbs_mount_pitch_deg);
+        m_global_cfg.bbs_mount_yaw_deg = getv<double>(gc, "bbs_mount_yaw_deg", m_global_cfg.bbs_mount_yaw_deg);
         m_global_cfg.bbs_z_max          = getv<double>(gc, "bbs_z_max", m_global_cfg.bbs_z_max);
         m_global_cfg.bbs_theta_bins     = getv<int>(gc, "bbs_theta_bins", m_global_cfg.bbs_theta_bins);
         m_global_cfg.bbs_max_levels     = getv<int>(gc, "bbs_max_levels", m_global_cfg.bbs_max_levels);
@@ -546,36 +549,55 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // 每个都跑一次 gicp, 取覆盖率最高者。
                 double refined_fit = cand.score;
                 {
-                    const double dxy[3] = {-0.4, 0.0, 0.4};
-                    const double dth[5] = {-6.0, -3.0, 0.0, 3.0, 6.0};
-                    MatchResult rr, best_r;
+                    // **两级搜索**: BBS 候选的误差实测可达 ~1.4m / 数度, 只搜 ±0.4m
+                    // 会把正确位姿排除在搜索范围外(45 个起点全部停在同一个局部极大)。
+                    // 第一级 ±2.0m(步长1.0) × ±12°(步长6°); 第二级在最优处 ±0.5m(0.25) × ±3°。
+                    const PoseStamped base_pose = m_pose;
+                    auto evalAt = [&](const double dx, const double dy, const double dth_deg,
+                                      PoseStamped& best_pose) -> bool {
+                        PoseStamped g = base_pose;
+                        g.trans = base_pose.trans + V3D(dx, dy, 0.0);
+                        g.rot = Eigen::AngleAxisd(dth_deg * M_PI / 180.0, V3D::UnitZ())
+                                    .toRotationMatrix() * base_pose.rot;
+                        CloudType::Ptr target = buildTarget(g);
+                        if (!target || target->empty()) return false;
+                        m_matcher->setTarget(target);
+                        MatchResult r;
+                        if (!m_matcher->match(f.cloud, g, r) || !r.converged) return false;
+                        if (r.fitness <= refined_fit) return false;
+                        refined_fit = r.fitness;
+                        best_pose = r.pose;
+                        return true;
+                    };
+
+                    PoseStamped best_pose = base_pose;
                     bool have_best = false;
-                    for (double a : dth) {
-                        for (double dx : dxy) {
-                            for (double dy : dxy) {
-                                PoseStamped g = m_pose;
-                                g.trans = m_pose.trans + V3D(dx, dy, 0.0);
-                                g.rot = Eigen::AngleAxisd(a * M_PI / 180.0, V3D::UnitZ())
-                                            .toRotationMatrix() * m_pose.rot;
-                                CloudType::Ptr target = buildTarget(g);
-                                if (!target || target->empty()) continue;
-                                m_matcher->setTarget(target);
-                                if (!m_matcher->match(f.cloud, g, rr) || !rr.converged) continue;
-                                if (rr.fitness > refined_fit) {
-                                    refined_fit = rr.fitness;
-                                    best_r = rr;
+                    double best_dx = 0.0, best_dy = 0.0, best_dth = 0.0;
+                    for (double a = -12.0; a <= 12.01; a += 6.0) {
+                        for (double dx = -2.0; dx <= 2.01; dx += 1.0) {
+                            for (double dy = -2.0; dy <= 2.01; dy += 1.0) {
+                                if (evalAt(dx, dy, a, best_pose)) {
                                     have_best = true;
+                                    best_dx = dx; best_dy = dy; best_dth = a;
                                 }
                             }
                         }
                     }
                     if (have_best) {
-                        m_pose = best_r.pose;
+                        // 第二级: 在粗搜最优附近细化
+                        for (double a = best_dth - 3.0; a <= best_dth + 3.01; a += 3.0) {
+                            for (double dx = best_dx - 0.5; dx <= best_dx + 0.51; dx += 0.25) {
+                                for (double dy = best_dy - 0.5; dy <= best_dy + 0.51; dy += 0.25) {
+                                    evalAt(dx, dy, a, best_pose);
+                                }
+                            }
+                        }
+                        m_pose = best_pose;
                         m_prior->reset(m_pose);
                         m_smoother.reset(m_pose);
                     }
                     std::cout << "[LocPipeline] relocalization refine: " << cand.score
-                              << " -> " << refined_fit << " (multi-start 45)" << std::endl;
+                              << " -> " << refined_fit << " (two-stage ±2m/±12deg)" << std::endl;
                 }
 
                     if (refined_fit > best_fit) {
