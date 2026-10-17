@@ -8,7 +8,7 @@
 #   accept.min_coverage        0.35   实测覆盖率 0.43~0.99; 0.5 会拒掉有效匹配
 #   matcher.max_iterations     12     32 迭代单帧 0.7s(输出 1.4Hz); 12 -> 10Hz 且精度 0.99
 #   matcher.voxel_resolution   0.4    与迭代数配套
-#   matcher.max_correspondence_dist 1.0  收紧后精度由 inlier_dist=0.3 保证
+#   matcher.max_correspondence_dist 2.5  重定位时初始误差可达 1.3m, 收到 1.0 会丢光对应点
 #   pipeline.relocalizer       none   手动重定位不跑 BBS(用户要求); /global_localization 仍可显式调用
 #   reset_on_mode_switch       true   进建图清上一轮残留(旧实现语义)
 #   modules.backend            ceres_pose_graph   机器人无 gtsam
@@ -170,7 +170,7 @@ localization:
     # 降迭代 + 放大体素, 目标单帧 < 150ms; 精度用下面的 inlier_dist/max_corr 兜住。
     voxel_resolution: 0.4
     max_iterations: 12
-    max_correspondence_dist: 1.0
+    max_correspondence_dist: 2.5
     transformation_epsilon: 0.000001
     inlier_dist: 0.3
     # pp_icp 专用
