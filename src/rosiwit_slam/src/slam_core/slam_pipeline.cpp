@@ -184,6 +184,26 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
     if (mode == PipelineMode::LOCALIZATION) {
         if (m_localization) {
             m_localization->onLidar(f);
+            // 若未定位(含刚丢失/重定位中途), 仍然对外输出**最后一次有效位姿**并标记状态,
+            // 否则上层看到的是"完全没数据"(界面冻结), 且无法区分"丢失"与"节点挂了"。
+            // 实机教训: 重定位锁定后一旦某帧匹配失败, 以前就静默停发, 现场无法判断。
+            if (m_localization->getStatus() != ILocalization::LOCALIZED) {
+                SlamOutput loose;
+                if (m_localization->getPose(loose.pose)) {
+                    loose.state = SlamState::LOST;
+                    loose.has_new_pose = true;
+                    if (f.cloud && !f.cloud->empty()) {
+                        CloudType::Ptr world_scan(new CloudType());
+                        Eigen::Affine3d T = Eigen::Affine3d::Identity();
+                        T.translate(loose.pose.trans);
+                        T.rotate(loose.pose.rot);
+                        pcl::transformPointCloud(*f.cloud, *world_scan, T);
+                        loose.world_cloud = world_scan;
+                        loose.body_cloud = f.cloud;
+                    }
+                    emitOutput(loose);
+                }
+            }
             if (m_localization->getStatus() == ILocalization::LOCALIZED) {
                 SlamOutput out;
                 m_localization->getPose(out.pose);
