@@ -467,6 +467,18 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
     if (improve > 3.0 * m_accept_cfg.residual_margin) return true;
     if (improve > m_accept_cfg.residual_margin &&
         m_consistent_cnt >= m_accept_cfg.consistent_frames) return true;
+    // [LocProbe] 拒绝原因 (每 10 帧一行): 定位"匹配成功但不输出"时靠它定位是哪道门限
+    {
+        static int probe_n = 0;
+        if (++probe_n % 10 == 0) {
+            std::cout << "[LocProbe] REJECT fitness=" << res.fitness
+                      << " (min_coverage=" << m_accept_cfg.min_coverage << ")"
+                      << " improve=" << improve
+                      << " margin=" << m_accept_cfg.residual_margin
+                      << " consistent=" << m_consistent_cnt << "/"
+                      << m_accept_cfg.consistent_frames << std::endl;
+        }
+    }
     return false;
 }
 
