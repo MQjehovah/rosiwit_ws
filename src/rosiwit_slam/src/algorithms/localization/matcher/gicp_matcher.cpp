@@ -52,7 +52,11 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     const auto t1 = std::chrono::steady_clock::now();
     Eigen::Matrix4f g = poseToMatrix(guess).cast<float>();
     m_gicp.setInputSource(src);
-    m_gicp.setInputTarget(m_target);
+    // 目标指针没变就别重设: PCL 1.8 setInputTarget 无条件置脏 target_cloud_updated_
+    // (每帧重建 ~6k 点目标 KD 树) 且 GICP 子类再 reset target_covariances_
+    // (每帧重算 20NN 协方差) —— 实测占每帧 37ms 的绝大部分。目标缓存命中时
+    // 指针跨帧不变, PCL 内部缓存(树+协方差)自动复用, 结果逐位一致。
+    if (m_gicp.getInputTarget() != m_target) m_gicp.setInputTarget(m_target);
     CloudType aligned;
     m_gicp.align(aligned, g);
     if (probe) ms_gicp = ms_since(t1);

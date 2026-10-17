@@ -149,7 +149,7 @@ Rx90 补偿的是**坏地图的倾斜**，被误当成"驱动轴系约定"写进
 | 万集驱动 `ros_frame_id: lidar` 改在安装目录 | 重装/OTA 会覆盖，需纳入配置管理 |
 | `mount_extra_*` 归零 + 参数残留清除 + 实机复验 | ✅ `2919834`；fpfh 0.994 / matching 0.98 / fitness 0.983（DDD） |
 | AAA 废图删除（目录+DB 行） | ✅ 2026-10-17；DB 备份 `database.db.bak_before_del_aaa` |
-| BBB 地图（仅 1 关键帧、0.3MB，基本为空） | 待用户决定是否删除 |
+| BBB 地图（仅 1 关键帧、0.3MB，基本为空） | ✅ 2026-10-17 已删（目录+DB 行）；备份 `database.db.bak_before_del_bbb` |
 | BBS 车体系投影：同一矩阵同时作用于地图+扫描，在"地图已水平、扫描带安装角"时非最优（共轭抵消后仅 z-band/2D 搜索受影响） | 低优先（默认重定位走 FPFH，3D 且与安装无关） |
 | 快速旋转丢失定位根因 | 需旋转时录 rosbag 复现 |
 | FFF 地图实机定位验证 | 未做（与 DDD 同管线，预期一致） |
@@ -201,6 +201,33 @@ exit 139，铁证）。修复：`GicpMatcher` 最小点数守卫（`matcher.min_
 
 **遗留（按优先级）**：
 1. 图外位姿 /relocation 最坏仍可排队 ~10s（fpfh 特征计算本身未预算、单线程 spinner 架构性限制）。正确方向：核心内部用独立工作线程跑重定位，`onLidar` 只置标志——改动大，未做。
-2. /switch_map 慢：`LocalizationPipeline::setMap` 把 46MB xzmap **解析两遍**（L300 kfs_fb + L334 kfs，手写 char 级 JSON 解析器），同步阻塞服务线程——待单次解析+共享数据。
-3. 显示点云含非墙体点（疑似地面泄漏）：`scan_f_map` 过滤带 `z-ground ∈ (0, 2.0)` 下界含 0 会放行贴地点；`or_curr_scan_point` 完全无 z 过滤且坐标系标注为 map 实为驱动系——待与 E:\workspace_slam\3d_slam 旧实现核对语义后修。
+2. ✅（已修，见 §15）/switch_map 慢：真正大头不是双解析，而是 fpfh 重定位器 setMap 对全图算特征+建树 45.4s 每次切图白付。改懒建后 3.2s。
+3. ✅（已修）显示点云非墙体：`scan_f_map` z 带下界 0→0.1m（相对地面），z_ref 标定偏差 ~7cm 时不再放行地面点；实测发布点最小 z_rel=0.104。
 4. PCL "Failed to find match for field normal_x" 告警刷屏（~4 行/帧，cosmetic），源头待查。
+
+## 15. 2026-10-17 深夜性能定案：切图 48s→3s、GICP 10 倍提速、位姿 10Hz 之真相
+
+**切图**：产品语义（用户拍板）：**切图带 initpose 就是直接从该位姿跟踪，不需要全局定位**。
+- fpfh 重定位库懒建（`ensureRelocalizerMap`：首次冷启动 / 显式 `/global_localization` / 歧义重播种才建）；
+- overlay 维护层 `setBaseMap` 只存指针，KD 树首用再建（原来每次切图白付 ~15.6s）；
+- 46MB xzmap 单次解析（回退路径原本解析两遍）。
+- 实测：/switch_map RTT **48.5s → 3.2s**；带 initpose 直接跟踪 fitness 0.95-0.97、零懒建触发；
+  显式 `/global_localization` 懒建 47s 后照常锁定 0.983（不回归）。
+
+**GICP 目标协方差缓存**（PCL 1.8 坑）：`Registration::setInputTarget` 无指针守卫——同一指针
+重复调用也置脏 `target_cloud_updated_`（每帧重建 ~6k 点目标 KD 树），且 GICP 子类无条件
+`target_covariances_.reset()`（每帧重算 20NN 协方差）。**matcher 按指针判等再调**后：
+gicp 37.4→**3.5ms**，单帧 44.4→**13-18ms**，位姿滞后 73→**39ms**，数值结果逐位一致。
+
+**位姿频率 10Hz 定论（"界面位姿刷新慢"排查终点）**：
+- 真实 3D 输入 = `/vanjee_points722`（PointCloud2，万集驱动）实测 **9.98Hz**；IMU = `/vanjee_lidar_imu_packets` 199Hz。
+- `default.yaml` 里 `lidar_topic:/lidar`、`imu_topic:/imu` **被 legacy profile 覆盖**，实际并不订阅；
+  `/scan` 是 2D 安全雷达（WJ-716N），核心不消费（仅频率统计，与旧实现一致）。
+- 核心对 10Hz 输入**全量处理零丢帧**，位姿 10.0Hz = 雷达驱动出图帧率上限；旧实现吃同一话题，上限相同。
+  **接口对齐成立；要超过 10Hz 只能调万集驱动的出图帧率**（核心余量充足：单帧 13-18ms）。
+- `/device/robot_shadow` 1Hz 是 App 遥测心跳（用户确认设计如此），与位姿链路无关。
+
+**遗留（按优先级）**：
+1. 图外位姿 /relocation 最坏排队 ~10s（§14 遗留 1，架构性：重定位需独立工作线程，未做）。
+2. PCL "Failed to find match for field normal_x" 告警刷屏（cosmetic）。
+3. FFF 图与三张原厂旧图实机验证（§13）。
