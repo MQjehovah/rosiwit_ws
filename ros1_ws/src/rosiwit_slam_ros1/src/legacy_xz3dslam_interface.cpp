@@ -464,6 +464,17 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
     SlamOutput out;
     const bool have_out = engine_.latestOutput(out) && out.has_new_pose;
 
+    // [PubProbe] 发布心跳: 每 100 tick 打一行, 说明"定时器在跑 / 有没有新位姿"。
+    // 用于区分"输出链路被锁住"与"核心根本没产出新位姿"(这两种现象的界面表现一样)。
+    {
+        static int pub_n = 0;
+        if (++pub_n % 100 == 0) {
+            std::cout << "[PubProbe] tick=" << pub_n << " mode=" << modeName(slam_mode_)
+                      << " have_new_pose=" << (have_out ? 1 : 0)
+                      << " pose_time=" << out.pose.time << std::endl;
+        }
+    }
+
     // **核心估的是"雷达/IMU 刚体"的位姿**, 而这辆车的雷达偏航 90°、俯装 41.67°、抬高 0.9m。
     // 直接当车身位姿发出去 -> 朝向差 90° 且带 42° 俯仰 (实测就是这个现象)。
     // 这里用 TF 里的安装变换换到车身 (base_link) 系:

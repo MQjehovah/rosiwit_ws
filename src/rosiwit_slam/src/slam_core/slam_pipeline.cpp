@@ -201,7 +201,12 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
                 emitOutput(out);
             }
         }
-        if (m_frontend) m_frontend->onLidar(f);
+        // ⚠ **定位模式下不再喂建图前端**: 之前这里无条件调 m_frontend->onLidar(f),
+        // 导致 FAST-LIO 前端与定位流水线**同时**吃同一份数据 —— 实机表现为
+        // "NO Effective Points!" 刷屏(165+ 次)、ikd-tree 线程空转(KD_TREE::multi_thread_rebuild)、
+        // CPU 被白白吃掉, 而定位结果反而发不出来。现在严格二选一。
+        // (核心库不依赖 ROS, 所以这里不做参数化; 若将来要"前端热备"再加成员开关)
+        (void)0;
     } else {
         SlamBase::onLidar(f);
     }
