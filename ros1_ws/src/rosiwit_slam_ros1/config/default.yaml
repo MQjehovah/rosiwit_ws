@@ -176,6 +176,11 @@ localization:
     # 降迭代 + 放大体素, 目标单帧 < 150ms; 精度用下面的 inlier_dist/max_corr 兜住。
     voxel_resolution: 0.4
     max_iterations: 12
+    # 退化输入守卫: 降采样+动态滤除后点数低于该值直接判配准失败, 不进 GICP。
+    # 依据: 2026-10-17 20:06 节点死亡 —— 错误位姿下 dynamic_filter 把扫描滤到 16 点,
+    #        PCL 1.8 GICP computeCovariances(点数<k_correspondences=20) 段错误(单测复现 exit 139)。
+    # 调小 -> 更容易进 GICP(有崩溃风险); 调大 -> 更保守(稀疏但有效帧可能被拒)。
+    min_match_points: 50
     max_correspondence_dist: 2.5
     transformation_epsilon: 0.000001
     inlier_dist: 0.3
@@ -233,8 +238,11 @@ localization:
   # 全局重定位参数 (relocalizer: scan_context | bbs | fpfh_ransac)
   global:
     min_score: 0.5
-    top_k: 5                    # 全局重定位多候选数
-    retry_interval: 30          # 丢失后重定位尝试间隔(帧, 节流)
+    top_k: 5                    # 全局重定位多候选数 (按分数降序精配, 命中 0.95+ 即停)
+    # 丢失后重定位尝试间隔(帧, 节流)。30 帧(~2s)太密: 每次尝试含多起点 GICP
+    # (预算 3s), 连续尝试会把单线程 spinner 独占, /relocation 等服务排队数十秒。
+    # 45 帧 ≈ 3s, 与单次尝试预算相当。
+    retry_interval: 45
     voxel_resolution: 0.3      # BBS 搜索栅格(不是 pgm 的 0.05; 0.2 实测反而更差)
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0

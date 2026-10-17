@@ -104,6 +104,11 @@ if(CATKIN_ENABLE_TESTING)
     if(TARGET test_legacy_convert)
         target_link_libraries(test_legacy_convert rosiwit_slam_ros1_lib)
     endif()
+
+    catkin_add_gtest(test_gicp_matcher_guard test/test_gicp_matcher_guard.cpp)
+    if(TARGET test_gicp_matcher_guard)
+        target_link_libraries(test_gicp_matcher_guard rosiwit_slam_ros1_lib)
+    endif()
 endif()
 
 install(TARGETS rosiwit_slam_ros1_node

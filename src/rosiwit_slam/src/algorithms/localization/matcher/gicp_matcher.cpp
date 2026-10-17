@@ -16,7 +16,10 @@ void GicpMatcher::configure(const ScanMatcherConfig& cfg) {
 void GicpMatcher::setTarget(const CloudType::Ptr& target) {
     m_target = downsampleCloud(target, m_cfg.voxel_resolution);
     if (!m_target) m_target.reset(new CloudType());
-    m_kdtree.setInputCloud(m_target);
+    // 退化目标守卫: 点数过少时 GICP 协方差估计无意义且会段错误, 置空让 match() 走拒绝分支
+    if (m_target->size() < static_cast<size_t>(std::max(1, m_cfg.min_match_points)))
+        m_target->clear();
+    if (!m_target->empty()) m_kdtree.setInputCloud(m_target);
 }
 
 bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
@@ -29,6 +32,8 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
         src = filterByMapProximity(src, m_kdtree, m_cfg.dynamic_dist);
         if (!src || src->empty()) return false;
     }
+    // 退化扫描守卫(崩溃根因): 16 点扫描进 PCL GICP = 段错误, 见 ScanMatcherConfig 注释
+    if (src->size() < static_cast<size_t>(std::max(1, m_cfg.min_match_points))) return false;
 
     Eigen::Matrix4f g = poseToMatrix(guess).cast<float>();
     m_gicp.setInputSource(src);

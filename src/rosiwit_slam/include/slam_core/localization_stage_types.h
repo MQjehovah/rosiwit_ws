@@ -92,6 +92,12 @@ struct ScanMatcherConfig {
     // 质量评估
     double inlier_dist = 0.3;               // 内点最近邻阈值(m)
 
+    // 退化输入守卫: 降采样/动态滤除后点数低于该值直接判配准失败。
+    // PCL 1.8 GICP 的 computeCovariances 要求点数 >= k_correspondences(20),
+    // 实测 16 点输入会**直接段错误崩掉整个节点**(2026-10-17 20:06 实机死亡,
+    // 单测 test_gicp_matcher_guard 复现 exit 139)。
+    int    min_match_points = 50;
+
     // ---- Point-to-Plane (pp_icp) 专用 ----
     bool   use_corr_decay = true;           // 迭代内对应点半径衰减
     double corr_dist_init = 4.0;            // 初始关联半径(m)

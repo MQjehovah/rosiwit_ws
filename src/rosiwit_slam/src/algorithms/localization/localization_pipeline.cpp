@@ -8,6 +8,8 @@
 #include <Eigen/Geometry>
 #include <iostream>
 #include <fstream>
+#include <algorithm>
+#include <chrono>
 #include <pcl/io/pcd_io.h>
 
 #ifndef YAML_CPP_DISABLED
@@ -49,6 +51,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (mc) {
         m_matcher_cfg.voxel_resolution        = getv<double>(mc, "voxel_resolution", m_matcher_cfg.voxel_resolution);
         m_matcher_cfg.max_iterations          = getv<int>(mc, "max_iterations", m_matcher_cfg.max_iterations);
+        m_matcher_cfg.min_match_points        = getv<int>(mc, "min_match_points", m_matcher_cfg.min_match_points);
         m_matcher_cfg.max_correspondence_dist = getv<double>(mc, "max_correspondence_dist", m_matcher_cfg.max_correspondence_dist);
         m_matcher_cfg.transformation_epsilon  = getv<double>(mc, "transformation_epsilon", m_matcher_cfg.transformation_epsilon);
         m_matcher_cfg.inlier_dist             = getv<double>(mc, "inlier_dist", m_matcher_cfg.inlier_dist);
@@ -425,13 +428,20 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     if (!target || target->empty()) return false;
     m_matcher->setTarget(target);
 
+    // 27 次多起点 GICP 单帧可耗 3~13s; 之前没有预算/提前退出, 一旦位姿偏了
+    // 每帧都全量跑满, 单线程 spinner 被独占 -> /relocation 等服务排队"很慢"。
+    // 现在两条停止条件: 覆盖率已达标(0.97)即停 / 墙钟预算(3s)耗尽即停。
+    const auto t0 = std::chrono::steady_clock::now();
     const double offs[3] = {-1.5, 0.0, 1.5};
     const double yaws[3] = {-10.0, 0.0, 10.0};
     double best_fit = m_accept_cfg.min_coverage;
     PoseStamped best;
     bool found = false;
-    for (double dx : offs)
-        for (double dy : offs)
+    bool stop = false;
+    for (double dx : offs) {
+        if (stop) break;
+        for (double dy : offs) {
+            if (stop) break;
             for (double yd : yaws) {
                 PoseStamped g = m_pose;
                 g.trans += V3D(dx, dy, 0.0);
@@ -442,7 +452,12 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
                     best = r.pose;
                     found = true;
                 }
+                const double ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - t0).count();
+                if (best_fit >= 0.97 || ms > 3000.0) { stop = true; break; }
             }
+        }
+    }
     if (!found) return false;
     m_pose = best;
     m_pose.time = best.time;
@@ -531,6 +546,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 ? m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands)
                 : 0;
             if (nk > 0) {
+                // 分数降序: 正确候选几乎总是分最高的, 先精配它 -> 命中即提前停
+                std::sort(cands.begin(), cands.end(),
+                          [](const GlobalCandidate& a, const GlobalCandidate& b) {
+                              return a.score > b.score;
+                          });
                 // L6: 用多候选初始化假设 (歧义时保留 Top-K)
                 std::vector<PoseStamped> hposes;
                 std::vector<double> hscores;
@@ -588,22 +608,36 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     PoseStamped best_pose = base_pose;
                     bool have_best = false;
                     double best_dx = 0.0, best_dy = 0.0, best_dth = 0.0;
-                    for (double a = -12.0; a <= 12.01; a += 6.0) {
-                        for (double dx = -2.0; dx <= 2.01; dx += 1.0) {
+                    // 墙钟预算 + 达标即停: 全量两级 = 每候选 200 次 GICP, 多候选时
+                    // 单帧回调被拖到分钟级, 单线程 spinner 饿死(实机 /relocation
+                    // 排队数十秒、输出停更)。正确候选通常前几个起点就到 0.95+。
+                    const auto t0 = std::chrono::steady_clock::now();
+                    auto budget_left = [&]() {
+                        return std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - t0).count() < 3000.0;
+                    };
+                    bool stop = false;
+                    for (double a = -12.0; a <= 12.01 && !stop; a += 6.0) {
+                        for (double dx = -2.0; dx <= 2.01 && !stop; dx += 1.0) {
                             for (double dy = -2.0; dy <= 2.01; dy += 1.0) {
                                 if (evalAt(dx, dy, a, best_pose)) {
                                     have_best = true;
                                     best_dx = dx; best_dy = dy; best_dth = a;
                                 }
+                                stop = (refined_fit >= 0.95) || !budget_left();
                             }
                         }
                     }
                     if (have_best) {
-                        // 第二级: 在粗搜最优附近细化
-                        for (double a = best_dth - 3.0; a <= best_dth + 3.01; a += 3.0) {
-                            for (double dx = best_dx - 0.5; dx <= best_dx + 0.51; dx += 0.25) {
-                                for (double dy = best_dy - 0.5; dy <= best_dy + 0.51; dy += 0.25) {
-                                    evalAt(dx, dy, a, best_pose);
+                        // 第二级: 在粗搜最优附近细化 (已足够好或预算耗尽则跳过)
+                        if (refined_fit < 0.97 && budget_left()) {
+                            stop = false;
+                            for (double a = best_dth - 3.0; a <= best_dth + 3.01 && !stop; a += 3.0) {
+                                for (double dx = best_dx - 0.5; dx <= best_dx + 0.51 && !stop; dx += 0.25) {
+                                    for (double dy = best_dy - 0.5; dy <= best_dy + 0.51; dy += 0.25) {
+                                        evalAt(dx, dy, a, best_pose);
+                                        stop = (refined_fit >= 0.97) || !budget_left();
+                                    }
                                 }
                             }
                         }
@@ -619,12 +653,17 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         best_fit = refined_fit;
                         best_pose = m_pose;
                     }
+                    // 已锁定(≥0.95) -> 不再精配其余候选, 把 spinner 还给服务/发布
+                    if (best_fit >= 0.95) break;
                 }   // for (const auto& cand : cands)
 
                 // 全部候选都不够高 -> 判定未定位, 绝不给"看起来对但覆盖率只有 0.6"的假位姿
                 if (best_fit < m_global_cfg.min_score * 0.9) {
                     m_status = LOST;
                     m_initialized = false;
+                    // 冷却: 之前这里漏设, 下一帧立刻又是一场全量全局风暴(fpfh top_k=5
+                    // × 两级 200 GICP), 单线程 spinner 被连续独占
+                    m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
                     std::cout << "[LocPipeline] relocalization weak: best_fit=" << best_fit
                               << " < 0.75 -> keep LOST" << std::endl;
                     return;
