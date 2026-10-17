@@ -33,8 +33,10 @@ void BbsGlobalLocalizer::configure(const GlobalLocalizeConfig& cfg) {
                               std::fabs(rr[5]) < 1e-9 && std::fabs(rr[6]) < 1e-9 &&
                               std::fabs(rr[7]) < 1e-9;
         if (!identity) {
+            // 注入的是 R_base<-lidar; 这里要用它的**逆**(=转置) 把点云从雷达系换到车体系,
+            // 判据: 车体系下 2D 足迹应 ≈ pgm 的 40x28m (@0.3 即 ~133x93), 否则方向反了。
             for (int r = 0; r < 3; ++r)
-                for (int c = 0; c < 3; ++c) m_r_bl(r, c) = rr[r * 3 + c];
+                for (int c = 0; c < 3; ++c) m_r_bl(r, c) = rr[c * 3 + r];   // transpose
             std::cout << "[BBS] mount from matrix (TF): "
                       << m_r_bl.row(0) << " | " << m_r_bl.row(1) << " | "
                       << m_r_bl.row(2) << std::endl;
