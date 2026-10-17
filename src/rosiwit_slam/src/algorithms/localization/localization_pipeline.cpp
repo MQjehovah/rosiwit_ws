@@ -585,7 +585,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }   // for (const auto& cand : cands)
 
                 // 全部候选都不够高 -> 判定未定位, 绝不给"看起来对但覆盖率只有 0.6"的假位姿
-                if (best_fit < 0.75) {
+                if (best_fit < m_global_cfg.min_score * 0.9) {
                     m_status = LOST;
                     m_initialized = false;
                     std::cout << "[LocPipeline] relocalization weak: best_fit=" << best_fit
