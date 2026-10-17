@@ -235,7 +235,7 @@ localization:
     min_score: 0.5
     top_k: 5                    # 全局重定位多候选数
     retry_interval: 30          # 丢失后重定位尝试间隔(帧, 节流)
-    voxel_resolution: 0.2      # BBS 2D 栅格分辨率: 0.3->0.2 (定位精度, 代价是慢一些)
+    voxel_resolution: 0.3      # BBS 搜索栅格(不是 pgm 的 0.05; 0.2 实测反而更差)
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0
     icp_max_iter: 32
@@ -251,8 +251,11 @@ localization:
     bbs_mount_roll_deg: 1.82
     bbs_mount_pitch_deg: 41.67
     bbs_mount_yaw_deg: 89.89
-    bbs_z_min: -1.0
-    bbs_z_max: 1.0
+    # ⚠ z 带是**相对地面**的(车体系里 z=0 即地面), 与栅格 grid_min/max_height 同口径。
+    # 之前写 -1.0..1.0 是"相对雷达"的口径, 转到车体系后只切到薄薄一层,
+    # 地图 2D 足迹从 85x82m 缩到 36x11m -> 候选只能到 0.53~0.84。
+    bbs_z_min: 0.1
+    bbs_z_max: 2.0
     bbs_theta_bins: 120         # 角分辨率 6deg -> 3deg (重定位精度)
     bbs_max_levels: 6
     bbs_min_points_per_cell: 5.0
