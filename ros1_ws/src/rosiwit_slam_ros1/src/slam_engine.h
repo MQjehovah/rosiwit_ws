@@ -84,6 +84,8 @@ public:
     /// 但换算逻辑只有这一份。
     void applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
                        bool zero_if_insane, bool force_z_zero = false);
+    /// 按需触发一次全局重定位 (转发到核心的定位流水线)
+    void requestRelocalization();
     bool getGridInfo(rosiwit_slam::GridInfo& out) const;
     bool getPoseCov(rosiwit_slam::PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const;
     /// 定位匹配度 [0,1] (旧接口 slam/info.matching_degree); 非定位/未支持时为 0

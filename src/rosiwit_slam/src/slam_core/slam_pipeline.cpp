@@ -490,6 +490,10 @@ bool SlamPipeline::saveGridMap(const std::string& pgm_path, const std::string& y
     return m_map_mgr->saveGridMap(pgm_path, yaml_path, resolution);
 }
 
+void SlamPipeline::requestRelocalization() {
+    if (m_localization) m_localization->requestRelocalization();
+}
+
 bool SlamPipeline::getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out) {
     // **必须走 generateGridMap**, 它内部用的是 buildFromObservations(逐帧观测) ——
     // 和 saveGridMap 完全同一条路径, 有逐帧地面处理。薄层以前是自己拿合并后的全局点云

@@ -151,10 +151,10 @@ localization:
   #   matcher     : gicp | pp_icp | p2p_icp | vgicp
   #   monitor     : threshold | windowed
   pipeline:
-    # **手动重定位时不要调全局重定位**(用户要求): 手工给了位姿就用它, 不跑 BBS。
-    # 需要自动找位置时, 由上层显式调用 /global_localization (该服务仍在, 只是不再自动触发)。
-    # (之前是 bbs: 切图/手动给位姿后会自动跑一遍 BBS, 在 aarch64 上很重, 且会覆盖人工给的位姿)
-    relocalizer: none
+    # **按需全局重定位**: /global_localization 服务会触发它。
+    # 手动重定位(给位姿)仍走 applyInitPose, 不会被 BBS 覆盖——两件事互不干扰。
+    # 若只想保留"有界局部重锁"、完全不跑 BBS, 改成 none 即可(服务仍可用, 只是搜索范围有限)。
+    relocalizer: bbs
     motion_prior: imu
     local_map: keyframe_submap
     matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有

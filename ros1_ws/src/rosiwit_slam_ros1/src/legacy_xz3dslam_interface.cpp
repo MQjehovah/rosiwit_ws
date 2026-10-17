@@ -972,7 +972,15 @@ bool LegacyXz3dSlamInterface::handleStopMap(
 
 bool LegacyXz3dSlamInterface::handleGlobalLocalization(std_srvs::Empty::Request&,
                                                        std_srvs::Empty::Response&) {
-    return true;   // legacy.cpp:2634 全文就这一行
+    // 旧实现 legacy.cpp:2634 就一行 `return true` (真正干活的是老定位模块自己)。
+    // 我们把它接成**按需触发一次全局重定位**: 核心侧置 LOST 并清冷却, 下一帧进入冷启动分支
+    // (localization.pipeline.relocalizer=bbs 时即全局检索; =none 时退化为有界局部重锁)。
+    if (!engine_.algo()) return false;
+    engine_.requestRelocalization();
+    lost_monitor_.reset();
+    relocating_ = true;
+    std::cout << "[legacy_iface] /global_localization -> relocalization requested" << std::endl;
+    return true;
 }
 
 bool LegacyXz3dSlamInterface::handleFinishTask(

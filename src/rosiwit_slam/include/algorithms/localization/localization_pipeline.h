@@ -30,6 +30,8 @@ public:
     void onImu(const IMUSample& s) override;
     void onOdom(const PoseStamped& odom) override;
     void onLidar(const LidarFrame& f) override;
+    /// 按需触发全局重定位: 置 LOST 并清冷却, 下一次 onLidar 进入冷启动/重定位分支
+    void requestRelocalization() override;
     Status getStatus() override;
     bool getPose(PoseStamped& out) override;
     bool getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;

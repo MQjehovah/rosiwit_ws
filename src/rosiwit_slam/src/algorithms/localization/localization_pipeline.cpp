@@ -359,6 +359,15 @@ void LocalizationPipeline::onImu(const IMUSample& s) {
     if (m_prior) m_prior->onImu(s);
 }
 
+void LocalizationPipeline::requestRelocalization() {
+    // 上层 /global_localization 触发: 强制回到未定位状态, 下一次 onLidar 走冷启动分支
+    // (relocalizer=bbs 时即全局检索; =none 时退化为 tryBoundedRecovery 的有界局部重锁)
+    m_status = LOST;
+    m_initialized = false;
+    m_reloc_cooldown = 0;
+    std::cout << "[LocPipeline] relocalization requested by service" << std::endl;
+}
+
 void LocalizationPipeline::onOdom(const PoseStamped& odom) {
     if (m_prior) m_prior->onOdom(odom);
 }

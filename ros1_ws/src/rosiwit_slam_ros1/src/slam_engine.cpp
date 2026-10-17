@@ -458,6 +458,10 @@ void SlamEngine::onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStamped
     applyInitPose(*msg, /*zero_if_insane=*/false, /*force_z_zero=*/false);
 }
 
+void SlamEngine::requestRelocalization() {
+    if (algo_raw_) algo_raw_->requestRelocalization();
+}
+
 void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
                                bool zero_if_insane, bool force_z_zero) {
     if (!algo_raw_) return;
