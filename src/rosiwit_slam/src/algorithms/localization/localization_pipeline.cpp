@@ -520,7 +520,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 if (nk > 1) m_hyp.seed(hposes, hscores);
                 else m_hyp.reset(cands.front().pose);
 
-                const GlobalCandidate& cand = cands.front();
+                // **多候选一起验**: BBS 只给粗候选(常含"看起来相似的另一处"), 而正确地点
+                // 的覆盖率能到 0.99、错地点稳定卡在 ~0.6。所以每个候选都做多起点精配,
+                // 取覆盖率最高的那个; 全部都不够高就判定未定位(不给假位姿)。
+                double best_fit = -1.0;
+                PoseStamped best_pose;
+                for (const auto& cand : cands) {
                 m_pose = cand.pose;
                 m_pose.time = f.end_time;
                 m_prior->reset(m_pose);
@@ -573,13 +578,33 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                               << " -> " << refined_fit << " (multi-start 45)" << std::endl;
                 }
 
+                    if (refined_fit > best_fit) {
+                        best_fit = refined_fit;
+                        best_pose = m_pose;
+                    }
+                }   // for (const auto& cand : cands)
+
+                // 全部候选都不够高 -> 判定未定位, 绝不给"看起来对但覆盖率只有 0.6"的假位姿
+                if (best_fit < 0.75) {
+                    m_status = LOST;
+                    m_initialized = false;
+                    std::cout << "[LocPipeline] relocalization weak: best_fit=" << best_fit
+                              << " < 0.75 -> keep LOST" << std::endl;
+                    return;
+                }
+                m_pose = best_pose;
+                m_pose.time = f.end_time;
+                m_prior->reset(m_pose);
+                m_smoother.reset(m_pose);
+                m_initialized = true;
+                m_status = LOCALIZED;
                 m_last_match = MatchResult();
                 m_last_match.converged = true;
-                m_last_match.fitness = refined_fit;
+                m_last_match.fitness = best_fit;
                 m_last_match.pose = m_pose;
                 std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
                           << " cands=" << nk << " hypotheses=" << m_hyp.size()
-                          << " score=" << cand.score << std::endl;
+                          << " best_fit=" << best_fit << std::endl;
             } else {
                 m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
             }
