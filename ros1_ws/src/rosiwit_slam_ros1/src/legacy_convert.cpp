@@ -158,7 +158,8 @@ double stdYawFromRot(const Eigen::Matrix3d& R) {
 rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
                                              double z_max,
                                              int downsample_multiplier,
-                                             double z_ref) {
+                                             double z_ref,
+                                             double z_min) {
     rosiwit_slam::CloudType::Ptr out(new rosiwit_slam::CloudType());
     const size_t n = in.size();
 
@@ -180,7 +181,10 @@ rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
     // 表现就是"看不清点云和墙体的贴合情况"。这里改成相对地面过滤, 与栅格同带。
     for (const auto& p : in) {
         const double z = p.z - z_ref;
-        if (!use_z || (z > 0 && z < z_max)) {
+        // 下界默认 0(旧语义); scan_f_map 传 0.1 —— z_ref 实测可偏差 ~7cm(标定 -0.898
+        // vs 实测地面 -0.83), 下界含 0 会把贴地点放进界面(用户报告"非墙体点云")。
+        // 0.1 与栅格提取的 0.1~2.0m 高度带对齐。
+        if (!use_z || (z > z_min && z < z_max)) {
             if (scan_count % down_sample == 0) out->push_back(p);
         }
         ++scan_count;

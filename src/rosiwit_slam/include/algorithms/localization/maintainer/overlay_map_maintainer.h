@@ -27,6 +27,7 @@ public:
     bool load(const std::string& path) override;
 
     size_t overlaySize() const { return m_overlay_count; }
+    uint64_t revision() const override { return m_revision; }
 
 private:
     static int64_t voxelKey(int cx, int cy, int cz);
@@ -39,6 +40,7 @@ private:
 
     MaintainerConfig m_cfg;
     std::string m_map_path;
+    CloudType::Ptr m_base_raw;                  // setBaseMap 原始指针(懒建用)
     CloudType::Ptr m_base;                       // 冻结原图(降采样), 用于增量/雕刻
     pcl::KdTreeFLANN<PointType> m_base_kdtree;
     bool m_has_base = false;
@@ -52,6 +54,7 @@ private:
     int m_low_count = 0;
     long m_frame = 0;
     size_t m_overlay_count = 0;
+    uint64_t m_revision = 0;      // 内容版本号: addPoint/load 自增, 供目标缓存判失效
 
     // L13 位姿图: 变化关键帧缓冲 (pose + 机体系点云)
     struct KfBuf { PoseStamped pose; CloudType::Ptr body; };

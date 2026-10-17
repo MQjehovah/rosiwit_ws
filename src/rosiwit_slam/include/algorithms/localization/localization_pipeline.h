@@ -48,6 +48,7 @@ private:
                      const PoseStamped& guess);
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)
     CloudType::Ptr buildTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
+    bool ensureRelocalizerMap();   // 全局重定位库懒建(首次用到才付全图特征+建树 ~45s)
 
     // 各阶段 (由配置选择)
     std::unique_ptr<IGlobalLocalizer>     m_relocalizer;
@@ -89,6 +90,8 @@ private:
     CloudType::Ptr m_cached_target;
     PoseStamped m_cached_target_pose;
     bool m_has_cached_target = false;
+    uint64_t m_cached_target_rev = 0;   // 建缓存时的维护层版本号(overlay 变更 -> 失效)
+    bool m_reloc_map_ready = false;     // 全局重定位库是否已建(懒建, setMap 置脏)
 
     // lifelong: 用叠加层刷新全局重定位器
     int m_refresh_counter = 0;

@@ -2,6 +2,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <cstdint>
 #include "slam_core/localization_stage_types.h"
 
 namespace rosiwit_slam {
@@ -33,6 +34,11 @@ public:
 
     /// 返回全部 overlay 点云(世界系), 供刷新全局重定位器 (lifelong)
     virtual CloudType::Ptr snapshotOverlay() { return nullptr; }
+
+    /// 叠加层内容版本号: 任何点写入/删除/载入时自增。
+    /// 配准目标缓存用它判断失效 —— 静态环境下 overlay 不增长, 目标(降采样+KD树)
+    /// 可跨帧复用, 不必每帧重建(实测每帧重建把位姿输出拖到 10Hz, 雷达是 15.8Hz)。
+    virtual uint64_t revision() const { return 0; }
 
     /// 取出并清空"自上次调用以来新增"的 overlay 点 (供存储底座增量插入)
     virtual void popOverlayDelta(CloudType::Ptr& out) { out.reset(); }

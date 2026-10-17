@@ -26,11 +26,12 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     m_map_path = map_path;
     m_voxel = m_cfg.voxel > 0 ? m_cfg.voxel : 0.3;
     m_cell = m_cfg.cell > 0 ? m_cfg.cell : 10.0;
-    if (base && !base->empty()) {
-        m_base = downsampleCloud(filterFinite(base), m_voxel);
-        m_base_kdtree.setInputCloud(m_base);
-        m_has_base = true;
-    }
+    // 懒建: 这里只存原始指针, 降采样+KD树推迟到首次真正用到(L147 吸收判据)再建。
+    // 全图降采样+建树实测 ~15s(aarch64, DDD), 每次切图都白付 —— 切图(带初始位姿)
+    // 根本不碰它 (用户语义: 有 initpose 不需要额外准备, 直接跟踪)。
+    m_base_raw = base;
+    m_base.reset();
+    m_has_base = false;
     // 尝试载入已存在的叠加层 (原图不变, 叠加层单独落盘)
     if (!map_path.empty()) load(map_path + ".overlay.pcd");
 }
@@ -56,6 +57,7 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
     if (!m_pending_store) m_pending_store.reset(new CloudType());
     m_pending_store->push_back(q);   // 供 store 增量插入
     ++m_overlay_count;
+    ++m_revision;                    // 目标缓存失效信号
 }
 
 void OverlayMapMaintainer::rayCarve(const PoseStamped& pose, const CloudType::Ptr& scan_body) {
@@ -140,6 +142,12 @@ void OverlayMapMaintainer::commitKeyframe(const PoseStamped& pose, const CloudTy
     const double dmin2 = m_cfg.delta_min * m_cfg.delta_min;
     std::vector<int> idx(1);
     std::vector<float> sq(1);
+    // 懒建 KD 树(首次吸收判据时): setBaseMap 只存了原始指针, 这里一次性补降采样+建树
+    if (!m_has_base && m_base_raw && !m_base_raw->empty()) {
+        m_base = downsampleCloud(filterFinite(m_base_raw), m_voxel);
+        m_base_kdtree.setInputCloud(m_base);
+        m_has_base = true;
+    }
     for (const auto& p : body->points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;

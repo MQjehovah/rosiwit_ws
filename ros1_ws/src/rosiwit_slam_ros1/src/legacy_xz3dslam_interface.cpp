@@ -35,6 +35,9 @@ constexpr const char* kMapFrame = "map";
 // 旧实现的 z 过滤上界: 定位 2.0 (legacy.cpp:989) / 建图 1.0 (legacy.cpp:1078)
 constexpr double kLocZMax = 2.0;
 constexpr double kMapZMax = 1.0;
+// scan_f_map 高度带下界(相对地面): 与栅格提取的 0.1~2.0m 对齐。
+// 0 会放行贴地点(z_ref 标定偏差 ~7cm 时地面直接漏进界面, 2026-10-17 用户报告)。
+constexpr double kScanZMin = 0.1;
 
 const char* modeName(SlamMode m) {
     switch (m) {
@@ -378,8 +381,9 @@ void LegacyXz3dSlamInterface::publishCurrScan() {
     const ros::Time stamp = out.pose.time > 0 ? ros::Time(out.pose.time) : ros::Time::now();
 
     if (slam_mode_ == SlamMode::LOCALIZATION) {
-        // scan_f_map: 抽稀到约 2000 + z∈(0,2) (legacy.cpp:982-1011), **无条件**发
-        CloudType::Ptr shaped = legacyScanShape(world, kLocZMax, 1, scan_ground_z_);
+        // scan_f_map: 抽稀到约 2000 + z∈(0.1,2) (legacy.cpp:982-1011 旧带 (0,2) 在
+        // "地面=0" 的车体系下成立; 我们 z_ref 有 ~7cm 标定偏差, 下界抬 0.1 防地面泄漏), **无条件**发
+        CloudType::Ptr shaped = legacyScanShape(world, kLocZMax, 1, scan_ground_z_, kScanZMin);
         if (shaped->empty()) return;
         ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
         // curr_scan_point: 同一个点云, 但只有 debug_publish_ 才发 (legacy.cpp:1007-1009)
@@ -399,8 +403,8 @@ void LegacyXz3dSlamInterface::publishCurrScan() {
                 or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_stamp));
         }
     } else if (slam_mode_ == SlamMode::MAPPING) {
-        // scan_f_map: 抽稀到约 2000 + z∈(0,1) (legacy.cpp:1071-1096)
-        CloudType::Ptr shaped = legacyScanShape(world, kMapZMax, 1, scan_ground_z_);
+        // scan_f_map: 抽稀到约 2000 + z∈(0.1,1) (legacy.cpp:1071-1096, 下界同理抬 0.1)
+        CloudType::Ptr shaped = legacyScanShape(world, kMapZMax, 1, scan_ground_z_, kScanZMin);
         // curr_scan_point: **完整的**去畸变点云 (legacy.cpp:1097 把过滤结果覆盖掉了), 无条件发
         pointcloud_puber_.publish(toPointCloud2(world, kMapFrame, stamp));
         if (!shaped->empty()) ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));

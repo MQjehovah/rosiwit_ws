@@ -93,6 +93,7 @@ double stdYawFromRot(const Eigen::Matrix3d& R);
 rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
                                              double z_max,
                                              int downsample_multiplier = 1,
-                                             double z_ref = 0.0);
+                                             double z_ref = 0.0,
+                                             double z_min = 0.0);
 
 } // namespace rosiwit_slam_ros1

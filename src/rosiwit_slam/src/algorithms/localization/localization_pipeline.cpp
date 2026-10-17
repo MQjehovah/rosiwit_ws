@@ -288,20 +288,32 @@ std::string LocalizationPipeline::describe() const {
 }
 
 void LocalizationPipeline::setMap(const std::string& map_name) {
+    // 分段计时: /switch_map 曾实测 48s, 必须知道钱花在哪 (每阶段一行, 只在切图时打)
+    const auto t_total0 = std::chrono::steady_clock::now();
+    auto stage_ms = [](const std::chrono::steady_clock::time_point& t) {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+    };
+    std::string timing;
+    auto mark = [&timing, &t_total0, &stage_ms](const char* name) {
+        timing += std::string(" ") + name + "=" + std::to_string(stage_ms(t_total0));
+    };
     m_status = INIT;
     m_initialized = false;
     m_has_cached_target = false;
     m_map_path = map_name;
     m_map.reset(new CloudType());
+    // ⚠ xzmap 只解析一次(46MB 手写 JSON 解析单次数秒, 之前回退路径解析两遍,
+    //    /switch_map 被直接拖慢一倍): 回退路径解析出的关键帧同时供两处使用 ——
+    //    重建基准点云 + setKeyframes; PCD 路径下后面才第一次读 xzmap。
+    std::vector<io::XzMapKeyframe> kfs;
     if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
         // **没有 PCD 的兼容回退**: 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml,
         // 关键帧里自带点 —— 直接从关键帧重建基准点云。
         // 这样"切图/定位"就**不再要求 PCD 文件** (旧实现 localiza_ptr_->run("<dir>/map")
         // 也只是读它自己那份 xzmap, 从来不看 PCD)。
         m_map->clear();
-        std::vector<io::XzMapKeyframe> kfs_fb;
-        if (io::readXzMap(map_name + ".xzmap", kfs_fb) && !kfs_fb.empty()) {
-            for (const auto& kf : kfs_fb) {
+        if (io::readXzMap(map_name + ".xzmap", kfs) && !kfs.empty()) {
+            for (const auto& kf : kfs) {
                 for (const auto& p : kf.points) {
                     PointType pt;   // PCL 1.8 无 (x,y,z) 三参构造, 逐字段赋值
                     pt.x = p.x();
@@ -311,7 +323,7 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
                 }
             }
             std::cout << "[LocPipeline] no PCD at " << map_name << "; rebuilt base map from "
-                      << map_name << ".xzmap (" << m_map->size() << " pts, " << kfs_fb.size()
+                      << map_name << ".xzmap (" << m_map->size() << " pts, " << kfs.size()
                       << " kfs)" << std::endl;
         } else {
             std::cerr << "[LocPipeline] failed to load map: " << map_name << std::endl;
@@ -322,19 +334,24 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
         std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)"
                   << std::endl;
     }
+    mark("parse");
     if (m_local_map) m_local_map->setMap(map_name, m_map);
     m_planar.setMap(m_map);
+    mark("locmap_planar");
     if (m_store) {
         m_store->buildFromCloud(m_map);
         if (m_matcher) m_matcher->setStore(m_store.get());
         m_planar.setStore(m_store.get());
     }
+    mark("store");
     if (m_maintainer) m_maintainer->setBaseMap(map_name, m_map);
+    mark("maintainer");
 
-    // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用
+    // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用。
+    // 回退路径已经在上面解析过 kfs, 直接复用 (省一整遍 46MB 解析); PCD 路径这里才第一次读。
     if (m_local_map) {
-        std::vector<io::XzMapKeyframe> kfs;
-        if (io::readXzMap(map_name + ".xzmap", kfs) && !kfs.empty()) {
+        if (kfs.empty()) io::readXzMap(map_name + ".xzmap", kfs);
+        if (!kfs.empty()) {
             std::vector<LocalKeyframe> lkfs;
             lkfs.reserve(kfs.size());
             for (const auto& kf : kfs) {
@@ -362,8 +379,28 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
                       << " keyframes from " << map_name << ".xzmap" << std::endl;
         }
     }
-    if (m_relocalizer && m_relocalizer_name != "none")
-        m_relocalizer->setMap(map_name, m_map);
+    mark("kfs");
+    // 懒建全局重定位库: FPFH 对全图算特征+建树实测 ~45s(aarch64, DDD)。只在真正需要
+    // 全局定位时(丢失无初值 / 显式 /global_localization / 歧义重播种)才建 ——
+    // **切图带 initpose 直接跟踪, 不为用不上的能力付 45s**(产品语义, 2026-10-17 确认)。
+    m_reloc_map_ready = false;
+    mark("relocalizer_lzy");
+    std::cout << "[LocPipeline] setMap profile(ms, 累计):" << timing
+              << " total=" << std::to_string(stage_ms(t_total0)) << std::endl;
+}
+
+bool LocalizationPipeline::ensureRelocalizerMap() {
+    if (!m_relocalizer || m_relocalizer_name == "none" || !m_map) return false;
+    if (!m_reloc_map_ready) {
+        const auto t0 = std::chrono::steady_clock::now();
+        m_relocalizer->setMap(m_map_path, m_map);
+        m_reloc_map_ready = true;
+        std::cout << "[LocPipeline] global reloc map built lazily in "
+                  << std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - t0).count()
+                  << "ms (first use)" << std::endl;
+    }
+    return true;
 }
 
 void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
@@ -542,7 +579,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_last_match.pose = m_pose;
         } else {
             std::vector<GlobalCandidate> cands;
-            const int nk = m_relocalizer
+            const int nk = ensureRelocalizerMap()
                 ? m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands)
                 : 0;
             if (nk > 0) {
@@ -716,9 +753,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
         m_has_cached_target = false;
     } else {
-        // 局部地图缓存: 无维护层且位姿小幅移动(或全图)时复用, 避免每帧重建 KD-tree/体素
+        // 局部地图缓存: 位姿小幅移动(或全图)且**叠加层未变**时复用, 避免每帧重建
+        // 降采样+KD-tree。之前配了维护层(m_maintainer)就直接放弃缓存 —— 但 overlay
+        // 只在真正写入新点时变(revision 自增), 静态环境基本不增长; 而每帧重建 10k 目标
+        // 的降采样+建树是把位姿输出拖到 10Hz 的主因之一(雷达 15.8Hz, 2026-10-17 实测)。
         bool rebuild_target = true;
-        if (!m_maintainer && m_has_cached_target &&
+        const uint64_t maint_rev = m_maintainer ? m_maintainer->revision() : 0;
+        if (m_has_cached_target && maint_rev == m_cached_target_rev &&
             (m_local_map_name == "global" ||
              (guess.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
             rebuild_target = false;
@@ -742,6 +783,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             }
             m_cached_target = target;
             m_cached_target_pose = guess;
+            m_cached_target_rev = m_maintainer ? m_maintainer->revision() : 0;
             m_has_cached_target = true;
             m_matcher->setTarget(target);
         }
@@ -806,7 +848,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     m_low_fit_frames = accepted ? 0 : (m_low_fit_frames + 1);
     if (m_hyp_reseed_frames > 0 && !m_hyp.ambiguous() &&
         m_low_fit_frames >= m_hyp_reseed_frames &&
-        m_relocalizer && m_relocalizer_name != "none") {
+        ensureRelocalizerMap()) {
         std::vector<GlobalCandidate> cands;
         const int nk = m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands);
         if (nk > 1) {
