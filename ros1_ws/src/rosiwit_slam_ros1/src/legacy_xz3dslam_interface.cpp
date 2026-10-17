@@ -868,8 +868,12 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     }
     // 分支 3: 换图
     relocating_ = true;
-    // 旧实现这里 DELETE_PTR 掉了建图实例 (legacy.cpp:2245-2246) -> 我们也重建核心
-    resetCoreAndCaches();
+    // **切图不清图** (用户要求, 也与旧实现的实际效果一致):
+    // 旧实现在这里删的是"建图实例", 定位实例由 loadMap() 原地替换; 我们若在这里重建核心,
+    // 会对 /switch_map 引入一次 STOP+join(后端忙时把服务线程卡死, 现场表现"切图卡住"),
+    // 还要重新做一次 IMU 初始化(2s), 纯属浪费。地图由下面的 loadMap() 替换即可。
+    // 清图只在"进建图"时做(handleModeSwitch -> 清上一轮残留)。
+    std::cout << "[legacy_iface] /switch_map: keep core, just load the new map" << std::endl;
     const bool detect_ok = callSetDetectMode(0);
     res.success = detect_ok;   // 旧实现: **该结果单独决定** success
 
