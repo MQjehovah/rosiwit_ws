@@ -246,11 +246,13 @@ localization:
     sc_dist_thresh: 0.4
     sc_candidate_ratio: 0.3
     # bbs 专用
-    # 安装角(base<-lidar, 度): 来自 TF (base_link <- lidar), 本机实测 rpy=[1.82, 41.67, 89.89]
-    # ⚠ 顺序: roll, pitch, yaw (与 TF 打印一致)。全 0 时退化为"假设水平安装"。
-    bbs_mount_roll_deg: 1.82
-    bbs_mount_pitch_deg: 41.67
-    bbs_mount_yaw_deg: 89.89
+    # 安装角(base<-lidar, 度): 来自 TF base_link <- lidar。
+    # ⚠ TF 日志打印的是 eulerAngles(2,1,0) = **[yaw, pitch, roll]**:
+    #    日志 rpy(deg)=[41.67 1.82 89.89]  =>  yaw=41.67, pitch=1.82, roll=89.89
+    # 即雷达是"侧装"(roll≈90°), 不是俯装。之前填反导致地图被压成 60x10m 的薄条。
+    bbs_mount_roll_deg: 89.89
+    bbs_mount_pitch_deg: 1.82
+    bbs_mount_yaw_deg: 41.67
     # ⚠ z 带是**相对地面**的(车体系里 z=0 即地面), 与栅格 grid_min/max_height 同口径。
     # 之前写 -1.0..1.0 是"相对雷达"的口径, 转到车体系后只切到薄薄一层,
     # 地图 2D 足迹从 85x82m 缩到 36x11m -> 候选只能到 0.53~0.84。
