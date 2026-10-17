@@ -17,17 +17,27 @@ struct RelativePoseError {
     bool operator()(const T* const from_t, const T* const from_r,
                     const T* const to_t, const T* const to_r,
                     T* residuals) const {
+        // 约定: relative_pose = T_from_to, 即"to 在 from 系里的位姿"
+        //   t_rel = R_from^{-1} (t_to - t_from)
+        //   q_rel = R_from^{-1} * R_to
+        // (与 VisualConstraintSource / ScanContextLoopClosure 的构造保持一致)
+        //
+        // ⚠ 历史 bug: 这里原本写成 R_from*(t_to-t_from) 与 R_to*R_from^{-1},
+        //   即平移用了正向旋转、旋转用了世界系顺序 —— 与测量值约定不一致, 残差永远消不掉,
+        //   优化器只能给出几十米/上百度级的解。实机表现: 后端每次"修正"都是
+        //   d_trans=40m d_rot=150deg (被薄层的兜底逻辑全部拒绝), 地图实际拿不到任何回环修正。
         T diff_t[3] = { to_t[0] - from_t[0], to_t[1] - from_t[1], to_t[2] - from_t[2] };
-        T rotated_t[3];
-        ceres::UnitQuaternionRotatePoint(from_r, diff_t, rotated_t);
-
         T from_r_inv[4] = { from_r[0], -from_r[1], -from_r[2], -from_r[3] };
+        T rotated_t[3];
+        ceres::UnitQuaternionRotatePoint(from_r_inv, diff_t, rotated_t);
+
         T rel_R[4];
-        ceres::QuaternionProduct(to_r, from_r_inv, rel_R);
+        ceres::QuaternionProduct(from_r_inv, to_r, rel_R);
 
         T measured_R[4] = {T(q_rel_.w()), T(q_rel_.x()), T(q_rel_.y()), T(q_rel_.z())};
+        T measured_inv[4] = {measured_R[0], -measured_R[1], -measured_R[2], -measured_R[3]};
         T error_R[4];
-        ceres::QuaternionProduct(rel_R, measured_R, error_R);
+        ceres::QuaternionProduct(rel_R, measured_inv, error_R);
 
         T q_delta[3];
         ceres::QuaternionToAngleAxis(error_R, q_delta);
