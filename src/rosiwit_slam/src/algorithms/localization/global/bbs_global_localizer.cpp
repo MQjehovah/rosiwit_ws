@@ -292,6 +292,14 @@ int BbsGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_k,
                   << " pose=(" << out[i].pose.trans.x() << ", " << out[i].pose.trans.y()
                   << ") yaw_deg=" << yaw << " z=" << out[i].pose.trans.z() << std::endl;
     }
+    // 一个候选都没过门限时**必须留痕**: 否则现场看到的就是"重定位没反应"
+    if (out.empty()) {
+        double best_leaf = 0.0;
+        for (const auto& n : leaves) best_leaf = std::max(best_leaf, n.score);
+        std::cout << "[BBS] no candidate above min_score=" << m_cfg.min_score
+                  << " (best_leaf=" << best_leaf << ", leaves=" << leaves.size()
+                  << ")" << std::endl;
+    }
     if (static_cast<int>(out.size()) > max_k) out.resize(max_k);
     return static_cast<int>(out.size());
 }
