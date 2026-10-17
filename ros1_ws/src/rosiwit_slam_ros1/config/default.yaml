@@ -255,7 +255,9 @@ localization:
   # s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性)
   accept:
     mode: 1
-    min_coverage: 0.5
+    # 实机: gicp 覆盖率典型 0.43, 原来的 0.5 会一直接受不了 -> 位姿不输出(角标冻结)。
+    # 先放到 0.35 让它能锁住; 后面根据 [LocProbe] REJECT 的实际分布再收紧。
+    min_coverage: 0.35
     residual_margin: 0.10
     consistent_frames: 2
     mahalanobis_gate: true    # 用匹配协方差做 Mahalanobis 门控
@@ -263,7 +265,11 @@ localization:
 
   # 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane
   planar:
-    mode: ground_plane        # 工厂: 平地锁平/坡道跟随 (洗地机过坡安全)
+    # 实机: 我们的"body"是**雷达系**, 而本机雷达俯装 41.67° -> ground_plane/lock_zrp
+    # 强行把 roll/pitch 拉平 = 把扫描整体转 42° -> 只有 ~43% 的点能找到对应面
+    # (fitness=cs.coverage 实测 0.434)。先用 none 验证因果, 若确认再改成
+    # "在车身系做平面约束"(需按安装角换算), 而不是直接丢掉这个能力。
+    mode: none
     z: 0.0                    # lock_zrp 目标高度
     sensor_height: 0.0        # 传感器离地高(m); 0=首帧自动标定
     cell: 1.0
