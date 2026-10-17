@@ -149,9 +149,12 @@ localization:
 
   # 配准器参数 (matcher: gicp | pp_icp | p2p_icp | vgicp)
   matcher:
-    voxel_resolution: 0.3
-    max_iterations: 32
-    max_correspondence_dist: 2.0
+    # 实机 aarch64: gicp(32 迭代, 11k 扫描点 vs 12k 目标点) 单帧约 0.7s,
+    # 导致位姿输出只有 ~1.4Hz(雷达 10Hz), 界面"频率很低"。
+    # 降迭代 + 放大体素, 目标单帧 < 150ms; 精度用下面的 inlier_dist/max_corr 兜住。
+    voxel_resolution: 0.4
+    max_iterations: 12
+    max_correspondence_dist: 1.0
     transformation_epsilon: 0.000001
     inlier_dist: 0.3
     # pp_icp 专用
