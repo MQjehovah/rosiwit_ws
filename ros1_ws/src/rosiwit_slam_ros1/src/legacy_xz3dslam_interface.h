@@ -206,6 +206,11 @@ private:
     nav_msgs::Path mapping_path_msg_;               // 建图轨迹 (累积后整条重发)
 
     LostMonitor lost_monitor_;      // T3
+    // confidently-wrong 防线: 激光位姿位移 vs 轮式里程计位移 的窗口一致性
+    OdomConsistencyMonitor odom_mon_;
+    bool odom_mon_wrong_prev_ = false;
+    double last_odom_x_ = 0.0, last_odom_y_ = 0.0;
+    double last_odom_t_ = -1.0;
     RealtimeGrid realtime_grid_;    // T2
 
     // ---- 发布器 (14 个, legacy.cpp:282-297 的名字/类型/queue/latch 逐字照抄) ----

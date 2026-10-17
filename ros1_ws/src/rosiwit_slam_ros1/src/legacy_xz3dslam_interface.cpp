@@ -248,6 +248,8 @@ void LegacyXz3dSlamInterface::resetCoreAndCaches() {
 
 void LegacyXz3dSlamInterface::resetLocalizationLatch() {    relocating_ = true;
     lost_monitor_.reset();
+    odom_mon_.reset();
+    odom_mon_wrong_prev_ = false;
 }
 
 // ---------------------------------------------------------------- [T6] 输入
@@ -303,6 +305,10 @@ void LegacyXz3dSlamInterface::laserScanCB(const sensor_msgs::LaserScan::ConstPtr
 void LegacyXz3dSlamInterface::chassisOdomCB(const nav_msgs::Odometry::ConstPtr& msg) {
     // 旧实现无条件订阅并把它当运动先验喂给定位 (legacy.cpp:210 chassisOdomCallBack)
     engine_.onOdomMsg(msg);
+    // 位姿-里程计一致性监测的输入 (同一定时器线程消费, 无锁)
+    last_odom_x_ = msg->pose.pose.position.x;
+    last_odom_y_ = msg->pose.pose.position.y;
+    last_odom_t_ = msg->header.stamp.toSec();
 }
 
 void LegacyXz3dSlamInterface::liftStateCB(const std_msgs::String::ConstPtr& msg) {
@@ -523,6 +529,20 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
                 // 才产出 has_new_pose 的输出 (slam_pipeline.cpp:178-182),
                 // 所以"收到过新位姿" == "真的定位上过"。
                 lost_monitor_.onLocalizedPose();
+
+                // confidently-wrong 防线 (2026-10-17 推行丢失事故): 匹配分 0.98 但
+                // 位姿锁错时状态机无感; 激光位移 vs 轮速位移长期背离是唯一信号。
+                if (last_odom_t_ > 0.0) {
+                    odom_mon_.onPose(t, curr_pose_.x, curr_pose_.y, last_odom_x_, last_odom_y_);
+                    const bool wrong = odom_mon_.wrongness();
+                    if (wrong && !odom_mon_wrong_prev_) {
+                        addWarningCode(20003505);
+                        std::cout << "[legacy_iface] pose-odom DEVIATION "
+                                  << odom_mon_.deviation() << "m -> warning 20003505"
+                                  << std::endl;
+                    }
+                    odom_mon_wrong_prev_ = wrong;
+                }
                 publish_info = true;
             }
         }
@@ -654,6 +674,14 @@ void LegacyXz3dSlamInterface::loadWarningCodeTable() {
         }
         std::cout << "[legacy_iface] warning_code table loaded: " << warning_code_table_.size()
                   << " codes from " << path << std::endl;
+        // 自定义码 (json 未定义, 需在 app 侧同步登记): 位姿-里程计长期背离
+        {
+            WarningInfo wi;
+            wi.level = "WARNING";
+            wi.name = "pose odom inconsistent";
+            wi.content = "slam pose deviates from wheel odometry (possible wrong lock)";
+            warning_code_table_[20003505] = wi;
+        }
     } catch (const std::exception& e) {
         ROS_WARN_STREAM("[legacy_iface] warning_code.json parse error (" << e.what()
                         << "): " << path);
@@ -894,6 +922,8 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     curr_map_name_ = req.map_name;
     applyInitPose(req.initial_pose, true);
     lost_monitor_.reset();
+    odom_mon_.reset();
+    odom_mon_wrong_prev_ = false;
     lost_monitor_.setMapLoaded(true);
     setWarningSuppression(true);   // 旧实现这里也调 run() (legacy.cpp:2345)
     return true;
@@ -910,6 +940,8 @@ bool LegacyXz3dSlamInterface::handleRelocation(
     relocating_ = false;
     // [T11] 进入重定位 -> 清 latch (下次真的定位上之前报 1, 不报 0)
     lost_monitor_.reset();
+    odom_mon_.reset();
+    odom_mon_wrong_prev_ = false;
     res.success = true;
     return true;
 }
@@ -982,6 +1014,8 @@ bool LegacyXz3dSlamInterface::handleGlobalLocalization(std_srvs::Empty::Request&
     if (!engine_.algo()) return false;
     engine_.requestRelocalization();
     lost_monitor_.reset();
+    odom_mon_.reset();
+    odom_mon_wrong_prev_ = false;
     relocating_ = true;
     std::cout << "[legacy_iface] /global_localization -> relocalization requested" << std::endl;
     return true;
@@ -1023,6 +1057,8 @@ bool LegacyXz3dSlamInterface::handleExpandMap(
             slam_mode_ = SlamMode::LOCALIZATION;
             applyInitPose(req.initial_pose, false);
             lost_monitor_.reset();
+    odom_mon_.reset();
+    odom_mon_wrong_prev_ = false;
             lost_monitor_.setMapLoaded(true);
             curr_map_path_ = req.map_dir;
         } else {

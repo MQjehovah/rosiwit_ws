@@ -150,6 +150,7 @@ struct MotionPriorConfig {
     double max_vel = 10.0;           // 常速外推速度上限(m/s)
     bool   use_odom = false;         // 融合轮式里程计(默认关: 洗地机打滑不可信)
     double slip_yaw_thresh = 0.3;    // 打滑判据: |odom_yaw_rate - imu_yaw_rate| > 该值(rad/s) 则丢弃 odom
+    double max_odom_speed = 3.0;     // odom 平移速度物理上限(m/s), 超出 = 打滑/毛刺样本, 整包丢弃
     // ---- IMU 零偏在线估计 (L11) ----
     int    imu_calib_samples = 200;  // 静止标定窗口样本数
     double static_gyro_std = 0.02;   // 静止判据: gyro 标准差(rad/s)

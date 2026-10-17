@@ -98,6 +98,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_motion_cfg.max_dt  = getv<double>(mpc, "max_dt", m_motion_cfg.max_dt);
         m_motion_cfg.max_vel = getv<double>(mpc, "max_vel", m_motion_cfg.max_vel);
         m_motion_cfg.use_odom = getv<bool>(mpc, "use_odom", m_motion_cfg.use_odom);
+        m_motion_cfg.max_odom_speed =
+            getv<double>(mpc, "max_odom_speed", m_motion_cfg.max_odom_speed);
         m_motion_cfg.slip_yaw_thresh = getv<double>(mpc, "slip_yaw_thresh", m_motion_cfg.slip_yaw_thresh);
         m_motion_cfg.imu_calib_samples = getv<int>(mpc, "imu_calib_samples", m_motion_cfg.imu_calib_samples);
         m_motion_cfg.static_gyro_std = getv<double>(mpc, "static_gyro_std", m_motion_cfg.static_gyro_std);
@@ -114,6 +116,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (gc) {
         m_global_cfg.min_score          = getv<double>(gc, "min_score", m_global_cfg.min_score);
         m_global_cfg.top_k              = getv<int>(gc, "top_k", m_global_cfg.top_k);
+        m_ambiguity_margin = getv<double>(gc, "ambiguity_margin", m_ambiguity_margin);
+        m_reseed_radius    = getv<double>(gc, "reseed_radius", m_reseed_radius);
         m_global_cfg.retry_interval     = getv<int>(gc, "retry_interval", m_global_cfg.retry_interval);
         m_global_cfg.voxel_resolution   = getv<double>(gc, "voxel_resolution", m_global_cfg.voxel_resolution);
         m_global_cfg.icp_max_corr_dist  = getv<double>(gc, "icp_max_corr_dist", m_global_cfg.icp_max_corr_dist);
@@ -273,6 +277,13 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
 }
 
 LocalizationPipeline::~LocalizationPipeline() {
+    // 后台构建线程: 先停再收 (worker 可能正持有 45s 的构建)
+    {
+        std::lock_guard<std::mutex> lk(m_reloc_mu);
+        m_reloc_stop = true;
+    }
+    m_reloc_cv.notify_all();
+    if (m_reloc_thread.joinable()) m_reloc_thread.join();
     // 非破坏性: 叠加层单独落盘, 原图不改
     if (m_maintainer && !m_map_path.empty()) m_maintainer->save(m_map_path + ".overlay.pcd");
 }
@@ -380,27 +391,62 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
         }
     }
     mark("kfs");
-    // 懒建全局重定位库: FPFH 对全图算特征+建树实测 ~45s(aarch64, DDD)。只在真正需要
-    // 全局定位时(丢失无初值 / 显式 /global_localization / 歧义重播种)才建 ——
-    // **切图带 initpose 直接跟踪, 不为用不上的能力付 45s**(产品语义, 2026-10-17 确认)。
-    m_reloc_map_ready = false;
-    mark("relocalizer_lzy");
+    // 全局重定位库**后台**预建: FPFH 对全图算特征+建树实测 ~45s(aarch64)。
+    // 演进史: ①最初 setMap 里同步建(切图 48.5s) ②改懒建(切图 3.2s, 但构建被推迟到
+    // 首次冷启动的 onLidar 回调里 —— 2026-10-17 推行丢失事故: 判丢后回调内构建
+    // 44.6s, 单线程 spinner 冻结, 雷达停处理+界面冻住) ③现在: setMap 后立即后台
+    // 线程构建, 切图依旧 3s, 回调永不阻塞, 构建完成前冷启动按节流自动重试。
+    {
+        std::lock_guard<std::mutex> lk(m_reloc_mu);
+        m_reloc_request = true;
+        m_reloc_ready = false;
+        m_reloc_map_snap = m_map;
+        m_reloc_path_snap = m_map_path;
+    }
+    if (!m_reloc_thread.joinable())
+        m_reloc_thread = std::thread([this] { relocBuildWorker(); });
+    m_reloc_cv.notify_all();
+    mark("relocalizer_bg");
     std::cout << "[LocPipeline] setMap profile(ms, 累计):" << timing
               << " total=" << std::to_string(stage_ms(t_total0)) << std::endl;
 }
 
+void LocalizationPipeline::relocBuildWorker() {
+    std::unique_lock<std::mutex> lk(m_reloc_mu);
+    while (!m_reloc_stop) {
+        m_reloc_cv.wait(lk, [this] { return m_reloc_stop || m_reloc_request; });
+        if (m_reloc_stop) break;
+        const CloudType::Ptr map = m_reloc_map_snap;
+        const std::string path = m_reloc_path_snap;
+        m_reloc_request = false;
+        lk.unlock();
+        m_reloc_building.store(true);
+        const auto t0 = std::chrono::steady_clock::now();
+        bool ok = false;
+        if (m_relocalizer && m_relocalizer_name != "none" && map && !map->empty())
+            ok = m_relocalizer->setMap(path, map);
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0).count();
+        lk.lock();
+        m_reloc_building.store(false);
+        // 构建期间又切图(request 已再次置位)则快照已更新, 循环继续重建
+        m_reloc_ready = ok && m_reloc_map_snap == map;
+        std::cout << "[LocPipeline] global reloc map built in background, " << ms
+                  << "ms ok=" << ok << std::endl;
+    }
+}
+
 bool LocalizationPipeline::ensureRelocalizerMap() {
     if (!m_relocalizer || m_relocalizer_name == "none" || !m_map) return false;
-    if (!m_reloc_map_ready) {
-        const auto t0 = std::chrono::steady_clock::now();
-        m_relocalizer->setMap(m_map_path, m_map);
-        m_reloc_map_ready = true;
-        std::cout << "[LocPipeline] global reloc map built lazily in "
-                  << std::chrono::duration<double, std::milli>(
-                         std::chrono::steady_clock::now() - t0).count()
-                  << "ms (first use)" << std::endl;
-    }
-    return true;
+    if (m_reloc_building.load()) return false;   // 构建中: 本帧跳过(回调绝不阻塞)
+    std::lock_guard<std::mutex> lk(m_reloc_mu);
+    if (m_reloc_ready && m_reloc_map_snap == m_map) return true;
+    // 未建或地图已换: 置请求让 worker 建, 立刻返回 false
+    m_reloc_request = true;
+    m_reloc_map_snap = m_map;
+    m_reloc_path_snap = m_map_path;
+    m_reloc_cv.notify_all();
+    return false;
 }
 
 void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
@@ -599,6 +645,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // 的覆盖率能到 0.99、错地点稳定卡在 ~0.6。所以每个候选都做多起点精配,
                 // 取覆盖率最高的那个; 全部都不够高就判定未定位(不给假位姿)。
                 double best_fit = -1.0;
+                double second_fit = -1.0;   // 次优精配分: 消歧需要 top1-top2 差值
                 PoseStamped best_pose;
                 for (const auto& cand : cands) {
                 m_pose = cand.pose;
@@ -687,11 +734,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }
 
                     if (refined_fit > best_fit) {
+                        second_fit = best_fit;   // 原最优降为次优
                         best_fit = refined_fit;
                         best_pose = m_pose;
+                    } else if (refined_fit > second_fit) {
+                        second_fit = refined_fit;
                     }
-                    // 已锁定(≥0.95) -> 不再精配其余候选, 把 spinner 还给服务/发布
-                    if (best_fit >= 0.95) break;
+                    // 已锁定(≥0.95)且**已评出第二名** -> 不再精配其余候选, 把 spinner
+                    // 还给服务/发布。消歧必须评出第二名: 重复结构下错候选一样能到
+                    // 0.99+ (2026-10-17 推行事故: 单候选 0.999 锁进相似车位)。
+                    if (best_fit >= 0.95 && second_fit > 0.0) break;
                 }   // for (const auto& cand : cands)
 
                 // 全部候选都不够高 -> 判定未定位, 绝不给"看起来对但覆盖率只有 0.6"的假位姿
@@ -715,9 +767,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_last_match.converged = true;
                 m_last_match.fitness = best_fit;
                 m_last_match.pose = m_pose;
+                const double gap = (second_fit > 0.0) ? (best_fit - second_fit) : 1.0;
+                if (nk == 1)
+                    std::cout << "[LocPipeline] WARNING: single-candidate reloc, "
+                                 "no disambiguation source, best_fit="
+                              << best_fit << std::endl;
                 std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
                           << " cands=" << nk << " hypotheses=" << m_hyp.size()
-                          << " best_fit=" << best_fit << std::endl;
+                          << " best_fit=" << best_fit << " second=" << second_fit
+                          << (gap < m_ambiguity_margin ? " AMBIGUOUS(multi-hyp kept)" : "")
+                          << std::endl;
             } else {
                 m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
             }
@@ -854,9 +913,18 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         if (nk > 1) {
             std::vector<PoseStamped> hp;
             std::vector<double> hs;
-            for (const auto& c : cands) { hp.push_back(c.pose); hs.push_back(c.score); }
-            m_hyp.seed(hp, hs);
-            m_low_fit_frames = 0;
+            for (const auto& c : cands) {
+                // 可达性门控: 只有当前位姿附近 reseed_radius 米内的候选才有资格进
+                // 假设池。2026-10-17 教训: 无距离约束的全局候选 = 0.3s 内"瞬移"31m。
+                if (m_reseed_radius > 0 &&
+                    (c.pose.trans - m_pose.trans).norm() > m_reseed_radius)
+                    continue;
+                hp.push_back(c.pose); hs.push_back(c.score);
+            }
+            if (hp.size() > 1) {
+                m_hyp.seed(hp, hs);
+                m_low_fit_frames = 0;
+            }
         }
     }
 

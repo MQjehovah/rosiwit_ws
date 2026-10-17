@@ -17,6 +17,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
+#include <algorithm>
 
 namespace rosiwit_slam_ros1 {
 
@@ -51,6 +53,44 @@ private:
     bool ever_localized_ = false;   // INIT 陷阱的 latch
     bool last_failed_    = false;   // 上一次 update 是否 FAILED, 用于边沿检测
     bool lost_edge_      = false;
+};
+
+/// 位姿-里程计一致性监测 (confidently-wrong 防线, 2026-10-17 推行丢失事故):
+/// 激光定位锁到重复结构的错误位置时, 匹配分照样 0.98+, 状态机永远看不到"丢";
+/// 但激光位姿的位移量与轮式里程计的位移量会长期背离 —— 这是少数可观测信号之一。
+/// 判据: 10s 窗口 |Δslam| 与 |Δodom| 差 > max(0.8, 25%·|Δodom|), 连续 2 个窗口。
+/// 轮子没转(|Δodom|<0.3m: 抱死推行/静止)时无法判定, 不计不报(防误报)。
+class OdomConsistencyMonitor {
+public:
+    /// 每次有效定位位姿调用: t 秒, (sx,sy) 激光位姿, (ox,oy) 同时刻轮式里程计
+    void onPose(double t, double sx, double sy, double ox, double oy) {
+        if (!have_ref_) { anchor(t, sx, sy, ox, oy); return; }
+        const double dt = t - t0_;
+        if (dt < window_s_) return;                       // 窗口未满, 累计中
+        const double ds = std::hypot(sx - sx0_, sy - sy0_);
+        const double dodom = std::hypot(ox - ox0_, oy - oy0_);
+        anchor(t, sx, sy, ox, oy);
+        if (dodom < 0.3) { idle_windows_ = 0; return; }   // 轮子没转: 无法判定
+        dev_ = std::fabs(ds - dodom);
+        const double lim = std::max(0.8, 0.25 * dodom);
+        bad_windows_ = (dev_ > lim) ? (bad_windows_ + 1) : 0;
+        wrong_ = (bad_windows_ >= 2);
+    }
+    bool wrongness() const { return wrong_; }
+    double deviation() const { return dev_; }
+    void reset() { have_ref_ = false; bad_windows_ = 0; idle_windows_ = 0; wrong_ = false; dev_ = 0.0; }
+
+private:
+    void anchor(double t, double sx, double sy, double ox, double oy) {
+        t0_ = t; sx0_ = sx; sy0_ = sy; ox0_ = ox; oy0_ = oy; have_ref_ = true;
+    }
+    double window_s_ = 10.0;
+    bool have_ref_ = false;
+    double t0_ = 0, sx0_ = 0, sy0_ = 0, ox0_ = 0, oy0_ = 0;
+    int bad_windows_ = 0;
+    int idle_windows_ = 0;
+    double dev_ = 0.0;
+    bool wrong_ = false;
 };
 
 } // namespace rosiwit_slam_ros1

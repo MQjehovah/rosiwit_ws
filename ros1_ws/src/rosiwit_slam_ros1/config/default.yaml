@@ -221,8 +221,11 @@ localization:
   motion_prior:
     max_dt: 0.2
     max_vel: 10.0
-    use_odom: false           # 融合轮式里程计(洗地机打滑: 默认关, 朝向始终用 IMU)
+    use_odom: true            # 融合轮式里程计平移(2026-10-17 推行丢失事故后开启:
+                              # 推行时 IMU 常速外推跟不上, fitness 崩到 0.17 后判丢;
+                              # odom 平移让预测跟着推走。朝向始终用 IMU)
     slip_yaw_thresh: 0.3      # |odom_yaw_rate - imu_yaw_rate| 超此值判打滑并丢弃 odom(rad/s)
+    max_odom_speed: 3.0       # odom 平移速度物理上限(m/s), 超出=打滑/毛刺, 整包丢弃
     # IMU 零偏在线估计 (L11)
     imu_calib_samples: 200    # 静止标定窗口样本数
     static_gyro_std: 0.02     # 静止判据: gyro 标准差(rad/s)
@@ -244,6 +247,8 @@ localization:
     # 45 帧 ≈ 3s, 与单次尝试预算相当。
     retry_interval: 45
     voxel_resolution: 0.3      # BBS 搜索栅格(不是 pgm 的 0.05; 0.2 实测反而更差)
+    ambiguity_margin: 0.02     # 冷启动 top1-top2 精配分差 < 此值 => 保留多假设(重复结构消歧)
+    reseed_radius: 5.0         # 跟踪期重播种候选离当前位姿的最大距离(m, 0=不限制; 31m 瞬移教训)
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0
     icp_max_iter: 32
