@@ -4,6 +4,8 @@
 #include "algorithms/localization/localization_utils.h"
 #include "io/xzmap_reader.h"
 #include "algorithms/map_store/map_store_factory.h"
+#include <cmath>
+#include <Eigen/Geometry>
 #include <iostream>
 #include <fstream>
 #include <pcl/io/pcd_io.h>
@@ -533,27 +535,42 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // **BBS 是粗搜(0.3m / 6 层)**: 实机重锁后覆盖率只有 ~0.71, 而用正确位姿
                 // 初始化时是 0.99。这里用当前 matcher 在候选位姿处反复精配(gicp),
                 // 只接受"覆盖率更高"的结果, 把粗搜的位姿收敛到 ~0.95+。
+                // **BBS 是粗搜(0.3m / 6 层)**: 实机重锁后覆盖率只有 ~0.61~0.71, 而正确位姿
+                // 初始化时是 0.99。单点精配无效(候选已落在 gicp 的局部极小里, 第一次迭代
+                // 覆盖率不升就退出), 所以这里做**小范围多起点**: ±0.4m / ±6°, 共 45 个起点,
+                // 每个都跑一次 gicp, 取覆盖率最高者。
                 double refined_fit = cand.score;
                 {
-                    const int kRefineIters = 12;
-                    PoseStamped cur = m_pose;
-                    MatchResult rr;
-                    for (int it = 0; it < kRefineIters; ++it) {
-                        CloudType::Ptr target = buildTarget(cur);
-                        if (!target || target->empty()) break;
-                        m_matcher->setTarget(target);
-                        if (!m_matcher->match(f.cloud, cur, rr) || !rr.converged) break;
-                        if (rr.fitness <= refined_fit) break;   // 不再变好就停
-                        refined_fit = rr.fitness;
-                        cur = rr.pose;
+                    const double dxy[3] = {-0.4, 0.0, 0.4};
+                    const double dth[5] = {-6.0, -3.0, 0.0, 3.0, 6.0};
+                    MatchResult rr, best_r;
+                    bool have_best = false;
+                    for (double a : dth) {
+                        for (double dx : dxy) {
+                            for (double dy : dxy) {
+                                PoseStamped g = m_pose;
+                                g.trans = m_pose.trans + V3D(dx, dy, 0.0);
+                                g.rot = Eigen::AngleAxisd(a * M_PI / 180.0, V3D::UnitZ())
+                                            .toRotationMatrix() * m_pose.rot;
+                                CloudType::Ptr target = buildTarget(g);
+                                if (!target || target->empty()) continue;
+                                m_matcher->setTarget(target);
+                                if (!m_matcher->match(f.cloud, g, rr) || !rr.converged) continue;
+                                if (rr.fitness > refined_fit) {
+                                    refined_fit = rr.fitness;
+                                    best_r = rr;
+                                    have_best = true;
+                                }
+                            }
+                        }
                     }
-                    if (refined_fit > cand.score) {
-                        m_pose = cur;
+                    if (have_best) {
+                        m_pose = best_r.pose;
                         m_prior->reset(m_pose);
                         m_smoother.reset(m_pose);
                     }
                     std::cout << "[LocPipeline] relocalization refine: " << cand.score
-                              << " -> " << refined_fit << std::endl;
+                              << " -> " << refined_fit << " (multi-start 45)" << std::endl;
                 }
 
                 m_last_match = MatchResult();
