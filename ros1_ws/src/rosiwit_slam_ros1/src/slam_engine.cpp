@@ -348,7 +348,7 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         // 车体系 2D 足迹 9.3x84.6m(薄条) -> 46x50m(正常))。
         // 注意: 这不是标定值, 是**驱动的 body 约定**; URDF 仍然描述真实安装, 不用改。
         // 若换用别的驱动(livox/rslidar), 把它改回 0 即可。
-        double ex_roll = 0.0, ex_pitch = 0.0, ex_yaw = 0.0;
+        double ex_roll = 90.0, ex_pitch = 0.0, ex_yaw = 0.0;
         pnh_.param<double>("mount_extra_roll_deg", ex_roll, ex_roll);
         pnh_.param<double>("mount_extra_pitch_deg", ex_pitch, ex_pitch);
         pnh_.param<double>("mount_extra_yaw_deg", ex_yaw, ex_yaw);
