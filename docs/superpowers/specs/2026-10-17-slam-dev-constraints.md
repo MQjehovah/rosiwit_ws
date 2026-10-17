@@ -154,3 +154,53 @@ Rx90 补偿的是**坏地图的倾斜**，被误当成"驱动轴系约定"写进
 | 快速旋转丢失定位根因 | 需旋转时录 rosbag 复现 |
 | FFF 地图实机定位验证 | 未做（与 DDD 同管线，预期一致） |
 | 三张原厂旧图（京东mall/jdmall/5楼，2026-01/05 建造）能否被本移植读取 | 未测；旧格式 `kf_frame_poses` 解析为 0，需确认 readXzMap 兼容性后再给用户用 |
+
+## 14. 2026-10-17 晚事故：节点崩溃 + 接口卡死（已修复 132b57c）
+
+**现象**：① /relocation（指定初始位姿重定位）接口很慢；② 定位突然完全无输出。
+
+**根因一（崩溃）**：错误位姿下 dynamic_filter 把扫描滤到 16 点 → PCL 1.8 GICP
+computeCovariances（要求点数 ≥ k_correspondences=20）**段错误**，进程直接消失
+（apport/journal 均无记录，但单测 	est_gicp_matcher_guard 用 4×4 点云确定性复现
+exit 139，铁证）。修复：GicpMatcher 最小点数守卫（matcher.min_match_points，默认 50）。
+
+**根因二（接口卡死）**：节点是单线程 os::spin()，所有回调串行。丢失后冷启动一帧内
+最多 = bounded recovery 27 GICP + fpfh top_k=5 × 两级精配 200 GICP ≈ 上千次 GICP，
+单帧回调分钟级 → /relocation 等服务排队数十秒、输出停更；且 weak-reject 路径**漏设冷却**，
+下一帧立刻再来全量风暴。修复：候选按分数降序 + 达标即停（0.95/0.97）+ 3s 墙钟预算
+（精配与 bounded recovery 双双生效）+ weak-reject 补冷却 + etry_interval 30→45 帧。
+
+**实测**：/relocation 正常位姿 RTT 0.00s、输出恢复 0.09s；/global_localization
+40s→13~15s（fitness 0.996）；图外位姿重定位不再崩溃。
+
+**遗留（按优先级）**：
+1. 图外位姿 /relocation 最坏仍可排队 ~10s（fpfh 特征计算本身未预算、单线程 spinner 架构性限制）。正确方向：核心内部用独立工作线程跑重定位，onLidar 只置标志——改动大，未做。
+2. /switch_map 慢：LocalizationPipeline::setMap 把 46MB xzmap **解析两遍**（L300 kfs_fb + L334 kfs，手写 char 级 JSON 解析器），同步阻塞服务线程——待单次解析+共享数据。
+3. 显示点云含非墙体点（疑似地面泄漏）：scan_f_map 过滤带 z-ground ∈ (0, 2.0) 下界
+   含 0 会放行贴地点；or_curr_scan_point 完全无 z 过滤且坐标系标注为 map 实为驱动系——待与
+   E:\workspace_slam\3d_slam 旧实现核对语义后修。
+4. PCL 
+
+## 14. 2026-10-17 晚事故：节点崩溃 + 接口卡死（已修复 `132b57c`）
+
+**现象**：① /relocation（指定初始位姿重定位）接口很慢；② 定位突然完全无输出。
+
+**根因一（崩溃）**：错误位姿下 `dynamic_filter` 把扫描滤到 16 点 → PCL 1.8 GICP
+`computeCovariances`（要求点数 >= k_correspondences=20）**段错误**，进程直接消失
+（apport/journal 均无记录，但单测 `test_gicp_matcher_guard` 用 4x4 点云确定性复现
+exit 139，铁证）。修复：`GicpMatcher` 最小点数守卫（`matcher.min_match_points`，默认 50）。
+
+**根因二（接口卡死）**：节点是单线程 `ros::spin()`，所有回调串行。丢失后冷启动一帧内
+最多 = bounded recovery 27 GICP + fpfh top_k=5 x 两级精配 200 GICP ≈ 上千次 GICP，
+单帧回调分钟级 → /relocation 等服务排队数十秒、输出停更；且 weak-reject 路径**漏设冷却**，
+下一帧立刻再来全量风暴。修复：候选按分数降序 + 达标即停（0.95/0.97）+ 3s 墙钟预算
+（精配与 bounded recovery 双双生效）+ weak-reject 补冷却 + `retry_interval` 30→45 帧。
+
+**实测**：/relocation 正常位姿 RTT 0.00s、输出恢复 0.09s；/global_localization
+40s→13~15s（fitness 0.996）；图外位姿重定位不再崩溃。
+
+**遗留（按优先级）**：
+1. 图外位姿 /relocation 最坏仍可排队 ~10s（fpfh 特征计算本身未预算、单线程 spinner 架构性限制）。正确方向：核心内部用独立工作线程跑重定位，`onLidar` 只置标志——改动大，未做。
+2. /switch_map 慢：`LocalizationPipeline::setMap` 把 46MB xzmap **解析两遍**（L300 kfs_fb + L334 kfs，手写 char 级 JSON 解析器），同步阻塞服务线程——待单次解析+共享数据。
+3. 显示点云含非墙体点（疑似地面泄漏）：`scan_f_map` 过滤带 `z-ground ∈ (0, 2.0)` 下界含 0 会放行贴地点；`or_curr_scan_point` 完全无 z 过滤且坐标系标注为 map 实为驱动系——待与 E:\workspace_slam\3d_slam 旧实现核对语义后修。
+4. PCL "Failed to find match for field normal_x" 告警刷屏（~4 行/帧，cosmetic），源头待查。
