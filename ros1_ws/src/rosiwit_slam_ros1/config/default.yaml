@@ -141,7 +141,9 @@ localization:
     relocalizer: none
     motion_prior: imu
     local_map: keyframe_submap
-    matcher: pp_icp
+    matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有
+                    # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
+                    # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
     map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
 
