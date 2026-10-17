@@ -107,8 +107,8 @@
 | 项 | 状态 |
 |---|---|
 | ROS2 `colcon build` + 端到端冒烟 | **未执行**（本机仅装 melodic） |
-| 薄层 `buildGridFromPoints` 死代码清理 | 待做 |
-| `setGlobalGridMap()`（无人调用） | 待接上或删除 |
-| `[LocProbe]`/`[PubProbe]` 收进开关 | 待做 |
+| 薄层 `buildGridFromPoints` 死代码清理 | ✅ 已删除 `1f287fd`，测试改为覆盖 `setGridSource` `61d9248` |
+| `setGlobalGridMap()`（无人调用） | ✅ 已删除 `1f287fd` |
+| `[LocProbe]`/`[PubProbe]` 探针降频 | ✅ 5s / 10s 一条 `1f287fd`；如需完全静默再引入成员开关 |
 | 重启后恢复上次模式（可选） | 用户明确暂不需要 |
 | 万集驱动 `ros_frame_id: lidar` 改在安装目录 | 重装/OTA 会覆盖，需纳入配置管理 |
