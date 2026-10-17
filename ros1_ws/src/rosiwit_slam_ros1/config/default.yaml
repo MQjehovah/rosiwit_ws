@@ -160,7 +160,7 @@ localization:
     # (若之后把 BBS 改成"先转到车体系再投影", 可以再切回来以换取速度)
     # bbs 已支持"车体系投影"(见下面 bbs_mount_*): 先转到车体系再 2D 搜索, 结果换回雷达系。
     # 若发现异常, 切回 fpfh_ransac (3D, 已验证 0.99+) 即可。
-    relocalizer: bbs
+    relocalizer: fpfh_ransac
     motion_prior: imu
     local_map: keyframe_submap
     matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有
