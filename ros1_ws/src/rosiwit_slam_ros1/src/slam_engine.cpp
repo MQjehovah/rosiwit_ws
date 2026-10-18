@@ -7,6 +7,7 @@
 #include <ros/package.h>
 
 #include <yaml-cpp/yaml.h>
+#include "slam_core/diagnostics.h"
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -500,6 +501,10 @@ void SlamEngine::onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStamped
 
 void SlamEngine::requestRelocalization() {
     if (algo_raw_) algo_raw_->requestRelocalization();
+}
+
+std::string SlamEngine::dumpFlightRecorder(const std::string& reason) {
+    return diag::FlightRecorder::instance().dump(reason);
 }
 
 void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,

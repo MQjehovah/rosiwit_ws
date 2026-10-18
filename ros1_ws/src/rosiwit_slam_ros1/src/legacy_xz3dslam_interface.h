@@ -22,6 +22,8 @@
 #include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <std_msgs/String.h>
+#include <std_srvs/Empty.h>
+#include <std_srvs/Trigger.h>
 #include <visualization_msgs/MarkerArray.h>
 
 #include <map>
@@ -162,6 +164,8 @@ private:
     bool handleStopMap(xzrobot_ros_dependency::StopMapOperation::Request& req,
                        xzrobot_ros_dependency::StopMapOperation::Response& res);
     bool handleGlobalLocalization(std_srvs::Empty::Request& req, std_srvs::Empty::Response& res);
+    // 手动落盘飞行记录仪 (诊断, 2026-10-18 日志重构); LOST 翻转会自动落盘
+    bool handleDumpRecorder(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res);
     bool handleFinishTask(xzrobot_ros_dependency::CommonBoolService::Request& req,
                           xzrobot_ros_dependency::CommonBoolService::Response& res);
     bool handleStartTask(xzrobot_ros_dependency::CommonBoolService::Request& req,
@@ -265,7 +269,8 @@ private:
 
     // ---- [T8] service server + 换图状态 ----
     ros::ServiceServer srv_mode_switch_, srv_switch_map_, srv_relocation_, srv_stop_map_,
-                       srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_;
+                       srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_,
+                       srv_dump_recorder_;
     std::string curr_map_path_;    // 旧 curr_map_path_
     ros::Time last_switch_map_time_;   // /switch_map 的 10s 限流 (legacy.cpp:2121-2137)
 
