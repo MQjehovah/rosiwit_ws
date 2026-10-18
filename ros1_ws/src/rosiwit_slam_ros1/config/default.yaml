@@ -1,6 +1,42 @@
-# rosiwit_slam - Default Configuration
+# rosiwit_slam - Default Configuration (2026-10-18 分层重构)
 # 默认 mapping 模式, 可通过 service (set_slam_mode) 切换到 localization / idle
 #
+# 分层导航:
+#   ① 全局(共享)  —— 算法选择 / 话题 / 坐标系 / 雷达输入 / 分辨率
+#   ② 建图        —— LIO 前端 / 回环 / 2D 栅格生成
+#   ③ 定位        —— 输出滤波 / 旧 GicpLocalization / 可编排定位管线(localization:)
+#   ④ 视觉        —— 视觉松耦合
+#   ⑤ 诊断        —— 日志 / 飞行记录仪
+#
+# ============================================================================
+# ★ 参数联动关系表 (改一个必须想一圈; 不变量由 LocPipeline 启动时校验并告警)
+# ============================================================================
+#  [fitness 阈值链 —— 2026-10-17 僵尸带事故的教训]
+#   accept.min_coverage(0.35) < monitor.lost_fitness(0.5) < monitor.credible_fitness(0.75)
+#   ≤ global.reloc_accept_score(0.85)   必须保持此序!
+#   - min_coverage: 单帧匹配被接受的最低覆盖率。过高 -> 有效匹配被拒, 位姿冻结;
+#     过低 -> 错位姿被放行"散步"(事故: 0.35 放行 0.6 的垃圾匹配走了 18m)。
+#   - credible_fitness: 健康线。低于它连续 mediocre_patience 帧 -> 强制判丢重定位
+#     (僵尸带出口); 有界恢复必须达到此线才算成功, 否则放行全局重定位。
+#   - reloc_accept_score: 冷启动接受线。低于它宁可保持 LOST(界面如实), 不接受弱锁。
+#  [匹配捕获-滤波螺旋]
+#   matcher.dynamic_dist(0.4) ↔ matcher.max_correspondence_dist(2.5) ↔ local_map.cache_move(0.5):
+#   预测滞后一旦超过 dynamic_dist, 动态滤波开始删"离目标太远"的点 —— 删掉的恰是
+#   证明真实位置的证据(2026-10-17 推行螺旋: src 393→130)。推行场景靠 motion_prior
+#   融合 odom 让预测跟上(见 use_odom 联动)。
+#   matcher.min_match_points(50): 调小有 PCL GICP 段错误风险(<20 点必崩, 有单测)。
+#  [odom 双开关]
+#   全局 enable_odom = 引擎是否订阅 /odom; localization.motion_prior.use_odom = 先验
+#   是否融合其平移。两者都开才有平移预测; 后者还受 slip_yaw_thresh / max_odom_speed /
+#   ekf_chi2 三重打滑门控。
+#  [重定位节流]
+#   global.retry_interval(45帧≈4.5s) ≈ 单次冷启动预算(FPFH topk 6s + 精配 3s/候选),
+#   调小会把单线程 spinner 独占, 服务排队数十秒。
+#  [z 带口径]
+#   grid_min/max_height 与 global.bbs_z_min/max 同为"相对地面"口径(车体系 z=0 即地面)。
+#  [叠加层 ↔ 重定位]
+#   maintainer.refresh_frames: 叠加层有变化时后台刷新全局重定位库, 防环境改变后
+#   重定位失效。
 # ============================================================================
 # 关键参数表 (实测依据见右侧; 改动必须写进提交信息, 见 docs/superpowers/specs/
 # 2026-10-17-slam-dev-constraints.md 第 4 条)
@@ -9,13 +45,13 @@
 #   matcher.max_iterations     12     32 迭代单帧 0.7s(输出 1.4Hz); 12 -> 10Hz 且精度 0.99
 #   matcher.voxel_resolution   0.4    与迭代数配套
 #   matcher.max_correspondence_dist 2.5  重定位时初始误差可达 1.3m, 收到 1.0 会丢光对应点
-#   pipeline.relocalizer       none   手动重定位不跑 BBS(用户要求); /global_localization 仍可显式调用
-#   reset_on_mode_switch       true   进建图清上一轮残留(旧实现语义)
-#   modules.backend            ceres_pose_graph   机器人无 gtsam
-#   esti_il                    false  实测会发散到 ~180°
-#   r_il / t_il                identity / 0   两话题 frame_id 同名(雷达内置 IMU)
-#   map_resolution             0.05   与现网 map.yaml 一致
+#   pipeline.relocalizer       fpfh_ransac  3D 特征匹配(雷达俯装 41.67°, BBS 的 2D 假设不成立)
+#   reset_on_mode_switch       true   速建图清上一轮残留(旧实现语义)
 # ============================================================================
+
+# ############################################################################
+# ① 全局 (建图 / 定位共享)
+# ############################################################################
 
 slam_algorithm: fast_lio2_pipeline
 pipeline: "rosiwit_slam"
@@ -29,75 +65,28 @@ modules:
   map_manager: "pcd_map_manager"
   localization: "localization_pipeline"   # 可编排流水线 | gicp_localization | scan_context_localization
 
+# ---- 话题 / 坐标系 ----
 imu_topic: /imu
 lidar_topic: /lidar
-enable_odom: false          # 轮式里程计开关(供定位运动先验; 洗地机易打滑, 默认关)
+enable_odom: false          # 轮式里程计订阅开关 (定位融合还要开 localization.motion_prior.use_odom)
 odom_topic: /odom
 body_frame: base_link
 world_frame: odom
 
+# ---- 雷达输入 / 分辨率 ----
 lidar_filter_num: 3
 lidar_min_range: 0.5
 lidar_max_range: 100.0
 scan_period_ms: 100.0
 scan_resolution: 0.3
-map_resolution: 0.05
+map_resolution: 0.05        # 与现网 map.yaml 一致
 map_save_voxel: 0.3
 
-# ---- 2D 占据栅格建图 (grid_map_generator: GridMapFactory 注册的生成策略) ----
-grid_map_generator: height_projection  # height_projection | ray_casting | occupancy_logodds | octomap
-grid_min_height: 0.1        # 地面以上障碍最低高度(m)
-grid_max_height: 2.0        # 地面以上障碍最高高度(m)
-grid_occupied_thresh: 1     # 每格最少点数判为占据(height_projection)
-grid_dilate_radius: 1       # 障碍膨胀半径(格), -1 按 map_save_voxel 自动
-grid_close_radius: 1        # 形态学闭运算半径(格), 填孔
-grid_min_component_cells: 0  # 实机实测: 0.05 分辨率下真实扫描的点很散, 占据格会碎成几千个
-                             # 小连通域, 阈值 30 会把**全部**占据格删掉 -> /map 全白。
-                             # (<=1 表示关闭该算子; 旧的实时栅格是多帧 log-odds 累积出来的所以不碎,
-                             #  我们是从当前全局地图重算, 必须关掉 denoise 才留得住)
-grid_max_range: 0.0         # 射线有效距离(m), 0=不限
-grid_ground_method: ransac  # ransac | percentile
-grid_ransac_dist_thr: 0.10
-grid_min_hits: 2            # occupancy_logodds: 占据所需命中帧数
-grid_min_misses: 2          # occupancy_logodds: 自由所需未命中次数
-grid_mark_radius: 0
-# 2D 后处理管道 (可选算子: denoise|open|close|fill_holes|dilate|skeleton|line)
-grid_post_pipeline: denoise,close,dilate
-grid_connectivity: 8
-grid_open_radius: 0
-grid_fill_max_hole_cells: 0
-grid_skeleton_width: 0
-grid_line_min_len_m: 0.0
-grid_axis_snap: false
+# ############################################################################
+# ② 建图 (mapping)
+# ############################################################################
 
-# ---- GICP 定位参数 (GicpLocalization) ----
-voxel_resolution: 0.3
-fitness_threshold: 10.0
-max_iterations: 64
-transformation_epsilon: 0.00000001
-gicp_max_corr_dist: 2.0
-gicp_euclid_eps: 0.01
-
-# ---- 定位输出滤波 (可编排开关) ----
-use_pose_filter: true
-pose_filter_alpha: 0.6
-pose_filter_max_xy_m: 0.5
-pose_filter_max_yaw_deg: 20.0
-
-output_smoothing_alpha: 0.3
-# L12 高频位姿输出 (定位模式): 运动先验传播 + alpha-beta 输出滤波
-output_rate_hz: 100          # 输出频率(Hz); 0=关闭(用扫描帧)
-output_filter_alpha: 0.5     # alpha-beta alpha
-output_filter_beta: 0.2      # alpha-beta beta
-output_extrap_max_s: 0.3     # 外推上限(s)
-# L19 绝对约束 (GNSS/UWB/反光标/二维码)
-absolute_enabled: false      # 开关 (启用后订阅 absolute_topic)
-absolute_topic: /absolute_pose  # geometry_msgs/PoseWithCovarianceStamped
-absolute_datum_x: 0.0        # 绝对源系 -> 地图系 datum
-absolute_datum_y: 0.0
-absolute_datum_z: 0.0
-absolute_datum_yaw_deg: 0.0
-
+# ---- LIO 前端 (fast_lio2_frontend) ----
 cube_len: 300
 det_range: 60
 move_thresh: 1.5
@@ -128,7 +117,7 @@ carve_free_thresh: 3      # 同一体素被看到"空"的次数阈值
 carve_stride: 10          # 射线行进抽样步长
 dynamic_residual_thresh: 1.0
 
-# 回环检测参数
+# ---- 回环检测 (loop_closure: scan_context) ----
 loop_closure:
   sc_num_rings: 20
   sc_num_sectors: 60
@@ -140,19 +129,75 @@ loop_closure:
   icp_max_corr_dist: 2.0
   icp_voxel_res: 0.3
 
-# ScanContext 全局重定位参数 (localization: scan_context_localization)
+# ---- 2D 占据栅格生成 (grid_map_generator: GridMapFactory 注册的生成策略) ----
+grid_map_generator: height_projection  # height_projection | ray_casting | occupancy_logodds | octomap
+grid_min_height: 0.1        # 地面以上障碍最低高度(m); 与 bbs_z_min 同口径(相对地面)
+grid_max_height: 2.0        # 地面以上障碍最高高度(m); 与 bbs_z_max 同口径
+grid_occupied_thresh: 1     # 每格最少点数判为占据(height_projection)
+grid_dilate_radius: 1       # 障碍膨胀半径(格), -1 按 map_save_voxel 自动
+grid_close_radius: 1        # 形态学闭运算半径(格), 填孔
+grid_min_component_cells: 0  # 实机实测: 0.05 分辨率下真实扫描的点很散, 占据格会碎成几千个
+                             # 小连通域, 阈值 30 会把**全部**占据格删掉 -> /map 全白。
+                             # (<=1 表示关闭该算子; 旧的实时栅格是多帧 log-odds 累积出来的所以不碎,
+                             #  我们是从当前全局地图重算, 必须关掉 denoise 才留得住)
+grid_max_range: 0.0         # 射线有效距离(m), 0=不限
+grid_ground_method: ransac  # ransac | percentile
+grid_ransac_dist_thr: 0.10
+grid_min_hits: 2            # occupancy_logodds: 占据所需命中帧数
+grid_min_misses: 2          # occupancy_logodds: 自由所需未命中次数
+grid_mark_radius: 0
+# 2D 后处理管道 (可选算子: denoise|open|close|fill_holes|dilate|skeleton|line)
+grid_post_pipeline: denoise,close,dilate
+grid_connectivity: 8
+grid_open_radius: 0
+grid_fill_max_hole_cells: 0
+grid_skeleton_width: 0
+grid_line_min_len_m: 0.0
+grid_axis_snap: false
+
+# ############################################################################
+# ③ 定位 (localization)
+# ############################################################################
+
+# ---- 定位输出滤波 (可编排开关) ----
+use_pose_filter: true
+pose_filter_alpha: 0.6
+pose_filter_max_xy_m: 0.5
+pose_filter_max_yaw_deg: 20.0
+
+output_smoothing_alpha: 0.3
+# L12 高频位姿输出 (定位模式): 运动先验传播 + alpha-beta 输出滤波
+output_rate_hz: 100          # 输出频率(Hz); 0=关闭(用扫描帧)
+output_filter_alpha: 0.5     # alpha-beta alpha
+output_filter_beta: 0.2      # alpha-beta beta
+output_extrap_max_s: 0.3     # 外推上限(s)
+# L19 绝对约束 (GNSS/UWB/反光标/二维码)
+absolute_enabled: false      # 开关 (启用后订阅 absolute_topic)
+absolute_topic: /absolute_pose  # geometry_msgs/PoseWithCovarianceStamped
+absolute_datum_x: 0.0        # 绝对源系 -> 地图系 datum
+absolute_datum_y: 0.0
+absolute_datum_z: 0.0
+absolute_datum_yaw_deg: 0.0
+
+# ---- 旧 GicpLocalization 独立定位器参数 (modules.localization=gicp_localization 时) ----
+voxel_resolution: 0.3
+fitness_threshold: 10.0
+max_iterations: 64
+transformation_epsilon: 0.00000001
+gicp_max_corr_dist: 2.0
+gicp_euclid_eps: 0.01
+
+# ==================== 可编排定位流水线 (modules.localization=localization_pipeline) ====================
 localization:
-  # ==================== 可编排定位流水线 (localization_pipeline) ====================
   # 各阶段按名选择算法, 便于对同一阶段的不同算法做横向性能验证.
   # 可用实现 (见 algorithms/localization/localization_factory.cpp):
   #   relocalizer : none | scan_context | bbs | fpfh_ransac
-  #   motion_prior: constant_velocity | imu
+  #   motion_prior: constant_velocity | imu | imu_ekf
   #   local_map   : global | radius_submap | keyframe_submap
   #   matcher     : gicp | pp_icp | p2p_icp | vgicp
   #   monitor     : threshold | windowed
   pipeline:
-    # **按需全局重定位**: /global_localization 服务会触发它。
-    # 手动重定位(给位姿)仍走 applyInitPose, 不会被覆盖——两件事互不干扰。
+    # **按需全局重定位**: /global_localization 服务会触发它; 切图带 initpose 直接跟踪不触发。
     #
     # 为什么不用 bbs: 本机雷达**俯装 41.67°**, 而 BBS 的模型是"点云投影到 xy + 只搜 yaw",
     # 俯仰分量的存在使 2D 假设不成立 —— 实机候选稳定卡在 0.62, 候选附近 ±2m/±12° 穷举
@@ -169,7 +214,7 @@ localization:
     monitor: windowed
     map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
 
-  # 配准器参数 (matcher: gicp | pp_icp | p2p_icp | vgicp)
+  # ---- 配准器 (matcher: gicp | pp_icp | p2p_icp | vgicp) ----
   matcher:
     # 实机 aarch64: gicp(32 迭代, 11k 扫描点 vs 12k 目标点) 单帧约 0.7s,
     # 导致位姿输出只有 ~1.4Hz(雷达 10Hz), 界面"频率很低"。
@@ -181,7 +226,7 @@ localization:
     #        PCL 1.8 GICP computeCovariances(点数<k_correspondences=20) 段错误(单测复现 exit 139)。
     # 调小 -> 更容易进 GICP(有崩溃风险); 调大 -> 更保守(稀疏但有效帧可能被拒)。
     min_match_points: 50
-    max_correspondence_dist: 2.5
+    max_correspondence_dist: 2.5   # ★联动: 必须 > 2×dynamic_dist, 否则滤波螺旋无捕获余量
     transformation_epsilon: 0.000001
     inlier_dist: 0.3
     # pp_icp 专用
@@ -202,6 +247,8 @@ localization:
     degeneracy_eig_ratio: 0.001
     min_correspondences: 20
     # 动态/变化物剔除: 只保留贴近静态地图的点 (人来人往/叉车/未入图的新堆货被剔除)
+    # ★联动: 预测滞后 > dynamic_dist 时会删掉真实位置的证据(推行螺旋), 由
+    #        motion_prior.use_odom 的平移预测保证滞后不超限
     dynamic_filter: true       # 工厂: 人/叉车多
     dynamic_dist: 0.4
     # 2.5D 平面 NDT (matcher: ndt2d)
@@ -209,7 +256,7 @@ localization:
     ndt2d_z_min: -1.0
     ndt2d_z_max: 1.0
 
-  # 局部地图参数 (local_map: global | radius_submap | keyframe_submap)
+  # ---- 局部地图 (local_map: global | radius_submap | keyframe_submap) ----
   local_map:
     voxel_resolution: 0.3
     radius: 60.0
@@ -217,16 +264,16 @@ localization:
     max_keyframes: 15   # keyframe_submap: 最近关键帧数上限
     cache_move: 0.5     # 位姿移动小于该值复用上一帧局部地图(m, 提速)
 
-  # 运动先验参数 (motion_prior: constant_velocity | imu)
+  # ---- 运动先验 (motion_prior: constant_velocity | imu | imu_ekf) ----
   motion_prior:
     max_dt: 0.2
     max_vel: 10.0
-    use_odom: true            # 融合轮式里程计平移(2026-10-17 推行丢失事故后开启:
-                              # 推行时 IMU 常速外推跟不上, fitness 崩到 0.17 后判丢;
-                              # odom 平移让预测跟着推走。朝向始终用 IMU)
+    use_odom: true            # ★联动全局 enable_odom: 引擎订阅 + 先验融合都开才有平移预测
+                              # (2026-10-17 推行丢失事故后开启: 推行时常速外推跟不上,
+                              #  fitness 崩到 0.17 后判丢; odom 平移让预测跟着推走)
     slip_yaw_thresh: 0.3      # |odom_yaw_rate - imu_yaw_rate| 超此值判打滑并丢弃 odom(rad/s)
     max_odom_speed: 3.0       # odom 平移速度物理上限(m/s), 超出=打滑/毛刺, 整包丢弃
-    # ---- imu_ekf 参数 ----
+    # ---- imu_ekf 参数 (误差状态 EKF, 状态=[vx,vy] 体系速度) ----
     ekf_q_v: 1.0              # 速度过程噪声 (m/s)²/s —— 越大跟得越快越抖
     ekf_r_odom: 0.15          # odom 速度观测噪声 (m/s)
     ekf_r_match: 0.8          # 激光位移速度观测噪声 (m/s, 低频弱观测)
@@ -243,10 +290,11 @@ localization:
     gravity: 9.81
     gravity_gain: 0.05
 
-  # 全局重定位参数 (relocalizer: scan_context | bbs | fpfh_ransac)
+  # ---- 全局重定位 (relocalizer: scan_context | bbs | fpfh_ransac) ----
   global:
     min_score: 0.5
-    reloc_accept_score: 0.85  # 冷启动接受线: 低于此值保持 LOST(诚实), 不接受弱重定位进僵尸态
+    reloc_accept_score: 0.85  # ★联动(阈值链): ≥ credible_fitness(0.75); 低于此值保持
+                              # LOST(诚实), 不接受弱重定位进僵尸态
     top_k: 5                    # 全局重定位多候选数 (按分数降序精配, 命中 0.95+ 即停)
     # 丢失后重定位尝试间隔(帧, 节流)。30 帧(~2s)太密: 每次尝试含多起点 GICP
     # (预算 3s), 连续尝试会把单线程 spinner 独占, /relocation 等服务排队数十秒。
@@ -284,11 +332,11 @@ localization:
     fpfh_inlier_fraction: 0.25
     fpfh_similarity: 0.9
 
-  # 健康监测参数 (monitor: threshold | windowed)
+  # ---- 健康监测 (monitor: threshold | windowed) —— ★联动(阈值链)见文件头 ----
   monitor:
     enabled: true
-    credible_fitness: 0.75
-    lost_fitness: 0.5
+    credible_fitness: 0.75   # 健康线: ≥ 此为 CREDIBLE; 有界恢复达标线
+    lost_fitness: 0.5        # < 此连续 lost_patience_low 帧判 LOST
     mediocre_patience: 100    # 持续平庸升级: fit∈[0.5,0.75) 连续 N 帧(~10s@10Hz)判丢触发重定位
                               # (僵尸带防御: 2026-10-17 推行事故 fitness 0.5~0.67 徘徊
                               #  330s 永不判丢, 位姿被 0.35 的低接受阈值放行散步 18m)
@@ -301,23 +349,18 @@ localization:
     max_yaw_step_deg: 20.0
     nees_threshold: 50.0      # NEES 滑窗均值超此判不一致(降级)
 
-  # 统一地图存储底座 (L8): none | pcd | voxel
-  # 设为 pcd/voxel 时, 支持 store 的配准器(pp_icp/p2p_icp)直接从 store 取近邻, 与存储解耦
-  map_store: none
-  map_store_leaf: 0.3
-
-  # s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性)
+  # ---- s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性) ----
   accept:
     mode: 1
     # 实机: gicp 覆盖率典型 0.43, 原来的 0.5 会一直接受不了 -> 位姿不输出(角标冻结)。
     # 先放到 0.35 让它能锁住; 后面根据 [LocProbe] REJECT 的实际分布再收紧。
-    min_coverage: 0.35
+    min_coverage: 0.35   # ★联动(阈值链): < lost_fitness(0.5) —— 最底层
     residual_margin: 0.10
     consistent_frames: 2
     mahalanobis_gate: true    # 用匹配协方差做 Mahalanobis 门控
     mahalanobis_chi2: 16.81   # 6DoF 99% 卡方阈值
 
-  # 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane
+  # ---- 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane ----
   planar:
     # 实机: 我们的"body"是**雷达系**, 而本机雷达俯装 41.67° -> ground_plane/lock_zrp
     # 强行把 roll/pitch 拉平 = 把扫描整体转 42° -> 只有 ~43% 的点能找到对应面
@@ -330,21 +373,21 @@ localization:
     ground_band: 0.3
     max_tilt_deg: 35.0
 
-  # 多假设跟踪 (aliasing): 重定位歧义时保留 Top-K 并按每帧适应度淘汰
+  # ---- 多假设跟踪 (aliasing): 重定位歧义时保留 Top-K 并按每帧适应度淘汰 ----
   hypothesis:
     max: 4
     margin: 0.25
     stale: 10
     reseed_frames: 0          # 跟踪期连续未采纳 N 帧后重定位重播多假设 (0=关)
 
-  # 固定滞后平滑器 (L4): 融合运动先验 + 扫描匹配(带协方差), 替代逐帧硬替换
+  # ---- 固定滞后平滑器 (L4): 融合运动先验 + 扫描匹配(带协方差), 替代逐帧硬替换 ----
   smoother:
     enabled: false
     lag_sec: 2.0
     motion_trans_sigma: 0.05
     motion_rot_sigma: 0.02
 
-  # 绝对约束融合 (L19): 门控互补融合
+  # ---- 绝对约束融合 (L19): 门控互补融合 ----
   absolute:
     enabled: false
     window: 0.5               # 观测有效窗口(s)
@@ -352,7 +395,7 @@ localization:
     max_trans: 2.0            # 创新门限(m)
     max_yaw_deg: 30.0
 
-  # 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层
+  # ---- 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层 ----
   maintainer:
     enabled: true
     fitness_trigger: 0.5      # fitness 低于此判为环境变化
@@ -363,7 +406,7 @@ localization:
     cell: 10.0
     persist_hits: 3           # 工厂: 只沉淀持久半静态堆货
     autosave_frames: 300      # 周期性落盘叠加层
-    refresh_frames: 300       # 周期性用叠加层刷新全局重定位器
+    refresh_frames: 300       # ★联动: 周期性用叠加层刷新全局重定位库(环境变化防失效)
     decay_frames: 3000        # 长期未再观测的叠加体素移除
     override_base: true       # 结构被移除/替换时压制原图旧点
     delta_min: 0.3            # 只沉淀"离原图 > 该距离(m)"的新结构(变化增量), 不重复静态
@@ -371,6 +414,11 @@ localization:
     # L13 位姿图维护 (可选): 变化关键帧缓冲后用 GTSAM 平滑再写入
     pose_graph: false
     pg_min_keyframes: 3
+
+  # ---- 统一地图存储底座 (L8): none | pcd | voxel ----
+  # 设为 pcd/voxel 时, 支持 store 的配准器(pp_icp/p2p_icp)直接从 store 取近邻, 与存储解耦
+  map_store: none
+  map_store_leaf: 0.3
 
   # ---- ScanContext 全局重定位参数 (localization: scan_context_localization) ----
   sc_num_rings: 20
@@ -384,7 +432,9 @@ localization:
   icp_fitness_thresh: 1.0
   icp_max_iter: 32
 
-# ---- 视觉松耦合 (route b): 外部 VO 库输出 -> GTSAM 后端因子 ----
+# ############################################################################
+# ④ 视觉松耦合 (route b): 外部 VO 库输出 -> GTSAM 后端因子
+# ############################################################################
 # 启用后: 通过 SlamPipeline::onVisualOdometry()/onVisualLoop() 注入;
 # VO between 因子在关键帧产生时自动生成, 视觉回环约束即时入图.
 vision:
@@ -393,3 +443,10 @@ vision:
   assoc_dt: 0.05            # VO 与关键帧时间关联容差(s)
   vo_trans_noise: 0.05      # VO between 平移噪声(std)
   vo_rot_noise: 0.02        # VO between 旋转噪声(std)
+
+# ############################################################################
+# ⑤ 诊断 (日志 / 飞行记录仪, 2026-10-18 日志重构)
+# ############################################################################
+diagnostics:
+  flight_max_frames: 3600         # 环形缓冲帧数 (10Hz 下 6 分钟)
+  flight_auto_dump_dir: /tmp/slam_flight   # LOST 翻转自动落盘目录; 手动: /slam/dump_recorder 服务

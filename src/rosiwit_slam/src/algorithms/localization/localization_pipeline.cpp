@@ -16,7 +16,11 @@
 #include <yaml-cpp/yaml.h>
 #endif
 
+#include "slam_core/diagnostics.h"
+#include <sstream>
+
 namespace rosiwit_slam {
+using diag::FlightRecorder;
 
 namespace {
 #ifndef YAML_CPP_DISABLED
@@ -252,6 +256,21 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     m_matcher     = LocalizationFactory::createMatcher(m_matcher_name);
     m_monitor     = LocalizationFactory::createMonitor(m_monitor_name);
 
+    // 飞行记录仪配置 (diagnostics: 分区; 2026-10-18 日志重构)
+#ifndef YAML_CPP_DISABLED
+    {
+        const auto dg = root["diagnostics"];
+        if (dg) {
+            FlightRecorder::instance().configure(
+                dg["flight_max_frames"].as<size_t>(3600),
+                dg["flight_auto_dump_dir"].as<std::string>("/tmp/slam_flight"));
+        } else {
+            FlightRecorder::instance().configure(3600, "/tmp/slam_flight");
+        }
+    }
+#endif
+    diag::log('I', "LocPipeline", describe());
+
     if (!m_matcher) { std::cerr << "[LocPipeline] unknown matcher: " << m_matcher_name << std::endl; return false; }
     if (!m_prior)   { std::cerr << "[LocPipeline] unknown motion_prior: " << m_prior_name << std::endl; return false; }
     if (!m_local_map) { std::cerr << "[LocPipeline] unknown local_map: " << m_local_map_name << std::endl; return false; }
@@ -263,6 +282,26 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     m_local_map->configure(m_local_map_cfg);
     m_monitor->configure(m_monitor_cfg);
     m_relocalizer->configure(m_global_cfg);
+
+    // 配置不变量校验 (配置治理, 2026-10-18): 阈值联动关系被打破时立刻报警,
+    // 而不是等到现场出现"僵尸带/弱接受循环"再反推 (2026-10-17 事故链的教训)。
+    {
+        auto warn = [](const std::string& msg) {
+            diag::log('W', "LocPipeline", "config invariant: " + msg);
+        };
+        if (!(m_global_cfg.reloc_accept_score >= m_monitor_cfg.credible_fitness))
+            warn("reloc_accept_score(" + std::to_string(m_global_cfg.reloc_accept_score) +
+                 ") < credible_fitness(" + std::to_string(m_monitor_cfg.credible_fitness) +
+                 ") -> 弱重定位会被接受后立即进入僵尸带");
+        if (!(m_monitor_cfg.credible_fitness > m_accept_cfg.min_coverage))
+            warn("credible_fitness(" + std::to_string(m_monitor_cfg.credible_fitness) +
+                 ") <= accept.min_coverage(" + std::to_string(m_accept_cfg.min_coverage) +
+                 ") -> 匹配被接受但健康计数永不增长");
+        if (!(m_monitor_cfg.lost_fitness < m_monitor_cfg.credible_fitness))
+            warn("lost_fitness >= credible_fitness -> 状态机区间为空");
+        if (m_matcher_cfg.max_correspondence_dist < m_matcher_cfg.dynamic_dist * 2.0)
+            warn("max_correspondence_dist < 2*dynamic_dist -> 动态滤波剪切大于匹配捕获范围");
+    }
     m_planar.configure(m_planar_cfg);
     m_smoother.configure(m_smoother_cfg);
     if (m_store_name != "none") {
@@ -438,8 +477,12 @@ void LocalizationPipeline::relocBuildWorker() {
         m_reloc_building.store(false);
         // 构建期间又切图(request 已再次置位)则快照已更新, 循环继续重建
         m_reloc_ready = ok && m_reloc_map_snap == map;
-        std::cout << "[LocPipeline] global reloc map built in background, " << ms
-                  << "ms ok=" << ok << std::endl;
+        {
+            std::ostringstream os;
+            os << "global reloc map built in background, " << ms << "ms ok=" << ok;
+            diag::log('I', "LocPipeline", os.str());
+            FlightRecorder::instance().event("BG_BUILD", os.str());
+        }
     }
 }
 
@@ -557,8 +600,8 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     }
     if (!found) {
         // 失败可见: 之前静默返回, 现场看不出"有界恢复试过但没到健康线"
-        std::cout << "[LocPipeline] bounded recovery failed (bar=" << best_fit
-                  << ") -> fall through to global relocalization" << std::endl;
+        diag::log('I', "LocPipeline", "bounded recovery failed (bar=" +
+                  std::to_string(best_fit) + ") -> global relocalization");
         return false;
     }
     m_pose = best;
@@ -568,7 +611,9 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     m_mediocre_streak = 0;
     m_has_cached_target = false;
     m_coast_count = 0;
-    std::cout << "[LocPipeline] bounded recovery, fitness=" << best_fit << std::endl;
+    diag::log('I', "LocPipeline", "bounded recovery, fitness=" + std::to_string(best_fit));
+    FlightRecorder::instance().event("RECOVERY", "bounded recovery fitness=" +
+                                      std::to_string(best_fit));
     return true;
 }
 
@@ -776,9 +821,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     // 冷却: 之前这里漏设, 下一帧立刻又是一场全量全局风暴(fpfh top_k=5
                     // × 两级 200 GICP), 单线程 spinner 被连续独占
                     m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
-                    std::cout << "[LocPipeline] relocalization weak: best_fit=" << best_fit
-                              << " < " << m_global_cfg.reloc_accept_score
-                              << " -> keep LOST" << std::endl;
+                    {
+                        std::ostringstream os;
+                        os << "relocalization weak: best_fit=" << best_fit
+                           << " < " << m_global_cfg.reloc_accept_score << " -> keep LOST";
+                        diag::log('W', "LocPipeline", os.str());
+                        FlightRecorder::instance().event("RELOC_WEAK", os.str());
+                        FlightRecorder::instance().onStatusChange(true);
+                    }
                     return;
                 }
                 m_pose = best_pose;
@@ -793,14 +843,18 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_last_match.pose = m_pose;
                 const double gap = (second_fit > 0.0) ? (best_fit - second_fit) : 1.0;
                 if (nk == 1)
-                    std::cout << "[LocPipeline] WARNING: single-candidate reloc, "
-                                 "no disambiguation source, best_fit="
-                              << best_fit << std::endl;
-                std::cout << "[LocPipeline] relocalized by " << m_relocalizer_name
-                          << " cands=" << nk << " hypotheses=" << m_hyp.size()
-                          << " best_fit=" << best_fit << " second=" << second_fit
-                          << (gap < m_ambiguity_margin ? " AMBIGUOUS(multi-hyp kept)" : "")
-                          << std::endl;
+                    diag::log('W', "LocPipeline", "single-candidate reloc, no disambiguation "
+                              "source, best_fit=" + std::to_string(best_fit));
+                {
+                    std::ostringstream os;
+                    os << "relocalized by " << m_relocalizer_name
+                       << " cands=" << nk << " hypotheses=" << m_hyp.size()
+                       << " best_fit=" << best_fit << " second=" << second_fit
+                       << (gap < m_ambiguity_margin ? " AMBIGUOUS(multi-hyp kept)" : "");
+                    diag::log('I', "LocPipeline", os.str());
+                    FlightRecorder::instance().event("RELOC", os.str());
+                    FlightRecorder::instance().onStatusChange(false);
+                }
             } else {
                 m_reloc_cooldown = std::max(1, m_global_cfg.retry_interval);
             }
@@ -932,6 +986,21 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                   << " acc=" << (accepted ? 1 : 0)
                   << " coast=" << m_coast_count << std::endl;
     }
+    // 飞行记录仪: 每帧一条(与 DropProbe 同字段), LOST 翻转自动落盘
+    {
+        diag::FrameRecord fr;
+        fr.t = f.end_time;
+        fr.status = (m_status == LOST) ? 2 : (m_status == LOCALIZED ? 1 : 0);
+        fr.fitness = res.fitness;
+        fr.lag = (out_pose.trans - guess.trans).norm();
+        fr.corr = res.correspondences;
+        fr.tgt = static_cast<int>(m_has_cached_target && m_cached_target
+                                      ? m_cached_target->size() : 0);
+        fr.accepted = accepted ? 1 : 0;
+        fr.coast = m_coast_count;
+        fr.hyp = m_hyp.size();
+        FlightRecorder::instance().record(fr);
+    }
     // 单假设模式下同步假设容器
     if (!m_hyp.ambiguous()) m_hyp.reset(m_pose);
 
@@ -1016,8 +1085,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     if (m_monitor_cfg.mediocre_patience > 0 &&
         m_mediocre_streak >= m_monitor_cfg.mediocre_patience) {
         m_status = LOST;
-        std::cout << "[LocPipeline] zombie-band LOST: fitness<" << m_monitor_cfg.credible_fitness
-                  << " sustained " << m_mediocre_streak << " frames -> relocate" << std::endl;
+        {
+            std::ostringstream os;
+            os << "fitness<" << m_monitor_cfg.credible_fitness
+               << " sustained " << m_mediocre_streak << " frames -> relocate";
+            diag::log('W', "LocPipeline", "zombie-band LOST: " + os.str());
+            FlightRecorder::instance().event("LOST", "zombie-band: " + os.str());
+            FlightRecorder::instance().onStatusChange(true);
+        }
         return;
     }
     switch (lvl) {

@@ -62,7 +62,12 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     src/slam_engine.cpp
     src/rosiwit_interface.cpp
     src/legacy_convert.cpp
-    src/legacy_xz3dslam_interface.cpp
+    src/legacy_xz3dslam_interface.cpp   # 只剩拆分索引说明, 实现在下面五个文件
+    src/legacy_assembly.cpp
+    src/legacy_cloud_publisher.cpp
+    src/legacy_pose_publisher.cpp
+    src/legacy_warning.cpp
+    src/legacy_services.cpp
     # T6 追加 src/legacy_subscribers.cpp 等
 )
 add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})

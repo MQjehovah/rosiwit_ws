@@ -86,6 +86,8 @@ public:
                        bool zero_if_insane, bool force_z_zero = false);
     /// 按需触发一次全局重定位 (转发到核心的定位流水线)
     void requestRelocalization();
+    /// 飞行记录仪手动落盘; 返回文件路径(空=无数据) —— /slam/dump_recorder 服务用
+    std::string dumpFlightRecorder(const std::string& reason);
     bool getGridInfo(rosiwit_slam::GridInfo& out) const;
     bool getPoseCov(rosiwit_slam::PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const;
     /// 定位匹配度 [0,1] (旧接口 slam/info.matching_degree); 非定位/未支持时为 0

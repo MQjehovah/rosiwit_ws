@@ -1,0 +1,55 @@
+// legacy 接口拆分后跨实现文件共享的内部助手 (原单文件匿名 namespace 内容)。
+// 仅限 rosiwit_slam_ros1 包内使用。
+#pragma once
+#include <ros/ros.h>
+#include <string>
+#include <opencv2/opencv.hpp>
+#include "legacy_xz3dslam_interface.h"
+
+namespace rosiwit_slam_ros1 {
+namespace legacy_internal {
+
+constexpr const char* kMapFrame = "map";
+// 旧实现的 z 过滤上界: 定位 2.0 (legacy.cpp:989) / 建图 1.0 (legacy.cpp:1078)
+constexpr double kLocZMax = 2.0;
+constexpr double kMapZMax = 1.0;
+// scan_f_map 高度带下界(相对地面): 与栅格提取的 0.1~2.0m 对齐。
+// 0 会放行贴地点(z_ref 标定偏差 ~7cm 时地面直接漏进界面, 2026-10-17 用户报告)。
+constexpr double kScanZMin = 0.1;
+
+inline const char* modeName(SlamMode m) {
+    switch (m) {
+        case SlamMode::FREE:         return "FREE";
+        case SlamMode::MAPPING:      return "MAPPING";
+        case SlamMode::LOCALIZATION: return "LOCALIZATION";
+        default:                     return "UNKNOWN";
+    }
+}
+
+/// 从我们刚写出的 `<base>.pgm` 生成 `<base>.jpg` 与 `<dir>/thumb.png`。
+/// 照抄旧实现 (multilayer_grid_map.cpp:284-288): jpg 与 pgm 是**同一张图**,
+/// thumb 是它的 0.2 倍缩放 (App 用来显示地图缩略图)。
+inline void writeMapThumbnails(const std::string& base) {
+    const std::string pgm = base + ".pgm";
+    const cv::Mat img = cv::imread(pgm, cv::IMREAD_GRAYSCALE);
+    if (img.empty()) {
+        ROS_WARN_STREAM("[legacy_iface] cannot read " << pgm << " -> skip jpg/thumb");
+        return;
+    }
+    if (!cv::imwrite(base + ".jpg", img)) {
+        ROS_WARN_STREAM("[legacy_iface] imwrite failed: " << base + ".jpg");
+    }
+    cv::Mat thumb;
+    cv::resize(img, thumb, cv::Size(0, 0), 0.2, 0.2);
+    const size_t slash = base.find_last_of('/');
+    const std::string dir = (slash == std::string::npos) ? std::string(".") : base.substr(0, slash);
+    const std::string tpath = dir + "/thumb.png";
+    if (!cv::imwrite(tpath, thumb)) {
+        ROS_WARN_STREAM("[legacy_iface] imwrite failed: " << tpath);
+    }
+    std::cout << "[legacy_iface] wrote " << base << ".jpg and " << tpath << " (thumb "
+              << thumb.cols << "x" << thumb.rows << ")" << std::endl;
+}
+
+} // namespace legacy_internal
+} // namespace rosiwit_slam_ros1
