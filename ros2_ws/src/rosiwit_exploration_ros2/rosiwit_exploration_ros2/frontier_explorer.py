@@ -571,41 +571,24 @@ class FrontierExplorer(Node):
         for cells in clusters:
             mean_row = sum(r for r, _ in cells) / len(cells)
             mean_col = sum(c for _, c in cells) / len(cells)
+
+            # 目标向自由区回退: 在 cluster 的整个包围盒(外扩搜索距离)里
+            # 找距 unknown 至少 goal_backoff、且离占据格有 goal_clearance 的
+            # 自由格. 不能只围绕 cluster 均值搜索, 大前沿的均值可能落在
+            # 远处, 也不能退回边界前沿格(那会落进 costmap 紫色/unknown).
+            if backoff_cells <= 0:
+                continue
+            rows = [r for r, _ in cells]
+            cols = [c for _, c in cells]
+            r_lo = max(0, min(rows) - search_cells)
+            r_hi = min(h, max(rows) + search_cells + 1)
+            c_lo = max(0, min(cols) - search_cells)
+            c_hi = min(w, max(cols) + search_cells + 1)
             best_cell = None
             best_d2 = float('inf')
-
-            # 目标向自由区回退: 不再站在 free/unknown 边界上, 而是找
-            # 距 unknown 至少 goal_backoff 的最近自由格, 避免贴着未知墙.
-            if backoff_cells > 0:
-                r_lo = max(0, int(mean_row) - search_cells)
-                r_hi = min(h, int(mean_row) + search_cells + 1)
-                c_lo = max(0, int(mean_col) - search_cells)
-                c_hi = min(w, int(mean_col) + search_cells + 1)
-                for row in range(r_lo, r_hi):
-                    for col in range(c_lo, c_hi):
-                        if not free[row, col] or not reachable[row, col]:
-                            continue
-                        r0 = max(0, row - clearance_cells)
-                        c0 = max(0, col - clearance_cells)
-                        r1 = min(h, row + clearance_cells + 1)
-                        c1 = min(w, col + clearance_cells + 1)
-                        if window_sum(integral, r0, c0, r1, c1) != 0:
-                            continue
-                        u0 = max(0, row - backoff_cells)
-                        v0 = max(0, col - backoff_cells)
-                        u1 = min(h, row + backoff_cells + 1)
-                        v1 = min(w, col + backoff_cells + 1)
-                        if window_sum(unknown_integral, u0, v0, u1, v1) != 0:
-                            continue
-                        d2 = (row - mean_row) ** 2 + (col - mean_col) ** 2
-                        if d2 < best_d2:
-                            best_d2 = d2
-                            best_cell = (row, col)
-
-            # 回退搜索失败时退回原来的前沿格选择, 保证不会漏掉前沿.
-            if best_cell is None:
-                for row, col in cells:
-                    if not reachable[row, col]:
+            for row in range(r_lo, r_hi):
+                for col in range(c_lo, c_hi):
+                    if not free[row, col] or not reachable[row, col]:
                         continue
                     r0 = max(0, row - clearance_cells)
                     c0 = max(0, col - clearance_cells)
@@ -613,11 +596,19 @@ class FrontierExplorer(Node):
                     c1 = min(w, col + clearance_cells + 1)
                     if window_sum(integral, r0, c0, r1, c1) != 0:
                         continue
+                    u0 = max(0, row - backoff_cells)
+                    v0 = max(0, col - backoff_cells)
+                    u1 = min(h, row + backoff_cells + 1)
+                    v1 = min(w, col + backoff_cells + 1)
+                    if window_sum(unknown_integral, u0, v0, u1, v1) != 0:
+                        continue
                     d2 = (row - mean_row) ** 2 + (col - mean_col) ** 2
                     if d2 < best_d2:
                         best_d2 = d2
                         best_cell = (row, col)
             if best_cell is None:
+                # 该 cluster 附近没有满足 backoff 的自由格, 跳过; 不要退回
+                # 贴着 unknown 的前沿格, 否则导航会报 goal in obstacle.
                 continue
             row, col = best_cell
             x, y = cell_to_world(row, col, origin_x, origin_y, resolution)
