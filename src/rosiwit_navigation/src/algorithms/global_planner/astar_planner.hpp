@@ -84,7 +84,7 @@ namespace AStarConstants {
     constexpr double kStraightCost = 1.0;                    // 直线移动代价
     constexpr double kDiagonalCost = 1.414;                  // 对角线移动代价 (√2)
     constexpr unsigned char kObstacleThreshold = 254;        // 障碍物判定阈值
-    constexpr double kCostFactorScale = 3.0;                 // 梯度代价缩放，越大路径越倾向远离障碍物
+    constexpr double kCostFactorScale = 8.0;                 // 梯度代价缩放，越大路径越倾向远离障碍物
     constexpr unsigned char kMaxCost = 255;                  // 最大代价值
     constexpr int kDefaultMaxIterations = 50000;             // 默认最大迭代次数（50K 确保大网格<2s）
     constexpr double kDefaultTimeoutSeconds = 2.0;           // 默认规划超时（秒）

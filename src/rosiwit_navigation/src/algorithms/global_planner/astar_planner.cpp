@@ -168,8 +168,9 @@ void AStarPlanner::inflateCostmap()
         }
     }
 
-    LOG_INFO(logger_, "Costmap inflated: radius=%.2fm (%d cells)",
-        inflation_radius_, radius_cells);
+    LOG_INFO(logger_,
+        "Costmap inflated: radius=%.2fm (%d cells), safety=%d cells (robot=%.2fm)",
+        inflation_radius_, radius_cells, safety_cells, robot_radius_);
 }
 
 core::Result<core::Path> AStarPlanner::plan(
@@ -213,7 +214,9 @@ core::Result<core::Path> AStarPlanner::plan(
     // 清出起点周围一小块, 让规划器还能把它带出来; 真正不可走的墙仍由
     // goal 检查和代价膨胀约束.
     if (isObstacle(start_x, start_y)) {
-        const int clear_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / resolution)));
+        // 只清起点本身和紧邻格, 不能按机器人半径清一大片, 否则路径会从
+        // "被清掉的墙"里穿出去, 看起来像贴着障碍物规划.
+        const int clear_cells = 1;
         for (int yy = start_y - clear_cells; yy <= start_y + clear_cells; ++yy) {
             for (int xx = start_x - clear_cells; xx <= start_x + clear_cells; ++xx) {
                 if (isValid(xx, yy)) {

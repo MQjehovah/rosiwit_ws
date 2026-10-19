@@ -18,6 +18,7 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -232,6 +233,7 @@ protected:
    * @brief 发布速度命令
    */
   void publishVelocityCommand(const geometry_msgs::msg::Twist & cmd_vel);
+  void publishSafetyState(const std::string & state);
 
   /**
    * @brief 发布路径（用于可视化）
@@ -260,6 +262,7 @@ private:
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr global_path_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr global_costmap_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr safety_state_pub_;
 
   // 定时器
   rclcpp::TimerBase::SharedPtr control_timer_;
@@ -310,6 +313,7 @@ private:
   double safety_max_height_ = 1.0;
   std::string safety_base_frame_ = "base_footprint";
   std::string safety_pointcloud_topic_ = "/velodyne_points";
+  std::string last_safety_state_;
 
   // 策略型规划器和控制器（由NavigationFactory创建）
   std::unique_ptr<core::IPlannerStrategy> planner_strategy_;

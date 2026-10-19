@@ -37,7 +37,7 @@ target_include_directories(rosiwit_navigation_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(rosiwit_navigation_node PRIVATE -pipe -pthread)
 ament_target_dependencies(rosiwit_navigation_node
-    rclcpp rclcpp_lifecycle geometry_msgs nav_msgs sensor_msgs
+    rclcpp rclcpp_lifecycle geometry_msgs nav_msgs sensor_msgs std_msgs
     tf2 tf2_ros tf2_geometry_msgs)
 target_link_libraries(rosiwit_navigation_node
     rosiwit_navigation)                # 核心库 (算法/规划器/控制器)
@@ -51,7 +51,7 @@ install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 # ==================== 导出 ====================
 ament_export_include_directories(include)
 ament_export_dependencies(
-    rclcpp rclcpp_lifecycle geometry_msgs nav_msgs sensor_msgs
+    rclcpp rclcpp_lifecycle geometry_msgs nav_msgs sensor_msgs std_msgs
     tf2 tf2_ros tf2_geometry_msgs)
 
 ament_package()

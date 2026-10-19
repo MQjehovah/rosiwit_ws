@@ -57,7 +57,9 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     planner_cfg.timeout = 2.0;
     planner_strategy_->initialize(planner_cfg);
     planner_strategy_->setInflationRadius(inflation_radius_);
-    planner_strategy_->setRobotRadius(robot_radius_);
+    // 硬安全缓冲已在 updateCostmap 里预先膨胀到 planner_cm;
+    // A* 内部只保留 1 格 (0.05m) 缓冲, 避免双重膨胀把门洞堵死.
+    planner_strategy_->setRobotRadius(0.0);
     RCLCPP_INFO(get_logger(), "Created planner strategy: %s", planner_name_.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "Planner '%s' not found, falling back to PathPlanner", planner_name_.c_str());
@@ -237,12 +239,12 @@ void NavigationNode::loadSafetyParameters()
   this->declare_parameter("safety_min_height", 0.05);
   this->declare_parameter("safety_max_height", 1.0);
   this->declare_parameter("safety_stop_polygon", std::vector<double>{
-    -0.26, -0.23, 0.26, -0.23, 0.26, 0.23, -0.26, 0.23});
+    -0.32, -0.28, 0.32, -0.28, 0.32, 0.28, -0.32, 0.28});
   this->declare_parameter("safety_stop_max_points", 2);
   this->declare_parameter("safety_slowdown_polygon", std::vector<double>{
-    -0.85, -0.75, 0.95, -0.75, 0.95, 0.75, -0.85, 0.75});
+    -0.60, -0.50, 0.70, -0.50, 0.70, 0.50, -0.60, 0.50});
   this->declare_parameter("safety_slowdown_max_points", 2);
-  this->declare_parameter("safety_slowdown_ratio", 0.35);
+  this->declare_parameter("safety_slowdown_ratio", 0.5);
   this->declare_parameter("safety_approach_enabled", true);
   this->declare_parameter("safety_time_before_collision", 2.0);
   this->declare_parameter("safety_simulation_time_step", 0.1);
@@ -393,6 +395,8 @@ void NavigationNode::initializePublishers()
     "/global_costmap", rclcpp::QoS(1).transient_local());
   local_costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
     "/local_costmap", rclcpp::QoS(1).transient_local());
+  safety_state_pub_ = create_publisher<std_msgs::msg::String>(
+    "/safety_state", 10);
 
   RCLCPP_INFO(get_logger(), "Publishers initialized");
 }
@@ -518,7 +522,44 @@ void NavigationNode::updateCostmap()
         cm.data[my * w + mx] = 255;
     }
 
-    planner_strategy_->setCostmap(cm);
+    // 在进入规划器之前先按机器人半径做一次硬膨胀. A* 内部的 safety_cells
+    // 只负责最后一格缓冲; 这里保证路径不会贴着真实障碍物.
+    core::Costmap planner_cm = cm;
+    const int hard_cells = std::max(
+      1, static_cast<int>(std::ceil(robot_radius_ / res)));
+    {
+      std::vector<int> d(w * h, -1);
+      std::queue<int> q;
+      for (size_t i = 0; i < planner_cm.data.size(); ++i) {
+        if (planner_cm.data[i] == 255) {
+          d[i] = 0;
+          q.push(static_cast<int>(i));
+        }
+      }
+      while (!q.empty()) {
+        const int idx = q.front(); q.pop();
+        const int cd = d[idx];
+        if (cd >= hard_cells) continue;
+        const int r = idx / static_cast<int>(w);
+        const int c = idx % static_cast<int>(w);
+        for (int dr = -1; dr <= 1; ++dr) {
+          for (int dc = -1; dc <= 1; ++dc) {
+            if (dr == 0 && dc == 0) continue;
+            const int nr = r + dr;
+            const int nc = c + dc;
+            if (nr < 0 || nr >= static_cast<int>(h) ||
+              nc < 0 || nc >= static_cast<int>(w)) continue;
+            const int ni = nr * static_cast<int>(w) + nc;
+            if (d[ni] != -1) continue;
+            d[ni] = cd + 1;
+            planner_cm.data[ni] = 255;
+            q.push(ni);
+          }
+        }
+      }
+    }
+    planner_strategy_->setCostmap(planner_cm);
+    cm = planner_cm;
 
     // 膨胀并发布 costmap 供 RViz 可视化
     int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
@@ -725,6 +766,12 @@ void NavigationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr m
   updateCostmap();
   RCLCPP_INFO(get_logger(), "Map received: %d x %d, res=%.3f",
     msg->info.width, msg->info.height, msg->info.resolution);
+
+  // 地图刚更新完, 立即用这份最新 costmap 重规划; 不能等独立定时器,
+  // 否则路径会比地图慢一个周期, 看起来贴着新出现的障碍物走.
+  if (is_navigating_ && !is_paused_ && !m_need_initial_rotate) {
+    replanningCheck();
+  }
 
   // 探索时地图每 2s 更新一次; 首次规划可能因瞬态膨胀/新障碍失败,
   // 地图更新后自动重试, 而不是让机器人一直停到上层目标超时.
@@ -1036,6 +1083,8 @@ void NavigationNode::publishVelocityCommand(const geometry_msgs::msg::Twist & cm
     if (!sensor_ok) {
       // Nav2 Collision Monitor 默认行为: 传感器失效时"瞎着眼放行".
       if (safety_fail_safe_on_timeout_) out = geometry_msgs::msg::Twist();
+      publishSafetyState(safety_fail_safe_on_timeout_ ?
+        "STOP_SENSOR_TIMEOUT" : "PASS_SENSOR_STALE");
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
         "Safety layer: sensor stale (have_cloud=%s, age=%.2fs)",
         safety_have_cloud_ ? "true" : "false",
@@ -1048,11 +1097,23 @@ void NavigationNode::publishVelocityCommand(const geometry_msgs::msg::Twist & cm
       out.linear.x = result.command.linear_x;
       out.linear.y = result.command.lateral_y;
       out.angular.z = result.command.angular_z;
+      publishSafetyState(result.state);
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
         "Safety layer: %s", result.state.c_str());
     }
+  } else {
+    publishSafetyState("DISABLED");
   }
   cmd_vel_pub_->publish(out);
+}
+
+void NavigationNode::publishSafetyState(const std::string & state)
+{
+  if (state == last_safety_state_ || !safety_state_pub_) return;
+  last_safety_state_ = state;
+  std_msgs::msg::String msg;
+  msg.data = state;
+  safety_state_pub_->publish(msg);
 }
 
 void NavigationNode::publishPath(const nav_msgs::msg::Path & path)
