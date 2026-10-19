@@ -61,7 +61,7 @@ private:
     std::thread m_thread;
     std::mutex m_mu;
     std::condition_variable m_cv;
-    std::queue<BackendItem> m_queue;
+    std::deque<BackendItem> m_queue;
     bool m_stop = false;
 };
 

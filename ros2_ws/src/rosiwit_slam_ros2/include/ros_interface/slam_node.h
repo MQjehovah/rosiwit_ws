@@ -45,6 +45,11 @@ private:
         std::string imu_frame   = "lidar";     // 核心 body frame (FAST-LIO2 估计 IMU body)
         std::string body_frame  = "base_link";
         std::string world_frame = "odom";
+        std::string map_frame   = "map";
+        std::string odom_frame  = "odom";
+        // unified: SLAM owns odom->base, map->odom static identity (当前默认).
+        // wheel: SLAM publishes map->odom; wheel odom owns odom->base.
+        std::string odom_mode   = "unified";
         int    lidar_filter_num = 3;
         double lidar_min_range  = 0.5;
         double lidar_max_range  = 100.0;
@@ -133,6 +138,11 @@ private:
     rclcpp::Service<rosiwit_slam_ros2::srv::SetSlamMode>::SharedPtr   m_srv_set_slam_mode;
     NodeConfig m_cfg;
     std::mutex m_out_mutex;
+    // wheel odom 输入的 odom->base 位姿, 用于计算 map->odom (REP-105 wheel 模式)
+    PoseStamped m_wheel_odom;
+    bool m_wheel_odom_valid = false;
+    double m_wheel_odom_sec = -1.0;
+    mutable std::mutex m_wheel_odom_mutex;
     SlamOutput m_latest;
     bool m_have_output = false;
     nav_msgs::msg::Path m_path;

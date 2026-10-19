@@ -3,6 +3,7 @@
 #include "io/xzmap_writer.h"
 #include <yaml-cpp/yaml.h>
 #include <iostream>
+#include <algorithm>
 #include <cmath>
 #include <pcl/common/transforms.h>
 
@@ -47,7 +48,23 @@ void BackendWorker::push(BackendTask task, const KeyFrame& kf) {
     {
         std::lock_guard<std::mutex> lk(m_mu);
         if (m_stop) return;
-        m_queue.push({task, kf});
+        constexpr size_t kMaxQueue = 500;
+        if (m_queue.size() >= kMaxQueue) {
+            // 队列满时优先丢弃可重算的 LOOP_CLOSURE/OPTIMIZE, 不能丢
+            // ADD_KF/MAP_SUBMAP (否则地图缺关键帧). 极端情况下丢最旧任务.
+            auto it = std::find_if(m_queue.begin(), m_queue.end(),
+                [](const BackendItem& item) {
+                    return item.task == BackendTask::LOOP_CLOSURE ||
+                           item.task == BackendTask::OPTIMIZE;
+                });
+            if (it != m_queue.end()) {
+                m_queue.erase(it);
+            } else {
+                m_queue.pop_front();
+            }
+            std::cerr << "[BackendWorker] queue full; dropped one task" << std::endl;
+        }
+        m_queue.push_back({task, kf});
     }
     m_cv.notify_one();
 }
@@ -86,7 +103,7 @@ void BackendWorker::run() {
             m_cv.wait(lk, [this] { return m_stop || !m_queue.empty(); });
             if (m_stop) break;
             item = std::move(m_queue.front());
-            m_queue.pop();
+            m_queue.pop_front();
         }
         if (item.task == BackendTask::ADD_KF && m_backend) {
             m_backend->addKeyFrame(item.kf);

@@ -20,6 +20,10 @@ lidar_frame: lidar          # 点云 frame; r_il/t_il 由 ROS2 层从 TF 推导
 imu_frame: lidar            # 核心估计 body (FAST-LIO2 是 IMU body)
 body_frame: base_link
 world_frame: odom
+map_frame: map
+odom_frame: odom
+# unified | wheel (见 simulator.yaml 说明; wheel 需要独立 odom_topic)
+odom_mode: unified
 
 lidar_filter_num: 3
 lidar_min_range: 0.5

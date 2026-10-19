@@ -161,6 +161,7 @@ bool PcdMapManager::loadMap(const std::string& name) {
     m_grid_data.clear();
     m_grid_w = 0;
     m_grid_h = 0;
+    m_grid_revision = 0;
     ++m_revision_;
     std::cout << "[PcdMapManager] Loaded: " << path
               << " (" << global_map_->size() << " pts)" << std::endl;
@@ -331,8 +332,16 @@ bool PcdMapManager::generateGridMap(double resolution) {
     GridPostConfig post;
     std::string gen_name;
     double save_voxel = 0.3;
+    uint64_t build_revision = 0;
     {
         std::lock_guard<std::mutex> lock(m_mutex_);
+        // 同一地图 revision + 同分辨率直接复用缓存, 避免保存/查询重复跑
+        // 全量 RANSAC/栅格化.
+        if (m_grid_w > 0 && std::abs(m_grid_res - resolution) < 1e-9 &&
+            m_grid_revision == m_revision_) {
+            return true;
+        }
+        build_revision = m_revision_;
         if (!global_map_ || global_map_->empty()) return false;
         observations = observations_;
         global_map = global_map_;
@@ -370,6 +379,7 @@ bool PcdMapManager::generateGridMap(double resolution) {
         m_grid_res = info.resolution;
         m_grid_ox = info.origin_x;
         m_grid_oy = info.origin_y;
+        m_grid_revision = build_revision;
     }
     std::cout << "[PcdMapManager] Generated grid map (" << gen->name() << "): "
               << info.width << "x" << info.height << std::endl;
@@ -425,6 +435,7 @@ bool PcdMapManager::loadGridMap(const std::string& pgm_path, const std::string& 
     m_grid_res = info.resolution;
     m_grid_ox = info.origin_x;
     m_grid_oy = info.origin_y;
+    m_grid_revision = m_revision_ + 1;
     ++m_revision_;
     return true;
 }

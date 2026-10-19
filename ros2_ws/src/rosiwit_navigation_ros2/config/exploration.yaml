@@ -25,6 +25,8 @@ rosiwit_navigation_node:
     global_frame: "odom"
     robot_frame: "base_link"
     map_frame: "odom"
+    # wheel_odom 模式示例: global_frame/map_frame 改 "map", odom_topic 改 /wheel_odom;
+    # SLAM 需 odom_mode: wheel 并让底盘驱动发布 odom->base_link.
 
     goal_tolerance_xy: 0.25
     goal_tolerance_yaw: 0.2

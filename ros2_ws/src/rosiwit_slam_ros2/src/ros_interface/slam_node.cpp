@@ -189,6 +189,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.imu_frame        = cfg["imu_frame"].as<std::string>(m_cfg.imu_frame);
             m_cfg.body_frame       = cfg["body_frame"].as<std::string>(m_cfg.body_frame);
             m_cfg.world_frame      = cfg["world_frame"].as<std::string>(m_cfg.world_frame);
+            m_cfg.map_frame        = cfg["map_frame"].as<std::string>(m_cfg.map_frame);
+            m_cfg.odom_frame       = cfg["odom_frame"].as<std::string>(m_cfg.odom_frame);
+            m_cfg.odom_mode        = cfg["odom_mode"].as<std::string>(m_cfg.odom_mode);
             m_cfg.lidar_filter_num = cfg["lidar_filter_num"].as<int>(m_cfg.lidar_filter_num);
             m_cfg.lidar_min_range  = cfg["lidar_min_range"].as<double>(m_cfg.lidar_min_range);
             m_cfg.lidar_max_range  = cfg["lidar_max_range"].as<double>(m_cfg.lidar_max_range);
@@ -295,6 +298,19 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.odom_enabled = false;
         }
     }
+    if (m_cfg.odom_mode == "wheel") {
+        if (!m_cfg.odom_enabled) {
+            RCLCPP_WARN(get_logger(),
+                "odom_mode=wheel requires enable_odom and a distinct odom_topic; "
+                "falling back to unified map==odom");
+            m_cfg.odom_mode = "unified";
+        } else if (m_cfg.world_frame != m_cfg.map_frame) {
+            RCLCPP_WARN(get_logger(),
+                "odom_mode=wheel: world_frame '%s' -> '%s' (must equal map_frame)",
+                m_cfg.world_frame.c_str(), m_cfg.map_frame.c_str());
+            m_cfg.world_frame = m_cfg.map_frame;
+        }
+    }
     if (m_cfg.odom_enabled) {
         m_odom_sub = create_subscription<nav_msgs::msg::Odometry>(
             m_cfg.odom_topic, 100, std::bind(&SlamNode::odomCB, this, _1), sensor_sub_opts);
@@ -314,14 +330,19 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_odom_nav_pub    = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     m_tf = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
     m_static_tf = std::make_shared<tf2_ros::StaticTransformBroadcaster>(*this);
-    // 发布 map -> odom 静态变换 (nav2 global_costmap 需要 map frame)
-    {
+    // unified: 发布 map -> odom 静态 identity (map==odom 单世界模式).
+    // wheel: map->odom 由 publishOdomTf() 动态计算, 不再发静态 identity.
+    if (m_cfg.odom_mode != "wheel") {
         geometry_msgs::msg::TransformStamped static_tf;
         static_tf.header.stamp = now();
-        static_tf.header.frame_id = "map";
-        static_tf.child_frame_id = "odom";
+        static_tf.header.frame_id = m_cfg.map_frame;
+        static_tf.child_frame_id = m_cfg.odom_frame;
         static_tf.transform.rotation.w = 1.0;
         m_static_tf->sendTransform(static_tf);
+    } else {
+        RCLCPP_INFO(get_logger(),
+            "odom_mode=wheel: publishing dynamic %s -> %s from wheel odom",
+            m_cfg.map_frame.c_str(), m_cfg.odom_frame.c_str());
     }
     // 处理定时器(work 分组): 只做重处理, 与传感器收包分组互不阻塞。
     // 缩短周期以降低入队->处理的延迟; 每 tick 把已同步的包一次性排空, 避免积压。
@@ -388,6 +409,17 @@ void SlamNode::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
     p.trans = V3D(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
     const auto& q = msg->pose.pose.orientation;
     p.rot = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
+    // wheel_odom 模式: 保存 odom->body, 用于计算 map->odom.
+    if (m_cfg.odom_mode == "wheel" && msg->child_frame_id == m_cfg.body_frame) {
+        std::lock_guard<std::mutex> lk(m_wheel_odom_mutex);
+        m_wheel_odom = p;
+        m_wheel_odom_valid = true;
+        m_wheel_odom_sec = p.time;
+    } else if (m_cfg.odom_mode == "wheel") {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+            "wheel odom child '%s' != body_frame '%s'; cannot compute map->odom",
+            msg->child_frame_id.c_str(), m_cfg.body_frame.c_str());
+    }
     RigidTransform imu_child;
     if (!imuFromChild(msg->child_frame_id, imu_child)) return;
     m_algo->onOdom(composeRight(p, imu_child));
@@ -556,8 +588,10 @@ void SlamNode::publishOdomTf(const PoseStamped& pose, const builtin_interfaces::
         m_last_odom_twist_q = q;
     }
 
+    const bool wheel_mode = (m_cfg.odom_mode == "wheel");
     const bool want_lio_odom = m_odom_pub && m_odom_pub->get_subscription_count() > 0;
-    const bool want_odom = m_odom_nav_pub && m_odom_nav_pub->get_subscription_count() > 0;
+    const bool want_odom = !wheel_mode && m_odom_nav_pub &&
+        m_odom_nav_pub->get_subscription_count() > 0;
     if (want_lio_odom || want_odom) {
         nav_msgs::msg::Odometry odom;
         odom.header.frame_id = m_cfg.world_frame; odom.child_frame_id = m_cfg.body_frame; odom.header.stamp = stamp;
@@ -586,10 +620,53 @@ void SlamNode::publishOdomTf(const PoseStamped& pose, const builtin_interfaces::
         if (want_odom) m_odom_nav_pub->publish(odom);
     }
     geometry_msgs::msg::TransformStamped tf;
-    tf.header.frame_id = m_cfg.world_frame; tf.child_frame_id = m_cfg.body_frame; tf.header.stamp = stamp;
-    tf.transform.translation.x = pose.trans.x(); tf.transform.translation.y = pose.trans.y(); tf.transform.translation.z = pose.trans.z();
-    tf.transform.rotation.x = q.x(); tf.transform.rotation.y = q.y(); tf.transform.rotation.z = q.z(); tf.transform.rotation.w = q.w();
-    m_tf->sendTransform(tf);
+    tf.header.stamp = stamp;
+    if (wheel_mode) {
+        // map <- base = SLAM pose; odom <- base = wheel odom;
+        // map <- odom = map<-base * (odom<-base)^-1.
+        PoseStamped wheel;
+        bool wheel_valid = false;
+        {
+            std::lock_guard<std::mutex> lk(m_wheel_odom_mutex);
+            wheel = m_wheel_odom;
+            wheel_valid = m_wheel_odom_valid &&
+                (now().seconds() - m_wheel_odom_sec <= 1.0);
+        }
+        if (!wheel_valid) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                "wheel odom unavailable; cannot publish %s -> %s",
+                m_cfg.map_frame.c_str(), m_cfg.odom_frame.c_str());
+            return;
+        }
+        const Eigen::Matrix3d R_odom_base = wheel.rot;
+        const Eigen::Vector3d t_odom_base = wheel.trans;
+        const Eigen::Matrix3d R_map_base = pose.rot;
+        const Eigen::Vector3d t_map_base = pose.trans;
+        const Eigen::Matrix3d R_map_odom = R_map_base * R_odom_base.transpose();
+        const Eigen::Vector3d t_map_odom = t_map_base - R_map_odom * t_odom_base;
+        const Eigen::Quaterniond q_map_odom(R_map_odom);
+        tf.header.frame_id = m_cfg.map_frame;
+        tf.child_frame_id = m_cfg.odom_frame;
+        tf.transform.translation.x = t_map_odom.x();
+        tf.transform.translation.y = t_map_odom.y();
+        tf.transform.translation.z = t_map_odom.z();
+        tf.transform.rotation.x = q_map_odom.x();
+        tf.transform.rotation.y = q_map_odom.y();
+        tf.transform.rotation.z = q_map_odom.z();
+        tf.transform.rotation.w = q_map_odom.w();
+        m_tf->sendTransform(tf);
+    } else {
+        tf.header.frame_id = m_cfg.world_frame;
+        tf.child_frame_id = m_cfg.body_frame;
+        tf.transform.translation.x = pose.trans.x();
+        tf.transform.translation.y = pose.trans.y();
+        tf.transform.translation.z = pose.trans.z();
+        tf.transform.rotation.x = q.x();
+        tf.transform.rotation.y = q.y();
+        tf.transform.rotation.z = q.z();
+        tf.transform.rotation.w = q.w();
+        m_tf->sendTransform(tf);
+    }
 }
 
 void SlamNode::highRateCB() {

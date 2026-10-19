@@ -48,6 +48,7 @@ private:
     std::vector<int8_t> m_grid_data;
     int m_grid_w = 0, m_grid_h = 0;
     double m_grid_res = 0.05;
+    uint64_t m_grid_revision = 0;
     double m_grid_ox = 0, m_grid_oy = 0;
 
     std::vector<Submap> submaps_;        // addSubMap 顺序保存的关键帧(原始位姿)
