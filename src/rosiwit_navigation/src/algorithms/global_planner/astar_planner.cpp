@@ -253,8 +253,6 @@ core::Result<core::Path> AStarPlanner::plan(
     start_node.parent_y = -1;
 
     open_list_.push(start_node);
-    closed_list_[start_y * nx_ + start_x] = 1;
-    closed_indices_.push_back(start_y * nx_ + start_x);
 
     // A*搜索（带迭代限制和超时保护）
     while (!open_list_.empty() && planning_active_) {
@@ -277,6 +275,14 @@ core::Result<core::Path> AStarPlanner::plan(
 
         AStarNode current = open_list_.top();
         open_list_.pop();
+
+        // 标准 A*: 弹出时才关闭节点. 之前"入队即关闭"会让先入队的高代价
+        // 节点永远无法被更优路径更新, 结果就是贴着障碍物内侧走.
+        const int current_idx = current.y * nx_ + current.x;
+        if (closed_list_[current_idx]) continue;
+        closed_list_[current_idx] = 1;
+        closed_indices_.push_back(current_idx);
+        if (current.g_cost > nodes_[current_idx].g_cost + 1e-9) continue;
 
         // 到达目标
         if (current.x == goal_x && current.y == goal_y) {
@@ -319,8 +325,6 @@ core::Result<core::Path> AStarPlanner::plan(
                 neighbor.parent_y = current.y;
 
                 open_list_.push(neighbor);
-                closed_list_[ny * nx_ + nx] = 1;
-                closed_indices_.push_back(ny * nx_ + nx);
             }
         }
     }
