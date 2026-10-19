@@ -1,0 +1,49 @@
+# Handheld / backpack mapping (no wheel odometry)
+#
+# Frames:
+#   map -> odom -> base_link -> imu_link / lidar_link
+#
+#   odom -> base_link : continuous LIO front-end pose (may drift)
+#   map  -> odom      : loop-closure/backend anchor correction
+#
+# The device body (IMU) is the base_link; provide static TF
+#   base_link -> imu_link / lidar_link
+# from the real sensor extrinsics. No wheel odom / base_footprint is required.
+
+slam_algorithm: fast_lio2_pipeline
+pipeline: "rosiwit_slam"
+pipeline_mode: mapping
+
+modules:
+  frontend: "fast_lio2_frontend"
+  backend: "ceres_pose_graph"
+  loop_closure: "scan_context"
+  localization: "localization_pipeline"
+  map_manager: "pcd_map_manager"
+
+imu_topic: imu
+lidar_topic: points
+lidar_frame: lidar_link
+imu_frame: imu_link
+body_frame: base_link
+
+world_frame: map
+map_frame: map
+odom_frame: odom
+# lio: LIO front-end owns odom->base, backend anchor owns map->odom.
+odom_tf_publisher: none
+
+use_wheel_odom: false
+odom_topic: wheel_odom
+
+# Keep false if extrinsics are provided by static TF; set true only if you
+# intentionally want the front end to estimate IMU-LiDAR extrinsic online.
+esti_il: false
+
+# Tune for your device:
+lidar_filter_num: 2
+lidar_min_range: 0.3
+lidar_max_range: 120.0
+scan_period_ms: 100.0
+map_resolution: 0.05
+map_publish_period: 0.5

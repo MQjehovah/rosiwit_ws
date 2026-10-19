@@ -39,6 +39,11 @@ struct PoseStamped {
 struct SlamOutput {
     SlamState state = SlamState::INITIALIZING;
     PoseStamped pose;
+    // 建图前端原始 LIO 位姿 (odom->body) 与回环锚点 (map->odom),
+    // 供 handheld/lio 模式发布标准 map->odom->base TF.
+    PoseStamped odom_pose;
+    PoseStamped map_T_odom;
+    bool has_odom_pose = false;
     CloudType::Ptr body_cloud;
     CloudType::Ptr world_cloud;
     bool has_new_pose = false;

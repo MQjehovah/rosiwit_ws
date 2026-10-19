@@ -14,16 +14,16 @@ modules:
 
 imu_topic: imu
 lidar_topic: lidar
-enable_odom: false          # 轮式里程计开关(供定位运动先验; 洗地机易打滑, 默认关)
+use_wheel_odom: false       # 是否使用轮式 odom 数据参与计算
 odom_topic: wheel_odom
 lidar_frame: lidar          # 点云 frame; r_il/t_il 由 ROS2 层从 TF 推导
 imu_frame: lidar            # 核心估计 body (FAST-LIO2 是 IMU body)
 body_frame: base_link
-world_frame: odom
+world_frame: map
 map_frame: map
 odom_frame: odom
-# unified | wheel (见 simulator.yaml 说明; wheel 需要独立 odom_topic)
-odom_mode: unified
+# none: map->base; lio: SLAM publishes odom->base; wheel: driver publishes it
+odom_tf_publisher: lio
 
 lidar_filter_num: 3
 lidar_min_range: 0.5

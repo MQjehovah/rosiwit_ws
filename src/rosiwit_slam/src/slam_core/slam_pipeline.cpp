@@ -469,6 +469,9 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
     }
     out.pose = poseMul(anchor, odom);
     out.pose.vel = anchor.rot * odom.vel;
+    out.odom_pose = odom;
+    out.map_T_odom = anchor;
+    out.has_odom_pose = true;
     if (have_anchor && out.world_cloud && !out.world_cloud->empty()) {
         Eigen::Affine3d T = Eigen::Affine3d::Identity();
         T.rotate(anchor.rot);

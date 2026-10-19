@@ -20,10 +20,10 @@ body_frame: base_footprint
 world_frame: map
 map_frame: map
 odom_frame: odom
-enable_odom: true
+use_wheel_odom: false
 odom_topic: odom
-# wheel: 轮式驱动发布 odom->base_footprint, SLAM 动态发布 map->odom (标准 REP-105)
-odom_mode: wheel
+# wheel: 轮式驱动发布 odom->base_footprint, SLAM 动态发布 map->odom
+odom_tf_publisher: wheel
 
 # VLP-16 预处理
 lidar_filter_num: 2

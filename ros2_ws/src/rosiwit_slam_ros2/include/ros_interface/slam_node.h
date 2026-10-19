@@ -47,16 +47,15 @@ private:
         std::string world_frame = "odom";
         std::string map_frame   = "map";
         std::string odom_frame  = "odom";
-        // unified: SLAM owns odom->base, map->odom static identity (当前默认).
-        // wheel: SLAM publishes map->odom; wheel odom owns odom->base.
-        std::string odom_mode   = "unified";
+        // none | lio | wheel: who publishes odom->body (or none).
+        std::string odom_tf_publisher = "lio";
         int    lidar_filter_num = 3;
         double lidar_min_range  = 0.5;
         double lidar_max_range  = 100.0;
         float  scan_period_ms   = 100.0f;   // LiDAR 扫描周期 (毫秒), 用于点时间戳
         bool   vision_enabled    = false;    // 视觉松耦合开关
         std::string vo_topic     = "visual_odometry";  // VO 库发布的里程计话题
-        bool   odom_enabled      = false;    // 轮式里程计开关(供定位运动先验)
+        bool   use_wheel_odom    = false;    // 是否使用轮式 odom 数据参与计算
         std::string odom_topic   = "wheel_odom";  // 轮式里程计话题
         double output_rate_hz    = 100.0;    // 定位高频输出频率(Hz); <=0 关闭(用扫描帧)
         double output_filter_alpha = 0.5;    // 输出 alpha-beta 滤波 alpha
@@ -79,7 +78,9 @@ private:
     void highRateCB();
     void onOutput(const SlamOutput& out);
     void publish(const SlamOutput& out);
-    void publishOdomTf(const PoseStamped& pose, const builtin_interfaces::msg::Time& stamp);
+    void publishOdomTf(const PoseStamped& pose, const builtin_interfaces::msg::Time& stamp,
+                       const PoseStamped* raw_odom = nullptr,
+                       const PoseStamped* map_T_odom = nullptr);
     void initialPoseCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
     builtin_interfaces::msg::Time toRosTime(double sec);
 
