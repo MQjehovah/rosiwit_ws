@@ -239,6 +239,7 @@ protected:
    * @brief 发布路径（用于可视化）
    */
   void publishPath(const nav_msgs::msg::Path & path);
+  void smoothCurrentPath(nav_msgs::msg::Path & path);
   void publishLocalCostmap();
   void republishGlobalCostmap();
 

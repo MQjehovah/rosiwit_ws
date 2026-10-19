@@ -1053,6 +1053,7 @@ void NavigationNode::replanningCheck()
   }
 
   current_path_ = RosUtils::toRosPath(result.value(), goal_pose_.header.frame_id, now());
+  smoothCurrentPath(current_path_);
   if (controller_strategy_) {
     // DWA 的 setPath 会重置进度; 地图 5Hz 重规划时最多 2Hz 刷给控制器,
     // 中间路径仍发布, 由安全层兜底.
@@ -1089,28 +1090,7 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
       current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
 
       // 平滑路径
-      if (enable_path_smoothing_ && current_path_.poses.size() >= 3) {
-        planners::SmootherConfig smoother_cfg;
-        smoother_cfg.max_iterations = 100;
-        smoother_cfg.alpha_start = 0.5;
-        smoother_cfg.alpha_end = 0.1;
-
-        // 转换为 core 类型，平滑，再转回 ROS 类型
-        core::Path core_path = RosUtils::toCorePath(current_path_);
-        // 构建 core::CostmapGrid 用于碰撞检测
-        std::shared_ptr<core::CostmapGrid> core_map;
-        if (current_map_) {
-          core_map = std::make_shared<core::CostmapGrid>();
-          core_map->info.width = current_map_->info.width;
-          core_map->info.height = current_map_->info.height;
-          core_map->info.resolution = current_map_->info.resolution;
-          core_map->info.origin.position.x = current_map_->info.origin.position.x;
-          core_map->info.origin.position.y = current_map_->info.origin.position.y;
-          core_map->data = current_map_->data;
-        }
-        core_path = planners::smoothPath(core_path, core_map, smoother_cfg);
-        current_path_ = RosUtils::toRosPath(core_path, goal.header.frame_id, now());
-      }
+      smoothCurrentPath(current_path_);
     } else {
       RCLCPP_ERROR(get_logger(), "Planner '%s' failed: %s",
         planner_name_.c_str(), result.error_message().c_str());
@@ -1305,6 +1285,41 @@ void NavigationNode::publishSafetyState(const std::string & state)
   std_msgs::msg::String msg;
   msg.data = state;
   safety_state_pub_->publish(msg);
+}
+
+void NavigationNode::smoothCurrentPath(nav_msgs::msg::Path & path)
+{
+  if (!enable_path_smoothing_ || path.poses.size() < 3) return;
+
+  planners::SmootherConfig smoother_cfg;
+  smoother_cfg.max_iterations = 100;
+  smoother_cfg.alpha_start = 0.5;
+  smoother_cfg.alpha_end = 0.1;
+
+  std::shared_ptr<core::CostmapGrid> core_map;
+  // 优先用已膨胀的 global costmap 做碰撞检测, 防止平滑把路径拉进安全区.
+  if (m_has_global_costmap_) {
+    core_map = std::make_shared<core::CostmapGrid>();
+    core_map->info.width = global_costmap_msg_.info.width;
+    core_map->info.height = global_costmap_msg_.info.height;
+    core_map->info.resolution = global_costmap_msg_.info.resolution;
+    core_map->info.origin.position.x = global_costmap_msg_.info.origin.position.x;
+    core_map->info.origin.position.y = global_costmap_msg_.info.origin.position.y;
+    core_map->data = global_costmap_msg_.data;
+  } else if (current_map_) {
+    core_map = std::make_shared<core::CostmapGrid>();
+    core_map->info.width = current_map_->info.width;
+    core_map->info.height = current_map_->info.height;
+    core_map->info.resolution = current_map_->info.resolution;
+    core_map->info.origin.position.x = current_map_->info.origin.position.x;
+    core_map->info.origin.position.y = current_map_->info.origin.position.y;
+    core_map->data = current_map_->data;
+  }
+  if (!core_map) return;
+
+  core::Path core_path = RosUtils::toCorePath(path);
+  core_path = planners::smoothPath(core_path, core_map, smoother_cfg);
+  path = RosUtils::toRosPath(core_path, path.header.frame_id, now());
 }
 
 void NavigationNode::publishPath(const nav_msgs::msg::Path & path)

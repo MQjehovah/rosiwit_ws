@@ -36,7 +36,7 @@ rosiwit_navigation_node:
     inflation_radius: 0.90
     local_costmap_size: 10.0
     # 平滑器会把 unknown 当自由并可能把路径拉进未知墙; 探索时关闭
-    enable_path_smoothing: false
+    enable_path_smoothing: true
 
     # DWA 卡死恢复
     recovery_enabled: true
