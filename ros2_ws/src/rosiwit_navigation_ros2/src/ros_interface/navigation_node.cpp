@@ -512,6 +512,8 @@ void NavigationNode::initializePublishers()
     "/local_costmap", rclcpp::QoS(1).transient_local());
   diagnostics_pub_ = create_publisher<std_msgs::msg::String>(
     "/nav_diagnostics", rclcpp::QoS(10));
+  goal_status_pub_ = create_publisher<std_msgs::msg::String>(
+    "/goal_status", rclcpp::QoS(10));
   safety_state_pub_ = create_publisher<std_msgs::msg::String>(
     "/safety_state", 10);
 
@@ -1010,6 +1012,7 @@ void NavigationNode::controlLoop()
   // 检查是否到达目标
   if (isGoalReached()) {
     RCLCPP_INFO(get_logger(), "Goal reached!");
+    publishGoalStatus("reached");
     current_state_ = NavigationState::GOAL_REACHED;
     stopNavigation();
     return;
@@ -1017,6 +1020,14 @@ void NavigationNode::controlLoop()
 
   // ========== 初始原地旋转：确保机器人面朝路径方向再前进 ==========
   if (m_need_initial_rotate) {
+    if (m_initial_rotate_start_sec_ <= 0.0) {
+      m_initial_rotate_start_sec_ = now().seconds();
+    } else if (now().seconds() - m_initial_rotate_start_sec_ > 4.0) {
+      RCLCPP_WARN(get_logger(),
+        "Initial rotation timeout; handing control to %s",
+        controller_name_.c_str());
+      m_need_initial_rotate = false;
+    }
     geometry_msgs::msg::Twist rot_cmd;
     double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
     double target_yaw = m_initial_rotate_target;
@@ -1028,7 +1039,7 @@ void NavigationNode::controlLoop()
       m_need_initial_rotate = false;
       RCLCPP_INFO(get_logger(), "Initial rotation done, starting %s",
         controller_name_.c_str());
-    } else {
+    } else if (m_need_initial_rotate) {
       rot_cmd.angular.z = std::clamp(1.5 * angle_error, -0.8, 0.8);
       publishVelocityCommand(rot_cmd);
       return;
@@ -1128,6 +1139,7 @@ void NavigationNode::replanningCheck()
     is_navigating_ = false;
     current_state_ = NavigationState::FAILED;
     current_path_.poses.clear();
+    publishGoalStatus("failed");
     global_path_pub_->publish(current_path_);
     RCLCPP_WARN(get_logger(), "Replan failed: %s; stopping for retry",
       result.error_message().c_str());
@@ -1180,6 +1192,9 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
     } else {
       RCLCPP_ERROR(get_logger(), "Planner '%s' failed: %s",
         planner_name_.c_str(), result.error_message().c_str());
+      publishGoalStatus("failed");
+      geometry_msgs::msg::Twist stop_cmd;
+      publishVelocityCommand(stop_cmd);
       current_state_ = NavigationState::FAILED;
       return;
     }
@@ -1202,7 +1217,7 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
   // 在轨迹采样里完成转向; 否则 TF/底盘角速度异常时会卡在 initial rotate,
   // 看起来就是"一直不走".
   m_need_initial_rotate = false;
-  if (controller_name_ == "pure_pursuit" && current_path_.poses.size() > 2) {
+  if (current_path_.poses.size() > 2) {
     double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
     double dx = current_path_.poses[1].pose.position.x - current_path_.poses[0].pose.position.x;
     double dy = current_path_.poses[1].pose.position.y - current_path_.poses[0].pose.position.y;
@@ -1213,6 +1228,7 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
     if (std::abs(yaw_diff) > 0.35) {
       m_need_initial_rotate = true;
       m_initial_rotate_target = path_yaw;
+      m_initial_rotate_start_sec_ = now().seconds();
       RCLCPP_INFO(get_logger(), "Initial rotation needed: %.1f deg", yaw_diff * 180.0 / M_PI);
     }
   }
@@ -1420,6 +1436,14 @@ void NavigationNode::publishSafetyState(const std::string & state)
   std_msgs::msg::String msg;
   msg.data = state;
   safety_state_pub_->publish(msg);
+}
+
+void NavigationNode::publishGoalStatus(const std::string & status)
+{
+  if (!goal_status_pub_) return;
+  std_msgs::msg::String msg;
+  msg.data = status;
+  goal_status_pub_->publish(msg);
 }
 
 void NavigationNode::publishDiagnostics()

@@ -235,6 +235,7 @@ protected:
   void publishVelocityCommand(const geometry_msgs::msg::Twist & cmd_vel);
   void publishSafetyState(const std::string & state);
   void publishDiagnostics();
+  void publishGoalStatus(const std::string & status);
 
   /**
    * @brief 发布路径（用于可视化）
@@ -269,6 +270,7 @@ private:
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr safety_state_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diagnostics_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr goal_status_pub_;
 
   // 定时器
   rclcpp::TimerBase::SharedPtr control_timer_;
@@ -298,6 +300,7 @@ private:
   // 初始旋转：Pure Pursuit 只前进，目标在后方时先原地掉头
   bool m_need_initial_rotate = false;
   double m_initial_rotate_target = 0.0;
+  double m_initial_rotate_start_sec_ = 0.0;
 
   // 目标位姿
   geometry_msgs::msg::PoseStamped goal_pose_;

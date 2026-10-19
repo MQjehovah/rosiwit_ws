@@ -28,6 +28,7 @@ from geometry_msgs.msg import PoseStamped, Quaternion
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from std_msgs.msg import String
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from std_srvs.srv import SetBool, Trigger
@@ -265,6 +266,8 @@ class FrontierExplorer(Node):
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 10)
 
         self.goal_pub = self.create_publisher(PoseStamped, self.goal_topic, 10)
+        self.goal_status_sub = self.create_subscription(
+            String, '/goal_status', self.goal_status_cb, 10)
         self.marker_pub = self.create_publisher(MarkerArray, 'frontier_markers', 10)
 
         self.action_client = None
@@ -479,6 +482,15 @@ class FrontierExplorer(Node):
             self.finish_goal(True, 'nav2 goal reached')
         else:
             self.finish_goal(False, f'nav2 goal failed (status={status})')
+
+    def goal_status_cb(self, msg: String) -> None:
+        if self.current_goal is None:
+            return
+        status = msg.data.strip().lower()
+        if status == 'failed':
+            self.finish_goal(False, 'navigation reported failure')
+        elif status == 'reached':
+            self.finish_goal(True, 'navigation reported reached')
 
     def check_goal(self, robot: Tuple[float, float]) -> None:
         if self.current_goal_xy is None:
