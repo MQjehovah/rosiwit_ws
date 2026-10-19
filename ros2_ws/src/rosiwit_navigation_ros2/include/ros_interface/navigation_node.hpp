@@ -273,6 +273,8 @@ private:
 
   // 目标位姿
   geometry_msgs::msg::PoseStamped goal_pose_;
+  // 规划失败后随地图更新重试 (探索场景地图会持续变化)
+  double m_last_replan_attempt_sec = 0.0;
 
   // 当前路径和轨迹
   nav_msgs::msg::Path current_path_;

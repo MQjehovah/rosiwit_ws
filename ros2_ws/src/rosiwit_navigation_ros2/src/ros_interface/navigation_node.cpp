@@ -566,6 +566,18 @@ void NavigationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr m
   updateCostmap();
   RCLCPP_INFO(get_logger(), "Map received: %d x %d, res=%.3f",
     msg->info.width, msg->info.height, msg->info.resolution);
+
+  // 探索时地图每 2s 更新一次; 首次规划可能因瞬态膨胀/新障碍失败,
+  // 地图更新后自动重试, 而不是让机器人一直停到上层目标超时.
+  if (current_state_ == NavigationState::FAILED &&
+      !goal_pose_.header.frame_id.empty()) {
+    const double now_sec = now().seconds();
+    if (now_sec - m_last_replan_attempt_sec >= 1.0) {
+      m_last_replan_attempt_sec = now_sec;
+      RCLCPP_INFO(get_logger(), "Retrying navigation planning after map update...");
+      executeNavigation(goal_pose_);
+    }
+  }
 }
 
 void NavigationNode::goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)

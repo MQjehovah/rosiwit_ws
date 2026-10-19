@@ -1,0 +1,52 @@
+# Frontier exploration parameters
+#
+# goal_interface:
+#   pose -> publish geometry_msgs/PoseStamped on goal_topic
+#           (works with rosiwit_navigation_ros2 /goal_pose)
+#   nav2 -> use the Nav2 navigate_to_pose action
+#   auto -> use Nav2 when its action server is ready, otherwise pose
+frontier_explorer:
+  ros__parameters:
+    use_sim_time: true
+
+    map_topic: /map
+    odom_topic: /odom
+    goal_topic: /goal_pose
+    goal_interface: pose
+    nav2_action: navigate_to_pose
+
+    robot_frame: base_link
+    # Empty map_frame = use the frame_id of the incoming OccupancyGrid.
+    map_frame: ""
+    # rosiwit_slam publishes its map in odom and rosiwit_navigation_ros2 uses odom.
+    # Set this to map when driving through Nav2.
+    goal_frame: odom
+
+    tick_period: 2.0
+
+    # OccupancyGrid interpretation
+    free_thresh: 50
+    occupied_thresh: 55
+    min_frontier_cells: 8
+
+    # Goal selection
+    goal_clearance: 0.6
+    min_goal_distance: 0.8
+    max_goal_distance: 30.0
+    frontier_size_weight: 0.02
+    check_reachability: true
+
+    # Goal lifecycle
+    blacklist_radius: 0.8
+    blacklist_duration: 180.0
+    goal_tolerance: 0.35
+    goal_timeout: 120.0
+    goal_cooldown: 1.0
+    finish_patience: 20
+
+    # Start / finish behaviour
+    autostart: true
+    start_delay: 5.0
+    save_map_on_finish: false
+    save_map_path: /tmp/rosiwit_exploration_map
+    publish_markers: true

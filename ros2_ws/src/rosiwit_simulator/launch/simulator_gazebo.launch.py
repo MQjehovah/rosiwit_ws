@@ -32,6 +32,10 @@ def generate_launch_description():
     headless_arg = DeclareLaunchArgument('headless', default_value='false')
     debug_arg = DeclareLaunchArgument('debug', default_value='false')
     use_3d_lidar_arg = DeclareLaunchArgument('use_3d_lidar', default_value='true')
+    spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='0')
+    spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='-18')
+    spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='0.1')
+    spawn_yaw_arg = DeclareLaunchArgument('spawn_yaw', default_value='1.57')
 
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -66,8 +70,10 @@ def generate_launch_description():
         arguments=[
             '-entity', 'mrobot',
             '-file', tmp_urdf.name,
-            '-x', '0', '-y', '-18', '-z', '0.1',
-            '-Y', '1.57',
+            '-x', LaunchConfiguration('spawn_x'),
+            '-y', LaunchConfiguration('spawn_y'),
+            '-z', LaunchConfiguration('spawn_z'),
+            '-Y', LaunchConfiguration('spawn_yaw'),
             '-timeout', '60'
         ],
         output='screen'
@@ -77,7 +83,10 @@ def generate_launch_description():
         package='joint_state_publisher',
         executable='joint_state_publisher',
         name='joint_state_publisher',
-        parameters=[{'robot_description': robot_description_content}]
+        parameters=[{
+            'robot_description': robot_description_content,
+            'use_sim_time': True,
+        }]
     )
 
     robot_state_publisher = Node(
@@ -88,13 +97,14 @@ def generate_launch_description():
         parameters=[{
             'robot_description': robot_description_content,
             'publish_frequency': 50.0,
+            'use_sim_time': True,
         }]
     )
 
     return LaunchDescription([
         set_gazebo_model_path,
         world_name_arg, use_sim_time_arg, gui_arg, paused_arg, headless_arg, debug_arg,
-        use_3d_lidar_arg,
+        use_3d_lidar_arg, spawn_x_arg, spawn_y_arg, spawn_z_arg, spawn_yaw_arg,
         gazebo,
         spawn_model,
         joint_state_publisher,

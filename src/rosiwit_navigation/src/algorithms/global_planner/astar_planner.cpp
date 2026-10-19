@@ -53,16 +53,24 @@ void AStarPlanner::setCostmap(const core::Costmap& costmap)
     nx_ = costmap_->grid->info.width;
     ny_ = costmap_->grid->info.height;
 
-    // 复制代价数据（OccupancyGrid: 0=free, 100=occupied, -1=unknown）
+    // 复制代价数据。优先使用调用方已转换好的 Costmap::data (nav 层会把 unknown
+    // 映射为 free)，否则再按 OccupancyGrid 约定转换。-1 是未知区域，规划器不能
+    // 把它当致命障碍，否则探索目标(前沿)永远无法规划。
     costmap_data_.resize(nx_ * ny_);
-    for (size_t i = 0; i < costmap_->grid->data.size(); ++i) {
-        int8_t v = costmap_->grid->data[i];
-        if (v == 0) {
-            costmap_data_[i] = 0;                     // free
-        } else if (v < 0 || v >= 100) {
-            costmap_data_[i] = 255;                   // unknown or occupied → lethal
-        } else {
-            costmap_data_[i] = static_cast<unsigned char>(v * 255 / 100);  // scale
+    if (costmap_->data.size() == costmap_data_.size()) {
+        for (size_t i = 0; i < costmap_data_.size(); ++i) {
+            costmap_data_[i] = costmap_->data[i];
+        }
+    } else {
+        for (size_t i = 0; i < costmap_->grid->data.size() && i < costmap_data_.size(); ++i) {
+            int8_t v = costmap_->grid->data[i];
+            if (v <= 0) {
+                costmap_data_[i] = 0;                 // free / unknown
+            } else if (v >= 100) {
+                costmap_data_[i] = 255;               // occupied → lethal
+            } else {
+                costmap_data_[i] = static_cast<unsigned char>(v * 255 / 100);  // scale
+            }
         }
     }
 

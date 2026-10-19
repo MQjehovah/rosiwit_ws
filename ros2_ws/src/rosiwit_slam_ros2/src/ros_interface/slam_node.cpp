@@ -189,6 +189,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.output_filter_alpha = cfg["output_filter_alpha"].as<double>(m_cfg.output_filter_alpha);
             m_cfg.output_filter_beta  = cfg["output_filter_beta"].as<double>(m_cfg.output_filter_beta);
             m_cfg.output_extrap_max_s = cfg["output_extrap_max_s"].as<double>(m_cfg.output_extrap_max_s);
+            m_cfg.grid_map_resolution = cfg["map_resolution"].as<double>(m_cfg.grid_map_resolution);
             m_cfg.absolute_enabled = cfg["absolute_enabled"].as<bool>(m_cfg.absolute_enabled);
             m_cfg.absolute_topic   = cfg["absolute_topic"].as<std::string>(m_cfg.absolute_topic);
             m_cfg.datum_x = cfg["absolute_datum_x"].as<double>(m_cfg.datum_x);
@@ -522,10 +523,25 @@ void SlamNode::mapTimerCB() {
     }
 
     // 2. grid_map (nav_msgs/OccupancyGrid)
-    // mapping 模式下也发布, 给导航提供 costmap
-    if (!m_grid_map_published && (is_localization || m_map_pub->get_subscription_count() > 0)) {
-        auto grid_info = m_algo_raw->getGridInfo();
-        if (grid_info.width > 0 && grid_info.height > 0) {
+    // mapping 模式下也要持续更新, 否则导航/探索拿到的是启动时的空图或旧图.
+    const bool need_grid = is_localization ||
+        m_map_pub->get_subscription_count() > 0 ||
+        m_grid_map_pub->get_subscription_count() > 0;
+    if (need_grid) {
+        rosiwit_slam::GridInfo grid_info;
+        bool have_grid = false;
+        if (is_localization) {
+            grid_info = m_algo_raw->getGridInfo();
+            have_grid = grid_info.width > 0 && grid_info.height > 0;
+        } else {
+            // 走 generateGridMap 的同一路径 (逐帧观测 + 地面处理), 保证实时图与存盘一致.
+            have_grid = m_algo_raw->getRealtimeGrid(m_cfg.grid_map_resolution, grid_info);
+            if (!have_grid) {
+                grid_info = m_algo_raw->getGridInfo();
+                have_grid = grid_info.width > 0 && grid_info.height > 0;
+            }
+        }
+        if (have_grid) {
             nav_msgs::msg::OccupancyGrid grid;
             grid.header.frame_id = m_cfg.world_frame;
             grid.header.stamp = now();
@@ -536,21 +552,14 @@ void SlamNode::mapTimerCB() {
             grid.info.origin.position.y = grid_info.origin_y;
             grid.info.origin.position.z = 0.0;
             grid.info.origin.orientation.w = 1.0;
-            // ROS OccupancyGrid 首行=最大 y; 内部 data 首行=最小 y -> 竖直翻转
-            {
-                const int w = grid_info.width, h = grid_info.height;
-                grid.data.resize(static_cast<size_t>(w) * h);
-                for (int row = 0; row < h; ++row) {
-                    const int src = h - 1 - row;
-                    for (int col = 0; col < w; ++col)
-                        grid.data[static_cast<size_t>(row) * w + col] =
-                            grid_info.data[static_cast<size_t>(src) * w + col];
-                }
-            }
+            // 内部 GridInfo 与 ROS OccupancyGrid 都是 row0 = 最小 y, 直接拷贝.
+            grid.data = grid_info.data;
             m_grid_map_pub->publish(grid);
             if (m_map_pub) m_map_pub->publish(grid);
             m_grid_map_published = true;
-            RCLCPP_INFO(get_logger(), "Published grid_map (%d x %d, res=%.3f)", grid.info.width, grid.info.height, grid.info.resolution);
+            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+                "Published grid_map (%d x %d, res=%.3f)",
+                grid.info.width, grid.info.height, grid.info.resolution);
         }
     }
 }

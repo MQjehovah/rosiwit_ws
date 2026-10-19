@@ -1,5 +1,7 @@
 #include "imu_processor.h"
 
+#include <cmath>
+
 IMUProcessor::IMUProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_config(config), m_kf(kf)
 {
     m_Q.setIdentity();
@@ -45,6 +47,14 @@ bool IMUProcessor::initialize(SyncPackage &package)
     }
     V3D acc_mean = acc_sum / n_static;
     V3D gyro_mean = gyro_sum / n_static;
+
+    // 自由落体/传感器异常时加速度接近 0. 若继续做重力对齐, normalized()
+    // 会对零向量做除法并触发 SIGFPE. 丢弃本批样本, 等机器人落地后重新初始化.
+    const double acc_norm = acc_mean.norm();
+    if (!std::isfinite(acc_norm) || acc_norm < 1.0) {
+        m_imu_cache.clear();
+        return false;
+    }
 
     m_kf->x().r_il = m_config.r_il;
     m_kf->x().t_il = m_config.t_il;
@@ -152,6 +162,10 @@ void IMUProcessor::undistort(SyncPackage &package)
     m_kf->predict(inp, dt, m_Q);
     m_last_imu = m_imu_cache.back();
     m_last_propagate_end_time = propagate_time_end;
+
+    // 去畸变开关: 仿真雷达(如 Gazebo GPU ray)一帧是瞬时快照且没有逐点时间,
+    // 强行按扫描周期摊开再补偿反而会引入假旋转. 关闭后仍保留上面的 IMU 传播.
+    if (!m_config.undistort_enable) return;
 
     M3D cur_r_wi = m_kf->x().r_wi;
     V3D cur_t_wi = m_kf->x().t_wi;

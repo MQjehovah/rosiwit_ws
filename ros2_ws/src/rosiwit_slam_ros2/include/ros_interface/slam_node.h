@@ -55,6 +55,7 @@ private:
         double output_filter_alpha = 0.5;    // 输出 alpha-beta 滤波 alpha
         double output_filter_beta  = 0.2;    // 输出 alpha-beta 滤波 beta
         double output_extrap_max_s = 0.3;    // 外推上限(s)
+        double grid_map_resolution = 0.3;    // 实时 /map 分辨率(m)
         bool   absolute_enabled  = false;    // 绝对约束(GNSS/UWB/反光标/二维码)开关
         std::string absolute_topic = "/absolute_pose";  // geometry_msgs/PoseWithCovarianceStamped
         double datum_x = 0, datum_y = 0, datum_z = 0, datum_yaw_deg = 0;  // 绝对源系 -> 地图系
