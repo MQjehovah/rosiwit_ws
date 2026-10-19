@@ -393,6 +393,9 @@ void SlamPipeline::handleLocalization(const LidarFrame& f) {
 }
 
 bool SlamPipeline::onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) {
+    // 模式切换后, SlamBase 里可能还残留上一种模式已同步的包;
+    // 定位模式绝不能继续喂建图前端.
+    if (m_mode.load() != PipelineMode::MAPPING) return false;
     return handleMapping(pkg, out);
 }
 
