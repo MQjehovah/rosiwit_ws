@@ -13,11 +13,11 @@ endif()
 
 find_package(catkin REQUIRED COMPONENTS
     roscpp nav_msgs geometry_msgs sensor_msgs std_msgs
-    tf2 tf2_ros tf2_geometry_msgs)
+    tf2 tf2_ros tf2_geometry_msgs std_srvs)
 
 catkin_package(
     CATKIN_DEPENDS roscpp nav_msgs geometry_msgs sensor_msgs std_msgs
-                   tf2 tf2_ros tf2_geometry_msgs)
+                   tf2 tf2_ros tf2_geometry_msgs std_srvs)
 
 # ==================== 算法核心 (源码共享, 独立开发, 此处内联构建) ====================
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation

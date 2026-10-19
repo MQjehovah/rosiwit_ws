@@ -14,22 +14,30 @@
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <sensor_msgs/LaserScan.h>
+#include <std_msgs/String.h>
+#include <std_srvs/Trigger.h>
 
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
+#include "rosiwit_navigation/nav_core/safety_monitor.hpp"
 #include "path_smoother.hpp"
+
+// 算法核心命名空间 (ROS2 薄层同样使用 rosiwit_navigation 前缀).
+using namespace rosiwit_navigation;
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -59,6 +67,15 @@ double normalizeAngle(double a)
   while (a > M_PI) { a -= 2.0 * M_PI; }
   while (a < -M_PI) { a += 2.0 * M_PI; }
   return a;
+}
+
+std::vector<std::pair<double, double>> toPolygon(const std::vector<double> & flat)
+{
+  std::vector<std::pair<double, double>> polygon;
+  for (size_t i = 0; i + 1 < flat.size(); i += 2) {
+    polygon.emplace_back(flat[i], flat[i + 1]);
+  }
+  return polygon;
 }
 
 }  // namespace
@@ -103,6 +120,31 @@ private:
     pnh_.param<std::string>("planner_name", planner_name_, "astar");
     pnh_.param<std::string>("controller_name", controller_name_, "pure_pursuit");
     pnh_.param<std::string>("odom_topic", odom_topic_, "/odom");
+
+    pnh_.param<bool>("safety_enabled", safety_enabled_, true);
+    pnh_.param<double>("safety_self_filter_radius", safety_self_filter_radius_, 0.25);
+    pnh_.param<bool>("safety_fail_safe_on_timeout", safety_fail_safe_on_timeout_, true);
+    pnh_.param<double>("safety_source_timeout", safety_source_timeout_, 0.5);
+    pnh_.param<double>("safety_slowdown_ratio", safety_slowdown_ratio_, 0.5);
+    pnh_.param<bool>("safety_approach_enabled", safety_approach_enabled_, true);
+    pnh_.param<double>("safety_time_before_collision", safety_time_before_collision_, 2.0);
+    std::vector<double> stop_poly, slow_poly, footprint;
+    const std::vector<double> default_stop{-0.55, -0.40, 0.55, -0.40, 0.55, 0.40, -0.55, 0.40};
+    const std::vector<double> default_slow{-0.75, -0.55, 0.85, -0.55, 0.85, 0.55, -0.75, 0.55};
+    const std::vector<double> default_footprint{-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22};
+    pnh_.param<std::vector<double>>("safety_stop_polygon", stop_poly, default_stop);
+    pnh_.param<std::vector<double>>("safety_slowdown_polygon", slow_poly, default_slow);
+    pnh_.param<std::vector<double>>("safety_footprint", footprint, default_footprint);
+
+    core::SafetyMonitorConfig safety_cfg;
+    safety_cfg.enabled = safety_enabled_;
+    safety_cfg.stop_polygon = toPolygon(stop_poly);
+    safety_cfg.slowdown_polygon = toPolygon(slow_poly);
+    safety_cfg.slowdown_ratio = safety_slowdown_ratio_;
+    safety_cfg.approach_enabled = safety_approach_enabled_;
+    safety_cfg.time_before_collision = safety_time_before_collision_;
+    safety_cfg.footprint = toPolygon(footprint);
+    safety_monitor_.configure(safety_cfg);
   }
 
   // ---- 核心策略 (来自算法核心, ROS 无关) ----
@@ -150,11 +192,15 @@ private:
     global_path_pub_ = nh_.advertise<nav_msgs::Path>("/global_path", 1);
     global_costmap_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("/global_costmap", 1, true);
     local_costmap_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("/local_costmap", 1, true);
+    goal_status_pub_ = nh_.advertise<std_msgs::String>("/goal_status", 1, true);
+    diagnostics_pub_ = nh_.advertise<std_msgs::String>("/nav_diagnostics", 1);
 
     odom_sub_ = nh_.subscribe(odom_topic_, 1, &RosiwitNavigationRos1Node::odomCallback, this);
     map_sub_ = nh_.subscribe("/map", 1, &RosiwitNavigationRos1Node::mapCallback, this);
     scan_sub_ = nh_.subscribe("/scan", 1, &RosiwitNavigationRos1Node::scanCallback, this);
     goal_sub_ = nh_.subscribe("/goal_pose", 1, &RosiwitNavigationRos1Node::goalCallback, this);
+    nav_stop_srv_ = nh_.advertiseService(
+      "/nav_stop", &RosiwitNavigationRos1Node::navStopCallback, this);
 
     control_timer_ = nh_.createTimer(
       ros::Duration(1.0 / std::max(1.0, controller_frequency_)),
@@ -164,6 +210,8 @@ private:
     replanning_timer_ = nh_.createTimer(
       ros::Duration(1.0 / std::max(0.1, planner_frequency_)),
       &RosiwitNavigationRos1Node::replanningCheck, this);
+    diagnostics_timer_ = nh_.createTimer(
+      ros::Duration(1.0), &RosiwitNavigationRos1Node::diagnosticsCallback, this);
   }
 
   // ---- 回调 ----
@@ -186,6 +234,7 @@ private:
 
   void scanCallback(const sensor_msgs::LaserScan::ConstPtr & msg)
   {
+    last_scan_stamp_ = ros::Time::now();
     geometry_msgs::TransformStamped tf;
     try {
       tf = tf_buffer_.lookupTransform(map_frame_, msg->header.frame_id,
@@ -218,10 +267,56 @@ private:
 
   void goalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
   {
-    ROS_INFO("[rosiwit_navigation_ros1] received /goal_pose: (%.2f, %.2f)",
-             msg->pose.position.x, msg->pose.position.y);
-    goal_pose_ = *msg;
+    geometry_msgs::PoseStamped goal = *msg;
+    if (goal.header.frame_id.empty()) {
+      goal.header.frame_id = map_frame_;
+    } else if (goal.header.frame_id != map_frame_) {
+      try {
+        tf_buffer_.transform(goal, goal, map_frame_, ros::Duration(0.1));
+      } catch (tf2::TransformException & ex) {
+        ROS_ERROR("[rosiwit_navigation_ros1] goal frame transform failed: %s", ex.what());
+        setGoalStatus("REJECTED_FRAME");
+        return;
+      }
+    }
+    ROS_INFO("[rosiwit_navigation_ros1] received goal: (%.2f, %.2f) frame=%s",
+             goal.pose.position.x, goal.pose.position.y, goal.header.frame_id.c_str());
+    goal_pose_ = goal;
+    setGoalStatus("ACCEPTED");
     executeNavigation(goal_pose_);
+  }
+
+  bool navStopCallback(std_srvs::Trigger::Request &, std_srvs::Trigger::Response & res)
+  {
+    stopNavigation();
+    setGoalStatus("STOPPED");
+    res.success = true;
+    res.message = "navigation stopped";
+    return true;
+  }
+
+  void setGoalStatus(const std::string & status)
+  {
+    goal_status_ = status;
+    std_msgs::String msg;
+    msg.data = status;
+    if (goal_status_pub_) goal_status_pub_.publish(msg);
+  }
+
+  void diagnosticsCallback(const ros::TimerEvent &)
+  {
+    if (!diagnostics_pub_) return;
+    std::ostringstream os;
+    os << "{\"state\":\"" << (is_navigating_ ? "NAVIGATING" : "IDLE")
+       << "\",\"goal_status\":\"" << goal_status_
+       << "\",\"safety\":\"" << last_safety_state_
+       << "\",\"safety_scale\":" << last_safety_scale_
+       << ",\"path_points\":" << current_path_.poses.size()
+       << ",\"odom_age\":" << (last_odom_stamp_.isZero() ? -1.0 : (ros::Time::now() - last_odom_stamp_).toSec())
+       << "}";
+    std_msgs::String msg;
+    msg.data = os.str();
+    diagnostics_pub_.publish(msg);
   }
 
   // ---- costmap ----
@@ -467,7 +562,7 @@ private:
         const int nx = c.first + ddx[i];
         const int ny = c.second + ddy[i];
         if (nx < 0 || nx >= lw || ny < 0 || ny >= lw) { continue; }
-        if (cd + 1 < ldist[ny * lw + nx]) { ldist[ny * lw + nx] = cd + 1; q.push({nx, ny}); }
+        if (cd + 1 < ldist[ny * lw + nx]) { ldist[ny * lw + nx] = cd + 1; lq.push({nx, ny}); }
       }
     }
 
@@ -516,6 +611,7 @@ private:
     }
     if (!updateCurrentPose()) {
       ROS_ERROR("[rosiwit_navigation_ros1] cannot get current pose for planning");
+      setGoalStatus("FAILED_POSE");
       stopNavigation();
       return;
     }
@@ -531,6 +627,7 @@ private:
     if (!result.is_ok()) {
       ROS_ERROR("[rosiwit_navigation_ros1] planner '%s' failed: %s",
                 planner_name_.c_str(), result.error_message().c_str());
+      setGoalStatus("FAILED_PLAN");
       stopNavigation();
       return;
     }
@@ -597,6 +694,7 @@ private:
 
     if (isGoalReached()) {
       ROS_INFO("[rosiwit_navigation_ros1] goal reached");
+      setGoalStatus("SUCCEEDED");
       stopNavigation();
       return;
     }
@@ -609,12 +707,13 @@ private:
         m_need_initial_rotate_ = false;
       } else {
         rot_cmd.angular.z = std::max(-0.8, std::min(0.8, 1.5 * angle_error));
-        cmd_vel_pub_.publish(rot_cmd);
+        cmd_vel_pub_.publish(applySafety(rot_cmd));
         return;
       }
     }
 
     geometry_msgs::Twist cmd_vel = computeVelocityCommand();
+    cmd_vel = applySafety(cmd_vel);
     cmd_vel_pub_.publish(cmd_vel);
     path_pub_.publish(current_path_);
   }
@@ -672,6 +771,35 @@ private:
     cmd_vel.linear.x = std::max(min_velocity_x_, std::min(max_velocity_x_, cmd_vel.linear.x));
     cmd_vel.angular.z = std::max(-max_velocity_theta_, std::min(max_velocity_theta_, cmd_vel.angular.z));
     return cmd_vel;
+  }
+
+  geometry_msgs::Twist applySafety(const geometry_msgs::Twist & cmd)
+  {
+    if (!safety_enabled_) return cmd;
+    if (safety_fail_safe_on_timeout_ && !last_scan_stamp_.isZero() &&
+        (ros::Time::now() - last_scan_stamp_).toSec() > safety_source_timeout_) {
+      last_safety_state_ = "STALE";
+      last_safety_scale_ = 0.0;
+      return geometry_msgs::Twist();
+    }
+
+    const double yaw = yawFromQuat(current_pose_.pose.orientation);
+    const double cy = std::cos(yaw), sy = std::sin(yaw);
+    std::vector<std::pair<double, double>> points;
+    points.reserve(laser_points_.size());
+    for (const auto & p : laser_points_) {
+      const double dx = p.x - current_pose_.pose.position.x;
+      const double dy = p.y - current_pose_.pose.position.y;
+      const double bx = cy * dx + sy * dy;
+      const double by = -sy * dx + cy * dy;
+      if (bx * bx + by * by < safety_self_filter_radius_ * safety_self_filter_radius_) continue;
+      points.emplace_back(bx, by);
+    }
+
+    const core::SafetyResult result = safety_monitor_.filter(toCoreVelocity(cmd), points);
+    last_safety_state_ = result.state;
+    last_safety_scale_ = result.scale;
+    return toRosTwist(result.command);
   }
 
   void stopNavigation()
@@ -755,6 +883,17 @@ private:
   double max_accel_x_ = 0.4;
   double max_accel_theta_ = 0.8;
 
+  bool safety_enabled_ = true;
+  double safety_self_filter_radius_ = 0.25;
+  bool safety_fail_safe_on_timeout_ = true;
+  double safety_source_timeout_ = 0.5;
+  double safety_slowdown_ratio_ = 0.5;
+  bool safety_approach_enabled_ = true;
+  double safety_time_before_collision_ = 2.0;
+  core::SafetyMonitor safety_monitor_;
+  std::string last_safety_state_ = "PASS";
+  double last_safety_scale_ = 1.0;
+
   std::string global_frame_;
   std::string robot_frame_;
   std::string map_frame_;
@@ -774,10 +913,16 @@ private:
   ros::Publisher global_path_pub_;
   ros::Publisher global_costmap_pub_;
   ros::Publisher local_costmap_pub_;
+  ros::Publisher goal_status_pub_;
+  ros::Publisher diagnostics_pub_;
+  ros::ServiceServer nav_stop_srv_;
+  std::string goal_status_ = "IDLE";
   ros::Time last_odom_stamp_;
+  ros::Time last_scan_stamp_;
   ros::Timer control_timer_;
   ros::Timer local_costmap_timer_;
   ros::Timer replanning_timer_;
+  ros::Timer diagnostics_timer_;
 
   nav_msgs::OccupancyGrid::ConstPtr current_map_;
   geometry_msgs::PoseStamped current_pose_;
