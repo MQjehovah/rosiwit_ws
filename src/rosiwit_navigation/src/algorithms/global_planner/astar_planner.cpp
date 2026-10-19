@@ -108,7 +108,7 @@ void AStarPlanner::inflateCostmap()
 
     // 安全缓冲区：障碍物往外 safety_cells 格标为 lethal（强制绕行）
     // 原 0.15m 太小，路径会贴着障碍物走；加大到 0.5m 让路径明显偏离障碍物
-    int safety_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
+    int safety_cells = std::max(0, static_cast<int>(std::ceil(robot_radius_ / res)));
 
     // BFS: 从所有障碍物格子出发计算距离
     std::vector<float> dist(nx_ * ny_, std::numeric_limits<float>::max());

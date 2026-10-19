@@ -103,9 +103,16 @@ SafetyResult SafetyMonitor::filter(
     return result;
   }
 
-  if (countPointsInPolygon(points, config_.stop_polygon) >
-    config_.stop_max_points)
-  {
+  int stop_count = 0;
+  if (config_.stop_radius > 0.0) {
+    const double r2 = config_.stop_radius * config_.stop_radius;
+    for (const auto & p : points) {
+      if (p.first * p.first + p.second * p.second <= r2) ++stop_count;
+    }
+  } else {
+    stop_count = countPointsInPolygon(points, config_.stop_polygon);
+  }
+  if (stop_count > config_.stop_max_points) {
     result.command = VelocityCommand{};
     result.scale = 0.0;
     result.state = "STOP";

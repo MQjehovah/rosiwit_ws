@@ -16,6 +16,7 @@ struct SafetyMonitorConfig
 {
   bool enabled = true;
   std::vector<std::pair<double, double>> stop_polygon;
+  double stop_radius = 0.0;  // >0: 用圆形安全区, 优先于 polygon
   int stop_max_points = 2;
   std::vector<std::pair<double, double>> slowdown_polygon;
   int slowdown_max_points = 2;

@@ -257,6 +257,7 @@ void NavigationNode::loadSafetyParameters()
   this->declare_parameter("safety_stop_polygon", std::vector<double>{
     -0.23, -0.21, 0.23, -0.21, 0.23, 0.21, -0.23, 0.21});
   this->declare_parameter("safety_stop_enabled", true);
+  this->declare_parameter("safety_stop_radius", 0.0);
   this->declare_parameter("safety_stop_max_points", 2);
   this->declare_parameter("safety_slowdown_polygon", std::vector<double>{
     -0.60, -0.50, 0.70, -0.50, 0.70, 0.50, -0.60, 0.50});
@@ -292,6 +293,7 @@ void NavigationNode::loadSafetyParameters()
   cfg.stop_polygon = stop_enabled ? to_polygon(
     this->get_parameter("safety_stop_polygon").as_double_array()) :
     std::vector<std::pair<double, double>>{};
+  cfg.stop_radius = this->get_parameter("safety_stop_radius").as_double();
   cfg.stop_max_points =
     static_cast<int>(this->get_parameter("safety_stop_max_points").as_int());
   const bool slowdown_enabled =
@@ -949,6 +951,21 @@ void NavigationNode::controlLoop()
       publishVelocityCommand(rot_cmd);
       return;
     }
+  }
+
+  // 实际速度长期接近 0: DWA/安全层把输出压得太小, 触发旋转恢复.
+  const bool actual_still =
+    std::hypot(current_velocity_.linear.x, current_velocity_.linear.y) < 0.02 &&
+    std::abs(current_velocity_.angular.z) < 0.05;
+  if (recovery_enabled_ && actual_still) {
+    if (++motion_stall_cycles_ >= recovery_trigger_cycles_) {
+      recovery_active_ = true;
+      recovery_until_sec_ = now().seconds() + recovery_duration_;
+      motion_stall_cycles_ = 0;
+      RCLCPP_WARN(get_logger(), "Robot not moving; recovery rotation");
+    }
+  } else {
+    motion_stall_cycles_ = 0;
   }
 
   // 安全层 STOP 持续 > 1s: 原地旋转寻找脱困方向 (安全层不再继续拦截

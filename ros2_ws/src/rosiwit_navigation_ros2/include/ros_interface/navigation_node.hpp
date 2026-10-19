@@ -299,6 +299,7 @@ private:
   double recovery_linear_velocity_ = -0.10;
   double recovery_angular_velocity_ = 0.60;
   int stall_cycles_ = 0;
+  int motion_stall_cycles_ = 0;
   bool recovery_active_ = false;
   bool recovery_bypass_safety_ = true;
   double recovery_until_sec_ = 0.0;

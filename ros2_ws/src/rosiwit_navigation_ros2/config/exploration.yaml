@@ -31,7 +31,8 @@ rosiwit_navigation_node:
     # 0.65m 为梯度代价, 让路径走走廊中间但不会把门洞整段判死.
     # 车体实际半径约 0.20m; 硬缓冲 0.22m, 梯度膨胀 0.90m.
     # 硬缓冲过大(0.32)会堵死 0.8m 门洞; 开阔区域由梯度代价把路径推离墙.
-    robot_radius: 0.22
+    # 车体实际半径 0.20; 硬规划边界 0.25; 0.90 为软膨胀距离
+    robot_radius: 0.25
     inflation_radius: 0.90
     local_costmap_size: 10.0
     # 平滑器会把 unknown 当自由并可能把路径拉进未知墙; 探索时关闭
@@ -41,7 +42,8 @@ rosiwit_navigation_node:
     recovery_enabled: true
     recovery_trigger_cycles: 40
     recovery_duration: 1.2
-    recovery_linear_velocity: 0.0
+    # 后退 + 旋转才能从贴墙/家具卡死中脱出; 纯原地旋转会被物理卡住
+    recovery_linear_velocity: -0.12
     recovery_angular_velocity: 0.60
     recovery_bypass_safety: true
 
@@ -53,20 +55,18 @@ rosiwit_navigation_node:
     safety_fail_safe_on_timeout: false
     safety_min_height: 0.05
     safety_max_height: 1.0
-    # 边界划分:
-    #   DWA/local costmap -> 正常避障 (硬缓冲 0.22m, 梯度 0.9m)
-    #   安全层 -> 方向相关的 1s TTC 推演, 只拦截即将碰撞的运动
-    # 紧急 STOP 只包住车体本身 (小于 DWA 的 0.22~0.25m 硬避障),
-    # 正常路径 0.30m 不会触发; 侧向 0.22m 也不会像之前那样全向锁死.
+    # 边界: 碰撞半径 0.20m; 安全停止半径 0.25m; 规划硬边界 0.25m;
+    # 0.90m 是软膨胀距离. 规划不允许路径进入 0.25m, 安全层进入 0.25m 就 STOP.
     safety_stop_enabled: true
-    safety_stop_polygon: [-0.21, -0.19, 0.21, -0.19, 0.21, 0.19, -0.21, 0.19]
+    safety_stop_radius: 0.25
+    safety_stop_polygon: [-0.25, -0.25, 0.25, -0.25, 0.25, 0.25, -0.25, 0.25]
     safety_stop_max_points: 2
     # SLOWDOWN 也关闭, 避免和 DWA 速度控制叠加
     safety_slowdown_enabled: false
     safety_slowdown_polygon: [-0.60, -0.50, 0.70, -0.50, 0.70, 0.50, -0.60, 0.50]
     safety_slowdown_max_points: 2
     safety_slowdown_ratio: 0.5
-    safety_approach_enabled: true
+    safety_approach_enabled: false
     safety_time_before_collision: 1.0
     safety_simulation_time_step: 0.1
     safety_footprint: [-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22]
