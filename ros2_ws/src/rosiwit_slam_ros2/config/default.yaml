@@ -12,10 +12,10 @@ modules:
   map_manager: "pcd_map_manager"
   localization: "localization_pipeline"   # 可编排流水线 | gicp_localization | scan_context_localization
 
-imu_topic: /imu
-lidar_topic: /lidar
+imu_topic: imu
+lidar_topic: lidar
 enable_odom: false          # 轮式里程计开关(供定位运动先验; 洗地机易打滑, 默认关)
-odom_topic: /odom
+odom_topic: wheel_odom
 lidar_frame: lidar          # 点云 frame; r_il/t_il 由 ROS2 层从 TF 推导
 imu_frame: lidar            # 核心估计 body (FAST-LIO2 是 IMU body)
 body_frame: base_link
@@ -78,7 +78,7 @@ output_filter_beta: 0.2      # alpha-beta beta
 output_extrap_max_s: 0.3     # 外推上限(s)
 # L19 绝对约束 (GNSS/UWB/反光标/二维码)
 absolute_enabled: false      # 开关 (启用后订阅 absolute_topic)
-absolute_topic: /absolute_pose  # geometry_msgs/PoseWithCovarianceStamped
+absolute_topic: absolute_pose  # geometry_msgs/PoseWithCovarianceStamped
 absolute_datum_x: 0.0        # 绝对源系 -> 地图系 datum
 absolute_datum_y: 0.0
 absolute_datum_z: 0.0
@@ -326,7 +326,7 @@ localization:
 # VO between 因子在关键帧产生时自动生成, 视觉回环约束即时入图.
 vision:
   enabled: false            # 视觉松耦合总开关 (false 时不订阅 VO 话题)
-  vo_topic: /visual_odometry  # 外部 VO 库发布的里程计话题 (nav_msgs/Odometry)
+  vo_topic: visual_odometry  # 外部 VO 库发布的里程计话题 (nav_msgs/Odometry)
   assoc_dt: 0.05            # VO 与关键帧时间关联容差(s)
   vo_trans_noise: 0.05      # VO between 平移噪声(std)
   vo_rot_noise: 0.02        # VO between 旋转噪声(std)

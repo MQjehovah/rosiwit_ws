@@ -157,7 +157,7 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
 
   // 外部停止服务 (探索节点 disable/finish 时调用)
   stop_srv_ = this->create_service<std_srvs::srv::Trigger>(
-    "/stop_navigation",
+    "stop_navigation",
     [this](
       const std::shared_ptr<std_srvs::srv::Trigger::Request>,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -365,7 +365,7 @@ void NavigationNode::loadParameters()
 void NavigationNode::loadSafetyParameters()
 {
   declareIfNeeded("safety_enabled", true);
-  declareIfNeeded("safety_pointcloud_topic", std::string("/velodyne_points"));
+  declareIfNeeded("safety_pointcloud_topic", std::string("velodyne_points"));
   declareIfNeeded("safety_base_frame", std::string("base_footprint"));
   declareIfNeeded("safety_source_timeout", 2.0);
   declareIfNeeded("safety_self_filter_radius", 0.20);
@@ -534,7 +534,7 @@ void NavigationNode::safetyPointCloudCallback(
 
 void NavigationNode::initializeSubscribers()
 {
-  declareIfNeeded("odom_topic", std::string("/odom"));
+  declareIfNeeded("odom_topic", std::string("odom"));
   std::string odom_topic;
   get_parameter("odom_topic", odom_topic);
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
@@ -542,11 +542,11 @@ void NavigationNode::initializeSubscribers()
     std::bind(&NavigationNode::odometryCallback, this, std::placeholders::_1));
 
   map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
-    "/map", rclcpp::QoS(1).transient_local().reliable(),
+    "map", rclcpp::QoS(1).transient_local().reliable(),
     std::bind(&NavigationNode::mapCallback, this, std::placeholders::_1));
 
   scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
-    "/scan", rclcpp::SensorDataQoS(),
+    "scan", rclcpp::SensorDataQoS(),
     std::bind(&NavigationNode::scanCallback, this, std::placeholders::_1));
 
   if (safety_enabled_) {
@@ -556,11 +556,11 @@ void NavigationNode::initializeSubscribers()
   }
 
   goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-    "/goal_pose", rclcpp::SystemDefaultsQoS(),
+    "goal_pose", rclcpp::SystemDefaultsQoS(),
     std::bind(&NavigationNode::goalCallback, this, std::placeholders::_1));
 
   stop_sub_ = create_subscription<std_msgs::msg::String>(
-    "/nav_stop", rclcpp::QoS(10),
+    "nav_stop", rclcpp::QoS(10),
     std::bind(&NavigationNode::stopCallback, this, std::placeholders::_1));
 
   RCLCPP_INFO(get_logger(), "Subscribers initialized");
@@ -569,24 +569,24 @@ void NavigationNode::initializeSubscribers()
 void NavigationNode::initializePublishers()
 {
   cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>(
-    "/cmd_vel", rclcpp::SystemDefaultsQoS());
+    "cmd_vel", rclcpp::SystemDefaultsQoS());
 
   path_pub_ = create_publisher<nav_msgs::msg::Path>(
-    "/local_path", rclcpp::SystemDefaultsQoS());
+    "local_path", rclcpp::SystemDefaultsQoS());
 
   global_path_pub_ = create_publisher<nav_msgs::msg::Path>(
-    "/global_path", rclcpp::SystemDefaultsQoS());
+    "global_path", rclcpp::SystemDefaultsQoS());
 
   global_costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
-    "/global_costmap", rclcpp::QoS(1).transient_local());
+    "global_costmap", rclcpp::QoS(1).transient_local());
   local_costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
-    "/local_costmap", rclcpp::QoS(1).transient_local());
+    "local_costmap", rclcpp::QoS(1).transient_local());
   diagnostics_pub_ = create_publisher<std_msgs::msg::String>(
-    "/nav_diagnostics", rclcpp::QoS(10));
+    "nav_diagnostics", rclcpp::QoS(10));
   goal_status_pub_ = create_publisher<std_msgs::msg::String>(
-    "/goal_status", rclcpp::QoS(10));
+    "goal_status", rclcpp::QoS(10));
   safety_state_pub_ = create_publisher<std_msgs::msg::String>(
-    "/safety_state", 10);
+    "safety_state", 10);
 
   RCLCPP_INFO(get_logger(), "Publishers initialized");
 }

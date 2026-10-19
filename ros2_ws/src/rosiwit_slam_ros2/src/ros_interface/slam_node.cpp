@@ -281,7 +281,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     const auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(500)).best_effort();
     m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, sensor_qos, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
     m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, sensor_qos, std::bind(&SlamNode::lidarCB, this, _1), sensor_sub_opts);
-    m_init_pose_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10, std::bind(&SlamNode::initialPoseCB, this, _1), sensor_sub_opts);
+    m_init_pose_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("initialpose", 10, std::bind(&SlamNode::initialPoseCB, this, _1), sensor_sub_opts);
     // 视觉里程计 (可选): 由 vision.enabled 开关控制, 话题名可配置
     if (m_cfg.vision_enabled) {
         m_vo_sub = create_subscription<nav_msgs::msg::Odometry>(
@@ -414,7 +414,7 @@ void SlamNode::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
         std::lock_guard<std::mutex> lk(m_wheel_odom_mutex);
         m_wheel_odom = p;
         m_wheel_odom_valid = true;
-        m_wheel_odom_sec = p.time;
+        m_wheel_odom_sec = p.time > 0.0 ? p.time : now().seconds();
     } else if (m_cfg.odom_mode == "wheel") {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
             "wheel odom child '%s' != body_frame '%s'; cannot compute map->odom",

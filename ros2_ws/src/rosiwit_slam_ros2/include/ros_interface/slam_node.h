@@ -39,8 +39,8 @@ public:
 
 private:
     struct NodeConfig {
-        std::string imu_topic   = "/imu";
-        std::string lidar_topic = "/velodyne_points";
+        std::string imu_topic   = "imu";
+        std::string lidar_topic = "velodyne_points";
         std::string lidar_frame = "lidar";
         std::string imu_frame   = "lidar";     // 核心 body frame (FAST-LIO2 估计 IMU body)
         std::string body_frame  = "base_link";
@@ -55,9 +55,9 @@ private:
         double lidar_max_range  = 100.0;
         float  scan_period_ms   = 100.0f;   // LiDAR 扫描周期 (毫秒), 用于点时间戳
         bool   vision_enabled    = false;    // 视觉松耦合开关
-        std::string vo_topic     = "/visual_odometry";  // VO 库发布的里程计话题
+        std::string vo_topic     = "visual_odometry";  // VO 库发布的里程计话题
         bool   odom_enabled      = false;    // 轮式里程计开关(供定位运动先验)
-        std::string odom_topic   = "/odom";  // 轮式里程计话题
+        std::string odom_topic   = "wheel_odom";  // 轮式里程计话题
         double output_rate_hz    = 100.0;    // 定位高频输出频率(Hz); <=0 关闭(用扫描帧)
         double output_filter_alpha = 0.5;    // 输出 alpha-beta 滤波 alpha
         double output_filter_beta  = 0.2;    // 输出 alpha-beta 滤波 beta
@@ -65,7 +65,7 @@ private:
         double grid_map_resolution = 0.3;    // 实时 /map 分辨率(m)
         double map_publish_period = 0.2;     // /map 发布周期(s)
         bool   absolute_enabled  = false;    // 绝对约束(GNSS/UWB/反光标/二维码)开关
-        std::string absolute_topic = "/absolute_pose";  // geometry_msgs/PoseWithCovarianceStamped
+        std::string absolute_topic = "absolute_pose";  // geometry_msgs/PoseWithCovarianceStamped
         double datum_x = 0, datum_y = 0, datum_z = 0, datum_yaw_deg = 0;  // 绝对源系 -> 地图系
     };
 

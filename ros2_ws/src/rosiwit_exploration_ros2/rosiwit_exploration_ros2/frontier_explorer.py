@@ -194,12 +194,12 @@ class FrontierExplorer(Node):
     def __init__(self) -> None:
         super().__init__('frontier_explorer')
 
-        self.declare_parameter('map_topic', '/map')
-        self.declare_parameter('odom_topic', '/odom')
-        self.declare_parameter('goal_topic', '/goal_pose')
+        self.declare_parameter('map_topic', 'map')
+        self.declare_parameter('odom_topic', 'odom')
+        self.declare_parameter('goal_topic', 'goal_pose')
         self.declare_parameter('goal_interface', 'pose')  # pose | nav2 | auto
         self.declare_parameter('nav2_action', 'navigate_to_pose')
-        self.declare_parameter('global_costmap_topic', '/global_costmap')
+        self.declare_parameter('global_costmap_topic', 'global_costmap')
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('map_frame', '')
         self.declare_parameter('goal_frame', 'odom')
@@ -318,14 +318,14 @@ class FrontierExplorer(Node):
 
         self.goal_pub = self.create_publisher(PoseStamped, self.goal_topic, 10)
         self.goal_status_sub = self.create_subscription(
-            String, '/goal_status', self.goal_status_cb, 10)
+            String, 'goal_status', self.goal_status_cb, 10)
         self.marker_pub = self.create_publisher(MarkerArray, 'frontier_markers', 10)
-        self.stop_pub = self.create_publisher(String, '/nav_stop', 10)
-        self.stop_client = self.create_client(Trigger, '/stop_navigation')
+        self.stop_pub = self.create_publisher(String, 'nav_stop', 10)
+        self.stop_client = self.create_client(Trigger, 'stop_navigation')
         self.slam_save_map_client = (
-            self.create_client(SaveMap, '/save_map') if SaveMap else None)
+            self.create_client(SaveMap, 'save_map') if SaveMap else None)
         self.slam_save_grid_client = (
-            self.create_client(SaveGridMap, '/save_grid_map') if SaveGridMap else None)
+            self.create_client(SaveGridMap, 'save_grid_map') if SaveGridMap else None)
 
         self.action_client = None
         if NavigateToPose is not None and self.goal_interface in ('nav2', 'auto'):

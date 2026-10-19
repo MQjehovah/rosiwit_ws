@@ -40,4 +40,4 @@ rosiwit_navigation_node:
     inflation_radius: 1.0
 
     # 里程计话题（Gazebo 纯仿真用 /odom，跑 SLAM 时用 /lio_odom）
-    odom_topic: /odom
+    odom_topic: odom

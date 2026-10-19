@@ -12,8 +12,8 @@ modules:
   map_manager: "pcd_map_manager"
   localization: "gicp_localization"
 
-imu_topic: /imu
-lidar_topic: /velodyne_points
+imu_topic: imu
+lidar_topic: velodyne_points
 lidar_frame: lidar_link
 imu_frame: imu_link
 body_frame: base_footprint
@@ -22,7 +22,7 @@ map_frame: map
 odom_frame: odom
 # unified: SLAM 发布 odom->base, map->odom 静态 identity (当前仿真)
 # wheel:   轮式驱动发布 odom->base, SLAM 动态发布 map->odom;
-#          需 enable_odom:true, odom_topic:/wheel_odom, world_frame:map
+#          需 enable_odom:true, odom_topic:wheel_odom, world_frame:map
 odom_mode: unified
 
 # VLP-16 预处理
