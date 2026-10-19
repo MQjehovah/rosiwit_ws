@@ -55,7 +55,9 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
 
 bool FastLio2Frontend::getOdometry(PoseStamped& out) {
     if (!m_inited || m_builder->status() != BuilderStatus::MAPPING) return false;
-    out.time = 0;
+    // 输出必须使用扫描时间, 而不是 0 + ROS 层 now(); 处理延迟/离线回放时
+    // 否则 odom/TF/path 会被打上处理时刻, 造成 TF 外插和延迟统计错误.
+    out.time = m_last_lidar_time;
     out.rot   = m_kf->x().r_wi;
     out.trans = m_kf->x().t_wi;
     out.vel   = m_kf->x().v;

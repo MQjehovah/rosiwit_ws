@@ -208,10 +208,10 @@ core::Result<core::Path> AStarPlanner::plan(
     float origin_x = costmap_->grid->info.origin.position.x;
     float origin_y = costmap_->grid->info.origin.position.y;
 
-    int start_x = static_cast<int>((start.x - origin_x) / resolution);
-    int start_y = static_cast<int>((start.y - origin_y) / resolution);
-    int goal_x = static_cast<int>((goal.x - origin_x) / resolution);
-    int goal_y = static_cast<int>((goal.y - origin_y) / resolution);
+    int start_x = static_cast<int>(std::floor((start.x - origin_x) / resolution));
+    int start_y = static_cast<int>(std::floor((start.y - origin_y) / resolution));
+    int goal_x = static_cast<int>(std::floor((goal.x - origin_x) / resolution));
+    int goal_y = static_cast<int>(std::floor((goal.y - origin_y) / resolution));
 
     // 检查边界
     if (!isValid(start_x, start_y) || !isValid(goal_x, goal_y)) {

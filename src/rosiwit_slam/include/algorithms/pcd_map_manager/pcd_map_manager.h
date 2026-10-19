@@ -52,7 +52,7 @@ private:
 
     std::vector<Submap> submaps_;        // addSubMap 顺序保存的关键帧(原始位姿)
     PoseStamped m_frontier_anchor_;      // 前沿锚点 A = G_last*P_last^{-1}, 新位姿经 A∘R 转到修正系
-    std::mutex m_mutex_;                 // 保护 global_map_ / submaps_ / anchor
+    mutable std::mutex m_mutex_;         // 保护 global_map_ / submaps_ / anchor; const 查询也加锁
     std::atomic<uint64_t> m_revision_{0}; // 地图内容版本号
     double save_voxel_ = 0.3;            // 保存/重建全局地图时的体素大小(m), yaml: map_save_voxel
     // 后端修正量的合理性上限: 相邻两次优化之间的锚点跳变量超过它就拒绝本次修正并告警。

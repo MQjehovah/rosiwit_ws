@@ -678,12 +678,16 @@ void NavigationNode::updateCostmap()
       else cm.data[i] = 0;
     }
 
-    // 叠加激光实时障碍物
-    for (const auto& pt : laser_points_) {
-      int mx = static_cast<int>((pt.x - ox) / res);
-      int my = static_cast<int>((pt.y - oy) / res);
-      if (mx >= 0 && mx < static_cast<int>(w) && my >= 0 && my < static_cast<int>(h))
-        cm.data[my * w + mx] = 255;
+    // 叠加激光实时障碍物; 扫描停止后不能把旧点永久写进规划图.
+    const bool laser_fresh = last_scan_sec_ > 0.0 &&
+      (now().seconds() - last_scan_sec_ <= 1.0);
+    if (laser_fresh) {
+      for (const auto& pt : laser_points_) {
+        int mx = static_cast<int>((pt.x - ox) / res);
+        int my = static_cast<int>((pt.y - oy) / res);
+        if (mx >= 0 && mx < static_cast<int>(w) && my >= 0 && my < static_cast<int>(h))
+          cm.data[my * w + mx] = 255;
+      }
     }
 
     // 发布用 costmap 用原始地图 + 安全环; 路径硬边界比它多一格,

@@ -130,7 +130,10 @@ bool PcdMapManager::saveMap(const std::string& name) {
         return false;
     }
 
-    std::string path = map_dir_ + "/" + name;
+    // 服务接口文档允许绝对路径; 之前无条件拼 map_dir_ 会把
+    // /tmp/map.pcd 变成 ./tmp/map.pcd 这类错误路径.
+    const std::string path = (!name.empty() && name[0] == '/')
+        ? name : map_dir_ + "/" + name;
     if (pcl::io::savePCDFileBinary(path, *global_map_) == -1) {
         std::cerr << "[PcdMapManager] Save failed: " << path << std::endl;
         return false;
@@ -141,7 +144,8 @@ bool PcdMapManager::saveMap(const std::string& name) {
 }
 
 bool PcdMapManager::loadMap(const std::string& name) {
-    std::string path = map_dir_ + "/" + name;
+    const std::string path = (!name.empty() && name[0] == '/')
+        ? name : map_dir_ + "/" + name;
     CloudType::Ptr cloud(new CloudType());
     if (pcl::io::loadPCDFile(path, *cloud) == -1) {
         std::cerr << "[PcdMapManager] Load failed: " << path << std::endl;
@@ -150,6 +154,13 @@ bool PcdMapManager::loadMap(const std::string& name) {
     std::lock_guard<std::mutex> lock(m_mutex_);
     global_map_ = cloud;
     observations_.clear();   // 纯 PCD 无逐帧原点, 射线类策略退回整体点云
+    // 换图必须丢弃旧建图关键帧/锚点, 否则后续 addSubMap/backend 会
+    // 把上一张地图的关键帧重新拼回来.
+    submaps_.clear();
+    m_frontier_anchor_ = PoseStamped{};
+    m_grid_data.clear();
+    m_grid_w = 0;
+    m_grid_h = 0;
     ++m_revision_;
     std::cout << "[PcdMapManager] Loaded: " << path
               << " (" << global_map_->size() << " pts)" << std::endl;
@@ -407,6 +418,7 @@ bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& 
 bool PcdMapManager::loadGridMap(const std::string& pgm_path, const std::string& yaml_path) {
     GridInfo info;
     if (!loadGridMapPGM(pgm_path, yaml_path, info)) return false;
+    std::lock_guard<std::mutex> lock(m_mutex_);
     m_grid_data = info.data;
     m_grid_w = info.width;
     m_grid_h = info.height;
@@ -418,6 +430,7 @@ bool PcdMapManager::loadGridMap(const std::string& pgm_path, const std::string& 
 }
 
 GridInfo PcdMapManager::getGridInfo() const {
+    std::lock_guard<std::mutex> lock(m_mutex_);
     GridInfo info;
     info.width = m_grid_w;
     info.height = m_grid_h;
