@@ -15,9 +15,13 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
     IncludeLaunchDescription,
+    RegisterEventHandler,
     TimerAction,
 )
+from launch.conditions import IfCondition
+from launch.event_handlers import OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -39,6 +43,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'gui', default_value='true',
             description='Show the Gazebo client'),
+        DeclareLaunchArgument(
+            'clean_stale', default_value='true',
+            description='Kill stale simulator/SLAM/nav processes before starting'),
         DeclareLaunchArgument(
             'spawn_x', default_value='0.0',
             description='Robot spawn x (house.world uses 0)'),
@@ -119,6 +126,26 @@ def generate_launch_description():
         }.items(),
     )
 
+    cleanup_cmd = [
+        'bash', '-c',
+        "pkill -9 -x gzserver || true; "
+        "pkill -9 -x gzclient || true; "
+        "pkill -9 -f '[r]osiwit_slam_ros2' || true; "
+        "pkill -9 -f '[r]osiwit_navigation_ros2' || true; "
+        "pkill -9 -f '[f]rontier_explorer' || true; "
+        "pkill -9 -f '[/]opt/ros/humble/lib/joint_state_publisher' || true; "
+        "pkill -9 -f '[/]opt/ros/humble/lib/robot_state_publisher' || true; "
+        "pkill -9 -f '[r]viz2' || true",
+    ]
+    cleanup_stale = ExecuteProcess(
+        cmd=cleanup_cmd,
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('clean_stale')),
+    )
+    cleanup_shutdown = RegisterEventHandler(OnShutdown(
+        on_shutdown=ExecuteProcess(cmd=cleanup_cmd, output='screen')
+    ))
+
     explorer = Node(
         package='rosiwit_exploration_ros2',
         executable='frontier_explorer',
@@ -142,11 +169,20 @@ def generate_launch_description():
 
     return LaunchDescription(
         declared_arguments
-        + [simulator, slam, navigation]
+        + [cleanup_stale, cleanup_shutdown]
         + [
+            # 先清理残留进程, 0.5s 后再拉起新的一套
             TimerAction(
-                period=LaunchConfiguration('start_delay'),
-                actions=[explorer],
+                period=0.5,
+                actions=[
+                    simulator,
+                    slam,
+                    navigation,
+                    TimerAction(
+                        period=LaunchConfiguration('start_delay'),
+                        actions=[explorer],
+                    ),
+                ],
             )
         ]
     )
