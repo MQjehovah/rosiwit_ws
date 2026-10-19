@@ -4,6 +4,7 @@
 
 #include "ros_interface/navigation_node.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <cmath>
@@ -193,6 +194,7 @@ void NavigationNode::loadParameters()
 
   this->declare_parameter("global_frame", std::string("odom"));
   this->declare_parameter("robot_frame", std::string("base_link"));
+  this->declare_parameter("map_frame", std::string("map"));
 
   this->declare_parameter("planner_name", std::string("astar"));
   this->declare_parameter("controller_name", std::string("pure_pursuit"));
@@ -200,6 +202,11 @@ void NavigationNode::loadParameters()
   this->declare_parameter("robot_radius", 0.21);
   this->declare_parameter("local_costmap_size", 8.0);
   this->declare_parameter("enable_path_smoothing", false);
+  this->declare_parameter("recovery_enabled", true);
+  this->declare_parameter("recovery_trigger_cycles", 40);
+  this->declare_parameter("recovery_duration", 1.2);
+  this->declare_parameter("recovery_linear_velocity", -0.10);
+  this->declare_parameter("recovery_angular_velocity", 0.60);
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -216,12 +223,18 @@ void NavigationNode::loadParameters()
 
   get_parameter("global_frame", global_frame_);
   get_parameter("robot_frame", robot_frame_);
+  get_parameter("map_frame", map_frame_);
   get_parameter("planner_name", planner_name_);
   get_parameter("controller_name", controller_name_);
   get_parameter("inflation_radius", inflation_radius_);
   get_parameter("robot_radius", robot_radius_);
   get_parameter("local_costmap_size", local_costmap_size_);
   get_parameter("enable_path_smoothing", enable_path_smoothing_);
+  get_parameter("recovery_enabled", recovery_enabled_);
+  get_parameter("recovery_trigger_cycles", recovery_trigger_cycles_);
+  get_parameter("recovery_duration", recovery_duration_);
+  get_parameter("recovery_linear_velocity", recovery_linear_velocity_);
+  get_parameter("recovery_angular_velocity", recovery_angular_velocity_);
   loadSafetyParameters();
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
@@ -355,10 +368,10 @@ void NavigationNode::safetyPointCloudCallback(
     geometry_msgs::msg::TransformStamped tf_map;
     try {
       tf_map = tf_buffer_->lookupTransform(
-        "map", safety_base_frame_, msg->header.stamp, tf2::durationFromSec(0.05));
+        map_frame_, safety_base_frame_, msg->header.stamp, tf2::durationFromSec(0.05));
     } catch (const tf2::TransformException &) {
       tf_map = tf_buffer_->lookupTransform(
-        "map", safety_base_frame_, tf2::TimePointZero, tf2::durationFromSec(0.05));
+        map_frame_, safety_base_frame_, tf2::TimePointZero, tf2::durationFromSec(0.05));
     }
     const auto & qm = tf_map.transform.rotation;
     const auto & tm = tf_map.transform.translation;
@@ -481,7 +494,7 @@ void NavigationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
   geometry_msgs::msg::TransformStamped tf;
   try {
     tf = tf_buffer_->lookupTransform(
-      "map", msg->header.frame_id, msg->header.stamp,
+      map_frame_, msg->header.frame_id, msg->header.stamp,
       tf2::durationFromSec(0.1));
   } catch (tf2::TransformException &) { return; }
 
@@ -553,6 +566,9 @@ void NavigationNode::updateCostmap()
     // 在进入规划器之前先按机器人半径做一次硬膨胀. A* 内部的 safety_cells
     // 只负责最后一格缓冲; 这里保证路径不会贴着真实障碍物.
     core::Costmap planner_cm = cm;
+
+    // 窄通道优先: 全局只用 0.22m 硬缓冲, 开阔区由 0.9m 梯度代价拉开距离.
+    // 不在全局按"当前位置窄不窄"选择 0.32m, 否则路径经过远处门洞时会无解.
     const int hard_cells = std::max(
       1, static_cast<int>(std::ceil(robot_radius_ / res)));
     {
@@ -609,7 +625,7 @@ void NavigationNode::updateCostmap()
       }
     }
     nav_msgs::msg::OccupancyGrid costmap_msg;
-    costmap_msg.header.frame_id = "map";
+    costmap_msg.header.frame_id = map_frame_;
     costmap_msg.header.stamp = now();
     costmap_msg.info.resolution = res;
     costmap_msg.info.width = w;
@@ -638,7 +654,7 @@ void NavigationNode::updateCostmap()
   // 获取机器人当前位置
   double rx = 0, ry = 0;
   try {
-    auto tf = tf_buffer_->lookupTransform("map", "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
+    auto tf = tf_buffer_->lookupTransform(map_frame_, "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
     rx = tf.transform.translation.x;
     ry = tf.transform.translation.y;
   } catch (tf2::TransformException &) { return; }
@@ -748,7 +764,7 @@ void NavigationNode::publishLocalCostmap()
   double oy = current_map_->info.origin.position.y;
   double rx = 0, ry = 0;
   try {
-    auto tf = tf_buffer_->lookupTransform("map", "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
+    auto tf = tf_buffer_->lookupTransform(map_frame_, "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
     rx = tf.transform.translation.x; ry = tf.transform.translation.y;
   } catch (tf2::TransformException &) { return; }
   double win_width = local_costmap_size_;
@@ -757,7 +773,7 @@ void NavigationNode::publishLocalCostmap()
   int cy = static_cast<int>((ry - oy) / res);
   int lw = win_half * 2;
   nav_msgs::msg::OccupancyGrid local_costmap;
-  local_costmap.header.frame_id = "map";
+  local_costmap.header.frame_id = map_frame_;
   local_costmap.header.stamp = now();
   local_costmap.info.resolution = res;
   local_costmap.info.width = lw;
@@ -813,6 +829,16 @@ void NavigationNode::publishLocalCostmap()
     if (d <= l_safety) local_costmap.data[i] = 100;
     else if (d <= l_inflate) local_costmap.data[i] = static_cast<int8_t>((1.0f - (d - l_safety) * linv) * 99);
     else local_costmap.data[i] = 0;
+  }
+  if (controller_strategy_) {
+    core::CostmapGrid grid;
+    grid.info.width = local_costmap.info.width;
+    grid.info.height = local_costmap.info.height;
+    grid.info.resolution = local_costmap.info.resolution;
+    grid.info.origin.position.x = local_costmap.info.origin.position.x;
+    grid.info.origin.position.y = local_costmap.info.origin.position.y;
+    grid.data = local_costmap.data;
+    controller_strategy_->setLocalCostmap(grid);
   }
   local_costmap_pub_->publish(local_costmap);
 }
@@ -902,8 +928,33 @@ void NavigationNode::controlLoop()
     }
   }
 
+  // DWA 无可行轨迹/贴着障碍时, 短暂后退+旋转恢复
+  if (recovery_active_) {
+    if (now().seconds() < recovery_until_sec_) {
+      geometry_msgs::msg::Twist recovery_cmd;
+      recovery_cmd.linear.x = recovery_linear_velocity_;
+      recovery_cmd.angular.z = recovery_angular_velocity_;
+      publishVelocityCommand(recovery_cmd);
+      return;
+    }
+    recovery_active_ = false;
+    stall_cycles_ = 0;
+  }
+
   // 计算速度命令
   geometry_msgs::msg::Twist cmd_vel = computeVelocityCommand();
+
+  if (recovery_enabled_ &&
+    std::abs(cmd_vel.linear.x) < 0.02 && std::abs(cmd_vel.angular.z) < 0.02) {
+    if (++stall_cycles_ >= recovery_trigger_cycles_) {
+      recovery_active_ = true;
+      recovery_until_sec_ = now().seconds() + recovery_duration_;
+      stall_cycles_ = 0;
+      RCLCPP_WARN(get_logger(), "Navigation stalled; recovery maneuver");
+    }
+  } else {
+    stall_cycles_ = 0;
+  }
 
   // 发布速度命令
   publishVelocityCommand(cmd_vel);

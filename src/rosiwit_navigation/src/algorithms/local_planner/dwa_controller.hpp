@@ -30,6 +30,7 @@ public:
     std::string getName() const override;
     std::string getVersion() const override;
     void setObstacles(const core::ObstacleArray& obstacles) override;
+    void setLocalCostmap(const core::CostmapGrid& costmap) override;
 
 private:
     struct Sample { double v, w; double heading, clearance, velocity; double cost; };
@@ -40,6 +41,8 @@ private:
     core::ControllerConfig cfg_;
     core::Path path_;
     core::ObstacleArray obstacles_;
+    core::CostmapGrid local_costmap_;
+    bool has_local_costmap_ = false;
     size_t idx_;
     double max_vx_, min_vx_, max_vw_, max_accel_, max_dvw_;
     double goal_tol_, dt_, sim_time_;

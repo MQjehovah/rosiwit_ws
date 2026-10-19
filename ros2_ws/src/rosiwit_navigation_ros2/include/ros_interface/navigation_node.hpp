@@ -291,6 +291,16 @@ private:
   // 目标位姿
   geometry_msgs::msg::PoseStamped goal_pose_;
   double last_controller_path_sec_ = 0.0;
+
+  // DWA 卡死恢复
+  bool recovery_enabled_ = true;
+  int recovery_trigger_cycles_ = 40;
+  double recovery_duration_ = 1.2;
+  double recovery_linear_velocity_ = -0.10;
+  double recovery_angular_velocity_ = 0.60;
+  int stall_cycles_ = 0;
+  bool recovery_active_ = false;
+  double recovery_until_sec_ = 0.0;
   // 规划失败后随地图更新重试 (探索场景地图会持续变化)
   double m_last_replan_attempt_sec = 0.0;
 
@@ -331,6 +341,7 @@ private:
   // 坐标系
   std::string global_frame_ = "odom";
   std::string robot_frame_ = "base_link";
+  std::string map_frame_ = "map";
 
   // 参数
   NavigationParams params_;

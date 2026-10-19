@@ -28,6 +28,7 @@ public:
   virtual std::string getName() const = 0;
   virtual std::string getVersion() const = 0;
   virtual void setObstacles(const ObstacleArray & obstacles) = 0;
+  virtual void setLocalCostmap(const CostmapGrid & /*costmap*/) {}
 };
 
 }  // namespace core

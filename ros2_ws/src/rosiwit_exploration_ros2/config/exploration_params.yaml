@@ -31,6 +31,8 @@ frontier_explorer:
 
     # Goal selection
     goal_clearance: 0.6
+    # 前沿目标向自由区回退, 避免目标落在未知边界/真实墙边
+    goal_backoff: 0.4
     min_goal_distance: 0.8
     max_goal_distance: 30.0
     frontier_size_weight: 0.02

@@ -18,6 +18,7 @@ rosiwit_navigation_node:
 
     global_frame: "odom"
     robot_frame: "base_link"
+    map_frame: "odom"
 
     goal_tolerance_xy: 0.25
     goal_tolerance_yaw: 0.2
@@ -35,6 +36,13 @@ rosiwit_navigation_node:
     local_costmap_size: 10.0
     # 平滑器会把 unknown 当自由并可能把路径拉进未知墙; 探索时关闭
     enable_path_smoothing: false
+
+    # DWA 卡死恢复
+    recovery_enabled: true
+    recovery_trigger_cycles: 40
+    recovery_duration: 1.2
+    recovery_linear_velocity: -0.10
+    recovery_angular_velocity: 0.60
 
     # ---- LiDAR safety layer (Nav2 Collision Monitor style) ----
     safety_enabled: true

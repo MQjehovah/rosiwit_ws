@@ -182,6 +182,7 @@ class FrontierExplorer(Node):
         self.declare_parameter('occupied_thresh', 55)
         self.declare_parameter('min_frontier_cells', 8)
         self.declare_parameter('goal_clearance', 0.6)
+        self.declare_parameter('goal_backoff', 0.4)
         self.declare_parameter('min_goal_distance', 0.8)
         self.declare_parameter('max_goal_distance', 30.0)
         self.declare_parameter('frontier_size_weight', 0.02)
@@ -213,6 +214,7 @@ class FrontierExplorer(Node):
         self.occupied_thresh = int(self.get_parameter('occupied_thresh').value)
         self.min_frontier_cells = int(self.get_parameter('min_frontier_cells').value)
         self.goal_clearance = float(self.get_parameter('goal_clearance').value)
+        self.goal_backoff = float(self.get_parameter('goal_backoff').value)
         self.min_goal_distance = float(self.get_parameter('min_goal_distance').value)
         self.max_goal_distance = float(self.get_parameter('max_goal_distance').value)
         self.frontier_size_weight = float(self.get_parameter('frontier_size_weight').value)
@@ -551,6 +553,7 @@ class FrontierExplorer(Node):
 
         occupied = grid >= self.occupied_thresh
         integral = build_integral(occupied)
+        unknown_integral = build_integral(unknown)
         h, w = grid.shape
 
         robot_col = int((robot[0] - origin_x) / resolution)
@@ -561,6 +564,8 @@ class FrontierExplorer(Node):
         reachable = reachable_free_mask(free, start) if self.check_reachability else free
 
         clearance_cells = max(1, int(math.ceil(self.goal_clearance / resolution)))
+        backoff_cells = max(0, int(math.ceil(self.goal_backoff / resolution)))
+        search_cells = backoff_cells + max(4, int(math.ceil(0.8 / resolution)))
         candidates: List[FrontierCandidate] = []
 
         for cells in clusters:
@@ -568,19 +573,50 @@ class FrontierExplorer(Node):
             mean_col = sum(c for _, c in cells) / len(cells)
             best_cell = None
             best_d2 = float('inf')
-            for row, col in cells:
-                if not reachable[row, col]:
-                    continue
-                r0 = max(0, row - clearance_cells)
-                c0 = max(0, col - clearance_cells)
-                r1 = min(h, row + clearance_cells + 1)
-                c1 = min(w, col + clearance_cells + 1)
-                if window_sum(integral, r0, c0, r1, c1) != 0:
-                    continue
-                d2 = (row - mean_row) ** 2 + (col - mean_col) ** 2
-                if d2 < best_d2:
-                    best_d2 = d2
-                    best_cell = (row, col)
+
+            # 目标向自由区回退: 不再站在 free/unknown 边界上, 而是找
+            # 距 unknown 至少 goal_backoff 的最近自由格, 避免贴着未知墙.
+            if backoff_cells > 0:
+                r_lo = max(0, int(mean_row) - search_cells)
+                r_hi = min(h, int(mean_row) + search_cells + 1)
+                c_lo = max(0, int(mean_col) - search_cells)
+                c_hi = min(w, int(mean_col) + search_cells + 1)
+                for row in range(r_lo, r_hi):
+                    for col in range(c_lo, c_hi):
+                        if not free[row, col] or not reachable[row, col]:
+                            continue
+                        r0 = max(0, row - clearance_cells)
+                        c0 = max(0, col - clearance_cells)
+                        r1 = min(h, row + clearance_cells + 1)
+                        c1 = min(w, col + clearance_cells + 1)
+                        if window_sum(integral, r0, c0, r1, c1) != 0:
+                            continue
+                        u0 = max(0, row - backoff_cells)
+                        v0 = max(0, col - backoff_cells)
+                        u1 = min(h, row + backoff_cells + 1)
+                        v1 = min(w, col + backoff_cells + 1)
+                        if window_sum(unknown_integral, u0, v0, u1, v1) != 0:
+                            continue
+                        d2 = (row - mean_row) ** 2 + (col - mean_col) ** 2
+                        if d2 < best_d2:
+                            best_d2 = d2
+                            best_cell = (row, col)
+
+            # 回退搜索失败时退回原来的前沿格选择, 保证不会漏掉前沿.
+            if best_cell is None:
+                for row, col in cells:
+                    if not reachable[row, col]:
+                        continue
+                    r0 = max(0, row - clearance_cells)
+                    c0 = max(0, col - clearance_cells)
+                    r1 = min(h, row + clearance_cells + 1)
+                    c1 = min(w, col + clearance_cells + 1)
+                    if window_sum(integral, r0, c0, r1, c1) != 0:
+                        continue
+                    d2 = (row - mean_row) ** 2 + (col - mean_col) ** 2
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best_cell = (row, col)
             if best_cell is None:
                 continue
             row, col = best_cell

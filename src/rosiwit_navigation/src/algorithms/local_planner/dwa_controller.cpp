@@ -127,6 +127,26 @@ core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const 
         }
         // 记录全程最小距离，不提前退出（碰撞后继续模拟，但距离为负时 penalty 递增）
         if (step_min < s.clearance) s.clearance = step_min;
+
+        // 直接使用局部 costmap: 已包含静态地图 + 3D 点云 + 安全膨胀.
+        if (has_local_costmap_) {
+            const auto& info = local_costmap_.info;
+            const int mx = static_cast<int>((px - info.origin.position.x) / info.resolution);
+            const int my = static_cast<int>((py - info.origin.position.y) / info.resolution);
+            if (mx < 0 || my < 0 ||
+                mx >= static_cast<int>(info.width) || my >= static_cast<int>(info.height)) {
+                s.clearance = std::min(s.clearance, 0.0);
+            } else {
+                const int v = local_costmap_.data[
+                    static_cast<size_t>(my) * info.width + static_cast<size_t>(mx)];
+                if (v >= 50) {
+                    s.clearance = std::min(s.clearance, 0.0);
+                } else if (v > 0) {
+                    s.clearance = std::min(s.clearance,
+                        (100.0 - static_cast<double>(v)) / 100.0 * 0.5);
+                }
+            }
+        }
     }
     return {px, py, pt};
 }
@@ -186,6 +206,12 @@ void DwaController::setVelocityLimit(double vx, double vw) { max_vx_ = vx; max_v
 std::string DwaController::getName() const { return name_; }
 std::string DwaController::getVersion() const { return "1.0.0"; }
 void DwaController::setObstacles(const core::ObstacleArray& obs) { obstacles_ = obs; }
+
+void DwaController::setLocalCostmap(const core::CostmapGrid& costmap) {
+    local_costmap_ = costmap;
+    has_local_costmap_ = !local_costmap_.data.empty() &&
+        local_costmap_.info.width > 0 && local_costmap_.info.height > 0;
+}
 double DwaController::normAngle(double a) {
     while (a > M_PI) a -= 2 * M_PI;
     while (a < -M_PI) a += 2 * M_PI;
