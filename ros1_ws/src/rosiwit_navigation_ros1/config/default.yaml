@@ -21,7 +21,7 @@ planner_name: "astar"
 controller_name: "dwa"
 
 # 坐标系
-global_frame: "odom"
+global_frame: "map"
 robot_frame: "base_link"
 map_frame: "map"
 

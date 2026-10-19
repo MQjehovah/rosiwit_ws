@@ -114,7 +114,7 @@ private:
     pnh_.param<double>("max_accel_x", max_accel_x_, 0.4);
     pnh_.param<double>("max_accel_theta", max_accel_theta_, 0.8);
 
-    pnh_.param<std::string>("global_frame", global_frame_, "odom");
+    pnh_.param<std::string>("global_frame", global_frame_, "map");
     pnh_.param<std::string>("robot_frame", robot_frame_, "base_link");
     pnh_.param<std::string>("map_frame", map_frame_, "map");
     pnh_.param<std::string>("planner_name", planner_name_, "astar");
