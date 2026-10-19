@@ -80,6 +80,11 @@ instead of `/goal_pose`.
 - `explore_mapping.launch.py` loads `config/navigation_params.yaml` explicitly.
   It keeps `unknown` cells blocked (so the robot cannot shortcut through
   unmapped walls), uses a finer safety margin, lower speed, and pure pursuit.
+- `/map` is published at 5 Hz (`map_publish_period` in `simulator.yaml`).
+  `/global_costmap` and `/local_costmap` are republished at 10 Hz so newly
+  discovered walls appear promptly in RViz and in the controller.
+- `local_costmap_size` (default 10 m) controls the local window; the global
+  costmap always covers the full SLAM map.
 - Goals at frontiers are only accepted when the goal cell is reachable through
   known free space and has `goal_clearance` free space around it.
 - Reached/failed goals are blacklisted for `blacklist_duration` seconds to avoid

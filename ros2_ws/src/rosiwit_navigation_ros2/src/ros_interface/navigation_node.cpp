@@ -191,6 +191,7 @@ void NavigationNode::loadParameters()
   this->declare_parameter("controller_name", std::string("pure_pursuit"));
   this->declare_parameter("inflation_radius", 0.5);
   this->declare_parameter("robot_radius", 0.21);
+  this->declare_parameter("local_costmap_size", 8.0);
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -211,6 +212,7 @@ void NavigationNode::loadParameters()
   get_parameter("controller_name", controller_name_);
   get_parameter("inflation_radius", inflation_radius_);
   get_parameter("robot_radius", robot_radius_);
+  get_parameter("local_costmap_size", local_costmap_size_);
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
   RCLCPP_INFO(get_logger(), "  - controller_frequency: %.1f Hz", params_.controller_frequency);
@@ -281,6 +283,11 @@ void NavigationNode::initializeTimers()
   local_costmap_timer_ = create_wall_timer(
     std::chrono::milliseconds(100),
     std::bind(&NavigationNode::publishLocalCostmap, this));
+
+  // 全局 costmap 高频重复发布（10Hz）；内容在地图更新时刷新
+  global_costmap_timer_ = create_wall_timer(
+    std::chrono::milliseconds(100),
+    std::bind(&NavigationNode::republishGlobalCostmap, this));
 
   RCLCPP_INFO(get_logger(), "Timers initialized");
 }
@@ -415,7 +422,9 @@ void NavigationNode::updateCostmap()
         (1.0f - (d - safety_cells) * inv) * 99);
       else costmap_msg.data[i] = 0;
     }
-    global_costmap_pub_->publish(costmap_msg);
+    global_costmap_msg_ = costmap_msg;
+    m_has_global_costmap_ = true;
+    global_costmap_pub_->publish(global_costmap_msg_);
   }
 
   // ========== 局部 costmap（机器人周围窗口，给控制器） ==========
@@ -430,7 +439,7 @@ void NavigationNode::updateCostmap()
   } catch (tf2::TransformException &) { return; }
 
   // 局部窗口参数
-  double win_width = 6.0;   // 6x6m 窗口
+  double win_width = local_costmap_size_;
   int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
   int cx = static_cast<int>((rx - ox) / res);
   int cy = static_cast<int>((ry - oy) / res);
@@ -515,7 +524,7 @@ void NavigationNode::publishLocalCostmap()
     auto tf = tf_buffer_->lookupTransform("map", "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
     rx = tf.transform.translation.x; ry = tf.transform.translation.y;
   } catch (tf2::TransformException &) { return; }
-  double win_width = 6.0;
+  double win_width = local_costmap_size_;
   int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
   int cx = static_cast<int>((rx - ox) / res);
   int cy = static_cast<int>((ry - oy) / res);
@@ -565,6 +574,13 @@ void NavigationNode::publishLocalCostmap()
     else local_costmap.data[i] = 0;
   }
   local_costmap_pub_->publish(local_costmap);
+}
+
+void NavigationNode::republishGlobalCostmap()
+{
+  if (!m_has_global_costmap_) return;
+  global_costmap_msg_.header.stamp = now();
+  global_costmap_pub_->publish(global_costmap_msg_);
 }
 
 void NavigationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)

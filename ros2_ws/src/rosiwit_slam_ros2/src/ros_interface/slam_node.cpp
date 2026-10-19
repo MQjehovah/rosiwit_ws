@@ -5,6 +5,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <yaml-cpp/yaml.h>
 #include <tf2/time.h>
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <functional>
@@ -190,6 +191,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.output_filter_beta  = cfg["output_filter_beta"].as<double>(m_cfg.output_filter_beta);
             m_cfg.output_extrap_max_s = cfg["output_extrap_max_s"].as<double>(m_cfg.output_extrap_max_s);
             m_cfg.grid_map_resolution = cfg["map_resolution"].as<double>(m_cfg.grid_map_resolution);
+            m_cfg.map_publish_period = cfg["map_publish_period"].as<double>(m_cfg.map_publish_period);
             m_cfg.absolute_enabled = cfg["absolute_enabled"].as<bool>(m_cfg.absolute_enabled);
             m_cfg.absolute_topic   = cfg["absolute_topic"].as<std::string>(m_cfg.absolute_topic);
             m_cfg.datum_x = cfg["absolute_datum_x"].as<double>(m_cfg.datum_x);
@@ -288,7 +290,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     // 处理定时器(work 分组): 只做重处理, 与传感器收包分组互不阻塞。
     // 缩短周期以降低入队->处理的延迟; 每 tick 把已同步的包一次性排空, 避免积压。
     m_process_timer = create_wall_timer(20ms, std::bind(&SlamNode::timerCB, this), m_work_cb_group);
-    m_map_timer = create_wall_timer(2s,   std::bind(&SlamNode::mapTimerCB, this), m_work_cb_group);
+    m_map_timer = create_wall_timer(
+        std::chrono::duration<double>(std::max(0.05, m_cfg.map_publish_period)),
+        std::bind(&SlamNode::mapTimerCB, this), m_work_cb_group);
     // base_link <- IMU 输出换算; 失败时 1Hz 限频重试, 不阻塞 100Hz 传感器回调.
     m_mount_timer = create_wall_timer(1s, std::bind(&SlamNode::ensureBaseFrames, this),
                                       m_work_cb_group);

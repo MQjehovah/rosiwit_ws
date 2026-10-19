@@ -28,5 +28,6 @@ rosiwit_navigation_node:
 
     robot_radius: 0.32
     inflation_radius: 0.8
+    local_costmap_size: 10.0
 
     odom_topic: /odom

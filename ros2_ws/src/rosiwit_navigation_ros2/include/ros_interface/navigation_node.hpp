@@ -232,6 +232,7 @@ protected:
    */
   void publishPath(const nav_msgs::msg::Path & path);
   void publishLocalCostmap();
+  void republishGlobalCostmap();
 
 private:
   // 组件
@@ -257,6 +258,12 @@ private:
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr replanning_timer_;
   rclcpp::TimerBase::SharedPtr local_costmap_timer_;
+  rclcpp::TimerBase::SharedPtr global_costmap_timer_;
+
+  // 最近一次全局 costmap, 由高频定时器重复发布
+  nav_msgs::msg::OccupancyGrid global_costmap_msg_;
+  bool m_has_global_costmap_ = false;
+  double local_costmap_size_ = 8.0;
 
   // 状态变量
   std::atomic<NavigationState> current_state_;
