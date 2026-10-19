@@ -27,7 +27,7 @@ def generate_launch_description():
         description='Use MultiThreadedExecutor (decouple sensor RX from heavy processing to avoid dropped scans)')
 
     config_arg = DeclareLaunchArgument(
-        'config_file', default_value='default.yaml',
+        'config', default_value='default.yaml',
         description='Config file name under <pkg>/config (e.g. default.yaml, livox.yaml, sim_vlp16.yaml, vanjee722.yaml)')
 
     from ament_index_python.packages import get_package_share_directory
@@ -37,7 +37,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('rosiwit_slam_ros2')
 
     config_default = PathJoinSubstitution(
-        [FindPackageShare('rosiwit_slam_ros2'), 'config', LaunchConfiguration('config_file')])
+        [FindPackageShare('rosiwit_slam_ros2'), 'config', LaunchConfiguration('config')])
     rviz_config = os.path.join(pkg_share, 'rviz', 'slam.rviz')
 
     slam_node = Node(
