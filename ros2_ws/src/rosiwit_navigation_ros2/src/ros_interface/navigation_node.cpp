@@ -299,6 +299,7 @@ void NavigationNode::loadParameters()
   declareIfNeeded("max_lookahead_distance", 0.9);
 
   declareIfNeeded("global_frame", std::string("odom"));
+  declareIfNeeded("odom_frame", std::string("odom"));
   declareIfNeeded("robot_frame", std::string("base_link"));
   declareIfNeeded("map_frame", std::string("map"));
 
@@ -335,6 +336,7 @@ void NavigationNode::loadParameters()
   get_parameter("max_lookahead_distance", params_.max_lookahead_distance);
 
   get_parameter("global_frame", global_frame_);
+  get_parameter("odom_frame", odom_frame_);
   get_parameter("robot_frame", robot_frame_);
   get_parameter("map_frame", map_frame_);
   get_parameter("planner_name", planner_name_);
@@ -1402,8 +1404,10 @@ bool NavigationNode::updateCurrentPose()
     last_tf_x_ = x; last_tf_y_ = y; last_tf_yaw_ = yaw;
     last_tf_pose_valid_ = true;
 
-    // TF 与 odom 应描述同一个底座; 差值异常时判定定位链路不可信.
-    if (odom_pose_valid_ && now().seconds() - last_odom_sec_ <= tf_stale_timeout_) {
+    // TF 与 odom 应描述同一个底座; 仅当 global_frame 就是 odom 时才直接比较.
+    // wheel odom 模式下 global=map, 两者差一个 map->odom, 不能直接比坐标.
+    if (global_frame_ == odom_frame_ &&
+        odom_pose_valid_ && now().seconds() - last_odom_sec_ <= tf_stale_timeout_) {
       const double ox = odom_pose_.position.x;
       const double oy = odom_pose_.position.y;
       double oyaw = tf2::getYaw(odom_pose_.orientation);

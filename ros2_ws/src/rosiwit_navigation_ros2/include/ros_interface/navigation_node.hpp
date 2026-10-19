@@ -392,6 +392,7 @@ private:
 
   // 坐标系
   std::string global_frame_ = "odom";
+  std::string odom_frame_ = "odom";
   std::string robot_frame_ = "base_link";
   std::string map_frame_ = "map";
 

@@ -76,8 +76,8 @@ def generate_launch_description():
             'goal_interface', default_value='pose',
             description='pose | nav2 | auto'),
         DeclareLaunchArgument(
-            'goal_frame', default_value='odom',
-            description='Frame used for goals (use map with Nav2)'),
+            'goal_frame', default_value='map',
+            description='Frame used for goals (use map with wheel odom, odom for unified)'),
         DeclareLaunchArgument(
             'start_delay', default_value='15.0',
             description='Delay before the explorer starts sending goals'),

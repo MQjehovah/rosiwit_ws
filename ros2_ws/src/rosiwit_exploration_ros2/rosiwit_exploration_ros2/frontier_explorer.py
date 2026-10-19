@@ -47,9 +47,9 @@ except ImportError:  # pragma: no cover - optional at runtime
     SaveGridMap = None
 
 try:
-    from tf2_geometry_msgs import do_transform_pose
+    from tf2_geometry_msgs import do_transform_pose_stamped
 except ImportError:  # pragma: no cover
-    do_transform_pose = None
+    do_transform_pose_stamped = None
 
 
 @dataclass
@@ -483,7 +483,7 @@ class FrontierExplorer(Node):
     def transform_goal(self, pose: PoseStamped) -> PoseStamped:
         if not self.goal_frame or self.goal_frame == pose.header.frame_id:
             return pose
-        if do_transform_pose is None:
+        if do_transform_pose_stamped is None:
             return pose
         try:
             tf = self.tf_buffer.lookup_transform(
@@ -494,7 +494,7 @@ class FrontierExplorer(Node):
                 'sending in source frame',
                 throttle_duration_sec=5.0)
             return pose
-        transformed = do_transform_pose(pose, tf)
+        transformed = do_transform_pose_stamped(pose, tf)
         transformed.header.frame_id = self.goal_frame
         transformed.header.stamp = self.get_clock().now().to_msg()
         return transformed

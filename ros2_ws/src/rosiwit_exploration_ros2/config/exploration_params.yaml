@@ -19,9 +19,8 @@ frontier_explorer:
     robot_frame: base_link
     # Empty map_frame = use the frame_id of the incoming OccupancyGrid.
     map_frame: ""
-    # rosiwit_slam publishes its map in odom and rosiwit_navigation_ros2 uses odom.
-    # Set this to map when driving through Nav2.
-    goal_frame: odom
+    # wheel_odom 模式: goal_frame=map; 纯 LIO map==odom 时可用 odom.
+    goal_frame: map
 
     tick_period: 2.0
 

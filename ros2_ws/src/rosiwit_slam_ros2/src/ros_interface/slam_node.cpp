@@ -290,7 +290,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     if (m_cfg.odom_enabled) {
         // SLAM 自己发布 /odom; 若输入也配成 /odom 会形成自订阅反馈.
         // 真实轮式里程计应通过 odom_topic 指向 /wheel_odom 等独立话题.
-        if (m_cfg.odom_topic == "/odom" || m_cfg.odom_topic == "odom") {
+        if (m_cfg.odom_mode != "wheel" &&
+            (m_cfg.odom_topic == "/odom" || m_cfg.odom_topic == "odom")) {
             RCLCPP_WARN(get_logger(),
                 "odom_enabled=true but odom_topic=%s is the SLAM output topic; "
                 "disable wheel-odom prior to avoid self-subscription",
