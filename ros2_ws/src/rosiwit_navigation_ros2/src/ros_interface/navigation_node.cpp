@@ -192,6 +192,7 @@ void NavigationNode::loadParameters()
   this->declare_parameter("inflation_radius", 0.5);
   this->declare_parameter("robot_radius", 0.21);
   this->declare_parameter("local_costmap_size", 8.0);
+  this->declare_parameter("enable_path_smoothing", false);
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -213,6 +214,7 @@ void NavigationNode::loadParameters()
   get_parameter("inflation_radius", inflation_radius_);
   get_parameter("robot_radius", robot_radius_);
   get_parameter("local_costmap_size", local_costmap_size_);
+  get_parameter("enable_path_smoothing", enable_path_smoothing_);
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
   RCLCPP_INFO(get_logger(), "  - controller_frequency: %.1f Hz", params_.controller_frequency);
@@ -697,7 +699,7 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
       current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
 
       // 平滑路径
-      if (current_path_.poses.size() >= 3) {
+      if (enable_path_smoothing_ && current_path_.poses.size() >= 3) {
         planners::SmootherConfig smoother_cfg;
         smoother_cfg.max_iterations = 100;
         smoother_cfg.alpha_start = 0.5;

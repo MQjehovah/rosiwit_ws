@@ -300,6 +300,7 @@ private:
   std::string controller_name_;
   double inflation_radius_ = 0.5;
   double robot_radius_ = 0.21;
+  bool enable_path_smoothing_ = false;
 
   // 坐标系
   std::string global_frame_ = "odom";

@@ -38,7 +38,9 @@ grid_max_height: 2.0
 grid_occupied_thresh: 1
 grid_dilate_radius: 1
 grid_close_radius: 1
-grid_min_component_cells: 30
+# 不做小连通域剔除: 否则椅子/桌腿等真实小障碍会被置为 unknown(-1)
+grid_post_pipeline: "close,dilate"
+grid_min_component_cells: 1
 grid_max_range: 50.0
 grid_ground_method: ransac
 grid_ransac_dist_thr: 0.10
