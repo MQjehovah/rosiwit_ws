@@ -348,7 +348,7 @@ private:
       cm.origin_y = oy;
       cm.data.assign(current_map_->data.size(), 0);
       for (size_t i = 0; i < current_map_->data.size(); ++i) {
-        cm.data[i] = (current_map_->data[i] >= 100) ? 255 : 0;
+        cm.data[i] = (current_map_->data[i] >= 100 || current_map_->data[i] < 0) ? 255 : 0;
       }
       for (const auto & pt : laser_points_) {
         const int mx = static_cast<int>((pt.x - ox) / res);
@@ -521,7 +521,8 @@ private:
         if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) { continue; }
         const int gx = dx + win_half;
         const int gy = dy + win_half;
-        raw[gy * lw + gx] = (current_map_->data[my * w + mx] >= 100) ? 100 : 0;
+        const int8_t mv = current_map_->data[my * w + mx];
+        raw[gy * lw + gx] = (mv >= 100 || mv < 0) ? 100 : 0;
       }
     }
     for (const auto& pt : laser_points_) {
