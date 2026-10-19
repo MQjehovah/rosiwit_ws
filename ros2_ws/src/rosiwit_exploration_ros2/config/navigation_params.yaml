@@ -26,10 +26,10 @@ rosiwit_navigation_node:
     min_lookahead_distance: 0.3
     max_lookahead_distance: 0.7
 
-    # 0.2m 地图下 0.20 对应 1 格安全缓冲, 0.5m 为梯度代价;
-    # 避免 0.5m 栅格 + 0.8m 膨胀把门洞/走廊整段堵死.
-    robot_radius: 0.20
-    inflation_radius: 0.5
+    # 车体实际半径约 0.20m; 0.24m 作为硬安全缓冲 (0.05m 地图下 5 格),
+    # 0.65m 为梯度代价, 让路径走走廊中间但不会把门洞整段判死.
+    robot_radius: 0.24
+    inflation_radius: 0.65
     local_costmap_size: 10.0
     # 平滑器会把 unknown 当自由并可能把路径拉进未知墙; 探索时关闭
     enable_path_smoothing: false
