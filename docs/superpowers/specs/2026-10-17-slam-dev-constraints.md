@@ -14,7 +14,7 @@
 
 1. **入口唯一**：初始位姿只有一个入口 `SlamEngine::applyInitPose(in, zero_if_insane, force_z_zero)`。
    `/initialpose`、`/switch_map`、`/relocation` 全部委托给它，差异只能体现在**参数**上。
-2. **查一次、缓存**：TF/安装角只在 `SlamEngine::lidarToBase()` 里查一次并缓存；
+2. **查一次、缓存**：TF/安装角只在 `SlamEngine::computeBaseFrames()` / `imuFromChild()` 里查一次并缓存；
    100 Hz 回调里**禁止**做会阻塞的查询（见第 5 条）。
 3. **同一功能出现第二种实现时，先删旧的再合新的**，不允许"两份并存、各自演进"。
 
@@ -22,19 +22,24 @@
 
 | 量 | 坐标系 | 说明 |
 |---|---|---|
-| 核心内部位姿 `SlamOutput::pose` | **雷达/IMU 刚体系** | `r_il/t_il` 描述它与雷达的关系（本机两者同 frame → identity） |
+| 核心内部位姿 `SlamOutput::pose` | **IMU body（world←IMU）** | 行业标准：FAST-LIO2 估计 IMU body；`r_il/t_il` 是 IMU←lidar 外参 |
 | 核心输出 `world_cloud` | map 系 | 已含位姿，**不需要**再做安装角换算 |
-| `curr_localization_pose` / `slam_info.robot_pose` / `map→odom` TF | **base_link 系** | 经 `r_lb_` 换算后发布 |
-| 上层下发的初始位姿 | **base_link 系** | 进核心前换算成雷达系 |
-| 地图文件（`.xzmap` / PCD） | 核心内部（雷达系） | 与内部位姿一致 |
+| `curr_localization_pose` / `slam_info.robot_pose` / `odom→base_link` TF | **base_link 系** | ROS 接口层做 `T_world_base = T_world_imu * T_imu_base` |
+| 上层下发的初始位姿 | **base_link 系** | ROS 接口层做 `T_world_imu = T_world_base * T_base_imu` 后送核心 |
+| 地图文件（`.xzmap` / PCD） | 核心内部（IMU body / lidar 外参链） | 与核心位姿一致；旧图保持兼容 |
 | 2D 栅格 `map.pgm/.yaml` | map 系，`origin` = 栅格左下角 | 写盘时首行=最大 y；**读取时必须解析 origin** |
-| 2D 栅格高度带 | **相对地面**：`z - ground_z ∈ [grid_min_height, grid_max_height]` | `ground_z ≈ -t_lb.z()`（本机 −0.898）；**不要用绝对 z** |
+| 2D 栅格高度带 | **相对地面**：`z - ground_z ∈ [grid_min_height, grid_max_height]` | 地图原点=初始 IMU；`ground_z ≈ -t_base_imu.z()`；**不要用绝对 z** |
 
-**换算只允许出现在两个地方**：
-- 输入侧：`SlamEngine::applyInitPose()`（base → 雷达）
-- 输出侧：`LegacyXz3dSlamInterface::publishCurrPose()`（雷达 → base）
+**行业标准边界**（2026-10-19 定案）：
 
-任何其它位置出现安装角换算，都属于违规复制。
+- 算法核心 `src/rosiwit_slam` 估计 **IMU body**，不感知 `base_link` / TF / 安装角。
+- ROS1、ROS2 **各自**在接口层实现 `base_link ↔ IMU` 转换（TF API 不同，允许两份实现）：
+  - 输入：odom/vision 的 child frame → IMU；`/initialpose` 的 base_link → IMU。
+  - 输出：核心 IMU 位姿/TF/`body_cloud` → base_link；`world_cloud` 已在 map，不再变换。
+  - LiDAR：喂原始点云；`r_il/t_il`（IMU←lidar）由 ROS 层从 TF 推导后注入核心。
+  - IMU：喂原始 IMU；算法 body 就是 IMU。
+- 新增输入/输出时，ROS1/ROS2 必须各自明确 frame_id 与转换；**禁止**把 base_link 转换塞回核心。
+- 旧地图（lidar/IMU 体系）继续兼容；不要为了改 body frame 重建地图。
 
 ## 3. 核心层与 ROS 薄层分离
 
