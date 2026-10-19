@@ -14,7 +14,7 @@ rosiwit_navigation_node:
     planner_frequency: 1.0
 
     planner_name: "astar"
-    controller_name: "dwa"
+    controller_name: "mppi"
 
     global_frame: "odom"
     robot_frame: "base_link"

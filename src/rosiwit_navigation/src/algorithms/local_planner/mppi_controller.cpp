@@ -25,7 +25,10 @@ bool MppiController::initialize(const core::ControllerConfig& config) {
 }
 
 void MppiController::resetNominal() {
-  nominal_.assign(static_cast<size_t>(horizon_), Control{});
+  // 不要从全 0 控制开始: 采样噪声在 0 附近对称, 加权平均后的第一个
+  // 控制量可能只有 0.01, 低于底盘的静止判定, 机器人会一直 recovery.
+  const double seed_v = std::max(0.0, max_vx_ * 0.5);
+  nominal_.assign(static_cast<size_t>(horizon_), Control{seed_v, 0.0});
 }
 
 void MppiController::setPath(const core::Path& path) {

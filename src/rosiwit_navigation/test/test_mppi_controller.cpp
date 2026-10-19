@@ -70,7 +70,7 @@ TEST(MppiController, MovesForwardOnFreeStraightPath)
 
   const auto command = controller.computeVelocityCommand(
     Pose2D(0.0, 0.0, 0.0), VelocityCommand(0.0, 0.0, 0.0));
-  EXPECT_GT(command.linear_x, 0.0);
+  EXPECT_GT(command.linear_x, 0.03);
   EXPECT_LE(std::abs(command.angular_z), 1.0 + 1e-6);
 }
 
@@ -82,7 +82,7 @@ TEST(MppiController, BlueLocalInflationIsTraversable)
 
   const auto command = controller.computeVelocityCommand(
     Pose2D(0.0, 0.0, 0.0), VelocityCommand(0.0, 0.0, 0.0));
-  EXPECT_GT(command.linear_x, 0.0);
+  EXPECT_GT(command.linear_x, 0.03);
 }
 
 TEST(MppiController, ReportsGoalReachedAtPathEnd)
