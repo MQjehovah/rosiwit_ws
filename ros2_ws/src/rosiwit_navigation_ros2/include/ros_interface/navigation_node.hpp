@@ -240,6 +240,8 @@ protected:
    */
   void publishPath(const nav_msgs::msg::Path & path);
   void smoothCurrentPath(nav_msgs::msg::Path & path);
+  bool pathCollides(const nav_msgs::msg::Path & path,
+    const nav_msgs::msg::OccupancyGrid & costmap) const;
   void publishLocalCostmap();
   void republishGlobalCostmap();
 
@@ -292,6 +294,7 @@ private:
   // 目标位姿
   geometry_msgs::msg::PoseStamped goal_pose_;
   double last_controller_path_sec_ = 0.0;
+  double last_costmap_replan_sec_ = -1e9;
 
   // DWA 卡死恢复
   bool recovery_enabled_ = true;

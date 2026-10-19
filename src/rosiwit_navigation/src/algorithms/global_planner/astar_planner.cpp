@@ -304,7 +304,11 @@ core::Result<core::Path> AStarPlanner::plan(
                 continue;
             }
 
-            if (isObstacle(nx, ny)) {
+            // 斜向移动不能从两个障碍物的夹角里切过去, 否则 RViz 中
+            // 两点连线会穿过紫色格. 要求两个正交邻格都可行.
+            if (i >= 4 &&
+                (isObstacle(current.x + dx[i], current.y) ||
+                 isObstacle(current.x, current.y + dy[i]))) {
                 continue;
             }
 

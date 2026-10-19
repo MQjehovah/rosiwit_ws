@@ -30,6 +30,48 @@ namespace navigation
 using rclcpp_lifecycle::LifecycleNode;
 using ros_interface::RosUtils;
 
+namespace {
+
+// 规划器使用的 costmap:
+//   blue_as_lethal=false: 0=free, 1..99=蓝区软代价, 100=紫区致命;
+//   blue_as_lethal=true : 0=free, 1..99 也当致命, 用于先尝试全程走无色区.
+core::Costmap makePlannerCostmap(
+  const nav_msgs::msg::OccupancyGrid & msg, bool blue_as_lethal)
+{
+  core::Costmap cm;
+  auto grid = std::make_shared<core::CostmapGrid>();
+  grid->info.width = msg.info.width;
+  grid->info.height = msg.info.height;
+  grid->info.resolution = msg.info.resolution;
+  grid->info.origin.position.x = msg.info.origin.position.x;
+  grid->info.origin.position.y = msg.info.origin.position.y;
+  grid->data = msg.data;
+  cm.grid = grid;
+  cm.width = msg.info.width;
+  cm.height = msg.info.height;
+  cm.resolution = msg.info.resolution;
+  cm.origin_x = msg.info.origin.position.x;
+  cm.origin_y = msg.info.origin.position.y;
+  cm.data.assign(static_cast<size_t>(msg.info.width) * msg.info.height, 0);
+
+  for (size_t i = 0; i < cm.data.size(); ++i) {
+    const int8_t v = msg.data[i];
+    if (v < 0) {
+      cm.data[i] = 254;
+    } else if (v >= 100) {
+      cm.data[i] = 255;
+    } else if (v > 0) {
+      cm.data[i] = blue_as_lethal ? 255 :
+        static_cast<unsigned char>(std::max(1, static_cast<int>(v) * 255 / 100));
+    } else {
+      cm.data[i] = 0;
+    }
+  }
+  return cm;
+}
+
+}  // namespace
+
 NavigationNode::NavigationNode(const rclcpp::NodeOptions & options)
 : LifecycleNode("rosiwit_navigation", options),
   current_state_(NavigationState::IDLE),
@@ -58,7 +100,8 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     planner_cfg.max_iterations = 50000;
     planner_cfg.timeout = 2.0;
     planner_strategy_->initialize(planner_cfg);
-    planner_strategy_->setInflationRadius(inflation_radius_);
+    // costmap 已包含安全环 + 蓝色梯度; A* 再膨胀一次会与显示图不一致.
+    planner_strategy_->setInflationRadius(0.0);
     // 硬安全缓冲已在 updateCostmap 里预先膨胀到 planner_cm;
     // A* 内部只保留 1 格 (0.05m) 缓冲, 避免双重膨胀把门洞堵死.
     planner_strategy_->setRobotRadius(0.0);
@@ -528,6 +571,20 @@ void NavigationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
   }
   // 激光数据更新后重新生成 costmap（含障碍物层）
   updateCostmap();
+
+  // 实时激光/3D 点可能让当前路径穿过新出现的紫色障碍. 实时检查路径,
+  // 失效就立即用最新 costmap 重规划, 而不是等下一次地图回调.
+  if (is_navigating_ && !is_paused_ && !m_need_initial_rotate &&
+      current_path_.poses.size() > 1 && m_has_global_costmap_) {
+    const double now_sec = now().seconds();
+    if (now_sec - last_costmap_replan_sec_ >= 0.5 &&
+        pathCollides(current_path_, global_costmap_msg_)) {
+      last_costmap_replan_sec_ = now_sec;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        "Path intersects new costmap obstacle; replanning");
+      replanningCheck();
+    }
+  }
 }
 
 
@@ -578,50 +635,6 @@ void NavigationNode::updateCostmap()
         cm.data[my * w + mx] = 255;
     }
 
-    // 在进入规划器之前先按机器人半径做一次硬膨胀. A* 内部的 safety_cells
-    // 只负责最后一格缓冲; 这里保证路径不会贴着真实障碍物.
-    core::Costmap planner_cm = cm;
-
-    // 窄通道优先: 全局只用 0.22m 硬缓冲, 开阔区由 0.9m 梯度代价拉开距离.
-    // 不在全局按"当前位置窄不窄"选择 0.32m, 否则路径经过远处门洞时会无解.
-    // 硬边界 = 安全半径 0.25m; 不再额外加一格, 否则窄门/家具间会直接无解.
-    const int hard_cells = std::max(
-      1, static_cast<int>(std::ceil(robot_radius_ / res)));
-    {
-      std::vector<int> d(w * h, -1);
-      std::queue<int> q;
-      for (size_t i = 0; i < planner_cm.data.size(); ++i) {
-        // 只膨胀真实占据格; unknown 仍被 A* 阻断, 但不再向外膨胀,
-        // 否则未建图的门口会把整条路径判死.
-        if (planner_cm.data[i] == 255) {
-          d[i] = 0;
-          q.push(static_cast<int>(i));
-        }
-      }
-      while (!q.empty()) {
-        const int idx = q.front(); q.pop();
-        const int cd = d[idx];
-        if (cd >= hard_cells) continue;
-        const int r = idx / static_cast<int>(w);
-        const int c = idx % static_cast<int>(w);
-        for (int dr = -1; dr <= 1; ++dr) {
-          for (int dc = -1; dc <= 1; ++dc) {
-            if (dr == 0 && dc == 0) continue;
-            const int nr = r + dr;
-            const int nc = c + dc;
-            if (nr < 0 || nr >= static_cast<int>(h) ||
-              nc < 0 || nc >= static_cast<int>(w)) continue;
-            const int ni = nr * static_cast<int>(w) + nc;
-            if (d[ni] != -1) continue;
-            d[ni] = cd + 1;
-            planner_cm.data[ni] = 255;
-            q.push(ni);
-          }
-        }
-      }
-    }
-    planner_strategy_->setCostmap(planner_cm);
-
     // 发布用 costmap 用原始地图 + 安全环; 路径硬边界比它多一格,
     // 避免路径落在显示的 100 区内.
     int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
@@ -664,6 +677,11 @@ void NavigationNode::updateCostmap()
     global_costmap_msg_ = costmap_msg;
     m_has_global_costmap_ = true;
     global_costmap_pub_->publish(global_costmap_msg_);
+
+    // 规划器使用与 RViz 同一张 costmap 的代价:
+    //   0 = 无色自由; 1..99 = 蓝色软膨胀; 100 = 紫色致命.
+    // 具体是否把蓝色当墙由规划时决定 (优先全 0 路径).
+    planner_strategy_->setCostmap(makePlannerCostmap(costmap_msg, false));
   }
 
   // ========== 局部 costmap（机器人周围窗口，给控制器） ==========
@@ -831,8 +849,12 @@ void NavigationNode::publishLocalCostmap()
     raw[gy * lw + gx] = 100;
   }
 
+  // 局部沿用同一语义:
+  //   robot_radius 内 -> 100 紫色, DWA 绝对不进入;
+  //   robot_radius ~ inflation_radius -> 1..99 蓝色软代价, 窄通道可进入.
   int l_inflate = static_cast<int>(std::ceil(inflation_radius_ / res));
   int l_safety = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
+  l_inflate = std::max(l_inflate, l_safety + 1);
   std::vector<float> ldist(lw * lw, std::numeric_limits<float>::max());
   std::queue<std::pair<int,int>> lq;
   for (int y = 0; y < lw; ++y)
@@ -1035,7 +1057,15 @@ void NavigationNode::replanningCheck()
 
   const auto start = RosUtils::toCorePose(current_pose_);
   const auto goal = RosUtils::toCorePose(goal_pose_);
-  const auto result = planner_strategy_->plan(start, goal);
+  const auto soft_cm = makePlannerCostmap(global_costmap_msg_, false);
+  const auto strict_cm = makePlannerCostmap(global_costmap_msg_, true);
+  planner_strategy_->setCostmap(strict_cm);
+  auto result = planner_strategy_->plan(start, goal);
+  planner_strategy_->setCostmap(soft_cm);
+  if (!result.is_ok()) {
+    // 没有全程无色路径时, 才允许进入蓝色膨胀区.
+    result = planner_strategy_->plan(start, goal);
+  }
 
   if (!result.is_ok()) {
     // 新地图下当前路径可能已经失效. 停车并置 FAILED, 由 mapCallback
@@ -1084,7 +1114,15 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
   if (planner_strategy_) {
     auto start_pose = RosUtils::toCorePose(current_pose_);
     auto goal_pose_core = RosUtils::toCorePose(goal);
+    const auto soft_cm = makePlannerCostmap(global_costmap_msg_, false);
+    const auto strict_cm = makePlannerCostmap(global_costmap_msg_, true);
+    planner_strategy_->setCostmap(strict_cm);
     auto result = planner_strategy_->plan(start_pose, goal_pose_core);
+    planner_strategy_->setCostmap(soft_cm);
+    if (!result.is_ok()) {
+      // 没有全程无色路径时, 才允许进入蓝色膨胀区 (窄通道/前沿目标).
+      result = planner_strategy_->plan(start_pose, goal_pose_core);
+    }
     if (result.is_ok()) {
       current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
 
@@ -1316,9 +1354,57 @@ void NavigationNode::smoothCurrentPath(nav_msgs::msg::Path & path)
   }
   if (!core_map) return;
 
+  const nav_msgs::msg::Path raw_path = path;
   core::Path core_path = RosUtils::toCorePath(path);
   core_path = planners::smoothPath(core_path, core_map, smoother_cfg);
   path = RosUtils::toRosPath(core_path, path.header.frame_id, now());
+
+  // 平滑后再逐段检查一次; 平滑器只保证新顶点/线段不进 100 区, 这里
+  // 作为最终安全闸, 失败就退回 A* 原始路径.
+  if (m_has_global_costmap_ && pathCollides(path, global_costmap_msg_)) {
+    path = raw_path;
+    if (pathCollides(path, global_costmap_msg_)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        "Raw A* path still intersects lethal costmap; path cleared");
+      path.poses.clear();
+    } else {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        "Smoothed path collides; using raw A* path");
+    }
+  }
+}
+
+bool NavigationNode::pathCollides(const nav_msgs::msg::Path & path,
+  const nav_msgs::msg::OccupancyGrid & costmap) const
+{
+  if (path.poses.empty() || costmap.data.empty()) return false;
+  const double res = costmap.info.resolution;
+  const double ox = costmap.info.origin.position.x;
+  const double oy = costmap.info.origin.position.y;
+  auto lethal = [&](double wx, double wy) -> bool {
+    const int mx = static_cast<int>((wx - ox) / res);
+    const int my = static_cast<int>((wy - oy) / res);
+    if (mx < 0 || mx >= static_cast<int>(costmap.info.width) ||
+        my < 0 || my >= static_cast<int>(costmap.info.height)) return true;
+    const size_t idx = static_cast<size_t>(my) * costmap.info.width +
+                       static_cast<size_t>(mx);
+    return costmap.data[idx] >= 100;
+  };
+  if (path.poses.size() == 1) {
+    return lethal(path.poses.front().pose.position.x,
+                  path.poses.front().pose.position.y);
+  }
+  for (size_t i = 1; i < path.poses.size(); ++i) {
+    const auto & a = path.poses[i-1].pose.position;
+    const auto & b = path.poses[i].pose.position;
+    const double dist = std::hypot(b.x - a.x, b.y - a.y);
+    const int steps = std::max(1, static_cast<int>(std::ceil(dist / (res * 0.5))));
+    for (int s = 0; s <= steps; ++s) {
+      const double t = static_cast<double>(s) / steps;
+      if (lethal(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)) return true;
+    }
+  }
+  return false;
 }
 
 void NavigationNode::publishPath(const nav_msgs::msg::Path & path)

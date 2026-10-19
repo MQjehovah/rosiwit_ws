@@ -21,6 +21,7 @@ struct SmootherConfig
     int max_iterations = 100;       // 最大迭代次数
     double alpha_start = 0.5;       // 初始平滑率
     double alpha_end = 0.1;         // 最终平滑率（逐渐减小以保持路径形状）
+    int max_cost_increase = 0;      // 允许平滑后代价上升的上限; 0=不进入更高代价的蓝区
 };
 
 /**
