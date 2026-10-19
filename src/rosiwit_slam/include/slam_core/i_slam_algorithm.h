@@ -4,6 +4,7 @@
 #include <functional>
 #include <vector>
 #include "slam_core/slam_types.h"
+#include <cstdint>
 
 namespace rosiwit_slam {
 
@@ -45,6 +46,7 @@ public:
     virtual bool setInitPose(const PoseStamped& /*pose*/) { return false; }
     /// 获取栅格地图信息 (用于定位模式发布 grid_map)
     virtual GridInfo getGridInfo() const { return {}; }
+    virtual uint64_t getRevision() const { return 0; }
 
     // 视觉松耦合 (route b, 默认空实现): 外部 VO 库输出注入
     /// VO 绝对里程计 (该帧时刻)

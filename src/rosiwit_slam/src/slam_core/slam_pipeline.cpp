@@ -625,6 +625,11 @@ GridInfo SlamPipeline::getGridInfo() const {
     return m_map_mgr->getGridInfo();
 }
 
+uint64_t SlamPipeline::getRevision() const {
+    if (!m_map_mgr) return 0;
+    return m_map_mgr->getRevision();
+}
+
 double SlamPipeline::getMatchingDegree() const {
     // 定位匹配度: 透传定位流水线的 confidence() (= m_last_match.fitness, 覆盖率 [0,1]).
     // 旧 xz_3d_slam 的 slam/info.matching_degree = localiza.getFitness(), 实机实测为 0.83 这种真值

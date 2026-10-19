@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <mutex>
+#include <atomic>
 #include <memory>
 #include "slam_core/i_map_manager.h"
 #include "slam_core/i_grid_map_generator.h"
@@ -26,6 +27,7 @@ public:
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path,
                      double resolution = 0.05) override;
     GridInfo getGridInfo() const override;
+    uint64_t getRevision() const override { return m_revision_.load(); }
     bool setGridMapGenerator(const std::string& name) override;
 
     bool loadGridMap(const std::string& pgm_path, const std::string& yaml_path);
@@ -51,6 +53,7 @@ private:
     std::vector<Submap> submaps_;        // addSubMap 顺序保存的关键帧(原始位姿)
     PoseStamped m_frontier_anchor_;      // 前沿锚点 A = G_last*P_last^{-1}, 新位姿经 A∘R 转到修正系
     std::mutex m_mutex_;                 // 保护 global_map_ / submaps_ / anchor
+    std::atomic<uint64_t> m_revision_{0}; // 地图内容版本号
     double save_voxel_ = 0.3;            // 保存/重建全局地图时的体素大小(m), yaml: map_save_voxel
     // 后端修正量的合理性上限: 相邻两次优化之间的锚点跳变量超过它就拒绝本次修正并告警。
     // 实机教训: 后端滞后导致 corrected/submaps 下标错位时, 锚点会跳 5~36m, 整张图瞬间错位重叠。

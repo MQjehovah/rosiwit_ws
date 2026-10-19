@@ -319,6 +319,9 @@ private:
   core::SafetyMonitor safety_monitor_;
   std::vector<std::pair<double, double>> safety_points_;
   std::vector<std::pair<double, double>> safety_points_map_;
+  bool safety_pose_valid_ = false;
+  double safety_pose_x_ = 0.0;
+  double safety_pose_y_ = 0.0;
   bool safety_enabled_ = true;
   bool safety_have_cloud_ = false;
   double safety_last_cloud_sec_ = 0.0;

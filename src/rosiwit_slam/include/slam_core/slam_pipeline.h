@@ -82,6 +82,7 @@ public:
     std::string getPipelineMode() const override;
     bool setInitPose(const PoseStamped& pose) override;
     GridInfo getGridInfo() const override;
+    uint64_t getRevision() const override;
     bool getHighRatePose(double t, PoseStamped& out) override;
     bool getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
     double getMatchingDegree() const override;    void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;

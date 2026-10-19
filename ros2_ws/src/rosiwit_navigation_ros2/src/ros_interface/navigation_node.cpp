@@ -388,6 +388,9 @@ void NavigationNode::safetyPointCloudCallback(
     tf2::Quaternion q_map(qm.x, qm.y, qm.z, qm.w);
     tf2::Matrix3x3 r_map(q_map);
     const tf2::Vector3 t_map(tm.x, tm.y, tm.z);
+    safety_pose_x_ = tm.x;
+    safety_pose_y_ = tm.y;
+    safety_pose_valid_ = true;
     safety_points_map_.reserve(safety_points_.size());
     for (const auto & p : safety_points_) {
       const tf2::Vector3 pm = r_map * tf2::Vector3(p.first, p.second, 0.0) + t_map;
@@ -775,10 +778,18 @@ void NavigationNode::publishLocalCostmap()
   double ox = current_map_->info.origin.position.x;
   double oy = current_map_->info.origin.position.y;
   double rx = 0, ry = 0;
-  try {
-    auto tf = tf_buffer_->lookupTransform(map_frame_, "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
-    rx = tf.transform.translation.x; ry = tf.transform.translation.y;
-  } catch (tf2::TransformException &) { return; }
+  if (safety_pose_valid_) {
+    // 与 safety_points_map_ 使用同一帧雷达位姿, 避免转弯时点云层和底图错位.
+    rx = safety_pose_x_;
+    ry = safety_pose_y_;
+  } else {
+    try {
+      auto tf = tf_buffer_->lookupTransform(
+        map_frame_, "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
+      rx = tf.transform.translation.x;
+      ry = tf.transform.translation.y;
+    } catch (tf2::TransformException &) { return; }
+  }
   double win_width = local_costmap_size_;
   int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
   int cx = static_cast<int>((rx - ox) / res);

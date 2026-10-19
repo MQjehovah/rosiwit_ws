@@ -152,6 +152,7 @@ void SlamNode::resetPublishState() {
     m_have_output = false;
     m_path.poses.clear();
     m_grid_map_published = false;
+    m_last_map_revision = 0;
     m_has_smoothed = false;
     m_has_cov = false;
 }
@@ -527,7 +528,12 @@ void SlamNode::mapTimerCB() {
     }
 
     // 2. grid_map (nav_msgs/OccupancyGrid)
-    // mapping 模式下也要持续更新, 否则导航/探索拿到的是启动时的空图或旧图.
+    // 事件驱动: 只有地图版本变化 (新关键帧/后端优化) 才重建并发布,
+    // 静止或转弯时不会按 1s 定时刷新底图.
+    const uint64_t map_revision = m_algo_raw->getRevision();
+    if (m_grid_map_published && map_revision == m_last_map_revision) {
+      return;
+    }
     const bool need_grid = is_localization ||
         m_map_pub->get_subscription_count() > 0 ||
         m_grid_map_pub->get_subscription_count() > 0;
@@ -561,6 +567,7 @@ void SlamNode::mapTimerCB() {
             m_grid_map_pub->publish(grid);
             if (m_map_pub) m_map_pub->publish(grid);
             m_grid_map_published = true;
+            m_last_map_revision = map_revision;
             RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
                 "Published grid_map (%d x %d, res=%.3f)",
                 grid.info.width, grid.info.height, grid.info.resolution);

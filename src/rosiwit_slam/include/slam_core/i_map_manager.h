@@ -2,6 +2,7 @@
 #include "slam_core/slam_types.h"
 #include "slam_core/pipeline_types.h"
 #include <vector>
+#include <cstdint>
 
 namespace rosiwit_slam {
 
@@ -13,6 +14,8 @@ public:
     virtual bool loadMap(const std::string& name) = 0;
     virtual bool getGlobalMap(PointVec& out) = 0;
     virtual bool addSubMap(const KeyFrame& kf) = 0;
+    /// 地图版本号: 只有关键帧/后端优化改变地图时才递增, 供 /map 事件驱动发布.
+    virtual uint64_t getRevision() const { return 0; }
 
     // 后端位姿图优化完成回调: corrected 为与 addSubMap 交付顺序一致的关键帧修正位姿
     // (只覆盖已交付后端的关键帧). 地图管理器据此用修正位姿重建全局地图, 使回环优化

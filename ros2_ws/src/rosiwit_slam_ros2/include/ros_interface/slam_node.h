@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -132,6 +133,7 @@ private:
     bool m_have_output = false;
     nav_msgs::msg::Path m_path;
     bool m_grid_map_published = false;
+    uint64_t m_last_map_revision = 0;
 
     // EMA 平滑滤波（抑制 LIO 抖动，避免 costmap 中机器人中心跳进 lethal）
     PoseStamped m_smoothed_pose;

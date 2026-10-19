@@ -150,6 +150,7 @@ bool PcdMapManager::loadMap(const std::string& name) {
     std::lock_guard<std::mutex> lock(m_mutex_);
     global_map_ = cloud;
     observations_.clear();   // 纯 PCD 无逐帧原点, 射线类策略退回整体点云
+    ++m_revision_;
     std::cout << "[PcdMapManager] Loaded: " << path
               << " (" << global_map_->size() << " pts)" << std::endl;
     return true;
@@ -200,6 +201,7 @@ bool PcdMapManager::addSubMap(const KeyFrame& kf) {
     vg.filter(*filtered);
     global_map_ = filtered;
 
+    ++m_revision_;
     return true;
 }
 
@@ -298,6 +300,7 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
               << " (matched " << matched << "/" << corrected.size() << " backend poses)"
               << " (" << global_map_->size() << " pts), anchor trans="
               << m_frontier_anchor_.trans.norm() << " m" << std::endl;
+    ++m_revision_;
 }
 
 bool PcdMapManager::getCorrectionAnchor(PoseStamped& out) {
@@ -386,6 +389,7 @@ bool PcdMapManager::loadGridMap(const std::string& pgm_path, const std::string& 
     m_grid_res = info.resolution;
     m_grid_ox = info.origin_x;
     m_grid_oy = info.origin_y;
+    ++m_revision_;
     return true;
 }
 
