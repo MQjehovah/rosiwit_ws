@@ -77,8 +77,8 @@ size_t MppiController::nearestPathIndex(
 int MppiController::localCostAt(const core::Pose2D& pose) const {
   if (!has_local_costmap_) return 0;
   const auto& info = local_costmap_.info;
-  const int mx = static_cast<int>((pose.x - info.origin.position.x) / info.resolution);
-  const int my = static_cast<int>((pose.y - info.origin.position.y) / info.resolution);
+  const int mx = static_cast<int>(std::floor((pose.x - info.origin.position.x) / info.resolution));
+  const int my = static_cast<int>(std::floor((pose.y - info.origin.position.y) / info.resolution));
   if (mx < 0 || my < 0 ||
       mx >= static_cast<int>(info.width) || my >= static_cast<int>(info.height)) {
     return 100;

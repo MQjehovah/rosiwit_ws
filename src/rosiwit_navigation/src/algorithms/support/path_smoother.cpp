@@ -23,8 +23,8 @@ core::Path smoothPath(const core::Path & raw_path,
         const double ox = costmap->info.origin.position.x;
         const double oy = costmap->info.origin.position.y;
         const double res = costmap->info.resolution;
-        const int mx = static_cast<int>((wx - ox) / res);
-        const int my = static_cast<int>((wy - oy) / res);
+        const int mx = static_cast<int>(std::floor((wx - ox) / res));
+        const int my = static_cast<int>(std::floor((wy - oy) / res));
         if (mx < 0 || mx >= static_cast<int>(costmap->info.width) ||
             my < 0 || my >= static_cast<int>(costmap->info.height)) return 100;
         const size_t idx = static_cast<size_t>(my) * costmap->info.width +

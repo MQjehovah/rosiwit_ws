@@ -695,8 +695,8 @@ class FrontierExplorer(Node):
         unknown_integral = build_integral(unknown)
         h, w = grid.shape
 
-        robot_col = int((robot[0] - origin_x) / resolution)
-        robot_row = int((robot[1] - origin_y) / resolution)
+        robot_col = math.floor((robot[0] - origin_x) / resolution)
+        robot_row = math.floor((robot[1] - origin_y) / resolution)
         start = nearest_free_cell(free, robot_row, robot_col)
         if start is None:
             return None

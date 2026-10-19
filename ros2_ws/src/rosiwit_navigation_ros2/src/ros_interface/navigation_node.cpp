@@ -706,8 +706,8 @@ void NavigationNode::updateCostmap()
       (now().seconds() - last_scan_sec_ <= 1.0);
     if (laser_fresh) {
       for (const auto& pt : laser_points_) {
-        int mx = static_cast<int>((pt.x - ox) / res);
-        int my = static_cast<int>((pt.y - oy) / res);
+        int mx = static_cast<int>(std::floor((pt.x - ox) / res));
+        int my = static_cast<int>(std::floor((pt.y - oy) / res));
         if (mx >= 0 && mx < static_cast<int>(w) && my >= 0 && my < static_cast<int>(h))
           cm.data[my * w + mx] = 255;
       }
@@ -797,8 +797,8 @@ void NavigationNode::publishLocalCostmap()
   }
   double win_width = local_costmap_size_;
   int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
-  int cx = static_cast<int>((rx - ox) / res);
-  int cy = static_cast<int>((ry - oy) / res);
+  int cx = static_cast<int>(std::floor((rx - ox) / res));
+  int cy = static_cast<int>(std::floor((ry - oy) / res));
   // 奇数尺寸, 让机器人正好落在中心格 (偶数尺寸会偏半格).
   int lw = win_half * 2 + 1;
   nav_msgs::msg::OccupancyGrid local_costmap;
@@ -820,8 +820,8 @@ void NavigationNode::publishLocalCostmap()
     }
   // real-time 2D laser + 3D LiDAR points in the local costmap window
   auto mark_point = [&](double px, double py) {
-      const int mx = static_cast<int>((px - ox) / res);
-      const int my = static_cast<int>((py - oy) / res);
+      const int mx = static_cast<int>(std::floor((px - ox) / res));
+      const int my = static_cast<int>(std::floor((py - oy) / res));
       const int dx = mx - cx;
       const int dy = my - cy;
       if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) return;
@@ -1675,8 +1675,8 @@ bool NavigationNode::adjustGoalToFree(core::Pose2D & goal) const
     if (mx < 0 || mx >= w || my < 0 || my >= h) return 100;
     return cm.data[static_cast<size_t>(my) * w + mx];
   };
-  const int cx = static_cast<int>((goal.x - cm.info.origin.position.x) / res);
-  const int cy = static_cast<int>((goal.y - cm.info.origin.position.y) / res);
+  const int cx = static_cast<int>(std::floor((goal.x - cm.info.origin.position.x) / res));
+  const int cy = static_cast<int>(std::floor((goal.y - cm.info.origin.position.y) / res));
   if (costAt(cx, cy) < 100) return true;
 
   // 前沿目标可能落在未知/激光点形成的紫色格上. 在 0.3m 内统一按
@@ -1720,8 +1720,8 @@ bool NavigationNode::pathCollides(const nav_msgs::msg::Path & path,
     // 机器人起点可能因贴墙/地图抖动落在 100 内; A* 会清出起点小区域.
     // 这里跳过起点近旁的检查, 否则会把刚规划好的路径误清空, 机器人停死.
     if (std::hypot(wx - start.x, wy - start.y) < 0.5) return false;
-    const int mx = static_cast<int>((wx - ox) / res);
-    const int my = static_cast<int>((wy - oy) / res);
+    const int mx = static_cast<int>(std::floor((wx - ox) / res));
+    const int my = static_cast<int>(std::floor((wy - oy) / res));
     if (mx < 0 || mx >= static_cast<int>(costmap.info.width) ||
         my < 0 || my >= static_cast<int>(costmap.info.height)) return true;
     const size_t idx = static_cast<size_t>(my) * costmap.info.width +

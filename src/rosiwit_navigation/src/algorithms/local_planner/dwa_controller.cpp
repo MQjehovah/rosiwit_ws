@@ -142,8 +142,8 @@ core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const 
         // 直接使用局部 costmap: 已包含静态地图 + 3D 点云 + 安全膨胀.
         if (has_local_costmap_) {
             const auto& info = local_costmap_.info;
-            const int mx = static_cast<int>((px - info.origin.position.x) / info.resolution);
-            const int my = static_cast<int>((py - info.origin.position.y) / info.resolution);
+            const int mx = static_cast<int>(std::floor((px - info.origin.position.x) / info.resolution));
+            const int my = static_cast<int>(std::floor((py - info.origin.position.y) / info.resolution));
             if (mx < 0 || my < 0 ||
                 mx >= static_cast<int>(info.width) || my >= static_cast<int>(info.height)) {
                 s.clearance = std::min(s.clearance, 0.0);
