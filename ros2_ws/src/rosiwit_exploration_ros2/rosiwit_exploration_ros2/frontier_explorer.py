@@ -429,6 +429,9 @@ class FrontierExplorer(Node):
         if time.monotonic() < self.next_goal_at:
             return
 
+        # 黑名单条目到期后必须及时失效; 之前只在 finish_goal() 末尾清理,
+        # 没有新目标结束时过期条目会永久挡住同一个前沿, 导致提前 finish.
+        self.cleanup_blacklist()
         candidate = self.best_frontier(robot)
         if candidate is not None:
             self.empty_cycles = 0
@@ -652,8 +655,9 @@ class FrontierExplorer(Node):
         self.blacklist = [b for b in self.blacklist if b[2] > now]
 
     def is_blacklisted(self, x: float, y: float) -> bool:
-        for bx, by, _ in self.blacklist:
-            if math.hypot(x - bx, y - by) <= self.blacklist_radius:
+        now = time.monotonic()
+        for bx, by, until in self.blacklist:
+            if until > now and math.hypot(x - bx, y - by) <= self.blacklist_radius:
                 return True
         return False
 

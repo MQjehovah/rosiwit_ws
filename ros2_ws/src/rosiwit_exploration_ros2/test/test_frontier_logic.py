@@ -1,4 +1,5 @@
 import math
+import time
 
 import numpy as np
 
@@ -39,6 +40,17 @@ def test_parse_goal_status_token():
 def test_first_failure_gets_short_blacklist():
     assert fe.blacklist_duration_for(1, 10.0, 180.0) == 10.0
     assert fe.blacklist_duration_for(2, 10.0, 180.0) == 180.0
+
+
+def test_expired_blacklist_is_ignored():
+    explorer = object.__new__(fe.FrontierExplorer)
+    explorer.blacklist_radius = 0.8
+    now = time.monotonic()
+    explorer.blacklist = [(1.0, 2.0, now - 1.0)]
+    assert not explorer.is_blacklisted(1.0, 2.0)
+    explorer.blacklist = [(1.0, 2.0, now + 10.0)]
+    assert explorer.is_blacklisted(1.0, 2.0)
+    assert not explorer.is_blacklisted(4.0, 2.0)
 
 
 def test_window_sum_and_integral():
