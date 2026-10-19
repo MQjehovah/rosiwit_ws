@@ -1,6 +1,8 @@
 #include "dwa_controller.hpp"
 #include <algorithm>
 #include <limits>
+#include <cstdio>
+#include <string>
 
 namespace rosiwit_navigation {
 namespace controllers {
@@ -48,11 +50,16 @@ core::VelocityCommand DwaController::computeVelocityCommand(
     idx_ = std::max(idx_, findClosest(pose));
 
     auto samples = search(pose, vel);
+    last_samples_ = static_cast<int>(samples.size());
     if (samples.empty()) return {0, 0, vel.angular_z};
 
     // Pick best
     auto best = std::min_element(samples.begin(), samples.end(),
         [](const Sample& a, const Sample& b) { return a.cost < b.cost; });
+    last_best_v_ = best->v;
+    last_best_w_ = best->w;
+    last_best_cost_ = best->cost;
+    last_min_clearance_ = best->clearance;
 
     // 平滑推进 idx_，最多 +2 防止前视点跳变
     double px = pose.x, py = pose.y, pt = pose.theta;
@@ -216,6 +223,15 @@ void DwaController::setVelocityLimit(double vx, double vw) { max_vx_ = vx; max_v
 std::string DwaController::getName() const { return name_; }
 std::string DwaController::getVersion() const { return "1.0.0"; }
 void DwaController::setObstacles(const core::ObstacleArray& obs) { obstacles_ = obs; }
+
+std::string DwaController::getDiagnostics() const {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+        "controller=dwa samples=%d best_v=%.3f best_w=%.3f cost=%.3f clearance=%.3f idx=%zu",
+        last_samples_, last_best_v_, last_best_w_, last_best_cost_,
+        last_min_clearance_, idx_);
+    return std::string(buf);
+}
 
 void DwaController::setLocalCostmap(const core::CostmapGrid& costmap) {
     local_costmap_ = costmap;

@@ -234,6 +234,7 @@ protected:
    */
   void publishVelocityCommand(const geometry_msgs::msg::Twist & cmd_vel);
   void publishSafetyState(const std::string & state);
+  void publishDiagnostics();
 
   /**
    * @brief 发布路径（用于可视化）
@@ -267,17 +268,23 @@ private:
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr global_costmap_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr safety_state_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diagnostics_pub_;
 
   // 定时器
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr replanning_timer_;
   rclcpp::TimerBase::SharedPtr local_costmap_timer_;
   rclcpp::TimerBase::SharedPtr global_costmap_timer_;
+  rclcpp::TimerBase::SharedPtr diagnostics_timer_;
 
   // 最近一次全局 costmap, 由高频定时器重复发布
   nav_msgs::msg::OccupancyGrid global_costmap_msg_;
   bool m_has_global_costmap_ = false;
   double local_costmap_size_ = 8.0;
+  int last_local_center_cost_ = -1;
+  int last_local_lethal_cells_ = 0;
+  int last_local_blue_cells_ = 0;
+  geometry_msgs::msg::Twist last_published_cmd_;
 
   // 状态变量
   std::atomic<NavigationState> current_state_;

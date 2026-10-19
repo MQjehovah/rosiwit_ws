@@ -10,6 +10,8 @@
 #include <cmath>
 #include <queue>
 #include <unordered_set>
+#include <sstream>
+#include <iomanip>
 #include <utility>
 
 #include "path_smoother.hpp"
@@ -508,6 +510,8 @@ void NavigationNode::initializePublishers()
     "/global_costmap", rclcpp::QoS(1).transient_local());
   local_costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
     "/local_costmap", rclcpp::QoS(1).transient_local());
+  diagnostics_pub_ = create_publisher<std_msgs::msg::String>(
+    "/nav_diagnostics", rclcpp::QoS(10));
   safety_state_pub_ = create_publisher<std_msgs::msg::String>(
     "/safety_state", 10);
 
@@ -541,6 +545,10 @@ void NavigationNode::initializeTimers()
   global_costmap_timer_ = create_wall_timer(
     std::chrono::milliseconds(100),
     std::bind(&NavigationNode::republishGlobalCostmap, this));
+
+  diagnostics_timer_ = create_wall_timer(
+    std::chrono::milliseconds(500),
+    std::bind(&NavigationNode::publishDiagnostics, this));
 
   RCLCPP_INFO(get_logger(), "Timers initialized");
 }
@@ -913,6 +921,15 @@ void NavigationNode::publishLocalCostmap()
     }
   }
 
+  last_local_lethal_cells_ = 0;
+  last_local_blue_cells_ = 0;
+  for (const auto v : local_costmap.data) {
+    if (v >= 100) ++last_local_lethal_cells_;
+    else if (v > 0) ++last_local_blue_cells_;
+  }
+  last_local_center_cost_ = local_costmap.data[
+    static_cast<size_t>(lw / 2) * lw + static_cast<size_t>(lw / 2)];
+
   if (controller_strategy_) {
     core::CostmapGrid grid;
     grid.info.width = local_costmap.info.width;
@@ -1181,9 +1198,11 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
     "Path planned with %zu points",
     current_path_.poses.size());
 
-  // 检查是否需要先原地旋转（Pure Pursuit 只能前进）
+  // 原地旋转只对不能倒车/横移的 Pure Pursuit 有意义. DWA/MPPI 自己能
+  // 在轨迹采样里完成转向; 否则 TF/底盘角速度异常时会卡在 initial rotate,
+  // 看起来就是"一直不走".
   m_need_initial_rotate = false;
-  if (current_path_.poses.size() > 2) {
+  if (controller_name_ == "pure_pursuit" && current_path_.poses.size() > 2) {
     double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
     double dx = current_path_.poses[1].pose.position.x - current_path_.poses[0].pose.position.x;
     double dy = current_path_.poses[1].pose.position.y - current_path_.poses[0].pose.position.y;
@@ -1390,6 +1409,7 @@ void NavigationNode::publishVelocityCommand(const geometry_msgs::msg::Twist & cm
   } else {
     publishSafetyState("DISABLED");
   }
+  last_published_cmd_ = out;
   cmd_vel_pub_->publish(out);
 }
 
@@ -1400,6 +1420,56 @@ void NavigationNode::publishSafetyState(const std::string & state)
   std_msgs::msg::String msg;
   msg.data = state;
   safety_state_pub_->publish(msg);
+}
+
+void NavigationNode::publishDiagnostics()
+{
+  if (!diagnostics_pub_) return;
+  const double now_sec = now().seconds();
+  const double tf_age = current_pose_.header.stamp.sec > 0 ?
+    now_sec - (current_pose_.header.stamp.sec + current_pose_.header.stamp.nanosec * 1e-9) : -1.0;
+  const double odom_age = last_odom_sec_ > 0 ? now_sec - last_odom_sec_ : -1.0;
+  const double goal_dist = goal_pose_.header.frame_id.empty() ? -1.0 :
+    std::hypot(goal_pose_.pose.position.x - current_pose_.pose.position.x,
+               goal_pose_.pose.position.y - current_pose_.pose.position.y);
+
+  std::ostringstream os;
+  os << std::fixed << std::setprecision(3);
+  os << "{"
+     << "\"state\":" << static_cast<int>(current_state_.load())
+     << ",\"navigating\":" << (is_navigating_.load() ? "true" : "false")
+     << ",\"pose\":[" << current_pose_.pose.position.x << ","
+     << current_pose_.pose.position.y << ","
+     << tf2::getYaw(current_pose_.pose.orientation) << "]"
+     << ",\"vel\":[" << current_velocity_.linear.x << ","
+     << current_velocity_.angular.z << "]"
+     << ",\"cmd\":[" << last_published_cmd_.linear.x << ","
+     << last_published_cmd_.angular.z << "]"
+     << ",\"tf_age\":" << tf_age
+     << ",\"odom_age\":" << odom_age
+     << ",\"path_points\":" << current_path_.poses.size()
+     << ",\"goal_dist\":" << goal_dist
+     << ",\"local_center\":" << last_local_center_cost_
+     << ",\"local_lethal\":" << last_local_lethal_cells_
+     << ",\"local_blue\":" << last_local_blue_cells_
+     << ",\"recovery\":" << (recovery_active_ ? "true" : "false")
+     << ",\"initial_rotate\":" << (m_need_initial_rotate ? "true" : "false")
+     << ",\"controller\":\"" << controller_name_ << "\""
+     << ",\"controller_diag\":\"" <<
+        (controller_strategy_ ? controller_strategy_->getDiagnostics() : std::string()) << "\""
+     << "}";
+  std_msgs::msg::String msg;
+  msg.data = os.str();
+  diagnostics_pub_->publish(msg);
+  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+    "diag state=%d pose=(%.2f,%.2f) vel=(%.2f,%.2f) cmd=(%.2f,%.2f) "
+    "tf_age=%.2f odom_age=%.2f local_center=%d lethal=%d blue=%d path=%zu rec=%d",
+    static_cast<int>(current_state_.load()),
+    current_pose_.pose.position.x, current_pose_.pose.position.y,
+    current_velocity_.linear.x, current_velocity_.angular.z,
+    last_published_cmd_.linear.x, last_published_cmd_.angular.z,
+    tf_age, odom_age, last_local_center_cost_, last_local_lethal_cells_,
+    last_local_blue_cells_, current_path_.poses.size(), recovery_active_ ? 1 : 0);
 }
 
 void NavigationNode::smoothCurrentPath(nav_msgs::msg::Path & path)

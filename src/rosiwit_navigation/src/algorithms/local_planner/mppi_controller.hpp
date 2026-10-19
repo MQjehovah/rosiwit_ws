@@ -34,6 +34,7 @@ public:
   std::string getVersion() const override;
   void setObstacles(const core::ObstacleArray& obstacles) override;
   void setLocalCostmap(const core::CostmapGrid& costmap) override;
+  std::string getDiagnostics() const override;
 
 private:
   struct Control { double v{0.0}; double w{0.0}; };
@@ -70,11 +71,21 @@ private:
   double path_weight_{2.0};
   double heading_weight_{0.4};
   double obstacle_weight_{0.03};
-  double control_weight_{0.08};
+  double control_weight_{0.03};
+  double speed_weight_{2.0};
   double goal_weight_{1.5};
 
   std::vector<Control> nominal_;
   std::mt19937 rng_{5489u};
+  double last_min_cost_{0.0};
+  double last_mean_cost_{0.0};
+  double last_collision_ratio_{0.0};
+  double last_best_v_{0.0};
+  double last_best_w_{0.0};
+  double last_output_v_{0.0};
+  double last_output_w_{0.0};
+  double last_goal_error_{0.0};
+  size_t last_nearest_idx_{0};
 };
 
 }}  // namespace rosiwit_navigation::controllers

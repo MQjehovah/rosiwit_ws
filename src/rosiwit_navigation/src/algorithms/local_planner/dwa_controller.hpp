@@ -31,6 +31,7 @@ public:
     std::string getVersion() const override;
     void setObstacles(const core::ObstacleArray& obstacles) override;
     void setLocalCostmap(const core::CostmapGrid& costmap) override;
+    std::string getDiagnostics() const override;
 
 private:
     struct Sample { double v, w; double heading, clearance, velocity; double cost; };
@@ -47,6 +48,9 @@ private:
     double max_vx_, min_vx_, max_vw_, max_accel_, max_dvw_;
     double goal_tol_, dt_, sim_time_;
     bool initialized_, goal_reached_;
+    int last_samples_{0};
+    double last_best_v_{0.0}, last_best_w_{0.0}, last_best_cost_{0.0};
+    double last_min_clearance_{0.0};
 
     std::vector<Sample> search(const core::Pose2D& pose, const core::VelocityCommand& vel);
     VelocityBounds dynamicWindow(const core::VelocityCommand& vel) const;

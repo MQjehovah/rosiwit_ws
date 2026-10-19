@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <cstdio>
+#include <string>
 
 namespace rosiwit_navigation {
 namespace controllers {
@@ -27,7 +29,7 @@ bool MppiController::initialize(const core::ControllerConfig& config) {
 void MppiController::resetNominal() {
   // 不要从全 0 控制开始: 采样噪声在 0 附近对称, 加权平均后的第一个
   // 控制量可能只有 0.01, 低于底盘的静止判定, 机器人会一直 recovery.
-  const double seed_v = std::max(0.0, max_vx_ * 0.5);
+  const double seed_v = std::max(0.0, max_vx_ * 0.8);
   nominal_.assign(static_cast<size_t>(horizon_), Control{seed_v, 0.0});
 }
 
@@ -154,6 +156,9 @@ core::VelocityCommand MppiController::computeVelocityCommand(
         cost += obstacle_weight_ * static_cast<double>(cell);
       }
       cost += control_weight_ * (v * v + w * w);
+      // 明确速度目标: 没有障碍时不要因为保守而长期低速.
+      const double v_ref = max_vx_ * 0.75;
+      cost += speed_weight_ * (v - v_ref) * (v - v_ref) * dt_;
       cost += 0.02 * ((v - prev_v) * (v - prev_v) +
                       (w - prev_w) * (w - prev_w));
       prev_v = v;
@@ -166,6 +171,7 @@ core::VelocityCommand MppiController::computeVelocityCommand(
     min_cost = std::min(min_cost, cost);
   }
 
+  last_min_cost_ = std::min(min_cost, 1e12);
   double sum_w = 0.0;
   std::vector<Control> weighted(static_cast<size_t>(horizon_), Control{});
   for (const auto& sample : sampled) {
@@ -188,8 +194,26 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   // 滚动时域: 平移标称控制序列, 最后一个保持.
   for (size_t t = 0; t + 1 < nominal_.size(); ++t) nominal_[t] = nominal_[t + 1];
 
-  return {std::clamp(first.v, 0.0, max_vx_), 0.0,
-          std::clamp(first.w, -max_vw_, max_vw_)};
+  last_output_v_ = std::clamp(first.v, 0.0, max_vx_);
+  last_output_w_ = std::clamp(first.w, -max_vw_, max_vw_);
+  last_nearest_idx_ = nearestPathIndex(pose);
+  last_goal_error_ = pose.distanceTo(path_.points.back().pose);
+  last_collision_ratio_ = 0.0;
+  last_mean_cost_ = 0.0;
+  int best_k = 0;
+  for (size_t k = 0; k < sampled.size(); ++k) {
+    last_mean_cost_ += sampled[k].cost;
+    if (sampled[k].cost < sampled[best_k].cost) best_k = static_cast<int>(k);
+    for (const auto& c : sampled[k].controls) {
+      (void)c;
+    }
+  }
+  last_mean_cost_ = sampled.empty() ? 0.0 :
+    last_mean_cost_ / static_cast<double>(sampled.size());
+  last_best_v_ = sampled.empty() ? 0.0 : sampled[best_k].controls.front().v;
+  last_best_w_ = sampled.empty() ? 0.0 : sampled[best_k].controls.front().w;
+
+  return {last_output_v_, 0.0, last_output_w_};
 }
 
 bool MppiController::isGoalReached(const core::Pose2D& pose) const {
@@ -220,6 +244,16 @@ std::string MppiController::getVersion() const { return "1.0.0"; }
 
 void MppiController::setObstacles(const core::ObstacleArray& obstacles) {
   obstacles_ = obstacles;
+}
+
+std::string MppiController::getDiagnostics() const {
+  char buf[320];
+  std::snprintf(buf, sizeof(buf),
+    "controller=mppi out_v=%.3f out_w=%.3f best_v=%.3f best_w=%.3f "
+    "min_cost=%.3f mean_cost=%.3f goal_err=%.2f idx=%zu",
+    last_output_v_, last_output_w_, last_best_v_, last_best_w_,
+    last_min_cost_, last_mean_cost_, last_goal_error_, last_nearest_idx_);
+  return std::string(buf);
 }
 
 void MppiController::setLocalCostmap(const core::CostmapGrid& costmap) {
