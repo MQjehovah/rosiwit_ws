@@ -77,7 +77,8 @@ instead of `/goal_pose`.
 - The SLAM node must publish a periodically updated `/map` in `mapping` mode.
   `rosiwit_slam_ros2` has been updated to regenerate the 2D grid from the latest
   observations and publish it every map timer tick.
-- `explore_mapping.launch.py` loads `config/navigation_params.yaml` explicitly.
+- Navigation parameters are owned by `rosiwit_navigation_ros2` (`config/exploration.yaml`).
+  The exploration launch only references that path via `navigation_params:=...`.
   It keeps `unknown` cells blocked (so the robot cannot shortcut through
   unmapped walls), uses a finer safety margin, lower speed, and pure pursuit.
 - `/map` is published at 5 Hz (`map_publish_period` in `simulator.yaml`).

@@ -60,8 +60,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'navigation_params',
             default_value=os.path.join(
-                exploration_dir, 'config', 'navigation_params.yaml'),
-            description='Navigation parameter file (DWA + conservative inflation)'),
+                navigation_dir, 'config', 'exploration.yaml'),
+            description='Navigation parameter file owned by rosiwit_navigation_ros2'),
         DeclareLaunchArgument(
             'exploration_config',
             default_value=os.path.join(
