@@ -189,4 +189,37 @@ TEST(AStarPlanner, BlueIsTraversableWhenNoFreeRouteExists)
   EXPECT_FALSE(pathTouchesLethal(costmap, result.value()));
 }
 
+TEST(AStarPlanner, AppliesConfiguredIterationLimit)
+{
+  const unsigned int width = 40;
+  const unsigned int height = 40;
+  std::vector<unsigned char> cells(width * height, 0);
+  const Costmap costmap = makeCostmap(width, height, 0.1, cells);
+
+  AStarPlanner planner;
+  rosiwit_navigation::core::PlannerConfig config;
+  config.name = "astar_iteration_test";
+  config.resolution = 0.1;
+  config.max_iterations = 1;
+  config.timeout = 2.0;
+  ASSERT_TRUE(planner.initialize(config));
+  planner.setInflationRadius(0.0);
+  planner.setRobotRadius(0.0);
+  planner.setCostmap(costmap);
+
+  const auto limited = planner.plan(
+    Pose2D(0.5, 0.5, 0.0), Pose2D(3.5, 3.5, 0.0));
+  EXPECT_FALSE(limited.is_ok());
+  EXPECT_EQ(limited.error_code(),
+            rosiwit_navigation::core::ErrorCode::TIMEOUT);
+
+  // 同一个 planner 用正常上限重新初始化, 应能恢复并完成规划;
+  // 这也覆盖失败/超时后搜索状态必须被清理.
+  config.max_iterations = 50000;
+  ASSERT_TRUE(planner.initialize(config));
+  const auto normal = planner.plan(
+    Pose2D(0.5, 0.5, 0.0), Pose2D(3.5, 3.5, 0.0));
+  ASSERT_TRUE(normal.is_ok()) << normal.error_message();
+}
+
 }  // namespace

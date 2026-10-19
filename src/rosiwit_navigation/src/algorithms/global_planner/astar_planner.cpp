@@ -37,6 +37,16 @@ bool AStarPlanner::initialize(const core::PlannerConfig& config)
 {
     config_ = config;
     planner_name_ = config.name.empty() ? "astar" : config.name;
+    // 这里必须把 ROS 层传入的迭代/超时限制落到搜索实际使用的成员;
+    // 之前只保存 config_, plan() 一直使用默认 50000, 参数完全无效.
+    if (config.max_iterations > 0) {
+        max_iterations_ = config.max_iterations;
+    }
+    if (config.timeout > 0.0) {
+        planning_timeout_seconds_ = config.timeout;
+    }
+    simple_config_.max_iterations = max_iterations_;
+    simple_config_.timeout_seconds = planning_timeout_seconds_;
     LOG_INFO(logger_, "A* planner initialized");
     return true;
 }
@@ -213,6 +223,18 @@ core::Result<core::Path> AStarPlanner::plan(
     // 机器人实际所在位置可能因 0.5m 栅格/膨胀而落在 lethal 区 (贴墙、地图抖动).
     // 清出起点周围一小块, 让规划器还能把它带出来; 真正不可走的墙仍由
     // goal 检查和代价膨胀约束.
+    // 注意: 这是临时清理, 不能永久写回 costmap_data_; 否则静态地图下每次
+    // 1Hz 重规划都会沿轨迹挖出 3x3 的自由洞, 路径可能穿墙.
+    struct RestoreStartCells {
+        std::vector<unsigned char> & data;
+        std::vector<std::pair<size_t, unsigned char>> saved;
+        explicit RestoreStartCells(std::vector<unsigned char> & d) : data(d) {}
+        ~RestoreStartCells() {
+            for (const auto & p : saved) data[p.first] = p.second;
+        }
+    };
+    RestoreStartCells restore_start(costmap_data_);
+
     if (isObstacle(start_x, start_y)) {
         // 只清起点本身和紧邻格, 不能按机器人半径清一大片, 否则路径会从
         // "被清掉的墙"里穿出去, 看起来像贴着障碍物规划.
@@ -220,7 +242,10 @@ core::Result<core::Path> AStarPlanner::plan(
         for (int yy = start_y - clear_cells; yy <= start_y + clear_cells; ++yy) {
             for (int xx = start_x - clear_cells; xx <= start_x + clear_cells; ++xx) {
                 if (isValid(xx, yy)) {
-                    costmap_data_[static_cast<size_t>(yy) * nx_ + static_cast<size_t>(xx)] = 0;
+                    const size_t idx = static_cast<size_t>(yy) * nx_ +
+                        static_cast<size_t>(xx);
+                    restore_start.saved.emplace_back(idx, costmap_data_[idx]);
+                    costmap_data_[idx] = 0;
                 }
             }
         }
@@ -469,12 +494,14 @@ void AStarPlanner::clearSearchData()
     // 使用 vector::assign 快速清空（O(n)但缓存友好）
     closed_list_.assign(closed_list_.size(), 0);
 
-    // 只重置被访问过的节点（避免大网格全量重置）
-    for (int idx : closed_indices_) {
-        if (idx >= 0 && idx < static_cast<int>(nodes_.size())) {
-            nodes_[idx] = AStarNode();  // 重置为默认构造
-        }
+    // 必须重置所有节点, 而不只是 closed_indices_. 规划超时/失败时,
+    // open list 中未弹出的节点仍保留 g_cost/parent; 下一次规划如果
+    // 只清 closed 节点, 会把旧父指针/旧代价当成有效状态, 产生错路径
+    // 或假失败. 87K 节点全量重置成本远低于一次错误规划.
+    if (nodes_.size() != static_cast<size_t>(nx_) * ny_) {
+        nodes_.resize(static_cast<size_t>(nx_) * ny_);
     }
+    for (auto & node : nodes_) node = AStarNode();
     closed_indices_.clear();
 }
 
