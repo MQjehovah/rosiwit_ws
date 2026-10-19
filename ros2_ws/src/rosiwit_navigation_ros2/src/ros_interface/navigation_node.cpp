@@ -293,6 +293,7 @@ void NavigationNode::loadParameters()
   declareIfNeeded("max_accel_theta", 1.0);
   declareIfNeeded("goal_tolerance_xy", 0.1);
   declareIfNeeded("goal_tolerance_yaw", 0.1);
+  declareIfNeeded("enforce_goal_yaw", false);
   declareIfNeeded("lookahead_distance", 0.6);
   declareIfNeeded("min_lookahead_distance", 0.3);
   declareIfNeeded("max_lookahead_distance", 0.9);
@@ -310,6 +311,7 @@ void NavigationNode::loadParameters()
   declareIfNeeded("local_costmap_size", 8.0);
   declareIfNeeded("tf_stale_timeout", 0.6);
   declareIfNeeded("local_clear_radius", 0.20);
+  declareIfNeeded("local_unknown_as_lethal", false);
   declareIfNeeded("enable_path_smoothing", false);
   declareIfNeeded("recovery_enabled", true);
   declareIfNeeded("recovery_trigger_cycles", 40);
@@ -327,6 +329,7 @@ void NavigationNode::loadParameters()
   get_parameter("max_accel_theta", params_.max_accel_theta);
   get_parameter("goal_tolerance_xy", params_.goal_tolerance_xy);
   get_parameter("goal_tolerance_yaw", params_.goal_tolerance_yaw);
+  get_parameter("enforce_goal_yaw", enforce_goal_yaw_);
   get_parameter("lookahead_distance", params_.lookahead_distance);
   get_parameter("min_lookahead_distance", params_.min_lookahead_distance);
   get_parameter("max_lookahead_distance", params_.max_lookahead_distance);
@@ -343,6 +346,7 @@ void NavigationNode::loadParameters()
   get_parameter("local_costmap_size", local_costmap_size_);
   get_parameter("tf_stale_timeout", tf_stale_timeout_);
   get_parameter("local_clear_radius", local_clear_radius_);
+  get_parameter("local_unknown_as_lethal", local_unknown_as_lethal_);
   get_parameter("enable_path_smoothing", enable_path_smoothing_);
   get_parameter("recovery_enabled", recovery_enabled_);
   get_parameter("recovery_trigger_cycles", recovery_trigger_cycles_);
@@ -816,7 +820,9 @@ void NavigationNode::publishLocalCostmap()
       int mx = cx + dx, my = cy + dy;
       if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) continue;
       int gx = dx + win_half, gy = dy + win_half;
-      raw[gy * lw + gx] = (current_map_->data[my * w + mx] >= 100) ? 100 : 0;
+      const int8_t mv = current_map_->data[my * w + mx];
+      raw[gy * lw + gx] = (mv >= 100 || (local_unknown_as_lethal_ && mv < 0))
+        ? 100 : 0;
     }
   // real-time 2D laser + 3D LiDAR points in the local costmap window
   auto mark_point = [&](double px, double py) {
@@ -992,6 +998,26 @@ void NavigationNode::controlLoop()
     geometry_msgs::msg::Twist stop_cmd;
     publishVelocityCommand(stop_cmd);
     return;
+  }
+
+  // 到达 XY 后, 若启用了目标朝向约束, 先原地转到目标 yaw.
+  if (enforce_goal_yaw_ && !current_path_.poses.empty()) {
+    const double dx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
+    const double dy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
+    if (std::hypot(dx, dy) < params_.goal_tolerance_xy) {
+      const double goal_yaw = tf2::getYaw(goal_pose_.pose.orientation);
+      const double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
+      double err = goal_yaw - current_yaw;
+      while (err > M_PI) err -= 2.0 * M_PI;
+      while (err < -M_PI) err += 2.0 * M_PI;
+      if (std::abs(err) > params_.goal_tolerance_yaw) {
+        geometry_msgs::msg::Twist rotate;
+        rotate.angular.z = std::clamp(
+          1.5 * err, -params_.max_velocity_theta, params_.max_velocity_theta);
+        publishVelocityCommand(rotate);
+        return;
+      }
+    }
   }
 
   // 检查是否到达目标
@@ -1417,7 +1443,16 @@ bool NavigationNode::isGoalReached()
   // 优先使用控制器的目标到达判断; 但路径被清空时不能误判到达.
   if (controller_strategy_ && !current_path_.poses.empty()) {
     auto core_pose = RosUtils::toCorePose(current_pose_);
-    return controller_strategy_->isGoalReached(core_pose);
+    if (!controller_strategy_->isGoalReached(core_pose)) return false;
+    if (enforce_goal_yaw_) {
+      const double goal_yaw = tf2::getYaw(goal_pose_.pose.orientation);
+      const double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
+      double err = goal_yaw - current_yaw;
+      while (err > M_PI) err -= 2.0 * M_PI;
+      while (err < -M_PI) err += 2.0 * M_PI;
+      return std::abs(err) <= params_.goal_tolerance_yaw;
+    }
+    return true;
   }
 
   // 后备：使用简单的欧氏距离判断

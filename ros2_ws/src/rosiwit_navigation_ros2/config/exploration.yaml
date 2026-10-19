@@ -28,6 +28,8 @@ rosiwit_navigation_node:
 
     goal_tolerance_xy: 0.25
     goal_tolerance_yaw: 0.2
+    # 探索目标只关心 XY; docking/精确朝向场景可打开.
+    enforce_goal_yaw: false
 
     lookahead_distance: 0.5
     min_lookahead_distance: 0.3
@@ -43,6 +45,8 @@ rosiwit_navigation_node:
     robot_radius: 0.25
     inflation_radius: 0.90
     local_costmap_size: 10.0
+    # 未知区域默认按自由处理, 便于接近 frontier; 定位/静态地图可设 true.
+    local_unknown_as_lethal: false
     tf_stale_timeout: 0.6
     local_clear_radius: 0.20
     # 平滑器会把 unknown 当自由并可能把路径拉进未知墙; 探索时关闭

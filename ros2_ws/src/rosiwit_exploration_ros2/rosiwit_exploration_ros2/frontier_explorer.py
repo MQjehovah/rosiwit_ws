@@ -41,6 +41,12 @@ except ImportError:  # pragma: no cover - nav2_msgs is an exec dependency
     NavigateToPose = None
 
 try:
+    from rosiwit_slam_ros2.srv import SaveMap, SaveGridMap
+except ImportError:  # pragma: no cover - optional at runtime
+    SaveMap = None
+    SaveGridMap = None
+
+try:
     from tf2_geometry_msgs import do_transform_pose
 except ImportError:  # pragma: no cover
     do_transform_pose = None
@@ -316,6 +322,10 @@ class FrontierExplorer(Node):
         self.marker_pub = self.create_publisher(MarkerArray, 'frontier_markers', 10)
         self.stop_pub = self.create_publisher(String, '/nav_stop', 10)
         self.stop_client = self.create_client(Trigger, '/stop_navigation')
+        self.slam_save_map_client = (
+            self.create_client(SaveMap, '/save_map') if SaveMap else None)
+        self.slam_save_grid_client = (
+            self.create_client(SaveGridMap, '/save_grid_map') if SaveGridMap else None)
 
         self.action_client = None
         if NavigateToPose is not None and self.goal_interface in ('nav2', 'auto'):
@@ -847,6 +857,22 @@ class FrontierExplorer(Node):
         directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
+        # 优先用 SLAM 自己的 SaveMap/SaveGridMap: 与实时 /map 使用同一
+        # 生成器, 并同时写出 PCD/xzmap, 后续定位可直接加载.
+        if (self.slam_save_map_client is not None and
+                self.slam_save_grid_client is not None and
+                self.slam_save_map_client.service_is_ready() and
+                self.slam_save_grid_client.service_is_ready()):
+            pcd_req = SaveMap.Request()
+            pcd_req.path = path + '.pcd'
+            self.slam_save_map_client.call_async(pcd_req)
+            grid_req = SaveGridMap.Request()
+            grid_req.pgm_path = path + '.pgm'
+            grid_req.yaml_path = path + '.yaml'
+            grid_req.resolution = 0.05
+            self.slam_save_grid_client.call_async(grid_req)
+            self.get_logger().info(f'Saving SLAM map to {path}.pcd/.xzmap/.pgm')
+            return
         cmd = ['ros2', 'run', 'nav2_map_server', 'map_saver_cli', '-f', path]
         if bool(self.get_parameter('use_sim_time').value):
             cmd += ['--ros-args', '-p', 'use_sim_time:=true']

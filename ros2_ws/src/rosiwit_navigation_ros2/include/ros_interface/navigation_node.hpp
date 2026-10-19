@@ -309,10 +309,12 @@ private:
 
   // 目标位姿
   geometry_msgs::msg::PoseStamped goal_pose_;
+  bool enforce_goal_yaw_{false};
   double last_controller_path_sec_ = 0.0;
   double tf_stale_timeout_{0.6};
   double safety_self_filter_radius_{0.20};
   double local_clear_radius_{0.20};
+  bool local_unknown_as_lethal_{false};
   double last_odom_sec_{-1e9};
   bool odom_pose_valid_{false};
   geometry_msgs::msg::Pose odom_pose_;
