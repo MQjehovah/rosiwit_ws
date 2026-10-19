@@ -1378,26 +1378,33 @@ bool NavigationNode::adjustGoalToFree(core::Pose2D & goal) const
   const int cy = static_cast<int>((goal.y - cm.info.origin.position.y) / res);
   if (costAt(cx, cy) < 100) return true;
 
-  // 前沿目标可能落在未知/激光点形成的紫色格上. 在 0.3m 内找最近的
-  // 0 格 (优先) 或蓝色格, 保持 explorer 的 0.35m 到达容差.
+  // 前沿目标可能落在未知/激光点形成的紫色格上. 在 0.3m 内统一按
+  // costmap 代价选最低的格子; 同代价再选最近, 不再区分 0/蓝两种情况.
   const int max_r = std::max(1, static_cast<int>(std::ceil(0.30 / res)));
-  for (int pass = 0; pass < 2; ++pass) {
-    for (int r = 1; r <= max_r; ++r) {
-      for (int dy = -r; dy <= r; ++dy) {
-        for (int dx = -r; dx <= r; ++dx) {
-          if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
-          const int c = costAt(cx + dx, cy + dy);
-          if ((pass == 0 && c != 0) || c >= 100) continue;
-          goal.x = cm.info.origin.position.x + (cx + dx + 0.5) * res;
-          goal.y = cm.info.origin.position.y + (cy + dy + 0.5) * res;
-          RCLCPP_WARN(get_logger(),
-            "Goal in obstacle; nudged to nearby free cell (%.2f, %.2f)", goal.x, goal.y);
-          return true;
-        }
+  int best_cost = 100;
+  double best_d2 = std::numeric_limits<double>::max();
+  int best_dx = 0;
+  int best_dy = 0;
+  for (int dy = -max_r; dy <= max_r; ++dy) {
+    for (int dx = -max_r; dx <= max_r; ++dx) {
+      const int c = costAt(cx + dx, cy + dy);
+      if (c >= 100) continue;
+      const double d2 = static_cast<double>(dx * dx + dy * dy);
+      if (c < best_cost || (c == best_cost && d2 < best_d2)) {
+        best_cost = c;
+        best_d2 = d2;
+        best_dx = dx;
+        best_dy = dy;
       }
     }
   }
-  return false;
+  if (best_cost >= 100) return false;
+  goal.x = cm.info.origin.position.x + (cx + best_dx + 0.5) * res;
+  goal.y = cm.info.origin.position.y + (cy + best_dy + 0.5) * res;
+  RCLCPP_WARN(get_logger(),
+    "Goal in obstacle; nudged to nearby lowest-cost cell (%.2f, %.2f), cost=%d",
+    goal.x, goal.y, best_cost);
+  return true;
 }
 
 bool NavigationNode::pathCollides(const nav_msgs::msg::Path & path,
