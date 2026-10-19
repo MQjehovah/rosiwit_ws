@@ -521,6 +521,7 @@ private:
     }
     if (!planner_strategy_) {
       ROS_ERROR("[rosiwit_navigation_ros1] no planner available");
+      stopNavigation();
       return;
     }
 

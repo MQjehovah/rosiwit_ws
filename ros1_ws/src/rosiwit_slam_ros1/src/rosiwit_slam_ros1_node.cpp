@@ -1,11 +1,8 @@
 // ============================================================================
-// rosiwit_slam_ros1 节点入口 (计划 T4 之后只剩"装配"这一步)
+// rosiwit_slam_ros1 节点入口
 //
-// 一个进程、一个算法核心实例, 由 SlamEngine 持有; 上面挂两套 ROS 接口:
-//   - RosiwitInterface : rosiwit_slam 原有的新接口 (始终挂)
-//   - LegacyXz3dSlamInterface : 旧 xz_3d_slam 的接口 (input_profile=legacy 时挂, T5-T11)
-//
-// 原来的 376 行单类已拆到 slam_engine.* / rosiwit_interface.*, 内容逐字搬移。
+// 一个进程、一个算法核心实例、一个对外接口:
+//   SlamRos1Interface = 老 xz_3d_slam 兼容接口(基线) + 不冲突的新输出
 // ============================================================================
 #include <ros/ros.h>
 
