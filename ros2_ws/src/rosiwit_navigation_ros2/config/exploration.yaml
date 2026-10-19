@@ -3,7 +3,9 @@
 # while the SLAM map is still growing.
 rosiwit_navigation_node:
   ros__parameters:
-    max_velocity_x: 0.35
+    # 探索巡航速度上限. MPPI 的巡航目标等于该值, 实际受
+    # max_accel_x / 障碍代价 / 安全层约束.
+    max_velocity_x: 1.0
     min_velocity_x: 0.0
     max_velocity_theta: 0.8
 

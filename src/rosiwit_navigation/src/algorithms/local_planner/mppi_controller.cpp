@@ -185,8 +185,9 @@ core::VelocityCommand MppiController::computeVelocityCommand(
         cost += obstacle_weight_ * static_cast<double>(cell - 60);
       }
       cost += control_weight_ * (v * v + w * w);
-      // 明确速度目标: 没有障碍时不要因为保守而长期低速.
-      const double v_ref = max_vx_ * 0.75;
+      // 巡航目标就是配置的 max_velocity_x; 实际值由加速度、路径和
+      // 障碍代价约束. 旧实现固定 75%, 导致把上限设成 1.0 也只能跑 ~0.75.
+      const double v_ref = max_vx_;
       cost += speed_weight_ * (v - v_ref) * (v - v_ref) * dt_;
       cost += 0.02 * ((v - prev_v) * (v - prev_v) +
                       (w - prev_w) * (w - prev_w));

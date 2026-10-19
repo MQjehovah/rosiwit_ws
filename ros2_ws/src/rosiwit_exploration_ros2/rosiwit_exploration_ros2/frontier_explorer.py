@@ -19,7 +19,7 @@ import subprocess
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import rclpy
@@ -176,6 +176,12 @@ def parse_goal_status(data: str) -> Tuple[str, Optional[int]]:
     return status, token
 
 
+def blacklist_duration_for(failures: int, first_failure: float,
+                           normal: float) -> float:
+    """First failure gets a short retry window; repeated failure is long."""
+    return first_failure if failures < 2 else normal
+
+
 class FrontierExplorer(Node):
     """Explore unknown space by repeatedly driving to the best frontier."""
 
@@ -206,6 +212,9 @@ class FrontierExplorer(Node):
 
         self.declare_parameter('blacklist_radius', 0.8)
         self.declare_parameter('blacklist_duration', 180.0)
+        # 第一次规划失败通常是地图还在增长/局部未知造成的瞬态失败,
+        # 短黑名单后允许重试; 同一目标连续失败才进入长黑名单.
+        self.declare_parameter('first_failure_blacklist', 10.0)
         self.declare_parameter('goal_tolerance', 0.35)
         self.declare_parameter('goal_timeout', 120.0)
         self.declare_parameter('goal_accept_timeout', 5.0)
@@ -241,6 +250,8 @@ class FrontierExplorer(Node):
 
         self.blacklist_radius = float(self.get_parameter('blacklist_radius').value)
         self.blacklist_duration = float(self.get_parameter('blacklist_duration').value)
+        self.first_failure_blacklist = float(
+            self.get_parameter('first_failure_blacklist').value)
         self.goal_tolerance = float(self.get_parameter('goal_tolerance').value)
         self.goal_timeout = float(self.get_parameter('goal_timeout').value)
         self.goal_accept_timeout = float(self.get_parameter('goal_accept_timeout').value)
@@ -286,6 +297,8 @@ class FrontierExplorer(Node):
         self.nav2_goal_handle = None
         self.next_goal_at = 0.0
         self.blacklist: List[Tuple[float, float, float]] = []
+        # 每个前沿目标的连续失败次数, 用于区分瞬态失败和真不可达.
+        self.goal_failures: Dict[Tuple[int, int], int] = {}
 
         map_qos = QoSProfile(
             depth=1,
@@ -359,6 +372,7 @@ class FrontierExplorer(Node):
             self.finished = False
             self.empty_cycles = 0
             self.blacklist.clear()
+            self.goal_failures.clear()
             self._started_at = time.monotonic()
             response.message = 'exploration enabled'
         else:
@@ -584,9 +598,25 @@ class FrontierExplorer(Node):
         if not success and self.goal_mode == 'pose':
             self.request_stop_goal()
         if self.current_goal_xy is not None:
+            key = (round(self.current_goal_xy[0] * 10),
+                   round(self.current_goal_xy[1] * 10))
+            if success:
+                self.goal_failures.pop(key, None)
+                blacklist_for = self.blacklist_duration
+            else:
+                failures = self.goal_failures.get(key, 0) + 1
+                self.goal_failures[key] = failures
+                blacklist_for = blacklist_duration_for(
+                    failures, self.first_failure_blacklist,
+                    self.blacklist_duration)
+                self.get_logger().info(
+                    f'Goal failure {failures} at '
+                    f'({self.current_goal_xy[0]:.2f}, '
+                    f'{self.current_goal_xy[1]:.2f}); '
+                    f'blacklist {blacklist_for:.1f}s')
             self.blacklist.append((self.current_goal_xy[0],
                                    self.current_goal_xy[1],
-                                   time.monotonic() + self.blacklist_duration))
+                                   time.monotonic() + blacklist_for))
         self.get_logger().info(('Goal succeeded: ' if success else 'Goal failed: ') + reason)
         self.goal_seq += 1  # invalidate late action callbacks
         self.current_goal = None

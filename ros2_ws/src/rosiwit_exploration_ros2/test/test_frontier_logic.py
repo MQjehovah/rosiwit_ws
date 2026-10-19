@@ -36,6 +36,11 @@ def test_parse_goal_status_token():
         'failed:not-a-number', None)
 
 
+def test_first_failure_gets_short_blacklist():
+    assert fe.blacklist_duration_for(1, 10.0, 180.0) == 10.0
+    assert fe.blacklist_duration_for(2, 10.0, 180.0) == 180.0
+
+
 def test_window_sum_and_integral():
     occupied = np.zeros((4, 4), dtype=bool)
     occupied[1, 1] = True

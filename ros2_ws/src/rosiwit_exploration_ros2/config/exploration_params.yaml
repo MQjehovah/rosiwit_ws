@@ -43,6 +43,7 @@ frontier_explorer:
     # Goal lifecycle
     blacklist_radius: 0.8
     blacklist_duration: 180.0
+    first_failure_blacklist: 10.0
     goal_tolerance: 0.35
     # 5.9m 的目标 + 4s 初始旋转实测需要约 26s; 25s 会在距目标
     # 0.53m 时误判失败并黑名单化. 45s 仍能兜住真正卡死的目标.
