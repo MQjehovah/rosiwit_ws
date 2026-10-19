@@ -7,7 +7,7 @@ pipeline_mode: mapping          # mapping | localization | idle
 
 modules:
   frontend: "fast_lio2_frontend"
-  backend: "gtsam_isam2"
+  backend: "ceres_pose_graph"   # 无 GTSAM 的机器也能启动; 需要 gtsam_isam2 时显式改
   loop_closure: "scan_context"
   map_manager: "pcd_map_manager"
   localization: "localization_pipeline"   # 可编排流水线 | gicp_localization | scan_context_localization
@@ -16,6 +16,8 @@ imu_topic: /imu
 lidar_topic: /lidar
 enable_odom: false          # 轮式里程计开关(供定位运动先验; 洗地机易打滑, 默认关)
 odom_topic: /odom
+lidar_frame: lidar          # 点云 frame; r_il/t_il 由 ROS2 层从 TF 推导
+imu_frame: lidar            # 核心估计 body (FAST-LIO2 是 IMU body)
 body_frame: base_link
 world_frame: odom
 
@@ -129,7 +131,9 @@ localization:
   #   matcher     : gicp | pp_icp | p2p_icp | vgicp
   #   monitor     : threshold | windowed
   pipeline:
-    relocalizer: bbs
+    # fpfh_ransac 是 3D 特征匹配, 不依赖 base<-lidar 投影; BBS 需要 bbs_mount_r,
+    # 在 ROS2 薄层未注入安装旋转时会按雷达系投影 (俯装/侧装雷达下候选会偏).
+    relocalizer: fpfh_ransac
     motion_prior: imu
     local_map: keyframe_submap
     matcher: pp_icp

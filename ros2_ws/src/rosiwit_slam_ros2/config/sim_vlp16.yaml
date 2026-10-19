@@ -14,6 +14,8 @@ modules:
 
 imu_topic: /imu
 lidar_topic: /lidar
+lidar_frame: lidar
+imu_frame: lidar
 body_frame: base_link
 world_frame: odom
 

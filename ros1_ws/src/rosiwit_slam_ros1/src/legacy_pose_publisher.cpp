@@ -51,10 +51,9 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
     //   R_base = R_lidar * R_lb^T ;  t_base = t_lidar - R_base * t_lb
     if (have_out) {
         computeLidarToBase();
-        if (have_lidar_mount_) {
-            const Eigen::Matrix3d R_body = out.pose.rot * r_lb_.transpose();
-            out.pose.trans = out.pose.trans - R_body * t_lb_;
-            out.pose.rot = R_body;
+        // 行业标准: 核心输出 IMU body; 对外位姿转 base_link.
+        if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseImu().valid) {
+            out.pose = composeRightInv(out.pose, engine_.baseImu());
         }
     }
 

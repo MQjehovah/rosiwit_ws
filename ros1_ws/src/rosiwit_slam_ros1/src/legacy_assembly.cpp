@@ -49,6 +49,10 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
     // warning_code_start_task_ = true (legacy.cpp:184) —— 所以**开机时抑制窗口是开的**,
     // 之后 100 个告警 tick (rt_grid 周期, 默认 1s -> 100s) 不发告警。
     setWarningSuppression(true);
+    // 地面 z 来自 base_link <- IMU; 避免 cloud timer 早于 pose timer 时用默认值.
+    if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseImu().valid) {
+        scan_ground_z_ = -engine_.baseImu().t.z();
+    }
 
     // 旧实现: 构造里按 slam_init_type_ 定初始 slam_mode_ (legacy.cpp:57-83)
     const std::string& init = cfg_.slam_init_type;
@@ -156,12 +160,10 @@ void LegacyXz3dSlamInterface::setModeFromLegacy(SlamMode m) {
 }
 
 void LegacyXz3dSlamInterface::computeLidarToBase() {
-    // **不重复实现 TF 查询**: 与 SlamEngine 共用同一份 (首次用时取一次, 那里会打日志)。
-    // 输出侧(位姿/点云换到车身系)与输入侧(初始位姿换到雷达系)因此保证用同一个安装角,
-    // 不会出现"一边换算一边不换算"的不一致。
-    if (have_lidar_mount_) return;
-    have_lidar_mount_ = engine_.lidarToBase(&r_lb_, &t_lb_);
-    if (have_lidar_mount_) scan_ground_z_ = -t_lb_.z();   // 地面在地图系里的 z (雷达起始高度即原点)
+    // 核心 body 是 IMU; 地图系原点=初始 IMU. 地面 z = -T_base_link_imu.t.z()(base 在地面时).
+    if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseImu().valid) {
+        scan_ground_z_ = -engine_.baseImu().t.z();
+    }
 }
 
 void LegacyXz3dSlamInterface::resetCoreAndCaches() {

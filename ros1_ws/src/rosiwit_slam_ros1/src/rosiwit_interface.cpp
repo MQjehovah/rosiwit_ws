@@ -66,22 +66,35 @@ void RosiwitInterface::onTick() {
 }
 
 void RosiwitInterface::publishPose(const SlamOutput& out) {
+    // 行业标准: 核心估计 IMU body; 所有对外位姿/TF/body_cloud 在 ROS1 层转 base_link.
+    // world_cloud 已在 map 系, 不参与变换。
+    PoseStamped pose = out.pose;
+    CloudType::Ptr body_cloud = out.body_cloud;
+    if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseImu().valid) {
+        // 核心输出/body_cloud 在 IMU body; 对外转 base_link.
+        pose = composeRightInv(out.pose, engine_.baseImu());
+        if (out.body_cloud) {
+            body_cloud.reset(new CloudType(*out.body_cloud));
+            transformCloud(*body_cloud, engine_.baseImu());
+        }
+    }
+
     ros::Time stamp;
-    if (out.pose.time > 0) stamp = ros::Time(out.pose.time); else stamp = ros::Time::now();
-    Eigen::Quaterniond q(out.pose.rot);
+    if (pose.time > 0) stamp = ros::Time(pose.time); else stamp = ros::Time::now();
+    Eigen::Quaterniond q(pose.rot);
 
     nav_msgs::Odometry odom;
     odom.header.frame_id = engine_.worldFrame();
     odom.child_frame_id = engine_.bodyFrame();
     odom.header.stamp = stamp;
-    odom.pose.pose.position.x = out.pose.trans.x();
-    odom.pose.pose.position.y = out.pose.trans.y();
-    odom.pose.pose.position.z = out.pose.trans.z();
+    odom.pose.pose.position.x = pose.trans.x();
+    odom.pose.pose.position.y = pose.trans.y();
+    odom.pose.pose.position.z = pose.trans.z();
     odom.pose.pose.orientation.x = q.x(); odom.pose.pose.orientation.y = q.y();
     odom.pose.pose.orientation.z = q.z(); odom.pose.pose.orientation.w = q.w();
-    odom.twist.twist.linear.x = out.pose.vel.x();
-    odom.twist.twist.linear.y = out.pose.vel.y();
-    odom.twist.twist.linear.z = out.pose.vel.z();
+    odom.twist.twist.linear.x = pose.vel.x();
+    odom.twist.twist.linear.y = pose.vel.y();
+    odom.twist.twist.linear.z = pose.vel.z();
     odom_pub_.publish(odom);
     // M5: legacy profile 下不发 `odom` 别名
     if (!legacy_ && odom_nav_pub_.getNumSubscribers() > 0) odom_nav_pub_.publish(odom);
@@ -91,9 +104,9 @@ void RosiwitInterface::publishPose(const SlamOutput& out) {
         geometry_msgs::TransformStamped tf;
         tf.header.frame_id = engine_.worldFrame(); tf.child_frame_id = engine_.bodyFrame();
         tf.header.stamp = stamp;
-        tf.transform.translation.x = out.pose.trans.x();
-        tf.transform.translation.y = out.pose.trans.y();
-        tf.transform.translation.z = out.pose.trans.z();
+        tf.transform.translation.x = pose.trans.x();
+        tf.transform.translation.y = pose.trans.y();
+        tf.transform.translation.z = pose.trans.z();
         tf.transform.rotation.x = q.x(); tf.transform.rotation.y = q.y();
         tf.transform.rotation.z = q.z(); tf.transform.rotation.w = q.w();
         tf_broadcaster_->sendTransform(tf);
@@ -104,15 +117,15 @@ void RosiwitInterface::publishPose(const SlamOutput& out) {
         sensor_msgs::PointCloud2 m; pcl::toROSMsg(*c, m);
         m.header.frame_id = fid; m.header.stamp = stamp; p.publish(m);
     };
-    pub_cloud(body_cloud_pub_, out.body_cloud, engine_.bodyFrame());
+    pub_cloud(body_cloud_pub_, body_cloud, engine_.bodyFrame());
     pub_cloud(world_cloud_pub_, out.world_cloud, engine_.worldFrame());
 
     if (path_pub_.getNumSubscribers() > 0) {
         geometry_msgs::PoseStamped ps;
         ps.header.frame_id = engine_.worldFrame(); ps.header.stamp = stamp;
-        ps.pose.position.x = out.pose.trans.x();
-        ps.pose.position.y = out.pose.trans.y();
-        ps.pose.position.z = out.pose.trans.z();
+        ps.pose.position.x = pose.trans.x();
+        ps.pose.position.y = pose.trans.y();
+        ps.pose.position.z = pose.trans.z();
         ps.pose.orientation.x = q.x(); ps.pose.orientation.y = q.y();
         ps.pose.orientation.z = q.z(); ps.pose.orientation.w = q.w();
         path_.poses.push_back(ps);

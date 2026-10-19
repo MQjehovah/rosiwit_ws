@@ -22,6 +22,7 @@
 #include <sensor_msgs/PointCloud2.h>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -30,6 +31,7 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
+#include "frame_utils.h"
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_base.h"
 #include "slam_core/slam_types.h"
@@ -182,17 +184,22 @@ private:
     bool computeLegacyExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t, std::string& source);
 
 public:
-    /// 车身(base_link) <- 雷达 的安装变换, 来自 TF, 首次用时取一次。
-    /// 用于把**上层下发的车身系初始位姿**换算成核心要的雷达系 (见 onInitialPoseMsg)。
-    bool lidarToBase(Eigen::Matrix3d* R = nullptr, Eigen::Vector3d* t = nullptr);
-    bool computeLidarToBase();                    // 取一次, 失败则保持单位阵
+    /// base_link <- 核心 body(IMU) 与 base_link <- lidar 的安装变换.
+    /// 行业标准: 算法估计 IMU body; ROS1 接口层负责 base_link 的输入/输出换算.
+    /// blocking=true: 启动路径最多等 ~3s; false: 周期回调只试一次(2s 节流).
+    bool computeBaseFrames(bool blocking = false);
+    const RigidTransform& baseImu() const { return base_imu_; }
+    const RigidTransform& baseLidar() const { return base_lidar_; }
+    /// 把 odom/VO 的 child frame 换到核心 IMU body; 静态外参查询一次后缓存.
+    bool imuFromChild(const std::string& child_frame, RigidTransform& out);
 
 private:
-    Eigen::Matrix3d r_lb_ = Eigen::Matrix3d::Identity();   // base <- lidar
-    Eigen::Vector3d t_lb_ = Eigen::Vector3d::Zero();
-    bool have_lidar_mount_ = false;
-    ros::Time mount_last_try_;          // 上次尝试查询安装变换的时刻 (2s 节流)
+    RigidTransform base_imu_;      // T_base_link_imu
+    RigidTransform base_lidar_;    // T_base_link_lidar (BBS 投影用)
+    std::map<std::string, RigidTransform> child_to_imu_;   // T_imu_child
+    ros::Time mount_last_try_;     // 上次尝试查询安装变换的时刻 (2s 节流)
     std::string mount_lidar_frame_ = "lidar";
+    std::string mount_imu_frame_ = "lidar";
     std::string mount_base_frame_ = "base_link";
 };
 

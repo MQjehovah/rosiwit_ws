@@ -8,13 +8,15 @@ pipeline_mode: mapping
 
 modules:
   frontend: "fast_lio2_frontend"
-  backend: "gtsam_isam2"
+  backend: "ceres_pose_graph"   # 无 GTSAM 的机器也能启动; 需要 gtsam_isam2 时显式改
   loop_closure: "scan_context"
   map_manager: "pcd_map_manager"
   localization: "gicp_localization"
 
 imu_topic: /livox/imu
 lidar_topic: /livox/lidar
+lidar_frame: livox_frame
+imu_frame: livox_frame
 body_frame: base_link
 world_frame: odom
 

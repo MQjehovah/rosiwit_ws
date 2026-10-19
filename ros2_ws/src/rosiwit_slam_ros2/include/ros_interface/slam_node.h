@@ -10,8 +10,12 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/static_transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include <builtin_interfaces/msg/time.hpp>
+#include <map>
 #include <mutex>
+#include "ros_interface/frame_utils.h"
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_types.h"
 #include "slam_core/pose_filter.h"
@@ -21,6 +25,8 @@
 #include "rosiwit_slam_ros2/srv/set_slam_mode.hpp"
 
 namespace rosiwit_slam {
+
+using rosiwit_slam_ros2::RigidTransform;
 
 class SlamBase;    // forward declare for tryPopAndProcess
 
@@ -33,6 +39,8 @@ private:
     struct NodeConfig {
         std::string imu_topic   = "/imu";
         std::string lidar_topic = "/velodyne_points";
+        std::string lidar_frame = "lidar";
+        std::string imu_frame   = "lidar";     // 核心 body frame (FAST-LIO2 估计 IMU body)
         std::string body_frame  = "base_link";
         std::string world_frame = "odom";
         int    lidar_filter_num = 3;
@@ -66,6 +74,20 @@ private:
     void initialPoseCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
     builtin_interfaces::msg::Time toRosTime(double sec);
 
+    /// 从 TF 取 base_link <- IMU / lidar, 供输入输出换算; 失败限频重试.
+    bool ensureBaseFrames();
+    /// 查一次 TF target <- source; 同 frame 返回单位变换.
+    bool lookupMount(const std::string& target, const std::string& source,
+                     RigidTransform& out, double timeout_sec);
+    /// odom/VO child frame -> 核心 IMU body; 缓存静态外参.
+    bool imuFromChild(const std::string& child_frame, RigidTransform& out);
+    /// 把 TF 推导出的 r_il/t_il 写进 override YAML, 供核心 init 使用.
+    std::string writeExtrinsicOverride(const std::string& base_yaml,
+                                       const RigidTransform& imu_lidar,
+                                       const RigidTransform& base_lidar);
+    /// 换图/换模式后允许 /map 重新发布.
+    void resetPublishState();
+
     void handleSaveMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SaveMap::Response>);
     void handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Response>);
     void handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Response>);
@@ -85,12 +107,19 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_nav_pub;
     std::unique_ptr<ISlamAlgorithm> m_algo;
     ISlamAlgorithm* m_algo_raw = nullptr;
-    rclcpp::TimerBase::SharedPtr m_process_timer, m_map_timer, m_output_timer;
+    rclcpp::TimerBase::SharedPtr m_process_timer, m_map_timer, m_output_timer, m_mount_timer;
     // 回调分组: 传感器收包与重处理解耦, 配合多线程执行器避免处理阻塞收包导致丢帧
     rclcpp::CallbackGroup::SharedPtr m_sensor_cb_group;
     rclcpp::CallbackGroup::SharedPtr m_work_cb_group;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> m_static_tf;
+    std::shared_ptr<tf2_ros::Buffer> m_tf_buffer;
+    std::shared_ptr<tf2_ros::TransformListener> m_tf_listener;
+    mutable std::mutex m_mount_mu;
+    rosiwit_slam_ros2::RigidTransform m_base_imu;    // T_base_link_imu
+    rosiwit_slam_ros2::RigidTransform m_base_lidar;  // T_base_link_lidar (BBS 投影用)
+    std::map<std::string, rosiwit_slam_ros2::RigidTransform> m_child_to_imu;
+    bool m_mount_warned = false;
     rclcpp::Service<rosiwit_slam_ros2::srv::SaveMap>::SharedPtr       m_srv_save_map;
     rclcpp::Service<rosiwit_slam_ros2::srv::LoadMap>::SharedPtr       m_srv_load_map;
     rclcpp::Service<rosiwit_slam_ros2::srv::SaveGridMap>::SharedPtr   m_srv_save_grid_map;

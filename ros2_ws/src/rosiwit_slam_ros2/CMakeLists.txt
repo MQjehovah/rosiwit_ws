@@ -65,6 +65,17 @@ install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY rviz DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY scripts DESTINATION share/${PROJECT_NAME} USE_SOURCE_PERMISSIONS)
 
+# ==================== 测试 ====================
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_frame_utils test/test_frame_utils.cpp)
+    if(TARGET test_frame_utils)
+        target_include_directories(test_frame_utils PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(test_frame_utils rosiwit_slam)
+    endif()
+endif()
+
 # ==================== 导出 ====================
 ament_export_include_directories(include)
 ament_export_dependencies(

@@ -282,16 +282,10 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
-    /// 雷达刚体 -> 车身(`base_link`) 的安装变换 (缓存在 T_lidar_base 里)。
-    /// 核心估出来的是**雷达/IMU 刚体**的位姿; 这辆车雷达偏航 90°、俯装 41.67°、抬高 0.9m,
-    /// 直接当车身位姿发出去就会**朝向差 90°**且带 42° 俯仰 (旧系统用 conf 里的
-    /// roll/pitch/yaw/x/z 做这件事, M13 当初跳过了)。
-    /// 这里改成从 TF (`base_link <- ~lidar_frame`) 读, 换车/换装自动正确。
-    void computeLidarToBase();                    // 启动/首次用时取一次, 失败则单位阵
-    Eigen::Matrix3d r_lb_ = Eigen::Matrix3d::Identity();   // base <- lidar
-    Eigen::Vector3d t_lb_ = Eigen::Vector3d::Zero();
-    bool have_lidar_mount_ = false;
-    /// 地面在地图系里的 z。地图系原点是起始时刻的雷达 -> 地面 ≈ -雷达安装高度。
+    /// 核心估计 IMU body; 对外位姿在 ROS1 层由 base_link <- IMU 转出.
+    /// 本函数只刷新 scan_ground_z_ (由 SlamEngine::computeBaseFrames 提供).
+    void computeLidarToBase();
+    /// 地面在地图系里的 z。地图系原点=起始 IMU -> 地面 ≈ -IMU 安装高度。
     /// 发布 scan_f_map / curr_scan_point 时用它做 z 参考, 保证与栅格 0.1~2.0m(相对地面)同带。
     double scan_ground_z_ = -0.898;
 };
