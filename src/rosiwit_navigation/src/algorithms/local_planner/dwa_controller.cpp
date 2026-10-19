@@ -193,7 +193,8 @@ size_t DwaController::findClosest(const core::Pose2D& pose) const {
 }
 
 bool DwaController::isGoalReached(const core::Pose2D& pose) const {
-    if (path_.points.empty()) return true;
+    // 路径被清空表示导航失败/等待重规划, 不是到达目标.
+    if (path_.points.empty()) return false;
     double dx = path_.points.back().pose.x - pose.x;
     double dy = path_.points.back().pose.y - pose.y;
     return std::sqrt(dx * dx + dy * dy) < goal_tol_;

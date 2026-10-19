@@ -1183,8 +1183,8 @@ bool NavigationNode::updateCurrentPose()
 
 bool NavigationNode::isGoalReached()
 {
-  // 优先使用控制器的目标到达判断
-  if (controller_strategy_) {
+  // 优先使用控制器的目标到达判断; 但路径被清空时不能误判到达.
+  if (controller_strategy_ && !current_path_.poses.empty()) {
     auto core_pose = RosUtils::toCorePose(current_pose_);
     return controller_strategy_->isGoalReached(core_pose);
   }
@@ -1368,7 +1368,11 @@ bool NavigationNode::pathCollides(const nav_msgs::msg::Path & path,
   const double res = costmap.info.resolution;
   const double ox = costmap.info.origin.position.x;
   const double oy = costmap.info.origin.position.y;
+  const auto & start = path.poses.front().pose.position;
   auto lethal = [&](double wx, double wy) -> bool {
+    // 机器人起点可能因贴墙/地图抖动落在 100 内; A* 会清出起点小区域.
+    // 这里跳过起点近旁的检查, 否则会把刚规划好的路径误清空, 机器人停死.
+    if (std::hypot(wx - start.x, wy - start.y) < 0.5) return false;
     const int mx = static_cast<int>((wx - ox) / res);
     const int my = static_cast<int>((wy - oy) / res);
     if (mx < 0 || mx >= static_cast<int>(costmap.info.width) ||
