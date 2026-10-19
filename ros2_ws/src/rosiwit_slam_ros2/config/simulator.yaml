@@ -8,7 +8,7 @@ pipeline_mode: mapping
 modules:
   frontend: "fast_lio2_frontend"
   backend: "ceres_pose_graph"
-  loop_closure: "scan_context"
+  loop_closure: ""  # 探索阶段先关闭 ScanContext/ICP, 避免 TF 被回环线程拖停; 建图稳定后再开
   map_manager: "pcd_map_manager"
   localization: "gicp_localization"
 

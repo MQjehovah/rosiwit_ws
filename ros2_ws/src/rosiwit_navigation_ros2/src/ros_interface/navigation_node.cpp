@@ -1433,9 +1433,11 @@ void NavigationNode::smoothCurrentPath(nav_msgs::msg::Path & path)
   if (m_has_global_costmap_ && pathCollides(path, global_costmap_msg_)) {
     path = raw_path;
     if (pathCollides(path, global_costmap_msg_)) {
+      // 不再把路径清空. 新地图/新激光和 A* 规划用的 costmap 可能差一个
+      // 更新周期; 清空会让机器人立即停死. 保留 A* 路径, 由下一周期
+      // replan 修正, 同时局部 costmap/安全层负责实时避障.
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "Raw A* path still intersects lethal costmap; path cleared");
-      path.poses.clear();
+        "Raw A* path intersects updated costmap; keeping path for replan");
     } else {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
         "Smoothed path collides; using raw A* path");

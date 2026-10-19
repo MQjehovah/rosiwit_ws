@@ -91,8 +91,10 @@ void BackendWorker::run() {
         if (item.task == BackendTask::ADD_KF && m_backend) {
             m_backend->addKeyFrame(item.kf);
         }
+        if (item.task == BackendTask::MAP_SUBMAP && m_map_mgr) {
+            m_map_mgr->addSubMap(item.kf);
+        }
         if (item.task == BackendTask::LOOP_CLOSURE && m_loop) {
-            if (m_map_mgr) m_map_mgr->addSubMap(item.kf);
             m_loop->addKeyFrame(item.kf);
             if (++m_lc_keyframes % 30 == 0) {
                 PoseStamped rel_pose;
@@ -395,6 +397,7 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
         if (m_backend) pushBackendTask(BackendTask::ADD_KF, kf);
         // 地图管理 + ScanContext/ICP 全部移到 backend worker:
         // 前端 work 组只负责传感器/前端/TF, 不能被地图锁或 ICP 拖住.
+        if (m_map_mgr) pushBackendTask(BackendTask::MAP_SUBMAP, kf);
         // 视觉松耦合: 关键帧注册 + 相邻关键帧 VO between 因子入图
         if (m_visual) {
             m_visual->addKeyframe(kf.id, kf.timestamp);

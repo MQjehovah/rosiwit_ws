@@ -19,7 +19,7 @@ namespace rosiwit_slam {
 enum class PipelineMode { IDLE, MAPPING, LOCALIZATION };
 
 /// 后端任务 (建图线程的输入).
-enum class BackendTask { ADD_KF, LOOP_CLOSURE, OPTIMIZE, STOP };
+enum class BackendTask { ADD_KF, MAP_SUBMAP, LOOP_CLOSURE, OPTIMIZE, STOP };
 struct BackendItem {
     BackendTask task;
     KeyFrame kf;
