@@ -33,10 +33,11 @@ using ros_interface::RosUtils;
 namespace {
 
 // 规划器使用的 costmap:
-//   blue_as_lethal=false: 0=free, 1..99=蓝区软代价, 100=紫区致命;
-//   blue_as_lethal=true : 0=free, 1..99 也当致命, 用于先尝试全程走无色区.
-core::Costmap makePlannerCostmap(
-  const nav_msgs::msg::OccupancyGrid & msg, bool blue_as_lethal)
+//   0=free, 1..99=蓝色软代价, 100=紫色致命.
+// 蓝色不能直接按 1..99 给小代价, 否则贴着蓝区边缘走只多花 1%,
+// A* 会为了抄近路切蓝区. 这里把任何蓝色都抬到 >=128, 让 A* 自己
+// 用代价选择全 0 路径; 没有全 0 路径时仍可进入蓝色(窄通道).
+core::Costmap makePlannerCostmap(const nav_msgs::msg::OccupancyGrid & msg)
 {
   core::Costmap cm;
   auto grid = std::make_shared<core::CostmapGrid>();
@@ -61,8 +62,8 @@ core::Costmap makePlannerCostmap(
     } else if (v >= 100) {
       cm.data[i] = 255;
     } else if (v > 0) {
-      cm.data[i] = blue_as_lethal ? 255 :
-        static_cast<unsigned char>(std::max(1, static_cast<int>(v) * 255 / 100));
+      // 128..253: 任意蓝格都明显比自由格贵, 但低于致命阈值 254.
+      cm.data[i] = static_cast<unsigned char>(128 + static_cast<int>(v) * 125 / 99);
     } else {
       cm.data[i] = 0;
     }
@@ -681,7 +682,7 @@ void NavigationNode::updateCostmap()
     // 规划器使用与 RViz 同一张 costmap 的代价:
     //   0 = 无色自由; 1..99 = 蓝色软膨胀; 100 = 紫色致命.
     // 具体是否把蓝色当墙由规划时决定 (优先全 0 路径).
-    planner_strategy_->setCostmap(makePlannerCostmap(costmap_msg, false));
+    planner_strategy_->setCostmap(makePlannerCostmap(costmap_msg));
   }
 
   // ========== 局部 costmap（机器人周围窗口，给控制器） ==========
@@ -1057,15 +1058,8 @@ void NavigationNode::replanningCheck()
 
   const auto start = RosUtils::toCorePose(current_pose_);
   const auto goal = RosUtils::toCorePose(goal_pose_);
-  const auto soft_cm = makePlannerCostmap(global_costmap_msg_, false);
-  const auto strict_cm = makePlannerCostmap(global_costmap_msg_, true);
-  planner_strategy_->setCostmap(strict_cm);
+  planner_strategy_->setCostmap(makePlannerCostmap(global_costmap_msg_));
   auto result = planner_strategy_->plan(start, goal);
-  planner_strategy_->setCostmap(soft_cm);
-  if (!result.is_ok()) {
-    // 没有全程无色路径时, 才允许进入蓝色膨胀区.
-    result = planner_strategy_->plan(start, goal);
-  }
 
   if (!result.is_ok()) {
     // 新地图下当前路径可能已经失效. 停车并置 FAILED, 由 mapCallback
@@ -1114,15 +1108,8 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
   if (planner_strategy_) {
     auto start_pose = RosUtils::toCorePose(current_pose_);
     auto goal_pose_core = RosUtils::toCorePose(goal);
-    const auto soft_cm = makePlannerCostmap(global_costmap_msg_, false);
-    const auto strict_cm = makePlannerCostmap(global_costmap_msg_, true);
-    planner_strategy_->setCostmap(strict_cm);
+    planner_strategy_->setCostmap(makePlannerCostmap(global_costmap_msg_));
     auto result = planner_strategy_->plan(start_pose, goal_pose_core);
-    planner_strategy_->setCostmap(soft_cm);
-    if (!result.is_ok()) {
-      // 没有全程无色路径时, 才允许进入蓝色膨胀区 (窄通道/前沿目标).
-      result = planner_strategy_->plan(start_pose, goal_pose_core);
-    }
     if (result.is_ok()) {
       current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
 
