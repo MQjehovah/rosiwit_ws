@@ -1057,7 +1057,8 @@ void NavigationNode::replanningCheck()
   }
 
   const auto start = RosUtils::toCorePose(current_pose_);
-  const auto goal = RosUtils::toCorePose(goal_pose_);
+  auto goal = RosUtils::toCorePose(goal_pose_);
+  adjustGoalToFree(goal);
   planner_strategy_->setCostmap(makePlannerCostmap(global_costmap_msg_));
   auto result = planner_strategy_->plan(start, goal);
 
@@ -1108,6 +1109,7 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
   if (planner_strategy_) {
     auto start_pose = RosUtils::toCorePose(current_pose_);
     auto goal_pose_core = RosUtils::toCorePose(goal);
+    adjustGoalToFree(goal_pose_core);
     planner_strategy_->setCostmap(makePlannerCostmap(global_costmap_msg_));
     auto result = planner_strategy_->plan(start_pose, goal_pose_core);
     if (result.is_ok()) {
@@ -1359,6 +1361,43 @@ void NavigationNode::smoothCurrentPath(nav_msgs::msg::Path & path)
         "Smoothed path collides; using raw A* path");
     }
   }
+}
+
+bool NavigationNode::adjustGoalToFree(core::Pose2D & goal) const
+{
+  if (!m_has_global_costmap_ || global_costmap_msg_.data.empty()) return false;
+  const auto & cm = global_costmap_msg_;
+  const double res = cm.info.resolution;
+  const int w = static_cast<int>(cm.info.width);
+  const int h = static_cast<int>(cm.info.height);
+  auto costAt = [&](int mx, int my) -> int {
+    if (mx < 0 || mx >= w || my < 0 || my >= h) return 100;
+    return cm.data[static_cast<size_t>(my) * w + mx];
+  };
+  const int cx = static_cast<int>((goal.x - cm.info.origin.position.x) / res);
+  const int cy = static_cast<int>((goal.y - cm.info.origin.position.y) / res);
+  if (costAt(cx, cy) < 100) return true;
+
+  // 前沿目标可能落在未知/激光点形成的紫色格上. 在 0.3m 内找最近的
+  // 0 格 (优先) 或蓝色格, 保持 explorer 的 0.35m 到达容差.
+  const int max_r = std::max(1, static_cast<int>(std::ceil(0.30 / res)));
+  for (int pass = 0; pass < 2; ++pass) {
+    for (int r = 1; r <= max_r; ++r) {
+      for (int dy = -r; dy <= r; ++dy) {
+        for (int dx = -r; dx <= r; ++dx) {
+          if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+          const int c = costAt(cx + dx, cy + dy);
+          if ((pass == 0 && c != 0) || c >= 100) continue;
+          goal.x = cm.info.origin.position.x + (cx + dx + 0.5) * res;
+          goal.y = cm.info.origin.position.y + (cy + dy + 0.5) * res;
+          RCLCPP_WARN(get_logger(),
+            "Goal in obstacle; nudged to nearby free cell (%.2f, %.2f)", goal.x, goal.y);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 bool NavigationNode::pathCollides(const nav_msgs::msg::Path & path,

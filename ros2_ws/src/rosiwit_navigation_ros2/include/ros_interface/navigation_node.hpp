@@ -242,6 +242,7 @@ protected:
   void smoothCurrentPath(nav_msgs::msg::Path & path);
   bool pathCollides(const nav_msgs::msg::Path & path,
     const nav_msgs::msg::OccupancyGrid & costmap) const;
+  bool adjustGoalToFree(core::Pose2D & goal) const;
   void publishLocalCostmap();
   void republishGlobalCostmap();
 

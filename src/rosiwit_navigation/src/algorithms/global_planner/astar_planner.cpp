@@ -227,6 +227,13 @@ core::Result<core::Path> AStarPlanner::plan(
     }
 
     if (isObstacle(start_x, start_y) || isObstacle(goal_x, goal_y)) {
+        LOG_ERROR(logger_,
+            "Start or goal in obstacle: start=(%d,%d) cost=%u world=(%.2f,%.2f), "
+            "goal=(%d,%d) cost=%u world=(%.2f,%.2f)",
+            start_x, start_y, static_cast<unsigned>(getCost(start_x, start_y)),
+            start.x, start.y,
+            goal_x, goal_y, static_cast<unsigned>(getCost(goal_x, goal_y)),
+            goal.x, goal.y);
         planning_active_ = false;
         return core::Result<core::Path>::error(
             core::ErrorCode::GOAL_IN_OBSTACLE, "Start or goal in obstacle");
