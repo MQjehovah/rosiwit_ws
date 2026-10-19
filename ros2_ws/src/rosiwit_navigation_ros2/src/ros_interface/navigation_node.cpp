@@ -100,8 +100,10 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     core::PlannerConfig planner_cfg;
     planner_cfg.name = planner_name_;
     planner_cfg.resolution = 0.05;
-    planner_cfg.max_iterations = 50000;
-    planner_cfg.timeout = 2.0;
+    // 地图 382x229≈8.7 万格; 旧值 50000 会让不可达目标报
+    // "iteration limit exceeded", 看起来像临时失败. 覆盖整张地图.
+    planner_cfg.max_iterations = planner_max_iterations_;
+    planner_cfg.timeout = planner_timeout_;
     planner_strategy_->initialize(planner_cfg);
     // costmap 已包含安全环 + 蓝色梯度; A* 再膨胀一次会与显示图不一致.
     planner_strategy_->setInflationRadius(0.0);
@@ -135,16 +137,20 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     RCLCPP_WARN(get_logger(), "Controller '%s' not found, using fallback inline controller", controller_name_.c_str());
   }
 
-  // 初始化组件
-  trajectory_generator_ = std::make_shared<TrajectoryGenerator>();
-  trajectory_generator_->setFrameId(global_frame_);
-
   // 初始化订阅者和发布者
   initializeSubscribers();
   initializePublishers();
 
-  // 初始化Action服务器
-  initializeActionServer();
+  // 外部停止服务 (探索节点 disable/finish 时调用)
+  stop_srv_ = this->create_service<std_srvs::srv::Trigger>(
+    "/stop_navigation",
+    [this](
+      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+      stopNavigation();
+      response->success = true;
+      response->message = "navigation stopped";
+    });
 
   RCLCPP_INFO(get_logger(), "rosiwit_navigation node configured successfully");
   return LifecycleNode::CallbackReturn::SUCCESS;
@@ -175,19 +181,21 @@ LifecycleNode::CallbackReturn NavigationNode::on_deactivate(const rclcpp_lifecyc
 {
   RCLCPP_INFO(get_logger(), "Deactivating rosiwit_navigation node");
 
+  // 先停车, 再停用 publisher; 否则 zero cmd 发不出去.
+  if (cmd_vel_pub_ && cmd_vel_pub_->is_activated()) {
+    stopNavigation();
+  }
+
   // 停用定时器
-  control_timer_->cancel();
-  replanning_timer_->cancel();
+  if (control_timer_) control_timer_->cancel();
+  if (replanning_timer_) replanning_timer_->cancel();
+  if (local_costmap_timer_) local_costmap_timer_->cancel();
+  if (diagnostics_timer_) diagnostics_timer_->cancel();
 
   // 停用发布者
-  cmd_vel_pub_->on_deactivate();
-  path_pub_->on_deactivate();
-  global_path_pub_->on_deactivate();
-
-  // 停用规划器
-
-  // 停止当前导航
-  stopNavigation();
+  if (cmd_vel_pub_) cmd_vel_pub_->on_deactivate();
+  if (path_pub_) path_pub_->on_deactivate();
+  if (global_path_pub_) global_path_pub_->on_deactivate();
 
   current_state_ = NavigationState::IDLE;
 
@@ -199,6 +207,12 @@ LifecycleNode::CallbackReturn NavigationNode::on_cleanup(const rclcpp_lifecycle:
 {
   RCLCPP_INFO(get_logger(), "Cleaning up rosiwit_navigation node");
 
+  if (control_timer_) {control_timer_->cancel(); control_timer_.reset();}
+  if (replanning_timer_) {replanning_timer_->cancel(); replanning_timer_.reset();}
+  if (local_costmap_timer_) {local_costmap_timer_->cancel(); local_costmap_timer_.reset();}
+  if (diagnostics_timer_) {diagnostics_timer_->cancel(); diagnostics_timer_.reset();}
+  stop_srv_.reset();
+
   // 清理组件
   planner_strategy_.reset();
   controller_strategy_.reset();
@@ -207,13 +221,35 @@ LifecycleNode::CallbackReturn NavigationNode::on_cleanup(const rclcpp_lifecycle:
   odom_sub_.reset();
   map_sub_.reset();
   scan_sub_.reset();
+  safety_cloud_sub_.reset();
   goal_sub_.reset();
+  stop_sub_.reset();
   cmd_vel_pub_.reset();
   path_pub_.reset();
   global_path_pub_.reset();
+  global_costmap_pub_.reset();
+  local_costmap_pub_.reset();
+  diagnostics_pub_.reset();
+  goal_status_pub_.reset();
+  safety_state_pub_.reset();
 
   tf_buffer_.reset();
   tf_listener_.reset();
+
+  current_map_.reset();
+  m_has_global_costmap_ = false;
+  m_has_planner_costmap_ = false;
+  m_has_effective_goal_ = false;
+  is_navigating_ = false;
+  is_paused_ = false;
+  last_published_cmd_ = geometry_msgs::msg::Twist();
+  current_velocity_ = geometry_msgs::msg::Twist();
+  last_odom_sec_ = -1e9;
+  last_scan_sec_ = -1e9;
+  last_tf_pose_valid_ = false;
+  safety_have_cloud_ = false;
+  safety_pose_valid_ = false;
+  motion_ref_valid_ = false;
 
   RCLCPP_INFO(get_logger(), "rosiwit_navigation node cleaned up");
   return LifecycleNode::CallbackReturn::SUCCESS;
@@ -246,6 +282,8 @@ void NavigationNode::loadParameters()
 
   this->declare_parameter("planner_name", std::string("astar"));
   this->declare_parameter("controller_name", std::string("pure_pursuit"));
+  this->declare_parameter("planner_max_iterations", 200000);
+  this->declare_parameter("planner_timeout", 2.0);
   this->declare_parameter("inflation_radius", 0.5);
   this->declare_parameter("robot_radius", 0.21);
   this->declare_parameter("local_costmap_size", 8.0);
@@ -277,6 +315,8 @@ void NavigationNode::loadParameters()
   get_parameter("map_frame", map_frame_);
   get_parameter("planner_name", planner_name_);
   get_parameter("controller_name", controller_name_);
+  get_parameter("planner_max_iterations", planner_max_iterations_);
+  get_parameter("planner_timeout", planner_timeout_);
   get_parameter("inflation_radius", inflation_radius_);
   get_parameter("robot_radius", robot_radius_);
   get_parameter("local_costmap_size", local_costmap_size_);
@@ -492,6 +532,10 @@ void NavigationNode::initializeSubscribers()
     "/goal_pose", rclcpp::SystemDefaultsQoS(),
     std::bind(&NavigationNode::goalCallback, this, std::placeholders::_1));
 
+  stop_sub_ = create_subscription<std_msgs::msg::String>(
+    "/nav_stop", rclcpp::QoS(10),
+    std::bind(&NavigationNode::stopCallback, this, std::placeholders::_1));
+
   RCLCPP_INFO(get_logger(), "Subscribers initialized");
 }
 
@@ -520,12 +564,6 @@ void NavigationNode::initializePublishers()
   RCLCPP_INFO(get_logger(), "Publishers initialized");
 }
 
-void NavigationNode::initializeActionServer()
-{
-
-  RCLCPP_INFO(get_logger(), "Action server initialized");
-}
-
 void NavigationNode::initializeTimers()
 {
   // 控制循环定时器
@@ -543,10 +581,8 @@ void NavigationNode::initializeTimers()
     std::chrono::milliseconds(100),
     std::bind(&NavigationNode::publishLocalCostmap, this));
 
-  // 全局 costmap 高频重复发布（10Hz）；内容在地图更新时刷新
-  global_costmap_timer_ = create_wall_timer(
-    std::chrono::milliseconds(100),
-    std::bind(&NavigationNode::republishGlobalCostmap, this));
+  // 全局 costmap 只在 updateCostmap() 里发布一次; QoS 是 transient_local,
+  // 后启动的 RViz 也能收到最后一帧, 不需要 10Hz 重复发送全图.
 
   diagnostics_timer_ = create_wall_timer(
     std::chrono::milliseconds(500),
@@ -583,6 +619,7 @@ void NavigationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
       tf2::durationFromSec(0.1));
   } catch (tf2::TransformException &) { return; }
 
+  last_scan_sec_ = now().seconds();
   laser_points_.clear();
   double angle = msg->angle_min;
   for (size_t i = 0; i < msg->ranges.size(); ++i, angle += msg->angle_increment) {
@@ -596,22 +633,9 @@ void NavigationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
     tf2::doTransform(lp, mp, tf);
     laser_points_.push_back(mp.point);
   }
-  // 激光数据更新后重新生成 costmap（含障碍物层）
-  updateCostmap();
-
-  // 实时激光/3D 点可能让当前路径穿过新出现的紫色障碍. 实时检查路径,
-  // 失效就立即用最新 costmap 重规划, 而不是等下一次地图回调.
-  if (is_navigating_ && !is_paused_ && !m_need_initial_rotate &&
-      current_path_.poses.size() > 1 && m_has_global_costmap_) {
-    const double now_sec = now().seconds();
-    if (now_sec - last_costmap_replan_sec_ >= 0.5 &&
-        pathCollides(current_path_, global_costmap_msg_)) {
-      last_costmap_replan_sec_ = now_sec;
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "Path intersects new costmap obstacle; replanning");
-      replanningCheck();
-    }
-  }
+  // 激光点只更新实时障碍层. 全局 costmap 由地图回调按地图频率重建;
+  // 局部 costmap 由 10Hz 定时器使用这些点重建. 不在 10Hz 扫描回调里
+  // 全图 BFS/重规划, 否则会阻塞控制定时器和地图/TF 回调.
 }
 
 
@@ -668,9 +692,12 @@ void NavigationNode::updateCostmap()
     int safety_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
     std::vector<float> dist(w * h, std::numeric_limits<float>::max());
     std::queue<std::pair<int,int>> q;
+    // 只让真实障碍物参与膨胀. unknown 在 planner costmap 里仍是 254
+    // (不可穿越), 但不能把它当成障碍物向外膨胀, 否则前沿自由格会被
+    // 硬安全环标成 100, explorer 选出来的目标会不断被 nudge/判不可达.
     for (unsigned int y = 0; y < h; ++y)
       for (unsigned int x = 0; x < w; ++x)
-        if (cm.data[y * w + x] >= 254) { dist[y * w + x] = 0; q.push({x, y}); }
+        if (cm.data[y * w + x] == 255) { dist[y * w + x] = 0; q.push({x, y}); }
     const int dx4[4] = {-1,0,1,0}, dy4[4] = {0,-1,0,1};
     while (!q.empty()) {
       auto [cx, cy] = q.front(); q.pop();
@@ -692,7 +719,8 @@ void NavigationNode::updateCostmap()
     costmap_msg.info.origin.position.y = oy;
     costmap_msg.info.origin.orientation.w = 1.0;
     costmap_msg.data.resize(w * h);
-    float inv = 1.0f / (inflate_cells - safety_cells);
+    const int inv_span = std::max(1, inflate_cells - safety_cells);
+    float inv = 1.0f / static_cast<float>(inv_span);
     for (size_t i = 0; i < w * h; ++i) {
       if (cm.data[i] >= 254) { costmap_msg.data[i] = 100; continue; }
       float d = dist[i];
@@ -708,115 +736,10 @@ void NavigationNode::updateCostmap()
     // 规划器使用与 RViz 同一张 costmap 的代价:
     //   0 = 无色自由; 1..99 = 蓝色软膨胀; 100 = 紫色致命.
     // 具体是否把蓝色当墙由规划时决定 (优先全 0 路径).
-    planner_strategy_->setCostmap(makePlannerCostmap(costmap_msg));
+    planner_costmap_ = makePlannerCostmap(costmap_msg);
+    m_has_planner_costmap_ = true;
+    planner_strategy_->setCostmap(planner_costmap_);
   }
-
-  // ========== 局部 costmap（机器人周围窗口，给控制器） ==========
-  if (!controller_strategy_) return;
-
-  // 获取机器人当前位置
-  double rx = 0, ry = 0;
-  try {
-    auto tf = tf_buffer_->lookupTransform(map_frame_, "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
-    rx = tf.transform.translation.x;
-    ry = tf.transform.translation.y;
-  } catch (tf2::TransformException &) { return; }
-
-  // 局部窗口参数
-  double win_width = local_costmap_size_;
-  int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
-  int cx = static_cast<int>((rx - ox) / res);
-  int cy = static_cast<int>((ry - oy) / res);
-
-  // 提取窗口内的障碍物（静态地图 + 激光）
-  core::ObstacleArray obstacles;
-  std::vector<std::vector<bool>> visited(h, std::vector<bool>(w, false));
-
-  // BFS 聚类 + 提取窗口内障碍物
-  int step = std::max(1, static_cast<int>(0.3 / res));
-  for (int dy = -win_half; dy <= win_half; dy += step) {
-    for (int dx = -win_half; dx <= win_half; dx += step) {
-      int mx = cx + dx, my = cy + dy;
-      if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) continue;
-      if (visited[my][mx]) continue;
-
-      bool is_obs = (current_map_->data[my * w + mx] >= 100);
-      // 也检查激光点
-      for (const auto& pt : laser_points_) {
-        int lx = static_cast<int>((pt.x - ox) / res);
-        int ly = static_cast<int>((pt.y - oy) / res);
-        if (std::abs(lx - mx) <= 1 && std::abs(ly - my) <= 1) { is_obs = true; break; }
-      }
-      if (!is_obs) continue;
-
-      // BFS 聚类
-      std::queue<std::pair<int,int>> cluster_q;
-      cluster_q.push({mx, my});
-      visited[my][mx] = true;
-      double sum_x = 0, sum_y = 0;
-      int cnt = 0, min_x = mx, max_x = mx, min_y = my, max_y = my;
-
-      while (!cluster_q.empty()) {
-        auto [cx2, cy2] = cluster_q.front(); cluster_q.pop();
-        sum_x += cx2; sum_y += cy2; ++cnt;
-        min_x = std::min(min_x, cx2); max_x = std::max(max_x, cx2);
-        min_y = std::min(min_y, cy2); max_y = std::max(max_y, cy2);
-
-        for (int i = 0; i < 4; ++i) {
-          int nx = cx2 + (i==0 ? -1 : i==1 ? 1 : 0);
-          int ny = cy2 + (i==2 ? -1 : i==3 ? 1 : 0);
-          if (nx >= 0 && nx < static_cast<int>(w) && ny >= 0 && ny < static_cast<int>(h) && !visited[ny][nx]) {
-            bool neighbor_obs = (current_map_->data[ny * w + nx] >= 100);
-            if (!neighbor_obs) {
-              for (const auto& pt : laser_points_) {
-                int lx = static_cast<int>((pt.x - ox) / res);
-                int ly = static_cast<int>((pt.y - oy) / res);
-                if (nx == lx && ny == ly) { neighbor_obs = true; break; }
-              }
-            }
-            if (neighbor_obs) {
-              visited[ny][nx] = true;
-              cluster_q.push({nx, ny});
-            }
-          }
-        }
-      }
-
-      core::Obstacle obs;
-      obs.x = ox + (sum_x / cnt + 0.5) * res;
-      obs.y = oy + (sum_y / cnt + 0.5) * res;
-      double w_ = (max_x - min_x + 1) * res;
-      double h_ = (max_y - min_y + 1) * res;
-      obs.radius = std::sqrt(w_ * w_ + h_ * h_) * 0.5;
-      obstacles.push_back(obs);
-    }
-  }
-
-  // 3D LiDAR -> 2D local obstacle layer for DWA.
-  if (!safety_points_map_.empty()) {
-    std::unordered_set<long long> seen;
-    constexpr double kSafetyCell = 0.15;
-    for (const auto& p : safety_points_map_) {
-      const double dx = p.first - rx;
-      const double dy = p.second - ry;
-      if (std::hypot(dx, dy) > win_width * 0.5) continue;
-      const int cx = static_cast<int>(std::floor(dx / kSafetyCell));
-      const int cy = static_cast<int>(std::floor(dy / kSafetyCell));
-      const long long key = (static_cast<long long>(cx) << 32) ^
-        static_cast<unsigned int>(cy);
-      if (!seen.insert(key).second) continue;
-      core::Obstacle obs;
-      obs.x = p.first;
-      obs.y = p.second;
-      obs.radius = 0.10;
-      obstacles.push_back(obs);
-      if (obstacles.size() >= 1500) break;
-    }
-  }
-
-  // DWA 已直接使用 local costmap; 不再叠加地图簇/3D 点障碍列表,
-  // 否则同一障碍被表示两次, 会把门洞/窄通道堵死.
-  controller_strategy_->setObstacles({});
 }
 
 void NavigationNode::publishLocalCostmap()
@@ -828,52 +751,66 @@ void NavigationNode::publishLocalCostmap()
   double ox = current_map_->info.origin.position.x;
   double oy = current_map_->info.origin.position.y;
   double rx = 0, ry = 0;
-  if (safety_pose_valid_) {
-    // 与 safety_points_map_ 使用同一帧雷达位姿, 避免转弯时点云层和底图错位.
-    rx = safety_pose_x_;
-    ry = safety_pose_y_;
-  } else {
-    try {
-      auto tf = tf_buffer_->lookupTransform(
-        map_frame_, "base_link", tf2::TimePointZero, tf2::durationFromSec(0.05));
-      rx = tf.transform.translation.x;
-      ry = tf.transform.translation.y;
-    } catch (tf2::TransformException &) { return; }
+  // 局部窗口必须跟随当前机器人, 不能跟随上一帧点云的位姿; 点云已经
+  // 变换到 map 系, 只是障碍物层, 窗口中心用当前 TF.
+  try {
+    auto tf = tf_buffer_->lookupTransform(
+      map_frame_, robot_frame_, tf2::TimePointZero, tf2::durationFromSec(0.05));
+    rx = tf.transform.translation.x;
+    ry = tf.transform.translation.y;
+  } catch (tf2::TransformException &) {
+    if (safety_pose_valid_) {
+      rx = safety_pose_x_;
+      ry = safety_pose_y_;
+    } else {
+      return;
+    }
   }
   double win_width = local_costmap_size_;
   int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
   int cx = static_cast<int>((rx - ox) / res);
   int cy = static_cast<int>((ry - oy) / res);
-  int lw = win_half * 2;
+  // 奇数尺寸, 让机器人正好落在中心格 (偶数尺寸会偏半格).
+  int lw = win_half * 2 + 1;
   nav_msgs::msg::OccupancyGrid local_costmap;
   local_costmap.header.frame_id = map_frame_;
   local_costmap.header.stamp = now();
   local_costmap.info.resolution = res;
   local_costmap.info.width = lw;
   local_costmap.info.height = lw;
-  local_costmap.info.origin.position.x = rx - win_width / 2.0;
-  local_costmap.info.origin.position.y = ry - win_width / 2.0;
+  local_costmap.info.origin.position.x = rx - (win_half + 0.5) * res;
+  local_costmap.info.origin.position.y = ry - (win_half + 0.5) * res;
   local_costmap.info.origin.orientation.w = 1.0;
-  std::vector<int8_t> raw(lw * lw, 0);
-  for (int dy = -win_half; dy < win_half; ++dy)
-    for (int dx = -win_half; dx < win_half; ++dx) {
+  std::vector<int8_t> raw(lw * lw, 100);  // 地图外默认致命, 防止驶出已知地图
+  for (int dy = -win_half; dy <= win_half; ++dy)
+    for (int dx = -win_half; dx <= win_half; ++dx) {
       int mx = cx + dx, my = cy + dy;
       if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) continue;
       int gx = dx + win_half, gy = dy + win_half;
       raw[gy * lw + gx] = (current_map_->data[my * w + mx] >= 100) ? 100 : 0;
     }
-  // real-time 3D LiDAR points in the local costmap window
-  for (const auto& p : safety_points_map_) {
-    const int mx = static_cast<int>((p.first - ox) / res);
-    const int my = static_cast<int>((p.second - oy) / res);
-    const int dx = mx - cx;
-    const int dy = my - cy;
-    if (dx < -win_half || dx >= win_half || dy < -win_half || dy >= win_half) {
-      continue;
+  // real-time 2D laser + 3D LiDAR points in the local costmap window
+  auto mark_point = [&](double px, double py) {
+      const int mx = static_cast<int>((px - ox) / res);
+      const int my = static_cast<int>((py - oy) / res);
+      const int dx = mx - cx;
+      const int dy = my - cy;
+      if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) return;
+      raw[(dy + win_half) * lw + (dx + win_half)] = 100;
+    };
+  const bool laser_fresh = last_scan_sec_ > 0.0 &&
+    (now().seconds() - last_scan_sec_ <= 1.0);
+  if (laser_fresh) {
+    for (const auto& pt : laser_points_) {
+      mark_point(pt.x, pt.y);
     }
-    const int gx = dx + win_half;
-    const int gy = dy + win_half;
-    raw[gy * lw + gx] = 100;
+  }
+  const bool safety_fresh = safety_have_cloud_ &&
+    (now().seconds() - safety_last_cloud_sec_ <= safety_source_timeout_);
+  if (safety_fresh) {
+    for (const auto& p : safety_points_map_) {
+      mark_point(p.first, p.second);
+    }
   }
 
   // 局部沿用同一语义:
@@ -907,6 +844,9 @@ void NavigationNode::publishLocalCostmap()
     else if (d <= l_inflate) local_costmap.data[i] = static_cast<int8_t>((1.0f - (d - l_safety) * linv) * 99);
     else local_costmap.data[i] = 0;
   }
+  // 记录清除前的中心代价, 便于诊断"机器人是否被墙/自身点云包住".
+  last_local_center_cost_ = local_costmap.data[
+    static_cast<size_t>(lw / 2) * lw + static_cast<size_t>(lw / 2)];
   // 机器人自身所在的小区域清成自由, 否则贴墙/自身噪点导致局部中心 100,
   // DWA/MPPI 没有可行轨迹; 真正碰撞仍由安全层和紫色硬边界负责.
   if (local_clear_radius_ > 0.0) {
@@ -929,8 +869,6 @@ void NavigationNode::publishLocalCostmap()
     if (v >= 100) ++last_local_lethal_cells_;
     else if (v > 0) ++last_local_blue_cells_;
   }
-  last_local_center_cost_ = local_costmap.data[
-    static_cast<size_t>(lw / 2) * lw + static_cast<size_t>(lw / 2)];
 
   if (controller_strategy_) {
     core::CostmapGrid grid;
@@ -945,13 +883,6 @@ void NavigationNode::publishLocalCostmap()
   local_costmap_pub_->publish(local_costmap);
 }
 
-void NavigationNode::republishGlobalCostmap()
-{
-  if (!m_has_global_costmap_) return;
-  global_costmap_msg_.header.stamp = now();
-  global_costmap_pub_->publish(global_costmap_msg_);
-}
-
 void NavigationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
 {
   current_map_ = msg;
@@ -959,23 +890,10 @@ void NavigationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr m
   RCLCPP_INFO(get_logger(), "Map received: %d x %d, res=%.3f",
     msg->info.width, msg->info.height, msg->info.resolution);
 
-  // 地图刚更新完, 立即用这份最新 costmap 重规划; 不能等独立定时器,
-  // 否则路径会比地图慢一个周期, 看起来贴着新出现的障碍物走.
-  if (is_navigating_ && !is_paused_ && !m_need_initial_rotate) {
-    replanningCheck();
-  }
-
-  // 探索时地图每 2s 更新一次; 首次规划可能因瞬态膨胀/新障碍失败,
-  // 地图更新后自动重试, 而不是让机器人一直停到上层目标超时.
-  if (current_state_ == NavigationState::FAILED &&
-      !goal_pose_.header.frame_id.empty()) {
-    const double now_sec = now().seconds();
-    if (now_sec - m_last_replan_attempt_sec >= 1.0) {
-      m_last_replan_attempt_sec = now_sec;
-      RCLCPP_INFO(get_logger(), "Retrying navigation planning after map update...");
-      executeNavigation(goal_pose_);
-    }
-  }
+  // 重规划由 1Hz 定时器统一执行. 不在地图回调里跑 A*, 避免阻塞地图/TF 回调.
+  // 也不在这里对 FAILED 目标自动重试: 失败已经通过 /goal_status 通知
+  // explorer, 由上层换目标; 否则旧目标会每秒重试并把过期 failed 状态
+  // 混到新目标上.
 }
 
 void NavigationNode::goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -987,6 +905,21 @@ void NavigationNode::goalCallback(const geometry_msgs::msg::PoseStamped::SharedP
 
   goal_pose_ = *msg;
   executeNavigation(goal_pose_);
+}
+
+void NavigationNode::stopCallback(const std_msgs::msg::String::SharedPtr msg)
+{
+  // 带 goal token 的 stop 只能停止对应目标; 防止 stop 晚到误停新目标.
+  if (msg && !msg->data.empty()) {
+    const auto & stamp = goal_pose_.header.stamp;
+    const int64_t stamp_ns = static_cast<int64_t>(stamp.sec) * 1000000000LL +
+      static_cast<int64_t>(stamp.nanosec);
+    if (msg->data != std::to_string(stamp_ns)) {
+      return;
+    }
+  }
+  RCLCPP_INFO(get_logger(), "Stop request received");
+  stopNavigation();
 }
 
 void NavigationNode::controlLoop()
@@ -1046,19 +979,43 @@ void NavigationNode::controlLoop()
     }
   }
 
-  // 实际速度长期接近 0: DWA/安全层把输出压得太小, 触发旋转恢复.
-  const bool actual_still =
-    std::hypot(current_velocity_.linear.x, current_velocity_.linear.y) < 0.02 &&
-    std::abs(current_velocity_.angular.z) < 0.05;
-  if (recovery_enabled_ && actual_still) {
-    if (++motion_stall_cycles_ >= recovery_trigger_cycles_) {
-      recovery_active_ = true;
-      recovery_until_sec_ = now().seconds() + recovery_duration_;
+  // 卡死检测必须基于真实位姿变化, 不能只看 odom.twist.
+  // 本项目的 SLAM 之前不填 twist.angular, 机器人原地转/慢慢走时
+  // current_velocity_ 仍接近 0, 会每 2s 误触发一次后退旋转恢复.
+  if (recovery_enabled_) {
+    const double now_sec = now().seconds();
+    const double pose_x = current_pose_.pose.position.x;
+    const double pose_y = current_pose_.pose.position.y;
+    const double pose_yaw = tf2::getYaw(current_pose_.pose.orientation);
+    if (!motion_ref_valid_) {
+      motion_ref_x_ = pose_x;
+      motion_ref_y_ = pose_y;
+      motion_ref_yaw_ = pose_yaw;
+      motion_ref_sec_ = now_sec;
+      motion_ref_valid_ = true;
       motion_stall_cycles_ = 0;
-      RCLCPP_WARN(get_logger(), "Robot not moving; recovery rotation");
+    } else {
+      const double moved = std::hypot(pose_x - motion_ref_x_, pose_y - motion_ref_y_);
+      double dyaw = pose_yaw - motion_ref_yaw_;
+      while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+      while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+      if (moved > 0.03 || std::abs(dyaw) > 0.05) {
+        motion_ref_x_ = pose_x;
+        motion_ref_y_ = pose_y;
+        motion_ref_yaw_ = pose_yaw;
+        motion_ref_sec_ = now_sec;
+        motion_stall_cycles_ = 0;
+      } else if (++motion_stall_cycles_ >= recovery_trigger_cycles_) {
+        recovery_active_ = true;
+        recovery_until_sec_ = now_sec + recovery_duration_;
+        motion_stall_cycles_ = 0;
+        motion_ref_valid_ = false;
+        RCLCPP_WARN(get_logger(), "Robot not moving; recovery rotation");
+      }
     }
   } else {
     motion_stall_cycles_ = 0;
+    motion_ref_valid_ = false;
   }
 
   // 安全层 STOP 持续 > 1s: 原地旋转寻找脱困方向 (安全层不再继续拦截
@@ -1080,6 +1037,7 @@ void NavigationNode::controlLoop()
       recovery_cmd.angular.z = recovery_angular_velocity_;
       if (recovery_bypass_safety_) {
         cmd_vel_pub_->publish(recovery_cmd);
+        last_published_cmd_ = recovery_cmd;
       } else {
         publishVelocityCommand(recovery_cmd);
       }
@@ -1087,6 +1045,7 @@ void NavigationNode::controlLoop()
     }
     recovery_active_ = false;
     stall_cycles_ = 0;
+    motion_ref_valid_ = false;
   }
 
   // 计算速度命令
@@ -1119,6 +1078,9 @@ void NavigationNode::replanningCheck()
   if (goal_pose_.header.frame_id.empty() || m_need_initial_rotate) {
     return;
   }
+  if (!m_has_planner_costmap_) {
+    return;
+  }
   if (!updateCurrentPose()) {
     geometry_msgs::msg::Twist stop_cmd;
     publishVelocityCommand(stop_cmd);
@@ -1126,14 +1088,16 @@ void NavigationNode::replanningCheck()
   }
 
   const auto start = RosUtils::toCorePose(current_pose_);
-  auto goal = RosUtils::toCorePose(goal_pose_);
-  adjustGoalToFree(goal);
-  planner_strategy_->setCostmap(makePlannerCostmap(global_costmap_msg_));
-  auto result = planner_strategy_->plan(start, goal);
+  if (!m_has_effective_goal_) {
+    effective_goal_ = RosUtils::toCorePose(goal_pose_);
+    adjustGoalToFree(effective_goal_);
+    m_has_effective_goal_ = true;
+  }
+  auto result = planner_strategy_->plan(start, effective_goal_);
 
   if (!result.is_ok()) {
-    // 新地图下当前路径可能已经失效. 停车并置 FAILED, 由 mapCallback
-    // 在下一次地图更新时用最新 costmap 重新规划.
+    // 不再由 mapCallback 自动重试旧目标. 失败通过 /goal_status 交给
+    // explorer 换目标; 旧目标每秒重试会把过期 failed 状态混到新目标上.
     geometry_msgs::msg::Twist stop_cmd;
     publishVelocityCommand(stop_cmd);
     is_navigating_ = false;
@@ -1141,7 +1105,12 @@ void NavigationNode::replanningCheck()
     current_path_.poses.clear();
     publishGoalStatus("failed");
     global_path_pub_->publish(current_path_);
-    RCLCPP_WARN(get_logger(), "Replan failed: %s; stopping for retry",
+    m_need_initial_rotate = false;
+    m_has_effective_goal_ = false;
+    recovery_active_ = false;
+    motion_ref_valid_ = false;
+    if (controller_strategy_) controller_strategy_->reset();
+    RCLCPP_WARN(get_logger(), "Replan failed: %s; waiting for new goal",
       result.error_message().c_str());
     return;
   }
@@ -1149,7 +1118,7 @@ void NavigationNode::replanningCheck()
   current_path_ = RosUtils::toRosPath(result.value(), goal_pose_.header.frame_id, now());
   smoothCurrentPath(current_path_);
   if (controller_strategy_) {
-    // DWA 的 setPath 会重置进度; 地图 5Hz 重规划时最多 2Hz 刷给控制器,
+    // DWA/MPPI 的 setPath 会重置进度; 地图 1Hz 重规划时最多 2Hz 刷给控制器,
     // 中间路径仍发布, 由安全层兜底.
     const double now_sec = now().seconds();
     if (now_sec - last_controller_path_sec_ >= 0.5) {
@@ -1165,40 +1134,68 @@ void NavigationNode::replanningCheck()
 
 void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & goal)
 {
+  // 新目标会覆盖旧路径. 规划期间先停车并清掉旧路径, 规划失败时
+  // 不能继续沿上一条路径开.
+  is_navigating_ = false;
+  current_state_ = NavigationState::PLANNING;
+  current_path_.poses.clear();
+  m_has_effective_goal_ = false;
+  m_need_initial_rotate = false;
+  recovery_active_ = false;
+  stall_cycles_ = 0;
+  motion_stall_cycles_ = 0;
+  motion_ref_valid_ = false;
+  {
+    geometry_msgs::msg::Twist stop_cmd;
+    publishVelocityCommand(stop_cmd);
+  }
+  global_path_pub_->publish(current_path_);
+
   // 更新当前位姿
   if (!updateCurrentPose()) {
     RCLCPP_ERROR(get_logger(), "Cannot get current pose for planning");
-    geometry_msgs::msg::Twist stop_cmd;
-    publishVelocityCommand(stop_cmd);
+    publishGoalStatus("failed");
+    current_state_ = NavigationState::FAILED;
+    return;
+  }
+
+  if (!planner_strategy_ || !m_has_planner_costmap_) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+      "No global costmap yet; rejecting goal");
+    publishGoalStatus("failed");
     current_state_ = NavigationState::FAILED;
     return;
   }
 
   // 规划路径
   RCLCPP_INFO(get_logger(), "Planning path to goal...");
-  current_state_ = NavigationState::PLANNING;
 
-  if (planner_strategy_) {
-    auto start_pose = RosUtils::toCorePose(current_pose_);
-    auto goal_pose_core = RosUtils::toCorePose(goal);
-    adjustGoalToFree(goal_pose_core);
-    planner_strategy_->setCostmap(makePlannerCostmap(global_costmap_msg_));
-    auto result = planner_strategy_->plan(start_pose, goal_pose_core);
-    if (result.is_ok()) {
-      current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
-
-      // 平滑路径
-      smoothCurrentPath(current_path_);
-    } else {
-      RCLCPP_ERROR(get_logger(), "Planner '%s' failed: %s",
-        planner_name_.c_str(), result.error_message().c_str());
-      publishGoalStatus("failed");
-      geometry_msgs::msg::Twist stop_cmd;
-      publishVelocityCommand(stop_cmd);
-      current_state_ = NavigationState::FAILED;
-      return;
-    }
+  auto start_pose = RosUtils::toCorePose(current_pose_);
+  auto goal_pose_core = RosUtils::toCorePose(goal);
+  if (!adjustGoalToFree(goal_pose_core)) {
+    RCLCPP_WARN(get_logger(),
+      "Goal (%.2f, %.2f) has no free cell nearby; rejecting",
+      goal_pose_core.x, goal_pose_core.y);
+    publishGoalStatus("failed");
+    current_state_ = NavigationState::FAILED;
+    return;
   }
+  effective_goal_ = goal_pose_core;
+  m_has_effective_goal_ = true;
+
+  auto result = planner_strategy_->plan(start_pose, effective_goal_);
+  if (!result.is_ok()) {
+    RCLCPP_ERROR(get_logger(), "Planner '%s' failed: %s",
+      planner_name_.c_str(), result.error_message().c_str());
+    publishGoalStatus("failed");
+    current_state_ = NavigationState::FAILED;
+    m_has_effective_goal_ = false;
+    if (controller_strategy_) controller_strategy_->reset();
+    return;
+  }
+
+  current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
+  smoothCurrentPath(current_path_);
 
   // 将路径注入控制器
   if (controller_strategy_) {
@@ -1213,9 +1210,11 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
     "Path planned with %zu points",
     current_path_.poses.size());
 
-  // 原地旋转只对不能倒车/横移的 Pure Pursuit 有意义. DWA/MPPI 自己能
-  // 在轨迹采样里完成转向; 否则 TF/底盘角速度异常时会卡在 initial rotate,
-  // 看起来就是"一直不走".
+  // 告诉上层目标已被接受; explorer 用它判断导航节点是否真的收到了目标.
+  publishGoalStatus("accepted");
+
+  // 大角度起步先原地转, 4s 超时后交给控制器 (见 controlLoop).
+  // DWA/MPPI 本身也能转向; 这个只用于缩短大角度目标的起步时间.
   m_need_initial_rotate = false;
   if (current_path_.poses.size() > 2) {
     double current_yaw = tf2::getYaw(current_pose_.pose.orientation);
@@ -1293,6 +1292,11 @@ bool NavigationNode::updateCurrentPose()
       }
     }
 
+    // 注意: odom.twist 的可信度由 SLAM 的 ROS2 层负责
+    // (world->body 线速度 + 四元数差分角速度). 这里不再用相邻 TF 差分
+    // 覆写 current_velocity_: TF 跳变/回环时会把巨大速度值混进控制器.
+    // 控制器侧同时把上一周期下发的 cmd 作为加速度状态兜底.
+
     current_pose_.header.stamp = transform.header.stamp;
     current_pose_.header.frame_id = global_frame_;
     current_pose_.pose.position.x = x;
@@ -1302,7 +1306,8 @@ bool NavigationNode::updateCurrentPose()
 
     return true;
   } catch (tf2::TransformException & ex) {
-    RCLCPP_WARN(get_logger(), "Transform error: %s", ex.what());
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+      "Transform error: %s", ex.what());
     return false;
   }
 }
@@ -1340,7 +1345,9 @@ geometry_msgs::msg::Twist NavigationNode::computeVelocityCommand()
   // 优先使用控制器的速度计算
   if (controller_strategy_) {
     auto core_pose = RosUtils::toCorePose(current_pose_);
-    auto core_vel = RosUtils::toCoreVelocity(current_velocity_);
+    // 用上一周期真正下发的速度作为加速度状态. odom.twist 可能滞后/缺角速度,
+    // 直接作为 DWA/MPPI 动态窗口输入会把首段命令压到 max_accel*dt.
+    auto core_vel = RosUtils::toCoreVelocity(last_published_cmd_);
     auto cmd = controller_strategy_->computeVelocityCommand(core_pose, core_vel);
     geometry_msgs::msg::Twist result = RosUtils::toRosTwist(cmd);
     RCLCPP_DEBUG(get_logger(),
@@ -1389,6 +1396,7 @@ geometry_msgs::msg::Twist NavigationNode::computeVelocityCommand()
 
 void NavigationNode::publishVelocityCommand(const geometry_msgs::msg::Twist & cmd_vel)
 {
+  if (!cmd_vel_pub_) return;
   geometry_msgs::msg::Twist out = cmd_vel;
   if (safety_enabled_) {
     const double now_sec = now().seconds();
@@ -1443,6 +1451,14 @@ void NavigationNode::publishGoalStatus(const std::string & status)
   if (!goal_status_pub_) return;
   std_msgs::msg::String msg;
   msg.data = status;
+  // 附带目标时间戳作为 goal token. explorer 用它丢弃上一个目标的
+  // 迟到 accepted/failed/reached, 避免旧状态误杀新目标.
+  const auto & stamp = goal_pose_.header.stamp;
+  if (stamp.sec != 0 || stamp.nanosec != 0) {
+    const int64_t stamp_ns = static_cast<int64_t>(stamp.sec) * 1000000000LL +
+      static_cast<int64_t>(stamp.nanosec);
+    msg.data += ":" + std::to_string(stamp_ns);
+  }
   goal_status_pub_->publish(msg);
 }
 
@@ -1640,11 +1656,22 @@ void NavigationNode::stopNavigation()
   is_paused_ = false;
   current_state_ = NavigationState::IDLE;
 
-  // 发送零速度命令
+  // 发送零速度命令 (经过安全层和 last_published_cmd_ 记录)
   geometry_msgs::msg::Twist stop_cmd;
-  stop_cmd.linear.x = 0.0;
-  stop_cmd.angular.z = 0.0;
-  cmd_vel_pub_->publish(stop_cmd);
+  publishVelocityCommand(stop_cmd);
+
+  current_path_.poses.clear();
+  m_has_effective_goal_ = false;
+  m_need_initial_rotate = false;
+  recovery_active_ = false;
+  stall_cycles_ = 0;
+  motion_stall_cycles_ = 0;
+  motion_ref_valid_ = false;
+  safety_stop_active_ = false;
+
+  if (controller_strategy_) controller_strategy_->reset();
+  if (path_pub_) path_pub_->publish(current_path_);
+  if (global_path_pub_) global_path_pub_->publish(current_path_);
 
   RCLCPP_INFO(get_logger(), "Navigation stopped");
 }
@@ -1656,9 +1683,8 @@ void NavigationNode::pauseNavigation()
 
   // 发送零速度命令
   geometry_msgs::msg::Twist stop_cmd;
-  stop_cmd.linear.x = 0.0;
-  stop_cmd.angular.z = 0.0;
-  cmd_vel_pub_->publish(stop_cmd);
+  publishVelocityCommand(stop_cmd);
+  motion_ref_valid_ = false;
 
   RCLCPP_INFO(get_logger(), "Navigation paused");
 }

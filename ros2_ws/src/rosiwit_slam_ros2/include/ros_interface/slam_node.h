@@ -14,6 +14,7 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <builtin_interfaces/msg/time.hpp>
+#include <Eigen/Geometry>
 #include <map>
 #include <mutex>
 #include "ros_interface/frame_utils.h"
@@ -136,6 +137,13 @@ private:
     nav_msgs::msg::Path m_path;
     bool m_grid_map_published = false;
     uint64_t m_last_map_revision = 0;
+
+    // odom.twist 必须是 child(base) 系速度, 且角速度要由姿态差分得到.
+    // 之前只填了 world 系 linear, angular 一直为 0, 导致 DWA/MPPI 的动态窗口
+    // 以为机器人没在转, 只能给最小加速度, 机器人长期 0.02m/s 爬行.
+    bool m_last_odom_twist_valid = false;
+    double m_last_odom_twist_sec = 0.0;
+    Eigen::Quaterniond m_last_odom_twist_q = Eigen::Quaterniond::Identity();
 
     // EMA 平滑滤波（抑制 LIO 抖动，避免 costmap 中机器人中心跳进 lethal）
     PoseStamped m_smoothed_pose;

@@ -163,6 +163,19 @@ def cell_to_world(row: int, col: int, origin_x: float, origin_y: float,
             origin_y + (row + 0.5) * resolution)
 
 
+def parse_goal_status(data: str) -> Tuple[str, Optional[int]]:
+    """Parse ``status[:goal_stamp_ns]`` published on /goal_status."""
+    raw = data.strip()
+    status = raw.lower()
+    token: Optional[int] = None
+    if ':' in raw:
+        head, tail = raw.rsplit(':', 1)
+        if tail.lstrip('-').isdigit():
+            status = head.strip().lower()
+            token = int(tail)
+    return status, token
+
+
 class FrontierExplorer(Node):
     """Explore unknown space by repeatedly driving to the best frontier."""
 
@@ -174,6 +187,7 @@ class FrontierExplorer(Node):
         self.declare_parameter('goal_topic', '/goal_pose')
         self.declare_parameter('goal_interface', 'pose')  # pose | nav2 | auto
         self.declare_parameter('nav2_action', 'navigate_to_pose')
+        self.declare_parameter('global_costmap_topic', '/global_costmap')
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('map_frame', '')
         self.declare_parameter('goal_frame', 'odom')
@@ -187,12 +201,14 @@ class FrontierExplorer(Node):
         self.declare_parameter('min_goal_distance', 0.8)
         self.declare_parameter('max_goal_distance', 30.0)
         self.declare_parameter('frontier_size_weight', 0.02)
+        self.declare_parameter('nav_cost_weight', 0.5)
         self.declare_parameter('check_reachability', True)
 
         self.declare_parameter('blacklist_radius', 0.8)
         self.declare_parameter('blacklist_duration', 180.0)
         self.declare_parameter('goal_tolerance', 0.35)
         self.declare_parameter('goal_timeout', 120.0)
+        self.declare_parameter('goal_accept_timeout', 5.0)
         self.declare_parameter('goal_cooldown', 1.0)
         self.declare_parameter('finish_patience', 20)
 
@@ -207,6 +223,7 @@ class FrontierExplorer(Node):
         self.goal_topic = self.get_parameter('goal_topic').value
         self.goal_interface = str(self.get_parameter('goal_interface').value).lower()
         self.nav2_action = self.get_parameter('nav2_action').value
+        self.global_costmap_topic = self.get_parameter('global_costmap_topic').value
         self.robot_frame = self.get_parameter('robot_frame').value
         self.map_frame_param = self.get_parameter('map_frame').value
         self.goal_frame = self.get_parameter('goal_frame').value
@@ -219,12 +236,14 @@ class FrontierExplorer(Node):
         self.min_goal_distance = float(self.get_parameter('min_goal_distance').value)
         self.max_goal_distance = float(self.get_parameter('max_goal_distance').value)
         self.frontier_size_weight = float(self.get_parameter('frontier_size_weight').value)
+        self.nav_cost_weight = float(self.get_parameter('nav_cost_weight').value)
         self.check_reachability = bool(self.get_parameter('check_reachability').value)
 
         self.blacklist_radius = float(self.get_parameter('blacklist_radius').value)
         self.blacklist_duration = float(self.get_parameter('blacklist_duration').value)
         self.goal_tolerance = float(self.get_parameter('goal_tolerance').value)
         self.goal_timeout = float(self.get_parameter('goal_timeout').value)
+        self.goal_accept_timeout = float(self.get_parameter('goal_accept_timeout').value)
         self.goal_cooldown = float(self.get_parameter('goal_cooldown').value)
         self.finish_patience = int(self.get_parameter('finish_patience').value)
 
@@ -243,6 +262,15 @@ class FrontierExplorer(Node):
         self.last_odom: Optional[Odometry] = None
         self._last_known_cells: Optional[int] = None
 
+        # 导航节点发布的 /global_costmap: 它已经包含 robot_radius 硬边界和
+        # inflation_radius 蓝区. explorer 选目标必须和规划器用同一张图,
+        # 否则会出现"地图 free 但 A* 无解".
+        self.nav_grid: Optional[np.ndarray] = None
+        self.nav_info = None
+        self._nav_seq = 0
+        self._nav_reachable_cache: Optional[np.ndarray] = None
+        self._nav_reachable_key = None
+
         self.enabled = self.autostart
         self.finished = False
         self.empty_cycles = 0
@@ -253,6 +281,8 @@ class FrontierExplorer(Node):
         self.goal_mode = ''
         self.goal_sent_at = 0.0
         self.goal_seq = 0
+        self.goal_expected_stamp_ns: Optional[int] = None
+        self.goal_accepted = False
         self.nav2_goal_handle = None
         self.next_goal_at = 0.0
         self.blacklist: List[Tuple[float, float, float]] = []
@@ -263,12 +293,16 @@ class FrontierExplorer(Node):
             reliability=ReliabilityPolicy.RELIABLE,
         )
         self.create_subscription(OccupancyGrid, self.map_topic, self.map_callback, map_qos)
+        self.create_subscription(OccupancyGrid, self.global_costmap_topic,
+                                 self.global_costmap_callback, map_qos)
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 10)
 
         self.goal_pub = self.create_publisher(PoseStamped, self.goal_topic, 10)
         self.goal_status_sub = self.create_subscription(
             String, '/goal_status', self.goal_status_cb, 10)
         self.marker_pub = self.create_publisher(MarkerArray, 'frontier_markers', 10)
+        self.stop_pub = self.create_publisher(String, '/nav_stop', 10)
+        self.stop_client = self.create_client(Trigger, '/stop_navigation')
 
         self.action_client = None
         if NavigateToPose is not None and self.goal_interface in ('nav2', 'auto'):
@@ -303,6 +337,18 @@ class FrontierExplorer(Node):
                 self.empty_cycles = 0
         self._last_known_cells = known
 
+    def global_costmap_callback(self, msg: OccupancyGrid) -> None:
+        expected = msg.info.width * msg.info.height
+        if expected == 0 or len(msg.data) != expected:
+            self.get_logger().warning('Ignoring malformed global costmap')
+            return
+        self.nav_grid = np.asarray(msg.data, dtype=np.int16).reshape(
+            msg.info.height, msg.info.width)
+        self.nav_info = msg.info
+        self._nav_seq += 1
+        self._nav_reachable_cache = None
+        self._nav_reachable_key = None
+
     def odom_callback(self, msg: Odometry) -> None:
         self.last_odom = msg
 
@@ -318,8 +364,11 @@ class FrontierExplorer(Node):
         else:
             response.message = 'exploration disabled'
             self._cancel_nav2_goal()
+            self.request_stop()
             self.current_goal = None
             self.current_goal_xy = None
+            self.goal_accepted = False
+            self.goal_expected_stamp_ns = None
         response.success = True
         self.get_logger().info(response.message)
         return response
@@ -386,7 +435,9 @@ class FrontierExplorer(Node):
                 self.map_frame, self.robot_frame, Time())
             return (tf.transform.translation.x, tf.transform.translation.y)
         except TransformException:
-            if self.last_odom is not None:
+            # odom 回调的坐标只在 odom 系; map != odom 时不能直接当 map 位姿.
+            if (self.last_odom is not None and
+                    self.last_odom.header.frame_id == self.map_frame):
                 return (self.last_odom.pose.pose.position.x,
                         self.last_odom.pose.pose.position.y)
             return None
@@ -427,6 +478,10 @@ class FrontierExplorer(Node):
         self.current_goal = pose
         self.current_goal_xy = (candidate.x, candidate.y)
         self.goal_sent_at = time.monotonic()
+        self.goal_accepted = False
+        stamp = pose.header.stamp
+        self.goal_expected_stamp_ns = (
+            int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec))
         self.goal_seq += 1
         seq = self.goal_seq
         self.get_logger().info(
@@ -466,6 +521,7 @@ class FrontierExplorer(Node):
         if not handle.accepted:
             self.finish_goal(False, 'goal rejected')
             return
+        self.goal_accepted = True
         self.nav2_goal_handle = handle
         handle.get_result_async().add_done_callback(
             lambda f, s=seq: self.goal_result_cb(f, s))
@@ -486,8 +542,15 @@ class FrontierExplorer(Node):
     def goal_status_cb(self, msg: String) -> None:
         if self.current_goal is None:
             return
-        status = msg.data.strip().lower()
-        if status == 'failed':
+        raw = msg.data.strip()
+        status, token = parse_goal_status(raw)
+        # 目标带时间戳 token: 旧目标的迟到状态不能作用到新目标.
+        if (token is not None and self.goal_expected_stamp_ns is not None and
+                token != self.goal_expected_stamp_ns):
+            return
+        if status == 'accepted':
+            self.goal_accepted = True
+        elif status == 'failed':
             self.finish_goal(False, 'navigation reported failure')
         elif status == 'reached':
             self.finish_goal(True, 'navigation reported reached')
@@ -503,12 +566,23 @@ class FrontierExplorer(Node):
             if dist <= self.goal_tolerance:
                 self.finish_goal(True, f'goal reached ({dist:.2f} m)')
                 return
+            if (not self.goal_accepted and
+                    elapsed > self.goal_accept_timeout):
+                self.finish_goal(
+                    False,
+                    f'navigation did not accept goal within '
+                    f'{self.goal_accept_timeout:.1f}s')
+                return
         if elapsed > self.goal_timeout:
             self._cancel_nav2_goal()
             self.finish_goal(False, f'goal timeout after {elapsed:.1f}s '
                                     f'(remaining {dist:.2f} m)')
 
     def finish_goal(self, success: bool, reason: str) -> None:
+        # 超时/本地失败时用带 goal token 的 stop 停止旧目标. 如果新目标
+        # 已经先到达导航节点, token 不匹配, 不会误停新目标.
+        if not success and self.goal_mode == 'pose':
+            self.request_stop_goal()
         if self.current_goal_xy is not None:
             self.blacklist.append((self.current_goal_xy[0],
                                    self.current_goal_xy[1],
@@ -518,9 +592,25 @@ class FrontierExplorer(Node):
         self.current_goal = None
         self.current_goal_xy = None
         self.goal_mode = ''
+        self.goal_accepted = False
+        self.goal_expected_stamp_ns = None
         self.nav2_goal_handle = None
         self.next_goal_at = time.monotonic() + self.goal_cooldown
         self.cleanup_blacklist()
+
+    def request_stop_goal(self) -> None:
+        msg = String()
+        if self.goal_expected_stamp_ns is not None:
+            msg.data = str(self.goal_expected_stamp_ns)
+        self.stop_pub.publish(msg)
+
+    def request_stop(self) -> None:
+        if not self.stop_client.service_is_ready():
+            self.get_logger().warning(
+                'Stop service /stop_navigation not available',
+                throttle_duration_sec=5.0)
+            return
+        self.stop_client.call_async(Trigger.Request())
 
     def _cancel_nav2_goal(self) -> None:
         if self.nav2_goal_handle is not None:
@@ -575,6 +665,27 @@ class FrontierExplorer(Node):
             return None
         reachable = reachable_free_mask(free, start) if self.check_reachability else free
 
+        # 用导航节点的 /global_costmap 做第二重可达性检查. 它含 robot_radius
+        # 硬边界 (紫色 100) 和 inflation_radius 蓝区 (<100 可通行), 与 A*
+        # 完全一致. 只用 /map 的 free 判断会把 0.5m 门洞外的目标误判为可达.
+        nav_reachable = None
+        nav_grid = None
+        if (self.check_reachability and self.nav_grid is not None and
+                self.nav_info is not None and
+                self.nav_grid.shape == grid.shape and
+                abs(float(self.nav_info.resolution) - resolution) < 1e-9 and
+                abs(float(self.nav_info.origin.position.x) - origin_x) < 1e-6 and
+                abs(float(self.nav_info.origin.position.y) - origin_y) < 1e-6):
+            nav_grid = self.nav_grid
+            nav_free = (nav_grid >= 0) & (nav_grid < 100)
+            nav_start = nearest_free_cell(nav_free, robot_row, robot_col)
+            if nav_start is not None:
+                key = (self._nav_seq, nav_start)
+                if key != self._nav_reachable_key:
+                    self._nav_reachable_cache = reachable_free_mask(nav_free, nav_start)
+                    self._nav_reachable_key = key
+                nav_reachable = self._nav_reachable_cache
+
         clearance_cells = max(1, int(math.ceil(self.goal_clearance / resolution)))
         backoff_cells = max(0, int(math.ceil(self.goal_backoff / resolution)))
         search_cells = backoff_cells + max(4, int(math.ceil(0.8 / resolution)))
@@ -601,6 +712,9 @@ class FrontierExplorer(Node):
             for row in range(r_lo, r_hi):
                 for col in range(c_lo, c_hi):
                     if not free[row, col] or not reachable[row, col]:
+                        continue
+                    if (nav_reachable is not None and
+                            (not nav_reachable[row, col] or nav_grid[row, col] >= 100)):
                         continue
                     r0 = max(0, row - clearance_cells)
                     c0 = max(0, col - clearance_cells)
@@ -630,7 +744,9 @@ class FrontierExplorer(Node):
             if self.is_blacklisted(x, y):
                 continue
             size = len(cells)
-            score = dist - self.frontier_size_weight * min(size, 500)
+            nav_cost = int(nav_grid[row, col]) if nav_grid is not None else 0
+            score = (dist - self.frontier_size_weight * min(size, 500) +
+                     self.nav_cost_weight * nav_cost / 100.0)
             candidates.append(FrontierCandidate(
                 x=x, y=y, size=size, distance=dist, score=score,
                 row=row, col=col))
@@ -684,6 +800,7 @@ class FrontierExplorer(Node):
             return
         self.finished = True
         self.enabled = False
+        self.request_stop()
         self.get_logger().info('Exploration finished: no reachable frontiers remain')
         if self.save_map_on_finish:
             self.save_map()

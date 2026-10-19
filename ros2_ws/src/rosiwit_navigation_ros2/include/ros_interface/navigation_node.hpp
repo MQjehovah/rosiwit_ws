@@ -19,13 +19,13 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 
-#include "trajectory_generator.hpp"
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 #include "ros_interface/ros_utils.hpp"
 #include "rosiwit_navigation/nav_core/safety_monitor.hpp"
@@ -161,11 +161,6 @@ protected:
   void initializePublishers();
 
   /**
-   * @brief 初始化Action服务器
-   */
-  void initializeActionServer();
-
-  /**
    * @brief 初始化定时器
    */
   void initializeTimers();
@@ -193,6 +188,7 @@ protected:
    * @brief RViz目标点回调
    */
   void goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+  void stopCallback(const std_msgs::msg::String::SharedPtr msg);
 
   /**
    * @brief 控制循环
@@ -203,11 +199,6 @@ protected:
    * @brief 重规划检查
    */
   void replanningCheck();
-
-  /**
-   * @brief Action服务器回调
-   */
-  void navigateToPoseCallback();
 
   /**
    * @brief 执行导航
@@ -246,11 +237,9 @@ protected:
     const nav_msgs::msg::OccupancyGrid & costmap) const;
   bool adjustGoalToFree(core::Pose2D & goal) const;
   void publishLocalCostmap();
-  void republishGlobalCostmap();
 
 private:
   // 组件
-  std::shared_ptr<TrajectoryGenerator> trajectory_generator_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
@@ -261,6 +250,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr safety_cloud_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr stop_sub_;
 
   // 发布者
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
@@ -276,12 +266,16 @@ private:
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr replanning_timer_;
   rclcpp::TimerBase::SharedPtr local_costmap_timer_;
-  rclcpp::TimerBase::SharedPtr global_costmap_timer_;
   rclcpp::TimerBase::SharedPtr diagnostics_timer_;
 
-  // 最近一次全局 costmap, 由高频定时器重复发布
+  // 服务: 外部停止当前导航 (探索节点关闭时使用)
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv_;
+
+  // 最近一次全局 costmap, 由 updateCostmap() 在地图更新时发布
   nav_msgs::msg::OccupancyGrid global_costmap_msg_;
   bool m_has_global_costmap_ = false;
+  core::Costmap planner_costmap_;
+  bool m_has_planner_costmap_ = false;
   double local_costmap_size_ = 8.0;
   int last_local_center_cost_ = -1;
   int last_local_lethal_cells_ = 0;
@@ -305,8 +299,6 @@ private:
   // 目标位姿
   geometry_msgs::msg::PoseStamped goal_pose_;
   double last_controller_path_sec_ = 0.0;
-  double last_costmap_replan_sec_ = -1e9;
-  double last_control_sec_ = -1.0;
   double tf_stale_timeout_{0.6};
   double safety_self_filter_radius_{0.20};
   double local_clear_radius_{0.20};
@@ -317,6 +309,17 @@ private:
   double last_tf_x_{0.0};
   double last_tf_y_{0.0};
   double last_tf_yaw_{0.0};
+
+  // 目标位姿 (nudge 后的有效目标固定下来, 避免每次重规划都重新选格导致抖动)
+  core::Pose2D effective_goal_;
+  bool m_has_effective_goal_ = false;
+
+  // 基于真实位姿的卡死检测 (不能信 odom.twist: SLAM 可能不填 angular)
+  bool motion_ref_valid_{false};
+  double motion_ref_x_{0.0};
+  double motion_ref_y_{0.0};
+  double motion_ref_yaw_{0.0};
+  double motion_ref_sec_{0.0};
 
   // DWA 卡死恢复
   bool recovery_enabled_ = true;
@@ -331,16 +334,14 @@ private:
   double recovery_until_sec_ = 0.0;
   bool safety_stop_active_ = false;
   double safety_stop_since_sec_ = 0.0;
-  // 规划失败后随地图更新重试 (探索场景地图会持续变化)
-  double m_last_replan_attempt_sec = 0.0;
 
-  // 当前路径和轨迹
+  // 当前路径
   nav_msgs::msg::Path current_path_;
-  std::vector<TrajectoryPoint> current_trajectory_;
 
   // 地图
   nav_msgs::msg::OccupancyGrid::SharedPtr current_map_;
   std::vector<geometry_msgs::msg::Point> laser_points_;
+  double last_scan_sec_{-1e9};
 
   // LiDAR safety layer (Nav2 Collision Monitor style)
   core::SafetyMonitor safety_monitor_;
@@ -367,6 +368,8 @@ private:
   // 策略名称参数
   std::string planner_name_;
   std::string controller_name_;
+  int planner_max_iterations_{200000};
+  double planner_timeout_{2.0};
   double inflation_radius_ = 0.5;
   double robot_radius_ = 0.21;
   bool enable_path_smoothing_ = false;

@@ -40,6 +40,7 @@ private:
   struct Control { double v{0.0}; double w{0.0}; };
 
   size_t nearestPathIndex(const core::Pose2D& pose) const;
+  size_t nearestPathIndex(const core::Pose2D& pose, size_t begin, size_t end) const;
   int localCostAt(const core::Pose2D& pose) const;
   static double normAngle(double a);
   static core::Pose2D integrate(

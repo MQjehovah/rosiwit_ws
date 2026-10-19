@@ -15,6 +15,10 @@ rosiwit_navigation_node:
 
     planner_name: "astar"
     controller_name: "mppi"
+    # A* 搜索上限要覆盖整张地图; 否则不可达目标会报 iteration limit,
+    # 看起来像临时失败而不是目标本身不可达.
+    planner_max_iterations: 200000
+    planner_timeout: 2.0
 
     global_frame: "odom"
     robot_frame: "base_link"

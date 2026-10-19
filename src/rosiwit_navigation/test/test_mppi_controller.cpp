@@ -85,6 +85,42 @@ TEST(MppiController, BlueLocalInflationIsTraversable)
   EXPECT_GT(command.linear_x, 0.03);
 }
 
+TEST(MppiController, SoftBlueInflationDoesNotForceCrawl)
+{
+  // 0.9m 膨胀半径下, 窄走廊中心也可能有 40-60 的蓝色代价. 这些格子
+  // 可通行, 不应把速度压到 0.05m/s.
+  auto controller = makeController();
+  controller.setPath(makeStraightPath());
+  controller.setLocalCostmap(makeLocalGrid(50));
+
+  std::vector<double> speeds;
+  for (int i = 0; i < 10; ++i) {
+    const auto command = controller.computeVelocityCommand(
+      Pose2D(0.0, 0.0, 0.0), VelocityCommand(0.0, 0.0, 0.0));
+    speeds.push_back(command.linear_x);
+  }
+  EXPECT_GT(speeds.back(), 0.10);
+}
+
+TEST(MppiController, RampsWhenMeasuredVelocityIsZero)
+{
+  // 复现仿真里 odom.twist 恒为 0 的情况: 如果只看当前速度,
+  // MPPI 每个周期都被限制在 max_accel*dt, 机器人会一直 0.04m/s 爬行.
+  auto controller = makeController();
+  controller.setPath(makeStraightPath());
+  controller.setLocalCostmap(makeLocalGrid(0));
+
+  std::vector<double> speeds;
+  for (int i = 0; i < 10; ++i) {
+    const auto command = controller.computeVelocityCommand(
+      Pose2D(0.0, 0.0, 0.0), VelocityCommand(0.0, 0.0, 0.0));
+    speeds.push_back(command.linear_x);
+  }
+  ASSERT_EQ(speeds.size(), 10u);
+  EXPECT_GT(speeds.back(), speeds.front() + 0.02);
+  EXPECT_GT(speeds.back(), 0.10);
+}
+
 TEST(MppiController, ReportsGoalReachedAtPathEnd)
 {
   auto controller = makeController();

@@ -27,6 +27,15 @@ def test_extract_clusters_filters_small_components():
     assert len(clusters[0]) == 3
 
 
+def test_parse_goal_status_token():
+    assert fe.parse_goal_status('failed:123456') == ('failed', 123456)
+    assert fe.parse_goal_status('ACCEPTED:42') == ('accepted', 42)
+    # 旧格式没有 token, 保持兼容.
+    assert fe.parse_goal_status('reached') == ('reached', None)
+    assert fe.parse_goal_status('failed:not-a-number') == (
+        'failed:not-a-number', None)
+
+
 def test_window_sum_and_integral():
     occupied = np.zeros((4, 4), dtype=bool)
     occupied[1, 1] = True

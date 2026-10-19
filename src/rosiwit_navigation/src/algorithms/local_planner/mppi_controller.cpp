@@ -41,15 +41,26 @@ void MppiController::setPath(const core::Path& path) {
   path_ = path;
   if (!same_goal) {
     idx_ = 0;
+    // 新目标从静止加速度约束重新起步, 不能沿用上一条路径的速度命令.
+    last_output_v_ = 0.0;
+    last_output_w_ = 0.0;
     resetNominal();
   }
   if (idx_ >= path_.points.size()) idx_ = 0;
 }
 
 size_t MppiController::nearestPathIndex(const core::Pose2D& pose) const {
-  size_t best = 0;
+  return nearestPathIndex(pose, 0, path_.points.size());
+}
+
+size_t MppiController::nearestPathIndex(
+  const core::Pose2D& pose, size_t begin, size_t end) const {
+  if (path_.points.empty()) return 0;
+  begin = std::min(begin, path_.points.size() - 1);
+  end = std::max(begin + 1, std::min(end, path_.points.size()));
+  size_t best = begin;
   double best_d2 = std::numeric_limits<double>::max();
-  for (size_t i = 0; i < path_.points.size(); ++i) {
+  for (size_t i = begin; i < end; ++i) {
     const double dx = path_.points[i].pose.x - pose.x;
     const double dy = path_.points[i].pose.y - pose.y;
     const double d2 = dx * dx + dy * dy;
@@ -99,7 +110,10 @@ core::VelocityCommand MppiController::computeVelocityCommand(
     return {0.0, 0.0, 0.0};
   }
 
-  idx_ = std::max(idx_, nearestPathIndex(pose));
+  // 只从当前进度附近向后搜索, 防止长路径上每个采样点都全表扫描, 也防止
+  // 最近点跳到 U 型路径的另一段导致参考航向突变.
+  const size_t progress_begin = idx_ > 2 ? idx_ - 2 : 0;
+  idx_ = std::max(idx_, nearestPathIndex(pose, progress_begin, path_.points.size()));
   if (nominal_.size() != static_cast<size_t>(horizon_)) resetNominal();
 
   std::normal_distribution<double> noise_v(0.0, sigma_v_);
@@ -112,12 +126,21 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   std::vector<Sample> sampled(static_cast<size_t>(samples_));
   double min_cost = std::numeric_limits<double>::max();
 
+  // 当前速度来自里程计, 但本项目的 odom/twist 可能滞后甚至为 0.
+  // 把上一周期实际下发的命令也作为加速度状态, 否则第一段控制量会被
+  // 永久压到 max_accel*dt (0.04m/s), 机器人看起来一直不走.
+  const double base_v = std::max(0.0, std::max(vel.linear_x, last_output_v_));
+  const double base_w = std::abs(vel.angular_z) > 0.02 ?
+    vel.angular_z : last_output_w_;
+  const size_t kLookaheadPoints = 80;
+
   for (int k = 0; k < samples_; ++k) {
     auto& sample = sampled[static_cast<size_t>(k)];
     sample.controls = nominal_;
     core::Pose2D p = pose;
-    double prev_v = vel.linear_x;
-    double prev_w = vel.angular_z;
+    double prev_v = base_v;
+    double prev_w = base_w;
+    size_t ni = idx_;
     double cost = 0.0;
 
     for (int t = 0; t < horizon_; ++t) {
@@ -131,7 +154,8 @@ core::VelocityCommand MppiController::computeVelocityCommand(
 
       p = integrate(p, v, w, dt_);
 
-      const size_t ni = nearestPathIndex(p);
+      ni = nearestPathIndex(
+        p, ni, std::min(path_.points.size(), ni + kLookaheadPoints));
       const auto& ref = path_.points[ni].pose;
       const double dx = p.x - ref.x;
       const double dy = p.y - ref.y;
@@ -152,8 +176,13 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       const int cell = localCostAt(p);
       if (cell >= 100) {
         cost += 1000.0;
-      } else if (cell > 0) {
-        cost += obstacle_weight_ * static_cast<double>(cell);
+      } else if (cell > 60) {
+        // 蓝色膨胀区 1..99 是可通行的软代价. 0.9m 膨胀会让窄走廊
+        // 几乎整片都是 40-60, 若每一格都重罚, 控制器的速度项会被
+        // 完全压掉, 机器人以 0.05m/s 爬行并频繁触探索超时.
+        // 只在进入约 0.5m 以内 (cost>60) 时开始惩罚, 硬边界仍由
+        // cell>=100 和 LiDAR 安全层负责.
+        cost += obstacle_weight_ * static_cast<double>(cell - 60);
       }
       cost += control_weight_ * (v * v + w * w);
       // 明确速度目标: 没有障碍时不要因为保守而长期低速.
@@ -182,7 +211,7 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       weighted[static_cast<size_t>(t)].w += weight * sample.controls[static_cast<size_t>(t)].w;
     }
   }
-  if (sum_w <= 0.0) return {0.0, 0.0, vel.angular_z};
+  if (sum_w <= 0.0) return {0.0, 0.0, 0.0};
 
   for (int t = 0; t < horizon_; ++t) {
     nominal_[static_cast<size_t>(t)] = {
@@ -204,9 +233,6 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   for (size_t k = 0; k < sampled.size(); ++k) {
     last_mean_cost_ += sampled[k].cost;
     if (sampled[k].cost < sampled[best_k].cost) best_k = static_cast<int>(k);
-    for (const auto& c : sampled[k].controls) {
-      (void)c;
-    }
   }
   last_mean_cost_ = sampled.empty() ? 0.0 :
     last_mean_cost_ / static_cast<double>(sampled.size());
@@ -231,6 +257,8 @@ double MppiController::getProgress() const {
 void MppiController::reset() {
   idx_ = 0;
   path_.points.clear();
+  last_output_v_ = 0.0;
+  last_output_w_ = 0.0;
   resetNominal();
 }
 

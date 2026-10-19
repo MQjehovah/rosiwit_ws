@@ -12,6 +12,7 @@ frontier_explorer:
     map_topic: /map
     odom_topic: /odom
     goal_topic: /goal_pose
+    global_costmap_topic: /global_costmap
     goal_interface: pose
     nav2_action: navigate_to_pose
 
@@ -36,13 +37,17 @@ frontier_explorer:
     min_goal_distance: 0.8
     max_goal_distance: 30.0
     frontier_size_weight: 0.02
+    nav_cost_weight: 0.5
     check_reachability: true
 
     # Goal lifecycle
     blacklist_radius: 0.8
     blacklist_duration: 180.0
     goal_tolerance: 0.35
-    goal_timeout: 25.0
+    # 5.9m 的目标 + 4s 初始旋转实测需要约 26s; 25s 会在距目标
+    # 0.53m 时误判失败并黑名单化. 45s 仍能兜住真正卡死的目标.
+    goal_timeout: 45.0
+    goal_accept_timeout: 5.0
     goal_cooldown: 1.0
     finish_patience: 20
 

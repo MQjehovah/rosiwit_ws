@@ -423,9 +423,19 @@ void SlamNode::timerCB() {
     auto* base = dynamic_cast<SlamBase*>(m_algo.get());
     // 一次 tick 内排空所有已同步的包, 防止重处理慢时数据在内部缓冲区积压
     if (base) { while (base->tryPopAndProcess()) {} }
-    SlamOutput out; bool have;
-    { std::lock_guard<std::mutex> lock(m_out_mutex); have = m_have_output; out = m_latest; }
-    if (have && out.has_new_pose) publish(out);
+    SlamOutput out; bool should_publish = false;
+    {
+        std::lock_guard<std::mutex> lock(m_out_mutex);
+        if (m_have_output && m_latest.has_new_pose) {
+            out = m_latest;
+            // 消费掉本次新位姿. 之前 has_new_pose 一直为 true, 处理定时器
+            // 会以几十 Hz 重复发布同一帧 odom/TF: 相邻消息 stamp 相同,
+            // twist.angular 差分为 0, 看起来像 SLAM 不输出角速度.
+            m_latest.has_new_pose = false;
+            should_publish = true;
+        }
+    }
+    if (should_publish) publish(out);
 }
 
 void SlamNode::publish(const SlamOutput& out) {
@@ -478,6 +488,37 @@ void SlamNode::publish(const SlamOutput& out) {
 
 void SlamNode::publishOdomTf(const PoseStamped& pose, const builtin_interfaces::msg::Time& stamp) {
     const Eigen::Quaterniond q(pose.rot);
+    const double stamp_sec = static_cast<double>(stamp.sec) +
+        static_cast<double>(stamp.nanosec) * 1e-9;
+
+    // 同一个位姿不要重复发 odom/TF. 重复 stamp 会让 twist 差分为 0,
+    // 也会让下游 TF 缓存/控制周期看到不推进的旧帧.
+    if (m_last_odom_twist_valid &&
+        std::abs(stamp_sec - m_last_odom_twist_sec) < 1e-6) {
+        return;
+    }
+
+    // REP-105: Odometry.twist 在 child_frame(base) 系. 核心给的是 world 系
+    // velocity, 必须旋转到 body 系; 角速度用相邻姿态四元数差分.
+    const Eigen::Vector3d vel_body = q.conjugate() * pose.vel;
+    double wz = 0.0;
+    if (m_last_odom_twist_valid) {
+        const double dt = stamp_sec - m_last_odom_twist_sec;
+        if (dt > 1e-3 && dt < 0.5) {
+            Eigen::Quaterniond dq = m_last_odom_twist_q.conjugate() * q;
+            if (dq.w() < 0.0) dq.coeffs() *= -1.0;  // shortest rotation
+            const Eigen::AngleAxisd aa(dq);
+            if (std::abs(aa.angle()) > 1e-6) {
+                wz = aa.axis().z() * aa.angle() / dt;
+            }
+        }
+    }
+    if (stamp_sec > 0.0) {
+        m_last_odom_twist_valid = true;
+        m_last_odom_twist_sec = stamp_sec;
+        m_last_odom_twist_q = q;
+    }
+
     const bool want_lio_odom = m_odom_pub && m_odom_pub->get_subscription_count() > 0;
     const bool want_odom = m_odom_nav_pub && m_odom_nav_pub->get_subscription_count() > 0;
     if (want_lio_odom || want_odom) {
@@ -485,7 +526,12 @@ void SlamNode::publishOdomTf(const PoseStamped& pose, const builtin_interfaces::
         odom.header.frame_id = m_cfg.world_frame; odom.child_frame_id = m_cfg.body_frame; odom.header.stamp = stamp;
         odom.pose.pose.position.x = pose.trans.x(); odom.pose.pose.position.y = pose.trans.y(); odom.pose.pose.position.z = pose.trans.z();
         odom.pose.pose.orientation.x = q.x(); odom.pose.pose.orientation.y = q.y(); odom.pose.pose.orientation.z = q.z(); odom.pose.pose.orientation.w = q.w();
-        odom.twist.twist.linear.x = pose.vel.x(); odom.twist.twist.linear.y = pose.vel.y(); odom.twist.twist.linear.z = pose.vel.z();
+        odom.twist.twist.linear.x = vel_body.x();
+        odom.twist.twist.linear.y = vel_body.y();
+        odom.twist.twist.linear.z = vel_body.z();
+        odom.twist.twist.angular.x = 0.0;
+        odom.twist.twist.angular.y = 0.0;
+        odom.twist.twist.angular.z = wz;
         // 协方差: 我们的顺序 [rot(3),trans(3)] -> ROS [x,y,z,rot(3)]
         auto mi = [](int r) { return r < 3 ? r + 3 : r - 3; };
         for (int r = 0; r < 6; ++r)
