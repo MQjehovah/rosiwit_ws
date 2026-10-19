@@ -42,7 +42,7 @@ frontier_explorer:
     blacklist_radius: 0.8
     blacklist_duration: 180.0
     goal_tolerance: 0.35
-    goal_timeout: 45.0
+    goal_timeout: 25.0
     goal_cooldown: 1.0
     finish_patience: 20
 
