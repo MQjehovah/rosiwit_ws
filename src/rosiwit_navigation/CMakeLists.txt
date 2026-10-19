@@ -23,7 +23,7 @@ else()
 endif()
 
 # ---- 源文件 ----
-file(GLOB_RECURSE CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+file(GLOB_RECURSE CORE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
 # ---- 核心库 ----
 add_library(rosiwit_navigation ${CORE_SOURCES})

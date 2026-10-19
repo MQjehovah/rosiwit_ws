@@ -290,6 +290,7 @@ private:
 
   // 目标位姿
   geometry_msgs::msg::PoseStamped goal_pose_;
+  double last_controller_path_sec_ = 0.0;
   // 规划失败后随地图更新重试 (探索场景地图会持续变化)
   double m_last_replan_attempt_sec = 0.0;
 
@@ -304,6 +305,7 @@ private:
   // LiDAR safety layer (Nav2 Collision Monitor style)
   core::SafetyMonitor safety_monitor_;
   std::vector<std::pair<double, double>> safety_points_;
+  std::vector<std::pair<double, double>> safety_points_map_;
   bool safety_enabled_ = true;
   bool safety_have_cloud_ = false;
   double safety_last_cloud_sec_ = 0.0;

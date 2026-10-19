@@ -26,8 +26,16 @@ bool DwaController::initialize(const core::ControllerConfig& config) {
 }
 
 void DwaController::setPath(const core::Path& path) {
-    path_ = path; idx_ = 0; goal_reached_ = false;
-    LOG_INFO(logger_, "DWA path set: %zu points", path_.points.size());
+    bool same_goal = false;
+    if (!path_.points.empty() && !path.points.empty()) {
+        const auto& a = path_.points.back().pose;
+        const auto& b = path.points.back().pose;
+        same_goal = std::hypot(a.x - b.x, a.y - b.y) < 0.30;
+    }
+    path_ = path;
+    if (!same_goal) idx_ = 0;
+    if (idx_ >= path_.points.size()) idx_ = 0;
+    goal_reached_ = false;
 }
 
 core::VelocityCommand DwaController::computeVelocityCommand(

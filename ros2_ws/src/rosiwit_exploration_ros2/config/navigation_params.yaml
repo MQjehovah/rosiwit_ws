@@ -14,7 +14,7 @@ rosiwit_navigation_node:
     planner_frequency: 1.0
 
     planner_name: "astar"
-    controller_name: "pure_pursuit"
+    controller_name: "dwa"
 
     global_frame: "odom"
     robot_frame: "base_link"
@@ -28,8 +28,9 @@ rosiwit_navigation_node:
 
     # 车体实际半径约 0.20m; 0.24m 作为硬安全缓冲 (0.05m 地图下 5 格),
     # 0.65m 为梯度代价, 让路径走走廊中间但不会把门洞整段判死.
-    # 规划硬安全缓冲 0.32m (0.05m 地图下 7 格), 梯度膨胀 0.90m
-    robot_radius: 0.32
+    # 车体实际半径约 0.20m; 硬缓冲 0.22m, 梯度膨胀 0.90m.
+    # 硬缓冲过大(0.32)会堵死 0.8m 门洞; 开阔区域由梯度代价把路径推离墙.
+    robot_radius: 0.22
     inflation_radius: 0.90
     local_costmap_size: 10.0
     # 平滑器会把 unknown 当自由并可能把路径拉进未知墙; 探索时关闭
@@ -43,7 +44,7 @@ rosiwit_navigation_node:
     safety_fail_safe_on_timeout: false
     safety_min_height: 0.05
     safety_max_height: 1.0
-    safety_stop_polygon: [-0.32, -0.28, 0.32, -0.28, 0.32, 0.28, -0.32, 0.28]
+    safety_stop_polygon: [-0.26, -0.22, 0.26, -0.22, 0.26, 0.22, -0.26, 0.22]
     safety_stop_max_points: 2
     safety_slowdown_polygon: [-0.60, -0.50, 0.70, -0.50, 0.70, 0.50, -0.60, 0.50]
     safety_slowdown_max_points: 2

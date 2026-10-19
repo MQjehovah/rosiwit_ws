@@ -8,6 +8,7 @@
 #include <string>
 #include <cmath>
 #include <queue>
+#include <unordered_set>
 #include <utility>
 
 #include "path_smoother.hpp"
@@ -239,7 +240,7 @@ void NavigationNode::loadSafetyParameters()
   this->declare_parameter("safety_min_height", 0.05);
   this->declare_parameter("safety_max_height", 1.0);
   this->declare_parameter("safety_stop_polygon", std::vector<double>{
-    -0.32, -0.28, 0.32, -0.28, 0.32, 0.28, -0.32, 0.28});
+    -0.26, -0.22, 0.26, -0.22, 0.26, 0.22, -0.26, 0.22});
   this->declare_parameter("safety_stop_max_points", 2);
   this->declare_parameter("safety_slowdown_polygon", std::vector<double>{
     -0.60, -0.50, 0.70, -0.50, 0.70, 0.50, -0.60, 0.50});
@@ -347,6 +348,33 @@ void NavigationNode::safetyPointCloudCallback(
   safety_points_ = std::move(points);
   safety_have_cloud_ = true;
   safety_last_cloud_sec_ = now().seconds();
+
+  // 同步投影到 map 系, 供局部 costmap 和 DWA 障碍层使用.
+  safety_points_map_.clear();
+  try {
+    geometry_msgs::msg::TransformStamped tf_map;
+    try {
+      tf_map = tf_buffer_->lookupTransform(
+        "map", safety_base_frame_, msg->header.stamp, tf2::durationFromSec(0.05));
+    } catch (const tf2::TransformException &) {
+      tf_map = tf_buffer_->lookupTransform(
+        "map", safety_base_frame_, tf2::TimePointZero, tf2::durationFromSec(0.05));
+    }
+    const auto & qm = tf_map.transform.rotation;
+    const auto & tm = tf_map.transform.translation;
+    tf2::Quaternion q_map(qm.x, qm.y, qm.z, qm.w);
+    tf2::Matrix3x3 r_map(q_map);
+    const tf2::Vector3 t_map(tm.x, tm.y, tm.z);
+    safety_points_map_.reserve(safety_points_.size());
+    for (const auto & p : safety_points_) {
+      const tf2::Vector3 pm = r_map * tf2::Vector3(p.first, p.second, 0.0) + t_map;
+      safety_points_map_.emplace_back(pm.x(), pm.y());
+    }
+  } catch (const tf2::TransformException & ex) {
+    RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 5000,
+      "Safety layer: map projection unavailable: %s", ex.what());
+  }
+
   RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 5000,
     "Safety cloud: %zu points in %s", safety_points_.size(),
     safety_base_frame_.c_str());
@@ -685,6 +713,28 @@ void NavigationNode::updateCostmap()
     }
   }
 
+  // 3D LiDAR -> 2D local obstacle layer for DWA.
+  if (!safety_points_map_.empty()) {
+    std::unordered_set<long long> seen;
+    constexpr double kSafetyCell = 0.15;
+    for (const auto& p : safety_points_map_) {
+      const double dx = p.first - rx;
+      const double dy = p.second - ry;
+      if (std::hypot(dx, dy) > win_width * 0.5) continue;
+      const int cx = static_cast<int>(std::floor(dx / kSafetyCell));
+      const int cy = static_cast<int>(std::floor(dy / kSafetyCell));
+      const long long key = (static_cast<long long>(cx) << 32) ^
+        static_cast<unsigned int>(cy);
+      if (!seen.insert(key).second) continue;
+      core::Obstacle obs;
+      obs.x = p.first;
+      obs.y = p.second;
+      obs.radius = 0.10;
+      obstacles.push_back(obs);
+      if (obstacles.size() >= 1500) break;
+    }
+  }
+
   controller_strategy_->setObstacles(obstacles);
 }
 
@@ -723,6 +773,20 @@ void NavigationNode::publishLocalCostmap()
       int gx = dx + win_half, gy = dy + win_half;
       raw[gy * lw + gx] = (current_map_->data[my * w + mx] >= 100) ? 100 : 0;
     }
+  // real-time 3D LiDAR points in the local costmap window
+  for (const auto& p : safety_points_map_) {
+    const int mx = static_cast<int>((p.first - ox) / res);
+    const int my = static_cast<int>((p.second - oy) / res);
+    const int dx = mx - cx;
+    const int dy = my - cy;
+    if (dx < -win_half || dx >= win_half || dy < -win_half || dy >= win_half) {
+      continue;
+    }
+    const int gx = dx + win_half;
+    const int gy = dy + win_half;
+    raw[gy * lw + gx] = 100;
+  }
+
   int l_inflate = static_cast<int>(std::ceil(inflation_radius_ / res));
   int l_safety = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
   std::vector<float> ldist(lw * lw, std::numeric_limits<float>::max());
@@ -829,7 +893,8 @@ void NavigationNode::controlLoop()
 
     if (std::abs(angle_error) < 0.08) {
       m_need_initial_rotate = false;
-      RCLCPP_INFO(get_logger(), "Initial rotation done, starting Pure Pursuit");
+      RCLCPP_INFO(get_logger(), "Initial rotation done, starting %s",
+        controller_name_.c_str());
     } else {
       rot_cmd.angular.z = std::clamp(1.5 * angle_error, -0.8, 0.8);
       publishVelocityCommand(rot_cmd);
@@ -877,7 +942,13 @@ void NavigationNode::replanningCheck()
 
   current_path_ = RosUtils::toRosPath(result.value(), goal_pose_.header.frame_id, now());
   if (controller_strategy_) {
-    controller_strategy_->setPath(RosUtils::toCorePath(current_path_));
+    // DWA 的 setPath 会重置进度; 地图 5Hz 重规划时最多 2Hz 刷给控制器,
+    // 中间路径仍发布, 由安全层兜底.
+    const double now_sec = now().seconds();
+    if (now_sec - last_controller_path_sec_ >= 0.5) {
+      controller_strategy_->setPath(RosUtils::toCorePath(current_path_));
+      last_controller_path_sec_ = now_sec;
+    }
   }
   global_path_pub_->publish(current_path_);
   RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
@@ -939,6 +1010,7 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
   // 将路径注入控制器
   if (controller_strategy_) {
     controller_strategy_->setPath(RosUtils::toCorePath(current_path_));
+    last_controller_path_sec_ = now().seconds();
   }
 
   // 发布全局路径

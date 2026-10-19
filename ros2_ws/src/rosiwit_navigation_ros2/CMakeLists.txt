@@ -10,9 +10,7 @@ project(rosiwit_navigation_ros2 VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
+set(CMAKE_BUILD_TYPE Release)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -41,6 +39,7 @@ ament_target_dependencies(rosiwit_navigation_node
     tf2 tf2_ros tf2_geometry_msgs)
 target_link_libraries(rosiwit_navigation_node
     rosiwit_navigation)                # 核心库 (算法/规划器/控制器)
+add_dependencies(rosiwit_navigation_node rosiwit_navigation)
 
 # ==================== 安装 ====================
 install(TARGETS rosiwit_navigation_node DESTINATION lib/${PROJECT_NAME})
