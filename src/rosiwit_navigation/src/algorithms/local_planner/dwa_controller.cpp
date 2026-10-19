@@ -18,10 +18,12 @@ bool DwaController::initialize(const core::ControllerConfig& config) {
     cfg_ = config;
     max_vx_ = config.max_linear_velocity > 0 ? config.max_linear_velocity : 0.5;
     max_vw_ = config.max_angular_velocity > 0 ? config.max_angular_velocity : 1.0;
-    max_accel_ = config.kinematics.max_velocity_x > 0 ? config.kinematics.max_velocity_x : 0.5;
+    max_accel_ = config.max_accel_x > 0 ? config.max_accel_x :
+      (config.kinematics.max_velocity_x > 0 ? config.kinematics.max_velocity_x : 0.5);
+    max_dvw_ = config.max_accel_theta > 0 ? config.max_accel_theta : 1.0;
     goal_tol_ = config.xy_goal_tolerance > 0 ? config.xy_goal_tolerance : 0.1;
     initialized_ = true;
-    LOG_INFO(logger_, "DWA initialized: vmax=%.2f, wmax=%.2f, accel=%.2f", max_vx_, max_vw_, max_accel_);
+    LOG_INFO(logger_, "DWA initialized: vmax=%.2f, wmax=%.2f, accel=%.2f, waccel=%.2f", max_vx_, max_vw_, max_accel_, max_dvw_);
     return true;
 }
 
@@ -41,6 +43,9 @@ void DwaController::setPath(const core::Path& path) {
 core::VelocityCommand DwaController::computeVelocityCommand(
     const core::Pose2D& pose, const core::VelocityCommand& vel) {
     if (path_.points.empty() || !initialized_) return {0, 0, 0};
+
+    // 路径重规划后 idx_ 可能停在旧路径位置; 用当前位姿校正, 但绝不倒退.
+    idx_ = std::max(idx_, findClosest(pose));
 
     auto samples = search(pose, vel);
     if (samples.empty()) return {0, 0, vel.angular_z};
@@ -98,7 +103,8 @@ std::vector<DwaController::Sample> DwaController::search(
             if (s.clearance <= 0.0) {
                 continue;  // 碰撞轨迹直接丢弃, 不允许用低权重换一条撞墙路径
             }
-            s.cost = 0.4 * h + 0.1 * c + 0.4 * v + 0.1 * smooth;
+            // 权重偏向航向和角速度连续性; 速度项不再压过平滑项.
+            s.cost = 0.45 * h + 0.10 * c + 0.30 * v + 0.15 * smooth;
             samples.push_back(s);
         }
     }

@@ -296,6 +296,7 @@ private:
   geometry_msgs::msg::PoseStamped goal_pose_;
   double last_controller_path_sec_ = 0.0;
   double last_costmap_replan_sec_ = -1e9;
+  double last_control_sec_ = -1.0;
   double tf_stale_timeout_{0.6};
   double last_odom_sec_{-1e9};
   bool odom_pose_valid_{false};

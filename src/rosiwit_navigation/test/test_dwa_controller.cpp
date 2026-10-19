@@ -94,4 +94,27 @@ TEST(DwaController, ReportsGoalReachedAtPathEnd)
   EXPECT_FALSE(controller.isGoalReached(Pose2D(1.0, 0.0, 0.0)));
 }
 
+TEST(DwaController, AngularCommandRespectsAccelerationLimit)
+{
+  ControllerConfig config;
+  config.max_linear_velocity = 0.5;
+  config.max_angular_velocity = 1.0;
+  config.max_accel_x = 0.5;
+  config.max_accel_theta = 0.2;
+  config.xy_goal_tolerance = 0.2;
+  config.kinematics.max_velocity_x = 0.5;
+  config.kinematics.max_velocity_theta = 1.0;
+
+  DwaController controller;
+  ASSERT_TRUE(controller.initialize(config));
+  Path path;
+  for (double x = 0.0; x <= 2.0 + 1e-9; x += 0.1) {
+    path.points.emplace_back(Pose2D(x, x, M_PI / 4.0));
+  }
+  controller.setPath(path);
+  const auto command = controller.computeVelocityCommand(
+    Pose2D(0.0, 0.0, 0.0), VelocityCommand(0.0, 0.0, 0.0));
+  EXPECT_LE(std::abs(command.angular_z), 0.2 + 1e-6);
+}
+
 }  // namespace

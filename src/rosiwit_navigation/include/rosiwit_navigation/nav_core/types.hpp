@@ -82,6 +82,8 @@ struct ControllerConfig
   KinematicsLimits kinematics;
   double max_linear_velocity;
   double max_angular_velocity;
+  double max_accel_x = 0.0;
+  double max_accel_theta = 0.0;
 };
 
 struct CostmapGridInfo

@@ -123,6 +123,8 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     ctrl_cfg.min_lookahead_distance = params_.min_lookahead_distance;
     ctrl_cfg.max_linear_velocity = params_.max_velocity_x;
     ctrl_cfg.max_angular_velocity = params_.max_velocity_theta;
+    ctrl_cfg.max_accel_x = params_.max_accel_x;
+    ctrl_cfg.max_accel_theta = params_.max_accel_theta;
     ctrl_cfg.kinematics.max_velocity_x = params_.max_velocity_x;
     ctrl_cfg.kinematics.max_velocity_theta = params_.max_velocity_theta;
     controller_strategy_->initialize(ctrl_cfg);
@@ -1036,6 +1038,22 @@ void NavigationNode::controlLoop()
 
   // 计算速度命令
   geometry_msgs::msg::Twist cmd_vel = computeVelocityCommand();
+
+  // 运控级角速度/线加速度限幅: DWA 的动态窗口覆盖 1s, 单周期仍可能
+  // 从 +0.8 跳到 -0.8; 这里按实际周期限制到加速度约束内. 明确的停车
+  // 指令不延迟, 保证安全层/规划失败时立即停.
+  const double cmd_now = now().seconds();
+  if (last_control_sec_ > 0.0 &&
+      (std::abs(cmd_vel.linear.x) > 1e-4 || std::abs(cmd_vel.angular.z) > 1e-4)) {
+    const double dt = std::clamp(cmd_now - last_control_sec_, 0.01, 0.1);
+    cmd_vel.linear.x = std::clamp(cmd_vel.linear.x,
+      current_velocity_.linear.x - params_.max_accel_x * dt,
+      current_velocity_.linear.x + params_.max_accel_x * dt);
+    cmd_vel.angular.z = std::clamp(cmd_vel.angular.z,
+      current_velocity_.angular.z - params_.max_accel_theta * dt,
+      current_velocity_.angular.z + params_.max_accel_theta * dt);
+  }
+  last_control_sec_ = cmd_now;
 
   if (recovery_enabled_ &&
     std::abs(cmd_vel.linear.x) < 0.02 && std::abs(cmd_vel.angular.z) < 0.02) {
