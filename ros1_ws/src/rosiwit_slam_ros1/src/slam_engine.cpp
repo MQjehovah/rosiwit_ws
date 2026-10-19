@@ -561,6 +561,13 @@ void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
     if (online_calib_enabled_) {
         std::lock_guard<std::mutex> lk(calib_mutex_);
         online_time_calib_.addImu(msg->header.stamp.toSec(), msg->angular_velocity.z);
+        const auto & q = msg->orientation;
+        if (std::abs(q.w) + std::abs(q.x) + std::abs(q.y) + std::abs(q.z) > 0.5) {
+            last_imu_yaw_ = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                       1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+            last_imu_stamp_ = msg->header.stamp.toSec();
+            have_imu_yaw_ = true;
+        }
     }
     IMUSample s;
     s.acc = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
@@ -701,6 +708,9 @@ void SlamEngine::onOutput(const SlamOutput& out) {
                                       1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
         std::lock_guard<std::mutex> lk(calib_mutex_);
         online_time_calib_.addLioPose(out.pose.time, yaw);
+        if (have_imu_yaw_) {
+            yaw_calib_.addSample(last_imu_yaw_, yaw);
+        }
     }
     {
         std::lock_guard<std::mutex> lk(out_mutex_);
@@ -764,6 +774,11 @@ bool SlamEngine::resetCore() {
 rosiwit_slam::TimeCalibrationResult SlamEngine::onlineTimeCalibration() const {
     std::lock_guard<std::mutex> lk(calib_mutex_);
     return online_time_calib_.estimate();
+}
+
+rosiwit_slam::YawCalibrationResult SlamEngine::onlineYawCalibration() const {
+    std::lock_guard<std::mutex> lk(calib_mutex_);
+    return yaw_calib_.estimate();
 }
 
 std::string SlamEngine::pipelineMode() const {

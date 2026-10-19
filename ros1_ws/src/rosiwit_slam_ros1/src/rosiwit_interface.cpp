@@ -185,11 +185,14 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
     }
 
     const TimeCalibrationResult calib = engine_.onlineTimeCalibration();
-    if (calib.valid && calib_pub_) {
+    const YawCalibrationResult yaw_calib = engine_.onlineYawCalibration();
+    if ((calib.valid || yaw_calib.valid) && calib_pub_) {
         std::ostringstream os;
         os << "{\"time_offset\":" << calib.offset
-           << ",\"confidence\":" << calib.confidence
-           << ",\"samples\":" << calib.samples << "}";
+           << ",\"time_confidence\":" << calib.confidence
+           << ",\"time_samples\":" << calib.samples
+           << ",\"yaw_offset\":" << yaw_calib.yaw_offset
+           << ",\"yaw_samples\":" << yaw_calib.samples << "}";
         std_msgs::String msg;
         msg.data = os.str();
         calib_pub_.publish(msg);
