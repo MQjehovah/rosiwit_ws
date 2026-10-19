@@ -265,7 +265,7 @@ void NavigationNode::loadSafetyParameters()
       return polygon;
     };
 
-  SafetyMonitorConfig cfg;
+  core::SafetyMonitorConfig cfg;
   cfg.enabled = safety_enabled_;
   cfg.stop_polygon = to_polygon(
     this->get_parameter("safety_stop_polygon").as_double_array());
@@ -1041,10 +1041,15 @@ void NavigationNode::publishVelocityCommand(const geometry_msgs::msg::Twist & cm
         safety_have_cloud_ ? "true" : "false",
         safety_have_cloud_ ? now_sec - safety_last_cloud_sec_ : -1.0);
     } else {
-      std::string state;
-      out = safety_monitor_.filter(cmd_vel, safety_points_, &state);
+      const core::VelocityCommand core_cmd(
+        cmd_vel.linear.x, cmd_vel.linear.y, cmd_vel.angular.z);
+      const core::SafetyResult result =
+        safety_monitor_.filter(core_cmd, safety_points_);
+      out.linear.x = result.command.linear_x;
+      out.linear.y = result.command.lateral_y;
+      out.angular.z = result.command.angular_z;
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
-        "Safety layer: %s", state.c_str());
+        "Safety layer: %s", result.state.c_str());
     }
   }
   cmd_vel_pub_->publish(out);

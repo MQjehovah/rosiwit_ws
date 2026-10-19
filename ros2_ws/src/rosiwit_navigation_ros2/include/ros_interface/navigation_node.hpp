@@ -27,7 +27,7 @@
 #include "trajectory_generator.hpp"
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 #include "ros_interface/ros_utils.hpp"
-#include "ros_interface/safety_monitor.hpp"
+#include "rosiwit_navigation/nav_core/safety_monitor.hpp"
 
 namespace rosiwit_navigation
 {
@@ -299,7 +299,7 @@ private:
   std::vector<geometry_msgs::msg::Point> laser_points_;
 
   // LiDAR safety layer (Nav2 Collision Monitor style)
-  SafetyMonitor safety_monitor_;
+  core::SafetyMonitor safety_monitor_;
   std::vector<std::pair<double, double>> safety_points_;
   bool safety_enabled_ = true;
   bool safety_have_cloud_ = false;
