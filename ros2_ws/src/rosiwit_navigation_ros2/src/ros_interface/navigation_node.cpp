@@ -584,13 +584,17 @@ void NavigationNode::updateCostmap()
 
     // 窄通道优先: 全局只用 0.22m 硬缓冲, 开阔区由 0.9m 梯度代价拉开距离.
     // 不在全局按"当前位置窄不窄"选择 0.32m, 否则路径经过远处门洞时会无解.
+    // 规划硬边界比安全环多 1 个栅格 (0.05m), 保证 A* 路径落在
+    // costmap 显示的安全区之外, 不会看起来穿过不可进入区.
     const int hard_cells = std::max(
-      1, static_cast<int>(std::ceil(robot_radius_ / res)));
+      1, static_cast<int>(std::ceil(robot_radius_ / res)) + 1);
     {
       std::vector<int> d(w * h, -1);
       std::queue<int> q;
       for (size_t i = 0; i < planner_cm.data.size(); ++i) {
-        if (planner_cm.data[i] == 255) {
+        // unknown 也作为膨胀源: 否则路径会贴着未建图边界, 看起来穿进
+        // 不可进入区; frontier 目标已通过 goal_backoff 后退.
+        if (planner_cm.data[i] >= 254) {
           d[i] = 0;
           q.push(static_cast<int>(i));
         }
@@ -618,9 +622,9 @@ void NavigationNode::updateCostmap()
       }
     }
     planner_strategy_->setCostmap(planner_cm);
-    cm = planner_cm;
 
-    // 膨胀并发布 costmap 供 RViz 可视化
+    // 发布用 costmap 用原始地图 + 安全环; 路径硬边界比它多一格,
+    // 避免路径落在显示的 100 区内.
     int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
     int safety_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
     std::vector<float> dist(w * h, std::numeric_limits<float>::max());
@@ -1041,6 +1045,8 @@ void NavigationNode::replanningCheck()
     publishVelocityCommand(stop_cmd);
     is_navigating_ = false;
     current_state_ = NavigationState::FAILED;
+    current_path_.poses.clear();
+    global_path_pub_->publish(current_path_);
     RCLCPP_WARN(get_logger(), "Replan failed: %s; stopping for retry",
       result.error_message().c_str());
     return;
