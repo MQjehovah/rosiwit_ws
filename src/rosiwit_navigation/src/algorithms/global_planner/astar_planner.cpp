@@ -64,10 +64,10 @@ void AStarPlanner::setCostmap(const core::Costmap& costmap)
     } else {
         for (size_t i = 0; i < costmap_->grid->data.size() && i < costmap_data_.size(); ++i) {
             int8_t v = costmap_->grid->data[i];
-            if (v <= 0) {
-                costmap_data_[i] = 0;                 // free / unknown
+            if (v < 0) {
+                costmap_data_[i] = 254;               // unknown: blocked, not inflated
             } else if (v >= 100) {
-                costmap_data_[i] = 255;               // occupied → lethal
+                costmap_data_[i] = 255;               // occupied → lethal + inflation
             } else {
                 costmap_data_[i] = static_cast<unsigned char>(v * 255 / 100);  // scale
             }
@@ -116,7 +116,9 @@ void AStarPlanner::inflateCostmap()
 
     for (unsigned int y = 0; y < ny_; ++y) {
         for (unsigned int x = 0; x < nx_; ++x) {
-            if (costmap_data_[y * nx_ + x] >= AStarConstants::kObstacleThreshold) {
+            // 只从真实占据格膨胀. unknown(254) 只阻断搜索, 不作为膨胀源,
+            // 否则紧邻未知区域的前沿目标会被膨胀成不可达.
+            if (costmap_data_[y * nx_ + x] >= 255) {
                 dist[y * nx_ + x] = 0.0f;
                 q.push({x, y});
             }
@@ -205,6 +207,20 @@ core::Result<core::Path> AStarPlanner::plan(
         planning_active_ = false;
         return core::Result<core::Path>::error(
             core::ErrorCode::START_IN_OBSTACLE, "Start or goal invalid");
+    }
+
+    // 机器人实际所在位置可能因 0.5m 栅格/膨胀而落在 lethal 区 (贴墙、地图抖动).
+    // 清出起点周围一小块, 让规划器还能把它带出来; 真正不可走的墙仍由
+    // goal 检查和代价膨胀约束.
+    if (isObstacle(start_x, start_y)) {
+        const int clear_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / resolution)));
+        for (int yy = start_y - clear_cells; yy <= start_y + clear_cells; ++yy) {
+            for (int xx = start_x - clear_cells; xx <= start_x + clear_cells; ++xx) {
+                if (isValid(xx, yy)) {
+                    costmap_data_[static_cast<size_t>(yy) * nx_ + static_cast<size_t>(xx)] = 0;
+                }
+            }
+        }
     }
 
     if (isObstacle(start_x, start_y) || isObstacle(goal_x, goal_y)) {

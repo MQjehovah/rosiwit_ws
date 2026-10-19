@@ -1,0 +1,32 @@
+# Navigation parameters tuned for frontier exploration.
+# Lower speed + DWA + conservative inflation keep the robot away from walls
+# while the SLAM map is still growing.
+rosiwit_navigation_node:
+  ros__parameters:
+    max_velocity_x: 0.35
+    min_velocity_x: 0.0
+    max_velocity_theta: 0.8
+
+    max_accel_x: 0.4
+    max_accel_theta: 0.8
+
+    controller_frequency: 20.0
+    planner_frequency: 1.0
+
+    planner_name: "astar"
+    controller_name: "pure_pursuit"
+
+    global_frame: "odom"
+    robot_frame: "base_link"
+
+    goal_tolerance_xy: 0.25
+    goal_tolerance_yaw: 0.2
+
+    lookahead_distance: 0.5
+    min_lookahead_distance: 0.3
+    max_lookahead_distance: 0.7
+
+    robot_radius: 0.32
+    inflation_radius: 0.8
+
+    odom_topic: /odom

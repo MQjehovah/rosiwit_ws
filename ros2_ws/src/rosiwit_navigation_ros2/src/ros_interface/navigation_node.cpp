@@ -357,8 +357,15 @@ void NavigationNode::updateCostmap()
 
     // 从静态地图初始化
     cm.data.assign(current_map_->data.size(), 0);
-    for (size_t i = 0; i < current_map_->data.size(); ++i)
-      cm.data[i] = (current_map_->data[i] >= 100) ? 255 : 0;
+    for (size_t i = 0; i < current_map_->data.size(); ++i) {
+      const int8_t v = current_map_->data[i];
+      // 254 = unknown (A* 不可穿越, 但不参与膨胀);
+      // 255 = occupied (不可穿越, 参与膨胀). 这样前沿目标(自由格紧邻 unknown)
+      // 不会被膨胀成障碍, 同时也不会为了抄近路穿过未建图区域.
+      if (v < 0) cm.data[i] = 254;
+      else if (v >= 100) cm.data[i] = 255;
+      else cm.data[i] = 0;
+    }
 
     // 叠加激光实时障碍物
     for (const auto& pt : laser_points_) {

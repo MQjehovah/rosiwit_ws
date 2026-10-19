@@ -68,7 +68,7 @@ instead of `/goal_pose`.
 | `min_goal_distance` | `0.8` | Ignore goals too close to the robot |
 | `max_goal_distance` | `30.0` | Ignore distant goals |
 | `frontier_size_weight` | `0.02` | Prefer larger frontiers |
-| `goal_timeout` | `120.0` | Abandon a goal after this many seconds |
+| `goal_timeout` | `45.0` | Abandon a goal after this many seconds |
 | `finish_patience` | `20` | Empty ticks before declaring completion |
 | `save_map_on_finish` | `false` | Run `map_saver_cli` at the end |
 
@@ -77,6 +77,9 @@ instead of `/goal_pose`.
 - The SLAM node must publish a periodically updated `/map` in `mapping` mode.
   `rosiwit_slam_ros2` has been updated to regenerate the 2D grid from the latest
   observations and publish it every map timer tick.
+- `explore_mapping.launch.py` loads `config/navigation_params.yaml` explicitly.
+  It keeps `unknown` cells blocked (so the robot cannot shortcut through
+  unmapped walls), uses a finer safety margin, lower speed, and pure pursuit.
 - Goals at frontiers are only accepted when the goal cell is reachable through
   known free space and has `goal_clearance` free space around it.
 - Reached/failed goals are blacklisted for `blacklist_duration` seconds to avoid

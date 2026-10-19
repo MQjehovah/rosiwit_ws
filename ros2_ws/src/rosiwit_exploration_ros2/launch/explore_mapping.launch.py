@@ -58,6 +58,11 @@ def generate_launch_description():
             'slam_config', default_value='simulator.yaml',
             description='Config file under rosiwit_slam_ros2/config'),
         DeclareLaunchArgument(
+            'navigation_params',
+            default_value=os.path.join(
+                exploration_dir, 'config', 'navigation_params.yaml'),
+            description='Navigation parameter file (DWA + conservative inflation)'),
+        DeclareLaunchArgument(
             'exploration_config',
             default_value=os.path.join(
                 exploration_dir, 'config', 'exploration_params.yaml'),
@@ -110,6 +115,7 @@ def generate_launch_description():
             'use_sim_time': 'true',
             'use_rviz': 'false',
             'load_map': 'false',
+            'params_file': LaunchConfiguration('navigation_params'),
         }.items(),
     )
 
