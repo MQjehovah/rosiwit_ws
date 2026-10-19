@@ -249,6 +249,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     // 即使建图/回环/保存地图耗时, 收包回调仍能在另一线程及时入队, 避免 DDS 队列溢出丢帧。
     m_sensor_cb_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     m_work_cb_group   = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    m_map_cb_group    = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions sensor_sub_opts;
     sensor_sub_opts.callback_group = m_sensor_cb_group;
 
@@ -293,7 +294,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_process_timer = create_wall_timer(20ms, std::bind(&SlamNode::timerCB, this), m_work_cb_group);
     m_map_timer = create_wall_timer(
         std::chrono::duration<double>(std::max(0.05, m_cfg.map_publish_period)),
-        std::bind(&SlamNode::mapTimerCB, this), m_work_cb_group);
+        std::bind(&SlamNode::mapTimerCB, this), m_map_cb_group);
     // base_link <- IMU 输出换算; 失败时 1Hz 限频重试, 不阻塞 100Hz 传感器回调.
     m_mount_timer = create_wall_timer(1s, std::bind(&SlamNode::ensureBaseFrames, this),
                                       m_work_cb_group);

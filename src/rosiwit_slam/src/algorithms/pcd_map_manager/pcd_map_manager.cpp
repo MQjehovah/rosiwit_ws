@@ -311,33 +311,57 @@ bool PcdMapManager::getCorrectionAnchor(PoseStamped& out) {
 
 
 bool PcdMapManager::generateGridMap(double resolution) {
-    std::lock_guard<std::mutex> lock(m_mutex_);
-    if (!global_map_ || global_map_->empty()) return false;
-    if (!grid_gen_) grid_gen_ = GridMapFactory::create("height_projection");
-    if (!grid_gen_) return false;
+    // 地图生成不再全程持有 m_mutex_: 先快照观测/点云, 在锁外重建栅格,
+    // 最后只短暂加锁写回. 否则 0.05m 栅格重建会阻塞前端 addSubMap,
+    // 进而阻塞 SLAM 位姿/TF 发布, 表现成 TF 断树、只看到 costmap.
+    std::vector<Observation> observations;
+    CloudType::Ptr global_map;
+    GridMapConfig cfg;
+    GridPostConfig post;
+    std::string gen_name;
+    double save_voxel = 0.3;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_);
+        if (!global_map_ || global_map_->empty()) return false;
+        observations = observations_;
+        global_map = global_map_;
+        if (observations.empty() && global_map) {
+            global_map.reset(new CloudType(*global_map));
+        }
+        cfg = grid_cfg_;
+        post = grid_post_cfg_;
+        gen_name = grid_gen_name_;
+        save_voxel = save_voxel_;
+    }
 
-    GridMapConfig cfg = grid_cfg_;
+    auto gen = GridMapFactory::create(gen_name);
+    if (!gen) gen = GridMapFactory::create("height_projection");
+    if (!gen) return false;
+
     cfg.resolution = resolution;
-    cfg.point_spacing = save_voxel_;
+    cfg.point_spacing = save_voxel;
 
     GridInfo info;
-    bool ok = !observations_.empty()
-        ? grid_gen_->buildFromObservations(observations_, Eigen::Vector3d::Zero(), cfg, info)
-        : grid_gen_->build(global_map_, Eigen::Vector3d::Zero(), cfg, info);
+    const bool ok = !observations.empty()
+        ? gen->buildFromObservations(observations, Eigen::Vector3d::Zero(), cfg, info)
+        : gen->build(global_map, Eigen::Vector3d::Zero(), cfg, info);
     if (!ok) return false;
 
-    grid_post_cfg_.resolution = info.resolution;
-    grid_post_cfg_.point_spacing = save_voxel_;
-    applyGridPostProcess(info, grid_post_cfg_);
+    post.resolution = info.resolution;
+    post.point_spacing = save_voxel;
+    applyGridPostProcess(info, post);
 
-    m_grid_data = info.data;
-    m_grid_w = info.width;
-    m_grid_h = info.height;
-    m_grid_res = info.resolution;
-    m_grid_ox = info.origin_x;
-    m_grid_oy = info.origin_y;
-    std::cout << "[PcdMapManager] Generated grid map (" << grid_gen_->name() << "): "
-              << m_grid_w << "x" << m_grid_h << std::endl;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_);
+        m_grid_data = info.data;
+        m_grid_w = info.width;
+        m_grid_h = info.height;
+        m_grid_res = info.resolution;
+        m_grid_ox = info.origin_x;
+        m_grid_oy = info.origin_y;
+    }
+    std::cout << "[PcdMapManager] Generated grid map (" << gen->name() << "): "
+              << info.width << "x" << info.height << std::endl;
     return true;
 }
 

@@ -113,6 +113,7 @@ private:
     rclcpp::TimerBase::SharedPtr m_process_timer, m_map_timer, m_output_timer, m_mount_timer;
     // 回调分组: 传感器收包与重处理解耦, 配合多线程执行器避免处理阻塞收包导致丢帧
     rclcpp::CallbackGroup::SharedPtr m_sensor_cb_group;
+    rclcpp::CallbackGroup::SharedPtr m_map_cb_group;
     rclcpp::CallbackGroup::SharedPtr m_work_cb_group;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> m_static_tf;
