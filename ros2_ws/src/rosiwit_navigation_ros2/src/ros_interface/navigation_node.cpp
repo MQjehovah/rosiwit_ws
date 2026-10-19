@@ -207,6 +207,7 @@ void NavigationNode::loadParameters()
   this->declare_parameter("recovery_duration", 1.2);
   this->declare_parameter("recovery_linear_velocity", -0.10);
   this->declare_parameter("recovery_angular_velocity", 0.60);
+  this->declare_parameter("recovery_bypass_safety", true);
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -235,6 +236,7 @@ void NavigationNode::loadParameters()
   get_parameter("recovery_duration", recovery_duration_);
   get_parameter("recovery_linear_velocity", recovery_linear_velocity_);
   get_parameter("recovery_angular_velocity", recovery_angular_velocity_);
+  get_parameter("recovery_bypass_safety", recovery_bypass_safety_);
   loadSafetyParameters();
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
@@ -253,10 +255,12 @@ void NavigationNode::loadSafetyParameters()
   this->declare_parameter("safety_min_height", 0.05);
   this->declare_parameter("safety_max_height", 1.0);
   this->declare_parameter("safety_stop_polygon", std::vector<double>{
-    -0.26, -0.22, 0.26, -0.22, 0.26, 0.22, -0.26, 0.22});
+    -0.23, -0.21, 0.23, -0.21, 0.23, 0.21, -0.23, 0.21});
+  this->declare_parameter("safety_stop_enabled", true);
   this->declare_parameter("safety_stop_max_points", 2);
   this->declare_parameter("safety_slowdown_polygon", std::vector<double>{
     -0.60, -0.50, 0.70, -0.50, 0.70, 0.50, -0.60, 0.50});
+  this->declare_parameter("safety_slowdown_enabled", true);
   this->declare_parameter("safety_slowdown_max_points", 2);
   this->declare_parameter("safety_slowdown_ratio", 0.5);
   this->declare_parameter("safety_approach_enabled", true);
@@ -283,12 +287,18 @@ void NavigationNode::loadSafetyParameters()
 
   core::SafetyMonitorConfig cfg;
   cfg.enabled = safety_enabled_;
-  cfg.stop_polygon = to_polygon(
-    this->get_parameter("safety_stop_polygon").as_double_array());
+  const bool stop_enabled =
+    this->get_parameter("safety_stop_enabled").as_bool();
+  cfg.stop_polygon = stop_enabled ? to_polygon(
+    this->get_parameter("safety_stop_polygon").as_double_array()) :
+    std::vector<std::pair<double, double>>{};
   cfg.stop_max_points =
     static_cast<int>(this->get_parameter("safety_stop_max_points").as_int());
-  cfg.slowdown_polygon = to_polygon(
-    this->get_parameter("safety_slowdown_polygon").as_double_array());
+  const bool slowdown_enabled =
+    this->get_parameter("safety_slowdown_enabled").as_bool();
+  cfg.slowdown_polygon = slowdown_enabled ? to_polygon(
+    this->get_parameter("safety_slowdown_polygon").as_double_array()) :
+    std::vector<std::pair<double, double>>{};
   cfg.slowdown_max_points =
     static_cast<int>(this->get_parameter("safety_slowdown_max_points").as_int());
   cfg.slowdown_ratio = this->get_parameter("safety_slowdown_ratio").as_double();
@@ -928,13 +938,28 @@ void NavigationNode::controlLoop()
     }
   }
 
-  // DWA 无可行轨迹/贴着障碍时, 短暂后退+旋转恢复
+  // 安全层 STOP 持续 > 1s: 原地旋转寻找脱困方向 (安全层不再继续拦截
+  // 这个明确的逃逸动作, 避免安全层和 DWA 互相卡死).
+  if (safety_stop_active_ && !recovery_active_ &&
+    now().seconds() - safety_stop_since_sec_ >= 1.0) {
+    recovery_active_ = true;
+    recovery_until_sec_ = now().seconds() + recovery_duration_;
+    safety_stop_active_ = false;
+    stall_cycles_ = 0;
+    RCLCPP_WARN(get_logger(), "Safety STOP held; recovery rotation");
+  }
+
+  // DWA 无可行轨迹/贴着障碍时, 短暂旋转恢复
   if (recovery_active_) {
     if (now().seconds() < recovery_until_sec_) {
       geometry_msgs::msg::Twist recovery_cmd;
       recovery_cmd.linear.x = recovery_linear_velocity_;
       recovery_cmd.angular.z = recovery_angular_velocity_;
-      publishVelocityCommand(recovery_cmd);
+      if (recovery_bypass_safety_) {
+        cmd_vel_pub_->publish(recovery_cmd);
+      } else {
+        publishVelocityCommand(recovery_cmd);
+      }
       return;
     }
     recovery_active_ = false;
@@ -1221,6 +1246,13 @@ void NavigationNode::publishVelocityCommand(const geometry_msgs::msg::Twist & cm
       out.linear.y = result.command.lateral_y;
       out.angular.z = result.command.angular_z;
       publishSafetyState(result.state);
+      const bool stopped = (result.state == "STOP");
+      if (stopped && !safety_stop_active_) {
+        safety_stop_active_ = true;
+        safety_stop_since_sec_ = now_sec;
+      } else if (!stopped) {
+        safety_stop_active_ = false;
+      }
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
         "Safety layer: %s", result.state.c_str());
     }

@@ -41,8 +41,9 @@ rosiwit_navigation_node:
     recovery_enabled: true
     recovery_trigger_cycles: 40
     recovery_duration: 1.2
-    recovery_linear_velocity: -0.10
+    recovery_linear_velocity: 0.0
     recovery_angular_velocity: 0.60
+    recovery_bypass_safety: true
 
     # ---- LiDAR safety layer (Nav2 Collision Monitor style) ----
     safety_enabled: true
@@ -52,13 +53,19 @@ rosiwit_navigation_node:
     safety_fail_safe_on_timeout: false
     safety_min_height: 0.05
     safety_max_height: 1.0
-    safety_stop_polygon: [-0.26, -0.22, 0.26, -0.22, 0.26, 0.22, -0.26, 0.22]
+    # 边界划分:
+    #   DWA/local costmap -> 正常避障 (硬缓冲 0.22m, 梯度 0.9m)
+    #   安全层 -> 方向相关的 1s TTC 推演, 只拦截即将碰撞的运动
+    safety_stop_enabled: false
+    safety_stop_polygon: [-0.23, -0.21, 0.23, -0.21, 0.23, 0.21, -0.23, 0.21]
     safety_stop_max_points: 2
+    # SLOWDOWN 也关闭, 避免和 DWA 速度控制叠加
+    safety_slowdown_enabled: false
     safety_slowdown_polygon: [-0.60, -0.50, 0.70, -0.50, 0.70, 0.50, -0.60, 0.50]
     safety_slowdown_max_points: 2
     safety_slowdown_ratio: 0.5
     safety_approach_enabled: true
-    safety_time_before_collision: 2.0
+    safety_time_before_collision: 1.0
     safety_simulation_time_step: 0.1
     safety_footprint: [-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22]
 

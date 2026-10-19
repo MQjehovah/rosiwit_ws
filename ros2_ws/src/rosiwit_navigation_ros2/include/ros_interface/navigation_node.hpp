@@ -300,7 +300,10 @@ private:
   double recovery_angular_velocity_ = 0.60;
   int stall_cycles_ = 0;
   bool recovery_active_ = false;
+  bool recovery_bypass_safety_ = true;
   double recovery_until_sec_ = 0.0;
+  bool safety_stop_active_ = false;
+  double safety_stop_since_sec_ = 0.0;
   // 规划失败后随地图更新重试 (探索场景地图会持续变化)
   double m_last_replan_attempt_sec = 0.0;
 
