@@ -77,6 +77,7 @@ public:
 
     bool saveMap(const std::string& path) override;
     bool loadMap(const std::string& path) override;
+    bool appendMap(const std::string& path) override;
     bool resetForNewMapping(const std::string& config_path) override;
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) override;
     /// 与 saveGridMap 同一条生成路径 (逐帧观测 + 地面处理), 结果给实时 /map 用。

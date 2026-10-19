@@ -2,6 +2,7 @@
 
 #include "astar_planner.hpp"
 #include "navfn_planner.hpp"
+#include "hybrid_astar_planner.hpp"
 #include "pure_pursuit_controller.hpp"
 #include "diff_drive_controller.hpp"
 #include "dwa_controller.hpp"
@@ -19,6 +20,9 @@ NavigationFactory::createPlanner(const std::string & name)
   }
   if (name == "navfn") {
     return std::make_unique<planners::NavFnPlanner>();
+  }
+  if (name == "hybrid_astar" || name == "hybrid") {
+    return std::make_unique<planners::HybridAStarPlanner>();
   }
   return nullptr;
 }
@@ -46,7 +50,7 @@ NavigationFactory::createController(const std::string & name)
 
 std::vector<std::string> NavigationFactory::listPlanners()
 {
-  return {"astar", "navfn"};
+  return {"astar", "navfn", "hybrid_astar"};
 }
 
 std::vector<std::string> NavigationFactory::listControllers()

@@ -168,6 +168,33 @@ bool PcdMapManager::loadMap(const std::string& name) {
     return true;
 }
 
+bool PcdMapManager::appendMap(const std::string& name) {
+    const std::string path = (!name.empty() && name[0] == '/')
+        ? name : map_dir_ + "/" + name;
+    CloudType::Ptr cloud(new CloudType());
+    if (pcl::io::loadPCDFile(path, *cloud) == -1 || cloud->empty()) {
+        std::cerr << "[PcdMapManager] Append load failed: " << path << std::endl;
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_mutex_);
+    if (!global_map_) global_map_.reset(new CloudType());
+    *global_map_ += *cloud;
+
+    // 体素去重，避免多会话重叠区域点数爆炸。
+    pcl::VoxelGrid<PointType> vg;
+    vg.setInputCloud(global_map_);
+    const double leaf = std::max(0.02, save_voxel_);
+    vg.setLeafSize(leaf, leaf, leaf);
+    CloudType::Ptr filtered(new CloudType());
+    vg.filter(*filtered);
+    global_map_ = filtered;
+    ++m_revision_;
+    std::cout << "[PcdMapManager] Appended: " << path
+              << " (" << cloud->size() << " pts, total " << global_map_->size() << ")" << std::endl;
+    return true;
+}
+
 bool PcdMapManager::getGlobalMap(PointVec& out) {
     std::lock_guard<std::mutex> lock(m_mutex_);
     if (!global_map_ || global_map_->empty()) return false;

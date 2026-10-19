@@ -9,6 +9,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <algorithm>
+#include <sstream>
 
 using namespace rosiwit_slam;
 
@@ -31,6 +32,7 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
     world_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("world_cloud", 10000);
     global_map_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("cloud_map", 10, true);
     grid_map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("grid_map", 1);
+    calib_pub_ = nh_.advertise<std_msgs::String>("slam_calibration", 1, true);
     if (!legacy_) {
         // legacy profile 下 /map 由旧接口独占 (M3)
         map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("map", 1, true);
@@ -54,6 +56,7 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
     // ---- 服务 ----
     srv_save_map_ = nh_.advertiseService("save_map", &RosiwitInterface::handleSaveMap, this);
     srv_load_map_ = nh_.advertiseService("load_map", &RosiwitInterface::handleLoadMap, this);
+    srv_merge_map_ = nh_.advertiseService("merge_map", &RosiwitInterface::handleMergeMap, this);
     srv_save_grid_ = nh_.advertiseService("save_grid_map", &RosiwitInterface::handleSaveGridMap, this);
     srv_set_mode_ = nh_.advertiseService("set_slam_mode", &RosiwitInterface::handleSetMode, this);
 
@@ -180,6 +183,17 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
             grid_published_ = true;
         }
     }
+
+    const TimeCalibrationResult calib = engine_.onlineTimeCalibration();
+    if (calib.valid && calib_pub_) {
+        std::ostringstream os;
+        os << "{\"time_offset\":" << calib.offset
+           << ",\"confidence\":" << calib.confidence
+           << ",\"samples\":" << calib.samples << "}";
+        std_msgs::String msg;
+        msg.data = os.str();
+        calib_pub_.publish(msg);
+    }
 }
 
 bool RosiwitInterface::handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,
@@ -192,6 +206,13 @@ bool RosiwitInterface::handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,
 bool RosiwitInterface::handleLoadMap(rosiwit_slam_ros1::LoadMap::Request& req,
                                      rosiwit_slam_ros1::LoadMap::Response& res) {
     res.success = engine_.algo() && engine_.algo()->loadMap(req.path);
+    res.message = res.success ? "ok" : "failed";
+    return true;
+}
+
+bool RosiwitInterface::handleMergeMap(rosiwit_slam_ros1::LoadMap::Request& req,
+                                      rosiwit_slam_ros1::LoadMap::Response& res) {
+    res.success = engine_.algo() && engine_.algo()->appendMap(req.path);
     res.message = res.success ? "ok" : "failed";
     return true;
 }

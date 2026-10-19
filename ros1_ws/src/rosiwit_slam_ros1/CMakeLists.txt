@@ -62,12 +62,7 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     src/slam_engine.cpp
     src/rosiwit_interface.cpp
     src/legacy_convert.cpp
-    src/legacy_xz3dslam_interface.cpp   # 只剩拆分索引说明, 实现在下面五个文件
-    src/legacy_assembly.cpp
-    src/legacy_cloud_publisher.cpp
-    src/legacy_pose_publisher.cpp
-    src/legacy_warning.cpp
-    src/legacy_services.cpp
+    src/legacy_xz3dslam_interface.cpp   # 旧接口单文件实现 (assembly/cloud/pose/warning/services)
     # T6 追加 src/legacy_subscribers.cpp 等
 )
 add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
@@ -103,6 +98,11 @@ if(CATKIN_ENABLE_TESTING)
     catkin_add_gtest(test_lost_monitor test/test_lost_monitor.cpp)
     if(TARGET test_lost_monitor)
         target_link_libraries(test_lost_monitor rosiwit_slam_ros1_lib)
+    endif()
+
+    catkin_add_gtest(test_online_calibrator ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_online_calibrator.cpp)
+    if(TARGET test_online_calibrator)
+        target_link_libraries(test_online_calibrator rosiwit_slam_ros1_lib)
     endif()
 
     catkin_add_gtest(test_legacy_convert test/test_legacy_convert.cpp)

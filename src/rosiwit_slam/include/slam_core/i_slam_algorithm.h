@@ -29,6 +29,8 @@ public:
     virtual bool saveMap(const std::string& /*path*/) { return false; }
     /// 加载地图用于定位
     virtual bool loadMap(const std::string& /*path*/) { return false; }
+    /// 多会话建图: 把另一段地图追加到当前地图。
+    virtual bool appendMap(const std::string& /*path*/) { return false; }
     /// 保存栅格地图 (PGM + YAML)
     virtual bool saveGridMap(const std::string& /*pgm_path*/, const std::string& /*yaml_path*/, double /*resolution*/) { return false; }
     /// 生成并返回 2D 占据栅格 (与 saveGridMap 内部**同一条路径**: 逐帧观测 + 地面处理)。

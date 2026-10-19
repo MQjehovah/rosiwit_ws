@@ -17,6 +17,8 @@ public:
     bool init(const std::string& config_path) override;
     bool saveMap(const std::string& name) override;
     bool loadMap(const std::string& name) override;
+    /// 多会话建图: 把另一段 PCD 追加/融合到当前地图（同一 map 坐标系）。
+    bool appendMap(const std::string& name);
     bool getGlobalMap(PointVec& out) override;
     bool addSubMap(const KeyFrame& kf) override;
     void onBackendOptimized(const std::vector<PoseStamped>& corrected) override;

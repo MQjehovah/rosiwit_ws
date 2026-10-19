@@ -24,6 +24,7 @@
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <std_msgs/String.h>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_broadcaster.h>
 
@@ -53,6 +54,8 @@ private:
                        rosiwit_slam_ros1::SaveMap::Response& res);
     bool handleLoadMap(rosiwit_slam_ros1::LoadMap::Request& req,
                        rosiwit_slam_ros1::LoadMap::Response& res);
+    bool handleMergeMap(rosiwit_slam_ros1::LoadMap::Request& req,
+                        rosiwit_slam_ros1::LoadMap::Response& res);
     bool handleSaveGridMap(rosiwit_slam_ros1::SaveGridMap::Request& req,
                            rosiwit_slam_ros1::SaveGridMap::Response& res);
     bool handleSetMode(rosiwit_slam_ros1::SetSlamMode::Request& req,
@@ -63,8 +66,8 @@ private:
     const bool legacy_;   // engine_.legacyProfile() 的快照
 
     ros::Publisher odom_pub_, odom_nav_pub_, path_pub_, body_cloud_pub_, world_cloud_pub_,
-                   global_map_pub_, grid_map_pub_, map_pub_;
-    ros::ServiceServer srv_save_map_, srv_load_map_, srv_save_grid_, srv_set_mode_;
+                   global_map_pub_, grid_map_pub_, map_pub_, calib_pub_;
+    ros::ServiceServer srv_save_map_, srv_load_map_, srv_merge_map_, srv_save_grid_, srv_set_mode_;
     ros::Timer map_timer_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_;

@@ -14,6 +14,9 @@
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <sensor_msgs/LaserScan.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/point_cloud2_iterator.h>
+#include <visualization_msgs/MarkerArray.h>
 #include <std_msgs/String.h>
 #include <std_srvs/Trigger.h>
 
@@ -34,6 +37,9 @@
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
 #include "rosiwit_navigation/nav_core/safety_monitor.hpp"
+#include "rosiwit_navigation/nav_core/obstacle_tracker.hpp"
+#include "rosiwit_navigation/nav_core/task_state_machine.hpp"
+#include "rosiwit_navigation/nav_core/voxel_layer.hpp"
 #include "path_smoother.hpp"
 
 // 算法核心命名空间 (ROS2 薄层同样使用 rosiwit_navigation 前缀).
@@ -145,6 +151,30 @@ private:
     safety_cfg.time_before_collision = safety_time_before_collision_;
     safety_cfg.footprint = toPolygon(footprint);
     safety_monitor_.configure(safety_cfg);
+
+    pnh_.param<bool>("tracking_enabled", tracking_enabled_, true);
+    pnh_.param<double>("tracking_horizon", tracking_horizon_, 0.5);
+    pnh_.param<double>("tracking_cluster_distance", tracking_cluster_distance_, 0.35);
+    pnh_.param<int>("tracking_confirm_hits", tracking_confirm_hits_, 3);
+    core::ObstacleTrackerConfig tracking_cfg;
+    tracking_cfg.cluster_distance = tracking_cluster_distance_;
+    tracking_cfg.confirm_hits = tracking_confirm_hits_;
+    tracker_.setConfig(tracking_cfg);
+
+    pnh_.param<bool>("voxel_enabled", voxel_enabled_, true);
+    pnh_.param<std::string>("voxel_cloud_topic", voxel_cloud_topic_, "/world_cloud");
+    pnh_.param<double>("voxel_resolution", voxel_resolution_, 0.10);
+    pnh_.param<double>("voxel_min_height", voxel_min_height_, -0.20);
+    pnh_.param<double>("voxel_max_height", voxel_max_height_, 2.00);
+    pnh_.param<double>("voxel_decay", voxel_decay_, 2.0);
+    pnh_.param<double>("voxel_inflation", voxel_inflation_, 0.15);
+    core::VoxelLayerConfig voxel_cfg;
+    voxel_cfg.resolution = voxel_resolution_;
+    voxel_cfg.min_height = voxel_min_height_;
+    voxel_cfg.max_height = voxel_max_height_;
+    voxel_cfg.decay_time = voxel_decay_;
+    voxel_cfg.inflation = voxel_inflation_;
+    voxel_layer_.setConfig(voxel_cfg);
   }
 
   // ---- 核心策略 (来自算法核心, ROS 无关) ----
@@ -194,10 +224,15 @@ private:
     local_costmap_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("/local_costmap", 1, true);
     goal_status_pub_ = nh_.advertise<std_msgs::String>("/goal_status", 1, true);
     diagnostics_pub_ = nh_.advertise<std_msgs::String>("/nav_diagnostics", 1);
+    tracked_obs_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/tracked_obstacles", 1);
 
     odom_sub_ = nh_.subscribe(odom_topic_, 1, &RosiwitNavigationRos1Node::odomCallback, this);
     map_sub_ = nh_.subscribe("/map", 1, &RosiwitNavigationRos1Node::mapCallback, this);
     scan_sub_ = nh_.subscribe("/scan", 1, &RosiwitNavigationRos1Node::scanCallback, this);
+    if (voxel_enabled_ && !voxel_cloud_topic_.empty()) {
+      voxel_sub_ = nh_.subscribe(voxel_cloud_topic_, 1,
+                                 &RosiwitNavigationRos1Node::voxelCallback, this);
+    }
     goal_sub_ = nh_.subscribe("/goal_pose", 1, &RosiwitNavigationRos1Node::goalCallback, this);
     nav_stop_srv_ = nh_.advertiseService(
       "/nav_stop", &RosiwitNavigationRos1Node::navStopCallback, this);
@@ -261,8 +296,68 @@ private:
       p.y = ty + lx * sy + ly * cy;
       p.z = 0.0;
       laser_points_.push_back(p);
+      if (tracking_enabled_) {
+        core::Point2D tp; tp.x = p.x; tp.y = p.y;
+        tracker_points_.push_back(tp);
+      }
+    }
+    if (tracking_enabled_) {
+      tracker_.update(tracker_points_, msg->header.stamp.toSec());
+      tracker_points_.clear();
+      publishTrackedObstacles();
     }
     updateCostmap();
+  }
+
+  void voxelCallback(const sensor_msgs::PointCloud2::ConstPtr & msg)
+  {
+    if (!voxel_enabled_) return;
+    bool has_xyz = false;
+    for (const auto & f : msg->fields) {
+      if (f.name == "x") has_xyz = true;
+    }
+    if (!has_xyz) return;
+
+    double tx = 0.0, ty = 0.0, tz = 0.0;
+    double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
+    if (!msg->header.frame_id.empty() && msg->header.frame_id != map_frame_) {
+      try {
+        const auto tf = tf_buffer_.lookupTransform(map_frame_, msg->header.frame_id,
+                                                  msg->header.stamp, ros::Duration(0.05));
+        tx = tf.transform.translation.x;
+        ty = tf.transform.translation.y;
+        tz = tf.transform.translation.z;
+        qx = tf.transform.rotation.x; qy = tf.transform.rotation.y;
+        qz = tf.transform.rotation.z; qw = tf.transform.rotation.w;
+      } catch (tf2::TransformException &) {
+        return;
+      }
+    }
+    const double xx = 1.0 - 2.0 * (qy * qy + qz * qz);
+    const double xy = 2.0 * (qx * qy - qz * qw);
+    const double xz = 2.0 * (qx * qz + qy * qw);
+    const double yx = 2.0 * (qx * qy + qz * qw);
+    const double yy = 1.0 - 2.0 * (qx * qx + qz * qz);
+    const double yz = 2.0 * (qy * qz - qx * qw);
+    const double zx = 2.0 * (qx * qz - qy * qw);
+    const double zy = 2.0 * (qy * qz + qx * qw);
+    const double zz = 1.0 - 2.0 * (qx * qx + qy * qy);
+
+    std::vector<core::Point3D> points;
+    points.reserve(std::min<size_t>(msg->width * msg->height, 200000));
+    sensor_msgs::PointCloud2ConstIterator<float> ix(*msg, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iy(*msg, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iz(*msg, "z");
+    for (; ix != ix.end(); ++ix, ++iy, ++iz) {
+      const double px = *ix, py = *iy, pz = *iz;
+      if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)) continue;
+      core::Point3D p;
+      p.x = xx * px + xy * py + xz * pz + tx;
+      p.y = yx * px + yy * py + yz * pz + ty;
+      p.z = zx * px + zy * py + zz * pz + tz;
+      points.push_back(p);
+    }
+    voxel_layer_.update(points, msg->header.stamp.toSec());
   }
 
   void goalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
@@ -298,9 +393,47 @@ private:
   void setGoalStatus(const std::string & status)
   {
     goal_status_ = status;
+    if (status == "ACCEPTED") {
+      task_sm_.handle(core::TaskEvent::GOAL_RECEIVED);
+    } else if (status.rfind("FAILED", 0) == 0) {
+      task_sm_.handle(core::TaskEvent::PLAN_FAIL);
+    } else if (status == "SUCCEEDED") {
+      task_sm_.handle(core::TaskEvent::GOAL_REACHED);
+    } else if (status == "STOPPED" || status == "REJECTED_FRAME") {
+      task_sm_.handle(core::TaskEvent::STOP);
+    }
     std_msgs::String msg;
     msg.data = status;
     if (goal_status_pub_) goal_status_pub_.publish(msg);
+  }
+
+  void publishTrackedObstacles()
+  {
+    if (!tracked_obs_pub_) return;
+    visualization_msgs::MarkerArray arr;
+    const auto tracks = tracker_.tracked();
+    for (const auto & t : tracks) {
+      visualization_msgs::Marker m;
+      m.header.frame_id = map_frame_;
+      m.header.stamp = ros::Time::now();
+      m.ns = "tracked_obstacles";
+      m.id = t.id;
+      m.type = visualization_msgs::Marker::CYLINDER;
+      m.action = visualization_msgs::Marker::ADD;
+      m.pose.position.x = t.x;
+      m.pose.position.y = t.y;
+      m.pose.position.z = 0.25;
+      m.pose.orientation.w = 1.0;
+      m.scale.x = m.scale.y = 2.0 * t.radius;
+      m.scale.z = 0.5;
+      m.color.a = 0.65;
+      m.color.r = 1.0;
+      m.color.g = t.speed() > 0.15 ? 0.2 : 0.8;
+      m.color.b = 0.2;
+      m.lifetime = ros::Duration(0.5);
+      arr.markers.push_back(m);
+    }
+    tracked_obs_pub_.publish(arr);
   }
 
   void diagnosticsCallback(const ros::TimerEvent &)
@@ -312,6 +445,9 @@ private:
        << "\",\"safety\":\"" << last_safety_state_
        << "\",\"safety_scale\":" << last_safety_scale_
        << ",\"path_points\":" << current_path_.poses.size()
+       << ",\"tracks\":" << tracker_.tracked().size()
+       << ",\"task_state\":\"" << task_sm_.stateName() << "\""
+       << ",\"voxels\":" << voxel_layer_.size()
        << ",\"odom_age\":" << (last_odom_stamp_.isZero() ? -1.0 : (ros::Time::now() - last_odom_stamp_).toSec())
        << "}";
     std_msgs::String msg;
@@ -533,6 +669,36 @@ private:
       if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) continue;
       raw[(dy + win_half) * lw + (dx + win_half)] = 100;
     }
+    if (tracking_enabled_) {
+      const auto predicted = tracker_.predicted(tracking_horizon_);
+      for (const auto & t : predicted) {
+        const int oxc = static_cast<int>(std::floor((t.x - ox) / res));
+        const int oyc = static_cast<int>(std::floor((t.y - oy) / res));
+        const int dx = oxc - cx;
+        const int dy = oyc - cy;
+        const int rr = std::max(1, static_cast<int>(std::ceil(t.radius / res)));
+        for (int yy = -rr; yy <= rr; ++yy)
+          for (int xx = -rr; xx <= rr; ++xx) {
+            if (xx * xx + yy * yy > rr * rr) continue;
+            const int gx = dx + xx + win_half;
+            const int gy = dy + yy + win_half;
+            if (gx >= 0 && gx < lw && gy >= 0 && gy < lw) raw[gy * lw + gx] = 100;
+          }
+      }
+    }
+
+    if (voxel_enabled_) {
+      const auto voxel_pts = voxel_layer_.occupancyPoints();
+      for (const auto & p : voxel_pts) {
+        const int mx = static_cast<int>(std::floor((p.x - ox) / res));
+        const int my = static_cast<int>(std::floor((p.y - oy) / res));
+        const int dx = mx - cx;
+        const int dy = my - cy;
+        if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) continue;
+        raw[(dy + win_half) * lw + (dx + win_half)] = 100;
+      }
+    }
+
     // 清掉机器人自身中心附近的自点/噪点; 碰撞仍由安全层和硬边界负责.
     const int clear_cells = std::max(1, static_cast<int>(std::ceil(0.2 / res)));
     for (int dy = -clear_cells; dy <= clear_cells; ++dy)
@@ -673,6 +839,7 @@ private:
       }
     }
 
+    task_sm_.handle(core::TaskEvent::PLAN_OK);
     is_navigating_ = true;
     is_paused_ = false;
     ROS_INFO("[rosiwit_navigation_ros1] path planned with %zu points",
@@ -892,6 +1059,21 @@ private:
   bool safety_approach_enabled_ = true;
   double safety_time_before_collision_ = 2.0;
   core::SafetyMonitor safety_monitor_;
+  core::ObstacleTracker tracker_;
+  core::TaskStateMachine task_sm_;
+  core::VoxelLayer voxel_layer_;
+  bool voxel_enabled_ = true;
+  std::string voxel_cloud_topic_ = "/world_cloud";
+  double voxel_resolution_ = 0.10;
+  double voxel_min_height_ = -0.20;
+  double voxel_max_height_ = 2.00;
+  double voxel_decay_ = 2.0;
+  double voxel_inflation_ = 0.15;
+  bool tracking_enabled_ = true;
+  double tracking_horizon_ = 0.5;
+  double tracking_cluster_distance_ = 0.35;
+  int tracking_confirm_hits_ = 3;
+  std::vector<core::Point2D> tracker_points_;
   std::string last_safety_state_ = "PASS";
   double last_safety_scale_ = 1.0;
 
@@ -908,6 +1090,7 @@ private:
   ros::Subscriber odom_sub_;
   ros::Subscriber map_sub_;
   ros::Subscriber scan_sub_;
+  ros::Subscriber voxel_sub_;
   ros::Subscriber goal_sub_;
   ros::Publisher cmd_vel_pub_;
   ros::Publisher path_pub_;
@@ -916,6 +1099,7 @@ private:
   ros::Publisher local_costmap_pub_;
   ros::Publisher goal_status_pub_;
   ros::Publisher diagnostics_pub_;
+  ros::Publisher tracked_obs_pub_;
   ros::ServiceServer nav_stop_srv_;
   std::string goal_status_ = "IDLE";
   ros::Time last_odom_stamp_;

@@ -589,6 +589,13 @@ bool SlamPipeline::loadMap(const std::string& path) {
     return true;
 }
 
+bool SlamPipeline::appendMap(const std::string& path) {
+    if (!m_map_mgr) return false;
+    if (!m_map_mgr->appendMap(path)) return false;
+    m_map_mgr->generateGridMap(0.05);
+    return true;
+}
+
 bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
     // 旧 xz_3d_slam 每次切建图都 DELETE_PTR(mapping_ptr_) 再 new 一个, 所以上一轮绝不残留;
     // 我们是单核心实例, 只能显式重建内部模块达到同样效果。

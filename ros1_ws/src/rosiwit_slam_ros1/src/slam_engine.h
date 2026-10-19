@@ -35,6 +35,7 @@
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_base.h"
 #include "slam_core/slam_types.h"
+#include "slam_core/online_calibrator.h"
 
 #include "legacy_config.h"
 
@@ -97,6 +98,8 @@ public:
     /// 丢掉核心的建图状态并重建 (= 旧实现的"删掉建图实例再 new"), 用于进建图模式前清干净。
     bool resetCore();
     std::string pipelineMode() const;
+    /// 在线时间偏移估计（只读；由上层决定是否写回配置）。
+    rosiwit_slam::TimeCalibrationResult onlineTimeCalibration() const;
 
     // ---- 泵 / 钩子 ----
     /// 注册 50Hz tick (在排空核心输出之后按注册顺序调用)。两套接口各挂一个:
@@ -163,6 +166,10 @@ private:
     rosiwit_slam::ISlamAlgorithm* algo_raw_ = nullptr;
     rosiwit_slam::SlamBase* base_ = nullptr;
     bool ok_ = false;
+    bool online_calib_enabled_ = true;
+    mutable std::mutex calib_mutex_;
+    rosiwit_slam::OnlineTimeCalibrator online_time_calib_;
+    rosiwit_slam::YawExtrinsicCalibrator yaw_calib_;
 
     ros::Subscriber imu_sub_, lidar_sub_, init_pose_sub_, odom_sub_, vo_sub_, absolute_sub_;
     ros::Timer process_timer_;

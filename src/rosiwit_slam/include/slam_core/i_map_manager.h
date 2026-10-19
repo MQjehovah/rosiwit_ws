@@ -12,6 +12,8 @@ public:
     virtual bool init(const std::string& config_path) = 0;
     virtual bool saveMap(const std::string& name) = 0;
     virtual bool loadMap(const std::string& name) = 0;
+    /// 多会话地图融合（默认不支持）。
+    virtual bool appendMap(const std::string& /*name*/) { return false; }
     virtual bool getGlobalMap(PointVec& out) = 0;
     virtual bool addSubMap(const KeyFrame& kf) = 0;
     /// 地图版本号: 只有关键帧/后端优化改变地图时才递增, 供 /map 事件驱动发布.

@@ -322,6 +322,7 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
 SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
     // ---- input_profile: 默认 legacy, 老接口优先; 仅选择输入配置, 不再决定输出接口 ----
     pnh_.param<std::string>("input_profile", input_profile_, "legacy");
+    pnh_.param<bool>("online_calibration", online_calib_enabled_, true);
     if (input_profile_ != "rosiwit" && input_profile_ != "legacy") {
         ROS_WARN_STREAM("[slam_engine] unknown input_profile '" << input_profile_
                         << "', falling back to 'rosiwit'");
@@ -557,6 +558,10 @@ CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg
 }
 
 void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
+    if (online_calib_enabled_) {
+        std::lock_guard<std::mutex> lk(calib_mutex_);
+        online_time_calib_.addImu(msg->header.stamp.toSec(), msg->angular_velocity.z);
+    }
     IMUSample s;
     s.acc = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
     s.gyro = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
@@ -690,6 +695,13 @@ void SlamEngine::absoluteCB(const geometry_msgs::PoseWithCovarianceStamped::Cons
 }
 
 void SlamEngine::onOutput(const SlamOutput& out) {
+    if (online_calib_enabled_ && out.has_new_pose && out.pose.time > 0.0) {
+        const Eigen::Quaterniond q(out.pose.rot);
+        const double yaw = std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
+                                      1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
+        std::lock_guard<std::mutex> lk(calib_mutex_);
+        online_time_calib_.addLioPose(out.pose.time, yaw);
+    }
     {
         std::lock_guard<std::mutex> lk(out_mutex_);
         latest_ = out;
@@ -747,6 +759,11 @@ bool SlamEngine::resetCore() {
     const bool ok = algo_raw_->resetForNewMapping(config_path_);
     std::cout << "[slam_engine] resetCore -> " << (ok ? "ok" : "unsupported/failed") << std::endl;
     return ok;
+}
+
+rosiwit_slam::TimeCalibrationResult SlamEngine::onlineTimeCalibration() const {
+    std::lock_guard<std::mutex> lk(calib_mutex_);
+    return online_time_calib_.estimate();
 }
 
 std::string SlamEngine::pipelineMode() const {

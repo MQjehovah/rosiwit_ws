@@ -52,3 +52,18 @@ safety_slowdown_ratio: 0.5
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
 safety_footprint: [-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22]
+
+# 动态障碍跟踪
+tracking_enabled: true
+tracking_horizon: 0.5
+tracking_cluster_distance: 0.35
+tracking_confirm_hits: 3
+
+# 3D 体素 / STVL 层
+voxel_enabled: true
+voxel_cloud_topic: "/world_cloud"
+voxel_resolution: 0.10
+voxel_min_height: -0.20
+voxel_max_height: 2.00
+voxel_decay: 2.0
+voxel_inflation: 0.15
