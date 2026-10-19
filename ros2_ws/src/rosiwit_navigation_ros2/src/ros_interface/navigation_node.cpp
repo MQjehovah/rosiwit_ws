@@ -690,6 +690,8 @@ void NavigationNode::updateCostmap()
     // 避免路径落在显示的 100 区内.
     int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
     int safety_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
+    // 即使 inflation_radius 设得比 robot_radius 小, 也要把硬安全环扩出来.
+    const int max_inflate_cells = std::max(inflate_cells, safety_cells);
     std::vector<float> dist(w * h, std::numeric_limits<float>::max());
     std::queue<std::pair<int,int>> q;
     // 只让真实障碍物参与膨胀. unknown 在 planner costmap 里仍是 254
@@ -702,7 +704,7 @@ void NavigationNode::updateCostmap()
     while (!q.empty()) {
       auto [cx, cy] = q.front(); q.pop();
       float cd = dist[cy * w + cx];
-      if (cd >= inflate_cells) continue;
+      if (cd >= max_inflate_cells) continue;
       for (int i = 0; i < 4; ++i) {
         int nx = cx + dx4[i], ny = cy + dy4[i];
         if (nx < 0 || nx >= static_cast<int>(w) || ny < 0 || ny >= static_cast<int>(h)) continue;
