@@ -668,13 +668,39 @@ void NavigationNode::controlLoop()
 
 void NavigationNode::replanningCheck()
 {
-  if (!is_navigating_ || is_paused_) {
+  if (!is_navigating_ || is_paused_ || !planner_strategy_ || !current_map_) {
+    return;
+  }
+  if (goal_pose_.header.frame_id.empty() || m_need_initial_rotate) {
+    return;
+  }
+  if (!updateCurrentPose()) {
     return;
   }
 
-  // 检查是否需要重规划
-  // TODO: 实现完整的重规划逻辑
-  RCLCPP_DEBUG(get_logger(), "Replanning check");
+  const auto start = RosUtils::toCorePose(current_pose_);
+  const auto goal = RosUtils::toCorePose(goal_pose_);
+  const auto result = planner_strategy_->plan(start, goal);
+
+  if (!result.is_ok()) {
+    // 新地图下当前路径可能已经失效. 停车并置 FAILED, 由 mapCallback
+    // 在下一次地图更新时用最新 costmap 重新规划.
+    geometry_msgs::msg::Twist stop_cmd;
+    publishVelocityCommand(stop_cmd);
+    is_navigating_ = false;
+    current_state_ = NavigationState::FAILED;
+    RCLCPP_WARN(get_logger(), "Replan failed: %s; stopping for retry",
+      result.error_message().c_str());
+    return;
+  }
+
+  current_path_ = RosUtils::toRosPath(result.value(), goal_pose_.header.frame_id, now());
+  if (controller_strategy_) {
+    controller_strategy_->setPath(RosUtils::toCorePath(current_path_));
+  }
+  global_path_pub_->publish(current_path_);
+  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+    "Replanned path: %zu points", current_path_.poses.size());
 }
 
 
