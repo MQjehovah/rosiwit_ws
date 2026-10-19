@@ -26,8 +26,8 @@ lidar_max_range: 100.0
 # Gazebo GPU ray 点云是瞬时快照且无逐点时间, 关闭按扫描周期摊开
 scan_period_ms: 0.0
 undistort_enable: false
-scan_resolution: 0.5
-map_resolution: 0.5
+scan_resolution: 0.2
+map_resolution: 0.05
 # /map 发布周期(s): 5Hz, 让导航 costmap 能及时看到新墙
 map_publish_period: 0.2
 
@@ -36,7 +36,8 @@ grid_map_generator: ray_casting
 grid_min_height: 0.1
 grid_max_height: 2.0
 grid_occupied_thresh: 1
-grid_dilate_radius: 1
+# 地图层不再额外膨胀; 安全距离交给导航 costmap, 避免双重膨胀堵死门洞
+grid_dilate_radius: 0
 grid_close_radius: 1
 # 不做小连通域剔除: 否则椅子/桌腿等真实小障碍会被置为 unknown(-1)
 grid_post_pipeline: "close,dilate"
