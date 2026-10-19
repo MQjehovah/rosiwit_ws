@@ -605,7 +605,8 @@ class FrontierExplorer(Node):
                    round(self.current_goal_xy[1] * 10))
             if success:
                 self.goal_failures.pop(key, None)
-                blacklist_for = self.blacklist_duration
+                # 成功点仍需短时间避开, 但不能用 180s 压住刚暴露的相邻 frontier.
+                blacklist_for = min(30.0, self.blacklist_duration)
             else:
                 failures = self.goal_failures.get(key, 0) + 1
                 self.goal_failures[key] = failures
@@ -639,8 +640,10 @@ class FrontierExplorer(Node):
 
     def request_stop(self) -> None:
         if not self.stop_client.service_is_ready():
+            # 服务不可用时退化到带 goal token 的 /nav_stop, 不能让旧目标继续跑.
+            self.request_stop_goal()
             self.get_logger().warning(
-                'Stop service /stop_navigation not available',
+                'Stop service /stop_navigation unavailable; published /nav_stop',
                 throttle_duration_sec=5.0)
             return
         self.stop_client.call_async(Trigger.Request())

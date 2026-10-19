@@ -87,6 +87,7 @@ bool CeresBackend::init(const std::string& config_path) {
 }
 
 void CeresBackend::addKeyFrame(const KeyFrame& kf) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (kf_index_.count(kf.id)) {
         KeyFrameNode& node = keyframes_[kf_index_[kf.id]];
         node.pose = kf.pose;
@@ -97,12 +98,19 @@ void CeresBackend::addKeyFrame(const KeyFrame& kf) {
     node.id = kf.id;
     node.pose = kf.pose;
     node.timestamp = kf.timestamp;
+    if (!keyframes_.empty()) {
+        const PoseStamped& prev = keyframes_.back().pose;
+        node.odom_relative.time = kf.pose.time;
+        node.odom_relative.rot = prev.rot.transpose() * kf.pose.rot;
+        node.odom_relative.trans = prev.rot.transpose() * (kf.pose.trans - prev.trans);
+        node.has_odom_relative = true;
+    }
     kf_index_[kf.id] = keyframes_.size();
     keyframes_.push_back(node);
 }
 
 void CeresBackend::addConstraints(const std::vector<Constraint>& constraints) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     for (const auto& c : constraints) {
         RelPoseConstraint rel;
         rel.from_kf = c.from_kf;
@@ -114,6 +122,7 @@ void CeresBackend::addConstraints(const std::vector<Constraint>& constraints) {
 }
 
 bool CeresBackend::optimize() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (keyframes_.size() < 2) {
         std::cerr << "[CeresBackend] Not enough keyframes to optimize (< 2)" << std::endl;
         return false;
@@ -183,6 +192,7 @@ bool CeresBackend::optimize() {
 }
 
 bool CeresBackend::getUpdatedPoses(std::vector<PoseStamped>& poses) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     poses.clear();
     for (const auto& kf : keyframes_) {
         poses.push_back(kf.pose);
@@ -192,18 +202,11 @@ bool CeresBackend::getUpdatedPoses(std::vector<PoseStamped>& poses) {
 
 void CeresBackend::addOdometryConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks) {
     for (size_t i = 1; i < keyframes_.size(); ++i) {
-        const auto& from_kf = keyframes_[i - 1];
         const auto& to_kf = keyframes_[i];
+        if (!to_kf.has_odom_relative) continue;
 
-        Eigen::Matrix3d from_R = from_kf.pose.rot;
-        Eigen::Vector3d from_t = from_kf.pose.trans;
-
-        Eigen::Matrix3d to_R = to_kf.pose.rot;
-        Eigen::Vector3d to_t = to_kf.pose.trans;
-
-        Eigen::Matrix3d rel_R = from_R.transpose() * to_R;
-        Eigen::Vector3d rel_t = from_R.transpose() * (to_t - from_t);
-
+        Eigen::Matrix3d rel_R = to_kf.odom_relative.rot;
+        Eigen::Vector3d rel_t = to_kf.odom_relative.trans;
         Eigen::Quaterniond rel_q(rel_R);
 
         size_t from_i = (i - 1) * 2;
@@ -217,7 +220,7 @@ void CeresBackend::addOdometryConstraints(ceres::Problem& problem, std::vector<d
 }
 
 void CeresBackend::addLoopConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     for (const auto& c : constraints_) {
         auto from_it = kf_index_.find(c.from_kf);
         auto to_it = kf_index_.find(c.to_kf);

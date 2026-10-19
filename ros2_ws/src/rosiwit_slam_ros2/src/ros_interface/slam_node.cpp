@@ -159,6 +159,7 @@ void SlamNode::resetPublishState() {
     m_path.poses.clear();
     m_grid_map_published = false;
     m_last_map_revision = 0;
+    m_last_cloud_map_revision = 0;
     m_has_smoothed = false;
     m_has_cov = false;
 }
@@ -246,9 +247,18 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                     "TF %s <- %s unavailable at startup; output will stay in core frame until it appears",
                     m_cfg.body_frame.c_str(), m_cfg.imu_frame.c_str());
     }
-    config_path = writeExtrinsicOverride(
-        config_path, imu_lidar, m_base_lidar,
-        have_base_imu ? base_imu : RigidTransform{});
+    // 同帧时 TF 只能给出 identity, 若仍覆写会把配置文件里真实的
+    // t_il/r_il (例如 IMU 在 LiDAR 上方 9cm) 清零. 同帧明确表示
+    // "核心已配置外参", 保留 YAML.
+    if (m_cfg.imu_frame == m_cfg.lidar_frame) {
+        RCLCPP_INFO(get_logger(),
+            "IMU/LiDAR share frame '%s'; keeping configured r_il/t_il",
+            m_cfg.imu_frame.c_str());
+    } else {
+        config_path = writeExtrinsicOverride(
+            config_path, imu_lidar, m_base_lidar,
+            have_base_imu ? base_imu : RigidTransform{});
+    }
 
     if (!m_algo->init(config_path)) { RCLCPP_FATAL(this->get_logger(), "Init failed"); throw std::runtime_error("init failed"); }
     m_algo->setOutputCallback([this](const SlamOutput& o){ onOutput(o); });
@@ -261,13 +271,27 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     rclcpp::SubscriptionOptions sensor_sub_opts;
     sensor_sub_opts.callback_group = m_sensor_cb_group;
 
-    m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, 1000, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
-    m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, 100, std::bind(&SlamNode::lidarCB, this, _1), sensor_sub_opts);
+    // 真实 LiDAR/IMU 驱动通常 best-effort; 默认 reliable 订阅会直接匹配不上.
+    // reliable 发布者可以被 best-effort 订阅者接收, 仿真/实机都兼容.
+    const auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(500)).best_effort();
+    m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, sensor_qos, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
+    m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, sensor_qos, std::bind(&SlamNode::lidarCB, this, _1), sensor_sub_opts);
     m_init_pose_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10, std::bind(&SlamNode::initialPoseCB, this, _1), sensor_sub_opts);
     // 视觉里程计 (可选): 由 vision.enabled 开关控制, 话题名可配置
     if (m_cfg.vision_enabled) {
         m_vo_sub = create_subscription<nav_msgs::msg::Odometry>(
             m_cfg.vo_topic, 100, std::bind(&SlamNode::voCB, this, _1), sensor_sub_opts);
+    }
+    if (m_cfg.odom_enabled) {
+        // SLAM 自己发布 /odom; 若输入也配成 /odom 会形成自订阅反馈.
+        // 真实轮式里程计应通过 odom_topic 指向 /wheel_odom 等独立话题.
+        if (m_cfg.odom_topic == "/odom" || m_cfg.odom_topic == "odom") {
+            RCLCPP_WARN(get_logger(),
+                "odom_enabled=true but odom_topic=%s is the SLAM output topic; "
+                "disable wheel-odom prior to avoid self-subscription",
+                m_cfg.odom_topic.c_str());
+            m_cfg.odom_enabled = false;
+        }
     }
     if (m_cfg.odom_enabled) {
         m_odom_sub = create_subscription<nav_msgs::msg::Odometry>(
@@ -482,7 +506,13 @@ void SlamNode::publish(const SlamOutput& out) {
         ps.pose.position.x = pose.trans.x(); ps.pose.position.y = pose.trans.y(); ps.pose.position.z = pose.trans.z();
         ps.pose.orientation.x = q.x(); ps.pose.orientation.y = q.y(); ps.pose.orientation.z = q.z(); ps.pose.orientation.w = q.w();
         std::lock_guard<std::mutex> lock(m_out_mutex);
-        m_path.poses.push_back(ps); m_path_pub->publish(m_path);
+        m_path.poses.push_back(ps);
+        // 长时间运行不能无限增长; 按块裁剪, 避免每帧 O(N) 搬移.
+        if (m_path.poses.size() > 25000) {
+            m_path.poses.erase(m_path.poses.begin(),
+                               m_path.poses.begin() + 5000);
+        }
+        m_path_pub->publish(m_path);
     }
 }
 
@@ -570,22 +600,25 @@ void SlamNode::mapTimerCB() {
     std::string mode = m_algo_raw->getPipelineMode();
     bool is_localization = (mode == "localization");
     bool always_pub = is_localization;
+    const uint64_t map_revision = m_algo_raw->getRevision();
 
-    // 1. cloud_map
-    if (always_pub || m_global_map_pub->get_subscription_count() > 0) {
+    // 1. cloud_map: 建图按 revision 事件发布, 定位模式保持周期发布.
+    if ((always_pub || m_global_map_pub->get_subscription_count() > 0) &&
+        (always_pub || map_revision != m_last_cloud_map_revision))
+    {
         PointVec pts;
         if (m_algo->getGlobalMap(pts) && !pts.empty()) {
             CloudType cloud; for (auto& p : pts) cloud.push_back(p);
             cloud.width = cloud.size(); cloud.height = 1;
             sensor_msgs::msg::PointCloud2 m; pcl::toROSMsg(cloud, m);
             m.header.frame_id = m_cfg.world_frame; m.header.stamp = now(); m_global_map_pub->publish(m);
+            m_last_cloud_map_revision = map_revision;
         }
     }
 
     // 2. grid_map (nav_msgs/OccupancyGrid)
     // 事件驱动: 只有地图版本变化 (新关键帧/后端优化) 才重建并发布,
     // 静止或转弯时不会按 1s 定时刷新底图.
-    const uint64_t map_revision = m_algo_raw->getRevision();
     if (m_grid_map_published && map_revision == m_last_map_revision) {
       return;
     }

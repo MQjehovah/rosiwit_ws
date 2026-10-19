@@ -120,11 +120,12 @@ std::vector<DwaController::Sample> DwaController::search(
 
 DwaController::VelocityBounds DwaController::dynamicWindow(const core::VelocityCommand& vel) const {
     VelocityBounds b;
-    // 用 sim_time_ 而不是 dt_，让动态窗口覆盖整个模拟周期能达到的速度
-    b.min_vx = std::max(min_vx_, vel.linear_x - max_accel_ * sim_time_);
-    b.max_vx = std::min(max_vx_, vel.linear_x + max_accel_ * sim_time_);
-    b.min_vw = std::max(-max_vw_, vel.angular_z - max_dvw_ * sim_time_);
-    b.max_vw = std::min(max_vw_, vel.angular_z + max_dvw_ * sim_time_);
+    // 动态窗口是"一个控制步内"可达到的速度; 用 sim_time_ 会把 1.5s
+    // 的加速度一次性塞进 50ms 控制周期, 造成 8m/s² 级跳变.
+    b.min_vx = std::max(min_vx_, vel.linear_x - max_accel_ * dt_);
+    b.max_vx = std::min(max_vx_, vel.linear_x + max_accel_ * dt_);
+    b.min_vw = std::max(-max_vw_, vel.angular_z - max_dvw_ * dt_);
+    b.max_vw = std::min(max_vw_, vel.angular_z + max_dvw_ * dt_);
     return b;
 }
 

@@ -115,6 +115,20 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     RCLCPP_WARN(get_logger(), "Planner '%s' not found, falling back to PathPlanner", planner_name_.c_str());
   }
 
+  // 独立异步重规划实例: 与 planner_strategy_ 分开发布 costmap, 避免
+  // 后台 plan() 与 mapCallback 的 setCostmap 并发读写同一份搜索数组.
+  async_planner_ = nav_core::NavigationFactory::createPlanner(planner_name_);
+  if (async_planner_) {
+    core::PlannerConfig async_cfg;
+    async_cfg.name = planner_name_;
+    async_cfg.resolution = 0.05;
+    async_cfg.max_iterations = planner_max_iterations_;
+    async_cfg.timeout = planner_timeout_;
+    async_planner_->initialize(async_cfg);
+    async_planner_->setInflationRadius(0.0);
+    async_planner_->setRobotRadius(0.0);
+  }
+
   // 使用NavigationFactory创建控制器策略
   controller_strategy_ = nav_core::NavigationFactory::createController(controller_name_);
   if (controller_strategy_) {
@@ -214,6 +228,8 @@ LifecycleNode::CallbackReturn NavigationNode::on_cleanup(const rclcpp_lifecycle:
   stop_srv_.reset();
 
   // 清理组件
+  waitForAsyncPlan();
+  async_planner_.reset();
   planner_strategy_.reset();
   controller_strategy_.reset();
 
@@ -258,44 +274,49 @@ LifecycleNode::CallbackReturn NavigationNode::on_cleanup(const rclcpp_lifecycle:
 LifecycleNode::CallbackReturn NavigationNode::on_shutdown(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Shutting down rosiwit_navigation node");
+  // 生命周期 shutdown 不一定先走 deactivate; 主动发零速度, 避免底盘保留
+  // 上一条 cmd_vel 继续运动.
+  if (cmd_vel_pub_ && cmd_vel_pub_->is_activated()) {
+    stopNavigation();
+  }
   return LifecycleNode::CallbackReturn::SUCCESS;
 }
 
 void NavigationNode::loadParameters()
 {
-  this->declare_parameter("controller_frequency", 20.0);
-  this->declare_parameter("planner_frequency", 1.0);
-  this->declare_parameter("max_velocity_x", 0.5);
-  this->declare_parameter("max_velocity_theta", 1.0);
-  this->declare_parameter("min_velocity_x", -0.5);
-  this->declare_parameter("max_accel_x", 0.5);
-  this->declare_parameter("max_accel_theta", 1.0);
-  this->declare_parameter("goal_tolerance_xy", 0.1);
-  this->declare_parameter("goal_tolerance_yaw", 0.1);
-  this->declare_parameter("lookahead_distance", 0.6);
-  this->declare_parameter("min_lookahead_distance", 0.3);
-  this->declare_parameter("max_lookahead_distance", 0.9);
+  declareIfNeeded("controller_frequency", 20.0);
+  declareIfNeeded("planner_frequency", 1.0);
+  declareIfNeeded("max_velocity_x", 0.5);
+  declareIfNeeded("max_velocity_theta", 1.0);
+  declareIfNeeded("min_velocity_x", -0.5);
+  declareIfNeeded("max_accel_x", 0.5);
+  declareIfNeeded("max_accel_theta", 1.0);
+  declareIfNeeded("goal_tolerance_xy", 0.1);
+  declareIfNeeded("goal_tolerance_yaw", 0.1);
+  declareIfNeeded("lookahead_distance", 0.6);
+  declareIfNeeded("min_lookahead_distance", 0.3);
+  declareIfNeeded("max_lookahead_distance", 0.9);
 
-  this->declare_parameter("global_frame", std::string("odom"));
-  this->declare_parameter("robot_frame", std::string("base_link"));
-  this->declare_parameter("map_frame", std::string("map"));
+  declareIfNeeded("global_frame", std::string("odom"));
+  declareIfNeeded("robot_frame", std::string("base_link"));
+  declareIfNeeded("map_frame", std::string("map"));
 
-  this->declare_parameter("planner_name", std::string("astar"));
-  this->declare_parameter("controller_name", std::string("pure_pursuit"));
-  this->declare_parameter("planner_max_iterations", 200000);
-  this->declare_parameter("planner_timeout", 2.0);
-  this->declare_parameter("inflation_radius", 0.5);
-  this->declare_parameter("robot_radius", 0.21);
-  this->declare_parameter("local_costmap_size", 8.0);
-  this->declare_parameter("tf_stale_timeout", 0.6);
-  this->declare_parameter("local_clear_radius", 0.20);
-  this->declare_parameter("enable_path_smoothing", false);
-  this->declare_parameter("recovery_enabled", true);
-  this->declare_parameter("recovery_trigger_cycles", 40);
-  this->declare_parameter("recovery_duration", 1.2);
-  this->declare_parameter("recovery_linear_velocity", -0.10);
-  this->declare_parameter("recovery_angular_velocity", 0.60);
-  this->declare_parameter("recovery_bypass_safety", true);
+  declareIfNeeded("planner_name", std::string("astar"));
+  declareIfNeeded("controller_name", std::string("pure_pursuit"));
+  declareIfNeeded("planner_max_iterations", 200000);
+  declareIfNeeded("planner_timeout", 2.0);
+  declareIfNeeded("inflation_radius", 0.5);
+  declareIfNeeded("robot_radius", 0.21);
+  declareIfNeeded("local_costmap_size", 8.0);
+  declareIfNeeded("tf_stale_timeout", 0.6);
+  declareIfNeeded("local_clear_radius", 0.20);
+  declareIfNeeded("enable_path_smoothing", false);
+  declareIfNeeded("recovery_enabled", true);
+  declareIfNeeded("recovery_trigger_cycles", 40);
+  declareIfNeeded("recovery_duration", 1.2);
+  declareIfNeeded("recovery_linear_velocity", -0.10);
+  declareIfNeeded("recovery_angular_velocity", 0.60);
+  declareIfNeeded("recovery_bypass_safety", true);
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -339,28 +360,28 @@ void NavigationNode::loadParameters()
 
 void NavigationNode::loadSafetyParameters()
 {
-  this->declare_parameter("safety_enabled", true);
-  this->declare_parameter("safety_pointcloud_topic", std::string("/velodyne_points"));
-  this->declare_parameter("safety_base_frame", std::string("base_footprint"));
-  this->declare_parameter("safety_source_timeout", 2.0);
-  this->declare_parameter("safety_self_filter_radius", 0.20);
-  this->declare_parameter("safety_fail_safe_on_timeout", false);
-  this->declare_parameter("safety_min_height", 0.05);
-  this->declare_parameter("safety_max_height", 1.0);
-  this->declare_parameter("safety_stop_polygon", std::vector<double>{
+  declareIfNeeded("safety_enabled", true);
+  declareIfNeeded("safety_pointcloud_topic", std::string("/velodyne_points"));
+  declareIfNeeded("safety_base_frame", std::string("base_footprint"));
+  declareIfNeeded("safety_source_timeout", 2.0);
+  declareIfNeeded("safety_self_filter_radius", 0.20);
+  declareIfNeeded("safety_fail_safe_on_timeout", false);
+  declareIfNeeded("safety_min_height", 0.05);
+  declareIfNeeded("safety_max_height", 1.0);
+  declareIfNeeded("safety_stop_polygon", std::vector<double>{
     -0.23, -0.21, 0.23, -0.21, 0.23, 0.21, -0.23, 0.21});
-  this->declare_parameter("safety_stop_enabled", true);
-  this->declare_parameter("safety_stop_radius", 0.0);
-  this->declare_parameter("safety_stop_max_points", 2);
-  this->declare_parameter("safety_slowdown_polygon", std::vector<double>{
+  declareIfNeeded("safety_stop_enabled", true);
+  declareIfNeeded("safety_stop_radius", 0.0);
+  declareIfNeeded("safety_stop_max_points", 2);
+  declareIfNeeded("safety_slowdown_polygon", std::vector<double>{
     -0.60, -0.50, 0.70, -0.50, 0.70, 0.50, -0.60, 0.50});
-  this->declare_parameter("safety_slowdown_enabled", true);
-  this->declare_parameter("safety_slowdown_max_points", 2);
-  this->declare_parameter("safety_slowdown_ratio", 0.5);
-  this->declare_parameter("safety_approach_enabled", true);
-  this->declare_parameter("safety_time_before_collision", 2.0);
-  this->declare_parameter("safety_simulation_time_step", 0.1);
-  this->declare_parameter("safety_footprint", std::vector<double>{
+  declareIfNeeded("safety_slowdown_enabled", true);
+  declareIfNeeded("safety_slowdown_max_points", 2);
+  declareIfNeeded("safety_slowdown_ratio", 0.5);
+  declareIfNeeded("safety_approach_enabled", true);
+  declareIfNeeded("safety_time_before_collision", 2.0);
+  declareIfNeeded("safety_simulation_time_step", 0.1);
+  declareIfNeeded("safety_footprint", std::vector<double>{
     -0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22});
 
   get_parameter("safety_enabled", safety_enabled_);
@@ -509,7 +530,9 @@ void NavigationNode::safetyPointCloudCallback(
 
 void NavigationNode::initializeSubscribers()
 {
-  std::string odom_topic = this->declare_parameter("odom_topic", "/odom");
+  declareIfNeeded("odom_topic", std::string("/odom"));
+  std::string odom_topic;
+  get_parameter("odom_topic", odom_topic);
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
     odom_topic, rclcpp::SensorDataQoS(),
     std::bind(&NavigationNode::odometryCallback, this, std::placeholders::_1));
@@ -904,6 +927,14 @@ void NavigationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr m
 
 void NavigationNode::goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
 {
+  // inactive/cleanup 状态下控制定时器不存在, 接受目标只会让上层误以为
+  // 导航已开始 (accepted) 而车不会动.
+  if (get_current_state().label() != "active") {
+    RCLCPP_WARN(get_logger(),
+      "Ignoring /goal_pose in lifecycle state '%s'",
+      get_current_state().label().c_str());
+    return;
+  }
   RCLCPP_INFO(get_logger(),
     "Received /goal_pose: (%.2f, %.2f, %.2f)",
     msg->pose.position.x, msg->pose.position.y,
@@ -1076,34 +1107,9 @@ void NavigationNode::controlLoop()
   publishPath(current_path_);
 }
 
-void NavigationNode::replanningCheck()
+void NavigationNode::applyPlanningResult(const core::Result<core::Path> & result)
 {
-  if (!is_navigating_ || is_paused_ || !planner_strategy_ || !current_map_) {
-    return;
-  }
-  if (goal_pose_.header.frame_id.empty() || m_need_initial_rotate) {
-    return;
-  }
-  if (!m_has_planner_costmap_) {
-    return;
-  }
-  if (!updateCurrentPose()) {
-    geometry_msgs::msg::Twist stop_cmd;
-    publishVelocityCommand(stop_cmd);
-    return;
-  }
-
-  const auto start = RosUtils::toCorePose(current_pose_);
-  if (!m_has_effective_goal_) {
-    effective_goal_ = RosUtils::toCorePose(goal_pose_);
-    adjustGoalToFree(effective_goal_);
-    m_has_effective_goal_ = true;
-  }
-  auto result = planner_strategy_->plan(start, effective_goal_);
-
   if (!result.is_ok()) {
-    // 不再由 mapCallback 自动重试旧目标. 失败通过 /goal_status 交给
-    // explorer 换目标; 旧目标每秒重试会把过期 failed 状态混到新目标上.
     geometry_msgs::msg::Twist stop_cmd;
     publishVelocityCommand(stop_cmd);
     is_navigating_ = false;
@@ -1137,6 +1143,69 @@ void NavigationNode::replanningCheck()
     "Replanned path: %zu points", current_path_.poses.size());
 }
 
+void NavigationNode::waitForAsyncPlan()
+{
+  if (!async_plan_future_.valid()) return;
+  try {
+    (void)async_plan_future_.get();
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(get_logger(), "Async planning exception: %s", e.what());
+  }
+}
+
+void NavigationNode::replanningCheck()
+{
+  if (!is_navigating_ || is_paused_ || !planner_strategy_ || !current_map_) {
+    return;
+  }
+  if (goal_pose_.header.frame_id.empty() || m_need_initial_rotate) {
+    return;
+  }
+  if (!m_has_planner_costmap_) {
+    return;
+  }
+  if (!updateCurrentPose()) {
+    geometry_msgs::msg::Twist stop_cmd;
+    publishVelocityCommand(stop_cmd);
+    return;
+  }
+
+  // 后台规划完成: 取结果并应用; 规划期间控制/安全定时器继续运行.
+  if (async_plan_future_.valid()) {
+    if (async_plan_future_.wait_for(std::chrono::seconds(0)) !=
+        std::future_status::ready)
+    {
+      return;
+    }
+    core::Result<core::Path> result = core::Result<core::Path>::error(
+      core::ErrorCode::PLANNING_FAILED, "async planning exception");
+    try {
+      result = async_plan_future_.get();
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(get_logger(), "Async planning exception: %s", e.what());
+    }
+    if (!is_navigating_ || is_paused_) return;
+    applyPlanningResult(result);
+    return;
+  }
+
+  const auto start = RosUtils::toCorePose(current_pose_);
+  if (!m_has_effective_goal_) {
+    effective_goal_ = RosUtils::toCorePose(goal_pose_);
+    adjustGoalToFree(effective_goal_);
+    m_has_effective_goal_ = true;
+  }
+  if (!async_planner_) return;
+
+  // 异步实例独立持有 costmap, 不会和主 planner 的 mapCallback 竞争.
+  async_planner_->setCostmap(planner_costmap_);
+  const core::Pose2D goal = effective_goal_;
+  async_plan_future_ = std::async(std::launch::async,
+    [this, start, goal]() {
+      return async_planner_->plan(start, goal);
+    });
+}
+
 
 void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & goal)
 {
@@ -1155,6 +1224,8 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
     geometry_msgs::msg::Twist stop_cmd;
     publishVelocityCommand(stop_cmd);
   }
+  // 新目标先停住并丢弃正在执行的重规划, 防止旧结果在稍后覆盖新路径.
+  waitForAsyncPlan();
   global_path_pub_->publish(current_path_);
 
   // 更新当前位姿

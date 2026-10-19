@@ -220,48 +220,27 @@ core::Result<core::Path> AStarPlanner::plan(
             core::ErrorCode::START_IN_OBSTACLE, "Start or goal invalid");
     }
 
-    // 机器人实际所在位置可能因 0.5m 栅格/膨胀而落在 lethal 区 (贴墙、地图抖动).
-    // 清出起点周围一小块, 让规划器还能把它带出来; 真正不可走的墙仍由
-    // goal 检查和代价膨胀约束.
-    // 注意: 这是临时清理, 不能永久写回 costmap_data_; 否则静态地图下每次
-    // 1Hz 重规划都会沿轨迹挖出 3x3 的自由洞, 路径可能穿墙.
-    struct RestoreStartCells {
-        std::vector<unsigned char> & data;
-        std::vector<std::pair<size_t, unsigned char>> saved;
-        explicit RestoreStartCells(std::vector<unsigned char> & d) : data(d) {}
-        ~RestoreStartCells() {
-            for (const auto & p : saved) data[p.first] = p.second;
-        }
-    };
-    RestoreStartCells restore_start(costmap_data_);
-
+    // 起点在硬障碍内时直接失败. 行业实现(Nav2 NavFn/global_planner)通常
+    // 不在全局规划器里把障碍格改成自由格; 那会让路径从被挖掉的墙里穿出.
+    // 起步位置若因定位/膨胀落入致命区, 应由恢复行为或局部 footprint 清除处理,
+    // 而不是污染全局 costmap.
     if (isObstacle(start_x, start_y)) {
-        // 只清起点本身和紧邻格, 不能按机器人半径清一大片, 否则路径会从
-        // "被清掉的墙"里穿出去, 看起来像贴着障碍物规划.
-        const int clear_cells = 1;
-        for (int yy = start_y - clear_cells; yy <= start_y + clear_cells; ++yy) {
-            for (int xx = start_x - clear_cells; xx <= start_x + clear_cells; ++xx) {
-                if (isValid(xx, yy)) {
-                    const size_t idx = static_cast<size_t>(yy) * nx_ +
-                        static_cast<size_t>(xx);
-                    restore_start.saved.emplace_back(idx, costmap_data_[idx]);
-                    costmap_data_[idx] = 0;
-                }
-            }
-        }
-    }
-
-    if (isObstacle(start_x, start_y) || isObstacle(goal_x, goal_y)) {
+        planning_active_ = false;
         LOG_ERROR(logger_,
-            "Start or goal in obstacle: start=(%d,%d) cost=%u world=(%.2f,%.2f), "
-            "goal=(%d,%d) cost=%u world=(%.2f,%.2f)",
+            "Start in obstacle: start=(%d,%d) cost=%u world=(%.2f,%.2f)",
             start_x, start_y, static_cast<unsigned>(getCost(start_x, start_y)),
-            start.x, start.y,
+            start.x, start.y);
+        return core::Result<core::Path>::error(
+            core::ErrorCode::START_IN_OBSTACLE, "Start in obstacle");
+    }
+    if (isObstacle(goal_x, goal_y)) {
+        planning_active_ = false;
+        LOG_ERROR(logger_,
+            "Goal in obstacle: goal=(%d,%d) cost=%u world=(%.2f,%.2f)",
             goal_x, goal_y, static_cast<unsigned>(getCost(goal_x, goal_y)),
             goal.x, goal.y);
-        planning_active_ = false;
         return core::Result<core::Path>::error(
-            core::ErrorCode::GOAL_IN_OBSTACLE, "Start or goal in obstacle");
+            core::ErrorCode::GOAL_IN_OBSTACLE, "Goal in obstacle");
     }
 
     // 起点=终点时直接返回

@@ -5,6 +5,7 @@
 #include "algorithms/scan_context/scan_context.h"
 #include <deque>
 #include <unordered_map>
+#include <mutex>
 #include <pcl/registration/gicp.h>
 
 namespace rosiwit_slam {
@@ -38,6 +39,7 @@ private:
 
     std::deque<KeyFrameRecord> m_keyframes;
     std::unordered_map<std::string, size_t> m_kf_index;
+    mutable std::mutex m_mutex;
 
     ScanContext m_sc;
 

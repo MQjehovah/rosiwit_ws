@@ -49,10 +49,20 @@ void NavFnPlanner::setCostmap(const core::Costmap& costmap)
     nx_ = costmap_->grid->info.width;
     ny_ = costmap_->grid->info.height;
 
-    // 复制代价数据
-    costmap_data_.resize(nx_ * ny_);
-    for (size_t i = 0; i < costmap_->grid->data.size(); ++i) {
-        costmap_data_[i] = static_cast<unsigned char>(costmap_->grid->data[i]);
+    // 与 A* 一致: 优先使用 nav 层转换后的 0..255 代价;
+    // 直接复制 OccupancyGrid 的 0..100 会绕过 254 障碍阈值.
+    costmap_data_.assign(static_cast<size_t>(nx_) * ny_, 0);
+    if (costmap_->data.size() == costmap_data_.size()) {
+        for (size_t i = 0; i < costmap_data_.size(); ++i) {
+            costmap_data_[i] = costmap_->data[i];
+        }
+    } else {
+        for (size_t i = 0; i < costmap_->grid->data.size() && i < costmap_data_.size(); ++i) {
+            const int8_t v = costmap_->grid->data[i];
+            if (v < 0) costmap_data_[i] = 254;
+            else if (v >= 100) costmap_data_[i] = 255;
+            else costmap_data_[i] = static_cast<unsigned char>(v * 255 / 100);
+        }
     }
 
     potential_.resize(nx_ * ny_, -1.0f);
@@ -73,7 +83,11 @@ core::Result<core::Path> NavFnPlanner::plan(
     planning_active_ = true;
 
     // 计算势场
-    computePotential(goal);
+    if (!computePotential(goal)) {
+        planning_active_ = false;
+        return core::Result<core::Path>::error(
+            core::ErrorCode::GOAL_IN_OBSTACLE, "Goal invalid");
+    }
 
     // 寻找路径
     core::Path path;
@@ -126,7 +140,7 @@ void NavFnPlanner::reset()
     grady_.clear();
 }
 
-void NavFnPlanner::computePotential(const core::Pose2D& goal)
+bool NavFnPlanner::computePotential(const core::Pose2D& goal)
 {
     // 使用波前传播计算势场
     std::fill(potential_.begin(), potential_.end(), -1.0f);
@@ -136,13 +150,15 @@ void NavFnPlanner::computePotential(const core::Pose2D& goal)
     float origin_x = static_cast<float>(costmap_->grid->info.origin.position.x);
     float origin_y = static_cast<float>(costmap_->grid->info.origin.position.y);
 
-    int goal_x = static_cast<int>((goal.x - origin_x) / resolution);
-    int goal_y = static_cast<int>((goal.y - origin_y) / resolution);
+    int goal_x = static_cast<int>(std::floor((goal.x - origin_x) / resolution));
+    int goal_y = static_cast<int>(std::floor((goal.y - origin_y) / resolution));
 
-    if (goal_x >= 0 && goal_x < static_cast<int>(nx_) &&
-        goal_y >= 0 && goal_y < static_cast<int>(ny_)) {
-        potential_[goal_y * nx_ + goal_x] = 0.0f;
+    if (goal_x < 0 || goal_x >= static_cast<int>(nx_) ||
+        goal_y < 0 || goal_y >= static_cast<int>(ny_) ||
+        getCost(static_cast<unsigned int>(goal_x), static_cast<unsigned int>(goal_y)) >= 254) {
+        return false;
     }
+    potential_[goal_y * nx_ + goal_x] = 0.0f;
 
     // 波前传播
     std::queue<std::pair<int, int>> wavefront;
@@ -172,6 +188,7 @@ void NavFnPlanner::computePotential(const core::Pose2D& goal)
             }
         }
     }
+    return planning_active_;
 }
 
 bool NavFnPlanner::findPath(
@@ -181,8 +198,8 @@ bool NavFnPlanner::findPath(
     float origin_x = static_cast<float>(costmap_->grid->info.origin.position.x);
     float origin_y = static_cast<float>(costmap_->grid->info.origin.position.y);
 
-    int start_x = static_cast<int>((start.x - origin_x) / resolution);
-    int start_y = static_cast<int>((start.y - origin_y) / resolution);
+    int start_x = static_cast<int>(std::floor((start.x - origin_x) / resolution));
+    int start_y = static_cast<int>(std::floor((start.y - origin_y) / resolution));
 
     if (start_x < 0 || start_x >= static_cast<int>(nx_) ||
         start_y < 0 || start_y >= static_cast<int>(ny_)) {

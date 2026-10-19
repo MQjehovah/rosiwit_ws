@@ -27,6 +27,13 @@ void SlamBase::onImu(const IMUSample& s) {
         }
     }
     m_imu_buf.push_back(s);
+    // 传感器停止/处理严重滞后时不能让队列无限增长; 保留最近一段历史,
+    // 超出部分丢弃最旧样本 (定位/建图都不应无限消费历史 IMU).
+    constexpr size_t kMaxImuBuf = 20000;
+    if (m_imu_buf.size() > kMaxImuBuf) {
+        m_imu_buf.erase(m_imu_buf.begin(),
+                        m_imu_buf.begin() + (m_imu_buf.size() - kMaxImuBuf));
+    }
     // fix(b): 不在此触发同步,由 Node timer 周期调用 tryPopAndProcess()
 }
 
@@ -36,6 +43,10 @@ void SlamBase::onLidar(const LidarFrame& f) {
         m_lidar_buf.clear();
     }
     m_lidar_buf.push_back(f);
+    constexpr size_t kMaxLidarBuf = 50;
+    if (m_lidar_buf.size() > kMaxLidarBuf) {
+        m_lidar_buf.pop_front();
+    }
     // fix(b): 不在此触发同步,避免持锁递归 lock 同一 m_buf_mutex 导致死锁
 }
 

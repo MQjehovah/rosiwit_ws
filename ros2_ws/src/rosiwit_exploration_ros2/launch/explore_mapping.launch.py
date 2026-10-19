@@ -17,11 +17,9 @@ from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
     IncludeLaunchDescription,
-    RegisterEventHandler,
     TimerAction,
 )
 from launch.conditions import IfCondition
-from launch.event_handlers import OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -142,9 +140,6 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(LaunchConfiguration('clean_stale')),
     )
-    cleanup_shutdown = RegisterEventHandler(OnShutdown(
-        on_shutdown=ExecuteProcess(cmd=cleanup_cmd, output='screen')
-    ))
 
     explorer = Node(
         package='rosiwit_exploration_ros2',
@@ -169,7 +164,7 @@ def generate_launch_description():
 
     return LaunchDescription(
         declared_arguments
-        + [cleanup_stale, cleanup_shutdown]
+        + [cleanup_stale]
         + [
             # 先清理残留进程, 0.5s 后再拉起新的一套
             TimerAction(

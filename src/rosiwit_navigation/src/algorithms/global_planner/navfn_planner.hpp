@@ -58,7 +58,7 @@ private:
     std::vector<int> gradx_, grady_;
     
     // 内部方法
-    void computePotential(const core::Pose2D& goal);
+    bool computePotential(const core::Pose2D& goal);
     bool findPath(const core::Pose2D& start, const core::Pose2D& goal, core::Path& path);
     void addWavefrontPoint(unsigned int x, unsigned int y);
     unsigned char getCost(unsigned int x, unsigned int y);

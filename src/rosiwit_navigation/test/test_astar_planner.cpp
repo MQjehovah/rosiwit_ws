@@ -189,6 +189,23 @@ TEST(AStarPlanner, BlueIsTraversableWhenNoFreeRouteExists)
   EXPECT_FALSE(pathTouchesLethal(costmap, result.value()));
 }
 
+TEST(AStarPlanner, StartInLethalFailsInsteadOfCarving)
+{
+  const unsigned int width = 20;
+  const unsigned int height = 20;
+  std::vector<unsigned char> cells(width * height, 0);
+  // 起点格本身致命; 规划器不应把它临时改成自由格.
+  cells[2 * width + 2] = 255;
+  const Costmap costmap = makeCostmap(width, height, 0.1, cells);
+  auto planner = makePlanner(costmap);
+
+  const auto result = planner.plan(
+    Pose2D(0.25, 0.25, 0.0), Pose2D(1.5, 1.5, 0.0));
+  EXPECT_FALSE(result.is_ok());
+  EXPECT_EQ(result.error_code(),
+            rosiwit_navigation::core::ErrorCode::START_IN_OBSTACLE);
+}
+
 TEST(AStarPlanner, AppliesConfiguredIterationLimit)
 {
   const unsigned int width = 40;

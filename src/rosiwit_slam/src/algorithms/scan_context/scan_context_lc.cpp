@@ -54,6 +54,7 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
 }
 
 void ScanContextLoopClosure::addKeyFrame(const KeyFrame& kf) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (!kf.cloud || kf.cloud->empty()) return;
 
     KeyFrameRecord rec;
@@ -107,6 +108,7 @@ bool ScanContextLoopClosure::icpVerify(
 }
 
 bool ScanContextLoopClosure::saveDatabase(const std::string& path) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     std::vector<ScanContextDatabaseEntry> db;
     db.reserve(m_keyframes.size());
     for (const auto& rec : m_keyframes) {
@@ -127,6 +129,7 @@ bool ScanContextLoopClosure::saveDatabase(const std::string& path) {
 }
 
 bool ScanContextLoopClosure::getKeyframes(std::vector<KeyFrame>& out) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     out.clear();
     out.reserve(m_keyframes.size());
     for (const auto& rec : m_keyframes) {
@@ -143,6 +146,7 @@ bool ScanContextLoopClosure::getKeyframes(std::vector<KeyFrame>& out) {
 
 bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
                                      std::string& matched_kf_id) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (m_keyframes.size() < static_cast<size_t>(m_min_keyframe_gap + 1)) {
         return false;
     }
@@ -188,6 +192,7 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
     int best_idx = -1;
     int best_col_shift = 0;
     double best_desc_dist = m_dist_thresh;
+    Eigen::Matrix4f best_delta = Eigen::Matrix4f::Identity();
 
     for (size_t ci = 0; ci < num_candidates; ++ci) {
         const auto& cand = candidates[ci];
@@ -210,6 +215,7 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
             best_desc_dist = desc_d;
             best_idx = static_cast<int>(cand.idx);
             best_col_shift = col_shift;
+            best_delta = delta;
         } else {
             std::cout << "[ScanContextLC] ICP failed: desc=" << desc_d
                       << ", fitness=" << fitness << std::endl;
@@ -220,14 +226,14 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
 
     const auto& match = m_keyframes[best_idx];
 
-    // === 3. 计算相对位姿 ===
-    Eigen::Matrix3d R_c_inv = match.pose.rot.transpose();
-    Eigen::Vector3d t_c_inv = -R_c_inv * match.pose.trans;
-
+    // === 3. 相对位姿 ===
+    // GICP 的 delta 是 candidate<-latest 的实测变换; 回环因子必须用它.
+    // 之前用 match.pose^{-1}*latest.pose (前端里程计先验) 重建相对位姿,
+    // 该因子与里程计完全一致, 回环不会提供任何修正量.
     matched_kf_id = match.id;
     relative_pose.time = latest.pose.time;
-    relative_pose.rot = R_c_inv * latest.pose.rot;
-    relative_pose.trans = R_c_inv * (latest.pose.trans - match.pose.trans);
+    relative_pose.rot = best_delta.block<3,3>(0,0).cast<double>();
+    relative_pose.trans = best_delta.block<3,1>(0,3).cast<double>();
 
     cov = std::min(1.0, best_desc_dist / m_dist_thresh);
 

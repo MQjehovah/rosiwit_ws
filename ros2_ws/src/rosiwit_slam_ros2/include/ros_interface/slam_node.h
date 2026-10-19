@@ -137,6 +137,7 @@ private:
     nav_msgs::msg::Path m_path;
     bool m_grid_map_published = false;
     uint64_t m_last_map_revision = 0;
+    uint64_t m_last_cloud_map_revision = 0;
 
     // odom.twist 必须是 child(base) 系速度, 且角速度要由姿态差分得到.
     // 之前只填了 world 系 linear, angular 一直为 0, 导致 DWA/MPPI 的动态窗口

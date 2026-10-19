@@ -1144,14 +1144,16 @@ ILocalization::Status LocalizationPipeline::getStatus() {
 
 bool LocalizationPipeline::getPose(PoseStamped& out) {
     std::lock_guard<std::mutex> lk(m_state_mu);
-    if (m_status == LOST) return false;
+    // LOST 时仍返回最后一次有效位姿; 否则 ROS 层既无法输出 LOST 状态,
+    // 也无法让上层区分"定位丢失"和"节点死了". 从未初始化/从未匹配则返回 false.
+    if (m_status == LOST && !m_initialized.load()) return false;
     out = m_pose;
     return true;
 }
 
 bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) {
     std::lock_guard<std::mutex> lk(m_state_mu);
-    if (m_status == LOST) return false;
+    if (m_status == LOST && !m_initialized.load()) return false;
     out = m_pose;
     cov = m_last_match.cov;
     return true;

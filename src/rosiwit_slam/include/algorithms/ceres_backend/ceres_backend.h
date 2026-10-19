@@ -14,6 +14,10 @@ struct KeyFrameNode {
     PoseStamped pose;
     std::string id;
     int64_t timestamp = 0;
+    // 入图时冻结的相邻里程计测量, 不能每次 optimize 从当前(可能已修正)
+    // 位姿重新推导, 否则上一次修正会变成新的观测.
+    PoseStamped odom_relative;
+    bool has_odom_relative = false;
 };
 
 struct RelPoseConstraint {
@@ -42,7 +46,7 @@ private:
     std::vector<KeyFrameNode> keyframes_;
     std::vector<RelPoseConstraint> constraints_;
     std::unordered_map<std::string, size_t> kf_index_;
-    std::mutex m_mutex;
+    std::recursive_mutex m_mutex;
 
     int optimize_period_ = 10;
     int num_optimizations_ = 0;

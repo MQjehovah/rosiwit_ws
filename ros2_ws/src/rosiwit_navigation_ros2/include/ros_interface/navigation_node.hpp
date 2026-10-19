@@ -8,6 +8,8 @@
 
 #include <memory>
 #include <atomic>
+#include <chrono>
+#include <future>
 #include <string>
 #include <utility>
 #include <vector>
@@ -168,6 +170,13 @@ protected:
   /**
    * @brief 加载参数
    */
+  template <typename T>
+  void declareIfNeeded(const std::string & name, const T & value)
+  {
+    if (!this->has_parameter(name)) {
+      this->declare_parameter(name, value);
+    }
+  }
   void loadParameters();
   void loadSafetyParameters();
 
@@ -199,6 +208,8 @@ protected:
    * @brief 重规划检查
    */
   void replanningCheck();
+  void applyPlanningResult(const core::Result<core::Path> & result);
+  void waitForAsyncPlan();
 
   /**
    * @brief 执行导航
@@ -363,6 +374,9 @@ private:
 
   // 策略型规划器和控制器（由NavigationFactory创建）
   std::unique_ptr<core::IPlannerStrategy> planner_strategy_;
+  // 重规划专用实例: 与主 planner 分离, 避免异步搜索与 mapCallback 的 setCostmap 竞争.
+  std::unique_ptr<core::IPlannerStrategy> async_planner_;
+  std::future<core::Result<core::Path>> async_plan_future_;
   std::unique_ptr<core::IControllerStrategy> controller_strategy_;
 
   // 策略名称参数
