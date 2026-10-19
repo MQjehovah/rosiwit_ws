@@ -92,6 +92,10 @@ private:
     pnh_.param<double>("max_lookahead_distance", max_lookahead_distance_, 0.9);
     pnh_.param<double>("inflation_radius", inflation_radius_, 0.5);
     pnh_.param<double>("robot_radius", robot_radius_, 0.21);
+    pnh_.param<int>("planner_max_iterations", planner_max_iterations_, 200000);
+    pnh_.param<double>("planner_timeout", planner_timeout_, 2.0);
+    pnh_.param<double>("max_accel_x", max_accel_x_, 0.4);
+    pnh_.param<double>("max_accel_theta", max_accel_theta_, 0.8);
 
     pnh_.param<std::string>("global_frame", global_frame_, "odom");
     pnh_.param<std::string>("robot_frame", robot_frame_, "base_link");
@@ -109,8 +113,8 @@ private:
       core::PlannerConfig cfg;
       cfg.name = planner_name_;
       cfg.resolution = 0.05;
-      cfg.max_iterations = 50000;
-      cfg.timeout = 2.0;
+      cfg.max_iterations = planner_max_iterations_;
+      cfg.timeout = planner_timeout_;
       planner_strategy_->initialize(cfg);
       planner_strategy_->setInflationRadius(inflation_radius_);
       planner_strategy_->setRobotRadius(robot_radius_);
@@ -129,6 +133,8 @@ private:
       cfg.min_lookahead_distance = min_lookahead_distance_;
       cfg.max_linear_velocity = max_velocity_x_;
       cfg.max_angular_velocity = max_velocity_theta_;
+      cfg.max_accel_x = max_accel_x_;
+      cfg.max_accel_theta = max_accel_theta_;
       cfg.kinematics.max_velocity_x = max_velocity_x_;
       cfg.kinematics.max_velocity_theta = max_velocity_theta_;
       controller_strategy_->initialize(cfg);
@@ -155,11 +161,15 @@ private:
       &RosiwitNavigationRos1Node::controlLoop, this);
     local_costmap_timer_ = nh_.createTimer(
       ros::Duration(0.1), &RosiwitNavigationRos1Node::publishLocalCostmap, this);
+    replanning_timer_ = nh_.createTimer(
+      ros::Duration(1.0 / std::max(0.1, planner_frequency_)),
+      &RosiwitNavigationRos1Node::replanningCheck, this);
   }
 
   // ---- 回调 ----
   void odomCallback(const nav_msgs::Odometry::ConstPtr & msg)
   {
+    last_odom_stamp_ = ros::Time::now();
     current_velocity_ = msg->twist.twist;
     current_pose_.header = msg->header;
     current_pose_.pose = msg->pose.pose;
@@ -395,7 +405,7 @@ private:
     const int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
     const int cx = static_cast<int>((rx - ox) / res);
     const int cy = static_cast<int>((ry - oy) / res);
-    const int lw = win_half * 2;
+    const int lw = win_half * 2 + 1;
 
     nav_msgs::OccupancyGrid local_costmap;
     local_costmap.header.frame_id = map_frame_;
@@ -403,13 +413,14 @@ private:
     local_costmap.info.resolution = res;
     local_costmap.info.width = lw;
     local_costmap.info.height = lw;
-    local_costmap.info.origin.position.x = rx - win_width / 2.0;
-    local_costmap.info.origin.position.y = ry - win_width / 2.0;
+    local_costmap.info.origin.position.x = rx - (win_half + 0.5) * res;
+    local_costmap.info.origin.position.y = ry - (win_half + 0.5) * res;
     local_costmap.info.origin.orientation.w = 1.0;
 
-    std::vector<int8_t> raw(lw * lw, 0);
-    for (int dy = -win_half; dy < win_half; ++dy) {
-      for (int dx = -win_half; dx < win_half; ++dx) {
+    // 窗口外默认致命; 融合静态地图 + 实时激光.
+    std::vector<int8_t> raw(lw * lw, 100);
+    for (int dy = -win_half; dy <= win_half; ++dy) {
+      for (int dx = -win_half; dx <= win_half; ++dx) {
         const int mx = cx + dx;
         const int my = cy + dy;
         if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) { continue; }
@@ -418,8 +429,26 @@ private:
         raw[gy * lw + gx] = (current_map_->data[my * w + mx] >= 100) ? 100 : 0;
       }
     }
+    for (const auto& pt : laser_points_) {
+      const int mx = static_cast<int>(std::floor((pt.x - ox) / res));
+      const int my = static_cast<int>(std::floor((pt.y - oy) / res));
+      const int dx = mx - cx;
+      const int dy = my - cy;
+      if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) continue;
+      raw[(dy + win_half) * lw + (dx + win_half)] = 100;
+    }
+    // 清掉机器人自身中心附近的自点/噪点; 碰撞仍由安全层和硬边界负责.
+    const int clear_cells = std::max(1, static_cast<int>(std::ceil(0.2 / res)));
+    for (int dy = -clear_cells; dy <= clear_cells; ++dy)
+      for (int dx = -clear_cells; dx <= clear_cells; ++dx) {
+        if (dx * dx + dy * dy > clear_cells * clear_cells) continue;
+        const int gx = win_half + dx, gy = win_half + dy;
+        if (gx >= 0 && gx < lw && gy >= 0 && gy < lw) raw[gy * lw + gx] = 0;
+      }
 
-    const int l_inflate = static_cast<int>(std::ceil(inflation_radius_ / res));
+    const int l_inflate = std::max(
+      static_cast<int>(std::ceil(inflation_radius_ / res)),
+      std::max(1, static_cast<int>(std::ceil(robot_radius_ / res))) + 1);
     const int l_safety = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
     std::vector<float> ldist(lw * lw, std::numeric_limits<float>::max());
     std::queue<std::pair<int, int>> lq;
@@ -453,13 +482,41 @@ private:
       } else { local_costmap.data[i] = 0; }
     }
     local_costmap_pub_.publish(local_costmap);
+
+    // ROS2 同类节点会把局部 costmap 注入控制器; ROS1 之前漏了这一步,
+    // DWA/MPPI 只能看到 RViz, 看不到真实局部障碍.
+    if (controller_strategy_) {
+      core::CostmapGrid grid;
+      grid.info.width = local_costmap.info.width;
+      grid.info.height = local_costmap.info.height;
+      grid.info.resolution = local_costmap.info.resolution;
+      grid.info.origin.position.x = local_costmap.info.origin.position.x;
+      grid.info.origin.position.y = local_costmap.info.origin.position.y;
+      grid.data = local_costmap.data;
+      controller_strategy_->setLocalCostmap(grid);
+    }
   }
 
   // ---- 导航 ----
-  void executeNavigation(const geometry_msgs::PoseStamped & goal)
+  void replanningCheck(const ros::TimerEvent &)
   {
+    if (!is_navigating_ || is_paused_ || m_need_initial_rotate_) return;
+    if (goal_pose_.header.frame_id.empty()) return;
+    executeNavigation(goal_pose_, /*allow_initial_rotate=*/false);
+  }
+
+  void executeNavigation(const geometry_msgs::PoseStamped & goal,
+                         bool allow_initial_rotate = true)
+  {
+    // 新目标先停旧路径; 重规划不打断当前控制.
+    if (allow_initial_rotate) {
+      stopNavigation();
+    } else {
+      is_navigating_ = false;
+    }
     if (!updateCurrentPose()) {
       ROS_ERROR("[rosiwit_navigation_ros1] cannot get current pose for planning");
+      stopNavigation();
       return;
     }
     if (!planner_strategy_) {
@@ -473,6 +530,7 @@ private:
     if (!result.is_ok()) {
       ROS_ERROR("[rosiwit_navigation_ros1] planner '%s' failed: %s",
                 planner_name_.c_str(), result.error_message().c_str());
+      stopNavigation();
       return;
     }
 
@@ -504,7 +562,7 @@ private:
     global_path_pub_.publish(current_path_);
 
     m_need_initial_rotate_ = false;
-    if (current_path_.poses.size() > 2) {
+    if (allow_initial_rotate && current_path_.poses.size() > 2) {
       const double current_yaw = yawFromQuat(current_pose_.pose.orientation);
       const double dx = current_path_.poses[1].pose.position.x - current_path_.poses[0].pose.position.x;
       const double dy = current_path_.poses[1].pose.position.y - current_path_.poses[0].pose.position.y;
@@ -525,7 +583,16 @@ private:
   void controlLoop(const ros::TimerEvent &)
   {
     if (!is_navigating_ || is_paused_) { return; }
-    if (!updateCurrentPose()) { return; }
+    if (last_odom_stamp_.isZero() ||
+        (ros::Time::now() - last_odom_stamp_).toSec() > 0.6) {
+      stopNavigation();
+      return;
+    }
+    if (!updateCurrentPose()) {
+      // 定位/TF 失效时必须主动发零, 不能保留上一条 cmd_vel.
+      stopNavigation();
+      return;
+    }
 
     if (isGoalReached()) {
       ROS_INFO("[rosiwit_navigation_ros1] goal reached");
@@ -682,6 +749,10 @@ private:
   double max_lookahead_distance_ = 0.9;
   double inflation_radius_ = 0.5;
   double robot_radius_ = 0.21;
+  int planner_max_iterations_ = 200000;
+  double planner_timeout_ = 2.0;
+  double max_accel_x_ = 0.4;
+  double max_accel_theta_ = 0.8;
 
   std::string global_frame_;
   std::string robot_frame_;
@@ -702,8 +773,10 @@ private:
   ros::Publisher global_path_pub_;
   ros::Publisher global_costmap_pub_;
   ros::Publisher local_costmap_pub_;
+  ros::Time last_odom_stamp_;
   ros::Timer control_timer_;
   ros::Timer local_costmap_timer_;
+  ros::Timer replanning_timer_;
 
   nav_msgs::OccupancyGrid::ConstPtr current_map_;
   geometry_msgs::PoseStamped current_pose_;

@@ -321,7 +321,7 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
 
 SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
     // ---- input_profile (M12: 默认 rosiwit, 只有 drop-in launch 显式传 legacy) ----
-    pnh_.param<std::string>("input_profile", input_profile_, "rosiwit");
+    pnh_.param<std::string>("input_profile", input_profile_, "legacy");
     if (input_profile_ != "rosiwit" && input_profile_ != "legacy") {
         ROS_WARN_STREAM("[slam_engine] unknown input_profile '" << input_profile_
                         << "', falling back to 'rosiwit'");

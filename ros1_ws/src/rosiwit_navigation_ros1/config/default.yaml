@@ -6,6 +6,12 @@ max_velocity_x: 0.5
 min_velocity_x: 0.0
 max_velocity_theta: 1.0
 
+max_accel_x: 0.4
+max_accel_theta: 0.8
+
+planner_max_iterations: 200000
+planner_timeout: 2.0
+
 # 频率
 controller_frequency: 20.0
 planner_frequency: 1.0

@@ -11,9 +11,8 @@
 
 #include <memory>
 
-#include "legacy_xz3dslam_interface.h"
-#include "rosiwit_interface.h"
 #include "slam_engine.h"
+#include "slam_ros1_interface.h"
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "rosiwit_slam_ros1");
@@ -22,20 +21,14 @@ int main(int argc, char** argv) {
 
     rosiwit_slam_ros1::SlamEngine engine(nh, pnh);
     if (!engine.ok()) {
-        // 与原实现一致: SlamEngine 构造里已经 ROS_FATAL + ros::shutdown(),
-        // 这里直接收工 (退出码仍是 0, 不改变 roslaunch/respawn 的既有行为)。
         return 0;
     }
 
-    rosiwit_slam_ros1::RosiwitInterface rosiwit_iface(nh, pnh, engine);
+    // 唯一对外接口: 老接口优先, 新输出只保留不冲突项.
+    rosiwit_slam_ros1::SlamRos1Interface iface(nh, pnh, engine);
 
-    // input_profile=legacy: 再把旧 xz_3d_slam 的接口挂到**同一个**核心上 (T5 起)
-    std::unique_ptr<rosiwit_slam_ros1::LegacyXz3dSlamInterface> legacy_iface;
-    if (engine.legacyProfile()) {
-        legacy_iface.reset(new rosiwit_slam_ros1::LegacyXz3dSlamInterface(nh, pnh, engine));
-    }
-
-    ROS_INFO("[rosiwit_slam_ros1] node up: profile=%s", engine.inputProfile().c_str());
+    ROS_INFO("[rosiwit_slam_ros1] node up: profile=%s (single interface)",
+             engine.inputProfile().c_str());
     ros::spin();
     return 0;
 }

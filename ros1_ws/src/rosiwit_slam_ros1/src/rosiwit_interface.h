@@ -40,7 +40,8 @@ namespace rosiwit_slam_ros1 {
 
 class RosiwitInterface {
 public:
-    RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine);
+    RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine,
+                     bool suppress_conflicts = false);
 
 private:
     /// 挂在 engine 的 50Hz 泵上: 与重构前"同一个 processCB 里排空+发布"时序一致

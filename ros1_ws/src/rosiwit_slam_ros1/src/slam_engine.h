@@ -155,7 +155,7 @@ private:
     ros::NodeHandle nh_, pnh_;
     Cfg cfg_;
 
-    std::string input_profile_ = "rosiwit";
+    std::string input_profile_ = "legacy";
     std::string config_path_;
     LegacyConfig legacy_cfg_;
 

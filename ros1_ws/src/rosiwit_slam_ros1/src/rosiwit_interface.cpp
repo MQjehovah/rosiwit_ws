@@ -14,8 +14,10 @@ using namespace rosiwit_slam;
 
 namespace rosiwit_slam_ros1 {
 
-RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine)
-    : nh_(nh), pnh_(pnh), engine_(engine), legacy_(engine.legacyProfile()) {
+RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine,
+                                   bool suppress_conflicts)
+    : nh_(nh), pnh_(pnh), engine_(engine),
+      legacy_(suppress_conflicts || engine.legacyProfile()) {
     // ---- 发布 ----
     odom_pub_ = nh_.advertise<nav_msgs::Odometry>("lio_odom", 1000);
     if (!legacy_) {
@@ -92,9 +94,10 @@ void RosiwitInterface::publishPose(const SlamOutput& out) {
     odom.pose.pose.position.z = pose.trans.z();
     odom.pose.pose.orientation.x = q.x(); odom.pose.pose.orientation.y = q.y();
     odom.pose.pose.orientation.z = q.z(); odom.pose.pose.orientation.w = q.w();
-    odom.twist.twist.linear.x = pose.vel.x();
-    odom.twist.twist.linear.y = pose.vel.y();
-    odom.twist.twist.linear.z = pose.vel.z();
+    const Eigen::Vector3d vel_body = q.conjugate() * pose.vel;
+    odom.twist.twist.linear.x = vel_body.x();
+    odom.twist.twist.linear.y = vel_body.y();
+    odom.twist.twist.linear.z = vel_body.z();
     odom_pub_.publish(odom);
     // M5: legacy profile 下不发 `odom` 别名
     if (!legacy_ && odom_nav_pub_.getNumSubscribers() > 0) odom_nav_pub_.publish(odom);
@@ -152,12 +155,14 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
             global_map_pub_.publish(m);
         }
     }
-    // grid_map (+ map, 仅 rosiwit profile)
+    // grid_map (+ map, 仅非冲突模式)
     const bool want_grid = is_loc || grid_map_pub_.getNumSubscribers() > 0 ||
                            (!legacy_ && map_pub_.getNumSubscribers() > 0);
-    if (!grid_published_ && want_grid) {
+    if (want_grid) {
         GridInfo gi;
-        if (engine_.getGridInfo(gi) && gi.width > 0 && gi.height > 0) {
+        // 必须走 getRealtimeGrid, 它会按当前观测重建栅格; 只读 getGridInfo
+        // 会在建图过程中一直发旧缓存. 核心内部按 revision 缓存, 不重复重建.
+        if (engine_.getRealtimeGrid(0.05, gi) && gi.width > 0 && gi.height > 0) {
             nav_msgs::OccupancyGrid grid;
             grid.header.frame_id = engine_.worldFrame();
             grid.header.stamp = ros::Time::now();
@@ -167,14 +172,9 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
             grid.info.origin.position.x = gi.origin_x;
             grid.info.origin.position.y = gi.origin_y;
             grid.info.origin.orientation.w = 1.0;
-            const int w = gi.width, h = gi.height;
-            grid.data.resize(static_cast<size_t>(w) * h);
-            for (int row = 0; row < h; ++row) {
-                const int src = h - 1 - row;   // 竖直翻转: 首行=最大 y
-                for (int col = 0; col < w; ++col)
-                    grid.data[static_cast<size_t>(row) * w + col] =
-                        gi.data[static_cast<size_t>(src) * w + col];
-            }
+            // GridInfo 内部 row0 = 最小 y, 与 ROS OccupancyGrid 一致.
+            // 旧 PGM 的图像坐标翻转只在存盘/读盘层做, 不能在这里翻.
+            grid.data = gi.data;
             grid_map_pub_.publish(grid);
             if (!legacy_) map_pub_.publish(grid);
             grid_published_ = true;
