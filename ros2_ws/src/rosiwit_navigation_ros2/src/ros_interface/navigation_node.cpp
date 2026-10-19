@@ -245,6 +245,7 @@ void NavigationNode::loadParameters()
   this->declare_parameter("inflation_radius", 0.5);
   this->declare_parameter("robot_radius", 0.21);
   this->declare_parameter("local_costmap_size", 8.0);
+  this->declare_parameter("tf_stale_timeout", 0.6);
   this->declare_parameter("enable_path_smoothing", false);
   this->declare_parameter("recovery_enabled", true);
   this->declare_parameter("recovery_trigger_cycles", 40);
@@ -274,6 +275,7 @@ void NavigationNode::loadParameters()
   get_parameter("inflation_radius", inflation_radius_);
   get_parameter("robot_radius", robot_radius_);
   get_parameter("local_costmap_size", local_costmap_size_);
+  get_parameter("tf_stale_timeout", tf_stale_timeout_);
   get_parameter("enable_path_smoothing", enable_path_smoothing_);
   get_parameter("recovery_enabled", recovery_enabled_);
   get_parameter("recovery_trigger_cycles", recovery_trigger_cycles_);
@@ -535,6 +537,9 @@ void NavigationNode::initializeTimers()
 void NavigationNode::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
   current_velocity_ = msg->twist.twist;
+  last_odom_sec_ = now().seconds();
+  odom_pose_ = msg->pose.pose;
+  odom_pose_valid_ = true;
 
   // 更新当前位姿
   current_pose_.header = msg->header;
@@ -944,10 +949,17 @@ void NavigationNode::controlLoop()
     return;
   }
 
-  // 更新当前位姿
+  // 更新当前位姿; 定位链路失效时必须主动发零速度, 不能保留上一条 cmd_vel.
   if (!updateCurrentPose()) {
+    geometry_msgs::msg::Twist stop_cmd;
+    publishVelocityCommand(stop_cmd);
+    return;
+  }
+  if (now().seconds() - last_odom_sec_ > tf_stale_timeout_) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-      "Cannot get current pose");
+      "Odom stale (%.2fs); stopping", now().seconds() - last_odom_sec_);
+    geometry_msgs::msg::Twist stop_cmd;
+    publishVelocityCommand(stop_cmd);
     return;
   }
 
@@ -1053,6 +1065,8 @@ void NavigationNode::replanningCheck()
     return;
   }
   if (!updateCurrentPose()) {
+    geometry_msgs::msg::Twist stop_cmd;
+    publishVelocityCommand(stop_cmd);
     return;
   }
 
@@ -1098,6 +1112,8 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
   // 更新当前位姿
   if (!updateCurrentPose()) {
     RCLCPP_ERROR(get_logger(), "Cannot get current pose for planning");
+    geometry_msgs::msg::Twist stop_cmd;
+    publishVelocityCommand(stop_cmd);
     current_state_ = NavigationState::FAILED;
     return;
   }
@@ -1169,10 +1185,56 @@ bool NavigationNode::updateCurrentPose()
     transform = tf_buffer_->lookupTransform(
       global_frame_, robot_frame_, tf2::TimePointZero);
 
+    const rclcpp::Time tf_stamp(transform.header.stamp);
+    const double tf_age = (this->now() - tf_stamp).seconds();
+    if (tf_age > tf_stale_timeout_) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+        "TF stale: %s -> %s age=%.2fs (limit %.2fs)",
+        global_frame_.c_str(), robot_frame_.c_str(), tf_age, tf_stale_timeout_);
+      return false;
+    }
+
+    const double x = transform.transform.translation.x;
+    const double y = transform.transform.translation.y;
+    const double yaw = tf2::getYaw(transform.transform.rotation);
+
+    // SLAM/loop-closure 可能让 TF 停住或突然跳变; 这期间不能继续用旧位姿开车.
+    if (last_tf_pose_valid_) {
+      const double dx = x - last_tf_x_;
+      const double dy = y - last_tf_y_;
+      double dyaw = yaw - last_tf_yaw_;
+      while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+      while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+      if (std::hypot(dx, dy) > 0.75 || std::abs(dyaw) > 1.0) {
+        last_tf_x_ = x; last_tf_y_ = y; last_tf_yaw_ = yaw;
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+          "TF jump ignored: d=%.2fm dyaw=%.2frad", std::hypot(dx, dy), dyaw);
+        return false;
+      }
+    }
+    last_tf_x_ = x; last_tf_y_ = y; last_tf_yaw_ = yaw;
+    last_tf_pose_valid_ = true;
+
+    // TF 与 odom 应描述同一个底座; 差值异常时判定定位链路不可信.
+    if (odom_pose_valid_ && now().seconds() - last_odom_sec_ <= tf_stale_timeout_) {
+      const double ox = odom_pose_.position.x;
+      const double oy = odom_pose_.position.y;
+      double oyaw = tf2::getYaw(odom_pose_.orientation);
+      double dyaw = yaw - oyaw;
+      while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+      while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+      if (std::hypot(x - ox, y - oy) > 0.6 || std::abs(dyaw) > 0.8) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+          "TF/odom mismatch: d=%.2fm dyaw=%.2frad; stopping",
+          std::hypot(x - ox, y - oy), dyaw);
+        return false;
+      }
+    }
+
     current_pose_.header.stamp = transform.header.stamp;
     current_pose_.header.frame_id = global_frame_;
-    current_pose_.pose.position.x = transform.transform.translation.x;
-    current_pose_.pose.position.y = transform.transform.translation.y;
+    current_pose_.pose.position.x = x;
+    current_pose_.pose.position.y = y;
     current_pose_.pose.position.z = transform.transform.translation.z;
     current_pose_.pose.orientation = transform.transform.rotation;
 

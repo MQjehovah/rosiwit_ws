@@ -296,6 +296,14 @@ private:
   geometry_msgs::msg::PoseStamped goal_pose_;
   double last_controller_path_sec_ = 0.0;
   double last_costmap_replan_sec_ = -1e9;
+  double tf_stale_timeout_{0.6};
+  double last_odom_sec_{-1e9};
+  bool odom_pose_valid_{false};
+  geometry_msgs::msg::Pose odom_pose_;
+  bool last_tf_pose_valid_{false};
+  double last_tf_x_{0.0};
+  double last_tf_y_{0.0};
+  double last_tf_yaw_{0.0};
 
   // DWA 卡死恢复
   bool recovery_enabled_ = true;

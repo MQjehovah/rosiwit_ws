@@ -37,6 +37,7 @@ rosiwit_navigation_node:
     robot_radius: 0.25
     inflation_radius: 0.90
     local_costmap_size: 10.0
+    tf_stale_timeout: 0.6
     # 平滑器会把 unknown 当自由并可能把路径拉进未知墙; 探索时关闭
     enable_path_smoothing: true
 
@@ -53,8 +54,8 @@ rosiwit_navigation_node:
     safety_enabled: true
     safety_pointcloud_topic: /velodyne_points
     safety_base_frame: base_footprint
-    safety_source_timeout: 2.0
-    safety_fail_safe_on_timeout: false
+    safety_source_timeout: 1.0
+    safety_fail_safe_on_timeout: true
     safety_min_height: 0.05
     safety_max_height: 1.0
     # 边界: 碰撞半径 0.20m; 安全停止半径 0.25m; 规划硬边界 0.25m;
