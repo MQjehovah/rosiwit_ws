@@ -6,6 +6,7 @@
 #include "diff_drive_controller.hpp"
 #include "dwa_controller.hpp"
 #include "teb_controller.hpp"
+#include "mppi_controller.hpp"
 
 namespace rosiwit_navigation {
 namespace nav_core {
@@ -34,6 +35,9 @@ NavigationFactory::createController(const std::string & name)
   if (name == "dwa") {
     return std::make_unique<controllers::DwaController>();
   }
+  if (name == "mppi") {
+    return std::make_unique<controllers::MppiController>();
+  }
   if (name == "teb") {
     return std::make_unique<controllers::TebController>();
   }
@@ -47,7 +51,7 @@ std::vector<std::string> NavigationFactory::listPlanners()
 
 std::vector<std::string> NavigationFactory::listControllers()
 {
-  return {"pure_pursuit", "diff_drive", "dwa", "teb"};
+  return {"pure_pursuit", "diff_drive", "dwa", "teb", "mppi"};
 }
 
 } // namespace nav_core
