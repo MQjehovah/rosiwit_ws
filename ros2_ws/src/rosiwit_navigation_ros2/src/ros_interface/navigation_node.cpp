@@ -248,6 +248,7 @@ void NavigationNode::loadParameters()
   this->declare_parameter("robot_radius", 0.21);
   this->declare_parameter("local_costmap_size", 8.0);
   this->declare_parameter("tf_stale_timeout", 0.6);
+  this->declare_parameter("local_clear_radius", 0.20);
   this->declare_parameter("enable_path_smoothing", false);
   this->declare_parameter("recovery_enabled", true);
   this->declare_parameter("recovery_trigger_cycles", 40);
@@ -278,6 +279,7 @@ void NavigationNode::loadParameters()
   get_parameter("robot_radius", robot_radius_);
   get_parameter("local_costmap_size", local_costmap_size_);
   get_parameter("tf_stale_timeout", tf_stale_timeout_);
+  get_parameter("local_clear_radius", local_clear_radius_);
   get_parameter("enable_path_smoothing", enable_path_smoothing_);
   get_parameter("recovery_enabled", recovery_enabled_);
   get_parameter("recovery_trigger_cycles", recovery_trigger_cycles_);
@@ -299,6 +301,7 @@ void NavigationNode::loadSafetyParameters()
   this->declare_parameter("safety_pointcloud_topic", std::string("/velodyne_points"));
   this->declare_parameter("safety_base_frame", std::string("base_footprint"));
   this->declare_parameter("safety_source_timeout", 2.0);
+  this->declare_parameter("safety_self_filter_radius", 0.20);
   this->declare_parameter("safety_fail_safe_on_timeout", false);
   this->declare_parameter("safety_min_height", 0.05);
   this->declare_parameter("safety_max_height", 1.0);
@@ -322,6 +325,7 @@ void NavigationNode::loadSafetyParameters()
   get_parameter("safety_pointcloud_topic", safety_pointcloud_topic_);
   get_parameter("safety_base_frame", safety_base_frame_);
   get_parameter("safety_source_timeout", safety_source_timeout_);
+  get_parameter("safety_self_filter_radius", safety_self_filter_radius_);
   get_parameter("safety_fail_safe_on_timeout", safety_fail_safe_on_timeout_);
   get_parameter("safety_min_height", safety_min_height_);
   get_parameter("safety_max_height", safety_max_height_);
@@ -407,6 +411,11 @@ void NavigationNode::safetyPointCloudCallback(
       tf2::Vector3 point(*iter_x, *iter_y, *iter_z);
       point = rotation * point + translation;
       if (point.z() < safety_min_height_ || point.z() > safety_max_height_) {
+        continue;
+      }
+      // 激光会打到机器人自身/很近的地面噪点; 不滤掉会在局部 costmap
+      // 中心形成 100, DWA/MPPI 所有轨迹都判碰撞, 原地 recovery.
+      if (std::hypot(point.x(), point.y()) < safety_self_filter_radius_) {
         continue;
       }
       points.emplace_back(point.x(), point.y());
@@ -888,6 +897,22 @@ void NavigationNode::publishLocalCostmap()
     else if (d <= l_inflate) local_costmap.data[i] = static_cast<int8_t>((1.0f - (d - l_safety) * linv) * 99);
     else local_costmap.data[i] = 0;
   }
+  // 机器人自身所在的小区域清成自由, 否则贴墙/自身噪点导致局部中心 100,
+  // DWA/MPPI 没有可行轨迹; 真正碰撞仍由安全层和紫色硬边界负责.
+  if (local_clear_radius_ > 0.0) {
+    const int clear_cells = std::max(1, static_cast<int>(
+      std::ceil(local_clear_radius_ / res)));
+    for (int dy = -clear_cells; dy <= clear_cells; ++dy) {
+      for (int dx = -clear_cells; dx <= clear_cells; ++dx) {
+        if (dx * dx + dy * dy > clear_cells * clear_cells) continue;
+        const int gx = win_half + dx;
+        const int gy = win_half + dy;
+        if (gx < 0 || gx >= lw || gy < 0 || gy >= lw) continue;
+        local_costmap.data[static_cast<size_t>(gy) * lw + gx] = 0;
+      }
+    }
+  }
+
   if (controller_strategy_) {
     core::CostmapGrid grid;
     grid.info.width = local_costmap.info.width;
@@ -1038,22 +1063,6 @@ void NavigationNode::controlLoop()
 
   // 计算速度命令
   geometry_msgs::msg::Twist cmd_vel = computeVelocityCommand();
-
-  // 运控级角速度/线加速度限幅: DWA 的动态窗口覆盖 1s, 单周期仍可能
-  // 从 +0.8 跳到 -0.8; 这里按实际周期限制到加速度约束内. 明确的停车
-  // 指令不延迟, 保证安全层/规划失败时立即停.
-  const double cmd_now = now().seconds();
-  if (last_control_sec_ > 0.0 &&
-      (std::abs(cmd_vel.linear.x) > 1e-4 || std::abs(cmd_vel.angular.z) > 1e-4)) {
-    const double dt = std::clamp(cmd_now - last_control_sec_, 0.01, 0.1);
-    cmd_vel.linear.x = std::clamp(cmd_vel.linear.x,
-      current_velocity_.linear.x - params_.max_accel_x * dt,
-      current_velocity_.linear.x + params_.max_accel_x * dt);
-    cmd_vel.angular.z = std::clamp(cmd_vel.angular.z,
-      current_velocity_.angular.z - params_.max_accel_theta * dt,
-      current_velocity_.angular.z + params_.max_accel_theta * dt);
-  }
-  last_control_sec_ = cmd_now;
 
   if (recovery_enabled_ &&
     std::abs(cmd_vel.linear.x) < 0.02 && std::abs(cmd_vel.angular.z) < 0.02) {

@@ -298,6 +298,8 @@ private:
   double last_costmap_replan_sec_ = -1e9;
   double last_control_sec_ = -1.0;
   double tf_stale_timeout_{0.6};
+  double safety_self_filter_radius_{0.20};
+  double local_clear_radius_{0.20};
   double last_odom_sec_{-1e9};
   bool odom_pose_valid_{false};
   geometry_msgs::msg::Pose odom_pose_;
