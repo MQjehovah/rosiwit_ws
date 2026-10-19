@@ -761,7 +761,9 @@ void NavigationNode::updateCostmap()
     }
   }
 
-  controller_strategy_->setObstacles(obstacles);
+  // DWA 已直接使用 local costmap; 不再叠加地图簇/3D 点障碍列表,
+  // 否则同一障碍被表示两次, 会把门洞/窄通道堵死.
+  controller_strategy_->setObstacles({});
 }
 
 void NavigationNode::publishLocalCostmap()

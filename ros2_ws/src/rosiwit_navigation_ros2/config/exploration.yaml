@@ -56,8 +56,10 @@ rosiwit_navigation_node:
     # 边界划分:
     #   DWA/local costmap -> 正常避障 (硬缓冲 0.22m, 梯度 0.9m)
     #   安全层 -> 方向相关的 1s TTC 推演, 只拦截即将碰撞的运动
-    safety_stop_enabled: false
-    safety_stop_polygon: [-0.23, -0.21, 0.23, -0.21, 0.23, 0.21, -0.23, 0.21]
+    # 紧急 STOP 只包住车体本身 (小于 DWA 的 0.22~0.25m 硬避障),
+    # 正常路径 0.30m 不会触发; 侧向 0.22m 也不会像之前那样全向锁死.
+    safety_stop_enabled: true
+    safety_stop_polygon: [-0.21, -0.19, 0.21, -0.19, 0.21, 0.19, -0.21, 0.19]
     safety_stop_max_points: 2
     # SLOWDOWN 也关闭, 避免和 DWA 速度控制叠加
     safety_slowdown_enabled: false

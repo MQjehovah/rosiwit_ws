@@ -95,6 +95,9 @@ std::vector<DwaController::Sample> DwaController::search(
             double dv_cmd = std::abs(s.v - vel.linear_x) / max_vx_;
             double dw_cmd = std::abs(s.w - vel.angular_z) / max_vw_;
             double smooth = (dv_cmd + dw_cmd) * 0.5;
+            if (s.clearance <= 0.0) {
+                continue;  // 碰撞轨迹直接丢弃, 不允许用低权重换一条撞墙路径
+            }
             s.cost = 0.4 * h + 0.1 * c + 0.4 * v + 0.1 * smooth;
             samples.push_back(s);
         }
@@ -139,7 +142,7 @@ core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const 
             } else {
                 const int v = local_costmap_.data[
                     static_cast<size_t>(my) * info.width + static_cast<size_t>(mx)];
-                if (v >= 50) {
+                if (v >= 100) {
                     s.clearance = std::min(s.clearance, 0.0);
                 } else if (v > 0) {
                     s.clearance = std::min(s.clearance,
