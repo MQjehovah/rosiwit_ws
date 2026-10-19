@@ -345,6 +345,8 @@ std::string LocalizationPipeline::describe() const {
 }
 
 void LocalizationPipeline::setMap(const std::string& map_name) {
+    // 换图会替换 local_map/matcher/store/maintainer; 与 onLidar 互斥.
+    std::lock_guard<std::mutex> state_lk(m_state_mu);
     // 分段计时: /switch_map 曾实测 48s, 必须知道钱花在哪 (每阶段一行, 只在切图时打)
     const auto t_total0 = std::chrono::steady_clock::now();
     auto stage_ms = [](const std::chrono::steady_clock::time_point& t) {
@@ -500,8 +502,12 @@ bool LocalizationPipeline::ensureRelocalizerMap() {
 }
 
 void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
+    std::lock_guard<std::mutex> state_lk(m_state_mu);
     m_pose = pose;
-    if (m_prior) m_prior->reset(pose);
+    {
+        std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+        if (m_prior) m_prior->reset(pose);
+    }
     if (m_monitor) m_monitor->reset();
     m_mediocre_streak = 0;
     m_corr_prev_valid = false;
@@ -513,12 +519,14 @@ void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
 }
 
 void LocalizationPipeline::onImu(const IMUSample& s) {
+    std::lock_guard<std::mutex> prior_lk(m_prior_mu);
     if (m_prior) m_prior->onImu(s);
 }
 
 void LocalizationPipeline::requestRelocalization() {
     // 上层 /global_localization 触发: 强制回到未定位状态, 下一次 onLidar 走冷启动分支
     // (relocalizer=bbs 时即全局检索; =none 时退化为 tryBoundedRecovery 的有界局部重锁)
+    std::lock_guard<std::mutex> state_lk(m_state_mu);
     m_status = LOST;
     m_initialized = false;
     m_reloc_cooldown = 0;
@@ -526,6 +534,7 @@ void LocalizationPipeline::requestRelocalization() {
 }
 
 void LocalizationPipeline::onOdom(const PoseStamped& odom) {
+    std::lock_guard<std::mutex> prior_lk(m_prior_mu);
     if (m_prior) m_prior->onOdom(odom);
 }
 
@@ -606,7 +615,10 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     }
     m_pose = best;
     m_pose.time = best.time;
-    m_prior->reset(m_pose);
+    {
+        std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+        m_prior->reset(m_pose);
+    }
     m_monitor->reset();
     m_mediocre_streak = 0;
     m_has_cached_target = false;
@@ -675,6 +687,9 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
 }
 
 void LocalizationPipeline::onLidar(const LidarFrame& f) {
+    // 唯一的"大状态"写入者: 整个匹配/重定位期间持 m_state_mu.
+    // 高频输出 predictAt 只走 m_prior_mu, 因此不会被这里的长耗时阻塞.
+    std::lock_guard<std::mutex> state_lk(m_state_mu);
     if (!m_map || !f.cloud || f.cloud->empty()) { m_status = LOST; return; }
 
     // 冷启动 / 丢失恢复: 尝试全局重定位 (多候选, 取最优通过者), 节流避免在未知环境刷爆
@@ -715,7 +730,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 for (const auto& cand : cands) {
                 m_pose = cand.pose;
                 m_pose.time = f.end_time;
-                m_prior->reset(m_pose);
+                {
+                    std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+                    m_prior->reset(m_pose);
+                }
                 m_monitor->reset();
                 m_mediocre_streak = 0;
                 m_initialized = true;
@@ -792,7 +810,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                             }
                         }
                         m_pose = best_pose;
-                        m_prior->reset(m_pose);
+                        {
+                            std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+                            m_prior->reset(m_pose);
+                        }
                         m_smoother.reset(m_pose);
                     }
                     std::cout << "[LocPipeline] relocalization refine: " << cand.score
@@ -833,7 +854,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }
                 m_pose = best_pose;
                 m_pose.time = f.end_time;
-                m_prior->reset(m_pose);
+                {
+                    std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+                    m_prior->reset(m_pose);
+                }
                 m_smoother.reset(m_pose);
                 m_initialized = true;
                 m_status = LOCALIZED;
@@ -863,7 +887,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         if (m_status == LOCALIZED) return;
     }
 
-    const PoseStamped guess = m_prior->predict(f.end_time);
+    PoseStamped guess;
+    {
+        std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+        guess = m_prior->predict(f.end_time);
+    }
 
     MatchResult res;
     bool accepted = false;
@@ -910,7 +938,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             if (!target || target->empty()) {
                 if (m_have_last_accepted) {
                     m_pose = m_last_accepted;
-                    if (m_prior) m_prior->reset(m_pose);
+                    {
+                        std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+                        if (m_prior) m_prior->reset(m_pose);
+                    }
                     out_pose = m_last_accepted;
                 } else {
                     out_pose = guess;
@@ -965,7 +996,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
     m_planar.apply(out_pose);
     if (accepted) {
-        m_prior->onMatch(out_pose);
+        {
+            std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+            m_prior->onMatch(out_pose);
+        }
         m_last_accepted = out_pose;      // 逸出保护用的回退锚点
         m_have_last_accepted = true;
     }
@@ -1103,15 +1137,20 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
 }
 
-ILocalization::Status LocalizationPipeline::getStatus() { return m_status; }
+ILocalization::Status LocalizationPipeline::getStatus() {
+    std::lock_guard<std::mutex> lk(m_state_mu);
+    return m_status;
+}
 
 bool LocalizationPipeline::getPose(PoseStamped& out) {
+    std::lock_guard<std::mutex> lk(m_state_mu);
     if (m_status == LOST) return false;
     out = m_pose;
     return true;
 }
 
 bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) {
+    std::lock_guard<std::mutex> lk(m_state_mu);
     if (m_status == LOST) return false;
     out = m_pose;
     cov = m_last_match.cov;
@@ -1120,12 +1159,14 @@ bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double
 
 bool LocalizationPipeline::predictAt(double t, PoseStamped& out) {
     if (!m_initialized || !m_prior) return false;
+    std::lock_guard<std::mutex> prior_lk(m_prior_mu);
     out = m_prior->predict(t);   // 运动先验(IMU)从最后校正位姿传播
     return true;
 }
 
 void LocalizationPipeline::onAbsolute(const PoseStamped& pose,
                                       const Eigen::Matrix<double, 6, 6>& cov) {
+    std::lock_guard<std::mutex> lk(m_state_mu);
     if (!m_abs_cfg.enabled) return;
     (void)cov;   // 门控互补融合暂只用位姿; 协方差供后续因子图
     m_abs_pose = pose;

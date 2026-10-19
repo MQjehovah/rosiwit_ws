@@ -23,6 +23,10 @@ void FastLio2Frontend::onImu(const IMUSample& s) {
     if (!m_inited) return;
     IMUSample scaled = s;
     scaled.acc = s.acc * m_config.acc_scale;
+    // 防御性上限: 正常 onLidar 会清空缓冲; 若雷达长时间不来 (或误在定位模式喂 IMU),
+    // 也不能无界增长. 2000 帧 @200Hz ~= 10s, 足够覆盖任何正常帧间隔.
+    constexpr size_t kMaxImuBuffer = 2000;
+    if (m_imu_buffer.size() >= kMaxImuBuffer) m_imu_buffer.pop_front();
     m_imu_buffer.push_back(scaled);
 }
 

@@ -26,11 +26,73 @@ PoseStamped poseInv(const PoseStamped& p) {
 }
 }  // namespace
 
-SlamPipeline::~SlamPipeline() {
-    if (m_backend_running) {
-        pushBackendTask(BackendTask::STOP);
-        if (m_backend_thread.joinable()) m_backend_thread.join();
+// ==================== 后端 worker ====================
+
+BackendWorker::BackendWorker(std::shared_ptr<IBackend> backend,
+                             std::shared_ptr<IMapManager> map_mgr,
+                             std::shared_ptr<AnchorState> anchor)
+    : m_backend(std::move(backend)),
+      m_map_mgr(std::move(map_mgr)),
+      m_anchor(std::move(anchor)) {}
+
+void BackendWorker::start() {
+    if (m_thread.joinable()) return;
+    auto self = shared_from_this();
+    m_thread = std::thread([self] { self->run(); });
+}
+
+void BackendWorker::push(BackendTask task, const KeyFrame& kf) {
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        if (m_stop) return;
+        m_queue.push({task, kf});
     }
+    m_cv.notify_one();
+}
+
+void BackendWorker::stopAsync() {
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        m_stop = true;
+    }
+    m_cv.notify_all();
+    // 不 join: 后端可能正卡在一次 optimize() 里, join 会把调用线程(ROS 服务线程)挂死。
+    // worker 只持有自己的 shared 状态, 线程结束后自然释放。
+    if (m_thread.joinable()) m_thread.detach();
+}
+
+void BackendWorker::run() {
+    while (true) {
+        BackendItem item;
+        {
+            std::unique_lock<std::mutex> lk(m_mu);
+            m_cv.wait(lk, [this] { return m_stop || !m_queue.empty(); });
+            if (m_stop) break;
+            item = std::move(m_queue.front());
+            m_queue.pop();
+        }
+        if (item.task == BackendTask::ADD_KF && m_backend) {
+            m_backend->addKeyFrame(item.kf);
+        }
+        if (item.task == BackendTask::OPTIMIZE && m_backend) {
+            if (m_backend->optimize()) {
+                std::vector<PoseStamped> corrected;
+                if (m_map_mgr && m_backend->getUpdatedPoses(corrected) && !corrected.empty()) {
+                    m_map_mgr->onBackendOptimized(corrected);
+                    PoseStamped anchor;
+                    if (m_map_mgr->getCorrectionAnchor(anchor) && m_anchor) {
+                        std::lock_guard<std::mutex> lk(m_anchor->mu);
+                        m_anchor->anchor = anchor;
+                        m_anchor->have = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+SlamPipeline::~SlamPipeline() {
+    if (m_backend_worker) m_backend_worker->stopAsync();
 }
 
 bool SlamPipeline::init(const std::string& config_path) {
@@ -52,47 +114,85 @@ bool SlamPipeline::init(const std::string& config_path) {
     if (!modules) return true;
 
     std::string name;
+    std::vector<std::string> module_errors;
+    auto module_failed = [&](const std::string& key, const std::string& module_name) {
+        module_errors.push_back(key + "=" + module_name);
+        std::cerr << "[SlamPipeline] module '" << key << "' = '" << module_name
+                  << "' unavailable or init failed" << std::endl;
+    };
 
     auto createFrontend = [&](const std::string& key) {
         name = modules[key].as<std::string>("");
         if (name.empty()) return;
         m_frontend = SlamFactory::createFrontend(name);
-        if (m_frontend && !m_frontend->init(config_path)) m_frontend.reset();
+        if (!m_frontend || !m_frontend->init(config_path)) {
+            m_frontend.reset();
+            module_failed(key, name);
+        }
     };
     auto createBackend = [&](const std::string& key) {
         name = modules[key].as<std::string>("");
         if (name.empty()) return;
-        m_backend = SlamFactory::createBackend(name);
-        if (m_backend && !m_backend->init(config_path)) m_backend.reset();
-        if (m_backend) {
-            m_backend_running = true;
-            m_backend_thread = std::thread(&SlamPipeline::backendThreadLoop, this);
+        m_backend = std::shared_ptr<IBackend>(SlamFactory::createBackend(name));
+        if (!m_backend || !m_backend->init(config_path)) {
+            m_backend.reset();
+            module_failed(key, name);
+            return;
         }
+        m_anchor = std::make_shared<AnchorState>();
+        m_backend_worker = std::make_shared<BackendWorker>(m_backend, m_map_mgr, m_anchor);
+        m_backend_worker->start();
     };
     auto createLoopClosure = [&](const std::string& key) {
         name = modules[key].as<std::string>("");
         if (name.empty()) return;
         m_loop = SlamFactory::createLoopClosure(name);
-        if (m_loop && !m_loop->init(config_path)) m_loop.reset();
+        if (!m_loop || !m_loop->init(config_path)) {
+            m_loop.reset();
+            module_failed(key, name);
+        }
     };
     auto createLocalization = [&](const std::string& key) {
         name = modules[key].as<std::string>("");
         if (name.empty()) return;
         m_localization = SlamFactory::createLocalization(name);
-        if (m_localization && !m_localization->init(config_path)) m_localization.reset();
+        if (!m_localization || !m_localization->init(config_path)) {
+            m_localization.reset();
+            module_failed(key, name);
+        }
     };
     auto createMapManager = [&](const std::string& key) {
         name = modules[key].as<std::string>("");
         if (name.empty()) return;
-        m_map_mgr = SlamFactory::createMapManager(name);
-        if (m_map_mgr && !m_map_mgr->init(config_path)) m_map_mgr.reset();
+        m_map_mgr = std::shared_ptr<IMapManager>(SlamFactory::createMapManager(name));
+        if (!m_map_mgr || !m_map_mgr->init(config_path)) {
+            m_map_mgr.reset();
+            module_failed(key, name);
+        }
     };
 
+    // map_manager 先建: 后端 worker 需要共享它.
+    createMapManager("map_manager");
     createFrontend("frontend");
-    createBackend("backend");
     createLoopClosure("loop_closure");
     createLocalization("localization");
-    createMapManager("map_manager");
+    createBackend("backend");
+
+    if (!module_errors.empty()) {
+        std::cerr << "[SlamPipeline] init failed: configured module(s) could not be created:";
+        for (const auto& e : module_errors) std::cerr << " " << e;
+        std::cerr << std::endl;
+        return false;
+    }
+    if (m_mode == PipelineMode::MAPPING && !m_frontend) {
+        std::cerr << "[SlamPipeline] init failed: mapping mode requires modules.frontend" << std::endl;
+        return false;
+    }
+    if (m_mode == PipelineMode::LOCALIZATION && (!m_localization || !m_map_mgr)) {
+        std::cerr << "[SlamPipeline] init failed: localization mode requires "
+                     "modules.localization and modules.map_manager" << std::endl;
+        return false;
+    }
 
     // 视觉松耦合: 读 vision 节点, 启用时创建 VO 因子源
     if (cfg["vision"] && cfg["vision"]["enabled"].as<bool>(false)) {
@@ -181,8 +281,9 @@ void SlamPipeline::onImu(const IMUSample& s) {
     auto mode = m_mode.load();
     if (mode == PipelineMode::IDLE) return;
     if (mode == PipelineMode::LOCALIZATION) {
+        // 定位模式不喂建图前端: 前端只在 onLidar 里消费 IMU 缓冲, 而定位模式不喂 lidar,
+        // 继续喂 IMU 会让 FastLio2Frontend 的 m_imu_buffer 无界增长 (且计算完全无用).
         if (m_localization) m_localization->onImu(s);
-        if (m_frontend) m_frontend->onImu(s);
     } else {
         SlamBase::onImu(s);
     }
@@ -246,46 +347,10 @@ bool SlamPipeline::onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) {
     return handleMapping(pkg, out);
 }
 
-// ==================== 后端线程 ====================
+// ==================== 后端任务入口 ====================
 
-void SlamPipeline::pushBackendTask(BackendTask task, KeyFrame kf) {
-    std::lock_guard<std::mutex> lock(m_queue_mutex);
-    m_backend_queue.push({task, std::move(kf)});
-    m_queue_cv.notify_one();
-}
-
-void SlamPipeline::backendThreadLoop() {
-    while (true) {
-        BackendItem item;
-        {
-            std::unique_lock<std::mutex> lock(m_queue_mutex);
-            m_queue_cv.wait(lock, [this] { return !m_backend_queue.empty(); });
-            item = std::move(m_backend_queue.front());
-            m_backend_queue.pop();
-        }
-        if (item.task == BackendTask::STOP) break;
-
-        if (item.task == BackendTask::ADD_KF && m_backend) {
-            m_backend->addKeyFrame(item.kf);
-        }
-        if (item.task == BackendTask::OPTIMIZE && m_backend) {
-            if (m_backend->optimize()) {
-                // 后端反馈: 把修正后的关键帧位姿交给地图管理器重建全局地图,
-                // 让回环优化真正作用到保存/发布的地图上(修正拐点叠图)。
-                std::vector<PoseStamped> corrected;
-                if (m_map_mgr && m_backend->getUpdatedPoses(corrected) && !corrected.empty()) {
-                    m_map_mgr->onBackendOptimized(corrected);
-                    // 取回前沿锚点, 供主线程把之后输出(odom/path/world_cloud)实时转到修正系
-                    PoseStamped anchor;
-                    if (m_map_mgr->getCorrectionAnchor(anchor)) {
-                        std::lock_guard<std::mutex> lock(m_anchor_mutex);
-                        m_out_anchor_ = anchor;
-                        m_have_anchor_ = true;
-                    }
-                }
-            }
-        }
-    }
+void SlamPipeline::pushBackendTask(BackendTask task, const KeyFrame& kf) {
+    if (m_backend_worker) m_backend_worker->push(task, kf);
 }
 
 // ==================== 建图管线 ====================
@@ -346,9 +411,9 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
     // 使 odom/tf/path 与重建后的地图一致, 回环瞬间可看到"拉回"。
     PoseStamped anchor;
     bool have_anchor = false;
-    {
-        std::lock_guard<std::mutex> lock(m_anchor_mutex);
-        if (m_have_anchor_) { anchor = m_out_anchor_; have_anchor = true; }
+    if (m_anchor) {
+        std::lock_guard<std::mutex> lock(m_anchor->mu);
+        if (m_anchor->have) { anchor = m_anchor->anchor; have_anchor = true; }
     }
     out.pose = poseMul(anchor, odom);
     out.pose.vel = anchor.rot * odom.vel;
@@ -473,39 +538,24 @@ bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
     // 旧 xz_3d_slam 每次切建图都 DELETE_PTR(mapping_ptr_) 再 new 一个, 所以上一轮绝不残留;
     // 我们是单核心实例, 只能显式重建内部模块达到同样效果。
     //
-    // 1) 停后端线程 —— **必须用核心自己的停止协议**: 后端线程的 wait 谓词只看"队列非空"
-    //    (backendThreadLoop), 唯一退出路径是取出一个 BackendTask::STOP。
-    //    实测教训: 只置 m_backend_running=false + notify_all **叫不醒**它, join 会永久阻塞,
-    //    整个 ROS 线程卡死在 /slam/mode_switch 里(节点假死: /slam/info 停发)。
-    if (m_backend_thread.joinable()) {
-        pushBackendTask(BackendTask::STOP);
-        // ⚠ **不能 join**: 后端可能正卡在一次 optimize() 里(或定位匹配占满 CPU), join 会把
-        // 调用线程(ROS 服务线程)一起挂住 -> 现场表现"切图/切模式卡住"。实测复现过两次。
-        // STOP 入队后线程会在本轮结束时自行退出; 它持有的是自己那份模块 shared_ptr,
-        // 与随后重建的新实例互不影响。
-        m_backend_thread.detach();
-        std::cout << "[SlamPipeline] backend thread detached (STOP queued, no join)"
-                  << std::endl;
+    // 1) 停后端 worker: stopAsync() 只置停止并 detach, 不 join (后端可能正卡在 optimize).
+    //    worker 只持有自己的 shared_ptr<IBackend/IMapManager/AnchorState>, 不会访问本对象,
+    //    所以旧线程晚于新实例退出也不会串数据/悬空。
+    if (m_backend_worker) {
+        m_backend_worker->stopAsync();
+        m_backend_worker.reset();
+        std::cout << "[SlamPipeline] backend worker stopped (detached, no join)" << std::endl;
     }
-    m_backend_running = false;
 
-    // 2) 丢掉所有模块 + 队列/锚点状态 (= "删掉建图实例")
+    // 2) 丢掉所有模块 + 锚点状态 (= "删掉建图实例")
     m_frontend.reset();
     m_backend.reset();
     m_loop.reset();
     m_localization.reset();
     m_map_mgr.reset();
     m_visual.reset();
-    {
-        std::lock_guard<std::mutex> lk(m_queue_mutex);
-        std::queue<BackendItem> empty;
-        std::swap(m_backend_queue, empty);
-    }
-    {
-        std::lock_guard<std::mutex> lk(m_anchor_mutex);
-        m_out_anchor_ = PoseStamped();
-        m_have_anchor_ = false;
-    }
+    m_anchor.reset();
+
     // 先置 IDLE 再 init: 否则 init() 里那段 "m_mode == LOCALIZATION 就自动载图" 会误触发
     m_mode = PipelineMode::IDLE;
     m_frame_count = 0;
@@ -542,9 +592,17 @@ bool SlamPipeline::setGridMapGenerator(const std::string& name) {
 }
 
 bool SlamPipeline::setPipelineMode(const std::string& mode) {
-    if (mode == "mapping")         { setMode(PipelineMode::MAPPING); return true; }
-    else if (mode == "localization") { setMode(PipelineMode::LOCALIZATION); return true; }
-    else if (mode == "idle")         { setMode(PipelineMode::IDLE); return true; }
+    if (mode == "mapping") {
+        if (!m_frontend) { std::cerr << "[SlamPipeline] mapping unavailable: frontend missing" << std::endl; return false; }
+        setMode(PipelineMode::MAPPING);
+        return true;
+    }
+    if (mode == "localization") {
+        if (!m_localization) { std::cerr << "[SlamPipeline] localization unavailable: module missing" << std::endl; return false; }
+        setMode(PipelineMode::LOCALIZATION);
+        return true;
+    }
+    if (mode == "idle") { setMode(PipelineMode::IDLE); return true; }
     return false;
 }
 

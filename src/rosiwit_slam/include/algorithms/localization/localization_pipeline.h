@@ -42,9 +42,15 @@ public:
     bool predictAt(double t, PoseStamped& out) override;
     void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
 
-    // 供离线评估/调试: 最近一帧配准结果与置信度
-    const MatchResult& lastMatch() const { return m_last_match; }
-    double confidence() const { return m_last_match.fitness; }
+    // 供离线评估/调试: 最近一帧配准结果与置信度 (加锁返回快照, 供 ROS2 多线程读)
+    MatchResult lastMatch() const {
+        std::lock_guard<std::mutex> lk(m_state_mu);
+        return m_last_match;
+    }
+    double confidence() const {
+        std::lock_guard<std::mutex> lk(m_state_mu);
+        return m_last_match.fitness;
+    }
     std::string describe() const;
 
 private:
@@ -80,6 +86,15 @@ private:
     std::string m_maintainer_name = "none";
 
     // 状态
+    // 并发契约 (ROS2 默认 MultiThreadedExecutor):
+    //   - onLidar 是唯一的大状态写入者; 它持 m_state_mu 整个执行期.
+    //   - getStatus/getPose/getPoseCov/confidence/setInitPose/setMap/requestRelocalization
+    //     都走 m_state_mu, 不会与 onLidar 交叠.
+    //   - 高频输出 predictAt 只走 m_prior_mu, 不被长达数秒的 onLidar 阻塞;
+    //     m_initialized 用 atomic 供无锁快速判断.
+    //   - 所有 m_prior->xxx 调用都走 m_prior_mu (onImu/onOdom/predictAt 与 onLidar 内的调用).
+    mutable std::mutex m_state_mu;
+    mutable std::mutex m_prior_mu;
     CloudType::Ptr m_map;
     std::string m_map_path;
     PoseStamped m_pose;
@@ -88,7 +103,7 @@ private:
     PoseStamped m_last_accepted;
     bool m_have_last_accepted = false;
     Status m_status = INIT;
-    bool m_initialized = false;
+    std::atomic<bool> m_initialized{false};
     MatchResult m_last_match;
 
     // 局部地图缓存 (位姿小幅移动时复用, 避免每帧重建 KD-tree/体素)

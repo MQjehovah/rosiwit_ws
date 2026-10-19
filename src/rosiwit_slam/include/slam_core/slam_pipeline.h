@@ -18,6 +18,47 @@ namespace rosiwit_slam {
 
 enum class PipelineMode { IDLE, MAPPING, LOCALIZATION };
 
+/// 后端任务 (建图线程的输入).
+enum class BackendTask { ADD_KF, OPTIMIZE, STOP };
+struct BackendItem {
+    BackendTask task;
+    KeyFrame kf;
+};
+
+/// 后端优化后回写的前沿锚点. 独立 shared 状态: 旧 worker 即使晚于 pipeline 退出,
+/// 也只会写自己那份 state, 不会碰新实例或已析构的 SlamPipeline.
+struct AnchorState {
+    std::mutex mu;
+    PoseStamped anchor;
+    bool have = false;
+};
+
+/// 自包含的后端线程. 只持有 shared_ptr<IBackend/IMapManager/AnchorState>,
+/// 不引用 SlamPipeline 的成员; reset/析构用 stopAsync() 分离线程即可, 不会 use-after-free.
+class BackendWorker : public std::enable_shared_from_this<BackendWorker> {
+public:
+    BackendWorker(std::shared_ptr<IBackend> backend,
+                  std::shared_ptr<IMapManager> map_mgr,
+                  std::shared_ptr<AnchorState> anchor);
+    void start();
+    void push(BackendTask task, const KeyFrame& kf = KeyFrame{});
+    /// 置停止并 detach; 正在执行的 optimize 会自然结束, 不阻塞调用线程.
+    void stopAsync();
+
+private:
+    void run();
+
+    std::shared_ptr<IBackend>    m_backend;
+    std::shared_ptr<IMapManager> m_map_mgr;
+    std::shared_ptr<AnchorState> m_anchor;
+
+    std::thread m_thread;
+    std::mutex m_mu;
+    std::condition_variable m_cv;
+    std::queue<BackendItem> m_queue;
+    bool m_stop = false;
+};
+
 class SlamPipeline : public SlamBase {
 public:
     bool init(const std::string& config_path) override;
@@ -64,39 +105,23 @@ public:
     ~SlamPipeline() override;
 
 private:
-    // 后端工作队列
-    enum class BackendTask { ADD_KF, OPTIMIZE, STOP };
-    void backendThreadLoop();
-    void pushBackendTask(BackendTask task, KeyFrame kf = {});
+    void pushBackendTask(BackendTask task, const KeyFrame& kf = KeyFrame{});
 
     // saveMap 附带导出 map.xzmap (关键帧+优化位姿交给 io 模块落盘, SLAM 侧不感知设备格式)
     bool exportXzMap(const std::string& pcd_path);
 
     std::unique_ptr<IFrontend>     m_frontend;
-    std::unique_ptr<IBackend>      m_backend;
     std::unique_ptr<ILoopClosure>  m_loop;
-    std::unique_ptr<IMapManager>   m_map_mgr;
     std::unique_ptr<ILocalization> m_localization;
     std::unique_ptr<VisualConstraintSource> m_visual;   // 视觉松耦合因子源
     VisualConstraintConfig m_visual_cfg;
     std::atomic<PipelineMode> m_mode{PipelineMode::IDLE};
 
-    // 后端线程
-    std::thread m_backend_thread;
-    std::mutex m_queue_mutex;
-    std::condition_variable m_queue_cv;
-    bool m_backend_running = false;
-
-    // 实时回环修正: 后端优化后由地图管理器提供的前沿锚点 A, 输出位姿/轨迹用它转到修正系
-    std::mutex m_anchor_mutex;
-    PoseStamped m_out_anchor_;   // 初始为单位变换
-    bool m_have_anchor_ = false;
-
-    struct BackendItem {
-        BackendTask task;
-        KeyFrame kf;
-    };
-    std::queue<BackendItem> m_backend_queue;
+    // 后端: 主线程与 worker 共享 backend/map_mgr; worker 自带队列与生命周期.
+    std::shared_ptr<IBackend>      m_backend;
+    std::shared_ptr<IMapManager>   m_map_mgr;
+    std::shared_ptr<AnchorState>   m_anchor;
+    std::shared_ptr<BackendWorker> m_backend_worker;
 };
 
 } // namespace rosiwit_slam
