@@ -39,8 +39,10 @@ void MppiController::setPath(const core::Path& path) {
     same_goal = path_.points.back().pose.distanceTo(path.points.back().pose) < 0.30;
   }
   path_ = path;
+  // 重规划后的路径从当前位姿开始; 旧 idx_ 可能已越过新绕行段, 必须回到
+  // 起点重新找最近点, 否则控制器会跳过新避障路径.
+  idx_ = 0;
   if (!same_goal) {
-    idx_ = 0;
     // 新目标从静止加速度约束重新起步, 不能沿用上一条路径的速度命令.
     last_output_v_ = 0.0;
     last_output_w_ = 0.0;

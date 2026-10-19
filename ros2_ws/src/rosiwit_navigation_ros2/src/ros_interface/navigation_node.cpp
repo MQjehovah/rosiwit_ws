@@ -940,7 +940,22 @@ void NavigationNode::goalCallback(const geometry_msgs::msg::PoseStamped::SharedP
     msg->pose.position.x, msg->pose.position.y,
     tf2::getYaw(msg->pose.orientation));
 
-  goal_pose_ = *msg;
+  // 目标 frame 必须转换到导航 global frame; 之前直接把 map 坐标当 odom
+  // 使用, 在 map->odom 非 identity 时会去错误位置.
+  geometry_msgs::msg::PoseStamped goal_msg = *msg;
+  if (!goal_msg.header.frame_id.empty() &&
+      goal_msg.header.frame_id != global_frame_) {
+    try {
+      goal_msg = tf_buffer_->transform(
+        goal_msg, global_frame_, tf2::durationFromSec(0.2));
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN(get_logger(),
+        "Cannot transform goal from '%s' to '%s': %s",
+        goal_msg.header.frame_id.c_str(), global_frame_.c_str(), ex.what());
+      return;
+    }
+  }
+  goal_pose_ = goal_msg;
   executeNavigation(goal_pose_);
 }
 
