@@ -13,6 +13,10 @@
 #include "path_smoother.hpp"
 #include "tf2/utils.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "sensor_msgs/point_cloud2_iterator.hpp"
+#include "tf2/LinearMath/Matrix3x3.h"
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2/LinearMath/Vector3.h"
 
 
 
@@ -215,11 +219,135 @@ void NavigationNode::loadParameters()
   get_parameter("robot_radius", robot_radius_);
   get_parameter("local_costmap_size", local_costmap_size_);
   get_parameter("enable_path_smoothing", enable_path_smoothing_);
+  loadSafetyParameters();
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
   RCLCPP_INFO(get_logger(), "  - controller_frequency: %.1f Hz", params_.controller_frequency);
   RCLCPP_INFO(get_logger(), "  - max_velocity_x: %.2f m/s", params_.max_velocity_x);
   RCLCPP_INFO(get_logger(), "  - goal_tolerance_xy: %.2f m", params_.goal_tolerance_xy);
+}
+
+void NavigationNode::loadSafetyParameters()
+{
+  this->declare_parameter("safety_enabled", true);
+  this->declare_parameter("safety_pointcloud_topic", std::string("/velodyne_points"));
+  this->declare_parameter("safety_base_frame", std::string("base_footprint"));
+  this->declare_parameter("safety_source_timeout", 2.0);
+  this->declare_parameter("safety_fail_safe_on_timeout", false);
+  this->declare_parameter("safety_min_height", 0.05);
+  this->declare_parameter("safety_max_height", 1.0);
+  this->declare_parameter("safety_stop_polygon", std::vector<double>{
+    -0.26, -0.23, 0.26, -0.23, 0.26, 0.23, -0.26, 0.23});
+  this->declare_parameter("safety_stop_max_points", 2);
+  this->declare_parameter("safety_slowdown_polygon", std::vector<double>{
+    -0.85, -0.75, 0.95, -0.75, 0.95, 0.75, -0.85, 0.75});
+  this->declare_parameter("safety_slowdown_max_points", 2);
+  this->declare_parameter("safety_slowdown_ratio", 0.35);
+  this->declare_parameter("safety_approach_enabled", true);
+  this->declare_parameter("safety_time_before_collision", 2.0);
+  this->declare_parameter("safety_simulation_time_step", 0.1);
+  this->declare_parameter("safety_footprint", std::vector<double>{
+    -0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22});
+
+  get_parameter("safety_enabled", safety_enabled_);
+  get_parameter("safety_pointcloud_topic", safety_pointcloud_topic_);
+  get_parameter("safety_base_frame", safety_base_frame_);
+  get_parameter("safety_source_timeout", safety_source_timeout_);
+  get_parameter("safety_fail_safe_on_timeout", safety_fail_safe_on_timeout_);
+  get_parameter("safety_min_height", safety_min_height_);
+  get_parameter("safety_max_height", safety_max_height_);
+
+  auto to_polygon = [](const std::vector<double> & flat) {
+      std::vector<std::pair<double, double>> polygon;
+      for (size_t i = 0; i + 1 < flat.size(); i += 2) {
+        polygon.emplace_back(flat[i], flat[i + 1]);
+      }
+      return polygon;
+    };
+
+  SafetyMonitorConfig cfg;
+  cfg.enabled = safety_enabled_;
+  cfg.stop_polygon = to_polygon(
+    this->get_parameter("safety_stop_polygon").as_double_array());
+  cfg.stop_max_points =
+    static_cast<int>(this->get_parameter("safety_stop_max_points").as_int());
+  cfg.slowdown_polygon = to_polygon(
+    this->get_parameter("safety_slowdown_polygon").as_double_array());
+  cfg.slowdown_max_points =
+    static_cast<int>(this->get_parameter("safety_slowdown_max_points").as_int());
+  cfg.slowdown_ratio = this->get_parameter("safety_slowdown_ratio").as_double();
+  cfg.approach_enabled = this->get_parameter("safety_approach_enabled").as_bool();
+  cfg.time_before_collision =
+    this->get_parameter("safety_time_before_collision").as_double();
+  cfg.simulation_time_step =
+    this->get_parameter("safety_simulation_time_step").as_double();
+  cfg.footprint = to_polygon(
+    this->get_parameter("safety_footprint").as_double_array());
+  safety_monitor_.configure(cfg);
+
+  RCLCPP_INFO(get_logger(),
+    "Safety layer: %s cloud=%s frame=%s stop_pts=%d slow_ratio=%.2f approach=%s",
+    safety_enabled_ ? "ON" : "OFF", safety_pointcloud_topic_.c_str(),
+    safety_base_frame_.c_str(), cfg.stop_max_points, cfg.slowdown_ratio,
+    cfg.approach_enabled ? "ON" : "OFF");
+}
+
+void NavigationNode::safetyPointCloudCallback(
+  const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
+  if (!safety_enabled_ || msg->header.frame_id.empty()) return;
+
+  geometry_msgs::msg::TransformStamped tf;
+  try {
+    tf = tf_buffer_->lookupTransform(
+      safety_base_frame_, msg->header.frame_id, msg->header.stamp,
+      tf2::durationFromSec(0.05));
+  } catch (const tf2::TransformException &) {
+    try {
+      tf = tf_buffer_->lookupTransform(
+        safety_base_frame_, msg->header.frame_id, tf2::TimePointZero,
+        tf2::durationFromSec(0.05));
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Safety layer: cannot transform %s -> %s: %s",
+        msg->header.frame_id.c_str(), safety_base_frame_.c_str(), ex.what());
+      return;
+    }
+  }
+
+  const auto & q_msg = tf.transform.rotation;
+  const auto & t_msg = tf.transform.translation;
+  tf2::Quaternion q(q_msg.x, q_msg.y, q_msg.z, q_msg.w);
+  tf2::Matrix3x3 rotation(q);
+  const tf2::Vector3 translation(t_msg.x, t_msg.y, t_msg.z);
+
+  std::vector<std::pair<double, double>> points;
+  points.reserve(static_cast<size_t>(msg->width) * msg->height);
+  try {
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y(*msg, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z(*msg, "z");
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+      tf2::Vector3 point(*iter_x, *iter_y, *iter_z);
+      point = rotation * point + translation;
+      if (point.z() < safety_min_height_ || point.z() > safety_max_height_) {
+        continue;
+      }
+      points.emplace_back(point.x(), point.y());
+      if (points.size() >= 20000) break;
+    }
+  } catch (const std::exception & ex) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+      "Safety layer: failed to parse PointCloud2: %s", ex.what());
+    return;
+  }
+
+  safety_points_ = std::move(points);
+  safety_have_cloud_ = true;
+  safety_last_cloud_sec_ = now().seconds();
+  RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 5000,
+    "Safety cloud: %zu points in %s", safety_points_.size(),
+    safety_base_frame_.c_str());
 }
 
 void NavigationNode::initializeSubscribers()
@@ -236,6 +364,12 @@ void NavigationNode::initializeSubscribers()
   scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
     "/scan", rclcpp::SensorDataQoS(),
     std::bind(&NavigationNode::scanCallback, this, std::placeholders::_1));
+
+  if (safety_enabled_) {
+    safety_cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+      safety_pointcloud_topic_, rclcpp::SensorDataQoS(),
+      std::bind(&NavigationNode::safetyPointCloudCallback, this, std::placeholders::_1));
+  }
 
   goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
     "/goal_pose", rclcpp::SystemDefaultsQoS(),
@@ -894,7 +1028,26 @@ geometry_msgs::msg::Twist NavigationNode::computeVelocityCommand()
 
 void NavigationNode::publishVelocityCommand(const geometry_msgs::msg::Twist & cmd_vel)
 {
-  cmd_vel_pub_->publish(cmd_vel);
+  geometry_msgs::msg::Twist out = cmd_vel;
+  if (safety_enabled_) {
+    const double now_sec = now().seconds();
+    const bool sensor_ok = safety_have_cloud_ &&
+      (now_sec - safety_last_cloud_sec_ <= safety_source_timeout_);
+    if (!sensor_ok) {
+      // Nav2 Collision Monitor 默认行为: 传感器失效时"瞎着眼放行".
+      if (safety_fail_safe_on_timeout_) out = geometry_msgs::msg::Twist();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Safety layer: sensor stale (have_cloud=%s, age=%.2fs)",
+        safety_have_cloud_ ? "true" : "false",
+        safety_have_cloud_ ? now_sec - safety_last_cloud_sec_ : -1.0);
+    } else {
+      std::string state;
+      out = safety_monitor_.filter(cmd_vel, safety_points_, &state);
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Safety layer: %s", state.c_str());
+    }
+  }
+  cmd_vel_pub_->publish(out);
 }
 
 void NavigationNode::publishPath(const nav_msgs::msg::Path & path)

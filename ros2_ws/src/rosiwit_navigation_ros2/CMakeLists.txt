@@ -32,6 +32,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation
 add_executable(rosiwit_navigation_node
     src/main.cpp
     src/ros_interface/navigation_node.cpp
+    src/ros_interface/safety_monitor.cpp
     src/ros_interface/ros_utils.cpp)
 target_include_directories(rosiwit_navigation_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include)

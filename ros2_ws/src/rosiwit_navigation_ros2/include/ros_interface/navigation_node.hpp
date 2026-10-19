@@ -9,12 +9,15 @@
 #include <memory>
 #include <atomic>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -24,6 +27,7 @@
 #include "trajectory_generator.hpp"
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 #include "ros_interface/ros_utils.hpp"
+#include "ros_interface/safety_monitor.hpp"
 
 namespace rosiwit_navigation
 {
@@ -169,6 +173,7 @@ protected:
    * @brief 加载参数
    */
   void loadParameters();
+  void loadSafetyParameters();
 
   /**
    * @brief 里程计回调
@@ -181,6 +186,7 @@ protected:
   void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
   void updateCostmap();
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
+  void safetyPointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
 
   /**
    * @brief RViz目标点回调
@@ -245,6 +251,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr safety_cloud_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
 
   // 发布者
@@ -290,6 +297,19 @@ private:
   // 地图
   nav_msgs::msg::OccupancyGrid::SharedPtr current_map_;
   std::vector<geometry_msgs::msg::Point> laser_points_;
+
+  // LiDAR safety layer (Nav2 Collision Monitor style)
+  SafetyMonitor safety_monitor_;
+  std::vector<std::pair<double, double>> safety_points_;
+  bool safety_enabled_ = true;
+  bool safety_have_cloud_ = false;
+  double safety_last_cloud_sec_ = 0.0;
+  double safety_source_timeout_ = 2.0;
+  bool safety_fail_safe_on_timeout_ = false;
+  double safety_min_height_ = 0.05;
+  double safety_max_height_ = 1.0;
+  std::string safety_base_frame_ = "base_footprint";
+  std::string safety_pointcloud_topic_ = "/velodyne_points";
 
   // 策略型规划器和控制器（由NavigationFactory创建）
   std::unique_ptr<core::IPlannerStrategy> planner_strategy_;

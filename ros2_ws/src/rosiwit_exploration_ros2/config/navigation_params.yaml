@@ -34,4 +34,22 @@ rosiwit_navigation_node:
     # 平滑器会把 unknown 当自由并可能把路径拉进未知墙; 探索时关闭
     enable_path_smoothing: false
 
+    # ---- LiDAR safety layer (Nav2 Collision Monitor style) ----
+    safety_enabled: true
+    safety_pointcloud_topic: /velodyne_points
+    safety_base_frame: base_footprint
+    safety_source_timeout: 2.0
+    safety_fail_safe_on_timeout: false
+    safety_min_height: 0.05
+    safety_max_height: 1.0
+    safety_stop_polygon: [-0.26, -0.23, 0.26, -0.23, 0.26, 0.23, -0.26, 0.23]
+    safety_stop_max_points: 2
+    safety_slowdown_polygon: [-0.85, -0.75, 0.95, -0.75, 0.95, 0.75, -0.85, 0.75]
+    safety_slowdown_max_points: 2
+    safety_slowdown_ratio: 0.35
+    safety_approach_enabled: true
+    safety_time_before_collision: 2.0
+    safety_simulation_time_step: 0.1
+    safety_footprint: [-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22]
+
     odom_topic: /odom
