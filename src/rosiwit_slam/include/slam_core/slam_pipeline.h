@@ -19,7 +19,7 @@ namespace rosiwit_slam {
 enum class PipelineMode { IDLE, MAPPING, LOCALIZATION };
 
 /// 后端任务 (建图线程的输入).
-enum class BackendTask { ADD_KF, OPTIMIZE, STOP };
+enum class BackendTask { ADD_KF, LOOP_CLOSURE, OPTIMIZE, STOP };
 struct BackendItem {
     BackendTask task;
     KeyFrame kf;
@@ -39,6 +39,7 @@ class BackendWorker : public std::enable_shared_from_this<BackendWorker> {
 public:
     BackendWorker(std::shared_ptr<IBackend> backend,
                   std::shared_ptr<IMapManager> map_mgr,
+                  std::shared_ptr<ILoopClosure> loop,
                   std::shared_ptr<AnchorState> anchor);
     void start();
     void push(BackendTask task, const KeyFrame& kf = KeyFrame{});
@@ -48,9 +49,13 @@ public:
 private:
     void run();
 
+    void optimizeAndPublishAnchor();
+
     std::shared_ptr<IBackend>    m_backend;
     std::shared_ptr<IMapManager> m_map_mgr;
+    std::shared_ptr<ILoopClosure> m_loop;
     std::shared_ptr<AnchorState> m_anchor;
+    int m_lc_keyframes = 0;
 
     std::thread m_thread;
     std::mutex m_mu;
@@ -112,7 +117,7 @@ private:
     bool exportXzMap(const std::string& pcd_path);
 
     std::unique_ptr<IFrontend>     m_frontend;
-    std::unique_ptr<ILoopClosure>  m_loop;
+    std::shared_ptr<ILoopClosure>  m_loop;
     std::unique_ptr<ILocalization> m_localization;
     std::unique_ptr<VisualConstraintSource> m_visual;   // 视觉松耦合因子源
     VisualConstraintConfig m_visual_cfg;

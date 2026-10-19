@@ -30,9 +30,11 @@ PoseStamped poseInv(const PoseStamped& p) {
 
 BackendWorker::BackendWorker(std::shared_ptr<IBackend> backend,
                              std::shared_ptr<IMapManager> map_mgr,
+                             std::shared_ptr<ILoopClosure> loop,
                              std::shared_ptr<AnchorState> anchor)
     : m_backend(std::move(backend)),
       m_map_mgr(std::move(map_mgr)),
+      m_loop(std::move(loop)),
       m_anchor(std::move(anchor)) {}
 
 void BackendWorker::start() {
@@ -61,6 +63,21 @@ void BackendWorker::stopAsync() {
     if (m_thread.joinable()) m_thread.detach();
 }
 
+void BackendWorker::optimizeAndPublishAnchor() {
+    if (m_backend && m_backend->optimize()) {
+        std::vector<PoseStamped> corrected;
+        if (m_map_mgr && m_backend->getUpdatedPoses(corrected) && !corrected.empty()) {
+            m_map_mgr->onBackendOptimized(corrected);
+            PoseStamped anchor;
+            if (m_map_mgr->getCorrectionAnchor(anchor) && m_anchor) {
+                std::lock_guard<std::mutex> lk(m_anchor->mu);
+                m_anchor->anchor = anchor;
+                m_anchor->have = true;
+            }
+        }
+    }
+}
+
 void BackendWorker::run() {
     while (true) {
         BackendItem item;
@@ -74,19 +91,26 @@ void BackendWorker::run() {
         if (item.task == BackendTask::ADD_KF && m_backend) {
             m_backend->addKeyFrame(item.kf);
         }
-        if (item.task == BackendTask::OPTIMIZE && m_backend) {
-            if (m_backend->optimize()) {
-                std::vector<PoseStamped> corrected;
-                if (m_map_mgr && m_backend->getUpdatedPoses(corrected) && !corrected.empty()) {
-                    m_map_mgr->onBackendOptimized(corrected);
-                    PoseStamped anchor;
-                    if (m_map_mgr->getCorrectionAnchor(anchor) && m_anchor) {
-                        std::lock_guard<std::mutex> lk(m_anchor->mu);
-                        m_anchor->anchor = anchor;
-                        m_anchor->have = true;
-                    }
+        if (item.task == BackendTask::LOOP_CLOSURE && m_loop) {
+            if (m_map_mgr) m_map_mgr->addSubMap(item.kf);
+            m_loop->addKeyFrame(item.kf);
+            if (++m_lc_keyframes % 30 == 0) {
+                PoseStamped rel_pose;
+                double cov = 0;
+                std::string matched_id;
+                if (m_loop->detect(rel_pose, cov, matched_id) && m_backend) {
+                    Constraint c;
+                    c.from_kf = matched_id;
+                    c.to_kf = item.kf.id;
+                    c.relative_pose = rel_pose;
+                    c.cov = cov;
+                    m_backend->addConstraints({c});
+                    optimizeAndPublishAnchor();
                 }
             }
+        }
+        if (item.task == BackendTask::OPTIMIZE && m_backend) {
+            optimizeAndPublishAnchor();
         }
     }
 }
@@ -140,17 +164,18 @@ bool SlamPipeline::init(const std::string& config_path) {
             return;
         }
         m_anchor = std::make_shared<AnchorState>();
-        m_backend_worker = std::make_shared<BackendWorker>(m_backend, m_map_mgr, m_anchor);
+        m_backend_worker = std::make_shared<BackendWorker>(m_backend, m_map_mgr, m_loop, m_anchor);
         m_backend_worker->start();
     };
     auto createLoopClosure = [&](const std::string& key) {
         name = modules[key].as<std::string>("");
         if (name.empty()) return;
-        m_loop = SlamFactory::createLoopClosure(name);
-        if (!m_loop || !m_loop->init(config_path)) {
-            m_loop.reset();
+        auto loop = SlamFactory::createLoopClosure(name);
+        if (!loop || !loop->init(config_path)) {
             module_failed(key, name);
+            return;
         }
+        m_loop = std::shared_ptr<ILoopClosure>(std::move(loop));
     };
     auto createLocalization = [&](const std::string& key) {
         name = modules[key].as<std::string>("");
@@ -368,10 +393,8 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
         ++m_frame_count;
         // 后端: 异步入队, 不阻塞前端
         if (m_backend) pushBackendTask(BackendTask::ADD_KF, kf);
-        // 回环检测 + 地图管理: 同步执行 (轻量)
-        if (m_loop) m_loop->addKeyFrame(kf);
-        if (m_map_mgr) m_map_mgr->addSubMap(kf);
-
+        // 地图管理 + ScanContext/ICP 全部移到 backend worker:
+        // 前端 work 组只负责传感器/前端/TF, 不能被地图锁或 ICP 拖住.
         // 视觉松耦合: 关键帧注册 + 相邻关键帧 VO between 因子入图
         if (m_visual) {
             m_visual->addKeyframe(kf.id, kf.timestamp);
@@ -379,24 +402,8 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
             if (!vcs.empty() && m_backend) m_backend->addConstraints(vcs);
         }
 
-        // 回环检测: 每 30 帧触发一次
-        if (m_loop && m_frame_count % 30 == 0) {
-            std::cout << "[Pipeline] LC check at kf_" << m_frame_count << std::endl;
-            PoseStamped rel_pose;
-            double cov = 0;
-            std::string matched_id;
-            if (m_loop->detect(rel_pose, cov, matched_id)) {
-                Constraint c;
-                c.from_kf = matched_id;
-                c.to_kf = kf.id;
-                c.relative_pose = rel_pose;
-                c.cov = cov;
-                if (m_backend) {
-                    m_backend->addConstraints({c});
-                    pushBackendTask(BackendTask::OPTIMIZE);
-                }
-            }
-        }
+        // 回环检测 + ICP 在 backend worker 中异步执行, 每 30 个关键帧检测一次.
+        if (m_loop) pushBackendTask(BackendTask::LOOP_CLOSURE, kf);
     }
 
     // 定期触发后端优化 (每 50 关键帧)
