@@ -321,7 +321,12 @@ core::Result<core::Path> AStarPlanner::plan(
 
             // 计算代价
             double move_cost = (i < 4) ? AStarConstants::kStraightCost : AStarConstants::kDiagonalCost;
-            double cost_factor = 1.0 + getCost(nx, ny) / AStarConstants::kMaxCost * AStarConstants::kCostFactorScale;
+            // 注意: getCost/kMaxCost 都是整型, 先转 double, 否则 1..253 的
+            // 蓝色代价会因整数除法全部变成 0, A* 实际完全不看膨胀代价.
+            double cost_factor = 1.0 +
+                static_cast<double>(getCost(nx, ny)) /
+                static_cast<double>(AStarConstants::kMaxCost) *
+                AStarConstants::kCostFactorScale;
 
             AStarNode& neighbor = nodes_[ny * nx_ + nx];
             double new_g_cost = current.g_cost + move_cost * cost_factor;
