@@ -27,6 +27,7 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.near_search_num  = config["near_search_num"].as<int>(out_cfg.near_search_num);
         out_cfg.ieskf_max_iter   = config["ieskf_max_iter"].as<int>(out_cfg.ieskf_max_iter);
         out_cfg.gravity_align    = config["gravity_align"].as<bool>(out_cfg.gravity_align);
+        out_cfg.init_z           = config["init_z"].as<double>(out_cfg.init_z);
         out_cfg.undistort_enable = config["undistort_enable"].as<bool>(out_cfg.undistort_enable);
         out_cfg.esti_il          = config["esti_il"].as<bool>(out_cfg.esti_il);
 

@@ -87,7 +87,8 @@ private:
     /// 把 TF 推导出的 r_il/t_il 写进 override YAML, 供核心 init 使用.
     std::string writeExtrinsicOverride(const std::string& base_yaml,
                                        const RigidTransform& imu_lidar,
-                                       const RigidTransform& base_lidar);
+                                       const RigidTransform& base_lidar,
+                                       const RigidTransform& base_imu);
     /// 换图/换模式后允许 /map 重新发布.
     void resetPublishState();
 

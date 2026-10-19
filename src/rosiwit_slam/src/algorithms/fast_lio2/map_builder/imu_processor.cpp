@@ -59,6 +59,8 @@ bool IMUProcessor::initialize(SyncPackage &package)
     m_kf->x().r_il = m_config.r_il;
     m_kf->x().t_il = m_config.t_il;
     m_kf->x().bg = gyro_mean;
+    // 世界 z 原点对齐地面: IMU body 初始 z = IMU 离地高度.
+    m_kf->x().t_wi.z() = m_config.init_z;
     if (m_config.gravity_align)
     {
         m_kf->x().r_wi = (Eigen::Quaterniond::FromTwoVectors((-acc_mean).normalized(), V3D(0.0, 0.0, -1.0)).matrix());

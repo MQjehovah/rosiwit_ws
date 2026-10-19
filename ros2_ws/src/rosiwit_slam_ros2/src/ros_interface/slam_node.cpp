@@ -108,7 +108,8 @@ bool SlamNode::imuFromChild(const std::string& child_frame, RigidTransform& out)
 
 std::string SlamNode::writeExtrinsicOverride(const std::string& base_yaml,
                                              const RigidTransform& imu_lidar,
-                                             const RigidTransform& base_lidar) {
+                                             const RigidTransform& base_lidar,
+                                             const RigidTransform& base_imu) {
     if (base_yaml.empty()) return base_yaml;
     const std::string out_path = "/tmp/rosiwit_slam_ros2_core_extrinsic.yaml";
     std::ifstream in(base_yaml);
@@ -120,7 +121,8 @@ std::string SlamNode::writeExtrinsicOverride(const std::string& base_yaml,
         if (b != std::string::npos) {
             const std::string t = line.substr(b);
             if (t.rfind("r_il:", 0) == 0 || t.rfind("t_il:", 0) == 0 ||
-                t.rfind("esti_il:", 0) == 0 || t.rfind("bbs_mount_r:", 0) == 0) continue;
+                t.rfind("esti_il:", 0) == 0 || t.rfind("bbs_mount_r:", 0) == 0 ||
+                t.rfind("init_z:", 0) == 0) continue;
         }
         out << line << "\n";
     }
@@ -134,6 +136,10 @@ std::string SlamNode::writeExtrinsicOverride(const std::string& base_yaml,
                   imu_lidar.R(1,0), imu_lidar.R(1,1), imu_lidar.R(1,2),
                   imu_lidar.R(2,0), imu_lidar.R(2,1), imu_lidar.R(2,2),
                   imu_lidar.t.x(), imu_lidar.t.y(), imu_lidar.t.z());
+    out << buf;
+    std::snprintf(buf, sizeof(buf),
+                  "init_z: %.8f   # IMU body 世界 z 初值, 使 base_footprint 在地面 z=0\n",
+                  base_imu.valid ? base_imu.t.z() : 0.0);
     out << buf;
     if (base_lidar.valid) {
         std::snprintf(buf, sizeof(buf),
@@ -240,7 +246,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                     "TF %s <- %s unavailable at startup; output will stay in core frame until it appears",
                     m_cfg.body_frame.c_str(), m_cfg.imu_frame.c_str());
     }
-    config_path = writeExtrinsicOverride(config_path, imu_lidar, m_base_lidar);
+    config_path = writeExtrinsicOverride(
+        config_path, imu_lidar, m_base_lidar,
+        have_base_imu ? base_imu : RigidTransform{});
 
     if (!m_algo->init(config_path)) { RCLCPP_FATAL(this->get_logger(), "Init failed"); throw std::runtime_error("init failed"); }
     m_algo->setOutputCallback([this](const SlamOutput& o){ onOutput(o); });

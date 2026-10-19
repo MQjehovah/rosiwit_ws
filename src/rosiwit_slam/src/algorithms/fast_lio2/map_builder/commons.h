@@ -49,6 +49,7 @@ struct Config
     int near_search_num = 5;
     int ieskf_max_iter = 5;
     bool gravity_align = true;
+    double init_z = 0.0;  // IMU body 世界 z 初值; 设成 IMU 离地高度使 footprint z=0
     bool undistort_enable = true;
     bool esti_il = false;
     M3D r_il = M3D::Identity();
