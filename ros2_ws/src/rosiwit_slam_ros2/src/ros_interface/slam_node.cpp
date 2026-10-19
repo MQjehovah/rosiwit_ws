@@ -2,6 +2,7 @@
 #include "ros_interface/slam_node.h"
 #include "slam_core/slam_factory.h"
 #include "slam_core/slam_base.h"
+#include "slam_core/slam_pipeline.h"
 #include <pcl_conversions/pcl_conversions.h>
 #include <yaml-cpp/yaml.h>
 #include <tf2/time.h>
@@ -268,6 +269,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_sensor_cb_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     m_work_cb_group   = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     m_map_cb_group    = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    m_output_cb_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions sensor_sub_opts;
     sensor_sub_opts.callback_group = m_sensor_cb_group;
 
@@ -335,7 +337,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     if (m_cfg.output_rate_hz > 0.0)
         m_output_timer = create_wall_timer(
             std::chrono::duration<double>(1.0 / m_cfg.output_rate_hz),
-            std::bind(&SlamNode::highRateCB, this), m_work_cb_group);
+            std::bind(&SlamNode::highRateCB, this), m_output_cb_group);
     m_path.header.frame_id = m_cfg.world_frame;
 
     // 服务与处理定时器同组, 避免保存地图等操作与建图重处理并发(扫描上下文/地图非线程安全)
@@ -447,6 +449,10 @@ void SlamNode::timerCB() {
     auto* base = dynamic_cast<SlamBase*>(m_algo.get());
     // 一次 tick 内排空所有已同步的包, 防止重处理慢时数据在内部缓冲区积压
     if (base) { while (base->tryPopAndProcess()) {} }
+    // 定位模式的 LiDAR 重处理已从 sensor callback 移到 work timer.
+    if (auto* pipeline = dynamic_cast<SlamPipeline*>(m_algo.get())) {
+        while (pipeline->tryPopLocalization()) {}
+    }
     SlamOutput out; bool should_publish = false;
     {
         std::lock_guard<std::mutex> lock(m_out_mutex);
@@ -487,6 +493,7 @@ void SlamNode::publish(const SlamOutput& out) {
     PoseStamped pv;
     Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Identity();
     if (m_algo && m_algo->getPoseCov(pv, cov)) {
+        std::lock_guard<std::mutex> lk(m_cov_mutex);
         m_pose_cov = base_imu.valid ? transformCovariance(cov, base_imu.R) : cov;
         m_has_cov = true;
     }
@@ -563,10 +570,17 @@ void SlamNode::publishOdomTf(const PoseStamped& pose, const builtin_interfaces::
         odom.twist.twist.angular.y = 0.0;
         odom.twist.twist.angular.z = wz;
         // 协方差: 我们的顺序 [rot(3),trans(3)] -> ROS [x,y,z,rot(3)]
+        Eigen::Matrix<double, 6, 6> cov;
+        bool has_cov = false;
+        {
+            std::lock_guard<std::mutex> lk(m_cov_mutex);
+            cov = m_pose_cov;
+            has_cov = m_has_cov;
+        }
         auto mi = [](int r) { return r < 3 ? r + 3 : r - 3; };
         for (int r = 0; r < 6; ++r)
             for (int c = 0; c < 6; ++c)
-                odom.pose.covariance[r * 6 + c] = m_has_cov ? m_pose_cov(mi(r), mi(c)) : 0.0;
+                odom.pose.covariance[r * 6 + c] = has_cov ? cov(mi(r), mi(c)) : 0.0;
         // 两个别名分别按各自订阅者发布, 不能被 lio_odom 的订阅数门控.
         if (want_lio_odom) m_odom_pub->publish(odom);
         if (want_odom) m_odom_nav_pub->publish(odom);

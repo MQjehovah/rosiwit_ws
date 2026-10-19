@@ -117,6 +117,7 @@ private:
     rclcpp::CallbackGroup::SharedPtr m_sensor_cb_group;
     rclcpp::CallbackGroup::SharedPtr m_map_cb_group;
     rclcpp::CallbackGroup::SharedPtr m_work_cb_group;
+    rclcpp::CallbackGroup::SharedPtr m_output_cb_group;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> m_static_tf;
     std::shared_ptr<tf2_ros::Buffer> m_tf_buffer;
@@ -155,6 +156,7 @@ private:
     PoseOutputFilter m_out_filter;
     Eigen::Matrix<double, 6, 6> m_pose_cov = Eigen::Matrix<double, 6, 6>::Identity();  // [rot,trans]
     bool m_has_cov = false;
+    mutable std::mutex m_cov_mutex;
 };
 
 } // namespace rosiwit_slam

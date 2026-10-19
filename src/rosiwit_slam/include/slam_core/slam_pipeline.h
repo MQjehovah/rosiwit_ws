@@ -5,6 +5,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
+#include <deque>
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_base.h"
 #include "slam_core/i_frontend.h"
@@ -92,6 +93,10 @@ public:
     bool getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
     double getMatchingDegree() const override;    void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
 
+    /// 定位模式的 LiDAR 重处理入口: 传感器回调只入队, 由 work timer 轮询.
+    /// 避免 GICP/重定位在 sensor callback 里阻塞 IMU 收包.
+    bool tryPopLocalization();
+
     PipelineMode getMode() const { return m_mode.load(); }
     void setMode(PipelineMode mode);
     bool loadMapForLocalization(const std::string& path, const PoseStamped& init_pose);
@@ -112,6 +117,11 @@ public:
 
 private:
     void pushBackendTask(BackendTask task, const KeyFrame& kf = KeyFrame{});
+    void handleLocalization(const LidarFrame& f);
+
+    // 定位模式重处理队列: sensor callback 只入队, work timer 消费.
+    std::mutex m_loc_mu;
+    std::deque<LidarFrame> m_loc_buf;
 
     // saveMap 附带导出 map.xzmap (关键帧+优化位姿交给 io 模块落盘, SLAM 侧不感知设备格式)
     bool exportXzMap(const std::string& pcd_path);
@@ -122,6 +132,7 @@ private:
     std::unique_ptr<VisualConstraintSource> m_visual;   // 视觉松耦合因子源
     VisualConstraintConfig m_visual_cfg;
     std::atomic<PipelineMode> m_mode{PipelineMode::IDLE};
+    std::atomic<bool> m_localization_map_loaded{false};
 
     // 后端: 主线程与 worker 共享 backend/map_mgr; worker 自带队列与生命周期.
     std::shared_ptr<IBackend>      m_backend;

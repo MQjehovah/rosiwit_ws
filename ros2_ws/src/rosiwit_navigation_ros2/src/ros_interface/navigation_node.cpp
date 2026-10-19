@@ -1087,6 +1087,14 @@ void NavigationNode::controlLoop()
       geometry_msgs::msg::Twist recovery_cmd;
       recovery_cmd.linear.x = recovery_linear_velocity_;
       recovery_cmd.angular.z = recovery_angular_velocity_;
+      // 恢复不能盲倒车: 后向小矩形内有 LiDAR 点就只原地旋转.
+      const std::vector<std::pair<double, double>> rear_box = {
+        {-0.65, -0.35}, {0.0, -0.35}, {0.0, 0.35}, {-0.65, 0.35}};
+      if (recovery_cmd.linear.x < 0.0 &&
+          core::countPointsInPolygon(safety_points_, rear_box) > 0)
+      {
+        recovery_cmd.linear.x = 0.0;
+      }
       if (recovery_bypass_safety_) {
         cmd_vel_pub_->publish(recovery_cmd);
         last_published_cmd_ = recovery_cmd;

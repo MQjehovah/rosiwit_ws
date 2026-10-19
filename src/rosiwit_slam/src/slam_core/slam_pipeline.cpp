@@ -234,6 +234,10 @@ bool SlamPipeline::init(const std::string& config_path) {
 
     if (m_mode == PipelineMode::LOCALIZATION && m_map_mgr && m_localization) {
         std::string map_name = cfg["localization_map"].as<std::string>("");
+        if (map_name.empty()) {
+            std::cerr << "[SlamPipeline] localization mode requires localization_map" << std::endl;
+            return false;
+        }
         if (!map_name.empty()) {
             PoseStamped init; init.trans = V3D::Zero(); init.rot = M3D::Identity();
             init.time = -1.0;   // 无 init_pose 配置时走冷启动全局重定位
@@ -292,6 +296,7 @@ bool SlamPipeline::loadMapForLocalization(const std::string& path, const PoseSta
                   << std::endl;
     }
     m_localization->setMap(path);
+    m_localization_map_loaded = true;
     // init_pose.time < 0 = "无初始位姿": 不 setInitPose, 走冷启动全局重定位。
     // (2026-10-17 实测: 这里曾无条件用伪造的 identity 位姿初始化 -> /switch_map
     //  不带 initpose 时从原点僵尸跟踪, fitness 0.74 既不判丢也不恢复)
@@ -320,53 +325,70 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
     auto mode = m_mode.load();
     if (mode == PipelineMode::IDLE) return;
     if (mode == PipelineMode::LOCALIZATION) {
-        if (m_localization) {
-            m_localization->onLidar(f);
-            // 若未定位(含刚丢失/重定位中途), 仍然对外输出**最后一次有效位姿**并标记状态,
-            // 否则上层看到的是"完全没数据"(界面冻结), 且无法区分"丢失"与"节点挂了"。
-            // 实机教训: 重定位锁定后一旦某帧匹配失败, 以前就静默停发, 现场无法判断。
-            if (m_localization->getStatus() != ILocalization::LOCALIZED) {
-                SlamOutput loose;
-                if (m_localization->getPose(loose.pose)) {
-                    loose.state = SlamState::LOST;
-                    loose.has_new_pose = true;
-                    if (f.cloud && !f.cloud->empty()) {
-                        CloudType::Ptr world_scan(new CloudType());
-                        Eigen::Affine3d T = Eigen::Affine3d::Identity();
-                        T.translate(loose.pose.trans);
-                        T.rotate(loose.pose.rot);
-                        pcl::transformPointCloud(*f.cloud, *world_scan, T);
-                        loose.world_cloud = world_scan;
-                        loose.body_cloud = f.cloud;
-                    }
-                    emitOutput(loose);
-                }
+        // 只入队: GICP/重定位不能占用 sensor callback, 否则 IMU 会在 DDS/队列里
+        // 积压, 匹配结束后再被积分一遍, 造成重复积分/过冲.
+        std::lock_guard<std::mutex> lk(m_loc_mu);
+        if (m_loc_buf.size() >= 2) m_loc_buf.pop_front();
+        m_loc_buf.push_back(f);
+        return;
+    }
+    SlamBase::onLidar(f);
+}
+
+bool SlamPipeline::tryPopLocalization() {
+    if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) {
+        std::lock_guard<std::mutex> lk(m_loc_mu);
+        m_loc_buf.clear();
+        return false;
+    }
+    LidarFrame f;
+    {
+        std::lock_guard<std::mutex> lk(m_loc_mu);
+        if (m_loc_buf.empty()) return false;
+        f = std::move(m_loc_buf.front());
+        m_loc_buf.pop_front();
+    }
+    handleLocalization(f);
+    return true;
+}
+
+void SlamPipeline::handleLocalization(const LidarFrame& f) {
+    if (!m_localization) return;
+    m_localization->onLidar(f);
+    // 若未定位(含刚丢失/重定位中途), 仍然对外输出**最后一次有效位姿**并标记状态,
+    // 否则上层看到的是"完全没数据"(界面冻结), 且无法区分"丢失"与"节点挂了"。
+    if (m_localization->getStatus() != ILocalization::LOCALIZED) {
+        SlamOutput loose;
+        if (m_localization->getPose(loose.pose)) {
+            loose.state = SlamState::LOST;
+            loose.has_new_pose = true;
+            if (f.cloud && !f.cloud->empty()) {
+                CloudType::Ptr world_scan(new CloudType());
+                Eigen::Affine3d T = Eigen::Affine3d::Identity();
+                T.translate(loose.pose.trans);
+                T.rotate(loose.pose.rot);
+                pcl::transformPointCloud(*f.cloud, *world_scan, T);
+                loose.world_cloud = world_scan;
+                loose.body_cloud = f.cloud;
             }
-            if (m_localization->getStatus() == ILocalization::LOCALIZED) {
-                SlamOutput out;
-                m_localization->getPose(out.pose);
-                out.state = SlamState::RUNNING;
-                out.has_new_pose = true;
-                if (f.cloud && !f.cloud->empty()) {
-                    CloudType::Ptr world_scan(new CloudType());
-                    Eigen::Affine3d T = Eigen::Affine3d::Identity();
-                    T.translate(out.pose.trans);
-                    T.rotate(out.pose.rot);
-                    pcl::transformPointCloud(*f.cloud, *world_scan, T);
-                    out.world_cloud = world_scan;
-                    out.body_cloud = f.cloud;
-                }
-                emitOutput(out);
-            }
+            emitOutput(loose);
         }
-        // ⚠ **定位模式下不再喂建图前端**: 之前这里无条件调 m_frontend->onLidar(f),
-        // 导致 FAST-LIO 前端与定位流水线**同时**吃同一份数据 —— 实机表现为
-        // "NO Effective Points!" 刷屏(165+ 次)、ikd-tree 线程空转(KD_TREE::multi_thread_rebuild)、
-        // CPU 被白白吃掉, 而定位结果反而发不出来。现在严格二选一。
-        // (核心库不依赖 ROS, 所以这里不做参数化; 若将来要"前端热备"再加成员开关)
-        (void)0;
-    } else {
-        SlamBase::onLidar(f);
+    }
+    if (m_localization->getStatus() == ILocalization::LOCALIZED) {
+        SlamOutput out;
+        m_localization->getPose(out.pose);
+        out.state = SlamState::RUNNING;
+        out.has_new_pose = true;
+        if (f.cloud && !f.cloud->empty()) {
+            CloudType::Ptr world_scan(new CloudType());
+            Eigen::Affine3d T = Eigen::Affine3d::Identity();
+            T.translate(out.pose.trans);
+            T.rotate(out.pose.rot);
+            pcl::transformPointCloud(*f.cloud, *world_scan, T);
+            out.world_cloud = world_scan;
+            out.body_cloud = f.cloud;
+        }
+        emitOutput(out);
     }
 }
 
@@ -568,6 +590,7 @@ bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
 
     // 先置 IDLE 再 init: 否则 init() 里那段 "m_mode == LOCALIZATION 就自动载图" 会误触发
     m_mode = PipelineMode::IDLE;
+    m_localization_map_loaded = false;
     m_frame_count = 0;
 
     // 3) 重建 (与启动时同一条路径)
@@ -609,6 +632,10 @@ bool SlamPipeline::setPipelineMode(const std::string& mode) {
     }
     if (mode == "localization") {
         if (!m_localization) { std::cerr << "[SlamPipeline] localization unavailable: module missing" << std::endl; return false; }
+        if (!m_localization_map_loaded.load()) {
+            std::cerr << "[SlamPipeline] localization requires load_map first" << std::endl;
+            return false;
+        }
         setMode(PipelineMode::LOCALIZATION);
         return true;
     }
