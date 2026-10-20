@@ -212,7 +212,8 @@ private:
     void resetCoreAndCaches();
 
     // ---- [T9] 动态 map->odom TF ----
-    void sendTransform();   // legacy.cpp:1899-1936
+    void sendTransform();   // legacy.cpp:1899-1936, 更新并广播
+    void broadcastMapOdom(); // 定位 LOST 时冻结最后有效 map->odom 并持续广播
 
     ros::NodeHandle nh_, pnh_;
     SlamEngine& engine_;
@@ -235,6 +236,9 @@ private:
     ros::Time last_new_pose_ros_;
     ros::Time last_high_rate_pub_;
     ros::Time last_high_rate_tf_;
+    geometry_msgs::TransformStamped last_map_odom_;  // 最后有效 map->odom
+    bool have_map_odom_ = false;
+    ros::Time last_map_odom_pub_;
     std::atomic<bool> relocating_{false};           // 旧 relocating_ (legacy.cpp:1843-1853)
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)

@@ -189,13 +189,19 @@ void Ros1SlamInterface::publishSlamInfoThrottled() {
 }
 
 void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
-    if (!curr_pose_valid_) return;
+    if (!curr_pose_valid_) {
+        broadcastMapOdom();
+        return;
+    }
     const ros::Time now = ros::Time::now();
     const bool fresh = !last_new_pose_ros_.isZero() &&
                        (now - last_new_pose_ros_).toSec() <= 0.30;
     const bool due = last_high_rate_pub_.isZero() ||
                      (now - last_high_rate_pub_).toSec() >= 0.02;
-    if (!fresh || !due) return;
+    if (!fresh || !due) {
+        broadcastMapOdom();
+        return;
+    }
 
     if (!info_published) {
         geometry_msgs::PoseStamped ps;
@@ -231,6 +237,9 @@ void Ros1SlamInterface::publishStaticMapFallback() {
 }
 
 void Ros1SlamInterface::publishZeroPoseInfo() {
+    // 切图后旧图的 map->odom 不能再沿用，先回到 identity，定位成功后再更新。
+    have_map_odom_ = false;
+    last_map_odom_pub_ = ros::Time();
     curr_pose_ = Xz3dPose();
     last_location_info_pub_ = ros::Time::now();
     slam_info_puber_.publish(
@@ -359,7 +368,27 @@ void Ros1SlamInterface::sendTransform() {
     out.transform.rotation.y = q_mo.y();
     out.transform.rotation.z = q_mo.z();
     out.transform.rotation.w = q_mo.w();
+    last_map_odom_ = out;
+    have_map_odom_ = true;
+    last_map_odom_pub_ = out.header.stamp;
     tf_broadcaster_->sendTransform(out);
+}
+
+void Ros1SlamInterface::broadcastMapOdom() {
+    if (!use_tf_ || !tf_broadcaster_) return;
+    const ros::Time now = ros::Time::now();
+    if (!last_map_odom_pub_.isZero() && (now - last_map_odom_pub_).toSec() < 0.05) return;
+    if (!have_map_odom_) {
+        // 首次定位前 / 切图后没有有效校正：先发 identity，保证 TF 树完整。
+        last_map_odom_ = geometry_msgs::TransformStamped();
+        last_map_odom_.header.frame_id = "map";
+        last_map_odom_.child_frame_id = "odom";
+        last_map_odom_.transform.rotation.w = 1.0;
+        have_map_odom_ = true;
+    }
+    last_map_odom_.header.stamp = now;
+    tf_broadcaster_->sendTransform(last_map_odom_);
+    last_map_odom_pub_ = now;
 }
 
 
