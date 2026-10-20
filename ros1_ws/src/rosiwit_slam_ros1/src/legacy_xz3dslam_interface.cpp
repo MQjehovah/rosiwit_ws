@@ -1051,8 +1051,12 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
         res.success = false;
         return true;
     }
-    // 分支 2: 同一张图且已在定位 -> 只重设初始位姿 + 转发 /switch_map_pro
-    if (req.map_dir == curr_map_path_ && slam_mode_ == SlamMode::LOCALIZATION) {
+    // 分支 2: 同一张图且**核心确实在定位** -> 只重设初始位姿 + 转发 /switch_map_pro。
+    // 不能只看 legacy 自己的 slam_mode_: set_slam_mode idle 后核心已 idle，
+    // 但 timer 尚未刷新 slam_mode_ 时会误走这条分支，导致“切了但没定位输出”。
+    const bool core_is_localization = (engine_.pipelineMode() == "localization");
+    if (req.map_dir == curr_map_path_ && slam_mode_ == SlamMode::LOCALIZATION &&
+        core_is_localization) {
         applyInitPose(req.initial_pose, true);
         res.success = callSwitchMapPro(req);
         return true;
