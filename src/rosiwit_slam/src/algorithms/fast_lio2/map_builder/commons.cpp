@@ -17,35 +17,57 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             if (frontend[key]) return frontend[key];
             return config[key];
         };
-        auto get_root_first = [&](const char* key) -> YAML::Node {
-            if (config[key]) return config[key];   // ROS1 注入的 r_il/t_il/esti_il 在根节点
-            return frontend[key];
+        auto get_alias = [&](const char* key, const char* legacy) -> YAML::Node {
+            if (frontend[key]) return frontend[key];
+            if (frontend[legacy]) return frontend[legacy];
+            if (config[key]) return config[key];
+            return config[legacy];
         };
-        (void)get_root_first;
+        auto get_ext = [&](const char* key, const char* legacy) -> YAML::Node {
+            if (config[key]) return config[key];   // ROS1 注入的外参在根节点
+            if (config[legacy]) return config[legacy];
+            if (frontend[key]) return frontend[key];
+            return frontend[legacy];
+        };
+        // 输入类参数既可在 mapping.frontend，也可在 global.input。
+        const YAML::Node gin = (config["global"] && config["global"]["input"])
+                                   ? config["global"]["input"] : YAML::Node();
+        auto get_input = [&](const char* key, const char* legacy) -> YAML::Node {
+            if (frontend[key]) return frontend[key];
+            if (frontend[legacy]) return frontend[legacy];
+            if (gin && gin[key]) return gin[key];
+            if (gin && gin[legacy]) return gin[legacy];
+            if (config[key]) return config[key];
+            return config[legacy];
+        };
 
-        out_cfg.lidar_filter_num = get("lidar_filter_num").as<int>(out_cfg.lidar_filter_num);
-        out_cfg.lidar_min_range  = get("lidar_min_range").as<double>(out_cfg.lidar_min_range);
-        out_cfg.lidar_max_range  = get("lidar_max_range").as<double>(out_cfg.lidar_max_range);
-        out_cfg.scan_resolution  = get("scan_resolution").as<double>(out_cfg.scan_resolution);
-        out_cfg.map_resolution   = get("map_resolution").as<double>(out_cfg.map_resolution);
-        out_cfg.cube_len         = get("cube_len").as<double>(out_cfg.cube_len);
-        out_cfg.det_range        = get("det_range").as<double>(out_cfg.det_range);
-        out_cfg.move_thresh      = get("move_thresh").as<double>(out_cfg.move_thresh);
-        out_cfg.na               = get("na").as<double>(out_cfg.na);
-        out_cfg.ng               = get("ng").as<double>(out_cfg.ng);
-        out_cfg.nba              = get("nba").as<double>(out_cfg.nba);
-        out_cfg.nbg              = get("nbg").as<double>(out_cfg.nbg);
-        out_cfg.acc_scale        = get("acc_scale").as<double>(out_cfg.acc_scale);
-        out_cfg.imu_init_num     = get("imu_init_num").as<int>(out_cfg.imu_init_num);
-        out_cfg.near_search_num  = get("near_search_num").as<int>(out_cfg.near_search_num);
-        out_cfg.ieskf_max_iter   = get("ieskf_max_iter").as<int>(out_cfg.ieskf_max_iter);
+        out_cfg.lidar_filter_num = get_input("lidar_filter_num","lidar_filter_num").as<int>(out_cfg.lidar_filter_num);
+        out_cfg.lidar_min_range  = get_input("lidar_min_range","lidar_min_range").as<double>(out_cfg.lidar_min_range);
+        out_cfg.lidar_max_range  = get_input("lidar_max_range","lidar_max_range").as<double>(out_cfg.lidar_max_range);
+        out_cfg.scan_resolution  = get_input("scan_voxel","scan_resolution").as<double>(out_cfg.scan_resolution);
+        const YAML::Node gmap = (config["global"] && config["global"]["map"])
+                                    ? config["global"]["map"] : YAML::Node();
+        out_cfg.map_resolution   = (gmap && gmap["resolution"])
+                                       ? gmap["resolution"].as<double>()
+                                       : get_input("map_resolution","map_resolution").as<double>(out_cfg.map_resolution);
+        out_cfg.cube_len         = get_alias("local_map_size","cube_len").as<double>(out_cfg.cube_len);
+        out_cfg.det_range        = get_alias("detection_range","det_range").as<double>(out_cfg.det_range);
+        out_cfg.move_thresh      = get_alias("map_move_threshold","move_thresh").as<double>(out_cfg.move_thresh);
+        out_cfg.na               = get_alias("acc_noise","na").as<double>(out_cfg.na);
+        out_cfg.ng               = get_alias("gyro_noise","ng").as<double>(out_cfg.ng);
+        out_cfg.nba              = get_alias("acc_bias_random_walk","nba").as<double>(out_cfg.nba);
+        out_cfg.nbg              = get_alias("gyro_bias_random_walk","nbg").as<double>(out_cfg.nbg);
+        out_cfg.acc_scale        = get_input("acc_scale","acc_scale").as<double>(out_cfg.acc_scale);
+        out_cfg.imu_init_num     = get_alias("imu_init_samples","imu_init_num").as<int>(out_cfg.imu_init_num);
+        out_cfg.near_search_num  = get_alias("nearest_search_points","near_search_num").as<int>(out_cfg.near_search_num);
+        out_cfg.ieskf_max_iter   = get_alias("iekf_max_iterations","ieskf_max_iter").as<int>(out_cfg.ieskf_max_iter);
         out_cfg.gravity_align    = get("gravity_align").as<bool>(out_cfg.gravity_align);
         out_cfg.init_z           = get("init_z").as<double>(out_cfg.init_z);
         out_cfg.undistort_enable = get("undistort_enable").as<bool>(out_cfg.undistort_enable);
-        out_cfg.esti_il          = get_root_first("esti_il").as<bool>(out_cfg.esti_il);
+        out_cfg.esti_il          = get_ext("estimate_imu_lidar_extrinsic","esti_il").as<bool>(out_cfg.esti_il);
 
-        auto t_il = get_root_first("t_il").as<std::vector<double>>(std::vector<double>{0,0,0});
-        auto r_il = get_root_first("r_il").as<std::vector<double>>(std::vector<double>{1,0,0,0,1,0,0,0,1});
+        auto t_il = get_ext("imu_lidar_translation","t_il").as<std::vector<double>>(std::vector<double>{0,0,0});
+        auto r_il = get_ext("imu_lidar_rotation","r_il").as<std::vector<double>>(std::vector<double>{1,0,0,0,1,0,0,0,1});
         if (t_il.size() >= 3 && r_il.size() >= 9) {
             out_cfg.t_il << t_il[0], t_il[1], t_il[2];
             out_cfg.r_il << r_il[0], r_il[1], r_il[2],
@@ -53,7 +75,7 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                             r_il[6], r_il[7], r_il[8];
         }
 
-        out_cfg.lidar_cov_inv = get("lidar_cov_inv").as<double>(out_cfg.lidar_cov_inv);
+        out_cfg.lidar_cov_inv = get_alias("lidar_information_weight","lidar_cov_inv").as<double>(out_cfg.lidar_cov_inv);
         out_cfg.robust_kernel = get("robust_kernel").as<std::string>(out_cfg.robust_kernel);
         out_cfg.robust_scale  = get("robust_scale").as<double>(out_cfg.robust_scale);
         out_cfg.robust_floor  = get("robust_floor").as<double>(out_cfg.robust_floor);

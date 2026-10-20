@@ -147,14 +147,19 @@ bool SlamPipeline::init(const std::string& config_path) {
         return false;
     }
 
-    m_pipeline_name = cfg["pipeline"].as<std::string>("custom_pipeline");
+    const YAML::Node glob = cfg["global"];
+    auto g = [&](const char* key) -> YAML::Node {
+        if (glob && glob[key]) return glob[key];
+        return cfg[key];
+    };
+    m_pipeline_name = g("pipeline").as<std::string>("custom_pipeline");
 
-    std::string mode_str = cfg["pipeline_mode"].as<std::string>("idle");
+    std::string mode_str = g("pipeline_mode").as<std::string>("idle");
     if (mode_str == "mapping")          m_mode = PipelineMode::MAPPING;
     else if (mode_str == "localization") m_mode = PipelineMode::LOCALIZATION;
     else                                m_mode = PipelineMode::IDLE;
 
-    auto modules = cfg["modules"];
+    auto modules = (glob && glob["modules"]) ? glob["modules"] : cfg["modules"];
     if (!modules) return true;
 
     std::string name;

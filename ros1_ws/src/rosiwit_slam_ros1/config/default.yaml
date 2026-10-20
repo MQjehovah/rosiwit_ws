@@ -53,52 +53,38 @@
 # ① 全局 (建图 / 定位共享)
 # ############################################################################
 
-slam_algorithm: fast_lio2_pipeline
-pipeline: "rosiwit_slam"
-pipeline_mode: mapping          # mapping | localization | idle
-
-modules:
-  frontend: "fast_lio2_frontend"
-  backend: "ceres_pose_graph"  # 机器人上没有 gtsam (apt 里也没有 libgtsam-dev), gtsam_isam2 会解析成 null;
+global:
+  slam_algorithm: fast_lio2_pipeline  # 核心算法名
+  pipeline: "rosiwit_slam" # 管线名称
+  pipeline_mode: mapping # 启动模式 mapping|localization|idle
+  modules:
+    frontend: "fast_lio2_frontend"
+    backend: "ceres_pose_graph" # 机器人上没有 gtsam (apt 里也没有 libgtsam-dev), gtsam_isam2 会解析成 null;
                                # ceres_pose_graph 用机器人上已有的 Ceres 1.13, 是"真实后端" 见计划 §14
-  loop_closure: "scan_context"
-  map_manager: "pcd_map_manager"
-  localization: "localization_pipeline"   # 可编排流水线 | gicp_localization | scan_context_localization
+    loop_closure: "scan_context"
+    map_manager: "pcd_map_manager"
+    localization: "localization_pipeline" # 可编排流水线 | gicp_localization | scan_context_localization
 
 # ---- 话题 / 坐标系 ----
-imu_topic: /imu
-lidar_topic: /lidar
-enable_odom: false          # 轮式里程计订阅开关 (定位融合还要开 localization.motion_prior.use_odom)
-odom_topic: /odom
-body_frame: base_link
-world_frame: odom
-
-# ---- 雷达输入 / 分辨率 ----
-lidar_filter_num: 3
-lidar_min_range: 0.5
-lidar_max_range: 100.0
-scan_period_ms: 100.0
-# 万集内置 IMU 实测加速度模长 ~9.85 m/s^2，单位已是 m/s^2，保持 1.0。
-# 若换成 g 单位的 IMU，这里应改为 9.81。
-acc_scale: 1.0
-map_resolution: 0.05        # 与现网 map.yaml 一致
+  input:
+    imu_topic: /imu  # IMU话题
+    lidar_topic: /lidar # 雷达点云话题
+    odom_topic: /odom # 轮式里程计话题
+    lidar_filter_num: 3 # 雷达点抽稀倍数
+    lidar_min_range: 0.5 # 雷达最小有效距离(m)
+    lidar_max_range: 100.0 # 雷达最大有效距离(m)
+    scan_period_ms: 100.0 # 单帧扫描周期(ms)
+    acc_scale: 1.0 # IMU加速度单位换算
+    use_odom: false # 是否订阅并使用轮式odom
+  frames:
+    body_frame: base_link  # 车体frame
+    world_frame: odom # 世界frame
+  map:
+    resolution: 0.05  # 地图/栅格分辨率(m)
+    save_voxel: 0.3 # 地图/点云保存降采样体素(m)
 mapping:
   frontend:
-    cube_len: 300  # 局部地图立方体边长(m)
-    det_range: 60 # 雷达有效检测距离(m)
-    move_thresh: 1.5 # 局部地图滑动窗口阈值比例
-    na: 0.002 # 加速度计白噪声
-    ng: 0.002 # 陀螺白噪声
-    nba: 0.0001 # 加速度计零偏随机游走
-    nbg: 0.0001 # 陀螺零偏随机游走
-    imu_init_num: 400 # IMU 静止初始化样本数
-    near_search_num: 5 # 近邻搜索点数
-    ieskf_max_iter: 5 # IEKF 最大迭代次数
     gravity_align: true # 是否用重力方向初始化姿态
-    scan_resolution: 0.3 # 前端扫描降采样体素(m)
-    esti_il: false # 是否在线估计雷达-IMU外参(本机必须false)
-    r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始 IMU<-lidar 旋转矩阵(行优先)
-    t_il: [0.0, 0.0, 0.0905] # 初始 IMU<-lidar 平移(m)
     lidar_cov_inv: 5000.0 # 激光观测信息矩阵权重
     robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
     robust_scale: 0.5 # 鲁棒核尺度
@@ -110,16 +96,25 @@ mapping:
     free_space_carving: false # 是否启用自由空间雕刻
     carve_free_thresh: 3 # 雕刻空体素命中次数阈值
     carve_stride: 10 # 雕刻射线抽样步长
+    local_map_size: 300 # 局部地图立方体边长(m)
+    detection_range: 60 # 雷达有效检测距离(m)
+    map_move_threshold: 1.5 # 局部地图滑动窗口阈值比例
+    acc_noise: 0.002 # 加速度计白噪声
+    gyro_noise: 0.002 # 陀螺白噪声
+    acc_bias_random_walk: 0.0001 # 加速度计零偏随机游走
+    gyro_bias_random_walk: 0.0001 # 陀螺零偏随机游走
+    imu_init_samples: 400 # IMU静止初始化样本数
+    nearest_search_points: 5 # 近邻搜索点数
+    iekf_max_iterations: 5 # IEKF最大迭代次数
+    scan_voxel: 0.3  # 前端扫描降采样体素(m)
+    imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
+    imu_lidar_translation: [0.0, 0.0, 0.0905] # 初始IMU<-lidar平移(m)
+    estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
   loop_closure:
-    sc_num_rings: 20  # ScanContext环数
-    sc_num_sectors: 60 # ScanContext扇区数
-    sc_max_radius: 80.0 # ScanContext最大半径(m)
-    sc_min_keyframe_gap: 30 # 回环最小关键帧间隔
-    sc_dist_thresh: 0.4 # ScanContext距离阈值
-    sc_candidate_ratio: 0.3 # 回环候选比例
     icp_fitness_thresh: 1.0 # 回环ICP适应度阈值
     icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)
     icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
+    min_keyframe_gap: 30 # 回环最小关键帧间隔
   grid:
     generator: ray_casting  # 2D栅格生成策略
     min_height: 0.1 # 地面以上障碍最低高度(m)
@@ -141,7 +136,6 @@ mapping:
     skeleton_width: 0 # 骨架膨胀宽度(格)
     line_min_len_m: 0.0 # Hough线段最小长度(m)
     axis_snap: false # Hough线段吸附水平/垂直
-    save_voxel: 0.3 # 地图/点云保存降采样体素(m)
 localization:
   # 各阶段按名选择算法, 便于对同一阶段的不同算法做横向性能验证.
   # 可用实现 (见 algorithms/localization/localization_factory.cpp):
@@ -263,7 +257,6 @@ localization:
     sc_num_rings: 20
     sc_num_sectors: 60
     sc_max_radius: 80.0
-    sc_min_radius: 2.0
     sc_dist_thresh: 0.4
     sc_candidate_ratio: 0.3
     # bbs 专用
@@ -287,6 +280,7 @@ localization:
     fpfh_similarity: 0.9
 
   # ---- 健康监测 (monitor: threshold | windowed) —— ★联动(阈值链)见文件头 ----
+    min_radius: 2.0 # 重定位候选最小半径(m)
   monitor:
     enabled: true
     credible_fitness: 0.85   # 健康线: ≥ 此为 CREDIBLE; 有界恢复达标线
@@ -378,7 +372,7 @@ localization:
   map_store_leaf: 0.3
 
   # ---- 旧独立定位器 gicp_localization (modules.localization=gicp_localization 时) ----
-  gicp:
+  gicp_localization:
     voxel_resolution: 0.3  # GICP降采样体素(m)
     fitness_threshold: 10.0 # GICP适应度阈值
     max_iterations: 64 # GICP最大迭代次数
@@ -405,11 +399,18 @@ diagnostics:
   flight_auto_dump_dir: /tmp/slam_flight   # LOST 翻转自动落盘目录; 手动: /slam/dump_recorder 服务
 
 # 在线标定闭环（默认只估计、不自动应用）
-online_calibration: true
-online_calibration_apply: false
-calib_min_confidence: 0.60
-calib_stable_windows: 3
-calib_rollback_windows: 3
-calib_max_time_offset: 0.05
-calib_max_yaw_offset: 0.15
-calib_max_step: 0.01
+calibration:
+  enabled: true  # 在线标定开关
+  apply: false # 在线标定是否自动应用
+  min_confidence: 0.60 # 标定最低置信度
+  stable_windows: 3 # 标定稳定窗口数
+  rollback_windows: 3 # 标定回滚窗口数
+  max_time_offset: 0.05 # 最大时间偏移(s)
+  max_yaw_offset: 0.15 # 最大yaw偏移(rad)
+  max_step: 0.01 # 标定最大步长
+scan_context:
+  num_rings: 20  # ScanContext环数
+  num_sectors: 60 # ScanContext扇区数
+  max_radius: 80.0 # ScanContext最大半径(m)
+  dist_thresh: 0.4 # ScanContext距离阈值
+  candidate_ratio: 0.3 # 候选比例

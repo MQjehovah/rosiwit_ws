@@ -24,13 +24,25 @@ bool ScanContextLocalization::init(const std::string& config_path) {
         auto loc = config["localization"];
         // ROS1 标准层级: localization.global；旧配置没有该组时退回根节点。
         const YAML::Node g = (loc && loc["global"]) ? loc["global"] : config;
+        const YAML::Node common = config["scan_context"];
         if (g) {
-            m_num_rings     = g["sc_num_rings"].as<int>(m_num_rings);
-            m_num_sectors   = g["sc_num_sectors"].as<int>(m_num_sectors);
-            m_max_radius    = g["sc_max_radius"].as<double>(m_max_radius);
-            m_min_radius    = g["sc_min_radius"].as<double>(m_min_radius);
-            m_dist_thresh   = g["sc_dist_thresh"].as<double>(m_dist_thresh);
-            m_candidate_ratio = g["sc_candidate_ratio"].as<double>(m_candidate_ratio);
+            m_num_rings     = common && common["num_rings"]
+                                  ? common["num_rings"].as<int>(m_num_rings)
+                                  : g["sc_num_rings"].as<int>(m_num_rings);
+            m_num_sectors   = common && common["num_sectors"]
+                                  ? common["num_sectors"].as<int>(m_num_sectors)
+                                  : g["sc_num_sectors"].as<int>(m_num_sectors);
+            m_max_radius    = common && common["max_radius"]
+                                  ? common["max_radius"].as<double>(m_max_radius)
+                                  : g["sc_max_radius"].as<double>(m_max_radius);
+            m_min_radius    = g["min_radius"] ? g["min_radius"].as<double>(m_min_radius)
+                                               : g["sc_min_radius"].as<double>(m_min_radius);
+            m_dist_thresh   = common && common["dist_thresh"]
+                                  ? common["dist_thresh"].as<double>(m_dist_thresh)
+                                  : g["sc_dist_thresh"].as<double>(m_dist_thresh);
+            m_candidate_ratio = common && common["candidate_ratio"]
+                                  ? common["candidate_ratio"].as<double>(m_candidate_ratio)
+                                  : g["sc_candidate_ratio"].as<double>(m_candidate_ratio);
             m_voxel_res         = g["voxel_resolution"].as<float>(m_voxel_res);
             m_icp_max_corr_dist = g["icp_max_corr_dist"].as<float>(m_icp_max_corr_dist);
             m_icp_fitness_thresh = g["icp_fitness_thresh"].as<float>(m_icp_fitness_thresh);

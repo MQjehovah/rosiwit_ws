@@ -42,6 +42,8 @@ void loadGridConfigFromYaml(const std::string& yaml_path,
 
         const YAML::Node grid =
             (c["mapping"] && c["mapping"]["grid"]) ? c["mapping"]["grid"] : c;
+        const YAML::Node gmap = (c["global"] && c["global"]["map"])
+                                    ? c["global"]["map"] : YAML::Node();
         auto gv = [&](const char* key) -> YAML::Node {
             if (grid[key]) return grid[key];
             const std::string legacy = (std::string(key) == "generator")
@@ -80,9 +82,12 @@ void loadGridConfigFromYaml(const std::string& yaml_path,
         if (gv("axis_snap")) post.axis_snap = gv("axis_snap").as<bool>();
 
         // ---- 分辨率与点间距: 核心是在 generateGridMap() 里赋的, 这里在装载时定下来 ----
-        if (c["map_resolution"]) cfg.resolution = c["map_resolution"].as<double>();
-        const double voxel = gv("save_voxel") ? gv("save_voxel").as<double>()
-                                              : c["map_save_voxel"].as<double>(0.0);
+        if (gmap && gmap["resolution"]) cfg.resolution = gmap["resolution"].as<double>();
+        else if (c["map_resolution"]) cfg.resolution = c["map_resolution"].as<double>();
+        const double voxel = (gmap && gmap["save_voxel"])
+                                 ? gmap["save_voxel"].as<double>()
+                                 : (gv("save_voxel") ? gv("save_voxel").as<double>()
+                                                     : c["map_save_voxel"].as<double>(0.0));
         if (voxel > 0.0) {
             cfg.point_spacing = voxel;
             post.point_spacing = voxel;

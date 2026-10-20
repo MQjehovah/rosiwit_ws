@@ -120,6 +120,14 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_motion_cfg.gravity = getv<double>(mpc, "gravity", m_motion_cfg.gravity);
         m_motion_cfg.gravity_gain = getv<double>(mpc, "gravity_gain", m_motion_cfg.gravity_gain);
     }
+    const YAML::Node common_sc = root["scan_context"];
+    if (common_sc) {
+        m_global_cfg.sc_num_rings = getv<int>(common_sc, "num_rings", m_global_cfg.sc_num_rings);
+        m_global_cfg.sc_num_sectors = getv<int>(common_sc, "num_sectors", m_global_cfg.sc_num_sectors);
+        m_global_cfg.sc_max_radius = getv<double>(common_sc, "max_radius", m_global_cfg.sc_max_radius);
+        m_global_cfg.sc_dist_thresh = getv<double>(common_sc, "dist_thresh", m_global_cfg.sc_dist_thresh);
+        m_global_cfg.sc_candidate_ratio = getv<double>(common_sc, "candidate_ratio", m_global_cfg.sc_candidate_ratio);
+    }
     auto gc = loc["global"];
     if (gc) {
         m_global_cfg.min_score          = getv<double>(gc, "min_score", m_global_cfg.min_score);
@@ -136,7 +144,9 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_global_cfg.sc_num_rings       = getv<int>(gc, "sc_num_rings", m_global_cfg.sc_num_rings);
         m_global_cfg.sc_num_sectors     = getv<int>(gc, "sc_num_sectors", m_global_cfg.sc_num_sectors);
         m_global_cfg.sc_max_radius      = getv<double>(gc, "sc_max_radius", m_global_cfg.sc_max_radius);
-        m_global_cfg.sc_min_radius      = getv<double>(gc, "sc_min_radius", m_global_cfg.sc_min_radius);
+        m_global_cfg.sc_min_radius      = gc["min_radius"]
+                                              ? getv<double>(gc, "min_radius", m_global_cfg.sc_min_radius)
+                                              : getv<double>(gc, "sc_min_radius", m_global_cfg.sc_min_radius);
         m_global_cfg.sc_dist_thresh     = getv<double>(gc, "sc_dist_thresh", m_global_cfg.sc_dist_thresh);
         m_global_cfg.sc_candidate_ratio = getv<double>(gc, "sc_candidate_ratio", m_global_cfg.sc_candidate_ratio);
         m_global_cfg.bbs_z_min          = getv<double>(gc, "bbs_z_min", m_global_cfg.bbs_z_min);

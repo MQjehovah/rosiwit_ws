@@ -91,9 +91,14 @@ std::string writeXz3dOverrideYaml(const std::string& base_yaml,
             const size_t b = line.find_first_not_of(" \t");
             if (b != std::string::npos) {
                 const std::string t = line.substr(b);
-                if (t.rfind("esti_il:", 0) == 0 || t.rfind("bbs_mount_r:", 0) == 0) continue;
+                if (t.rfind("esti_il:", 0) == 0 ||
+                    t.rfind("estimate_imu_lidar_extrinsic:", 0) == 0 ||
+                    t.rfind("bbs_mount_r:", 0) == 0) continue;
                 if (write_extrinsic &&
-                    (t.rfind("r_il:", 0) == 0 || t.rfind("t_il:", 0) == 0)) continue;
+                    (t.rfind("r_il:", 0) == 0 ||
+                     t.rfind("imu_lidar_rotation:", 0) == 0 ||
+                     t.rfind("t_il:", 0) == 0 ||
+                     t.rfind("imu_lidar_translation:", 0) == 0)) continue;
             }
             out << line << "\n";
         }
@@ -299,9 +304,20 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
     try {
         // **读注入后的文件**: 那才是核心实际拿到的配置 (基底里的 r_il/t_il 可能已被覆盖)。
         const YAML::Node c = YAML::LoadFile(injected_yaml);
-        if (c && c["acc_scale"]) acc_scale = c["acc_scale"].as<double>(acc_scale);
-        if (c && c["r_il"]) r_il = YAML::Dump(c["r_il"]);
-        if (c && c["t_il"]) t_il = YAML::Dump(c["t_il"]);
+        const YAML::Node inp = (c && c["global"] && c["global"]["input"])
+                                   ? c["global"]["input"] : YAML::Node();
+        if (inp && inp["acc_scale"]) acc_scale = inp["acc_scale"].as<double>(acc_scale);
+        else if (c && c["acc_scale"]) acc_scale = c["acc_scale"].as<double>(acc_scale);
+        const YAML::Node fe = (c && c["mapping"] && c["mapping"]["frontend"])
+                                  ? c["mapping"]["frontend"] : YAML::Node();
+        const YAML::Node rnode = (c && c["r_il"]) ? c["r_il"]
+                                 : (fe && fe["imu_lidar_rotation"]) ? fe["imu_lidar_rotation"]
+                                 : (fe ? fe["r_il"] : YAML::Node());
+        const YAML::Node tnode = (c && c["t_il"]) ? c["t_il"]
+                                 : (fe && fe["imu_lidar_translation"]) ? fe["imu_lidar_translation"]
+                                 : (fe ? fe["t_il"] : YAML::Node());
+        if (rnode) r_il = YAML::Dump(rnode);
+        if (tnode) t_il = YAML::Dump(tnode);
     } catch (const std::exception& e) {
         ROS_WARN_STREAM("[slam_engine] compat diagnostics: cannot read base yaml (" << e.what() << ")");
     }
@@ -360,15 +376,26 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         try {
             YAML::Node c = YAML::LoadFile(config_path_);
             if (c) {
-                cfg_.imu_topic   = c["imu_topic"].as<std::string>(cfg_.imu_topic);
-                cfg_.lidar_topic = c["lidar_topic"].as<std::string>(cfg_.lidar_topic);
-                cfg_.body_frame  = c["body_frame"].as<std::string>(cfg_.body_frame);
-                cfg_.world_frame = c["world_frame"].as<std::string>(cfg_.world_frame);
-                cfg_.scan_period_ms = c["scan_period_ms"].as<float>(cfg_.scan_period_ms);
-                cfg_.lidar_filter_num = c["lidar_filter_num"].as<int>(cfg_.lidar_filter_num);
-                cfg_.lidar_min_range = c["lidar_min_range"].as<double>(cfg_.lidar_min_range);
-                cfg_.lidar_max_range = c["lidar_max_range"].as<double>(cfg_.lidar_max_range);
-                cfg_.odom_topic = c["odom_topic"].as<std::string>(cfg_.odom_topic);
+                const YAML::Node glob = c["global"];
+                const YAML::Node inp = (glob && glob["input"]) ? glob["input"] : YAML::Node();
+                const YAML::Node frames = (glob && glob["frames"]) ? glob["frames"] : YAML::Node();
+                auto gi = [&](const char* key) -> YAML::Node {
+                    if (inp && inp[key]) return inp[key];
+                    return c[key];
+                };
+                auto gf = [&](const char* key) -> YAML::Node {
+                    if (frames && frames[key]) return frames[key];
+                    return c[key];
+                };
+                cfg_.imu_topic   = gi("imu_topic").as<std::string>(cfg_.imu_topic);
+                cfg_.lidar_topic = gi("lidar_topic").as<std::string>(cfg_.lidar_topic);
+                cfg_.body_frame  = gf("body_frame").as<std::string>(cfg_.body_frame);
+                cfg_.world_frame = gf("world_frame").as<std::string>(cfg_.world_frame);
+                cfg_.scan_period_ms = gi("scan_period_ms").as<float>(cfg_.scan_period_ms);
+                cfg_.lidar_filter_num = gi("lidar_filter_num").as<int>(cfg_.lidar_filter_num);
+                cfg_.lidar_min_range = gi("lidar_min_range").as<double>(cfg_.lidar_min_range);
+                cfg_.lidar_max_range = gi("lidar_max_range").as<double>(cfg_.lidar_max_range);
+                cfg_.odom_topic = gi("odom_topic").as<std::string>(cfg_.odom_topic);
                 if (c["localization"] && c["localization"]["absolute"]) {
                     const YAML::Node a = c["localization"]["absolute"];
                     cfg_.absolute_topic = a["topic"].as<std::string>(cfg_.absolute_topic);
@@ -378,7 +405,9 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
                     vo_enabled = c["vision"]["enabled"].as<bool>(false);
                     cfg_.vo_topic = c["vision"]["vo_topic"].as<std::string>(cfg_.vo_topic);
                 }
-                odom_enabled = c["enable_odom"].as<bool>(false);
+                odom_enabled = (inp && inp["use_odom"])
+                                   ? inp["use_odom"].as<bool>(false)
+                                   : c["enable_odom"].as<bool>(false);
             }
         } catch (const std::exception& e) {
             ROS_WARN("[rosiwit_slam_ros1] config parse error: %s", e.what());

@@ -61,9 +61,13 @@ bool PcdMapManager::init(const std::string& config_path) {
                                            : (std::string("grid_") + key);
             return config[legacy];
         };
+        const YAML::Node gmap = (config["global"] && config["global"]["map"])
+                                    ? config["global"]["map"] : YAML::Node();
         if (config["map_directory"])
             map_dir_ = config["map_directory"].as<std::string>();
-        if (grid && grid["save_voxel"])
+        if (gmap && gmap["save_voxel"])
+            save_voxel_ = gmap["save_voxel"].as<double>();
+        else if (grid && grid["save_voxel"])
             save_voxel_ = grid["save_voxel"].as<double>();
         else if (config["map_save_voxel"])
             save_voxel_ = config["map_save_voxel"].as<double>();

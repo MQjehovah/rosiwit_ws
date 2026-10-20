@@ -28,10 +28,12 @@ bool GicpLocalization::init(const std::string& config_path) {
 #ifndef YAML_CPP_DISABLED
     try {
         const YAML::Node config = YAML::LoadFile(config_path);
-        // ROS1 标准层级: localization.gicp；ROS2/旧配置仍兼容根节点写法。
-        const YAML::Node gicp = config["localization"] && config["localization"]["gicp"]
-                                   ? config["localization"]["gicp"]
-                                   : config;
+        // 标准层级: localization.gicp_localization；兼容旧的 localization.gicp 和根节点写法。
+        const YAML::Node gicp = (config["localization"] && config["localization"]["gicp_localization"])
+                                   ? config["localization"]["gicp_localization"]
+                                   : (config["localization"] && config["localization"]["gicp"])
+                                         ? config["localization"]["gicp"]
+                                         : config;
         if (gicp["voxel_resolution"])
             voxel_resolution_ = gicp["voxel_resolution"].as<float>();
         if (gicp["fitness_threshold"])

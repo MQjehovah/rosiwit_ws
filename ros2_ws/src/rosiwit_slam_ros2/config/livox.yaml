@@ -2,48 +2,36 @@
 # - 内置 IMU 加速度单位为 g, 需 acc_scale=9.81 换算为 m/s^2
 # - Mid-360 内置 IMU 与雷达对齐 (r_il=单位阵), 25° 安装斜角由 gravity_align 处理
 
-slam_algorithm: fast_lio2_pipeline
-pipeline: "rosiwit_slam"
-pipeline_mode: mapping
+global:
+  slam_algorithm: fast_lio2_pipeline  # 核心算法名
+  pipeline: "rosiwit_slam" # 管线名称
+  pipeline_mode: mapping # 启动模式 mapping|localization|idle
+  modules:
+    frontend: "fast_lio2_frontend"
+    backend: "ceres_pose_graph" # 无 GTSAM 的机器也能启动; 需要 gtsam_isam2 时显式改
+    loop_closure: "scan_context"
+    map_manager: "pcd_map_manager"
+    localization: "gicp_localization"
 
-modules:
-  frontend: "fast_lio2_frontend"
-  backend: "ceres_pose_graph"   # 无 GTSAM 的机器也能启动; 需要 gtsam_isam2 时显式改
-  loop_closure: "scan_context"
-  map_manager: "pcd_map_manager"
-  localization: "gicp_localization"
-
-imu_topic: /livox/imu
-lidar_topic: /livox/lidar
-lidar_frame: livox_frame
-imu_frame: livox_frame
-body_frame: base_link
-world_frame: odom
-
-lidar_filter_num: 3
-lidar_min_range: 0.5
-lidar_max_range: 100.0
-scan_period_ms: 100.0
-# 体素/分辨率: 3D 匹配/存图用 0.3m 档 (参考 mid360), 2D 栅格输出仍由 save_grid_map 传 0.05
-map_resolution: 0.3
-acc_scale: 9.81
+  input:
+    imu_topic: /livox/imu  # IMU话题
+    lidar_topic: /livox/lidar # 雷达点云话题
+    lidar_filter_num: 3 # 雷达点抽稀倍数
+    lidar_min_range: 0.5 # 雷达最小有效距离(m)
+    lidar_max_range: 100.0 # 雷达最大有效距离(m)
+    scan_period_ms: 100.0 # 单帧扫描周期(ms)
+    acc_scale: 9.81 # IMU加速度单位换算
+  frames:
+    lidar_frame: livox_frame  # 雷达frame
+    imu_frame: livox_frame # IMU frame
+    body_frame: base_link # 车体frame
+    world_frame: odom # 世界frame
+  map:
+    resolution: 0.3  # 地图/栅格分辨率(m)
+    save_voxel: 0.3 # 地图/点云保存降采样体素(m)
 mapping:
   frontend:
-    cube_len: 300  # 局部地图立方体边长(m)
-    det_range: 60 # 雷达有效检测距离(m)
-    move_thresh: 1.5 # 局部地图滑动窗口阈值比例
-    na: 0.05 # 加速度计白噪声
-    ng: 0.05 # 陀螺白噪声
-    nba: 0.001 # 加速度计零偏随机游走
-    nbg: 0.001 # 陀螺零偏随机游走
-    imu_init_num: 100 # IMU 静止初始化样本数
-    near_search_num: 5 # 近邻搜索点数
-    ieskf_max_iter: 5 # IEKF 最大迭代次数
     gravity_align: true # 是否用重力方向初始化姿态
-    scan_resolution: 0.3 # 前端扫描降采样体素(m)
-    esti_il: false # 是否在线估计雷达-IMU外参(本机必须false)
-    r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始 IMU<-lidar 旋转矩阵(行优先)
-    t_il: [0.0, 0.0, 0.0] # 初始 IMU<-lidar 平移(m)
     lidar_cov_inv: 5000.0 # 激光观测信息矩阵权重
     robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
     robust_scale: 0.5 # 鲁棒核尺度
@@ -52,16 +40,25 @@ mapping:
     persist_thresh: 2 # 动态点持久确认帧数
     persist_window: 20 # 动态点确认窗口帧数
     dynamic_residual_thresh: 1.0 # 动态点残差阈值
+    local_map_size: 300          # 局部地图立方体边长(m)
+    detection_range: 60          # 雷达有效检测距离(m)
+    map_move_threshold: 1.5      # 局部地图滑动窗口阈值比例
+    acc_noise: 0.05              # 加速度计白噪声
+    gyro_noise: 0.05             # 陀螺白噪声
+    acc_bias_random_walk: 0.001  # 加速度计零偏随机游走
+    gyro_bias_random_walk: 0.001 # 陀螺零偏随机游走
+    imu_init_samples: 100        # IMU静止初始化样本数
+    nearest_search_points: 5     # 近邻搜索点数
+    iekf_max_iterations: 5       # IEKF最大迭代次数
+    scan_voxel: 0.3              # 前端扫描降采样体素(m)
+    imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
+    imu_lidar_translation: [0.0, 0.0, 0.0] # 初始IMU<-lidar平移(m)
+    estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
   loop_closure:
-    sc_num_rings: 20  # ScanContext环数
-    sc_num_sectors: 60 # ScanContext扇区数
-    sc_max_radius: 80.0 # ScanContext最大半径(m)
-    sc_min_keyframe_gap: 30 # 回环最小关键帧间隔
-    sc_dist_thresh: 0.4 # ScanContext距离阈值
-    sc_candidate_ratio: 0.3 # 回环候选比例
     icp_fitness_thresh: 1.0 # 回环ICP适应度阈值
     icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)
     icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
+    min_keyframe_gap: 30 # 回环最小关键帧间隔
   grid:
     generator: occupancy_logodds  # 2D栅格生成策略
     min_height: 0.1 # 地面以上障碍最低高度(m)
@@ -84,9 +81,21 @@ mapping:
     skeleton_width: 3 # 骨架膨胀宽度(格)
     line_min_len_m: 0.0 # Hough线段最小长度(m)
     axis_snap: false # Hough线段吸附水平/垂直
-    save_voxel: 0.3 # 地图/点云保存降采样体素(m)
 localization:
-  gicp:
+  output:
+    smoothing_alpha: 0.3  # 输出平滑系数
+  global:
+    sc_num_rings: 20
+    sc_num_sectors: 60
+    sc_max_radius: 80.0
+    sc_dist_thresh: 0.4
+    sc_candidate_ratio: 0.3
+    icp_voxel_res: 0.3
+    icp_max_corr_dist: 2.0
+    icp_fitness_thresh: 1.0
+    icp_max_iter: 32
+    min_radius: 2.0  # 重定位候选最小半径(m)
+  gicp_localization:
     voxel_resolution: 0.3  # GICP降采样体素(m)
     fitness_threshold: 10.0 # GICP适应度阈值
     max_iterations: 64 # GICP最大迭代次数
@@ -98,16 +107,9 @@ localization:
       alpha: 0.6 # 滤波融合系数
       max_xy_m: 0.5 # 位置修正门限(m)
       max_yaw_deg: 20.0 # 航向修正门限(deg)
-  output:
-    smoothing_alpha: 0.3  # 输出平滑系数
-  global:
-    sc_num_rings: 20
-    sc_num_sectors: 60
-    sc_max_radius: 80.0
-    sc_min_radius: 2.0
-    sc_dist_thresh: 0.4
-    sc_candidate_ratio: 0.3
-    icp_voxel_res: 0.3
-    icp_max_corr_dist: 2.0
-    icp_fitness_thresh: 1.0
-    icp_max_iter: 32
+scan_context:
+  num_rings: 20  # ScanContext环数
+  num_sectors: 60 # ScanContext扇区数
+  max_radius: 80.0 # ScanContext最大半径(m)
+  dist_thresh: 0.4 # ScanContext距离阈值
+  candidate_ratio: 0.3 # 候选比例

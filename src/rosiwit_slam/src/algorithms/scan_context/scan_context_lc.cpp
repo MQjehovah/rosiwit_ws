@@ -24,18 +24,31 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
             auto lc = (config["mapping"] && config["mapping"]["loop_closure"])
                           ? config["mapping"]["loop_closure"]
                           : config["loop_closure"];
+            const YAML::Node common = config["scan_context"];
             if (lc) {
-                m_min_keyframe_gap  = lc["sc_min_keyframe_gap"].as<int>(m_min_keyframe_gap);
-                m_dist_thresh       = lc["sc_dist_thresh"].as<double>(m_dist_thresh);
-                m_candidate_ratio   = lc["sc_candidate_ratio"].as<double>(m_candidate_ratio);
+                m_min_keyframe_gap = lc["min_keyframe_gap"]
+                                         ? lc["min_keyframe_gap"].as<int>(m_min_keyframe_gap)
+                                         : lc["sc_min_keyframe_gap"].as<int>(m_min_keyframe_gap);
+                m_dist_thresh     = common && common["dist_thresh"]
+                                        ? common["dist_thresh"].as<double>(m_dist_thresh)
+                                        : lc["sc_dist_thresh"].as<double>(m_dist_thresh);
+                m_candidate_ratio = common && common["candidate_ratio"]
+                                        ? common["candidate_ratio"].as<double>(m_candidate_ratio)
+                                        : lc["sc_candidate_ratio"].as<double>(m_candidate_ratio);
                 m_icp_fitness_thresh = lc["icp_fitness_thresh"].as<float>(m_icp_fitness_thresh);
                 m_icp_max_corr_dist  = lc["icp_max_corr_dist"].as<float>(m_icp_max_corr_dist);
                 m_icp_voxel_res      = lc["icp_voxel_res"].as<float>(m_icp_voxel_res);
 
                 ScanContext::Config sc_cfg;
-                sc_cfg.num_rings   = lc["sc_num_rings"].as<int>(sc_cfg.num_rings);
-                sc_cfg.num_sectors = lc["sc_num_sectors"].as<int>(sc_cfg.num_sectors);
-                sc_cfg.max_radius  = lc["sc_max_radius"].as<double>(sc_cfg.max_radius);
+                sc_cfg.num_rings   = common && common["num_rings"]
+                                         ? common["num_rings"].as<int>(sc_cfg.num_rings)
+                                         : lc["sc_num_rings"].as<int>(sc_cfg.num_rings);
+                sc_cfg.num_sectors = common && common["num_sectors"]
+                                         ? common["num_sectors"].as<int>(sc_cfg.num_sectors)
+                                         : lc["sc_num_sectors"].as<int>(sc_cfg.num_sectors);
+                sc_cfg.max_radius  = common && common["max_radius"]
+                                         ? common["max_radius"].as<double>(sc_cfg.max_radius)
+                                         : lc["sc_max_radius"].as<double>(sc_cfg.max_radius);
                 m_sc = ScanContext(sc_cfg);
                 m_cfg_num_rings = sc_cfg.num_rings;
                 m_cfg_num_sectors = sc_cfg.num_sectors;
