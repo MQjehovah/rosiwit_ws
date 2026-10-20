@@ -8,7 +8,7 @@
 //       关键帧层级数据, 常规地图规模可接受.
 #include <string>
 #include <vector>
-#include "io/xzmap_writer.h"
+#include "xzmap_writer.h"
 
 namespace rosiwit_slam {
 namespace io {

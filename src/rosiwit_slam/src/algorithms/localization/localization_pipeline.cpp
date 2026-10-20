@@ -2,7 +2,6 @@
 #include "algorithms/localization/localization_pipeline.h"
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_utils.h"
-#include "io/xzmap_reader.h"
 #include "algorithms/map_store/map_store_factory.h"
 #include <cmath>
 #include <Eigen/Geometry>
@@ -11,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <pcl/io/pcd_io.h>
+#include <pcl/common/transforms.h>
 
 #ifndef YAML_CPP_DISABLED
 #include <yaml-cpp/yaml.h>
@@ -345,14 +345,10 @@ std::string LocalizationPipeline::describe() const {
 }
 
 void LocalizationPipeline::setMap(const std::string& map_name) {
-    setMapImpl(map_name, false);
+    setMapImpl(map_name);
 }
 
-void LocalizationPipeline::setMapXzmapOnly(const std::string& map_name) {
-    setMapImpl(map_name, true);
-}
-
-void LocalizationPipeline::setMapImpl(const std::string& map_name, bool xzmap_only) {
+void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     // 换图会替换 local_map/matcher/store/maintainer; 与 onLidar 互斥.
     std::lock_guard<std::mutex> state_lk(m_state_mu);
     m_cancel_set_map.store(false);
@@ -370,38 +366,13 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name, bool xzmap_on
     m_has_cached_target = false;
     m_map_path = map_name;
     m_map.reset(new CloudType());
-    // ⚠ xzmap 只解析一次(46MB 手写 JSON 解析单次数秒, 之前回退路径解析两遍,
-    //    /switch_map 被直接拖慢一倍): 回退路径解析出的关键帧同时供两处使用 ——
-    //    重建基准点云 + setKeyframes; PCD 路径下后面才第一次读 xzmap。
-    std::vector<io::XzMapKeyframe> kfs;
-    if (xzmap_only || pcl::io::loadPCDFile(map_name, *m_map) == -1) {
-        // **没有 PCD 的兼容回退**: 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml,
-        // 关键帧里自带点 —— 直接从关键帧重建基准点云。
-        // 这样"切图/定位"就**不再要求 PCD 文件** (旧实现 localiza_ptr_->run("<dir>/map")
-        // 也只是读它自己那份 xzmap, 从来不看 PCD)。
-        m_map->clear();
-        if (io::readXzMap(map_name + ".xzmap", kfs) && !kfs.empty()) {
-            for (const auto& kf : kfs) {
-                for (const auto& p : kf.points) {
-                    PointType pt;   // PCL 1.8 无 (x,y,z) 三参构造, 逐字段赋值
-                    pt.x = p.x();
-                    pt.y = p.y();
-                    pt.z = p.z();
-                    m_map->push_back(pt);
-                }
-            }
-            std::cout << "[LocPipeline] no PCD at " << map_name << "; rebuilt base map from "
-                      << map_name << ".xzmap (" << m_map->size() << " pts, " << kfs.size()
-                      << " kfs)" << std::endl;
-        } else {
-            std::cerr << "[LocPipeline] failed to load map: " << map_name << std::endl;
-            m_map.reset();
-            return;
-        }
-    } else {
-        std::cout << "[LocPipeline] loaded map: " << map_name << " (" << m_map->size() << " pts)"
-                  << std::endl;
+    if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
+        std::cerr << "[LocPipeline] failed to load PCD map: " << map_name << std::endl;
+        m_map.reset();
+        return;
     }
+    std::cout << "[LocPipeline] loaded PCD map: " << map_name << " (" << m_map->size()
+              << " pts)" << std::endl;
     mark("parse");
     if (m_cancel_set_map.load()) { std::cout << "[LocPipeline] setMap canceled after parse" << std::endl; return; }
     if (m_local_map) m_local_map->setMap(map_name, m_map);
@@ -416,43 +387,6 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name, bool xzmap_on
     if (m_maintainer) m_maintainer->setBaseMap(map_name, m_map);
     mark("maintainer");
 
-    // 尝试载入关键帧 (map.pcd 的伴生文件 map.pcd.xzmap) 供 keyframe_submap 使用。
-    // 回退路径已经在上面解析过 kfs, 直接复用 (省一整遍 46MB 解析); PCD 路径这里才第一次读。
-    if (m_local_map) {
-        if (kfs.empty()) io::readXzMap(map_name + ".xzmap", kfs);
-        if (!kfs.empty()) {
-            std::vector<LocalKeyframe> lkfs;
-            lkfs.reserve(kfs.size());
-            size_t kf_i = 0;
-            for (const auto& kf : kfs) {
-                if ((kf_i++ & 0x1f) == 0 && m_cancel_set_map.load()) {
-                    std::cout << "[LocPipeline] setMap canceled during keyframes" << std::endl;
-                    return;
-                }
-                LocalKeyframe lk;
-                lk.pose.trans = V3D(kf.pose.x, kf.pose.y, kf.pose.z);
-                lk.pose.rot = Eigen::AngleAxisd(kf.pose.yaw, V3D::UnitZ()).toRotationMatrix() *
-                              Eigen::AngleAxisd(kf.pose.pitch, V3D::UnitY()).toRotationMatrix() *
-                              Eigen::AngleAxisd(kf.pose.roll, V3D::UnitX()).toRotationMatrix();
-                lk.cloud.reset(new CloudType());
-                lk.cloud->reserve(kf.points.size());
-                // 注意: PCL 1.8 (melodic/18.04) 的 pcl::PointXYZINormal 没有 (x,y,z)
-                // 三参构造 (PCL 1.12+ 才有), 因此逐字段赋值。默认构造已把 intensity /
-                // curvature / normal_* 置零, data[3] 置 1, 与新版本三参构造语义一致。
-                for (const auto& p : kf.points) {
-                    PointType pt;
-                    pt.x = p.x();
-                    pt.y = p.y();
-                    pt.z = p.z();
-                    lk.cloud->push_back(pt);
-                }
-                lkfs.push_back(std::move(lk));
-            }
-            m_local_map->setKeyframes(lkfs);
-            std::cout << "[LocPipeline] loaded " << lkfs.size()
-                      << " keyframes from " << map_name << ".xzmap" << std::endl;
-        }
-    }
     mark("kfs");
     if (m_cancel_set_map.load()) { std::cout << "[LocPipeline] setMap canceled after kfs" << std::endl; return; }
     // 全局重定位库**后台**预建: FPFH 对全图算特征+建树实测 ~45s(aarch64)。
@@ -473,6 +407,77 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name, bool xzmap_on
     mark("relocalizer_bg");
     std::cout << "[LocPipeline] setMap profile(ms, 累计):" << timing
               << " total=" << std::to_string(stage_ms(t_total0)) << std::endl;
+}
+
+
+void LocalizationPipeline::setMapData(const MapData& data) {
+    std::lock_guard<std::mutex> state_lk(m_state_mu);
+    m_cancel_set_map.store(false);
+    m_status = INIT;
+    m_initialized = false;
+    m_has_cached_target = false;
+    m_map_path = data.meta.map_id;
+    m_map.reset(new CloudType());
+
+    if (data.points) m_map = data.points->exportCloud();
+    if (!m_map) m_map.reset(new CloudType());
+
+    std::vector<LocalKeyframe> lkfs;
+    lkfs.reserve(data.keyframes.size());
+    size_t kf_i = 0;
+    for (const auto& kf : data.keyframes) {
+        if ((kf_i++ & 0x1f) == 0 && m_cancel_set_map.load()) {
+            std::cout << "[LocPipeline] setMapData canceled during keyframes" << std::endl;
+            return;
+        }
+        if (!kf.cloud || kf.cloud->empty()) continue;
+        LocalKeyframe lk;
+        lk.pose = kf.pose;
+        lk.cloud = kf.cloud;
+        lkfs.push_back(std::move(lk));
+
+        if (!data.points) {
+            CloudType::Ptr world(new CloudType());
+            Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+            T.block<3,3>(0,0) = kf.pose.rot.cast<float>();
+            T.block<3,1>(0,3) = kf.pose.trans.cast<float>();
+            pcl::transformPointCloud(*kf.cloud, *world, T);
+            *m_map += *world;
+        }
+    }
+    if (m_map->empty()) {
+        std::cerr << "[LocPipeline] setMapData: empty map" << std::endl;
+        m_map.reset();
+        return;
+    }
+    std::cout << "[LocPipeline] setMapData: " << m_map->size() << " pts, "
+              << lkfs.size() << " keyframes" << std::endl;
+
+    if (m_cancel_set_map.load()) return;
+    if (m_local_map) m_local_map->setMap(m_map_path, m_map);
+    m_planar.setMap(m_map);
+    if (m_store) {
+        m_store->buildFromCloud(m_map);
+        if (m_matcher) m_matcher->setStore(m_store.get());
+        m_planar.setStore(m_store.get());
+    }
+    if (m_maintainer) m_maintainer->setBaseMap(m_map_path, m_map);
+    if (m_local_map && !lkfs.empty()) {
+        m_local_map->setKeyframes(lkfs);
+        std::cout << "[LocPipeline] setMapData keyframes=" << lkfs.size() << std::endl;
+    }
+    if (m_cancel_set_map.load()) return;
+
+    {
+        std::lock_guard<std::mutex> lk(m_reloc_mu);
+        m_reloc_request = true;
+        m_reloc_ready = false;
+        m_reloc_map_snap = m_map;
+        m_reloc_path_snap = m_map_path;
+    }
+    if (!m_reloc_thread.joinable())
+        m_reloc_thread = std::thread([this] { relocBuildWorker(); });
+    m_reloc_cv.notify_all();
 }
 
 void LocalizationPipeline::relocBuildWorker() {

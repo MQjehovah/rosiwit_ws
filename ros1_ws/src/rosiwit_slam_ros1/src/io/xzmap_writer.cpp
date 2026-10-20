@@ -1,4 +1,4 @@
-#include "io/xzmap_writer.h"
+#include "xzmap_writer.h"
 
 #include <cstdio>
 #include <cmath>

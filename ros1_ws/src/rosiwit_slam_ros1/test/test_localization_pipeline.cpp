@@ -15,8 +15,8 @@
 #include <fstream>
 #include <pcl/io/pcd_io.h>
 #include "algorithms/map_store/map_store_factory.h"
-#include "io/xzmap_writer.h"
-#include "io/xzmap_reader.h"
+#include "xzmap_writer.h"
+#include "xzmap_reader.h"
 
 using namespace rosiwit_slam;
 

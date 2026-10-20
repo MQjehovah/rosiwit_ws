@@ -30,7 +30,7 @@ public:
 
     bool init(const std::string& config_path) override;
     void setMap(const std::string& map_name) override;
-    void setMapXzmapOnly(const std::string& map_name) override;
+    void setMapData(const MapData& data) override;
     void cancelSetMap() override { m_cancel_set_map.store(true); }
     void setInitPose(const PoseStamped& pose) override;
     void onImu(const IMUSample& s) override;
@@ -56,7 +56,7 @@ public:
     std::string describe() const;
 
 private:
-    void setMapImpl(const std::string& map_name, bool xzmap_only);
+    void setMapImpl(const std::string& map_name);
     bool acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
                      const PoseStamped& guess);
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)

@@ -19,7 +19,7 @@
 #include <vector>
 #include <pcl/io/pcd_io.h>
 #include "slam_core/slam_types.h"
-#include "io/xzmap_reader.h"
+#include "xzmap_reader.h"
 
 using namespace rosiwit_slam;
 

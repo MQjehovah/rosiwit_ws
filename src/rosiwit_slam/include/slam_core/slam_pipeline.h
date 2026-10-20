@@ -77,8 +77,8 @@ public:
 
     bool saveMap(const std::string& path) override;
     bool loadMap(const std::string& path) override;
-    bool loadMapXzmapOnly(const std::string& path) override;
-    bool saveMapXzmapOnly(const std::string& path) override;
+    bool loadLocalizationMapData(const MapData& data) override;
+    bool exportMapData(MapData& out) override;
     void cancelMapLoad() override;
     bool appendMap(const std::string& path) override;
     bool resetForNewMapping(const std::string& config_path) override;
@@ -127,8 +127,7 @@ private:
     std::mutex m_loc_mu;
     std::deque<LidarFrame> m_loc_buf;
 
-    // saveMap 附带导出 map.xzmap (关键帧+优化位姿交给 io 模块落盘, SLAM 侧不感知设备格式)
-    bool exportXzMap(const std::string& pcd_path);
+    // 核心只保存通用 PCD/PGM 等；xzmap 导出由 ROS1 适配层完成。
 
     std::unique_ptr<IFrontend>     m_frontend;
     std::shared_ptr<ILoopClosure>  m_loop;

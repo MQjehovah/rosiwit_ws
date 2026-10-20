@@ -20,7 +20,7 @@
 #include "algorithms/grid_map/grid_map_io.h"
 #include "algorithms/grid_map/grid_map_postprocess.h"
 #include "algorithms/grid_map/ray_casting_grid_map.h"
-#include "io/xzmap_reader.h"
+#include "xzmap_reader.h"
 #include "slam_core/slam_types.h"
 
 using namespace rosiwit_slam;

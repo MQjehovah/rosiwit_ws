@@ -1,6 +1,6 @@
 #include "slam_core/slam_pipeline.h"
 #include "slam_core/slam_factory.h"
-#include "io/xzmap_writer.h"
+#include "algorithms/map_store/voxel_map_store.h"
 #include <yaml-cpp/yaml.h>
 #include <iostream>
 #include <fstream>
@@ -305,21 +305,15 @@ void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& t
 
 bool SlamPipeline::loadMapForLocalization(const std::string& path, const PoseStamped& init_pose) {
     if (!m_localization) return false;
-    // 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml, **没有 PCD** ——
-    // 所以这里不能把"PCD 加载失败"当成致命错误 (旧实现 localiza_ptr_->run("<dir>/map")
-    // 也只看它自己那份 xzmap)。定位入口 setMap() 会在没有 PCD 时从关键帧重建基准点云。
-    // 只有真的存在 PCD 才尝试加载；xzmap-only 老地图是正常兼容路径，
-    // 不应先让 PcdMapManager 打一条 "Load failed" ERROR。
+    // 核心只接受 PCD/中立地图数据；xzmap 由 ROS1 适配层转成 MapData 后注入。
     std::ifstream pcd_probe(path);
-    const bool has_pcd = pcd_probe.good();
-    if (m_map_mgr && has_pcd) {
-        if (!m_map_mgr->loadMap(path)) {
-            std::cout << "[SlamPipeline] PCD load failed: " << path << std::endl;
-        }
-    } else if (!has_pcd) {
-        std::cout << "[SlamPipeline] no PCD at " << path
-                  << " (legacy xzmap-only map); localization map is loaded from <base>.xzmap"
-                  << std::endl;
+    if (!pcd_probe.good()) {
+        std::cout << "[SlamPipeline] no PCD map at " << path << std::endl;
+        return false;
+    }
+    if (m_map_mgr && !m_map_mgr->loadMap(path)) {
+        std::cout << "[SlamPipeline] PCD load failed: " << path << std::endl;
+        return false;
     }
     m_localization->setMap(path);
     m_localization_map_loaded = true;
@@ -514,96 +508,47 @@ SlamState SlamPipeline::state() const {
     return SlamState::RUNNING;
 }
 
-bool SlamPipeline::saveMapXzmapOnly(const std::string& path) {
-    // ROS1 老格式：地图只需要 map.xzmap + pgm/yaml，不生成 PCD。
-    if (!m_loop) return false;
-    m_loop->saveDatabase(path + ".scdb");
-    if (!exportXzMap(path)) return false;
+bool SlamPipeline::loadLocalizationMapData(const MapData& data) {
+    if (!m_localization) return false;
+    m_localization->setMapData(data);
+    m_localization_map_loaded = true;
+    std::cout << "[SlamPipeline] localization MapData loaded: "
+              << data.meta.map_id << " kfs=" << data.keyframes.size() << std::endl;
     return true;
 }
 
-bool SlamPipeline::saveMap(const std::string& path) {
+bool SlamPipeline::exportMapData(MapData& out) {
     if (!m_map_mgr) return false;
-    bool ok = m_map_mgr->saveMap(path);
-    if (ok && m_loop) {
-        m_loop->saveDatabase(path + ".scdb");
-        exportXzMap(path);
-    }
-    return ok;
-}
-
-// xzmap 导出: 关键帧(body系点云) + 回环优化后位姿, 整理为 io 模块的中性结构后落盘。
-// 本函数不感知设备格式的任何细节 (键名/量化/坐标系约定都在 io/xzmap_writer 内)。
-bool SlamPipeline::exportXzMap(const std::string& pcd_path) {
-    if (!m_loop) return false;
-
-    std::vector<KeyFrame> kfs;
-    if (!m_loop->getKeyframes(kfs) || kfs.empty()) {
-        std::cerr << "[SlamPipeline] xzmap export: no keyframes" << std::endl;
-        return false;
-    }
-
-    // 回环优化位姿按序回填 (backend 与 loop 关键帧数量一致时生效)
-    std::vector<PoseStamped> refined;
-    if (m_backend && m_backend->getUpdatedPoses(refined)
-            && refined.size() == kfs.size()) {
-        for (size_t i = 0; i < kfs.size(); ++i) kfs[i].pose = refined[i];
-    } else {
-        std::cerr << "[SlamPipeline] xzmap export: optimized poses unavailable ("
-                  << refined.size() << "/" << kfs.size()
-                  << "), fallback to frontend poses" << std::endl;
-    }
-
-    std::vector<io::XzMapKeyframe> xz_kfs;
-    xz_kfs.reserve(kfs.size());
-    for (auto& kf : kfs) {
-        io::XzMapKeyframe xk;
-        const M3D& r = kf.pose.rot;
-        // ZYX 欧拉角提取 (R = Rz(yaw)*Ry(pitch)*Rx(roll)), 值域 [-pi, pi]
-        xk.pose.roll  = std::atan2(r(2, 1), r(2, 2));
-        xk.pose.pitch = std::atan2(-r(2, 0), std::sqrt(r(2, 1) * r(2, 1) + r(2, 2) * r(2, 2)));
-        xk.pose.yaw   = std::atan2(r(1, 0), r(0, 0));
-        xk.pose.x = kf.pose.trans.x();
-        xk.pose.y = kf.pose.trans.y();
-        xk.pose.z = kf.pose.trans.z();
-        if (kf.cloud) {
-            xk.points.reserve(kf.cloud->size());
-            for (const auto& pt : kf.cloud->points) {
-                xk.points.emplace_back(pt.x, pt.y, pt.z);
-            }
-        }
-        xz_kfs.push_back(std::move(xk));
-    }
-
-    // map.pcd -> 同目录同名 .xzmap
-    std::string base = pcd_path;
-    const auto slash = base.find_last_of('/');
-    const std::string dir = (slash != std::string::npos) ? base.substr(0, slash + 1) : "";
-    base = (slash != std::string::npos) ? base.substr(slash + 1) : base;
-    const auto dot = base.rfind('.');
-    const std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
-    const std::string xz_path = dir + stem + ".xzmap";
-
-    long long total = 0;
-    if (io::writeXzMap(xz_path, stem, xz_kfs, &total)) {
-        std::cout << "[SlamPipeline] xzmap saved: " << xz_path
-                  << " (kf=" << xz_kfs.size() << ", pts=" << total << ")" << std::endl;
-        return true;
-    }
-    std::cerr << "[SlamPipeline] xzmap save failed: " << xz_path << std::endl;
-    return false;
-}
-
-bool SlamPipeline::loadMapXzmapOnly(const std::string& path) {
-    if (!m_localization) return false;
-    m_localization->setMapXzmapOnly(path);
-    m_localization_map_loaded = true;
-    std::cout << "[SlamPipeline] xzmap-only localization map ready: " << path << std::endl;
+    PointVec pts;
+    if (!m_map_mgr->getGlobalMap(pts) || pts.empty()) return false;
+    CloudType::Ptr cloud(new CloudType());
+    cloud->reserve(pts.size());
+    for (const auto& p : pts) cloud->push_back(p);
+    cloud->width = static_cast<uint32_t>(cloud->size());
+    cloud->height = 1;
+    auto store = std::make_shared<VoxelMapStore>(0.3);
+    store->buildFromCloud(cloud);
+    out.points = store;
+    if (m_loop) m_loop->getKeyframes(out.keyframes);
+    out.grid = m_map_mgr->getGridInfo();
+    out.meta.map_id = "";
+    out.meta.frame_id = "map";
+    out.meta.resolution = out.grid.resolution;
+    out.meta.origin_x = out.grid.origin_x;
+    out.meta.origin_y = out.grid.origin_y;
+    out.meta.revision = m_map_mgr->getRevision();
     return true;
 }
 
 void SlamPipeline::cancelMapLoad() {
     if (m_localization) m_localization->cancelSetMap();
+}
+
+bool SlamPipeline::saveMap(const std::string& path) {
+    if (!m_map_mgr) return false;
+    bool ok = m_map_mgr->saveMap(path);
+    if (ok && m_loop) m_loop->saveDatabase(path + ".scdb");
+    return ok;
 }
 
 bool SlamPipeline::loadMap(const std::string& path) {

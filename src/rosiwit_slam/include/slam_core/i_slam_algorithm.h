@@ -4,6 +4,7 @@
 #include <functional>
 #include <vector>
 #include "slam_core/slam_types.h"
+#include "slam_core/map_data.h"
 #include <cstdint>
 
 namespace rosiwit_slam {
@@ -29,10 +30,8 @@ public:
     virtual bool saveMap(const std::string& /*path*/) { return false; }
     /// 加载地图用于定位
     virtual bool loadMap(const std::string& /*path*/) { return false; }
-    /// ROS1 老地图：只从 xzmap 建定位地图，不尝试 PCD。
-    virtual bool loadMapXzmapOnly(const std::string& /*path*/) { return false; }
-    /// 只导出 xzmap/scdb，不写 PCD。
-    virtual bool saveMapXzmapOnly(const std::string& /*path*/) { return false; }
+    virtual bool loadLocalizationMapData(const MapData& /*data*/) { return false; }
+    virtual bool exportMapData(MapData& /*out*/) { return false; }
     /// 取消正在进行的异步地图加载（在阶段边界生效）。
     virtual void cancelMapLoad() {}
     /// 多会话建图: 把另一段地图追加到当前地图。

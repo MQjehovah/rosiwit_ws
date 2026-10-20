@@ -56,18 +56,21 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam
 
 # ==================== 接口层静态库 (便于 gtest 直接链接) ====================
 set(ROSIWIT_ROS1_LIB_SOURCES
-    config/config.cpp
-    interface/realtime_grid.cpp
-    monitor/lost_monitor.cpp
-    engine/slam_engine.cpp
-    interface/outputs.cpp
-    interface/convert.cpp
-    interface/ros1_slam_interface.cpp
+    src/config/config.cpp
+    src/interface/realtime_grid.cpp
+    src/monitor/lost_monitor.cpp
+    src/engine/slam_engine.cpp
+    src/interface/outputs.cpp
+    src/interface/convert.cpp
+    src/interface/ros1_slam_interface.cpp
+    src/io/xzmap_reader.cpp
+    src/io/xzmap_writer.cpp
+    src/io/map_adapter.cpp
     # T6 追加 src/legacy_subscribers.cpp 等
 )
 add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
 target_include_directories(rosiwit_slam_ros1_lib PUBLIC
-    src config engine interface monitor
+    src src/config src/engine src/interface src/monitor src/io
     ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 target_compile_options(rosiwit_slam_ros1_lib PRIVATE -pipe -pthread)
 target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam ${OpenCV_LIBS})
@@ -84,10 +87,15 @@ target_link_libraries(rosiwit_slam_ros1_node rosiwit_slam_ros1_lib)
 add_dependencies(rosiwit_slam_ros1_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 # 历史地图兼容工具: 从 map.xzmap 重新生成带 unknown 的 PGM
-add_executable(repair_map_grid tools/repair_map_grid.cpp)
+add_executable(repair_map_grid src/tools/repair_map_grid.cpp)
 target_link_libraries(repair_map_grid rosiwit_slam_ros1_lib)
 add_dependencies(repair_map_grid ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 install(TARGETS repair_map_grid RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+add_executable(map_cleanup src/tools/map_cleanup.cpp)
+target_link_libraries(map_cleanup rosiwit_slam_ros1_lib)
+add_dependencies(map_cleanup ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+install(TARGETS map_cleanup RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 # ==================== 测试 ====================
 if(CATKIN_ENABLE_TESTING)

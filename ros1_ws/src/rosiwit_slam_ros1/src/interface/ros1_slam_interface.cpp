@@ -31,6 +31,7 @@
 
 #include "convert.h"
 #include "internal.h"
+#include "map_adapter.h"
 
 using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
@@ -333,6 +334,7 @@ void Ros1SlamInterface::initServer() {
 
 #include "convert.h"
 #include "internal.h"
+#include "map_adapter.h"
 
 using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
@@ -530,6 +532,7 @@ void Ros1SlamInterface::publishPointMap() {
 
 #include "convert.h"
 #include "internal.h"
+#include "map_adapter.h"
 
 using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
@@ -858,6 +861,7 @@ void Ros1SlamInterface::sendTransform() {
 
 #include "convert.h"
 #include "internal.h"
+#include "map_adapter.h"
 
 using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
@@ -1016,6 +1020,7 @@ void Ros1SlamInterface::timerPublishWarningCode(const ros::TimerEvent&) {
 
 #include "convert.h"
 #include "internal.h"
+#include "map_adapter.h"
 
 using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
@@ -1181,7 +1186,10 @@ bool Ros1SlamInterface::handleSwitchMap(
             [this, base, init_pose, switch_gen]() {
                 std::lock_guard<std::mutex> lk(map_switch_mtx_);
                 map_switch_busy_.store(true);
-                const bool loaded = engine_.algo() && engine_.algo()->loadMapXzmapOnly(base);
+                rosiwit_slam::MapData map_data;
+                const bool loaded = map_adapter::loadMapData(base, map_data) &&
+                                    engine_.algo() &&
+                                    engine_.algo()->loadLocalizationMapData(map_data);
                 if (switch_gen != map_switch_generation_.load()) {
                     std::cout << "[ros1_slam] /switch_map: discard stale map load: "
                               << base << std::endl;
@@ -1242,9 +1250,10 @@ bool Ros1SlamInterface::handleStopMap(
 
     // 旧: mapping_ptr_->saveMap(folderPath, "map") -> 等价于 saveMap("<dir>/map")
     const std::string base = xzMapBase(req.map_dir);
-    if (!engine_.algo()->saveMapXzmapOnly(base)) {
-        // ROS1 老格式只导出 xzmap/scdb，不写 PCD。
-        ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: saveMapXzmapOnly failed: " << base);
+    rosiwit_slam::MapData map_data;
+    if (!engine_.algo()->exportMapData(map_data) ||
+        !map_adapter::saveMapData(map_data, base)) {
+        ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: xzmap export failed: " << base);
     }
 
     // 同时补 map.pgm / map.yaml: 旧实现的地图目录里有这两个文件, 且旧

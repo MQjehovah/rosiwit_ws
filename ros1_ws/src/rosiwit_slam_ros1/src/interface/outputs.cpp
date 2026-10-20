@@ -3,6 +3,7 @@
 // 发布器 / 服务 / TF 部分, 仅按 M5/M3 加 profile 抑制。
 // ============================================================================
 #include "outputs.h"
+#include "map_adapter.h"
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -200,14 +201,18 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
 
 bool RosiwitInterface::handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,
                                      rosiwit_slam_ros1::SaveMap::Response& res) {
-    res.success = engine_.algo() && engine_.algo()->saveMapXzmapOnly(req.path);
+    rosiwit_slam::MapData data;
+    res.success = engine_.algo() && engine_.algo()->exportMapData(data) &&
+                  map_adapter::saveMapData(data, req.path);
     res.message = res.success ? "ok" : "failed";
     return true;
 }
 
 bool RosiwitInterface::handleLoadMap(rosiwit_slam_ros1::LoadMap::Request& req,
                                      rosiwit_slam_ros1::LoadMap::Response& res) {
-    res.success = engine_.algo() && engine_.algo()->loadMapXzmapOnly(req.path);
+    rosiwit_slam::MapData data;
+    res.success = engine_.algo() && map_adapter::loadMapData(req.path, data) &&
+                  engine_.algo()->loadLocalizationMapData(data);
     res.message = res.success ? "ok" : "failed";
     return true;
 }

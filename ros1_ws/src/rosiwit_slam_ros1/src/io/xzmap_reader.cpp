@@ -1,4 +1,4 @@
-#include "io/xzmap_reader.h"
+#include "xzmap_reader.h"
 
 #include <cstdio>
 #include <cstdlib>
