@@ -219,6 +219,13 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.datum_y = cfg["absolute_datum_y"].as<double>(m_cfg.datum_y);
             m_cfg.datum_z = cfg["absolute_datum_z"].as<double>(m_cfg.datum_z);
             m_cfg.datum_yaw_deg = cfg["absolute_datum_yaw_deg"].as<double>(m_cfg.datum_yaw_deg);
+            m_cfg.online_calib_apply = cfg["online_calibration_apply"].as<bool>(m_cfg.online_calib_apply);
+            m_cfg.calib_min_confidence = cfg["calib_min_confidence"].as<double>(m_cfg.calib_min_confidence);
+            m_cfg.calib_stable_windows = cfg["calib_stable_windows"].as<int>(m_cfg.calib_stable_windows);
+            m_cfg.calib_rollback_windows = cfg["calib_rollback_windows"].as<int>(m_cfg.calib_rollback_windows);
+            m_cfg.calib_max_time_offset = cfg["calib_max_time_offset"].as<double>(m_cfg.calib_max_time_offset);
+            m_cfg.calib_max_yaw_offset = cfg["calib_max_yaw_offset"].as<double>(m_cfg.calib_max_yaw_offset);
+            m_cfg.calib_max_step = cfg["calib_max_step"].as<double>(m_cfg.calib_max_step);
             if (cfg["vision"]) {
                 m_cfg.vision_enabled = cfg["vision"]["enabled"].as<bool>(m_cfg.vision_enabled);
                 m_cfg.vo_topic       = cfg["vision"]["vo_topic"].as<std::string>(m_cfg.vo_topic);
@@ -280,6 +287,17 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     // 即使建图/回环/保存地图耗时, 收包回调仍能在另一线程及时入队, 避免 DDS 队列溢出丢帧。
     m_sensor_cb_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     m_work_cb_group   = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    {
+        CalibrationApplyConfig ccfg;
+        ccfg.enabled = m_cfg.online_calib_apply;
+        ccfg.min_confidence = m_cfg.calib_min_confidence;
+        ccfg.stable_windows = m_cfg.calib_stable_windows;
+        ccfg.rollback_windows = m_cfg.calib_rollback_windows;
+        ccfg.max_time_offset = m_cfg.calib_max_time_offset;
+        ccfg.max_yaw_offset = m_cfg.calib_max_yaw_offset;
+        ccfg.max_step = m_cfg.calib_max_step;
+        m_calib_controller.setConfig(ccfg);
+    }
     m_map_cb_group    = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     m_output_cb_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions sensor_sub_opts;
@@ -328,6 +346,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_path_pub        = create_publisher<nav_msgs::msg::Path>("lio_path", 10000);
     m_global_map_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_map", 10);
     m_grid_map_pub    = create_publisher<nav_msgs::msg::OccupancyGrid>("grid_map", 1);
+    m_calib_pub       = create_publisher<std_msgs::msg::String>("slam_calibration", 1);
     m_map_pub         = create_publisher<nav_msgs::msg::OccupancyGrid>("map", rclcpp::QoS(1).transient_local());
     m_odom_nav_pub    = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     m_tf = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
@@ -368,6 +387,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     // 服务与处理定时器同组, 避免保存地图等操作与建图重处理并发(扫描上下文/地图非线程安全)
     m_srv_save_map = create_service<rosiwit_slam_ros2::srv::SaveMap>("save_map", std::bind(&SlamNode::handleSaveMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_load_map = create_service<rosiwit_slam_ros2::srv::LoadMap>("load_map", std::bind(&SlamNode::handleLoadMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_merge_map = create_service<rosiwit_slam_ros2::srv::LoadMap>("merge_map", std::bind(&SlamNode::handleMergeMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_save_grid_map = create_service<rosiwit_slam_ros2::srv::SaveGridMap>("save_grid_map", std::bind(&SlamNode::handleSaveGridMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_set_slam_mode = create_service<rosiwit_slam_ros2::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
 
@@ -382,7 +402,19 @@ void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {
     IMUSample s;
     s.acc = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
     s.gyro = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
-    s.time = RosUtils::getSec(msg->header);
+    const double raw_time = RosUtils::getSec(msg->header);
+    s.time = raw_time + m_imu_time_offset.load();
+    {
+        std::lock_guard<std::mutex> lk(m_calib_mutex);
+        m_time_calib.addImu(raw_time, msg->angular_velocity.z);
+        const auto & q = msg->orientation;
+        if (std::abs(q.w) + std::abs(q.x) + std::abs(q.y) + std::abs(q.z) > 0.5) {
+            m_last_imu_yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                        1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+            m_last_imu_stamp = s.time;
+            m_have_imu_yaw = true;
+        }
+    }
     m_algo->onImu(s);
 }
 
@@ -460,6 +492,16 @@ void SlamNode::absoluteCB(const geometry_msgs::msg::PoseWithCovarianceStamped::S
 }
 
 void SlamNode::onOutput(const SlamOutput& out) {
+  if (out.has_new_pose && out.pose.time > 0.0) {
+    const Eigen::Quaterniond q(out.pose.rot);
+    const double yaw = std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
+                                  1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
+    std::lock_guard<std::mutex> lk(m_calib_mutex);
+    m_time_calib.addLioPose(out.pose.time, yaw);
+    if (m_have_imu_yaw && std::abs(out.pose.time - m_last_imu_stamp) < 0.15) {
+      m_yaw_calib.addSample(m_last_imu_yaw, yaw);
+    }
+  }
   std::lock_guard<std::mutex> lock(m_out_mutex);
   // EMA 平滑只用于定位输出; 建图时位姿必须与 world_cloud 同帧对齐, 平滑会让 TF/odom 滞后于地图.
   const bool loc = (m_algo_raw && m_algo_raw->getPipelineMode() == "localization");
@@ -768,6 +810,24 @@ void SlamNode::highRateCB() {
 }
 
 void SlamNode::mapTimerCB() {
+    if (m_calib_pub) {
+        CalibrationDecision decision;
+        {
+            std::lock_guard<std::mutex> lk(m_calib_mutex);
+            const auto tc = m_time_calib.estimate();
+            const auto yc = m_yaw_calib.estimate();
+            decision = m_calib_controller.update(tc, yc);
+            m_imu_time_offset.store(decision.time_offset);
+        }
+        std::ostringstream os;
+        os << "{\"state\":\"" << decision.state << "\""
+           << ",\"applied\":" << (decision.applied ? "true" : "false")
+           << ",\"rolled_back\":" << (decision.rolled_back ? "true" : "false")
+           << ",\"time_offset\":" << decision.time_offset
+           << ",\"yaw_offset\":" << decision.yaw_offset << "}";
+        std_msgs::msg::String m; m.data = os.str();
+        m_calib_pub->publish(m);
+    }
     std::string mode = m_algo_raw->getPipelineMode();
     bool is_localization = (mode == "localization");
     bool always_pub = is_localization;
@@ -881,6 +941,12 @@ void SlamNode::handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std:
     res->success = m_algo_raw->loadMap(req->path);
     res->message = res->success ? "Loaded" : "Failed";
     if (res->success) resetPublishState();   // 新地图必须允许 /map 重新发布
+}
+
+void SlamNode::handleMergeMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Response> res) {
+    res->success = m_algo_raw->appendMap(req->path);
+    res->message = res->success ? "Merged" : "Failed";
+    if (res->success) resetPublishState();
 }
 
 void SlamNode::handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Response> res) {

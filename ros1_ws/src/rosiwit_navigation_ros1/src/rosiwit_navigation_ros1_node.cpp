@@ -31,6 +31,7 @@
 #include <queue>
 #include <sstream>
 #include <string>
+#include <future>
 #include <utility>
 #include <vector>
 
@@ -192,6 +193,20 @@ private:
       planner_strategy_->setRobotRadius(robot_radius_);
     } else {
       ROS_WARN("[rosiwit_navigation_ros1] planner '%s' not found", planner_name_.c_str());
+    }
+
+    // 异步规划实例: 与主 planner 分开，后台 plan() 不会和 updateCostmap 的
+    // setCostmap 竞争；控制/安全定时器在规划期间继续运行。
+    async_planner_ = nav_core::NavigationFactory::createPlanner(planner_name_);
+    if (async_planner_) {
+      core::PlannerConfig acfg;
+      acfg.name = planner_name_;
+      acfg.resolution = 0.05;
+      acfg.max_iterations = planner_max_iterations_;
+      acfg.timeout = planner_timeout_;
+      async_planner_->initialize(acfg);
+      async_planner_->setInflationRadius(inflation_radius_);
+      async_planner_->setRobotRadius(robot_radius_);
     }
 
     controller_strategy_ = nav_core::NavigationFactory::createController(controller_name_);
@@ -400,7 +415,7 @@ private:
       task_sm_.handle(core::TaskEvent::PLAN_FAIL);
     } else if (status == "SUCCEEDED") {
       task_sm_.handle(core::TaskEvent::GOAL_REACHED);
-    } else if (status == "STOPPED" || status == "REJECTED_FRAME") {
+    } else if (status.rfind("STOPPED", 0) == 0 || status == "REJECTED_FRAME") {
       task_sm_.handle(core::TaskEvent::STOP);
     }
     std_msgs::String msg;
@@ -497,6 +512,8 @@ private:
         }
       }
       planner_strategy_->setCostmap(cm);
+      planner_costmap_ = cm;
+      m_has_planner_costmap_ = true;
 
       // 膨胀并发布供 RViz 可视化
       const int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
@@ -764,21 +781,44 @@ private:
   }
 
   // ---- 导航 ----
-  void replanningCheck(const ros::TimerEvent &)
+  void waitForAsyncPlan()
   {
-    if (!is_navigating_ || is_paused_ || m_need_initial_rotate_) return;
-    if (goal_pose_.header.frame_id.empty()) return;
-    executeNavigation(goal_pose_, /*allow_initial_rotate=*/false);
+    if (!async_plan_future_.valid()) return;
+    try { (void)async_plan_future_.get(); }
+    catch (const std::exception & e) {
+      ROS_WARN("[rosiwit_navigation_ros1] async planning exception: %s", e.what());
+    }
   }
 
-  void executeNavigation(const geometry_msgs::PoseStamped & goal,
-                         bool allow_initial_rotate = true)
+  void launchPlan()
   {
-    // 新目标先停旧路径; 重规划不打断当前控制.
-    if (allow_initial_rotate) {
+    if (!planning_active_ || async_plan_future_.valid()) return;
+    if (!async_planner_ || !m_has_planner_costmap_) {
+      ROS_ERROR("[rosiwit_navigation_ros1] planner/costmap not ready");
+      setGoalStatus("FAILED_PLAN");
+      planning_active_ = false;
       stopNavigation();
+      return;
+    }
+    const core::Pose2D start = toCorePose(current_pose_);
+    const core::Pose2D goal = toCorePose(pending_goal_);
+    async_planner_->setCostmap(planner_costmap_);
+    active_plan_generation_ = plan_generation_;
+    async_plan_future_ = std::async(std::launch::async, [this, start, goal]() {
+      return async_planner_->plan(start, goal);
+    });
+  }
+
+  void startPlanning(const geometry_msgs::PoseStamped & goal, bool allow_initial_rotate,
+                     bool restart)
+  {
+    // restart=true: 新目标, 先停旧路径; false: 1Hz 重规划, 继续沿旧路径控制.
+    if (restart) {
+      stopNavigation();
+      current_path_.poses.clear();
+      global_path_pub_.publish(current_path_);
     } else {
-      is_navigating_ = false;
+      is_navigating_ = true;  // 重规划期间旧路径继续可用
     }
     if (!updateCurrentPose()) {
       ROS_ERROR("[rosiwit_navigation_ros1] cannot get current pose for planning");
@@ -786,15 +826,45 @@ private:
       stopNavigation();
       return;
     }
-    if (!planner_strategy_) {
-      ROS_ERROR("[rosiwit_navigation_ros1] no planner available");
-      stopNavigation();
+    pending_goal_ = goal;
+    pending_allow_initial_rotate_ = allow_initial_rotate;
+    ++plan_generation_;
+    planning_active_ = true;
+    if (async_plan_future_.valid()) {
+      // 旧规划仍在跑: 取消并等 pollPlanning 丢弃, 不阻塞控制定时器.
+      async_planner_->cancel();
+      return;
+    }
+    launchPlan();
+  }
+
+  void pollPlanning()
+  {
+    if (!async_plan_future_.valid()) {
+      if (planning_active_) launchPlan();
+      return;
+    }
+    if (async_plan_future_.wait_for(std::chrono::seconds(0)) !=
+        std::future_status::ready) {
+      return;
+    }
+    core::Result<core::Path> result = core::Result<core::Path>::error(
+      core::ErrorCode::PLANNING_FAILED, "async planning exception");
+    try { result = async_plan_future_.get(); }
+    catch (const std::exception & e) {
+      ROS_ERROR("[rosiwit_navigation_ros1] async planning exception: %s", e.what());
+    }
+    planning_active_ = false;
+
+    // 结果属于旧目标: 丢弃并立即为新目标启动规划.
+    if (active_plan_generation_ != plan_generation_) {
+      if (planning_active_ || !pending_goal_.header.frame_id.empty()) {
+        planning_active_ = true;
+        launchPlan();
+      }
       return;
     }
 
-    const core::Pose2D start = toCorePose(current_pose_);
-    const core::Pose2D goal_core = toCorePose(goal);
-    auto result = planner_strategy_->plan(start, goal_core);
     if (!result.is_ok()) {
       ROS_ERROR("[rosiwit_navigation_ros1] planner '%s' failed: %s",
                 planner_name_.c_str(), result.error_message().c_str());
@@ -802,15 +872,18 @@ private:
       stopNavigation();
       return;
     }
+    applyPlanningResult(result, pending_allow_initial_rotate_);
+  }
 
-    current_path_ = toRosPath(result.value(), goal.header.frame_id, ros::Time::now());
+  void applyPlanningResult(const core::Result<core::Path> & result, bool allow_initial_rotate)
+  {
+    current_path_ = toRosPath(result.value(), pending_goal_.header.frame_id, ros::Time::now());
 
     if (current_path_.poses.size() >= 3) {
       planners::SmootherConfig smoother_cfg;
       smoother_cfg.max_iterations = 100;
       smoother_cfg.alpha_start = 0.5;
       smoother_cfg.alpha_end = 0.1;
-
       std::shared_ptr<core::CostmapGrid> core_map;
       if (current_map_) {
         core_map = std::make_shared<core::CostmapGrid>();
@@ -822,12 +895,10 @@ private:
         core_map->data = current_map_->data;
       }
       core::Path core_path = planners::smoothPath(toCorePath(current_path_), core_map, smoother_cfg);
-      current_path_ = toRosPath(core_path, goal.header.frame_id, ros::Time::now());
+      current_path_ = toRosPath(core_path, pending_goal_.header.frame_id, ros::Time::now());
     }
 
-    if (controller_strategy_) {
-      controller_strategy_->setPath(toCorePath(current_path_));
-    }
+    if (controller_strategy_) controller_strategy_->setPath(toCorePath(current_path_));
     global_path_pub_.publish(current_path_);
 
     m_need_initial_rotate_ = false;
@@ -836,8 +907,7 @@ private:
       const double dx = current_path_.poses[1].pose.position.x - current_path_.poses[0].pose.position.x;
       const double dy = current_path_.poses[1].pose.position.y - current_path_.poses[0].pose.position.y;
       const double path_yaw = std::atan2(dy, dx);
-      const double yaw_diff = normalizeAngle(path_yaw - current_yaw);
-      if (std::abs(yaw_diff) > 0.35) {
+      if (std::abs(normalizeAngle(path_yaw - current_yaw)) > 0.35) {
         m_need_initial_rotate_ = true;
         m_initial_rotate_target_ = path_yaw;
       }
@@ -850,16 +920,32 @@ private:
              current_path_.poses.size());
   }
 
+  void replanningCheck(const ros::TimerEvent &)
+  {
+    if (!is_navigating_ || is_paused_ || m_need_initial_rotate_ || planning_active_) return;
+    if (goal_pose_.header.frame_id.empty() || !m_has_planner_costmap_) return;
+    startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/false);
+  }
+
+  void executeNavigation(const geometry_msgs::PoseStamped & goal,
+                         bool allow_initial_rotate = true)
+  {
+    startPlanning(goal, allow_initial_rotate, /*restart=*/true);
+  }
+
   void controlLoop(const ros::TimerEvent &)
   {
+    if (planning_active_) pollPlanning();
     if (!is_navigating_ || is_paused_) { return; }
     if (last_odom_stamp_.isZero() ||
         (ros::Time::now() - last_odom_stamp_).toSec() > 0.6) {
+      setGoalStatus("STOPPED_ODOM");
       stopNavigation();
       return;
     }
     if (!updateCurrentPose()) {
       // 定位/TF 失效时必须主动发零, 不能保留上一条 cmd_vel.
+      setGoalStatus("FAILED_TF");
       stopNavigation();
       return;
     }
@@ -1089,6 +1175,15 @@ private:
   std::string odom_topic_;
 
   std::unique_ptr<core::IPlannerStrategy> planner_strategy_;
+  std::unique_ptr<core::IPlannerStrategy> async_planner_;
+  std::future<core::Result<core::Path>> async_plan_future_;
+  bool planning_active_ = false;
+  uint64_t plan_generation_ = 0;
+  uint64_t active_plan_generation_ = 0;
+  bool pending_allow_initial_rotate_ = true;
+  geometry_msgs::PoseStamped pending_goal_;
+  core::Costmap planner_costmap_;
+  bool m_has_planner_costmap_ = false;
   std::unique_ptr<core::IControllerStrategy> controller_strategy_;
 
   ros::Subscriber odom_sub_;

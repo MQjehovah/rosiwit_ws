@@ -21,7 +21,7 @@ rosiwit_navigation_node:
     controller_name: "dwa"
 
     # 坐标系
-    global_frame: "odom"
+    global_frame: "map"
     robot_frame: "base_link"
 
     # 导航容差
@@ -41,3 +41,17 @@ rosiwit_navigation_node:
 
     # 里程计话题（Gazebo 纯仿真用 /odom，跑 SLAM 时用 /lio_odom）
     odom_topic: odom
+
+    # 动态障碍跟踪
+    tracking_enabled: true
+    tracking_horizon: 0.5
+    tracking_cluster_distance: 0.35
+    tracking_confirm_hits: 3
+
+    # 3D 体素 / STVL
+    voxel_enabled: true
+    voxel_cloud_topic: "world_cloud"
+    voxel_resolution: 0.10
+    voxel_min_height: -0.20
+    voxel_max_height: 2.00
+    voxel_decay: 2.0

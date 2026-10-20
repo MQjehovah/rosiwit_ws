@@ -20,6 +20,7 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -31,6 +32,9 @@
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 #include "ros_interface/ros_utils.hpp"
 #include "rosiwit_navigation/nav_core/safety_monitor.hpp"
+#include "rosiwit_navigation/nav_core/obstacle_tracker.hpp"
+#include "rosiwit_navigation/nav_core/voxel_layer.hpp"
+#include "rosiwit_navigation/nav_core/task_state_machine.hpp"
 
 namespace rosiwit_navigation
 {
@@ -192,6 +196,8 @@ protected:
   void updateCostmap();
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
   void safetyPointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+  void voxelCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+  void publishTrackedObstacles();
 
   /**
    * @brief RViz目标点回调
@@ -260,6 +266,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr safety_cloud_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr voxel_cloud_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr stop_sub_;
 
@@ -272,6 +279,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr safety_state_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diagnostics_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr goal_status_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr tracked_obs_pub_;
 
   // 定时器
   rclcpp::TimerBase::SharedPtr control_timer_;
@@ -358,6 +366,20 @@ private:
 
   // LiDAR safety layer (Nav2 Collision Monitor style)
   core::SafetyMonitor safety_monitor_;
+  core::ObstacleTracker tracker_;
+  core::VoxelLayer voxel_layer_;
+  core::TaskStateMachine task_sm_;
+  bool tracking_enabled_{true};
+  double tracking_horizon_{0.5};
+  double tracking_cluster_distance_{0.35};
+  int tracking_confirm_hits_{3};
+  bool voxel_enabled_{true};
+  std::string voxel_cloud_topic_{"world_cloud"};
+  double voxel_resolution_{0.10};
+  double voxel_min_height_{-0.20};
+  double voxel_max_height_{2.00};
+  double voxel_decay_{2.0};
+  std::vector<core::Point2D> tracker_points_;
   std::vector<std::pair<double, double>> safety_points_;
   std::vector<std::pair<double, double>> safety_points_map_;
   bool safety_pose_valid_ = false;
@@ -391,7 +413,7 @@ private:
   bool enable_path_smoothing_ = false;
 
   // 坐标系
-  std::string global_frame_ = "odom";
+  std::string global_frame_ = "map";
   std::string odom_frame_ = "odom";
   std::string robot_frame_ = "base_link";
   std::string map_frame_ = "map";

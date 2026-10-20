@@ -330,3 +330,12 @@ vision:
   assoc_dt: 0.05            # VO 与关键帧时间关联容差(s)
   vo_trans_noise: 0.05      # VO between 平移噪声(std)
   vo_rot_noise: 0.02        # VO between 旋转噪声(std)
+
+# 在线标定闭环（默认只估计、不自动应用）
+online_calibration_apply: false
+calib_min_confidence: 0.60
+calib_stable_windows: 3
+calib_rollback_windows: 3
+calib_max_time_offset: 0.05
+calib_max_yaw_offset: 0.15
+calib_max_step: 0.01

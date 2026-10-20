@@ -323,6 +323,17 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     // ---- input_profile: 默认 legacy, 老接口优先; 仅选择输入配置, 不再决定输出接口 ----
     pnh_.param<std::string>("input_profile", input_profile_, "legacy");
     pnh_.param<bool>("online_calibration", online_calib_enabled_, true);
+    bool calib_apply = false;
+    pnh_.param<bool>("online_calibration_apply", calib_apply, false);
+    rosiwit_slam::CalibrationApplyConfig calib_cfg;
+    calib_cfg.enabled = calib_apply;
+    pnh_.param<double>("calib_min_confidence", calib_cfg.min_confidence, 0.60);
+    pnh_.param<int>("calib_stable_windows", calib_cfg.stable_windows, 3);
+    pnh_.param<int>("calib_rollback_windows", calib_cfg.rollback_windows, 3);
+    pnh_.param<double>("calib_max_time_offset", calib_cfg.max_time_offset, 0.05);
+    pnh_.param<double>("calib_max_yaw_offset", calib_cfg.max_yaw_offset, 0.15);
+    pnh_.param<double>("calib_max_step", calib_cfg.max_step, 0.01);
+    calib_controller_.setConfig(calib_cfg);
     if (input_profile_ != "rosiwit" && input_profile_ != "legacy") {
         ROS_WARN_STREAM("[slam_engine] unknown input_profile '" << input_profile_
                         << "', falling back to 'rosiwit'");
@@ -572,7 +583,7 @@ void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
     IMUSample s;
     s.acc = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
     s.gyro = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
-    s.time = getSec(msg->header.stamp);
+    s.time = getSec(msg->header.stamp) + imu_time_offset_.load();
     if (input_seen_hook_) input_seen_hook_(false);
     if (algo_) algo_->onImu(s);
 }
@@ -769,6 +780,15 @@ bool SlamEngine::resetCore() {
     const bool ok = algo_raw_->resetForNewMapping(config_path_);
     std::cout << "[slam_engine] resetCore -> " << (ok ? "ok" : "unsupported/failed") << std::endl;
     return ok;
+}
+
+rosiwit_slam::CalibrationDecision SlamEngine::updateCalibration() {
+    std::lock_guard<std::mutex> lk(calib_mutex_);
+    const auto t = online_time_calib_.estimate();
+    const auto y = yaw_calib_.estimate();
+    const auto d = calib_controller_.update(t, y);
+    imu_time_offset_.store(d.time_offset);
+    return d;
 }
 
 rosiwit_slam::TimeCalibrationResult SlamEngine::onlineTimeCalibration() const {

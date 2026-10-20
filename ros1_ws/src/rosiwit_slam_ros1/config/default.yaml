@@ -450,3 +450,13 @@ vision:
 diagnostics:
   flight_max_frames: 3600         # 环形缓冲帧数 (10Hz 下 6 分钟)
   flight_auto_dump_dir: /tmp/slam_flight   # LOST 翻转自动落盘目录; 手动: /slam/dump_recorder 服务
+
+# 在线标定闭环（默认只估计、不自动应用）
+online_calibration: true
+online_calibration_apply: false
+calib_min_confidence: 0.60
+calib_stable_windows: 3
+calib_rollback_windows: 3
+calib_max_time_offset: 0.05
+calib_max_yaw_offset: 0.15
+calib_max_step: 0.01

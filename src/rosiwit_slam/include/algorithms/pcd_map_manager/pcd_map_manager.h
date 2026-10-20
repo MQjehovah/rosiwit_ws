@@ -19,6 +19,9 @@ public:
     bool loadMap(const std::string& name) override;
     /// 多会话建图: 把另一段 PCD 追加/融合到当前地图（同一 map 坐标系）。
     bool appendMap(const std::string& name);
+    /// 多会话对齐: initial 为 session 初始位姿 (time<0=identity)，align=true 时用 ICP 精配准。
+    bool appendMap(const std::string& name, const PoseStamped& initial,
+                   bool align = true, double max_fitness = 1.0);
     bool getGlobalMap(PointVec& out) override;
     bool addSubMap(const KeyFrame& kf) override;
     void onBackendOptimized(const std::vector<PoseStamped>& corrected) override;

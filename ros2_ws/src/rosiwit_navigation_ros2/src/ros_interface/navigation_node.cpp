@@ -21,6 +21,7 @@
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Vector3.h"
+#include "tf2/LinearMath/Transform.h"
 
 
 
@@ -238,6 +239,7 @@ LifecycleNode::CallbackReturn NavigationNode::on_cleanup(const rclcpp_lifecycle:
   map_sub_.reset();
   scan_sub_.reset();
   safety_cloud_sub_.reset();
+  voxel_cloud_sub_.reset();
   goal_sub_.reset();
   stop_sub_.reset();
   cmd_vel_pub_.reset();
@@ -248,6 +250,7 @@ LifecycleNode::CallbackReturn NavigationNode::on_cleanup(const rclcpp_lifecycle:
   diagnostics_pub_.reset();
   goal_status_pub_.reset();
   safety_state_pub_.reset();
+  tracked_obs_pub_.reset();
 
   tf_buffer_.reset();
   tf_listener_.reset();
@@ -320,6 +323,16 @@ void NavigationNode::loadParameters()
   declareIfNeeded("recovery_linear_velocity", -0.10);
   declareIfNeeded("recovery_angular_velocity", 0.60);
   declareIfNeeded("recovery_bypass_safety", true);
+  declareIfNeeded("tracking_enabled", true);
+  declareIfNeeded("tracking_horizon", 0.5);
+  declareIfNeeded("tracking_cluster_distance", 0.35);
+  declareIfNeeded("tracking_confirm_hits", 3);
+  declareIfNeeded("voxel_enabled", true);
+  declareIfNeeded("voxel_cloud_topic", std::string("world_cloud"));
+  declareIfNeeded("voxel_resolution", 0.10);
+  declareIfNeeded("voxel_min_height", -0.20);
+  declareIfNeeded("voxel_max_height", 2.00);
+  declareIfNeeded("voxel_decay", 2.0);
 
   get_parameter("controller_frequency", params_.controller_frequency);
   get_parameter("planner_frequency", params_.planner_frequency);
@@ -356,6 +369,28 @@ void NavigationNode::loadParameters()
   get_parameter("recovery_linear_velocity", recovery_linear_velocity_);
   get_parameter("recovery_angular_velocity", recovery_angular_velocity_);
   get_parameter("recovery_bypass_safety", recovery_bypass_safety_);
+  get_parameter("tracking_enabled", tracking_enabled_);
+  get_parameter("tracking_horizon", tracking_horizon_);
+  get_parameter("tracking_cluster_distance", tracking_cluster_distance_);
+  get_parameter("tracking_confirm_hits", tracking_confirm_hits_);
+  get_parameter("voxel_enabled", voxel_enabled_);
+  get_parameter("voxel_cloud_topic", voxel_cloud_topic_);
+  get_parameter("voxel_resolution", voxel_resolution_);
+  get_parameter("voxel_min_height", voxel_min_height_);
+  get_parameter("voxel_max_height", voxel_max_height_);
+  get_parameter("voxel_decay", voxel_decay_);
+  {
+    core::ObstacleTrackerConfig tcfg;
+    tcfg.cluster_distance = tracking_cluster_distance_;
+    tcfg.confirm_hits = tracking_confirm_hits_;
+    tracker_.setConfig(tcfg);
+    core::VoxelLayerConfig vcfg;
+    vcfg.resolution = voxel_resolution_;
+    vcfg.min_height = voxel_min_height_;
+    vcfg.max_height = voxel_max_height_;
+    vcfg.decay_time = voxel_decay_;
+    voxel_layer_.setConfig(vcfg);
+  }
   loadSafetyParameters();
 
   RCLCPP_INFO(get_logger(), "Parameters loaded:");
@@ -534,6 +569,67 @@ void NavigationNode::safetyPointCloudCallback(
     safety_base_frame_.c_str());
 }
 
+void NavigationNode::voxelCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
+  if (!voxel_enabled_) return;
+  bool has_xyz = false;
+  for (const auto & f : msg->fields) if (f.name == "x") has_xyz = true;
+  if (!has_xyz) return;
+
+  tf2::Transform T = tf2::Transform::getIdentity();
+  if (!msg->header.frame_id.empty() && msg->header.frame_id != map_frame_) {
+    try {
+      const auto tf = tf_buffer_->lookupTransform(
+        map_frame_, msg->header.frame_id, msg->header.stamp, tf2::durationFromSec(0.05));
+      tf2::fromMsg(tf.transform, T);
+    } catch (const tf2::TransformException &) {
+      return;
+    }
+  }
+
+  std::vector<core::Point3D> points;
+  points.reserve(std::min<size_t>(msg->width * msg->height, 200000));
+  sensor_msgs::PointCloud2ConstIterator<float> ix(*msg, "x");
+  sensor_msgs::PointCloud2ConstIterator<float> iy(*msg, "y");
+  sensor_msgs::PointCloud2ConstIterator<float> iz(*msg, "z");
+  for (; ix != ix.end(); ++ix, ++iy, ++iz) {
+    if (!std::isfinite(*ix) || !std::isfinite(*iy) || !std::isfinite(*iz)) continue;
+    const tf2::Vector3 p = T * tf2::Vector3(*ix, *iy, *iz);
+    core::Point3D out;
+    out.x = p.x(); out.y = p.y(); out.z = p.z();
+    points.push_back(out);
+  }
+  voxel_layer_.update(points, rclcpp::Time(msg->header.stamp).seconds());
+}
+
+void NavigationNode::publishTrackedObstacles()
+{
+  if (!tracked_obs_pub_) return;
+  visualization_msgs::msg::MarkerArray arr;
+  for (const auto & t : tracker_.tracked()) {
+    visualization_msgs::msg::Marker m;
+    m.header.frame_id = map_frame_;
+    m.header.stamp = now();
+    m.ns = "tracked_obstacles";
+    m.id = t.id;
+    m.type = visualization_msgs::msg::Marker::CYLINDER;
+    m.action = visualization_msgs::msg::Marker::ADD;
+    m.pose.position.x = t.x;
+    m.pose.position.y = t.y;
+    m.pose.position.z = 0.25;
+    m.pose.orientation.w = 1.0;
+    m.scale.x = m.scale.y = 2.0 * t.radius;
+    m.scale.z = 0.5;
+    m.color.a = 0.65f;
+    m.color.r = 1.0f;
+    m.color.g = t.speed() > 0.15 ? 0.2f : 0.8f;
+    m.color.b = 0.2f;
+    m.lifetime = rclcpp::Duration::from_seconds(0.5);
+    arr.markers.push_back(m);
+  }
+  tracked_obs_pub_->publish(arr);
+}
+
 void NavigationNode::initializeSubscribers()
 {
   declareIfNeeded("odom_topic", std::string("odom"));
@@ -555,6 +651,11 @@ void NavigationNode::initializeSubscribers()
     safety_cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       safety_pointcloud_topic_, rclcpp::SensorDataQoS(),
       std::bind(&NavigationNode::safetyPointCloudCallback, this, std::placeholders::_1));
+  }
+  if (voxel_enabled_ && !voxel_cloud_topic_.empty()) {
+    voxel_cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+      voxel_cloud_topic_, rclcpp::SensorDataQoS(),
+      std::bind(&NavigationNode::voxelCloudCallback, this, std::placeholders::_1));
   }
 
   goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -589,6 +690,8 @@ void NavigationNode::initializePublishers()
     "goal_status", rclcpp::QoS(10));
   safety_state_pub_ = create_publisher<std_msgs::msg::String>(
     "safety_state", 10);
+  tracked_obs_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
+    "tracked_obstacles", rclcpp::QoS(1));
 
   RCLCPP_INFO(get_logger(), "Publishers initialized");
 }
@@ -661,6 +764,15 @@ void NavigationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
     geometry_msgs::msg::PointStamped mp;
     tf2::doTransform(lp, mp, tf);
     laser_points_.push_back(mp.point);
+    if (tracking_enabled_) {
+      core::Point2D tp; tp.x = mp.point.x; tp.y = mp.point.y;
+      tracker_points_.push_back(tp);
+    }
+  }
+  if (tracking_enabled_) {
+    tracker_.update(tracker_points_, rclcpp::Time(msg->header.stamp).seconds());
+    tracker_points_.clear();
+    publishTrackedObstacles();
   }
   // 激光点只更新实时障碍层. 全局 costmap 由地图回调按地图频率重建;
   // 局部 costmap 由 10Hz 定时器使用这些点重建. 不在 10Hz 扫描回调里
@@ -848,6 +960,27 @@ void NavigationNode::publishLocalCostmap()
     for (const auto& p : safety_points_map_) {
       mark_point(p.first, p.second);
     }
+  }
+  if (tracking_enabled_) {
+    const auto predicted = tracker_.predicted(tracking_horizon_);
+    for (const auto& t : predicted) {
+      mark_point(t.x, t.y);
+      const int rr = std::max(1, static_cast<int>(std::ceil(t.radius / res)));
+      const int mx = static_cast<int>(std::floor((t.x - ox) / res));
+      const int my = static_cast<int>(std::floor((t.y - oy) / res));
+      const int dx = mx - cx;
+      const int dy = my - cy;
+      for (int yy = -rr; yy <= rr; ++yy)
+        for (int xx = -rr; xx <= rr; ++xx) {
+          if (xx * xx + yy * yy > rr * rr) continue;
+          const int gx = dx + xx + win_half;
+          const int gy = dy + yy + win_half;
+          if (gx >= 0 && gx < lw && gy >= 0 && gy < lw) raw[gy * lw + gx] = 100;
+        }
+    }
+  }
+  if (voxel_enabled_) {
+    for (const auto& p : voxel_layer_.occupancyPoints()) mark_point(p.x, p.y);
   }
 
   // 局部沿用同一语义:
@@ -1190,6 +1323,7 @@ void NavigationNode::applyPlanningResult(const core::Result<core::Path> & result
     }
   }
   global_path_pub_->publish(current_path_);
+  task_sm_.handle(core::TaskEvent::PLAN_OK);
   RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
     "Replanned path: %zu points", current_path_.poses.size());
 }
@@ -1587,6 +1721,10 @@ void NavigationNode::publishSafetyState(const std::string & state)
 
 void NavigationNode::publishGoalStatus(const std::string & status)
 {
+  if (status == "accepted") task_sm_.handle(core::TaskEvent::GOAL_RECEIVED);
+  else if (status == "failed") task_sm_.handle(core::TaskEvent::PLAN_FAIL);
+  else if (status == "reached") task_sm_.handle(core::TaskEvent::GOAL_REACHED);
+  else if (status == "stopped") task_sm_.handle(core::TaskEvent::STOP);
   if (!goal_status_pub_) return;
   std_msgs::msg::String msg;
   msg.data = status;
@@ -1636,6 +1774,9 @@ void NavigationNode::publishDiagnostics()
      << ",\"controller\":\"" << controller_name_ << "\""
      << ",\"controller_diag\":\"" <<
         (controller_strategy_ ? controller_strategy_->getDiagnostics() : std::string()) << "\""
+     << ",\"tracks\":" << tracker_.tracked().size()
+     << ",\"voxels\":" << voxel_layer_.size()
+     << ",\"task_state\":\"" << task_sm_.stateName() << "\""
      << "}";
   std_msgs::msg::String msg;
   msg.data = os.str();

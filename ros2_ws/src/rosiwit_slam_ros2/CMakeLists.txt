@@ -18,6 +18,7 @@ find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -49,7 +50,7 @@ target_compile_definitions(${NODE_NAME} PRIVATE BOOST_ALL_NO_LIB)
 target_precompile_headers(${NODE_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/pch.hpp)
 
 ament_target_dependencies(${NODE_NAME}
-    rclcpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros std_srvs
+    rclcpp sensor_msgs nav_msgs geometry_msgs std_msgs tf2 tf2_ros std_srvs
     pcl_conversions visualization_msgs)
 
 rosidl_get_typesupport_target(typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
@@ -79,6 +80,6 @@ endif()
 # ==================== 导出 ====================
 ament_export_include_directories(include)
 ament_export_dependencies(
-    rclcpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros std_srvs pcl_conversions visualization_msgs)
+    rclcpp sensor_msgs nav_msgs geometry_msgs std_msgs tf2 tf2_ros std_srvs pcl_conversions visualization_msgs)
 
 ament_package()

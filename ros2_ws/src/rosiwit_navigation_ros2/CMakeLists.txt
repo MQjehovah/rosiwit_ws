@@ -20,6 +20,7 @@ find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -38,6 +39,7 @@ target_include_directories(rosiwit_navigation_node PRIVATE
 target_compile_options(rosiwit_navigation_node PRIVATE -pipe -pthread)
 ament_target_dependencies(rosiwit_navigation_node
     rclcpp rclcpp_lifecycle geometry_msgs nav_msgs sensor_msgs std_msgs std_srvs
+    visualization_msgs
     tf2 tf2_ros tf2_geometry_msgs)
 target_link_libraries(rosiwit_navigation_node
     rosiwit_navigation)                # 核心库 (算法/规划器/控制器)
@@ -53,6 +55,7 @@ install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 ament_export_include_directories(include)
 ament_export_dependencies(
     rclcpp rclcpp_lifecycle geometry_msgs nav_msgs sensor_msgs std_msgs std_srvs
+    visualization_msgs
     tf2 tf2_ros tf2_geometry_msgs)
 
 ament_package()

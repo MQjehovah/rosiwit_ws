@@ -21,6 +21,7 @@
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/PointCloud2.h>
 
+#include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
@@ -36,6 +37,7 @@
 #include "slam_core/slam_base.h"
 #include "slam_core/slam_types.h"
 #include "slam_core/online_calibrator.h"
+#include "slam_core/calibration_controller.h"
 
 #include "legacy_config.h"
 
@@ -102,6 +104,8 @@ public:
     rosiwit_slam::TimeCalibrationResult onlineTimeCalibration() const;
     /// 在线 yaw 外参估计（IMU 朝向 vs LIO 朝向；只读）。
     rosiwit_slam::YawCalibrationResult onlineYawCalibration() const;
+    /// 闭环标定: 过门限/稳定窗口后应用时间偏移；异常回滚。
+    rosiwit_slam::CalibrationDecision updateCalibration();
 
     // ---- 泵 / 钩子 ----
     /// 注册 50Hz tick (在排空核心输出之后按注册顺序调用)。两套接口各挂一个:
@@ -172,6 +176,8 @@ private:
     mutable std::mutex calib_mutex_;
     rosiwit_slam::OnlineTimeCalibrator online_time_calib_;
     rosiwit_slam::YawExtrinsicCalibrator yaw_calib_;
+    rosiwit_slam::CalibrationController calib_controller_;
+    std::atomic<double> imu_time_offset_{0.0};
     double last_imu_yaw_ = 0.0;
     double last_imu_stamp_ = -1.0;
     bool have_imu_yaw_ = false;

@@ -7,6 +7,7 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
+#include <pcl/registration/icp.h>
 
 #ifndef YAML_CPP_DISABLED
 #include <yaml-cpp/yaml.h>
@@ -169,19 +170,68 @@ bool PcdMapManager::loadMap(const std::string& name) {
 }
 
 bool PcdMapManager::appendMap(const std::string& name) {
+    PoseStamped identity;
+    identity.time = -1.0;
+    return appendMap(name, identity, true, 1.0);
+}
+
+bool PcdMapManager::appendMap(const std::string& name, const PoseStamped& initial,
+                              bool align, double max_fitness) {
     const std::string path = (!name.empty() && name[0] == '/')
         ? name : map_dir_ + "/" + name;
-    CloudType::Ptr cloud(new CloudType());
-    if (pcl::io::loadPCDFile(path, *cloud) == -1 || cloud->empty()) {
+    CloudType::Ptr source(new CloudType());
+    if (pcl::io::loadPCDFile(path, *source) == -1 || source->empty()) {
         std::cerr << "[PcdMapManager] Append load failed: " << path << std::endl;
         return false;
     }
 
     std::lock_guard<std::mutex> lock(m_mutex_);
     if (!global_map_) global_map_.reset(new CloudType());
-    *global_map_ += *cloud;
 
-    // 体素去重，避免多会话重叠区域点数爆炸。
+    Eigen::Matrix4f guess = Eigen::Matrix4f::Identity();
+    if (initial.time >= 0.0) {
+        guess.block<3,3>(0,0) = initial.rot.cast<float>();
+        guess.block<3,1>(0,3) = initial.trans.cast<float>();
+    }
+    Eigen::Matrix4f final_tf = guess;
+
+    if (align && !global_map_->empty() && source->size() > 50) {
+        const double leaf = std::max(0.05, save_voxel_);
+        CloudType::Ptr target_ds(new CloudType());
+        CloudType::Ptr source_ds(new CloudType());
+        pcl::VoxelGrid<PointType> vg;
+        vg.setLeafSize(leaf, leaf, leaf);
+        vg.setInputCloud(global_map_); vg.filter(*target_ds);
+        vg.setInputCloud(source); vg.filter(*source_ds);
+
+        pcl::IterativeClosestPoint<PointType, PointType> icp;
+        icp.setMaximumIterations(60);
+        icp.setMaxCorrespondenceDistance(1.0);
+        icp.setTransformationEpsilon(1e-6);
+        icp.setEuclideanFitnessEpsilon(1e-6);
+        icp.setInputSource(source_ds);
+        icp.setInputTarget(target_ds);
+        CloudType::Ptr aligned(new CloudType());
+        icp.align(*aligned, guess);
+        if (!icp.hasConverged()) {
+            std::cerr << "[PcdMapManager] Session alignment did not converge: " << path << std::endl;
+            return false;
+        }
+        const double fitness = icp.getFitnessScore();
+        if (fitness > max_fitness) {
+            std::cerr << "[PcdMapManager] Reject session map: fitness=" << fitness
+                      << " > " << max_fitness << std::endl;
+            return false;
+        }
+        final_tf = icp.getFinalTransformation();
+        std::cout << "[PcdMapManager] Session aligned: fitness=" << fitness
+                  << " t=" << final_tf.block<3,1>(0,3).transpose() << std::endl;
+    }
+
+    CloudType::Ptr transformed(new CloudType());
+    pcl::transformPointCloud(*source, *transformed, final_tf);
+    *global_map_ += *transformed;
+
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(global_map_);
     const double leaf = std::max(0.02, save_voxel_);
@@ -189,12 +239,10 @@ bool PcdMapManager::appendMap(const std::string& name) {
     CloudType::Ptr filtered(new CloudType());
     vg.filter(*filtered);
     global_map_ = filtered;
-    // 纯 PCD 没有逐帧原点；若继续用上一会话的 observations_ 做射线栅格化，
-    // 新追加的云不会进入栅格。清空观测，强制退回 global_map 整体栅格化。
     observations_.clear();
     ++m_revision_;
     std::cout << "[PcdMapManager] Appended: " << path
-              << " (" << cloud->size() << " pts, total " << global_map_->size() << ")" << std::endl;
+              << " (" << source->size() << " pts, total " << global_map_->size() << ")" << std::endl;
     return true;
 }
 

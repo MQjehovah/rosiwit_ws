@@ -100,6 +100,11 @@ if(CATKIN_ENABLE_TESTING)
         target_link_libraries(test_lost_monitor rosiwit_slam_ros1_lib)
     endif()
 
+    catkin_add_gtest(test_calibration_controller ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_calibration_controller.cpp)
+    if(TARGET test_calibration_controller)
+        target_link_libraries(test_calibration_controller rosiwit_slam_ros1_lib)
+    endif()
+
     catkin_add_gtest(test_online_calibrator ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_online_calibrator.cpp)
     if(TARGET test_online_calibrator)
         target_link_libraries(test_online_calibrator rosiwit_slam_ros1_lib)
