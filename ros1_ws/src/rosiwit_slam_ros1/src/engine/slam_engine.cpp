@@ -670,16 +670,12 @@ void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& i
 
     Eigen::Quaterniond q(in.pose.pose.orientation.w, in.pose.pose.orientation.x,
                          in.pose.pose.orientation.y, in.pose.pose.orientation.z);
-    // 退化四元数(全零/近零)不能 normalize。对 /switch_map 这类"默认位姿"入口，
-    // 把它补成 0,0,0 + identity；这仍然是正常 base_link 位姿，不是"无位姿"。
-    // 只有核心后面的 seed 校验失败时，才由恢复策略触发全局重定位。
-    if (q.norm() < 0.5) {
-        if (!zero_if_insane) {
-            std::cout << "[slam_engine] degenerate initial pose (|q|<0.5): skip setInitPose"
-                      << std::endl;
-            return;
-        }
-        std::cout << "[slam_engine] null initial pose -> default 0,0,0 identity"
+    // App 没有下发初始位姿时，四元数通常是全零。它不是 base_link 的 (0,0,0)，
+    // 而是"没有设置"的占位值；此时由系统补核心 map/IMU 零点，直接 setInitPose，
+    // 不能做 base_link -> IMU 换算（否则会从 yaw=90° 开始，正好偏离地图零点 90°）。
+    const bool default_map_pose = (q.norm() < 0.5);
+    if (default_map_pose) {
+        std::cout << "[slam_engine] no initial pose -> core map/IMU identity 0,0,0"
                   << std::endl;
         x = 0.0;
         y = 0.0;
@@ -693,10 +689,11 @@ void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& i
     p.rot = q.toRotationMatrix();
     p.time = in.header.stamp.toSec();
 
-    // 行业标准: 上层下发 base_link 位姿, 核心吃 IMU body 位姿.
-    // T_world_imu = T_world_base * T_base_imu (composeRight).
-    // force_z_zero 时换算后仍把核心 body 的 z 归零 (旧实现 /switch_map 的约定).
-    if (computeBaseFrames(/*blocking=*/true) && base_imu_.valid) {
+    // 有效初始位姿来自 App，语义为 base_link；核心吃 IMU body 位姿。
+    // 缺省 map/IMU zero 位姿已经在上面的分支直通，不能再次叠加安装角。
+    if (default_map_pose) {
+        if (force_z_zero) p.trans.z() = 0.0;
+    } else if (computeBaseFrames(/*blocking=*/true) && base_imu_.valid) {
         const double yaw_b = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
         p = composeRight(p, base_imu_);
         if (force_z_zero) p.trans.z() = 0.0;
