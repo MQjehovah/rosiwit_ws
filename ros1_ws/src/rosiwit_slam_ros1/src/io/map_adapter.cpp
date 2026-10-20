@@ -2,6 +2,7 @@
 
 #include <Eigen/Geometry>
 #include <pcl/common/transforms.h>
+#include <pcl/io/pcd_io.h>
 
 #include <algorithm>
 #include <fstream>
@@ -106,6 +107,19 @@ bool saveMapData(const rosiwit_slam::MapData& data, const std::string& path) {
     if (!rosiwit_slam::io::writeXzMap(base + ".xzmap", map_id, kfs)) {
         std::cerr << "[map_adapter] write failed: " << base << ".xzmap" << std::endl;
         return false;
+    }
+    // 同时落一份通用 PCD，方便离线检查/可视化；定位读取仍只使用 xzmap。
+    if (data.points) {
+        rosiwit_slam::CloudType::Ptr cloud = data.points->exportCloud();
+        if (cloud && !cloud->empty()) {
+            const std::string pcd_path = base + ".pcd";
+            if (pcl::io::savePCDFileBinary(pcd_path, *cloud) == 0) {
+                std::cout << "[map_adapter] saved PCD: " << pcd_path
+                          << " (" << cloud->size() << " pts)" << std::endl;
+            } else {
+                std::cerr << "[map_adapter] PCD write failed: " << pcd_path << std::endl;
+            }
+        }
     }
     std::cout << "[map_adapter] saved " << kfs.size() << " kfs -> "
               << base << ".xzmap" << std::endl;
