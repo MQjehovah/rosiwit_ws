@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <cmath>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
@@ -63,6 +64,27 @@ bool PcdMapManager::init(const std::string& config_path) {
         };
         const YAML::Node gmap = (config["global"] && config["global"]["map"])
                                     ? config["global"]["map"] : YAML::Node();
+        // 后端修正量保护阈值: 标准位置 mapping.map_manager.*; 兼容根节点同名键.
+        const YAML::Node mm = (config["mapping"] && config["mapping"]["map_manager"])
+                                  ? config["mapping"]["map_manager"] : config["map_manager"];
+        auto mv = [&](const char* key) -> YAML::Node {
+            if (mm && mm[key]) return mm[key];
+            return config[key];
+        };
+        if (mv("max_correction_trans_m")) {
+            const double v = mv("max_correction_trans_m").as<double>();
+            if (std::isfinite(v) && v > 0.0) m_max_correction_trans_m = v;
+        }
+        if (mv("max_correction_rot_deg")) {
+            const double v = mv("max_correction_rot_deg").as<double>();
+            if (std::isfinite(v) && v > 0.0)
+                m_max_correction_rot_rad = v * M_PI / 180.0;
+        } else if (mv("max_correction_rot_rad")) {
+            const double v = mv("max_correction_rot_rad").as<double>();
+            if (std::isfinite(v) && v > 0.0) m_max_correction_rot_rad = v;
+        }
+        std::cout << "[PcdMapManager] correction limits: trans=" << m_max_correction_trans_m
+                  << "m rot=" << m_max_correction_rot_rad * 180.0 / M_PI << "deg" << std::endl;
         if (config["map_directory"])
             map_dir_ = config["map_directory"].as<std::string>();
         if (gmap && gmap["save_voxel"])
