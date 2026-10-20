@@ -787,11 +787,7 @@ void SlamEngine::onOutput(const SlamOutput& out) {
 void SlamEngine::processCB(const ros::TimerEvent&) {
     if (base_) {
         while (base_->tryPopAndProcess()) {}
-        // 定位模式的 LiDAR 是入队后由 work timer 处理的（ROS2 同样逻辑）。
-        // 漏掉这一步会导致切图后定位永不产出新位姿。
-        if (auto* pipeline = dynamic_cast<rosiwit_slam::SlamPipeline*>(base_)) {
-            while (pipeline->tryPopLocalization()) {}
-        }
+        // 定位模式的 LiDAR 由 SlamPipeline 内部 worker 处理，避免重定位阻塞 spinner。
     }
     for (auto& h : tick_hooks_) if (h) h();
 }

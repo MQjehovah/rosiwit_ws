@@ -98,10 +98,6 @@ public:
     bool getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
     double getMatchingDegree() const override;    void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
 
-    /// 定位模式的 LiDAR 重处理入口: 传感器回调只入队, 由 work timer 轮询.
-    /// 避免 GICP/重定位在 sensor callback 里阻塞 IMU 收包.
-    bool tryPopLocalization();
-
     PipelineMode getMode() const { return m_mode.load(); }
     void setMode(PipelineMode mode);
     bool loadMapForLocalization(const std::string& path, const PoseStamped& init_pose);
@@ -123,10 +119,15 @@ public:
 private:
     void pushBackendTask(BackendTask task, const KeyFrame& kf = KeyFrame{});
     void handleLocalization(const LidarFrame& f);
+    void localizationWorker();
 
-    // 定位模式重处理队列: sensor callback 只入队, work timer 消费.
+    // 定位模式重处理队列: sensor callback 只入队, 独立 worker 消费.
+    // 全局重定位/GICP 可能持续数秒，绝不能占用 ROS spinner 或 50Hz 泵。
     std::mutex m_loc_mu;
+    std::condition_variable m_loc_cv;
     std::deque<LidarFrame> m_loc_buf;
+    std::thread m_loc_worker;
+    bool m_loc_stop = false;
 
     // 核心只保存通用 PCD/PGM 等；xzmap 导出由 ROS1 适配层完成。
 

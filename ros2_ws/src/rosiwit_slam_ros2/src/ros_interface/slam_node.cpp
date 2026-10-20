@@ -552,10 +552,7 @@ void SlamNode::timerCB() {
     auto* base = dynamic_cast<SlamBase*>(m_algo.get());
     // 一次 tick 内排空所有已同步的包, 防止重处理慢时数据在内部缓冲区积压
     if (base) { while (base->tryPopAndProcess()) {} }
-    // 定位模式的 LiDAR 重处理已从 sensor callback 移到 work timer.
-    if (auto* pipeline = dynamic_cast<SlamPipeline*>(m_algo.get())) {
-        while (pipeline->tryPopLocalization()) {}
-    }
+    // 定位模式的 LiDAR 由 SlamPipeline 内部 worker 处理，避免重定位阻塞 spinner。
     SlamOutput out; bool should_publish = false;
     {
         std::lock_guard<std::mutex> lock(m_out_mutex);

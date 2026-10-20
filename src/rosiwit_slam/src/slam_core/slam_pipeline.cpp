@@ -137,6 +137,12 @@ void BackendWorker::run() {
 
 SlamPipeline::~SlamPipeline() {
     if (m_backend_worker) m_backend_worker->stopAsync();
+    {
+        std::lock_guard<std::mutex> lk(m_loc_mu);
+        m_loc_stop = true;
+    }
+    m_loc_cv.notify_all();
+    if (m_loc_worker.joinable()) m_loc_worker.join();
 }
 
 bool SlamPipeline::init(const std::string& config_path) {
@@ -274,10 +280,22 @@ bool SlamPipeline::init(const std::string& config_path) {
             loadMapForLocalization(map_name, init);
         }
     }
+    {
+        std::lock_guard<std::mutex> lk(m_loc_mu);
+        m_loc_stop = false;
+    }
+    if (!m_loc_worker.joinable()) m_loc_worker = std::thread([this] { localizationWorker(); });
     return true;
 }
 
-void SlamPipeline::setMode(PipelineMode mode) { m_mode = mode; }
+void SlamPipeline::setMode(PipelineMode mode) {
+    m_mode = mode;
+    if (mode != PipelineMode::LOCALIZATION) {
+        std::lock_guard<std::mutex> lk(m_loc_mu);
+        m_loc_buf.clear();
+    }
+    m_loc_cv.notify_all();
+}
 
 void SlamPipeline::onVisualOdometry(double time, const PoseStamped& vo_pose) {
     if (m_visual) m_visual->addVisualOdometry(time, vo_pose);
@@ -352,29 +370,37 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
     if (mode == PipelineMode::LOCALIZATION) {
         // 只入队: GICP/重定位不能占用 sensor callback, 否则 IMU 会在 DDS/队列里
         // 积压, 匹配结束后再被积分一遍, 造成重复积分/过冲.
-        std::lock_guard<std::mutex> lk(m_loc_mu);
-        if (m_loc_buf.size() >= 2) m_loc_buf.pop_front();
-        m_loc_buf.push_back(f);
+        {
+            std::lock_guard<std::mutex> lk(m_loc_mu);
+            if (m_loc_buf.size() >= 2) m_loc_buf.pop_front();
+            m_loc_buf.push_back(f);
+        }
+        m_loc_cv.notify_one();
         return;
     }
     SlamBase::onLidar(f);
 }
 
-bool SlamPipeline::tryPopLocalization() {
-    if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) {
-        std::lock_guard<std::mutex> lk(m_loc_mu);
-        m_loc_buf.clear();
-        return false;
+void SlamPipeline::localizationWorker() {
+    while (true) {
+        LidarFrame f;
+        {
+            std::unique_lock<std::mutex> lk(m_loc_mu);
+            m_loc_cv.wait(lk, [this] {
+                return m_loc_stop || (m_mode.load() == PipelineMode::LOCALIZATION &&
+                                      !m_loc_buf.empty());
+            });
+            if (m_loc_stop) break;
+            if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) {
+                m_loc_buf.clear();
+                continue;
+            }
+            f = std::move(m_loc_buf.front());
+            m_loc_buf.pop_front();
+        }
+        // 重定位/GICP 在 worker 线程执行，ROS spinner 仍能处理服务、TF、slam/info。
+        handleLocalization(f);
     }
-    LidarFrame f;
-    {
-        std::lock_guard<std::mutex> lk(m_loc_mu);
-        if (m_loc_buf.empty()) return false;
-        f = std::move(m_loc_buf.front());
-        m_loc_buf.pop_front();
-    }
-    handleLocalization(f);
-    return true;
 }
 
 void SlamPipeline::handleLocalization(const LidarFrame& f) {
@@ -584,6 +610,14 @@ bool SlamPipeline::appendMap(const std::string& path) {
 bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
     // 旧 xz_3d_slam 每次切建图都 DELETE_PTR(mapping_ptr_) 再 new 一个, 所以上一轮绝不残留;
     // 我们是单核心实例, 只能显式重建内部模块达到同样效果。
+    //
+    // 0) 停定位 worker，避免 reset 模块时 worker 仍持有 m_localization。
+    {
+        std::lock_guard<std::mutex> lk(m_loc_mu);
+        m_loc_stop = true;
+    }
+    m_loc_cv.notify_all();
+    if (m_loc_worker.joinable()) m_loc_worker.join();
     //
     // 1) 停后端 worker: stopAsync() 只置停止并 detach, 不 join (后端可能正卡在 optimize).
     //    worker 只持有自己的 shared_ptr<IBackend/IMapManager/AnchorState>, 不会访问本对象,
