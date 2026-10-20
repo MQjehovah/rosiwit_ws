@@ -23,6 +23,9 @@ generate_messages(DEPENDENCIES std_msgs geometry_msgs)
 
 # 生成 map.jpg / thumb.png 要用 OpenCV (核心已依赖它; 这里显式声明, 供薄层直接用)
 find_package(OpenCV REQUIRED)
+# GTSAM/Ceres 的 imported target 会引用 Boost::timer；CMake 3.10 环境需要显式创建该 target，
+# 否则在 51.19 这类机器上 add_library 会报 "Boost::timer not found"。
+find_package(Boost REQUIRED COMPONENTS timer)
 
 # 本包是纯接口层(仅一个可执行 + 一个内部静态库), 不对外导出头文件, 因此不声明 INCLUDE_DIRS
 catkin_package(
