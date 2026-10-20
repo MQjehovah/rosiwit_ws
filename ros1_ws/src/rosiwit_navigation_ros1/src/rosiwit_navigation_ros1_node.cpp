@@ -261,6 +261,7 @@ private:
   void mapCallback(const nav_msgs::OccupancyGrid::ConstPtr & msg)
   {
     current_map_ = msg;
+    last_global_costmap_update_ = ros::Time(0);
     updateCostmap();
     ROS_INFO("[rosiwit_navigation_ros1] map received: %d x %d, res=%.3f",
              static_cast<int>(msg->info.width), static_cast<int>(msg->info.height),
@@ -466,7 +467,9 @@ private:
     const double ox = current_map_->info.origin.position.x;
     const double oy = current_map_->info.origin.position.y;
 
-    if (planner_strategy_) {
+    const bool need_global = last_global_costmap_update_.isZero() ||
+      (ros::Time::now() - last_global_costmap_update_).toSec() >= 1.0;
+    if (planner_strategy_ && need_global) {
       auto grid = std::make_shared<core::CostmapGrid>();
       grid->info.width = w;
       grid->info.height = h;
@@ -539,6 +542,7 @@ private:
         } else { costmap_msg.data[i] = 0; }
       }
       global_costmap_pub_.publish(costmap_msg);
+      last_global_costmap_update_ = ros::Time::now();
     }
 
     // 局部障碍物聚类, 供控制器避障
@@ -1104,6 +1108,7 @@ private:
   std::string goal_status_ = "IDLE";
   ros::Time last_odom_stamp_;
   ros::Time last_scan_stamp_;
+  ros::Time last_global_costmap_update_;
   ros::Timer control_timer_;
   ros::Timer local_costmap_timer_;
   ros::Timer replanning_timer_;

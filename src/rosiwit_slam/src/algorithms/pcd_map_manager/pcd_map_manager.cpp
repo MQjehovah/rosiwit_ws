@@ -189,6 +189,9 @@ bool PcdMapManager::appendMap(const std::string& name) {
     CloudType::Ptr filtered(new CloudType());
     vg.filter(*filtered);
     global_map_ = filtered;
+    // 纯 PCD 没有逐帧原点；若继续用上一会话的 observations_ 做射线栅格化，
+    // 新追加的云不会进入栅格。清空观测，强制退回 global_map 整体栅格化。
+    observations_.clear();
     ++m_revision_;
     std::cout << "[PcdMapManager] Appended: " << path
               << " (" << cloud->size() << " pts, total " << global_map_->size() << ")" << std::endl;

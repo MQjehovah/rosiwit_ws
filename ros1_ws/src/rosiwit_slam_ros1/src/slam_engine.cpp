@@ -708,7 +708,7 @@ void SlamEngine::onOutput(const SlamOutput& out) {
                                       1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
         std::lock_guard<std::mutex> lk(calib_mutex_);
         online_time_calib_.addLioPose(out.pose.time, yaw);
-        if (have_imu_yaw_) {
+        if (have_imu_yaw_ && std::abs(out.pose.time - last_imu_stamp_) < 0.15) {
             yaw_calib_.addSample(last_imu_yaw_, yaw);
         }
     }
