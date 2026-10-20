@@ -606,13 +606,13 @@ void Ros1SlamInterface::publishCurrPose() {
                 ps.pose.orientation.z = curr_pose_.q.z();
                 ps.pose.orientation.w = curr_pose_.q.w();
                 pose_puber_.publish(ps);
-                curr_pose_valid_ = true;
-                last_new_pose_ros_ = ros::Time::now();
-
-                // INIT 陷阱的 latch 就靠这里: 核心在定位模式下**只在 LOCALIZED 时**
-                // 才产出 has_new_pose 的输出 (slam_pipeline.cpp:178-182),
-                // 所以"收到过新位姿" == "真的定位上过"。
-                lost_monitor_.onLocalizedPose();
+                // 核心在 LOST 时也会输出最后有效位姿用于界面保持位置，
+                // 但不能把 loose output 当成“定位成功”。
+                if (out.state != rosiwit_slam::SlamState::LOST) {
+                    curr_pose_valid_ = true;
+                    last_new_pose_ros_ = ros::Time::now();
+                    lost_monitor_.onLocalizedPose();
+                }
 
                 // confidently-wrong 防线 (2026-10-17 推行丢失事故): 匹配分 0.98 但
                 // 位姿锁错时状态机无感; 激光位移 vs 轮速位移长期背离是唯一信号。

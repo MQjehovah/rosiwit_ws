@@ -1174,7 +1174,9 @@ bool LocalizationPipeline::getPose(PoseStamped& out) {
 
 bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) {
     std::lock_guard<std::mutex> lk(m_state_mu);
-    if (m_status == LOST && !m_initialized.load()) return false;
+    // LOST 必须返回 false：ROS 层的 LostMonitor 用它判断“当前是否可信”。
+    // getPose() 仍可返回最后有效位姿，供界面保持最后位置显示。
+    if (m_status == LOST) return false;
     out = m_pose;
     cov = m_last_match.cov;
     return true;
