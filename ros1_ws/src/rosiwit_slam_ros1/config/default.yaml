@@ -81,90 +81,67 @@ scan_period_ms: 100.0
 # 万集内置 IMU 实测加速度模长 ~9.85 m/s^2，单位已是 m/s^2，保持 1.0。
 # 若换成 g 单位的 IMU，这里应改为 9.81。
 acc_scale: 1.0
-scan_resolution: 0.3
 map_resolution: 0.05        # 与现网 map.yaml 一致
-map_save_voxel: 0.3
-
-# ############################################################################
-# ② 建图 (mapping)
-# ############################################################################
-
-# ---- LIO 前端 (fast_lio2_frontend) ----
-cube_len: 300
-det_range: 60
-move_thresh: 1.5
-
-na: 0.002
-ng: 0.002
-nba: 0.0001
-nbg: 0.0001
-imu_init_num: 400
-near_search_num: 5
-ieskf_max_iter: 5
-
-gravity_align: true
-esti_il: false           # 实机实测: 打开后外参发散到 ~180° (rpy=[-179.3 179.2 178.5]), 不可用。
-                         # 保持 false, 外参用 legacy 层按帧名/TF 推导出的确定值 (identity)。
-                         # 日志 [FLIO2] extrinsic(used) 仍会打印实际在用的外参, 便于核对。
-r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-t_il: [0.0, 0.0, 0.0905]
-lidar_cov_inv: 5000.0
-robust_kernel: cauchy # none | huber | cauchy | tukey 动态障碍物剔除匹配
-robust_scale: 0.5
-robust_floor: 0.1
-dynamic_removal: true # 动态障碍物剔除建图
-persist_thresh: 2
-persist_window: 20
-free_space_carving: false # L3a 在线自由空间雕刻(删除"已移除物体"的残留地图点)
-carve_free_thresh: 3      # 同一体素被看到"空"的次数阈值
-carve_stride: 10          # 射线行进抽样步长
-dynamic_residual_thresh: 1.0
-
-# ---- 回环检测 (loop_closure: scan_context) ----
-loop_closure:
-  sc_num_rings: 20
-  sc_num_sectors: 60
-  sc_max_radius: 80.0
-  sc_min_keyframe_gap: 30
-  sc_dist_thresh: 0.4
-  sc_candidate_ratio: 0.3
-  icp_fitness_thresh: 1.0
-  icp_max_corr_dist: 2.0
-  icp_voxel_res: 0.3
-
-# ---- 2D 占据栅格生成 (grid_map_generator: GridMapFactory 注册的生成策略) ----
-grid_map_generator: ray_casting  # height_projection | ray_casting | occupancy_logodds | octomap
-grid_min_height: 0.1        # 地面以上障碍最低高度(m); 与 bbs_z_min 同口径(相对地面)
-grid_max_height: 2.0        # 地面以上障碍最高高度(m); 与 bbs_z_max 同口径
-grid_occupied_thresh: 1     # 每格最少点数判为占据(height_projection)
-grid_dilate_radius: 1       # 障碍膨胀半径(格), -1 按 map_save_voxel 自动
-grid_close_radius: 1        # 形态学闭运算半径(格), 填孔
-grid_min_component_cells: 0  # 实机实测: 0.05 分辨率下真实扫描的点很散, 占据格会碎成几千个
-                             # 小连通域, 阈值 30 会把**全部**占据格删掉 -> /map 全白。
-                             # (<=1 表示关闭该算子; 旧的实时栅格是多帧 log-odds 累积出来的所以不碎,
-                             #  我们是从当前全局地图重算, 必须关掉 denoise 才留得住)
-grid_max_range: 0.0         # 射线有效距离(m), 0=不限
-grid_ground_method: ransac  # ransac | percentile
-grid_ransac_dist_thr: 0.10
-grid_min_hits: 2            # occupancy_logodds: 占据所需命中帧数
-grid_min_misses: 2          # occupancy_logodds: 自由所需未命中次数
-grid_mark_radius: 0
-# 2D 后处理管道 (可选算子: denoise|open|close|fill_holes|dilate|skeleton|line)
-grid_post_pipeline: denoise,close,dilate
-grid_connectivity: 8
-grid_open_radius: 0
-grid_fill_max_hole_cells: 0
-grid_skeleton_width: 0
-grid_line_min_len_m: 0.0
-grid_axis_snap: false
-
-# ############################################################################
-# ③ 定位 (localization)
-# ############################################################################
-
-# 定位相关的所有参数统一放在 localization.* 下；不要再在文件根节点增加同义参数。
-
-# ==================== 可编排定位流水线 (modules.localization=localization_pipeline) ====================
+mapping:
+  frontend:
+    cube_len: 300  # 局部地图立方体边长(m)
+    det_range: 60 # 雷达有效检测距离(m)
+    move_thresh: 1.5 # 局部地图滑动窗口阈值比例
+    na: 0.002 # 加速度计白噪声
+    ng: 0.002 # 陀螺白噪声
+    nba: 0.0001 # 加速度计零偏随机游走
+    nbg: 0.0001 # 陀螺零偏随机游走
+    imu_init_num: 400 # IMU 静止初始化样本数
+    near_search_num: 5 # 近邻搜索点数
+    ieskf_max_iter: 5 # IEKF 最大迭代次数
+    gravity_align: true # 是否用重力方向初始化姿态
+    scan_resolution: 0.3 # 前端扫描降采样体素(m)
+    esti_il: false # 是否在线估计雷达-IMU外参(本机必须false)
+    r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始 IMU<-lidar 旋转矩阵(行优先)
+    t_il: [0.0, 0.0, 0.0905] # 初始 IMU<-lidar 平移(m)
+    lidar_cov_inv: 5000.0 # 激光观测信息矩阵权重
+    robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
+    robust_scale: 0.5 # 鲁棒核尺度
+    robust_floor: 0.1 # 鲁棒权重下限
+    dynamic_removal: true # 是否剔除动态障碍物点
+    persist_thresh: 2 # 动态点持久确认帧数
+    persist_window: 20 # 动态点确认窗口帧数
+    dynamic_residual_thresh: 1.0 # 动态点残差阈值
+    free_space_carving: false # 是否启用自由空间雕刻
+    carve_free_thresh: 3 # 雕刻空体素命中次数阈值
+    carve_stride: 10 # 雕刻射线抽样步长
+  loop_closure:
+    sc_num_rings: 20  # ScanContext环数
+    sc_num_sectors: 60 # ScanContext扇区数
+    sc_max_radius: 80.0 # ScanContext最大半径(m)
+    sc_min_keyframe_gap: 30 # 回环最小关键帧间隔
+    sc_dist_thresh: 0.4 # ScanContext距离阈值
+    sc_candidate_ratio: 0.3 # 回环候选比例
+    icp_fitness_thresh: 1.0 # 回环ICP适应度阈值
+    icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)
+    icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
+  grid:
+    generator: ray_casting  # 2D栅格生成策略
+    min_height: 0.1 # 地面以上障碍最低高度(m)
+    max_height: 2.0 # 地面以上障碍最高高度(m)
+    occupied_thresh: 1 # 每格最少点数判占据
+    dilate_radius: 1 # 障碍膨胀半径(格)
+    close_radius: 1 # 形态学闭运算半径(格)
+    min_component_cells: 0 # 去噪最小连通域格数
+    max_range: 0.0 # 射线有效距离(m),0=不限
+    ground_method: ransac # 地面提取方法 ransac|percentile
+    ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
+    min_hits: 2 # occupancy_logodds占据命中次数
+    min_misses: 2 # occupancy_logodds自由未命中次数
+    mark_radius: 0 # 栅格标记半径(格)
+    post_pipeline: denoise,close,dilate # 2D后处理管道
+    connectivity: 8 # 后处理连通性 4|8
+    open_radius: 0 # 开运算半径(格)
+    fill_max_hole_cells: 0 # 填洞最大格数
+    skeleton_width: 0 # 骨架膨胀宽度(格)
+    line_min_len_m: 0.0 # Hough线段最小长度(m)
+    axis_snap: false # Hough线段吸附水平/垂直
+    save_voxel: 0.3 # 地图/点云保存降采样体素(m)
 localization:
   # 各阶段按名选择算法, 便于对同一阶段的不同算法做横向性能验证.
   # 可用实现 (见 algorithms/localization/localization_factory.cpp):
@@ -368,8 +345,8 @@ localization:
 
   # ---- 绝对约束融合 (L19): 门控互补融合 ----
   absolute:
-    enabled: false
-    topic: /absolute_pose     # geometry_msgs/PoseWithCovarianceStamped
+    enabled: false  # 是否启用绝对约束
+    topic: /absolute_pose # 绝对位姿话题
     window: 0.5               # 观测有效窗口(s)
     alpha: 0.5                # 融合权重
     max_trans: 2.0            # 创新门限(m)
@@ -402,23 +379,17 @@ localization:
 
   # ---- 旧独立定位器 gicp_localization (modules.localization=gicp_localization 时) ----
   gicp:
-    voxel_resolution: 0.3
-    fitness_threshold: 10.0
-    max_iterations: 64
-    transformation_epsilon: 0.00000001
-    max_correspondence_dist: 2.0
-    euclid_epsilon: 0.01
+    voxel_resolution: 0.3  # GICP降采样体素(m)
+    fitness_threshold: 10.0 # GICP适应度阈值
+    max_iterations: 64 # GICP最大迭代次数
+    transformation_epsilon: 0.00000001 # GICP变换收敛阈值
+    max_correspondence_dist: 2.0 # GICP最大对应点距离(m)
+    euclid_epsilon: 0.01 # GICP欧氏收敛阈值
     output_filter:
-      enabled: true
-      alpha: 0.6
-      max_xy_m: 0.5
-      max_yaw_deg: 20.0
-
-# ############################################################################
-# ④ 视觉松耦合 (route b): 外部 VO 库输出 -> GTSAM 后端因子
-# ############################################################################
-# 启用后: 通过 SlamPipeline::onVisualOdometry()/onVisualLoop() 注入;
-# VO between 因子在关键帧产生时自动生成, 视觉回环约束即时入图.
+      enabled: true  # 是否启用位姿输出滤波
+      alpha: 0.6 # 滤波融合系数
+      max_xy_m: 0.5 # 位置修正门限(m)
+      max_yaw_deg: 20.0 # 航向修正门限(deg)
 vision:
   enabled: false            # 视觉松耦合总开关 (false 时不订阅 VO 话题)
   vo_topic: /visual_odometry  # 外部 VO 库发布的里程计话题 (nav_msgs/Odometry)

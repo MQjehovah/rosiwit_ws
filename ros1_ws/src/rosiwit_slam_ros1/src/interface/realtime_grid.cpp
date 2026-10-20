@@ -40,43 +40,50 @@ void loadGridConfigFromYaml(const std::string& yaml_path,
             return;
         }
 
+        const YAML::Node grid =
+            (c["mapping"] && c["mapping"]["grid"]) ? c["mapping"]["grid"] : c;
+        auto gv = [&](const char* key) -> YAML::Node {
+            if (grid[key]) return grid[key];
+            const std::string legacy = (std::string(key) == "generator")
+                                           ? "grid_map_generator"
+                                           : (std::string("grid_") + key);
+            return c[legacy];
+        };
+
         // ---- 生成策略 + GridMapConfig (pcd_map_manager.cpp:56-81) ----
-        if (c["grid_map_generator"]) generator = c["grid_map_generator"].as<std::string>();
-        if (c["grid_min_height"]) cfg.min_height = c["grid_min_height"].as<double>();
-        if (c["grid_max_height"]) cfg.max_height = c["grid_max_height"].as<double>();
-        if (c["grid_occupied_thresh"]) cfg.occupied_thresh = c["grid_occupied_thresh"].as<int>();
-        if (c["grid_dilate_radius"]) cfg.dilate_radius = c["grid_dilate_radius"].as<int>();
-        if (c["grid_max_range"]) cfg.max_range = c["grid_max_range"].as<double>();
-        if (c["grid_ground_z"]) cfg.ground_z = c["grid_ground_z"].as<double>();
-        if (c["grid_ground_method"]) cfg.ground_method = c["grid_ground_method"].as<std::string>();
-        if (c["grid_ransac_dist_thr"]) cfg.ransac_dist_thr = c["grid_ransac_dist_thr"].as<double>();
-        if (c["grid_ransac_max_iter"]) cfg.ransac_max_iter = c["grid_ransac_max_iter"].as<int>();
-        if (c["grid_min_hits"]) cfg.min_hits = c["grid_min_hits"].as<int>();
-        if (c["grid_min_misses"]) cfg.min_misses = c["grid_min_misses"].as<int>();
-        if (c["grid_mark_radius"]) cfg.mark_radius = c["grid_mark_radius"].as<int>();
+        if (gv("generator")) generator = gv("generator").as<std::string>();
+        if (gv("min_height")) cfg.min_height = gv("min_height").as<double>();
+        if (gv("max_height")) cfg.max_height = gv("max_height").as<double>();
+        if (gv("occupied_thresh")) cfg.occupied_thresh = gv("occupied_thresh").as<int>();
+        if (gv("dilate_radius")) cfg.dilate_radius = gv("dilate_radius").as<int>();
+        if (gv("max_range")) cfg.max_range = gv("max_range").as<double>();
+        if (gv("ground_z")) cfg.ground_z = gv("ground_z").as<double>();
+        if (gv("ground_method")) cfg.ground_method = gv("ground_method").as<std::string>();
+        if (gv("ransac_dist_thr")) cfg.ransac_dist_thr = gv("ransac_dist_thr").as<double>();
+        if (gv("ransac_max_iter")) cfg.ransac_max_iter = gv("ransac_max_iter").as<int>();
+        if (gv("min_hits")) cfg.min_hits = gv("min_hits").as<int>();
+        if (gv("min_misses")) cfg.min_misses = gv("min_misses").as<int>();
+        if (gv("mark_radius")) cfg.mark_radius = gv("mark_radius").as<int>();
 
         // ---- GridPostConfig (pcd_map_manager.cpp:83-104) ----
-        if (c["grid_post_pipeline"])
-            post.pipeline = rosiwit_slam::parsePostPipeline(c["grid_post_pipeline"].as<std::string>());
-        if (c["grid_min_component_cells"])
-            post.min_component_cells = c["grid_min_component_cells"].as<int>();
-        if (c["grid_connectivity"]) post.connectivity = c["grid_connectivity"].as<int>();
-        if (c["grid_no_info_is_obstacle"])
-            post.no_info_is_obstacle = c["grid_no_info_is_obstacle"].as<bool>();
-        if (c["grid_close_radius"]) post.close_radius = c["grid_close_radius"].as<int>();
-        if (c["grid_open_radius"]) post.open_radius = c["grid_open_radius"].as<int>();
-        if (c["grid_fill_max_hole_cells"])
-            post.max_hole_cells = c["grid_fill_max_hole_cells"].as<int>();
-        if (c["grid_dilate_radius"]) post.dilate_radius = c["grid_dilate_radius"].as<int>();
-        if (c["grid_skeleton_width"]) post.skeleton_width = c["grid_skeleton_width"].as<int>();
-        if (c["grid_line_min_len_m"]) post.line_min_len_m = c["grid_line_min_len_m"].as<double>();
-        if (c["grid_axis_snap"]) post.axis_snap = c["grid_axis_snap"].as<bool>();
+        if (gv("post_pipeline"))
+            post.pipeline = rosiwit_slam::parsePostPipeline(gv("post_pipeline").as<std::string>());
+        if (gv("min_component_cells")) post.min_component_cells = gv("min_component_cells").as<int>();
+        if (gv("connectivity")) post.connectivity = gv("connectivity").as<int>();
+        if (gv("no_info_is_obstacle")) post.no_info_is_obstacle = gv("no_info_is_obstacle").as<bool>();
+        if (gv("close_radius")) post.close_radius = gv("close_radius").as<int>();
+        if (gv("open_radius")) post.open_radius = gv("open_radius").as<int>();
+        if (gv("fill_max_hole_cells")) post.max_hole_cells = gv("fill_max_hole_cells").as<int>();
+        if (gv("dilate_radius")) post.dilate_radius = gv("dilate_radius").as<int>();
+        if (gv("skeleton_width")) post.skeleton_width = gv("skeleton_width").as<int>();
+        if (gv("line_min_len_m")) post.line_min_len_m = gv("line_min_len_m").as<double>();
+        if (gv("axis_snap")) post.axis_snap = gv("axis_snap").as<bool>();
 
         // ---- 分辨率与点间距: 核心是在 generateGridMap() 里赋的, 这里在装载时定下来 ----
-        // (核心: cfg.resolution = 调用方传入的 resolution; cfg.point_spacing = save_voxel_)
         if (c["map_resolution"]) cfg.resolution = c["map_resolution"].as<double>();
-        if (c["map_save_voxel"]) {
-            const double voxel = c["map_save_voxel"].as<double>();
+        const double voxel = gv("save_voxel") ? gv("save_voxel").as<double>()
+                                              : c["map_save_voxel"].as<double>(0.0);
+        if (voxel > 0.0) {
             cfg.point_spacing = voxel;
             post.point_spacing = voxel;
         }

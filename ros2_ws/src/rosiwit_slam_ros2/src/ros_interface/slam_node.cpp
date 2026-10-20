@@ -207,18 +207,21 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                 m_cfg.use_wheel_odom = cfg["enable_odom"].as<bool>(m_cfg.use_wheel_odom);
             }
             m_cfg.odom_topic       = cfg["odom_topic"].as<std::string>(m_cfg.odom_topic);
-            m_cfg.output_rate_hz   = cfg["output_rate_hz"].as<double>(m_cfg.output_rate_hz);
-            m_cfg.output_filter_alpha = cfg["output_filter_alpha"].as<double>(m_cfg.output_filter_alpha);
-            m_cfg.output_filter_beta  = cfg["output_filter_beta"].as<double>(m_cfg.output_filter_beta);
-            m_cfg.output_extrap_max_s = cfg["output_extrap_max_s"].as<double>(m_cfg.output_extrap_max_s);
+            const YAML::Node loc = cfg["localization"];
+            const YAML::Node out = (loc && loc["output"]) ? loc["output"] : cfg;
+            const YAML::Node abs = (loc && loc["absolute"]) ? loc["absolute"] : cfg;
+            m_cfg.output_rate_hz   = out["rate_hz"].as<double>(m_cfg.output_rate_hz);
+            m_cfg.output_filter_alpha = out["filter_alpha"].as<double>(m_cfg.output_filter_alpha);
+            m_cfg.output_filter_beta  = out["filter_beta"].as<double>(m_cfg.output_filter_beta);
+            m_cfg.output_extrap_max_s = out["extrap_max_s"].as<double>(m_cfg.output_extrap_max_s);
             m_cfg.grid_map_resolution = cfg["map_resolution"].as<double>(m_cfg.grid_map_resolution);
             m_cfg.map_publish_period = cfg["map_publish_period"].as<double>(m_cfg.map_publish_period);
-            m_cfg.absolute_enabled = cfg["absolute_enabled"].as<bool>(m_cfg.absolute_enabled);
-            m_cfg.absolute_topic   = cfg["absolute_topic"].as<std::string>(m_cfg.absolute_topic);
-            m_cfg.datum_x = cfg["absolute_datum_x"].as<double>(m_cfg.datum_x);
-            m_cfg.datum_y = cfg["absolute_datum_y"].as<double>(m_cfg.datum_y);
-            m_cfg.datum_z = cfg["absolute_datum_z"].as<double>(m_cfg.datum_z);
-            m_cfg.datum_yaw_deg = cfg["absolute_datum_yaw_deg"].as<double>(m_cfg.datum_yaw_deg);
+            m_cfg.absolute_enabled = abs["enabled"].as<bool>(m_cfg.absolute_enabled);
+            m_cfg.absolute_topic   = abs["topic"].as<std::string>(m_cfg.absolute_topic);
+            m_cfg.datum_x = abs["datum_x"].as<double>(m_cfg.datum_x);
+            m_cfg.datum_y = abs["datum_y"].as<double>(m_cfg.datum_y);
+            m_cfg.datum_z = abs["datum_z"].as<double>(m_cfg.datum_z);
+            m_cfg.datum_yaw_deg = abs["datum_yaw_deg"].as<double>(m_cfg.datum_yaw_deg);
             m_cfg.online_calib_apply = cfg["online_calibration_apply"].as<bool>(m_cfg.online_calib_apply);
             m_cfg.calib_min_confidence = cfg["calib_min_confidence"].as<double>(m_cfg.calib_min_confidence);
             m_cfg.calib_stable_windows = cfg["calib_stable_windows"].as<int>(m_cfg.calib_stable_windows);
@@ -230,8 +233,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                 m_cfg.vision_enabled = cfg["vision"]["enabled"].as<bool>(m_cfg.vision_enabled);
                 m_cfg.vo_topic       = cfg["vision"]["vo_topic"].as<std::string>(m_cfg.vo_topic);
             }
-            if (cfg["output_smoothing_alpha"])
-                m_ema_alpha = cfg["output_smoothing_alpha"].as<double>();
+            if (out["smoothing_alpha"])
+                m_ema_alpha = out["smoothing_alpha"].as<double>();
         }
     }
     // 行业标准: 核心估计 IMU body; r_il/t_il 必须由 ROS2 层从 TF 推导后注入.

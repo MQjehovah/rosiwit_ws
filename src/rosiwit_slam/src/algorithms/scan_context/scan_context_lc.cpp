@@ -20,7 +20,10 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
 #ifndef YAML_CPP_DISABLED
         try {
             YAML::Node config = YAML::LoadFile(config_path);
-            auto lc = config["loop_closure"];
+            // 标准层级 mapping.loop_closure；旧配置回退根节点 loop_closure。
+            auto lc = (config["mapping"] && config["mapping"]["loop_closure"])
+                          ? config["mapping"]["loop_closure"]
+                          : config["loop_closure"];
             if (lc) {
                 m_min_keyframe_gap  = lc["sc_min_keyframe_gap"].as<int>(m_min_keyframe_gap);
                 m_dist_thresh       = lc["sc_dist_thresh"].as<double>(m_dist_thresh);

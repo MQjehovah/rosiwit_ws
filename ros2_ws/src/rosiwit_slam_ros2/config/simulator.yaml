@@ -31,62 +31,58 @@ lidar_min_range: 0.10
 lidar_max_range: 100.0
 # Gazebo GPU ray 点云是瞬时快照且无逐点时间, 关闭按扫描周期摊开
 scan_period_ms: 0.0
-undistort_enable: false
-scan_resolution: 0.2
 map_resolution: 0.05
 # /map 发布周期(s): 5Hz, 让导航 costmap 能及时看到新墙
 map_publish_period: 1.0
 
 # 2D 栅格: 探索需要 unknown(-1) 才能检测 frontier, 因此用 ray_casting
-grid_map_generator: ray_casting
-grid_min_height: 0.1
-grid_max_height: 2.0
-grid_occupied_thresh: 1
-# 地图层不再额外膨胀; 安全距离交给导航 costmap, 避免双重膨胀堵死门洞
-grid_dilate_radius: 0
-grid_close_radius: 1
-# 不做小连通域剔除: 否则椅子/桌腿等真实小障碍会被置为 unknown(-1)
-grid_post_pipeline: "close,dilate"
-grid_min_component_cells: 1
-grid_max_range: 50.0
-grid_ground_method: ransac
-grid_ransac_dist_thr: 0.10
-
-# iKD-Tree
-cube_len: 300
-det_range: 60
-move_thresh: 1.5
-
-# IMU 噪声
-na: 0.01
-ng: 0.01
-nba: 0.0001
-nbg: 0.0001
-imu_init_num: 20
-near_search_num: 5
-ieskf_max_iter: 5
-
-gravity_align: true
-esti_il: false
-r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-t_il: [0.0, 0.0, 0.0]
-lidar_cov_inv: 1000.0
-# ScanContext 全局重定位参数 (localization: scan_context_localization)
+mapping:
+  frontend:
+    cube_len: 300  # 局部地图立方体边长(m)
+    det_range: 60 # 雷达有效检测距离(m)
+    move_thresh: 1.5 # 局部地图滑动窗口阈值比例
+    na: 0.01 # 加速度计白噪声
+    ng: 0.01 # 陀螺白噪声
+    nba: 0.0001 # 加速度计零偏随机游走
+    nbg: 0.0001 # 陀螺零偏随机游走
+    imu_init_num: 20 # IMU 静止初始化样本数
+    near_search_num: 5 # 近邻搜索点数
+    ieskf_max_iter: 5 # IEKF 最大迭代次数
+    gravity_align: true # 是否用重力方向初始化姿态
+    scan_resolution: 0.2 # 前端扫描降采样体素(m)
+    undistort_enable: false # 是否启用运动畸变补偿
+    esti_il: false # 是否在线估计雷达-IMU外参(本机必须false)
+    r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始 IMU<-lidar 旋转矩阵(行优先)
+    t_il: [0.0, 0.0, 0.0] # 初始 IMU<-lidar 平移(m)
+    lidar_cov_inv: 1000.0 # 激光观测信息矩阵权重
+    robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
+    robust_scale: 0.5 # 鲁棒核尺度
+    robust_floor: 0.1 # 鲁棒权重下限
+    dynamic_removal: true # 是否剔除动态障碍物点
+    persist_thresh: 2 # 动态点持久确认帧数
+    persist_window: 20 # 动态点确认窗口帧数
+    dynamic_residual_thresh: 1.0 # 动态点残差阈值
+  grid:
+    generator: ray_casting  # 2D栅格生成策略
+    min_height: 0.1 # 地面以上障碍最低高度(m)
+    max_height: 2.0 # 地面以上障碍最高高度(m)
+    occupied_thresh: 1 # 每格最少点数判占据
+    dilate_radius: 0 # 障碍膨胀半径(格)
+    close_radius: 1 # 形态学闭运算半径(格)
+    min_component_cells: 1 # 去噪最小连通域格数
+    max_range: 50.0 # 射线有效距离(m),0=不限
+    ground_method: ransac # 地面提取方法 ransac|percentile
+    ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
+    post_pipeline: "close,dilate" # 2D后处理管道
 localization:
-  sc_num_rings: 20
-  sc_num_sectors: 60
-  sc_max_radius: 80.0
-  sc_min_radius: 2.0
-  sc_dist_thresh: 0.4
-  sc_candidate_ratio: 0.3
-  icp_voxel_res: 0.5
-  icp_max_corr_dist: 2.0
-  icp_fitness_thresh: 1.0
-  icp_max_iter: 32
-robust_kernel: cauchy
-robust_scale: 0.5
-robust_floor: 0.1
-dynamic_removal: true
-persist_thresh: 2
-persist_window: 20
-dynamic_residual_thresh: 1.0
+  global:
+    sc_num_rings: 20
+    sc_num_sectors: 60
+    sc_max_radius: 80.0
+    sc_min_radius: 2.0
+    sc_dist_thresh: 0.4
+    sc_candidate_ratio: 0.3
+    icp_voxel_res: 0.5
+    icp_max_corr_dist: 2.0
+    icp_fitness_thresh: 1.0
+    icp_max_iter: 32

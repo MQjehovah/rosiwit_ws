@@ -50,59 +50,48 @@ bool PcdMapManager::init(const std::string& config_path) {
 #ifndef YAML_CPP_DISABLED
     try {
         YAML::Node config = YAML::LoadFile(config_path);
+        // mapping.grid.* 是标准层级；旧配置仍从根节点 grid_* 读取。
+        const YAML::Node grid =
+            (config["mapping"] && config["mapping"]["grid"])
+                ? config["mapping"]["grid"] : YAML::Node();
+        auto gv = [&](const char* key) -> YAML::Node {
+            if (grid && grid[key]) return grid[key];
+            const std::string legacy = (std::string(key) == "generator")
+                                           ? "grid_map_generator"
+                                           : (std::string("grid_") + key);
+            return config[legacy];
+        };
         if (config["map_directory"])
             map_dir_ = config["map_directory"].as<std::string>();
-        if (config["map_save_voxel"])
+        if (grid && grid["save_voxel"])
+            save_voxel_ = grid["save_voxel"].as<double>();
+        else if (config["map_save_voxel"])
             save_voxel_ = config["map_save_voxel"].as<double>();
-        if (config["grid_map_generator"])
-            grid_gen_name_ = config["grid_map_generator"].as<std::string>();
-        if (config["grid_min_height"])
-            grid_cfg_.min_height = config["grid_min_height"].as<double>();
-        if (config["grid_max_height"])
-            grid_cfg_.max_height = config["grid_max_height"].as<double>();
-        if (config["grid_occupied_thresh"])
-            grid_cfg_.occupied_thresh = config["grid_occupied_thresh"].as<int>();
-        if (config["grid_dilate_radius"])
-            grid_cfg_.dilate_radius = config["grid_dilate_radius"].as<int>();
-        if (config["grid_max_range"])
-            grid_cfg_.max_range = config["grid_max_range"].as<double>();
-        if (config["grid_ground_z"])
-            grid_cfg_.ground_z = config["grid_ground_z"].as<double>();
-        if (config["grid_ground_method"])
-            grid_cfg_.ground_method = config["grid_ground_method"].as<std::string>();
-        if (config["grid_ransac_dist_thr"])
-            grid_cfg_.ransac_dist_thr = config["grid_ransac_dist_thr"].as<double>();
-        if (config["grid_ransac_max_iter"])
-            grid_cfg_.ransac_max_iter = config["grid_ransac_max_iter"].as<int>();
-        if (config["grid_min_hits"])
-            grid_cfg_.min_hits = config["grid_min_hits"].as<int>();
-        if (config["grid_min_misses"])
-            grid_cfg_.min_misses = config["grid_min_misses"].as<int>();
-        if (config["grid_mark_radius"])
-            grid_cfg_.mark_radius = config["grid_mark_radius"].as<int>();
+        if (gv("generator")) grid_gen_name_ = gv("generator").as<std::string>();
+        if (gv("min_height")) grid_cfg_.min_height = gv("min_height").as<double>();
+        if (gv("max_height")) grid_cfg_.max_height = gv("max_height").as<double>();
+        if (gv("occupied_thresh")) grid_cfg_.occupied_thresh = gv("occupied_thresh").as<int>();
+        if (gv("dilate_radius")) grid_cfg_.dilate_radius = gv("dilate_radius").as<int>();
+        if (gv("max_range")) grid_cfg_.max_range = gv("max_range").as<double>();
+        if (gv("ground_z")) grid_cfg_.ground_z = gv("ground_z").as<double>();
+        if (gv("ground_method")) grid_cfg_.ground_method = gv("ground_method").as<std::string>();
+        if (gv("ransac_dist_thr")) grid_cfg_.ransac_dist_thr = gv("ransac_dist_thr").as<double>();
+        if (gv("ransac_max_iter")) grid_cfg_.ransac_max_iter = gv("ransac_max_iter").as<int>();
+        if (gv("min_hits")) grid_cfg_.min_hits = gv("min_hits").as<int>();
+        if (gv("min_misses")) grid_cfg_.min_misses = gv("min_misses").as<int>();
+        if (gv("mark_radius")) grid_cfg_.mark_radius = gv("mark_radius").as<int>();
         // ---- 2D 后处理管道 ----
-        if (config["grid_post_pipeline"])
-            grid_post_cfg_.pipeline = parsePostPipeline(config["grid_post_pipeline"].as<std::string>());
-        if (config["grid_min_component_cells"])
-            grid_post_cfg_.min_component_cells = config["grid_min_component_cells"].as<int>();
-        if (config["grid_connectivity"])
-            grid_post_cfg_.connectivity = config["grid_connectivity"].as<int>();
-        if (config["grid_no_info_is_obstacle"])
-            grid_post_cfg_.no_info_is_obstacle = config["grid_no_info_is_obstacle"].as<bool>();
-        if (config["grid_close_radius"])
-            grid_post_cfg_.close_radius = config["grid_close_radius"].as<int>();
-        if (config["grid_open_radius"])
-            grid_post_cfg_.open_radius = config["grid_open_radius"].as<int>();
-        if (config["grid_fill_max_hole_cells"])
-            grid_post_cfg_.max_hole_cells = config["grid_fill_max_hole_cells"].as<int>();
-        if (config["grid_dilate_radius"])
-            grid_post_cfg_.dilate_radius = config["grid_dilate_radius"].as<int>();
-        if (config["grid_skeleton_width"])
-            grid_post_cfg_.skeleton_width = config["grid_skeleton_width"].as<int>();
-        if (config["grid_line_min_len_m"])
-            grid_post_cfg_.line_min_len_m = config["grid_line_min_len_m"].as<double>();
-        if (config["grid_axis_snap"])
-            grid_post_cfg_.axis_snap = config["grid_axis_snap"].as<bool>();
+        if (gv("post_pipeline")) grid_post_cfg_.pipeline = parsePostPipeline(gv("post_pipeline").as<std::string>());
+        if (gv("min_component_cells")) grid_post_cfg_.min_component_cells = gv("min_component_cells").as<int>();
+        if (gv("connectivity")) grid_post_cfg_.connectivity = gv("connectivity").as<int>();
+        if (gv("no_info_is_obstacle")) grid_post_cfg_.no_info_is_obstacle = gv("no_info_is_obstacle").as<bool>();
+        if (gv("close_radius")) grid_post_cfg_.close_radius = gv("close_radius").as<int>();
+        if (gv("open_radius")) grid_post_cfg_.open_radius = gv("open_radius").as<int>();
+        if (gv("fill_max_hole_cells")) grid_post_cfg_.max_hole_cells = gv("fill_max_hole_cells").as<int>();
+        if (gv("dilate_radius")) grid_post_cfg_.dilate_radius = gv("dilate_radius").as<int>();
+        if (gv("skeleton_width")) grid_post_cfg_.skeleton_width = gv("skeleton_width").as<int>();
+        if (gv("line_min_len_m")) grid_post_cfg_.line_min_len_m = gv("line_min_len_m").as<double>();
+        if (gv("axis_snap")) grid_post_cfg_.axis_snap = gv("axis_snap").as<bool>();
     } catch (const std::exception& e) {
         std::cerr << "[PcdMapManager] Config parse error: " << e.what() << std::endl;
         return false;
