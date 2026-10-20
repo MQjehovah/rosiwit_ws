@@ -72,92 +72,113 @@ void RosiwitInterface::onTick() {
 }
 
 void RosiwitInterface::publishPose(const SlamOutput& out) {
-    // 行业标准: 核心估计 IMU body; 所有对外位姿/TF/body_cloud 在 ROS1 层转 base_link.
-    // world_cloud 已在 map 系, 不参与变换。
-    //
-    // onTick 是 50Hz，但核心定位/建图输出通常约 10Hz；同一 timestamp 不重复
-    // 深拷贝 body_cloud，也不重复追加轨迹。lio_odom 仍按 50Hz 重发，保持兼容。
-    const bool new_pose = out.pose.time > last_pose_time_ + 1e-6;
-    if (new_pose) last_pose_time_ = out.pose.time;
+    const PreparedPose p = preparePose(out);
+    publishOdometry(p);
+    publishTransform(p);
+    publishClouds(out, p);
+    publishPath(p);
+}
 
-    PoseStamped pose = out.pose;
-    CloudType::Ptr body_cloud;
+RosiwitInterface::PreparedPose RosiwitInterface::preparePose(const SlamOutput& out) {
+    PreparedPose p;
+    p.new_pose = out.pose.time > last_pose_time_ + 1e-6;
+    if (p.new_pose) last_pose_time_ = out.pose.time;
+
+    p.pose = out.pose;
     if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseImu().valid) {
-        // 核心输出/body_cloud 在 IMU body; 对外转 base_link.
-        pose = composeRightInv(out.pose, engine_.baseImu());
-        if (new_pose && out.body_cloud && body_cloud_pub_.getNumSubscribers() > 0) {
-            body_cloud.reset(new CloudType(*out.body_cloud));
-            transformCloud(*body_cloud, engine_.baseImu());
+        p.pose = composeRightInv(out.pose, engine_.baseImu());
+        if (p.new_pose && out.body_cloud && body_cloud_pub_.getNumSubscribers() > 0) {
+            p.body_cloud.reset(new CloudType(*out.body_cloud));
+            transformCloud(*p.body_cloud, engine_.baseImu());
         }
-    } else if (new_pose && out.body_cloud && body_cloud_pub_.getNumSubscribers() > 0) {
-        body_cloud = out.body_cloud;
+    } else if (p.new_pose && out.body_cloud && body_cloud_pub_.getNumSubscribers() > 0) {
+        p.body_cloud = out.body_cloud;
     }
 
-    ros::Time stamp;
-    if (pose.time > 0) stamp = ros::Time(pose.time); else stamp = ros::Time::now();
-    Eigen::Quaterniond q(pose.rot);
+    p.stamp = (p.pose.time > 0) ? ros::Time(p.pose.time) : ros::Time::now();
+    return p;
+}
+
+void RosiwitInterface::publishOdometry(const PreparedPose& p) {
+    const Eigen::Quaterniond q(p.pose.rot);
 
     nav_msgs::Odometry odom;
     odom.header.frame_id = engine_.worldFrame();
     odom.child_frame_id = engine_.bodyFrame();
-    odom.header.stamp = stamp;
-    odom.pose.pose.position.x = pose.trans.x();
-    odom.pose.pose.position.y = pose.trans.y();
-    odom.pose.pose.position.z = pose.trans.z();
-    odom.pose.pose.orientation.x = q.x(); odom.pose.pose.orientation.y = q.y();
-    odom.pose.pose.orientation.z = q.z(); odom.pose.pose.orientation.w = q.w();
-    const Eigen::Vector3d vel_body = q.conjugate() * pose.vel;
+    odom.header.stamp = p.stamp;
+    odom.pose.pose.position.x = p.pose.trans.x();
+    odom.pose.pose.position.y = p.pose.trans.y();
+    odom.pose.pose.position.z = p.pose.trans.z();
+    odom.pose.pose.orientation.x = q.x();
+    odom.pose.pose.orientation.y = q.y();
+    odom.pose.pose.orientation.z = q.z();
+    odom.pose.pose.orientation.w = q.w();
+    const Eigen::Vector3d vel_body = q.conjugate() * p.pose.vel;
     odom.twist.twist.linear.x = vel_body.x();
     odom.twist.twist.linear.y = vel_body.y();
     odom.twist.twist.linear.z = vel_body.z();
     odom_pub_.publish(odom);
-    // M5: legacy profile 下不发 `odom` 别名
-    if (!suppress_conflicts_ && odom_nav_pub_.getNumSubscribers() > 0) odom_nav_pub_.publish(odom);
-
-    // M5: legacy profile 下不发任何新 TF
-    if (!suppress_conflicts_) {
-        geometry_msgs::TransformStamped tf;
-        tf.header.frame_id = engine_.worldFrame(); tf.child_frame_id = engine_.bodyFrame();
-        tf.header.stamp = stamp;
-        tf.transform.translation.x = pose.trans.x();
-        tf.transform.translation.y = pose.trans.y();
-        tf.transform.translation.z = pose.trans.z();
-        tf.transform.rotation.x = q.x(); tf.transform.rotation.y = q.y();
-        tf.transform.rotation.z = q.z(); tf.transform.rotation.w = q.w();
-        tf_broadcaster_->sendTransform(tf);
+    if (!suppress_conflicts_ && odom_nav_pub_.getNumSubscribers() > 0) {
+        odom_nav_pub_.publish(odom);
     }
+}
 
-    auto pub_cloud = [&](ros::Publisher& p, const CloudType::Ptr& c, const std::string& fid) {
-        if (p.getNumSubscribers() <= 0 || !c) return;
-        sensor_msgs::PointCloud2 m; pcl::toROSMsg(*c, m);
-        m.header.frame_id = fid; m.header.stamp = stamp; p.publish(m);
+void RosiwitInterface::publishTransform(const PreparedPose& p) {
+    if (suppress_conflicts_) return;
+    const Eigen::Quaterniond q(p.pose.rot);
+    geometry_msgs::TransformStamped tf;
+    tf.header.frame_id = engine_.worldFrame();
+    tf.child_frame_id = engine_.bodyFrame();
+    tf.header.stamp = p.stamp;
+    tf.transform.translation.x = p.pose.trans.x();
+    tf.transform.translation.y = p.pose.trans.y();
+    tf.transform.translation.z = p.pose.trans.z();
+    tf.transform.rotation.x = q.x();
+    tf.transform.rotation.y = q.y();
+    tf.transform.rotation.z = q.z();
+    tf.transform.rotation.w = q.w();
+    tf_broadcaster_->sendTransform(tf);
+}
+
+void RosiwitInterface::publishClouds(const SlamOutput& out, const PreparedPose& p) {
+    if (!p.new_pose) return;
+    auto pub_cloud = [&](ros::Publisher& pub, const CloudType::Ptr& cloud,
+                         const std::string& frame) {
+        if (pub.getNumSubscribers() <= 0 || !cloud) return;
+        sensor_msgs::PointCloud2 msg;
+        pcl::toROSMsg(*cloud, msg);
+        msg.header.frame_id = frame;
+        msg.header.stamp = p.stamp;
+        pub.publish(msg);
     };
-    if (new_pose && body_cloud) pub_cloud(body_cloud_pub_, body_cloud, engine_.bodyFrame());
-    if (new_pose && out.world_cloud)
-        pub_cloud(world_cloud_pub_, out.world_cloud, engine_.worldFrame());
+    if (p.body_cloud) pub_cloud(body_cloud_pub_, p.body_cloud, engine_.bodyFrame());
+    if (out.world_cloud) pub_cloud(world_cloud_pub_, out.world_cloud, engine_.worldFrame());
+}
 
-    if (new_pose && path_pub_.getNumSubscribers() > 0) {
-        geometry_msgs::PoseStamped ps;
-        ps.header.frame_id = engine_.worldFrame(); ps.header.stamp = stamp;
-        ps.pose.position.x = pose.trans.x();
-        ps.pose.position.y = pose.trans.y();
-        ps.pose.position.z = pose.trans.z();
-        ps.pose.orientation.x = q.x(); ps.pose.orientation.y = q.y();
-        ps.pose.orientation.z = q.z(); ps.pose.orientation.w = q.w();
-        path_.poses.push_back(ps);
-        // Path 不能无限长：超过上限丢弃最老的一小段，避免 vector 每次单删。
-        if (path_.poses.size() > kMaxPathPoses) {
-            const size_t drop = kMaxPathPoses / 10;
-            path_.poses.erase(path_.poses.begin(), path_.poses.begin() + drop);
-        }
-        path_.header.stamp = stamp;
-        // 整条 Path 序列化是 O(N)；可视化 1Hz 足够，不需 50Hz 重发。
-        if (last_path_pub_.isZero() ||
-            (ros::Time::now() - last_path_pub_).toSec() >= 1.0) {
-            path_pub_.publish(path_);
-            last_path_pub_ = ros::Time::now();
-        }
+void RosiwitInterface::publishPath(const PreparedPose& p) {
+    if (!p.new_pose || path_pub_.getNumSubscribers() <= 0) return;
+
+    const Eigen::Quaterniond q(p.pose.rot);
+    geometry_msgs::PoseStamped ps;
+    ps.header.frame_id = engine_.worldFrame();
+    ps.header.stamp = p.stamp;
+    ps.pose.position.x = p.pose.trans.x();
+    ps.pose.position.y = p.pose.trans.y();
+    ps.pose.position.z = p.pose.trans.z();
+    ps.pose.orientation.x = q.x();
+    ps.pose.orientation.y = q.y();
+    ps.pose.orientation.z = q.z();
+    ps.pose.orientation.w = q.w();
+    path_.poses.push_back(ps);
+    if (path_.poses.size() > kMaxPathPoses) {
+        const size_t drop = kMaxPathPoses / 10;
+        path_.poses.erase(path_.poses.begin(), path_.poses.begin() + drop);
     }
+    path_.header.stamp = p.stamp;
+    if (!last_path_pub_.isZero() &&
+        (ros::Time::now() - last_path_pub_).toSec() < 1.0) return;
+    path_pub_.publish(path_);
+    last_path_pub_ = ros::Time::now();
 }
 
 void RosiwitInterface::mapCB(const ros::TimerEvent&) {

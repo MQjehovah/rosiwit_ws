@@ -102,51 +102,28 @@ bool Ros1SlamInterface::handleModeSwitch(
     return false;   // 非法 mode: result 保持默认 0
 }
 
-bool Ros1SlamInterface::handleSwitchMap(
-    xzrobot_ros_dependency::SwitchMap::Request& req,
-    xzrobot_ros_dependency::SwitchMap::Response& res) {
-    // 切图不限流：允许用户连续切换，最后一次请求胜出。
-    // 后台加载旧图时若来了新请求，旧 job 完成后发现 generation 已过期，
-    // 不再应用旧图的定位状态；新 job 继续加载新图。
+Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
+    const std::string& base, const xzrobot_ros_dependency::SwitchMap::Request& req) {
+    MapSwitchContext ctx;
+    ctx.base = base;
 
-    // 分支 1: 参数不合法
-    if (req.map_dir.empty() || req.map_name.empty()) {
-        res.success = false;
-        return true;
-    }
-    // 分支 2: 同一张图且**核心确实在定位** -> 只重设初始位姿 + 转发 /switch_map_pro。
-    // 不能只看 legacy 自己的 slam_mode_: set_slam_mode idle 后核心已 idle，
-    // 但 timer 尚未刷新 slam_mode_ 时会误走这条分支，导致“切了但没定位输出”。
-    const bool core_is_localization = (engine_.pipelineMode() == "localization");
-    if (req.map_dir == curr_map_path_ && slam_mode_ == SlamMode::LOCALIZATION &&
-        core_is_localization) {
-        applyInitPose(req.initial_pose, true);
-        // /switch_map_pro 由外部感知/地图管理节点提供；实测它可能阻塞数秒并
-        // 返回 false，不能让它拖延/否决核心已经完成的同图切换。这里不再同步调用。
-        res.success = true;
-        return true;
-    }
-    // 分支 3: 换图
-    // 先"停用并清空"上一张图：核心置 idle（不再产出旧图位姿/不再消费定位帧），
-    // 清掉最近一次输出快照。随后后台加载新图，加载完成再切回 localization。
-    // 这是行业常见的 deactivate -> swap -> activate，而不是继续让旧图输出再靠 10Hz 重发掩盖。
+    // 1. 停用旧定位：核心 idle + 丢弃旧输出，之后任何残留输出都不能进入界面。
     if (engine_.algo()) {
         engine_.algo()->cancelMapLoad();
         engine_.algo()->setPipelineMode("idle");
     }
     engine_.clearLatestOutput();
-    const uint64_t switch_gen = ++map_switch_generation_;
+
+    ctx.generation = ++map_switch_generation_;
     relocating_ = true;
     map_switch_busy_.store(true);
-    const bool detect_ok = callSetDetectMode(0);
-    const std::string base = xzMapBase(req.map_dir);   // "/dir/map"
+    ctx.detect_ok = callSetDetectMode(0);
 
-    // 1) 先在 ROS 层把老地图的 PGM 发布出去。App/RViz 依赖 /map，
-    //    不能等核心解析完 25s 的 xzmap 才更新；PGM 的 127/128 会保持灰色未知区。
+    // 2. 先发布新图 PGM，App/RViz 不必等 xzmap 解析完成。
     rosiwit_slam::GridInfo static_grid;
-    const bool pgm_ok = interface_internal::loadGridPgm(base, static_grid) &&
-        static_grid.width > 0 && static_grid.height > 0;
-    if (pgm_ok) {
+    ctx.pgm_ok = interface_internal::loadGridPgm(base, static_grid) &&
+                 static_grid.width > 0 && static_grid.height > 0;
+    if (ctx.pgm_ok) {
         realtime_grid_map_ = toRosGrid(static_grid, kMapFrame);
         realtime_grid_map_area_ =
             static_cast<double>(static_grid.width) * static_grid.height *
@@ -158,11 +135,9 @@ bool Ros1SlamInterface::handleSwitchMap(
                   << " unknown=" << std::count(static_grid.data.begin(), static_grid.data.end(), -1)
                   << std::endl;
     }
+    static_map_valid_ = ctx.pgm_ok;
 
-    static_map_valid_ = pgm_ok;
-    // 切图默认显示地图零点 (0,0,0)，不保留上一张图的位姿。
-    // 核心已 idle + 输出快照已清空；这里同步清本层缓存，只发一次零点 slam/info，
-    // 之后等新图加载/定位结果，不再周期性重发。
+    // 3. 切图默认显示地图零点，清掉上一张图的位姿/高频状态。
     curr_pose_ = Xz3dPose();
     curr_pose_valid_ = false;
     last_new_pose_ros_ = ros::Time();
@@ -170,8 +145,6 @@ bool Ros1SlamInterface::handleSwitchMap(
     last_high_rate_tf_ = ros::Time();
     last_pose_stamp_ = 0.0;
 
-    // 2) 服务立即返回，避免 App 5s 超时；完整定位地图在后台串行加载。
-    res.success = detect_ok || pgm_ok;
     slam_mode_ = SlamMode::LOCALIZATION;
     curr_map_path_ = req.map_dir;
     curr_map_name_ = req.map_name;
@@ -180,50 +153,77 @@ bool Ros1SlamInterface::handleSwitchMap(
     odom_mon_wrong_prev_ = false;
     lost_monitor_.setMapLoaded(true);
     setWarningSuppression(true);
-    publishZeroPoseInfo();   // 立即发布零位姿，App 不必等核心加载完
+    publishZeroPoseInfo();   // 只发一次，之后由核心输出接管
+    return ctx;
+}
 
-    const geometry_msgs::PoseWithCovarianceStamped init_pose = req.initial_pose;
-    {
-        std::lock_guard<std::mutex> jobs_lk(map_switch_jobs_mtx_);
-        // 回收已完成 job，避免连续切图时 future 列表无限增长。
-        for (auto it = map_switch_jobs_.begin(); it != map_switch_jobs_.end();) {
-            if (it->valid() && it->wait_for(std::chrono::seconds(0)) ==
-                                   std::future_status::ready) {
-                try { it->get(); } catch (...) {}
-                it = map_switch_jobs_.erase(it);
-            } else {
-                ++it;
-            }
+void Ros1SlamInterface::startMapLoadJob(
+    const MapSwitchContext& ctx,
+    const geometry_msgs::PoseWithCovarianceStamped& init_pose) {
+    std::lock_guard<std::mutex> jobs_lk(map_switch_jobs_mtx_);
+    // 回收已完成 job，避免连续切图时 future 列表无限增长。
+    for (auto it = map_switch_jobs_.begin(); it != map_switch_jobs_.end();) {
+        if (it->valid() &&
+            it->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            try { it->get(); } catch (...) {}
+            it = map_switch_jobs_.erase(it);
+        } else {
+            ++it;
         }
-        map_switch_jobs_.push_back(std::async(std::launch::async,
-            [this, base, init_pose, switch_gen]() {
-                std::lock_guard<std::mutex> lk(map_switch_mtx_);
-                map_switch_busy_.store(true);
-                rosiwit_slam::MapData map_data;
-                const bool loaded = map_adapter::loadMapData(base, map_data) &&
-                                    engine_.algo() &&
-                                    engine_.algo()->loadLocalizationMapData(map_data);
-                if (switch_gen != map_switch_generation_.load()) {
-                    std::cout << "[ros1_slam] /switch_map: discard stale map load: "
-                              << base << std::endl;
-                    map_switch_busy_.store(false);
-                    return;
-                }
-                if (!loaded) {
-                    ROS_ERROR_STREAM("[ros1_slam] /switch_map background loadMap failed: "
-                                     << base);
-                    relocating_ = false;
-                    map_switch_busy_.store(false);
-                    return;
-                }
-                engine_.algo()->setPipelineMode("localization");
-                applyInitPose(init_pose, true);
+    }
+
+    map_switch_jobs_.push_back(std::async(std::launch::async,
+        [this, base = ctx.base, init_pose, switch_gen = ctx.generation]() {
+            std::lock_guard<std::mutex> lk(map_switch_mtx_);
+            map_switch_busy_.store(true);
+            rosiwit_slam::MapData map_data;
+            const bool loaded = map_adapter::loadMapData(base, map_data) &&
+                                engine_.algo() &&
+                                engine_.algo()->loadLocalizationMapData(map_data);
+            if (switch_gen != map_switch_generation_.load()) {
+                std::cout << "[ros1_slam] /switch_map: discard stale map load: "
+                          << base << std::endl;
+                map_switch_busy_.store(false);
+                return;
+            }
+            if (!loaded) {
+                ROS_ERROR_STREAM("[ros1_slam] /switch_map background loadMap failed: "
+                                 << base);
                 relocating_ = false;
                 map_switch_busy_.store(false);
-                std::cout << "[ros1_slam] /switch_map background localization map ready: "
-                          << base << std::endl;
-            }));
+                return;
+            }
+            engine_.algo()->setPipelineMode("localization");
+            applyInitPose(init_pose, true);
+            relocating_ = false;
+            map_switch_busy_.store(false);
+            std::cout << "[ros1_slam] /switch_map background localization map ready: "
+                      << base << std::endl;
+        }));
+}
+
+bool Ros1SlamInterface::handleSwitchMap(
+    xzrobot_ros_dependency::SwitchMap::Request& req,
+    xzrobot_ros_dependency::SwitchMap::Response& res) {
+    if (req.map_dir.empty() || req.map_name.empty()) {
+        res.success = false;
+        return true;
     }
+
+    // 同一张图且核心确实在定位：只重设初始位姿，不重载地图。
+    // 不能只看 slam_mode_：切 idle 后 timer 尚未刷新时会误走这里。
+    const bool core_is_localization = (engine_.pipelineMode() == "localization");
+    if (req.map_dir == curr_map_path_ && slam_mode_ == SlamMode::LOCALIZATION &&
+        core_is_localization) {
+        applyInitPose(req.initial_pose, true);
+        res.success = true;
+        return true;
+    }
+
+    // 换图：阶段一同步完成（服务立即返回），阶段二在后台加载 MapData。
+    MapSwitchContext ctx = beginMapSwitch(xzMapBase(req.map_dir), req);
+    startMapLoadJob(ctx, req.initial_pose);
+    res.success = ctx.detect_ok || ctx.pgm_ok;
     return true;
 }
 

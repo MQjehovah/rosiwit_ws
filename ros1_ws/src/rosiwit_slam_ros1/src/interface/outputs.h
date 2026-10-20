@@ -48,6 +48,20 @@ private:
     /// 挂在 engine 的 50Hz 泵上: 与重构前"同一个 processCB 里排空+发布"时序一致
     void onTick();
     void publishPose(const rosiwit_slam::SlamOutput& out);
+
+    /// 一次核心输出在 ROS 层的统一形态：base_link 位姿 + 可选 body_cloud。
+    struct PreparedPose {
+        rosiwit_slam::PoseStamped pose;
+        rosiwit_slam::CloudType::Ptr body_cloud;
+        ros::Time stamp;
+        bool new_pose = false;
+    };
+    PreparedPose preparePose(const rosiwit_slam::SlamOutput& out);
+    void publishOdometry(const PreparedPose& p);
+    void publishTransform(const PreparedPose& p);
+    void publishClouds(const rosiwit_slam::SlamOutput& out, const PreparedPose& p);
+    void publishPath(const PreparedPose& p);
+
     void mapCB(const ros::TimerEvent&);
 
     bool handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,

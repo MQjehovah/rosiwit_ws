@@ -138,10 +138,20 @@ private:
 
     void startPub();                 // legacy.cpp:333-371
     void publishCurrScan();          // legacy.cpp:966-1110
+    void publishLocalizationScan(const rosiwit_slam::CloudType& world, const ros::Time& stamp);
+    void publishMappingScan(const rosiwit_slam::CloudType& world, const ros::Time& stamp);
+    void publishRawInputScan();
     void publishMappingPath();       // legacy.cpp:840-889
     void publishRealtimeGridMap();   // legacy.cpp:891-910
     void publishPointMap();          // legacy.cpp:912-964
-    void publishCurrPose();          // legacy.cpp:1112-1211
+    void publishCurrPose();          // 位姿发布总入口 (只做模式分派/顺序)
+    /// 定位分支的发布结果：需要丢弃整个 tick / 本 tick 不发 slam/info / 正常发
+    enum class PoseTickResult { DropTick, NoInfo, Info };
+    PoseTickResult publishLocalizationPose(const rosiwit_slam::SlamOutput& out, bool have_out);
+    void publishMappingPose(const rosiwit_slam::SlamOutput& out, bool have_out);
+    void publishSlamInfoThrottled();
+    void publishHighRateLocalizationPose(bool info_published);
+    void publishStaticMapFallback();
     void publishLocationInfo();      // legacy.cpp:1823-1897
     /// 切图/未定位阶段的零点位姿 slam/info (1 = RECOVERING, 0,0,0)
     void publishZeroPoseInfo();
@@ -163,6 +173,18 @@ private:
     // ---- [T8] 8 个 service server ----
     bool handleModeSwitch(xzrobot_ros_dependency::SlamModeSwitchService::Request& req,
                           xzrobot_ros_dependency::SlamModeSwitchService::Response& res);
+    struct MapSwitchContext {
+        std::string base;
+        uint64_t generation = 0;
+        bool detect_ok = false;
+        bool pgm_ok = false;
+    };
+    /// 切图第一阶段：停旧核心/清旧输出/发预览/重置本层状态，服务可以立即返回。
+    MapSwitchContext beginMapSwitch(const std::string& base,
+                                    const xzrobot_ros_dependency::SwitchMap::Request& req);
+    /// 切图第二阶段：后台串行加载新图，generation 过期则丢弃。
+    void startMapLoadJob(const MapSwitchContext& ctx,
+                         const geometry_msgs::PoseWithCovarianceStamped& init_pose);
     bool handleSwitchMap(xzrobot_ros_dependency::SwitchMap::Request& req,
                          xzrobot_ros_dependency::SwitchMap::Response& res);
     bool handleRelocation(xzrobot_ros_dependency::Relocation::Request& req,

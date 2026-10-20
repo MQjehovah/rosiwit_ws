@@ -117,52 +117,60 @@ void Ros1SlamInterface::startPub() {
 void Ros1SlamInterface::publishCurrScan() {
     SlamOutput out;
     if (!engine_.latestOutput(out) || !out.world_cloud || out.world_cloud->empty()) return;
+
     const CloudType& world = *out.world_cloud;   // 核心给的就是 map 系下的当前帧
     const ros::Time stamp = out.pose.time > 0 ? ros::Time(out.pose.time) : ros::Time::now();
-
     if (slam_mode_ == SlamMode::LOCALIZATION) {
-        // scan_f_map: 抽稀到约 2000 + z∈(0.1,2) (legacy.cpp:982-1011 旧带 (0,2) 在
-        // "地面=0" 的车体系下成立; 我们 z_ref 有 ~7cm 标定偏差, 下界抬 0.1 防地面泄漏)。
-        // 先看订阅者：没有订阅时不做 shape/旧 PointCloud 转换。
-        const bool need_scan = ros1_pointcloud_puber_.getNumSubscribers() > 0;
-        const bool need_debug_cloud =
-            debug_publish_ && pointcloud_puber_.getNumSubscribers() > 0;
-        if (need_scan || need_debug_cloud) {
-            CloudType::Ptr shaped = scanShape(world, kLocZMax, 1, scan_ground_z_, kScanZMin);
-            if (!shaped->empty()) {
-                if (need_scan)
-                    ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
-                if (need_debug_cloud)
-                    pointcloud_puber_.publish(toPointCloud2(*shaped, kMapFrame, stamp));
-            }
-        }
-        // or_curr_scan_point: 原始输入帧, 抽稀倍率 x2, **不过滤 z** (legacy.cpp:1026-1058)。
-        // frame_id "map" 照抄旧实现 (xz_slam_ros1_interface.cpp:1053)。
-        if (or_pointcloud_puber_.getNumSubscribers() > 0) {
-            CloudType::Ptr raw_snapshot;
-            ros::Time raw_stamp;
-            {
-                std::lock_guard<std::mutex> lk(raw_input_mtx_);
-                raw_snapshot = raw_input_;
-                raw_stamp = raw_input_stamp_;
-            }
-            if (raw_snapshot && !raw_snapshot->empty()) {
-                CloudType::Ptr orc = scanShape(*raw_snapshot, -1.0, 2, scan_ground_z_);
-                if (!orc->empty())
-                    or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_stamp));
-            }
-        }
+        publishLocalizationScan(world, stamp);
+        publishRawInputScan();
     } else if (slam_mode_ == SlamMode::MAPPING) {
-        // scan_f_map: 抽稀到约 2000 + z∈(0.1,1) (legacy.cpp:1071-1096, 下界同理抬 0.1)
-        if (pointcloud_puber_.getNumSubscribers() > 0) {
-            pointcloud_puber_.publish(toPointCloud2(world, kMapFrame, stamp));
-        }
-        if (ros1_pointcloud_puber_.getNumSubscribers() > 0) {
-            CloudType::Ptr shaped = scanShape(world, kMapZMax, 1, scan_ground_z_, kScanZMin);
-            if (!shaped->empty())
-                ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
-        }
-        // or_curr_scan_point: 建图**不发** (legacy.cpp:1102 那行是注释掉的)
+        publishMappingScan(world, stamp);
+    }
+}
+
+void Ros1SlamInterface::publishLocalizationScan(const CloudType& world,
+                                                const ros::Time& stamp) {
+    // scan_f_map: 抽稀到约 2000 + z∈(0.1,2)；无人订阅时不做 shape/旧 PointCloud 转换。
+    const bool need_scan = ros1_pointcloud_puber_.getNumSubscribers() > 0;
+    const bool need_debug_cloud =
+        debug_publish_ && pointcloud_puber_.getNumSubscribers() > 0;
+    if (!need_scan && !need_debug_cloud) return;
+
+    CloudType::Ptr shaped = scanShape(world, kLocZMax, 1, scan_ground_z_, kScanZMin);
+    if (shaped->empty()) return;
+    if (need_scan)
+        ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
+    if (need_debug_cloud)
+        pointcloud_puber_.publish(toPointCloud2(*shaped, kMapFrame, stamp));
+}
+
+void Ros1SlamInterface::publishRawInputScan() {
+    // or_curr_scan_point: 原始输入帧，抽稀 x2，不过滤 z。
+    if (or_pointcloud_puber_.getNumSubscribers() <= 0) return;
+
+    CloudType::Ptr raw_snapshot;
+    ros::Time raw_stamp;
+    {
+        std::lock_guard<std::mutex> lk(raw_input_mtx_);
+        raw_snapshot = raw_input_;
+        raw_stamp = raw_input_stamp_;
+    }
+    if (!raw_snapshot || raw_snapshot->empty()) return;
+
+    CloudType::Ptr orc = scanShape(*raw_snapshot, -1.0, 2, scan_ground_z_);
+    if (!orc->empty())
+        or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_stamp));
+}
+
+void Ros1SlamInterface::publishMappingScan(const CloudType& world,
+                                           const ros::Time& stamp) {
+    if (pointcloud_puber_.getNumSubscribers() > 0) {
+        pointcloud_puber_.publish(toPointCloud2(world, kMapFrame, stamp));
+    }
+    if (ros1_pointcloud_puber_.getNumSubscribers() > 0) {
+        CloudType::Ptr shaped = scanShape(world, kMapZMax, 1, scan_ground_z_, kScanZMin);
+        if (!shaped->empty())
+            ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
     }
 }
 
