@@ -208,7 +208,10 @@ private:
     double realtime_grid_map_area_ = 0.0;
     bool static_map_valid_ = false;      // /switch_map 已加载 PGM，由 pose 定时器兜底重发
     ros::Time last_static_map_pub_;
-    bool relocating_ = false;                       // 旧 relocating_ (legacy.cpp:1843-1853)
+    bool curr_pose_valid_ = false;       // 用于定位 50Hz 高频重发
+    ros::Time last_new_pose_ros_;
+    ros::Time last_high_rate_pub_;
+    std::atomic<bool> relocating_{false};           // 旧 relocating_ (legacy.cpp:1843-1853)
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= config 的 map_resolution)
@@ -278,7 +281,7 @@ private:
                        srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_,
                        srv_dump_recorder_;
     std::string curr_map_path_;    // 旧 curr_map_path_
-    ros::Time last_switch_map_time_;   // /switch_map 的 10s 限流 (legacy.cpp:2121-2137)
+    std::atomic<uint64_t> map_switch_generation_{0};  // 最后一次切图请求胜出
     // ROS 层兼容：大图 xzmap 解析/关键帧重建在 aarch64 上可达 25s，
     // 不能让 /switch_map 服务线程被拖到 App 超时。PGM 先同步发布，
     // 完整定位地图在后台串行加载。

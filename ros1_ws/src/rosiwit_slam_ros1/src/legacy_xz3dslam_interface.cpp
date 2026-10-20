@@ -16,6 +16,7 @@
 #include "legacy_xz3dslam_interface.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -152,8 +153,21 @@ SlamMode LegacyXz3dSlamInterface::updateModeFromCore() {
     const std::string m = engine_.pipelineMode();
     if (m == "mapping")           slam_mode_ = SlamMode::MAPPING;
     else if (m == "localization") slam_mode_ = SlamMode::LOCALIZATION;
-    else if (m == "idle")         slam_mode_ = SlamMode::FREE;
-    else                          slam_mode_ = SlamMode::UNKNOWN;
+    else if (m == "idle") {
+        slam_mode_ = SlamMode::FREE;
+        // 切图过渡期间 core 会短暂 idle；此时不能清掉刚设置的地图状态。
+        if (!map_switch_busy_.load() && !relocating_.load()) {
+            curr_map_name_ = "NULL";
+            curr_map_path_.clear();
+            realtime_grid_map_area_ = 0.0;
+            static_map_valid_ = false;
+            curr_pose_valid_ = false;
+            realtime_grid_map_ = nav_msgs::OccupancyGrid();
+            last_static_map_pub_ = ros::Time();
+        }
+    } else {
+        slam_mode_ = SlamMode::UNKNOWN;
+    }
     return slam_mode_;
 }
 
@@ -211,6 +225,9 @@ void LegacyXz3dSlamInterface::resetCoreAndCaches() {
     realtime_grid_map_ = nav_msgs::OccupancyGrid();
     realtime_grid_map_area_ = 0.0;
     curr_pose_ = LegacyPose();
+    curr_pose_valid_ = false;
+    last_new_pose_ros_ = ros::Time();
+    last_high_rate_pub_ = ros::Time();
     last_pose_stamp_ = 0.0;
     mapping_path_msg_ = nav_msgs::Path();
     debug_map_published_ = false;
@@ -300,6 +317,7 @@ void LegacyXz3dSlamInterface::initServer() {
 #include "legacy_xz3dslam_interface.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -496,6 +514,7 @@ void LegacyXz3dSlamInterface::publishPointMap() {
 #include "legacy_xz3dslam_interface.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -583,6 +602,8 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
                 ps.pose.orientation.z = curr_pose_.q.z();
                 ps.pose.orientation.w = curr_pose_.q.w();
                 pose_puber_.publish(ps);
+                curr_pose_valid_ = true;
+                last_new_pose_ros_ = ros::Time::now();
 
                 // INIT 陷阱的 latch 就靠这里: 核心在定位模式下**只在 LOCALIZED 时**
                 // 才产出 has_new_pose 的输出 (slam_pipeline.cpp:178-182),
@@ -634,6 +655,34 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
     if (publish_info) publishLocationInfo();
     // legacy.cpp:1208-1210: 非 FREE 且 use_tf_ 才发 (FREE 下不发)
     if (slam_mode_ != SlamMode::FREE && use_tf_) sendTransform();
+
+    // 定位 50Hz 高频输出: 核心匹配约 10Hz，底盘/导航若需要更平滑的
+    // /curr_localization_pose 与 map->odom，在两次 10Hz 更新之间重发
+    // 最近一次位姿（最多 0.3s，超时后交给 LostMonitor 判定）。
+    if (slam_mode_ == SlamMode::LOCALIZATION && curr_pose_valid_) {
+        const ros::Time now = ros::Time::now();
+        const bool fresh = !last_new_pose_ros_.isZero() &&
+                           (now - last_new_pose_ros_).toSec() <= 0.30;
+        const bool due = last_high_rate_pub_.isZero() ||
+                         (now - last_high_rate_pub_).toSec() >= 0.02;
+        if (fresh && due) {
+            if (!publish_info) {
+                geometry_msgs::PoseStamped ps;
+                ps.header.frame_id = kMapFrame;
+                ps.header.stamp = now;
+                ps.pose.position.x = curr_pose_.x;
+                ps.pose.position.y = curr_pose_.y;
+                ps.pose.position.z = curr_pose_.z;
+                ps.pose.orientation.x = curr_pose_.q.x();
+                ps.pose.orientation.y = curr_pose_.q.y();
+                ps.pose.orientation.z = curr_pose_.q.z();
+                ps.pose.orientation.w = curr_pose_.q.w();
+                pose_puber_.publish(ps);
+                if (use_tf_) sendTransform();
+            }
+            last_high_rate_pub_ = now;
+        }
+    }
 
     // 兼容兜底: 部分实机上 realtime_grid_map_timer_ 在切定位后不再触发
     // (定时器本身无异常，表现是 /map 一直停在切换瞬间)。用 100Hz 的
@@ -783,6 +832,7 @@ void LegacyXz3dSlamInterface::sendTransform() {
 #include "legacy_xz3dslam_interface.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -940,6 +990,7 @@ void LegacyXz3dSlamInterface::timerPublishWarningCode(const ros::TimerEvent&) {
 #include "legacy_xz3dslam_interface.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -1037,14 +1088,9 @@ bool LegacyXz3dSlamInterface::handleModeSwitch(
 bool LegacyXz3dSlamInterface::handleSwitchMap(
     xzrobot_ros_dependency::SwitchMap::Request& req,
     xzrobot_ros_dependency::SwitchMap::Response& res) {
-    // 10s 限流 —— 注意这在 **/switch_map** 里, 不在 /slam/mode_switch (legacy.cpp:2121-2137)
-    const ros::Time now = ros::Time::now();
-    if (!last_switch_map_time_.isZero() && (now - last_switch_map_time_).toSec() < 10.0) {
-        addWarningCode(20003005);   // set mode operation frequent
-        res.success = false;
-        return false;
-    }
-    last_switch_map_time_ = now;
+    // 切图不限流：允许用户连续切换，最后一次请求胜出。
+    // 后台加载旧图时若来了新请求，旧 job 完成后发现 generation 已过期，
+    // 不再应用旧图的定位状态；新 job 继续加载新图。
 
     // 分支 1: 参数不合法
     if (req.map_dir.empty() || req.map_name.empty()) {
@@ -1058,11 +1104,15 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     if (req.map_dir == curr_map_path_ && slam_mode_ == SlamMode::LOCALIZATION &&
         core_is_localization) {
         applyInitPose(req.initial_pose, true);
-        res.success = callSwitchMapPro(req);
+        // /switch_map_pro 由外部感知/地图管理节点提供；实测它可能阻塞数秒并
+        // 返回 false，不能让它拖延/否决核心已经完成的同图切换。这里不再同步调用。
+        res.success = true;
         return true;
     }
     // 分支 3: 换图
+    const uint64_t switch_gen = ++map_switch_generation_;
     relocating_ = true;
+    map_switch_busy_.store(true);
     const bool detect_ok = callSetDetectMode(0);
     const std::string base = legacyMapBase(req.map_dir);   // "/dir/map"
 
@@ -1085,6 +1135,9 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     }
 
     static_map_valid_ = pgm_ok;
+    curr_pose_valid_ = false;
+    last_new_pose_ros_ = ros::Time();
+    last_high_rate_pub_ = ros::Time();
 
     // 2) 服务立即返回，避免 App 5s 超时；完整定位地图在后台串行加载。
     res.success = detect_ok || pgm_ok;
@@ -1100,11 +1153,27 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     const geometry_msgs::PoseWithCovarianceStamped init_pose = req.initial_pose;
     {
         std::lock_guard<std::mutex> jobs_lk(map_switch_jobs_mtx_);
+        // 回收已完成 job，避免连续切图时 future 列表无限增长。
+        for (auto it = map_switch_jobs_.begin(); it != map_switch_jobs_.end();) {
+            if (it->valid() && it->wait_for(std::chrono::seconds(0)) ==
+                                   std::future_status::ready) {
+                try { it->get(); } catch (...) {}
+                it = map_switch_jobs_.erase(it);
+            } else {
+                ++it;
+            }
+        }
         map_switch_jobs_.push_back(std::async(std::launch::async,
-            [this, base, init_pose]() {
+            [this, base, init_pose, switch_gen]() {
                 std::lock_guard<std::mutex> lk(map_switch_mtx_);
                 map_switch_busy_.store(true);
                 const bool loaded = engine_.algo() && engine_.algo()->loadMap(base);
+                if (switch_gen != map_switch_generation_.load()) {
+                    std::cout << "[legacy_iface] /switch_map: discard stale map load: "
+                              << base << std::endl;
+                    map_switch_busy_.store(false);
+                    return;
+                }
                 if (!loaded) {
                     ROS_ERROR_STREAM("[legacy_iface] /switch_map background loadMap failed: "
                                      << base);

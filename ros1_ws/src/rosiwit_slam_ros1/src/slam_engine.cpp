@@ -11,7 +11,6 @@
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
-#include <pcl/console/print.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/point_cloud2_iterator.h>
 
@@ -314,17 +313,14 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
               << " imu_in_car_frame_yaw_livox=" << lc.imu_in_car_frame_yaw_livox
               << " (M13: 外参/单位按核心 YAML, 不采纳旧实现的 9.81 与安装角)" << std::endl;
     if (std::fabs(acc_scale - 1.0) < 1e-12) {
-        std::cout << "[compat] WARN acc_scale=1.0 —— 若雷达内置 IMU 的加速度是 g 单位, "
-                     "这里应为 9.81 (待办项 C: 首次上机必须核对本行)" << std::endl;
+        std::cout << "[compat] INFO acc_scale=1.0（本车万集 IMU 实测为 m/s^2；"
+                     "若换用 g 单位传感器需改为 9.81）" << std::endl;
     }
 }
 
 } // namespace
 
 SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
-    // 万集点云没有 normal_* 字段; PointXYZINormal 的 fromROSMsg 会在每帧
-    // 打 4 行 PCL 警告，实机 10Hz 会把日志刷爆。只保留 ERROR。
-    pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
     // ---- input_profile: 默认 legacy, 老接口优先; 仅选择输入配置, 不再决定输出接口 ----
     pnh_.param<std::string>("input_profile", input_profile_, "legacy");
     pnh_.param<bool>("online_calibration", online_calib_enabled_, true);
@@ -518,8 +514,44 @@ SlamEngine::~SlamEngine() = default;
 CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
                                    int filter_num, double min_r, double max_r) {
     CloudType::Ptr cloud(new CloudType());
-    pcl::fromROSMsg(*msg, *cloud);
     filter_num = std::max(1, filter_num);
+
+    // 万集点云没有 normal_x/y/z 字段；直接 fromROSMsg 到 PointXYZINormal
+    // 会每帧打印 "Failed to find match for field 'normal_*'”，并污染日志。
+    // 这里按它实际有的 x/y/z/intensity 读取，再拷贝到核心点类型，
+    // normal 字段保持默认零值。
+    bool has_intensity = false;
+    for (const auto& field : msg->fields) {
+        if (field.name == "intensity") { has_intensity = true; break; }
+    }
+    if (has_intensity) {
+        pcl::PointCloud<pcl::PointXYZI> tmp;
+        pcl::fromROSMsg(*msg, tmp);
+        cloud->resize(tmp.size());
+        for (size_t i = 0; i < tmp.size(); ++i) {
+            PointType& dst = cloud->points[i];
+            dst.x = tmp.points[i].x;
+            dst.y = tmp.points[i].y;
+            dst.z = tmp.points[i].z;
+            dst.intensity = tmp.points[i].intensity;
+        }
+        cloud->width = static_cast<uint32_t>(cloud->size());
+        cloud->height = 1;
+        cloud->is_dense = false;
+    } else {
+        pcl::PointCloud<pcl::PointXYZ> tmp;
+        pcl::fromROSMsg(*msg, tmp);
+        cloud->resize(tmp.size());
+        for (size_t i = 0; i < tmp.size(); ++i) {
+            PointType& dst = cloud->points[i];
+            dst.x = tmp.points[i].x;
+            dst.y = tmp.points[i].y;
+            dst.z = tmp.points[i].z;
+        }
+        cloud->width = static_cast<uint32_t>(cloud->size());
+        cloud->height = 1;
+        cloud->is_dense = false;
+    }
 
     // ⚠ **逐点时间必须手动补到 curvature** —— 核心的运动畸变补偿(IMUProcessor::undistort)用的是
     //    point.curvature/1000 = 该点相对帧起始的秒数, 并要求点按时间升序。
@@ -595,6 +627,14 @@ void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
 
 void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
     if (!algo_) return;
+
+    // FREE/idle 不跑算法，也不做昂贵的 PointCloud2 -> PCL 转换。
+    // 仍调用 input_seen_hook_，保持旧接口的雷达频率统计/告警。
+    if (algo_raw_ && algo_raw_->getPipelineMode() == "idle") {
+        if (input_seen_hook_) input_seen_hook_(true);
+        return;
+    }
+
     LidarFrame f;
     f.cloud = ros2Pcl(msg, cfg_.lidar_filter_num, cfg_.lidar_min_range, cfg_.lidar_max_range);
     if (!f.cloud || f.cloud->empty()) return;

@@ -3,6 +3,7 @@
 #include "io/xzmap_writer.h"
 #include <yaml-cpp/yaml.h>
 #include <iostream>
+#include <fstream>
 #include <algorithm>
 #include <cmath>
 #include <pcl/common/transforms.h>
@@ -307,7 +308,15 @@ bool SlamPipeline::loadMapForLocalization(const std::string& path, const PoseSta
     // 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml, **没有 PCD** ——
     // 所以这里不能把"PCD 加载失败"当成致命错误 (旧实现 localiza_ptr_->run("<dir>/map")
     // 也只看它自己那份 xzmap)。定位入口 setMap() 会在没有 PCD 时从关键帧重建基准点云。
-    if (m_map_mgr && !m_map_mgr->loadMap(path)) {
+    // 只有真的存在 PCD 才尝试加载；xzmap-only 老地图是正常兼容路径，
+    // 不应先让 PcdMapManager 打一条 "Load failed" ERROR。
+    std::ifstream pcd_probe(path);
+    const bool has_pcd = pcd_probe.good();
+    if (m_map_mgr && has_pcd) {
+        if (!m_map_mgr->loadMap(path)) {
+            std::cout << "[SlamPipeline] PCD load failed: " << path << std::endl;
+        }
+    } else if (!has_pcd) {
         std::cout << "[SlamPipeline] no PCD at " << path
                   << " (legacy xzmap-only map); localization map is loaded from <base>.xzmap"
                   << std::endl;

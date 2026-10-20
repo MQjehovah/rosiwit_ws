@@ -81,6 +81,12 @@ target_compile_options(rosiwit_slam_ros1_node PRIVATE -pipe -pthread)
 target_link_libraries(rosiwit_slam_ros1_node rosiwit_slam_ros1_lib)
 add_dependencies(rosiwit_slam_ros1_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+# 历史地图兼容工具: 从 map.xzmap 重新生成带 unknown 的 PGM
+add_executable(repair_map_grid tools/repair_map_grid.cpp)
+target_link_libraries(repair_map_grid rosiwit_slam_ros1_lib)
+add_dependencies(repair_map_grid ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+install(TARGETS repair_map_grid RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
 # ==================== 测试 ====================
 if(CATKIN_ENABLE_TESTING)
     catkin_add_gtest(test_legacy_config test/test_legacy_config.cpp)
