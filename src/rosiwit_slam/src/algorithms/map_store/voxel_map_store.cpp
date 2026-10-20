@@ -234,6 +234,26 @@ void VoxelMapStore::decay(double now) {
     if (changed) ++m_rev;
 }
 
+CloudType::Ptr VoxelMapStore::exportCloud() const {
+    CloudType::Ptr out(new CloudType());
+    out->reserve(m_size);
+    for (const auto& kv : m_cells) {
+        if (!kv.second.pts) continue;
+        *out += *kv.second.pts;
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    out->is_dense = false;
+    return out;
+}
+
+bool VoxelMapStore::mergeFrom(const VoxelMapStore& other) {
+    CloudType::Ptr cloud = other.exportCloud();
+    if (!cloud || cloud->empty()) return false;
+    insert(cloud, -1.0);
+    return true;
+}
+
 bool VoxelMapStore::save(const std::string& path) const {
     if (m_cells.empty()) return false;
     FILE* fp = std::fopen(path.c_str(), "wb");

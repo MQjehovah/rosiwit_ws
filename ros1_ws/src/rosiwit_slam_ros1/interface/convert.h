@@ -24,11 +24,11 @@ namespace rosiwit_slam_ros1 {
 /// 直接往 nav_msgs/OccupancyGrid::data 里按 v*cols+u 填的 (legacy.cpp:1737-1747),
 /// 而它自己的 log-odds 栅格的 v 轴方向就是"从最小 y 起"。见设计文档 M3。
 /// 注意: `origin.position.z = map_area * 1e-5` 是**调用方**加的 (legacy.cpp:1749)。
-nav_msgs::OccupancyGrid toLegacyGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame);
+nav_msgs::OccupancyGrid toRosGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame);
 
 /// rosiwit 新接口的 `/map` 与 `grid_map` 行序: **竖直翻转** (row 0 = 最大 y)。
 /// 值域保留核心原样 (0/100/-1)。
-nav_msgs::OccupancyGrid toFlippedGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame);
+nav_msgs::OccupancyGrid toFlippedRosGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame);
 
 /// 组装 `slam/info` (设计文档 §5.3 字段表)。
 /// `update_request` 恒 0; `matching_degree` 恒 0 —— D3 已知偏差
@@ -72,12 +72,12 @@ sensor_msgs::PointCloud toOldPointCloud(const rosiwit_slam::CloudType& c,
 /// **注意这不是"机器人的 yaw"**: 对 `R = Rot(Z,θ)` 而言 `R(0,1) = -sinθ`、`R(0,0) = cosθ`,
 /// 所以本函数返回 **`-θ`**; 旧实现紧接着用 `AngleAxis(-yaw, Z)` (legacy.cpp:1922) 再取负,
 /// 两者合起来正好还原成 `Rot(Z,θ)`。所以"取 yaw"与"用 yaw"必须成对照抄, 单独看会以为符号错了。
-double legacyYawFromRot(const Eigen::Matrix3d& R);
+double xzYawFromRot(const Eigen::Matrix3d& R);
 
 /// **标准航向角** (map 系下绕 Z 逆时针为正): `atan2(R(1,0), R(0,0))`。
 /// 旧 `slam_info.robot_pose.theta` 用的 `curr_pose.yaw` 就是它 —— 旁证: legacy.cpp:1172-1183
 /// 拿 yaw 做 `dx=0.06cos(yaw) / dy=0.06sin(yaw)` 的航向偏移, 并按 `sin(yaw/2)/cos(yaw/2)`
-/// 造 Z 轴四元数, 两者都是标准航向约定。注意它恒等于 `-legacyYawFromRot(R)`
+/// 造 Z 轴四元数, 两者都是标准航向约定。注意它恒等于 `-xzYawFromRot(R)`
 /// (后者是 Eigen 的 `atan2(R(0,1),R(0,0))` 约定, 旧 TF 里再取一次负才还原)。
 double stdYawFromRot(const Eigen::Matrix3d& R);
 
@@ -90,7 +90,7 @@ double stdYawFromRot(const Eigen::Matrix3d& R);
 ///      (地面在 -0.898m), 用绝对 z 会把 0~0.9m 的墙面全砍掉, 与栅格的
 ///      0.1~2.0m(相对地面)高度带对不上。传 `-t_lb_.z()` 即可。
 /// 这是下游(导航/感知/可视化)习惯的数据形态, 不能省。
-rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
+rosiwit_slam::CloudType::Ptr scanShape(const rosiwit_slam::CloudType& in,
                                              double z_max,
                                              int downsample_multiplier = 1,
                                              double z_ref = 0.0,

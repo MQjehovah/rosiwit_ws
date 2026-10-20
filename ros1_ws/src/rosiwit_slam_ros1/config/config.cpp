@@ -2,7 +2,7 @@
 // 旧 xz_3d_slam 配置装载的实现 —— 逐条照抄旧行为, 不允许"顺手改正"
 // 对齐: legacy.cpp:32-43 / 1373-1407 / 1409-1708, xz_slam_ros1_node.cpp:32-44
 // ============================================================================
-#include "legacy_config.h"
+#include "config.h"
 
 #include <yaml-cpp/yaml.h>
 
@@ -48,7 +48,7 @@ T getOr(const YAML::Node& conf, const std::string& key, const T& fallback) {
     try {
         return conf[key].as<T>();
     } catch (const std::exception& e) {
-        ROS_WARN_STREAM("[legacy_config] key '" << key << "' has unexpected type (" << e.what()
+        ROS_WARN_STREAM("[xz3d_config] key '" << key << "' has unexpected type (" << e.what()
                                                << "), falling back to default");
         return fallback;
     }
@@ -64,12 +64,12 @@ std::string loadSensorConfig(const std::string& path, const std::string& model,
             if (conf && conf.IsMap() && conf["type_3d"]) config_type = conf["type_3d"].as<std::string>();
             if (config_type == "Livox") config_type = "Livox_Mid360";
         } catch (const std::exception& e) {
-            ROS_WARN_STREAM("[legacy_config] failed to parse sensor_config (" << e.what()
+            ROS_WARN_STREAM("[xz3d_config] failed to parse sensor_config (" << e.what()
                             << "), falling back to type_3d=Livox_Mid360: " << path);
         }
     } else {
         ROS_WARN_STREAM(
-            "[legacy_config] sensor_config not readable, falling back to type_3d=Livox_Mid360: "
+            "[xz3d_config] sensor_config not readable, falling back to type_3d=Livox_Mid360: "
             << path);
     }
     std::cout << "config_type=" << config_type << std::endl;
@@ -91,7 +91,7 @@ std::string loadSensorConfig(const std::string& path, const std::string& model,
 }
 
 /// legacy.cpp:1419-1452 —— 主配置 (优先 proj, 兜底 pkg) + /opt 深合并覆盖 + laser_params.<base> 子树合并
-YAML::Node loadMainConf(const LegacyConfPaths& paths, const std::string& laser_type) {
+YAML::Node loadMainConf(const Xz3dConfPaths& paths, const std::string& laser_type) {
     YAML::Node conf;
     bool loaded = false;
 
@@ -99,9 +99,9 @@ YAML::Node loadMainConf(const LegacyConfPaths& paths, const std::string& laser_t
         try {
             conf = YAML::LoadFile(paths.proj_conf_json);
             loaded = true;
-            std::cout << "[legacy_config] 主配置: " << paths.proj_conf_json << std::endl;
+            std::cout << "[xz3d_config] 主配置: " << paths.proj_conf_json << std::endl;
         } catch (const std::exception& e) {
-            ROS_WARN_STREAM("[legacy_config] failed to parse main conf (" << e.what()
+            ROS_WARN_STREAM("[xz3d_config] failed to parse main conf (" << e.what()
                             << "): " << paths.proj_conf_json);
         }
     }
@@ -109,14 +109,14 @@ YAML::Node loadMainConf(const LegacyConfPaths& paths, const std::string& laser_t
         try {
             conf = YAML::LoadFile(paths.pkg_conf_json);
             loaded = true;
-            std::cout << "[legacy_config] 主配置(兜底): " << paths.pkg_conf_json << std::endl;
+            std::cout << "[xz3d_config] 主配置(兜底): " << paths.pkg_conf_json << std::endl;
         } catch (const std::exception& e) {
-            ROS_WARN_STREAM("[legacy_config] failed to parse fallback conf (" << e.what()
+            ROS_WARN_STREAM("[xz3d_config] failed to parse fallback conf (" << e.what()
                              << "): " << paths.pkg_conf_json);
         }
     }
     if (!loaded) {
-        ROS_WARN_STREAM("[legacy_config] main conf missing, using built-in defaults (proj="
+        ROS_WARN_STREAM("[xz3d_config] main conf missing, using built-in defaults (proj="
                         << paths.proj_conf_json << " pkg=" << paths.pkg_conf_json << ")");
     }
 
@@ -124,9 +124,9 @@ YAML::Node loadMainConf(const LegacyConfPaths& paths, const std::string& laser_t
     if (fileReadable(paths.opt_slam_json)) {
         try {
             conf = deepMerge(conf, YAML::LoadFile(paths.opt_slam_json));
-            std::cout << "[legacy_config] 已深合并覆盖配置: " << paths.opt_slam_json << std::endl;
+            std::cout << "[xz3d_config] 已深合并覆盖配置: " << paths.opt_slam_json << std::endl;
         } catch (const std::exception& e) {
-            ROS_WARN_STREAM("[legacy_config] failed to parse override conf (" << e.what()
+            ROS_WARN_STREAM("[xz3d_config] failed to parse override conf (" << e.what()
                             << "): " << paths.opt_slam_json);
         }
     }
@@ -141,7 +141,7 @@ YAML::Node loadMainConf(const LegacyConfPaths& paths, const std::string& laser_t
         const YAML::Node lp = conf["laser_params"];
         if (lp.IsMap() && lp[base_type]) {
             conf = deepMerge(conf, lp[base_type]);
-            std::cout << "[legacy_config] laser_params 已合并: " << base_type << std::endl;
+            std::cout << "[xz3d_config] laser_params 已合并: " << base_type << std::endl;
         }
     }
     return conf;
@@ -153,7 +153,7 @@ bool isSkywalker50(const std::string& model) { return model == "XZ-SW50"; }
 
 bool isSkywalkerGT(const std::string& model) { return model == "XZ-SWGT"; }
 
-std::string legacyMapBase(const std::string& map_dir) {
+std::string xzMapBase(const std::string& map_dir) {
     std::string p = map_dir;
     // 1) 去掉结尾的 '/'
     while (p.size() > 1 && p.back() == '/') p.pop_back();
@@ -178,8 +178,8 @@ std::string legacyMapBase(const std::string& map_dir) {
     return p + "/map";
 }
 
-LegacyConfig LegacyConfig::load(const LegacyConfPaths& paths, const std::string& machine_model) {
-    LegacyConfig c;
+Xz3dConfig Xz3dConfig::load(const Xz3dConfPaths& paths, const std::string& machine_model) {
+    Xz3dConfig c;
 
     // --- 1. sensor_config.json + 机型 (legacy.cpp:35-37) ---
     c.laser_type = loadSensorConfig(paths.opt_sensor_json, machine_model, c.laser_sub_name,
@@ -256,10 +256,10 @@ LegacyConfig LegacyConfig::load(const LegacyConfPaths& paths, const std::string&
     // --- 7. 装载之后的与运算 (legacy.cpp:43) ---
     c.use_delete_pts = c.use_delete_pts && isSkywalker50(machine_model);
 
-    std::cout << "[legacy_config] machine_model='" << machine_model << "' laser_type='" << c.laser_type
+    std::cout << "[xz3d_config] machine_model='" << machine_model << "' laser_type='" << c.laser_type
               << "' laser_sub='" << c.laser_sub_name << "' imu_sub='" << c.imu_sub_name
               << "' slam_init_type='" << c.slam_init_type << "'" << std::endl;
-    std::cout << "[legacy_config] effective params: loc_z_min = " << c.loc_z_min
+    std::cout << "[xz3d_config] effective params: loc_z_min = " << c.loc_z_min
               << ", loc_z_max = " << c.loc_z_max << ", mapping_z_min = " << c.mapping_z_min
               << ", mapping_z_max = " << c.mapping_z_max << ", yaw_calib(rad) = " << c.yaw_calib
               << ", use_delete_pts = " << (c.use_delete_pts ? 1 : 0)

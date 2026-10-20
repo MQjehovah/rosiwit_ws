@@ -63,7 +63,7 @@ private:
 
     ros::NodeHandle nh_, pnh_;
     SlamEngine& engine_;
-    const bool legacy_;   // engine_.legacyProfile() 的快照
+    const bool suppress_conflicts_;   // engine_.legacyProfile() 的快照
 
     ros::Publisher odom_pub_, odom_nav_pub_, path_pub_, body_cloud_pub_, world_cloud_pub_,
                    global_map_pub_, grid_map_pub_, map_pub_, calib_pub_;

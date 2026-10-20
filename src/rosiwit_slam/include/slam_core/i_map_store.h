@@ -57,6 +57,9 @@ public:
 
     virtual bool save(const std::string& path) const = 0;
     virtual bool load(const std::string& path) = 0;
+
+    /// 全量点云快照（供 MapData 导出 / 通用地图格式转换）
+    virtual CloudType::Ptr exportCloud() const { return nullptr; }
 };
 
 } // namespace rosiwit_slam

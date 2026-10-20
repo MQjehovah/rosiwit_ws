@@ -29,8 +29,8 @@ namespace rosiwit_slam_ros1 {
 
 using namespace rosiwit_slam;
 
-LegacyConfPaths defaultLegacyPaths() {
-    LegacyConfPaths p;
+Xz3dConfPaths defaultXz3dPaths() {
+    Xz3dConfPaths p;
     // 旧实现 (xz_3d_slam/CMakeLists.txt:24/26):
     //   install 分支  PROJECT_PATH = /opt/ros/melodic/share/xz_3d_slam
     //   其余分支      PROJECT_PATH = ${PROJECT_SOURCE_DIR}
@@ -51,7 +51,7 @@ LegacyConfPaths defaultLegacyPaths() {
     std::ifstream probe(old_conf);
     p.proj_conf_json = probe.good() ? old_conf : (pkg + "/conf/slam_conf.json");
     std::cout << "[slam_engine] legacy main conf source: " << p.proj_conf_json << std::endl;
-    // 旧实现只有一个主配置来源。T1 的 LegacyConfig 留了 proj(优先)/pkg(兜底) 两级,
+    // 旧实现只有一个主配置来源。T1 的 Xz3dConfig 留了 proj(优先)/pkg(兜底) 两级,
     // 这里让二者指向同一份文件。见计划 §5.6。
     p.pkg_conf_json = p.proj_conf_json;
     p.opt_sensor_json = "/opt/xzrobot/configs/sensor_config.json";
@@ -63,7 +63,7 @@ namespace {
 
 /// 给核心写一份 override YAML: 文本复制基底, 末尾追加实际生效的 r_il/t_il / bbs_mount_r。
 /// legacy profile 额外写 `map_directory: "/"` (M8/D9); 新接口不写, 保持原有相对路径语义。
-std::string writeLegacyOverrideYaml(const std::string& base_yaml,
+std::string writeXz3dOverrideYaml(const std::string& base_yaml,
                                     const Eigen::Matrix3d& r_il,
                                     const Eigen::Vector3d& t_il,
                                     bool write_extrinsic,
@@ -105,7 +105,7 @@ std::string writeLegacyOverrideYaml(const std::string& base_yaml,
                "# PcdMapManager 是 map_dir_ + \"/\" + name; 置成 \"/\" 让拼接退化为绝对路径。\n"
                "map_directory: \"/\"\n";
     }
-    // 雷达-IMU 外参: 由启动时按 TF 推导 (见 computeLegacyExtrinsic), 写在这里覆盖基底配置。
+    // 雷达-IMU 外参: 由启动时按 TF 推导 (见 computeXz3dExtrinsic), 写在这里覆盖基底配置。
     // write_extrinsic=false 表示 TF 推导失败 -> 不写, 让基底配置里的值生效。
     if (write_extrinsic) {
         char buf[512];
@@ -136,7 +136,7 @@ std::string writeLegacyOverrideYaml(const std::string& base_yaml,
 
 } // namespace  <-- 临时收起匿名 namespace: 成员函数必须定义在 rosiwit_slam_ros1 里
 
-bool SlamEngine::computeLegacyExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
+bool SlamEngine::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
                                        std::string& source) {
     // 帧名可配; 默认都是 lidar —— 本机点云与 IMU 由同一个万集 SDK 节点发布, frame_id 相同
     std::string lidar_frame = "lidar", imu_frame = "lidar";
@@ -293,7 +293,7 @@ namespace {  // 重新打开匿名 namespace, 供下面的 printCompatDiagnostic
 /// 因为"完全没位姿"最常见的两个原因就是加速度单位(acc_scale)与雷达-IMU 外参(r_il/t_il)。
 /// 用 std::cout + endl (ROS_INFO 在 roslaunch 下是块缓冲的, 看不到)。
 void printCompatDiagnostics(const std::string& base_yaml, const std::string& injected_yaml,
-                            const LegacyConfig& lc) {
+                            const Xz3dConfig& lc) {
     double acc_scale = 1.0;                  // 核心默认 (fast_lio2/map_builder/commons.h:47)
     std::string r_il = "(缺省)", t_il = "(缺省)";
     try {
@@ -383,10 +383,10 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     }
 
     // ---- legacy profile: 旧配置决定输入话题名 (M13: 外参/单位仍取核心 YAML) ----
-    if (legacyProfile()) {
+    if (xzProfile()) {
         std::string model;
         nh_.param<std::string>("/machine/model", model, "");
-        legacy_cfg_ = LegacyConfig::load(defaultLegacyPaths(), model);
+        xz_cfg_ = Xz3dConfig::load(defaultXz3dPaths(), model);
         // 旧实现 startSub (legacy.cpp:200-207) 选输入话题靠的是 **laser_type**,
         // 不是 imu_sub_name/laser_sub_name:
         //   mid360 / new_mid360 -> "livox/imu" + "livox/lidar"
@@ -394,14 +394,14 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         // 这一步很关键: 发行 conf 的顶层 laser_sub_name 是 "vanjee_points722",
         // 但对 mid360 机型旧实现**根本不看它** —— 照 laser_sub_name 订阅会在真机上收不到数据。
         // (D4: livox/lidar 在我们这边是 sensor_msgs/PointCloud2, 不是 livox 的 CustomMsg。)
-        const std::string& lt = legacy_cfg_.laser_type;
+        const std::string& lt = xz_cfg_.laser_type;
         if (lt == "mid360" || lt == "new_mid360") {
             cfg_.imu_topic = "livox/imu";
             cfg_.lidar_topic = "livox/lidar";
         } else {
             // 空值时保留核心 YAML 里的名字 (不应发生, 但别把订阅名清成空串)
-            if (!legacy_cfg_.imu_sub_name.empty())   cfg_.imu_topic   = legacy_cfg_.imu_sub_name;
-            if (!legacy_cfg_.laser_sub_name.empty()) cfg_.lidar_topic = legacy_cfg_.laser_sub_name;
+            if (!xz_cfg_.imu_sub_name.empty())   cfg_.imu_topic   = xz_cfg_.imu_sub_name;
+            if (!xz_cfg_.laser_sub_name.empty()) cfg_.lidar_topic = xz_cfg_.laser_sub_name;
         }
         std::cout << "[slam_engine] legacy laser_type='" << lt << "' -> input topics: imu="
                   << cfg_.imu_topic << " lidar=" << cfg_.lidar_topic << std::endl;
@@ -417,7 +417,7 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         Eigen::Matrix3d r_il = Eigen::Matrix3d::Identity();
         Eigen::Vector3d t_il = Eigen::Vector3d::Zero();
         std::string extr_src;
-        const bool have_extr = computeLegacyExtrinsic(r_il, t_il, extr_src);
+        const bool have_extr = computeXz3dExtrinsic(r_il, t_il, extr_src);
         if (!have_extr) extr_src = "config (core yaml)";
         // base_link <- imu/lidar 先取一次(TF): 输出换算与 BBS 投影都要用.
         computeBaseFrames(/*blocking=*/true);
@@ -444,7 +444,7 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
             std::cout << "[compat] mount extra rpy(deg)=[" << ex_roll << " " << ex_pitch
                       << " " << ex_yaw << "] applied (experimental)" << std::endl;
         }
-        config_path_ = writeLegacyOverrideYaml(base, r_il, t_il, have_extr,
+        config_path_ = writeXz3dOverrideYaml(base, r_il, t_il, have_extr,
                                               base_lidar_.valid ? &r_bl_used : nullptr,
                                               /*write_map_dir=*/true);
         std::cout << "[compat] extrinsic source = " << extr_src << std::endl;
@@ -455,7 +455,7 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
                           r_il(0,0), r_il(0,1), r_il(0,2), r_il(1,0), r_il(1,1), r_il(1,2),
                           r_il(2,0), r_il(2,1), r_il(2,2), t_il.x(), t_il.y(), t_il.z());
             std::cout << eb << std::endl;
-        }        printCompatDiagnostics(base, config_path_, legacy_cfg_);
+        }        printCompatDiagnostics(base, config_path_, xz_cfg_);
     } else {
         // 行业标准: 算法用 IMU body; r_il/t_il 是 IMU<-lidar 外参, 由 ROS1 层从 TF 推导后注入.
         std::string base = config_path_;
@@ -465,11 +465,11 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         Eigen::Matrix3d r_il = Eigen::Matrix3d::Identity();
         Eigen::Vector3d t_il = Eigen::Vector3d::Zero();
         std::string extr_src;
-        const bool have_extr = computeLegacyExtrinsic(r_il, t_il, extr_src);
+        const bool have_extr = computeXz3dExtrinsic(r_il, t_il, extr_src);
         if (!have_extr) extr_src = "config (core yaml)";
         computeBaseFrames(/*blocking=*/true);
         Eigen::Matrix3d r_bl = base_lidar_.R;
-        config_path_ = writeLegacyOverrideYaml(base, r_il, t_il, have_extr,
+        config_path_ = writeXz3dOverrideYaml(base, r_il, t_il, have_extr,
                                               base_lidar_.valid ? &r_bl : nullptr,
                                               /*write_map_dir=*/false);
         std::cout << "[slam_engine] core body=IMU, extrinsic source = " << extr_src
@@ -487,9 +487,9 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     imu_sub_  = nh_.subscribe(cfg_.imu_topic, 1000, &SlamEngine::imuCB, this);
     lidar_sub_ = nh_.subscribe(cfg_.lidar_topic, 100, &SlamEngine::lidarCB, this);
     init_pose_sub_ = nh_.subscribe("/initialpose", 10, &SlamEngine::initialPoseCB, this);
-    // 轮式里程计: legacy profile 下由 LegacyXz3dSlamInterface 独占订阅 (它无条件喂核心),
+    // 轮式里程计: legacy profile 下由 Ros1SlamInterface 独占订阅 (它无条件喂核心),
     // 引擎这里就不再重复订阅, 免得同一份 /odom 被注入两次。
-    if (odom_enabled && !legacyProfile())
+    if (odom_enabled && !xzProfile())
         odom_sub_ = nh_.subscribe(cfg_.odom_topic, 100, &SlamEngine::odomCB, this);
     if (vo_enabled) vo_sub_ = nh_.subscribe(cfg_.vo_topic, 100, &SlamEngine::voCB, this);
     if (absolute_enabled) absolute_sub_ = nh_.subscribe(cfg_.absolute_topic, 100, &SlamEngine::absoluteCB, this);

@@ -29,6 +29,8 @@ public:
     size_t size() const override { return m_size; }
     bool save(const std::string& path) const override;
     bool load(const std::string& path) override;
+    CloudType::Ptr exportCloud() const override;
+    bool mergeFrom(const VoxelMapStore& other);
 
 private:
     struct Cell {

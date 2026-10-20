@@ -2,7 +2,7 @@
 // RosiwitInterface 实现 —— 逐字搬自原 rosiwit_slam_ros1_node.cpp 的
 // 发布器 / 服务 / TF 部分, 仅按 M5/M3 加 profile 抑制。
 // ============================================================================
-#include "rosiwit_interface.h"
+#include "outputs.h"
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -18,10 +18,10 @@ namespace rosiwit_slam_ros1 {
 RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine,
                                    bool suppress_conflicts)
     : nh_(nh), pnh_(pnh), engine_(engine),
-      legacy_(suppress_conflicts || engine.legacyProfile()) {
+      suppress_conflicts_(suppress_conflicts || engine.xzProfile()) {
     // ---- 发布 ----
     odom_pub_ = nh_.advertise<nav_msgs::Odometry>("lio_odom", 1000);
-    if (!legacy_) {
+    if (!suppress_conflicts_) {
         // M5: legacy profile 下不发 `odom` 别名 —— 连 advertise 都不做,
         // 免得 `rosnode info` 里多出一条永远不出数据的发布者 (旧系统里
         // /odom 由 robot_localization 提供)。
@@ -33,7 +33,7 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
     global_map_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("cloud_map", 10, true);
     grid_map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("grid_map", 1);
     calib_pub_ = nh_.advertise<std_msgs::String>("slam_calibration", 1, true);
-    if (!legacy_) {
+    if (!suppress_conflicts_) {
         // legacy profile 下 /map 由旧接口独占 (M3)
         map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("map", 1, true);
     }
@@ -41,7 +41,7 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
     // ---- TF ----
     // 非 legacy 才发: legacy 要自己发动态 map->odom (旧实现在 legacy.cpp:1899-1936),
     // 静态同边会打架; odom->base_link 在旧系统里由 robot_localization 提供。
-    if (!legacy_) {
+    if (!suppress_conflicts_) {
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>();
         static_tf_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>();
         geometry_msgs::TransformStamped stf;
@@ -103,10 +103,10 @@ void RosiwitInterface::publishPose(const SlamOutput& out) {
     odom.twist.twist.linear.z = vel_body.z();
     odom_pub_.publish(odom);
     // M5: legacy profile 下不发 `odom` 别名
-    if (!legacy_ && odom_nav_pub_.getNumSubscribers() > 0) odom_nav_pub_.publish(odom);
+    if (!suppress_conflicts_ && odom_nav_pub_.getNumSubscribers() > 0) odom_nav_pub_.publish(odom);
 
     // M5: legacy profile 下不发任何新 TF
-    if (!legacy_) {
+    if (!suppress_conflicts_) {
         geometry_msgs::TransformStamped tf;
         tf.header.frame_id = engine_.worldFrame(); tf.child_frame_id = engine_.bodyFrame();
         tf.header.stamp = stamp;
@@ -160,7 +160,7 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
     }
     // grid_map (+ map, 仅非冲突模式)
     const bool want_grid = is_loc || grid_map_pub_.getNumSubscribers() > 0 ||
-                           (!legacy_ && map_pub_.getNumSubscribers() > 0);
+                           (!suppress_conflicts_ && map_pub_.getNumSubscribers() > 0);
     if (want_grid) {
         GridInfo gi;
         // 必须走 getRealtimeGrid, 它会按当前观测重建栅格; 只读 getGridInfo
@@ -179,7 +179,7 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
             // 旧 PGM 的图像坐标翻转只在存盘/读盘层做, 不能在这里翻.
             grid.data = gi.data;
             grid_map_pub_.publish(grid);
-            if (!legacy_) map_pub_.publish(grid);
+            if (!suppress_conflicts_) map_pub_.publish(grid);
             grid_published_ = true;
         }
     }
@@ -234,6 +234,7 @@ bool RosiwitInterface::handleSaveGridMap(rosiwit_slam_ros1::SaveGridMap::Request
 
 bool RosiwitInterface::handleSetMode(rosiwit_slam_ros1::SetSlamMode::Request& req,
                                      rosiwit_slam_ros1::SetSlamMode::Response& res) {
+    if (engine_.algo() && req.mode == "idle") engine_.algo()->cancelMapLoad();
     if (engine_.algo() && req.mode == "idle") engine_.algo()->cancelMapLoad();
     res.success = engine_.algo() && engine_.algo()->setPipelineMode(req.mode);
     res.message = res.success ? "ok" : "unsupported";

@@ -6,10 +6,10 @@
 #include <fstream>
 #include <sstream>
 #include <opencv2/opencv.hpp>
-#include "legacy_xz3dslam_interface.h"
+#include "ros1_slam_interface.h"
 
 namespace rosiwit_slam_ros1 {
-namespace legacy_internal {
+namespace interface_internal {
 
 constexpr const char* kMapFrame = "map";
 // 旧实现的 z 过滤上界: 定位 2.0 (legacy.cpp:989) / 建图 1.0 (legacy.cpp:1078)
@@ -35,11 +35,11 @@ inline void writeMapThumbnails(const std::string& base) {
     const std::string pgm = base + ".pgm";
     const cv::Mat img = cv::imread(pgm, cv::IMREAD_GRAYSCALE);
     if (img.empty()) {
-        ROS_WARN_STREAM("[legacy_iface] cannot read " << pgm << " -> skip jpg/thumb");
+        ROS_WARN_STREAM("[ros1_slam] cannot read " << pgm << " -> skip jpg/thumb");
         return;
     }
     if (!cv::imwrite(base + ".jpg", img)) {
-        ROS_WARN_STREAM("[legacy_iface] imwrite failed: " << base + ".jpg");
+        ROS_WARN_STREAM("[ros1_slam] imwrite failed: " << base + ".jpg");
     }
     cv::Mat thumb;
     cv::resize(img, thumb, cv::Size(0, 0), 0.2, 0.2);
@@ -47,16 +47,16 @@ inline void writeMapThumbnails(const std::string& base) {
     const std::string dir = (slash == std::string::npos) ? std::string(".") : base.substr(0, slash);
     const std::string tpath = dir + "/thumb.png";
     if (!cv::imwrite(tpath, thumb)) {
-        ROS_WARN_STREAM("[legacy_iface] imwrite failed: " << tpath);
+        ROS_WARN_STREAM("[ros1_slam] imwrite failed: " << tpath);
     }
-    std::cout << "[legacy_iface] wrote " << base << ".jpg and " << tpath << " (thumb "
+    std::cout << "[ros1_slam] wrote " << base << ".jpg and " << tpath << " (thumb "
               << thumb.cols << "x" << thumb.rows << ")" << std::endl;
 }
 
 /// 读取旧地图的 PGM+YAML。旧 PGM 可能带 `#` 注释行，不能直接用
 /// 简单的 `>>` 解析（会把注释当成宽高）。这是 ROS1 兼容层逻辑：
 /// 内部栅格 row0=最小 y，文件 row0=最大 y，读入时翻转。
-inline bool loadLegacyGridPgm(const std::string& base, rosiwit_slam::GridInfo& out) {
+inline bool loadGridPgm(const std::string& base, rosiwit_slam::GridInfo& out) {
     const cv::Mat img = cv::imread(base + ".pgm", cv::IMREAD_GRAYSCALE);
     if (img.empty()) return false;
     double resolution = 0.05;
@@ -101,5 +101,5 @@ inline bool loadLegacyGridPgm(const std::string& base, rosiwit_slam::GridInfo& o
     return true;
 }
 
-} // namespace legacy_internal
+} // namespace interface_internal
 } // namespace rosiwit_slam_ros1

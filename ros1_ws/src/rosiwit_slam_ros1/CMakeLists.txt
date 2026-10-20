@@ -56,17 +56,19 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam
 
 # ==================== 接口层静态库 (便于 gtest 直接链接) ====================
 set(ROSIWIT_ROS1_LIB_SOURCES
-    src/legacy_config.cpp
-    src/realtime_grid.cpp
-    src/lost_monitor.cpp
-    src/slam_engine.cpp
-    src/rosiwit_interface.cpp
-    src/legacy_convert.cpp
-    src/legacy_xz3dslam_interface.cpp   # 旧接口单文件实现 (assembly/cloud/pose/warning/services)
+    config/config.cpp
+    interface/realtime_grid.cpp
+    monitor/lost_monitor.cpp
+    engine/slam_engine.cpp
+    interface/outputs.cpp
+    interface/convert.cpp
+    interface/ros1_slam_interface.cpp
     # T6 追加 src/legacy_subscribers.cpp 等
 )
 add_library(rosiwit_slam_ros1_lib ${ROSIWIT_ROS1_LIB_SOURCES})
-target_include_directories(rosiwit_slam_ros1_lib PUBLIC src ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
+target_include_directories(rosiwit_slam_ros1_lib PUBLIC
+    src config engine interface monitor
+    ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 target_compile_options(rosiwit_slam_ros1_lib PRIVATE -pipe -pthread)
 target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam ${OpenCV_LIBS})
 add_dependencies(rosiwit_slam_ros1_lib ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
@@ -76,7 +78,7 @@ install(TARGETS rosiwit_slam_ros1_lib
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 # ==================== ROS1 节点 (薄) ====================
-add_executable(rosiwit_slam_ros1_node src/rosiwit_slam_ros1_node.cpp)
+add_executable(rosiwit_slam_ros1_node src/main.cpp)
 target_compile_options(rosiwit_slam_ros1_node PRIVATE -pipe -pthread)
 target_link_libraries(rosiwit_slam_ros1_node rosiwit_slam_ros1_lib)
 add_dependencies(rosiwit_slam_ros1_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
@@ -89,11 +91,11 @@ install(TARGETS repair_map_grid RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINA
 
 # ==================== 测试 ====================
 if(CATKIN_ENABLE_TESTING)
-    catkin_add_gtest(test_legacy_config test/test_legacy_config.cpp)
-    if(TARGET test_legacy_config)
-        target_link_libraries(test_legacy_config rosiwit_slam_ros1_lib)
+    catkin_add_gtest(test_config test/test_config.cpp)
+    if(TARGET test_config)
+        target_link_libraries(test_config rosiwit_slam_ros1_lib)
         # fixture 路径以宏传入, 不依赖测试进程的 CWD
-        target_compile_definitions(test_legacy_config PRIVATE
+        target_compile_definitions(test_config PRIVATE
             LEGACY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures")
     endif()
 
@@ -120,9 +122,9 @@ if(CATKIN_ENABLE_TESTING)
         target_link_libraries(test_online_calibrator rosiwit_slam_ros1_lib)
     endif()
 
-    catkin_add_gtest(test_legacy_convert test/test_legacy_convert.cpp)
-    if(TARGET test_legacy_convert)
-        target_link_libraries(test_legacy_convert rosiwit_slam_ros1_lib)
+    catkin_add_gtest(test_convert test/test_convert.cpp)
+    if(TARGET test_convert)
+        target_link_libraries(test_convert rosiwit_slam_ros1_lib)
     endif()
 
     catkin_add_gtest(test_gicp_matcher_guard test/test_gicp_matcher_guard.cpp)

@@ -9,7 +9,7 @@
 #include <memory>
 
 #include "slam_engine.h"
-#include "slam_ros1_interface.h"
+#include "facade.h"
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "rosiwit_slam_ros1");

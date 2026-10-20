@@ -1,7 +1,7 @@
 // ============================================================================
-// legacy_convert 单测 (计划 T5 §5.1 的 6 条 + 3 条补充)
+// convert 单测 (计划 T5 §5.1 的 6 条 + 3 条补充)
 // ============================================================================
-#include "legacy_convert.h"
+#include "convert.h"
 
 #include <gtest/gtest.h>
 
@@ -41,7 +41,7 @@ PointType mkPoint(double x, double y, double z) {
 // 1
 TEST(LegacyConvert, LegacyGridKeepsRowOrder) {
     const GridInfo gi = makeGrid();
-    const auto g = toLegacyGrid(gi, "map");
+    const auto g = toRosGrid(gi, "map");
 
     EXPECT_EQ(g.data.size(), gi.data.size());
     EXPECT_TRUE(std::equal(g.data.begin(), g.data.end(), gi.data.begin()));
@@ -53,7 +53,7 @@ TEST(LegacyConvert, LegacyGridKeepsRowOrder) {
 // 2
 TEST(LegacyConvert, FlippedGridFlipsRows) {
     const GridInfo gi = makeGrid();
-    const auto g = toFlippedGrid(gi, "map");
+    const auto g = toFlippedRosGrid(gi, "map");
 
     // 首行(3 个) == 原最后一行
     EXPECT_EQ(static_cast<int>(g.data[0]), 13);
@@ -68,7 +68,7 @@ TEST(LegacyConvert, FlippedGridFlipsRows) {
 // 3
 TEST(LegacyConvert, LegacyGridHeaderAndInfo) {
     const GridInfo gi = makeGrid();
-    const auto g = toLegacyGrid(gi, "map");
+    const auto g = toRosGrid(gi, "map");
 
     EXPECT_EQ(g.header.frame_id, "map");
     EXPECT_NEAR(g.info.resolution, 0.5, 1e-12);
@@ -147,10 +147,10 @@ TEST(LegacyConvert, WarningJsonMultiCode) {
 }
 
 // 6 —— 钉住符号。对 R = Rot(Z,θ): R(0,1) = -sinθ, R(0,0) = cosθ,
-//      所以 legacyYawFromRot(Rot(Z,+π/2)) == -π/2; 旧实现随后用 AngleAxis(-yaw, Z)
+//      所以 xzYawFromRot(Rot(Z,+π/2)) == -π/2; 旧实现随后用 AngleAxis(-yaw, Z)
 //      再取负, 合起来还原成 Rot(Z,θ) (legacy.cpp:1921-1924)。
 TEST(LegacyConvert, LegacyYawFromIdentityIsZero) {
-    EXPECT_NEAR(legacyYawFromRot(Eigen::Matrix3d::Identity()), 0.0, 1e-12);
+    EXPECT_NEAR(xzYawFromRot(Eigen::Matrix3d::Identity()), 0.0, 1e-12);
 }
 
 TEST(LegacyConvert, LegacyYawFromPlus90degIsMinusHalfPi) {
@@ -159,7 +159,7 @@ TEST(LegacyConvert, LegacyYawFromPlus90degIsMinusHalfPi) {
     EXPECT_NEAR(R(0, 1), -1.0, 1e-12);   // 不是 +1
     EXPECT_NEAR(R(0, 0), 0.0, 1e-12);
 
-    const double yaw = legacyYawFromRot(R);
+    const double yaw = xzYawFromRot(R);
     EXPECT_NEAR(yaw, -M_PI / 2.0, 1e-12);
 
     // 旧 TF 的完整套路: 再转 -yaw 就还原成 R 里的那个 +90°
@@ -168,12 +168,12 @@ TEST(LegacyConvert, LegacyYawFromPlus90degIsMinusHalfPi) {
     EXPECT_TRUE(R2.isApprox(R, 1e-12));
 }
 
-// 6b —— 标准航向角 (slam_info.robot_pose.theta 用它) 与 legacyYawFromRot 反号
+// 6b —— 标准航向角 (slam_info.robot_pose.theta 用它) 与 xzYawFromRot 反号
 TEST(LegacyConvert, StdYawIsNegativeOfLegacyYaw) {
     const Eigen::Matrix3d R =
         Eigen::AngleAxisd(M_PI / 3.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
     EXPECT_NEAR(stdYawFromRot(R), M_PI / 3.0, 1e-12);
-    EXPECT_NEAR(stdYawFromRot(R), -legacyYawFromRot(R), 1e-12);
+    EXPECT_NEAR(stdYawFromRot(R), -xzYawFromRot(R), 1e-12);
     EXPECT_NEAR(stdYawFromRot(Eigen::Matrix3d::Identity()), 0.0, 1e-12);
 }
 
@@ -185,35 +185,35 @@ TEST(LegacyConvert, ScanShapeFiltersByZ) {
     in.push_back(mkPoint(0, 0, 0.5));    // 留下
     in.push_back(mkPoint(0, 0, 3.0));    // 高于 z_max -> 丢
 
-    auto out = legacyScanShape(in, 2.0);
+    auto out = scanShape(in, 2.0);
     ASSERT_EQ(out->size(), 1u);
     EXPECT_NEAR(out->points[0].z, 0.5, 1e-6);
 
     // 建图的 z 上界是 1.0
-    auto out_map = legacyScanShape(in, 1.0);
+    auto out_map = scanShape(in, 1.0);
     ASSERT_EQ(out_map->size(), 1u);
 }
 
 TEST(LegacyConvert, ScanShapeZMaxNonPositiveMeansNoFilter) {
     CloudType in;
     for (double z = -1.0; z <= 3.0; z += 0.5) in.push_back(mkPoint(0, 0, z));
-    auto out = legacyScanShape(in, -1.0);   // 不过滤 (旧实现的"原始帧"就是这样)
+    auto out = scanShape(in, -1.0);   // 不过滤 (旧实现的"原始帧"就是这样)
     EXPECT_EQ(out->size(), in.size());
 }
 
 TEST(LegacyConvert, ScanShapeDownsamplesToAbout2000) {
     CloudType in;
     for (int i = 0; i < 10000; ++i) in.push_back(mkPoint(0, 0, 0.5));  // 全部在 z 带内
-    auto out = legacyScanShape(in, 2.0);           // down_sample = round(10000/2000) = 5
+    auto out = scanShape(in, 2.0);           // down_sample = round(10000/2000) = 5
     EXPECT_EQ(out->size(), 2000u);
 
-    auto out2 = legacyScanShape(in, 2.0, 2);       // 再乘 2 -> 每 10 个取 1
+    auto out2 = scanShape(in, 2.0, 2);       // 再乘 2 -> 每 10 个取 1
     EXPECT_EQ(out2->size(), 1000u);
 
     // 少于 2000 点时 down_sample 固定为 1, 一个都不抽
     CloudType small;
     for (int i = 0; i < 100; ++i) small.push_back(mkPoint(0, 0, 0.5));
-    EXPECT_EQ(legacyScanShape(small, 2.0)->size(), 100u);
+    EXPECT_EQ(scanShape(small, 2.0)->size(), 100u);
 }
 
 // 8 —— 老类型转换确实产出的不是 PointCloud2

@@ -20,7 +20,7 @@
 namespace rosiwit_slam_ros1 {
 
 /// 旧实现的四个配置来源。都会逐个尝试, 缺失只告警。
-struct LegacyConfPaths {
+struct Xz3dConfPaths {
     std::string proj_conf_json;  // PROJECT_PATH/conf/slam_conf.json      (优先)
     std::string pkg_conf_json;   // 本包 conf/slam_conf.json              (兜底)
     std::string opt_sensor_json; // /opt/xzrobot/configs/sensor_config.json
@@ -28,7 +28,7 @@ struct LegacyConfPaths {
 };
 
 /// 旧配置的装载结果。字段名去掉旧代码的下划线后缀, 语义一一对应。
-struct LegacyConfig {
+struct Xz3dConfig {
     // --- 来自 sensor_config.json + 机型 (legacy.cpp:1373-1407) ---
     // mid360 | new_mid360 | vanjee | new_vanjee | new_robosense | ""(都不命中)
     std::string laser_type = "";
@@ -90,7 +90,7 @@ struct LegacyConfig {
     /// 任何文件缺失/解析失败只告警, 用内置默认值。
     /// 返回后在内部完成: use_delete_pts &&= isSkywalker50(machine_model)
     /// 并把生效值打到启动日志。
-    static LegacyConfig load(const LegacyConfPaths& paths, const std::string& machine_model);
+    static Xz3dConfig load(const Xz3dConfPaths& paths, const std::string& machine_model);
 };
 
 /// legacy.cpp:12-20 原样
@@ -99,6 +99,6 @@ bool isSkywalkerGT(const std::string& model);
 
 /// 旧地图路径契约 (设计文档 §5.10 A): base = (map_dir 去掉尾斜杠) + "/map"
 /// 基名恒为 "map" (map.pcd / map.xzmap / map.pgm / map.yaml), map_name 只是显示标签。
-std::string legacyMapBase(const std::string& map_dir);
+std::string xzMapBase(const std::string& map_dir);
 
 } // namespace rosiwit_slam_ros1

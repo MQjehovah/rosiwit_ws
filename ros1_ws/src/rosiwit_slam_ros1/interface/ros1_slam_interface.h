@@ -53,7 +53,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
-#include "legacy_config.h"
+#include "config.h"
 #include "lost_monitor.h"
 #include "realtime_grid.h"
 #include "slam_engine.h"
@@ -65,15 +65,15 @@ namespace rosiwit_slam_ros1 {
 enum class SlamMode { FREE, MAPPING, LOCALIZATION, UNKNOWN };
 
 /// 旧实现的 xzSlamPose3D 里我们真正用到的那几项
-struct LegacyPose {
+struct Xz3dPose {
     double x = 0.0, y = 0.0, z = 0.0, yaw = 0.0;
     Eigen::Quaterniond q = Eigen::Quaterniond::Identity();
 };
 
-class LegacyXz3dSlamInterface {
+class Ros1SlamInterface {
 public:
-    LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine);
-    ~LegacyXz3dSlamInterface();
+    Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine);
+    ~Ros1SlamInterface();
 
     // ---- [T6] 订阅侧往这里喂数据 ----
     /// 每收到一帧**原始输入**(未配准、在传感器自身坐标系)点云就调一次:
@@ -87,7 +87,7 @@ public:
     // ---- [T8] 服务侧改模式 ----
     /// 旧实现改模式就是给 slam_mode_ 赋值, 然后靠 localiza_ptr_/mapping_ptr_ 是否为空决定行为。
     /// 我们只有**一个核心**, 所以这里同时把模式同步给核心 (FREE -> "idle")。
-    void setModeFromLegacy(SlamMode m);
+    void setModeFromConfig(SlamMode m);
     SlamMode slamMode() const { return slam_mode_; }
 
     // ---- [T8/T11] 地图与定位 latch ----
@@ -193,14 +193,14 @@ private:
 
     ros::NodeHandle nh_, pnh_;
     SlamEngine& engine_;
-    const LegacyConfig& cfg_;        // engine_.legacyConfig()
+    const Xz3dConfig& cfg_;        // engine_.xzConfig()
     const bool debug_publish_;       // 旧 debug_publish_ 开关
     const bool is_debug_;
     const bool use_tf_;
 
     SlamMode slam_mode_ = SlamMode::FREE;
     std::string curr_map_name_ = "";   // legacy.cpp:93
-    LegacyPose curr_pose_;
+    Xz3dPose curr_pose_;
     double last_pose_stamp_ = 0.0;         // 同帧去重 (legacy.cpp:1116/1121)
 
     bool have_imu_ = false, have_laser_ = false;    // legacy 的 get_imu_data_/get_laser_data_

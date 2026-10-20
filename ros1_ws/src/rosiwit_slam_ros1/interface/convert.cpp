@@ -1,7 +1,7 @@
 // ============================================================================
 // 旧 3d_slam 消息/数值转换的实现 (计划 T5 §5.1)
 // ============================================================================
-#include "legacy_convert.h"
+#include "convert.h"
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -61,14 +61,14 @@ void fillGridHeader(nav_msgs::OccupancyGrid& g, const rosiwit_slam::GridInfo& gi
 
 } // namespace
 
-nav_msgs::OccupancyGrid toLegacyGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame) {
+nav_msgs::OccupancyGrid toRosGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame) {
     nav_msgs::OccupancyGrid g;
     fillGridHeader(g, gi, frame);
     g.data.assign(gi.data.begin(), gi.data.end());   // 行序原样, 不翻转
     return g;
 }
 
-nav_msgs::OccupancyGrid toFlippedGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame) {
+nav_msgs::OccupancyGrid toFlippedRosGrid(const rosiwit_slam::GridInfo& gi, const std::string& frame) {
     nav_msgs::OccupancyGrid g;
     fillGridHeader(g, gi, frame);
     const int w = gi.width, h = gi.height;
@@ -147,7 +147,7 @@ sensor_msgs::PointCloud toOldPointCloud(const rosiwit_slam::CloudType& c,
     return pc;
 }
 
-double legacyYawFromRot(const Eigen::Matrix3d& R) {
+double xzYawFromRot(const Eigen::Matrix3d& R) {
     return std::atan2(R(0, 1), R(0, 0));
 }
 
@@ -155,7 +155,7 @@ double stdYawFromRot(const Eigen::Matrix3d& R) {
     return std::atan2(R(1, 0), R(0, 0));
 }
 
-rosiwit_slam::CloudType::Ptr legacyScanShape(const rosiwit_slam::CloudType& in,
+rosiwit_slam::CloudType::Ptr scanShape(const rosiwit_slam::CloudType& in,
                                              double z_max,
                                              int downsample_multiplier,
                                              double z_ref,

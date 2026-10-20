@@ -9,7 +9,7 @@
 //
 // **行为契约**: 默认 legacy (老接口优先); input_profile 仅选择输入配置
 // (话题名、发布频率、TF、服务名都不变)。`legacy` 只额外做一件事:
-// 输入话题名改由旧配置(见 T1 的 LegacyConfig)决定。
+// 输入话题名改由旧配置(见 T1 的 Xz3dConfig)决定。
 // ============================================================================
 #pragma once
 
@@ -39,7 +39,7 @@
 #include "slam_core/online_calibrator.h"
 #include "slam_core/calibration_controller.h"
 
-#include "legacy_config.h"
+#include "config.h"
 
 namespace rosiwit_slam_ros1 {
 
@@ -47,7 +47,7 @@ namespace rosiwit_slam_ros1 {
 /// 旧实现用的是编译期宏 PROJECT_PATH (xz_3d_slam/CMakeLists.txt:24/26):
 /// 装机后 = /opt/ros/melodic/share/xz_3d_slam, 开发时 = 源码目录。
 /// ros::package::getPath 恰好两种情况都能给出正确目录, 所以用它等价替换。
-LegacyConfPaths defaultLegacyPaths();
+Xz3dConfPaths defaultXz3dPaths();
 
 class SlamEngine {
 public:
@@ -64,10 +64,10 @@ public:
 
     // ---- profile ----
     const std::string& inputProfile() const { return input_profile_; }
-    bool legacyProfile() const { return input_profile_ == "legacy"; }
+    bool xzProfile() const { return input_profile_ == "legacy"; }
     const std::string& configPath() const { return config_path_; }
     /// 仅 legacy profile 有意义 (否则是默认构造的全默认值)
-    const LegacyConfig& legacyConfig() const { return legacy_cfg_; }
+    const Xz3dConfig& xzConfig() const { return xz_cfg_; }
 
     // ---- 帧名 / 话题名 ----
     const std::string& worldFrame() const { return cfg_.world_frame; }
@@ -166,7 +166,7 @@ private:
 
     std::string input_profile_ = "legacy";
     std::string config_path_;
-    LegacyConfig legacy_cfg_;
+    Xz3dConfig xz_cfg_;
 
     std::unique_ptr<rosiwit_slam::ISlamAlgorithm> algo_;
     rosiwit_slam::ISlamAlgorithm* algo_raw_ = nullptr;
@@ -199,7 +199,7 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     /// 推导 T_(imu <- lidar). 顺序: ① 两帧同名 -> 恒等; ② TF 里查得到 -> 用 TF;
     /// ③ 都没有 -> 回落到核心 YAML 里的值。source 说明用了哪一种。
-    bool computeLegacyExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t, std::string& source);
+    bool computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t, std::string& source);
 
 public:
     /// base_link <- 核心 body(IMU) 与 base_link <- lidar 的安装变换.
