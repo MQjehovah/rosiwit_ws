@@ -72,7 +72,7 @@ global:
     imu_topic: /imu  # IMU话题
     lidar_topic: /lidar # 雷达点云话题
     odom_topic: /odom # 轮式里程计话题
-    lidar_filter_num: 2 # 雷达点抽稀倍数 (3 -> 2, 保留更多墙体点)
+    lidar_filter_num: 3 # 雷达点抽稀倍数 (对齐 Livox)
     lidar_min_range: 0.5 # 雷达最小有效距离(m)
     lidar_max_range: 100.0 # 雷达最大有效距离(m)
     scan_period_ms: 100.0 # 单帧扫描周期(ms)
@@ -83,7 +83,7 @@ global:
     world_frame: odom # 世界frame
   map:
     resolution: 0.05  # 地图/栅格分辨率(m)
-    save_voxel: 0.15 # 地图/点云保存降采样体素(m) (0.3 -> 0.15, 保留墙体细节)
+    save_voxel: 0.3 # 地图/点云保存降采样体素(m) (对齐 Livox)
   scan_context:
     num_rings: 20 # ScanContext环数
     num_sectors: 60 # ScanContext扇区数
@@ -97,7 +97,7 @@ mapping:
     robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
     robust_scale: 0.5 # 鲁棒核尺度
     robust_floor: 0.1 # 鲁棒权重下限
-    dynamic_removal: true # 是否剔除动态障碍物点
+    dynamic_removal: false # 是否剔除动态障碍物点 (对齐 Livox)
     persist_thresh: 2 # 动态点持久确认帧数
     persist_window: 20 # 动态点确认窗口帧数
     dynamic_residual_thresh: 1.0 # 动态点残差阈值
@@ -107,14 +107,14 @@ mapping:
     local_map_size: 300 # 局部地图立方体边长(m)
     detection_range: 60 # 雷达有效检测距离(m)
     map_move_threshold: 1.5 # 局部地图滑动窗口阈值比例
-    acc_noise: 0.002 # 加速度计白噪声
-    gyro_noise: 0.002 # 陀螺白噪声
-    acc_bias_random_walk: 0.0001 # 加速度计零偏随机游走
-    gyro_bias_random_walk: 0.0001 # 陀螺零偏随机游走
-    imu_init_samples: 400 # IMU静止初始化样本数
+    acc_noise: 0.05 # 加速度计白噪声 (对齐 Livox)
+    gyro_noise: 0.05 # 陀螺白噪声 (对齐 Livox)
+    acc_bias_random_walk: 0.001 # 加速度计零偏随机游走 (对齐 Livox)
+    gyro_bias_random_walk: 0.001 # 陀螺零偏随机游走 (对齐 Livox)
+    imu_init_samples: 100 # IMU静止初始化样本数 (对齐 Livox)
     nearest_search_points: 5 # 近邻搜索点数
     iekf_max_iterations: 5 # IEKF最大迭代次数
-    scan_voxel: 0.15 # 前端扫描降采样体素(m) (0.3 -> 0.15, 保留墙体细节)
+    scan_voxel: 0.3 # 前端扫描降采样体素(m) (对齐 Livox)
     imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
     imu_lidar_translation: [0.0, 0.0, 0.0905] # 初始IMU<-lidar平移(m)
     estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
@@ -124,24 +124,24 @@ mapping:
     icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
     min_keyframe_gap: 30 # 回环最小关键帧间隔
   grid:
-    generator: ray_casting  # 2D栅格生成策略
+    generator: occupancy_logodds # 2D栅格生成策略 (对齐 Livox)
     min_height: 0.25 # 地面以上障碍最低高度(m) (0.1 -> 0.25, 压制巷道地面黑点)
     max_height: 2.0 # 地面以上障碍最高高度(m)
     occupied_thresh: 1 # 每格最少点数判占据
     dilate_radius: 1 # 障碍膨胀半径(格)
     close_radius: 1 # 形态学闭运算半径(格)
-    min_component_cells: 20 # 去噪最小连通域格数 (0 -> 20, 清理孤立黑点)
+    min_component_cells: 30 # 去噪最小连通域格数 (对齐 Livox)
     max_range: 40.0 # 射线有效距离(m),0=不限 (限制远处扇形/稀疏点)
     ground_method: ransac # 地面提取方法 ransac|percentile
     ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
     min_hits: 2 # occupancy_logodds占据命中次数
     min_misses: 2 # occupancy_logodds自由未命中次数
     mark_radius: 0 # 栅格标记半径(格)
-    post_pipeline: denoise,close,dilate # 2D后处理管道
+    post_pipeline: denoise,close,skeleton # 2D后处理管道 (对齐 Livox)
     connectivity: 8 # 后处理连通性 4|8
     open_radius: 0 # 开运算半径(格)
     fill_max_hole_cells: 0 # 填洞最大格数
-    skeleton_width: 0 # 骨架膨胀宽度(格)
+    skeleton_width: 3 # 骨架膨胀宽度(格) (对齐 Livox)
     line_min_len_m: 0.0 # Hough线段最小长度(m)
     axis_snap: false # Hough线段吸附水平/垂直
 localization:
