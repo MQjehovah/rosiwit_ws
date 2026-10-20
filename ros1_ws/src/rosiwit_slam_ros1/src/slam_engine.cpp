@@ -11,6 +11,7 @@
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/console/print.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/point_cloud2_iterator.h>
 
@@ -320,6 +321,9 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
 } // namespace
 
 SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
+    // 万集点云没有 normal_* 字段; PointXYZINormal 的 fromROSMsg 会在每帧
+    // 打 4 行 PCL 警告，实机 10Hz 会把日志刷爆。只保留 ERROR。
+    pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
     // ---- input_profile: 默认 legacy, 老接口优先; 仅选择输入配置, 不再决定输出接口 ----
     pnh_.param<std::string>("input_profile", input_profile_, "legacy");
     pnh_.param<bool>("online_calibration", online_calib_enabled_, true);

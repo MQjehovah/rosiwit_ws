@@ -49,8 +49,8 @@
 
     <node name="xz_3d_monitor" pkg="xz_3d_monitor" type="xz_3d_monitor_node" output="log"> </node>
     <!-- drop-in: 唯一改动就是把下面这行的 pkg/type 指向本包, 并显式传 input_profile=legacy。
-         节点名保持 xz_3d_slam_node —— 这是这台机器上真正的部署件里用的名字 (原行见上面那行注释)。 -->
-    <node name="xz_3d_slam_node" pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" output="log">
+         节点名必须保持 xz_3d_slam —— 这是机器人上 xzrobot_all / xz_3d_monitor 依赖的部署名。 -->
+    <node name="xz_3d_slam" pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" output="log">
       <param name="input_profile" value="legacy" />
       <param name="config_file" value="$(find rosiwit_slam_ros1)/config/default.yaml" />
     </node>

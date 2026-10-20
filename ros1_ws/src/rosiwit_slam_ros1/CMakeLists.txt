@@ -70,6 +70,10 @@ target_include_directories(rosiwit_slam_ros1_lib PUBLIC src ${catkin_INCLUDE_DIR
 target_compile_options(rosiwit_slam_ros1_lib PRIVATE -pipe -pthread)
 target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam ${OpenCV_LIBS})
 add_dependencies(rosiwit_slam_ros1_lib ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+install(TARGETS rosiwit_slam_ros1_lib
+    ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+    RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 # ==================== ROS1 节点 (薄) ====================
 add_executable(rosiwit_slam_ros1_node src/rosiwit_slam_ros1_node.cpp)
