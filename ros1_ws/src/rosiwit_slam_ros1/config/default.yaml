@@ -26,9 +26,10 @@
 #   融合 odom 让预测跟上(见 use_odom 联动)。
 #   matcher.min_match_points(50): 调小有 PCL GICP 段错误风险(<20 点必崩, 有单测)。
 #  [odom 双开关]
-#   全局 enable_odom = 引擎是否订阅 /odom; localization.motion_prior.use_odom = 先验
+#   global.input.use_odom = 引擎是否订阅 /odom; localization.motion_prior.use_odom = 先验
 #   是否融合其平移。两者都开才有平移预测; 后者还受 slip_yaw_thresh / max_odom_speed /
-#   ekf_chi2 三重打滑门控。
+#   ekf_chi2 三重打滑门控。legacy profile 由 Ros1SlamInterface 无条件订阅 /odom 并喂核心,
+#   非 legacy profile 才由 SlamEngine 根据该开关订阅。
 #  [重定位节流]
 #   global.retry_interval(45帧≈4.5s) ≈ 单次冷启动预算(FPFH topk 6s + 精配 3s/候选),
 #   调小会把单线程 spinner 独占, 服务排队数十秒。
@@ -75,7 +76,7 @@ global:
     lidar_max_range: 100.0 # 雷达最大有效距离(m)
     scan_period_ms: 100.0 # 单帧扫描周期(ms)
     acc_scale: 1.0 # IMU加速度单位换算
-    use_odom: false # 是否订阅并使用轮式odom
+    use_odom: true # 是否订阅并使用轮式odom（legacy 由接口订阅；非 legacy 由引擎订阅）
   frames:
     body_frame: base_link  # 车体frame
     world_frame: odom # 世界frame
@@ -222,7 +223,7 @@ localization:
   motion_prior:
     max_dt: 0.2
     max_vel: 10.0
-    use_odom: true            # ★联动全局 enable_odom: 引擎订阅 + 先验融合都开才有平移预测
+    use_odom: true            # ★联动 global.input.use_odom: 订阅 + 先验融合都开才有平移预测
                               # (2026-10-17 推行丢失事故后开启: 推行时常速外推跟不上,
                               #  fitness 崩到 0.17 后判丢; odom 平移让预测跟着推走)
     slip_yaw_thresh: 0.3      # |odom_yaw_rate - imu_yaw_rate| 超此值判打滑并丢弃 odom(rad/s)
