@@ -58,11 +58,16 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam
 set(ROSIWIT_ROS1_LIB_SOURCES
     src/config/config.cpp
     src/interface/realtime_grid.cpp
+    src/interface/internal.cpp
     src/monitor/lost_monitor.cpp
     src/engine/slam_engine.cpp
     src/interface/outputs.cpp
     src/interface/convert.cpp
-    src/interface/ros1_slam_interface.cpp
+    src/interface/assembly.cpp
+    src/interface/cloud_publisher.cpp
+    src/interface/pose_publisher.cpp
+    src/interface/warning.cpp
+    src/interface/services.cpp
     src/io/xzmap_reader.cpp
     src/io/xzmap_writer.cpp
     src/io/map_adapter.cpp
