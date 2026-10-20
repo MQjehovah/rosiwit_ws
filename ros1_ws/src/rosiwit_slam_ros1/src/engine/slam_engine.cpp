@@ -369,13 +369,16 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
                 cfg_.lidar_min_range = c["lidar_min_range"].as<double>(cfg_.lidar_min_range);
                 cfg_.lidar_max_range = c["lidar_max_range"].as<double>(cfg_.lidar_max_range);
                 cfg_.odom_topic = c["odom_topic"].as<std::string>(cfg_.odom_topic);
-                cfg_.absolute_topic = c["absolute_topic"].as<std::string>(cfg_.absolute_topic);
+                if (c["localization"] && c["localization"]["absolute"]) {
+                    const YAML::Node a = c["localization"]["absolute"];
+                    cfg_.absolute_topic = a["topic"].as<std::string>(cfg_.absolute_topic);
+                    absolute_enabled = a["enabled"].as<bool>(false);
+                }
                 if (c["vision"]) {
                     vo_enabled = c["vision"]["enabled"].as<bool>(false);
                     cfg_.vo_topic = c["vision"]["vo_topic"].as<std::string>(cfg_.vo_topic);
                 }
                 odom_enabled = c["enable_odom"].as<bool>(false);
-                absolute_enabled = c["absolute_enabled"].as<bool>(false);
             }
         } catch (const std::exception& e) {
             ROS_WARN("[rosiwit_slam_ros1] config parse error: %s", e.what());

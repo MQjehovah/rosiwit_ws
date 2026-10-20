@@ -76,11 +76,15 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
                                                m_cfg.max_correspondence_dist);
     if (probe) {
         ms_eval = ms_since(t2);
-        std::cout << "[MatchProbe] n=" << probe_n << " scan=" << scan->size()
-                  << " src=" << src->size() << " tgt=" << m_target->size()
-                  << " ds=" << ms_ds << " dynf=" << ms_df
-                  << " gicp=" << ms_gicp << " eval=" << ms_eval
-                  << " total=" << ms_ds + ms_df + ms_gicp + ms_eval << "ms" << std::endl;
+        std::cout << "[MatchProbe] match_index=" << probe_n
+                  << " scan_points=" << scan->size()
+                  << " source_points=" << src->size()
+                  << " target_points=" << m_target->size()
+                  << " downsample_ms=" << ms_ds
+                  << " dynamic_filter_ms=" << ms_df
+                  << " gicp_ms=" << ms_gicp
+                  << " evaluate_ms=" << ms_eval
+                  << " total_ms=" << ms_ds + ms_df + ms_gicp + ms_eval << std::endl;
     }
     const double s = out.residual > 0 ? out.residual * out.residual
                                       : (out.rmse > 0 ? out.rmse * out.rmse : 1.0);

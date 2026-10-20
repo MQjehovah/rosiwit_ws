@@ -58,7 +58,7 @@ public:
 private:
     void setMapImpl(const std::string& map_name);
     bool acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
-                     const PoseStamped& guess);
+                     const PoseStamped& guess, const char** reject_reason = nullptr);
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)
     CloudType::Ptr buildTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
     bool ensureRelocalizerMap();   // 全局重定位库就绪检查(后台构建中返回 false, 绝不阻塞)
@@ -114,7 +114,7 @@ private:
     CloudType::Ptr m_cached_target;
     PoseStamped m_cached_target_pose;
     bool m_has_cached_target = false;
-    /// setInitPose 后首帧必须通过 init_accept_score，否则判 LOST 进入恢复。
+    /// setInitPose 后首帧必须通过 global.reloc_accept_score，否则判 LOST 进入恢复。
     bool m_seed_pending = false;
     uint64_t m_cached_target_rev = 0;   // 建缓存时的维护层版本号(overlay 变更 -> 失效)
 

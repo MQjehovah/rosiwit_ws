@@ -22,17 +22,19 @@ bool ScanContextLocalization::init(const std::string& config_path) {
     try {
         YAML::Node config = YAML::LoadFile(config_path);
         auto loc = config["localization"];
-        if (loc) {
-            m_num_rings     = loc["sc_num_rings"].as<int>(m_num_rings);
-            m_num_sectors   = loc["sc_num_sectors"].as<int>(m_num_sectors);
-            m_max_radius    = loc["sc_max_radius"].as<double>(m_max_radius);
-            m_min_radius    = loc["sc_min_radius"].as<double>(m_min_radius);
-            m_dist_thresh   = loc["sc_dist_thresh"].as<double>(m_dist_thresh);
-            m_candidate_ratio = loc["sc_candidate_ratio"].as<double>(m_candidate_ratio);
-            m_voxel_res         = loc["icp_voxel_res"].as<float>(m_voxel_res);
-            m_icp_max_corr_dist = loc["icp_max_corr_dist"].as<float>(m_icp_max_corr_dist);
-            m_icp_fitness_thresh = loc["icp_fitness_thresh"].as<float>(m_icp_fitness_thresh);
-            m_icp_max_iter       = loc["icp_max_iter"].as<int>(m_icp_max_iter);
+        // ROS1 标准层级: localization.global；旧配置没有该组时退回根节点。
+        const YAML::Node g = (loc && loc["global"]) ? loc["global"] : config;
+        if (g) {
+            m_num_rings     = g["sc_num_rings"].as<int>(m_num_rings);
+            m_num_sectors   = g["sc_num_sectors"].as<int>(m_num_sectors);
+            m_max_radius    = g["sc_max_radius"].as<double>(m_max_radius);
+            m_min_radius    = g["sc_min_radius"].as<double>(m_min_radius);
+            m_dist_thresh   = g["sc_dist_thresh"].as<double>(m_dist_thresh);
+            m_candidate_ratio = g["sc_candidate_ratio"].as<double>(m_candidate_ratio);
+            m_voxel_res         = g["voxel_resolution"].as<float>(m_voxel_res);
+            m_icp_max_corr_dist = g["icp_max_corr_dist"].as<float>(m_icp_max_corr_dist);
+            m_icp_fitness_thresh = g["icp_fitness_thresh"].as<float>(m_icp_fitness_thresh);
+            m_icp_max_iter       = g["icp_max_iter"].as<int>(m_icp_max_iter);
         }
     } catch (const std::exception& e) {
         std::cerr << "[SCLocalization] Config parse error: " << e.what() << std::endl;

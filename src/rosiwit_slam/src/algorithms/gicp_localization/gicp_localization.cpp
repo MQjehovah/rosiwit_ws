@@ -27,28 +27,45 @@ bool GicpLocalization::init(const std::string& config_path) {
 
 #ifndef YAML_CPP_DISABLED
     try {
-        YAML::Node config = YAML::LoadFile(config_path);
-        if (config["voxel_resolution"])
-            voxel_resolution_ = config["voxel_resolution"].as<float>();
-        if (config["fitness_threshold"])
-            fitness_threshold_ = config["fitness_threshold"].as<float>();
-        if (config["max_iterations"])
-            max_iterations_ = config["max_iterations"].as<int>();
-        if (config["transformation_epsilon"])
-            transformation_epsilon_ = config["transformation_epsilon"].as<double>();
-        if (config["gicp_max_corr_dist"])
-            max_corr_dist_ = config["gicp_max_corr_dist"].as<float>();
-        if (config["gicp_euclid_eps"])
-            euclid_eps_ = config["gicp_euclid_eps"].as<double>();
-        // 输出位姿滤波开关与参数
-        if (config["use_pose_filter"])
-            use_pose_filter_ = config["use_pose_filter"].as<bool>();
-        if (config["pose_filter_alpha"])
-            pose_filter_alpha_ = config["pose_filter_alpha"].as<double>();
-        if (config["pose_filter_max_xy_m"])
-            pose_filter_max_xy_m_ = config["pose_filter_max_xy_m"].as<double>();
-        if (config["pose_filter_max_yaw_deg"])
-            pose_filter_max_yaw_deg_ = config["pose_filter_max_yaw_deg"].as<double>();
+        const YAML::Node config = YAML::LoadFile(config_path);
+        // ROS1 标准层级: localization.gicp；ROS2/旧配置仍兼容根节点写法。
+        const YAML::Node gicp = config["localization"] && config["localization"]["gicp"]
+                                   ? config["localization"]["gicp"]
+                                   : config;
+        if (gicp["voxel_resolution"])
+            voxel_resolution_ = gicp["voxel_resolution"].as<float>();
+        if (gicp["fitness_threshold"])
+            fitness_threshold_ = gicp["fitness_threshold"].as<float>();
+        if (gicp["max_iterations"])
+            max_iterations_ = gicp["max_iterations"].as<int>();
+        if (gicp["transformation_epsilon"])
+            transformation_epsilon_ = gicp["transformation_epsilon"].as<double>();
+        if (gicp["max_correspondence_dist"])
+            max_corr_dist_ = gicp["max_correspondence_dist"].as<float>();
+        else if (gicp["gicp_max_corr_dist"])
+            max_corr_dist_ = gicp["gicp_max_corr_dist"].as<float>();
+        if (gicp["euclid_epsilon"])
+            euclid_eps_ = gicp["euclid_epsilon"].as<double>();
+        else if (gicp["gicp_euclid_eps"])
+            euclid_eps_ = gicp["gicp_euclid_eps"].as<double>();
+        // 新层级 output_filter.*；旧根节点配置沿用 use_pose_filter/pose_filter_*。
+        const YAML::Node out = gicp["output_filter"] ? gicp["output_filter"] : gicp;
+        if (out["enabled"])
+            use_pose_filter_ = out["enabled"].as<bool>();
+        else if (out["use_pose_filter"])
+            use_pose_filter_ = out["use_pose_filter"].as<bool>();
+        if (out["alpha"])
+            pose_filter_alpha_ = out["alpha"].as<double>();
+        else if (out["pose_filter_alpha"])
+            pose_filter_alpha_ = out["pose_filter_alpha"].as<double>();
+        if (out["max_xy_m"])
+            pose_filter_max_xy_m_ = out["max_xy_m"].as<double>();
+        else if (out["pose_filter_max_xy_m"])
+            pose_filter_max_xy_m_ = out["pose_filter_max_xy_m"].as<double>();
+        if (out["max_yaw_deg"])
+            pose_filter_max_yaw_deg_ = out["max_yaw_deg"].as<double>();
+        else if (out["pose_filter_max_yaw_deg"])
+            pose_filter_max_yaw_deg_ = out["pose_filter_max_yaw_deg"].as<double>();
     } catch (const std::exception& e) {
         std::cerr << "[GicpLocalization] Config parse error: " << e.what() << std::endl;
         return false;

@@ -53,7 +53,7 @@ roslaunch rosiwit_slam_ros1 xz_3d_slam.launch model:=XZ-SW50   # 兼容旧系统
 ## 接口速览
 
 **新接口**（`RosiwitInterface`）
-- 订阅：`imu`/`lidar`（由 `config_file` 指定）、`/initialpose`、可选 `odom_topic`/`vision.vo_topic`/`absolute_topic`
+- 订阅：`imu`/`lidar`（由 `config_file` 指定）、`/initialpose`、可选 `odom_topic`/`vision.vo_topic`/`localization.absolute.topic`
 - 发布：`lio_odom`/`odom`、`lio_path`、`body_cloud`/`world_cloud`/`cloud_map`、`grid_map`/`map`
 - TF：`world_frame->body_frame`（动态）、`map->odom`（静态）
 - 服务：`save_map`/`load_map`/`save_grid_map`/`set_slam_mode`

@@ -12,7 +12,7 @@
 # ★ 参数联动关系表 (改一个必须想一圈; 不变量由 LocPipeline 启动时校验并告警)
 # ============================================================================
 #  [fitness 阈值链 —— 2026-10-17 僵尸带事故的教训]
-#   accept.min_coverage(0.35) < monitor.lost_fitness(0.5) < monitor.credible_fitness(0.75)
+#   accept.min_coverage(0.35) < monitor.lost_fitness(0.75) < monitor.credible_fitness(0.85)
 #   ≤ global.reloc_accept_score(0.85)   必须保持此序!
 #   - min_coverage: 单帧匹配被接受的最低覆盖率。过高 -> 有效匹配被拒, 位姿冻结;
 #     过低 -> 错位姿被放行"散步"(事故: 0.35 放行 0.6 的垃圾匹配走了 18m)。
@@ -162,33 +162,7 @@ grid_axis_snap: false
 # ③ 定位 (localization)
 # ############################################################################
 
-# ---- 定位输出滤波 (可编排开关) ----
-use_pose_filter: true
-pose_filter_alpha: 0.6
-pose_filter_max_xy_m: 0.5
-pose_filter_max_yaw_deg: 20.0
-
-output_smoothing_alpha: 0.3
-# L12 高频位姿输出 (定位模式): 运动先验传播 + alpha-beta 输出滤波
-output_rate_hz: 100          # 输出频率(Hz); 0=关闭(用扫描帧)
-output_filter_alpha: 0.5     # alpha-beta alpha
-output_filter_beta: 0.2      # alpha-beta beta
-output_extrap_max_s: 0.3     # 外推上限(s)
-# L19 绝对约束 (GNSS/UWB/反光标/二维码)
-absolute_enabled: false      # 开关 (启用后订阅 absolute_topic)
-absolute_topic: /absolute_pose  # geometry_msgs/PoseWithCovarianceStamped
-absolute_datum_x: 0.0        # 绝对源系 -> 地图系 datum
-absolute_datum_y: 0.0
-absolute_datum_z: 0.0
-absolute_datum_yaw_deg: 0.0
-
-# ---- 旧 GicpLocalization 独立定位器参数 (modules.localization=gicp_localization 时) ----
-voxel_resolution: 0.3
-fitness_threshold: 10.0
-max_iterations: 64
-transformation_epsilon: 0.00000001
-gicp_max_corr_dist: 2.0
-gicp_euclid_eps: 0.01
+# 定位相关的所有参数统一放在 localization.* 下；不要再在文件根节点增加同义参数。
 
 # ==================== 可编排定位流水线 (modules.localization=localization_pipeline) ====================
 localization:
@@ -296,7 +270,7 @@ localization:
   # ---- 全局重定位 (relocalizer: scan_context | bbs | fpfh_ransac) ----
   global:
     min_score: 0.5
-    reloc_accept_score: 0.85  # ★联动(阈值链): ≥ credible_fitness(0.75); 低于此值保持
+    reloc_accept_score: 0.85  # ★联动(阈值链): ≥ credible_fitness(0.85); 低于此值保持
                               # LOST(诚实), 不接受弱重定位进僵尸态
     top_k: 5                    # 全局重定位多候选数 (按分数降序精配, 命中 0.95+ 即停)
     # 丢失后重定位尝试间隔(帧, 节流)。30 帧(~2s)太密: 每次尝试含多起点 GICP
@@ -355,14 +329,15 @@ localization:
   # ---- s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性) ----
   accept:
     mode: 1
-    init_accept_score: 0.85  # 初始位姿首帧最低覆盖率; 低于此值判 LOST 交给恢复策略
     # 实机: gicp 覆盖率典型 0.43, 原来的 0.5 会一直接受不了 -> 位姿不输出(角标冻结)。
-    # 先放到 0.35 让它能锁住; 后面根据 [LocProbe] REJECT 的实际分布再收紧。
-    min_coverage: 0.35   # ★联动(阈值链): < lost_fitness(0.5) —— 最底层
+    # 先放到 0.35 让它能锁住; 后面根据 [LocProbe] rejected 的实际分布再收紧。
+    min_coverage: 0.35   # ★联动(阈值链): < lost_fitness(0.75) —— 最底层
     residual_margin: 0.10
     consistent_frames: 2
     mahalanobis_gate: true    # 用匹配协方差做 Mahalanobis 门控
     mahalanobis_chi2: 16.81   # 6DoF 99% 卡方阈值
+    mahalanobis_trans_floor: 0.20  # m; GICP 残差协方差的平移下限
+    mahalanobis_rot_floor: 0.05    # rad; GICP 残差协方差的旋转下限
 
   # ---- 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane ----
   planar:
@@ -394,6 +369,7 @@ localization:
   # ---- 绝对约束融合 (L19): 门控互补融合 ----
   absolute:
     enabled: false
+    topic: /absolute_pose     # geometry_msgs/PoseWithCovarianceStamped
     window: 0.5               # 观测有效窗口(s)
     alpha: 0.5                # 融合权重
     max_trans: 2.0            # 创新门限(m)
@@ -424,17 +400,19 @@ localization:
   map_store: none
   map_store_leaf: 0.3
 
-  # ---- ScanContext 全局重定位参数 (localization: scan_context_localization) ----
-  sc_num_rings: 20
-  sc_num_sectors: 60
-  sc_max_radius: 80.0
-  sc_min_radius: 2.0
-  sc_dist_thresh: 0.4
-  sc_candidate_ratio: 0.3
-  icp_voxel_res: 0.3
-  icp_max_corr_dist: 2.0
-  icp_fitness_thresh: 1.0
-  icp_max_iter: 32
+  # ---- 旧独立定位器 gicp_localization (modules.localization=gicp_localization 时) ----
+  gicp:
+    voxel_resolution: 0.3
+    fitness_threshold: 10.0
+    max_iterations: 64
+    transformation_epsilon: 0.00000001
+    max_correspondence_dist: 2.0
+    euclid_epsilon: 0.01
+    output_filter:
+      enabled: true
+      alpha: 0.6
+      max_xy_m: 0.5
+      max_yaw_deg: 20.0
 
 # ############################################################################
 # ④ 视觉松耦合 (route b): 外部 VO 库输出 -> GTSAM 后端因子

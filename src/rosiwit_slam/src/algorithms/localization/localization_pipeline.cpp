@@ -191,7 +191,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_accept_cfg.consistent_frames = getv<int>(ac, "consistent_frames", m_accept_cfg.consistent_frames);
         m_accept_cfg.mahalanobis_gate = getv<bool>(ac, "mahalanobis_gate", m_accept_cfg.mahalanobis_gate);
         m_accept_cfg.mahalanobis_chi2 = getv<double>(ac, "mahalanobis_chi2", m_accept_cfg.mahalanobis_chi2);
-        m_accept_cfg.init_accept_score = getv<double>(ac, "init_accept_score", m_accept_cfg.init_accept_score);
+        m_accept_cfg.mahalanobis_trans_floor = getv<double>(ac, "mahalanobis_trans_floor", m_accept_cfg.mahalanobis_trans_floor);
+        m_accept_cfg.mahalanobis_rot_floor = getv<double>(ac, "mahalanobis_rot_floor", m_accept_cfg.mahalanobis_rot_floor);
     }
     auto mtc = loc["maintainer"];
     if (mtc) {
@@ -570,7 +571,7 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     {
         static int probe_n = 0;
         if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
-            std::cout << "[LocProbe] local_map=" << (target ? target->size() : 0)
+            std::cout << "[LocProbe] local_map_points=" << (target ? target->size() : 0)
                       << " pose=(" << pose.trans.x() << ", " << pose.trans.y() << ")"
                       << " local_map_name=" << m_local_map_name << std::endl;
         }
@@ -656,33 +657,44 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
 }
 
 bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
-                                       const PoseStamped& guess) {
-    if (!res.converged) return false;
+                                       const PoseStamped& guess, const char** reject_reason) {
+    auto reject = [&](const char* reason) {
+        if (reject_reason) *reject_reason = reason;
+        return false;
+    };
+    if (!res.converged) return reject("not_converged");
     // Mahalanobis 门控: 修正量相对匹配协方差异常大 -> 判离群, 不采信
     // (协方差加下限: 匹配协方差是估计自身不确定度, 极小时会误拒正常修正)
     if (m_accept_cfg.mahalanobis_gate) {
         Eigen::Matrix<double, 6, 1> e;
         poseInnovation(res.pose, guess, e);
         Eigen::Matrix<double, 6, 6> C = res.cov;
-        const double rf = 0.0175 * 0.0175, tf = 0.05 * 0.05;
+        const double rf = m_accept_cfg.mahalanobis_rot_floor * m_accept_cfg.mahalanobis_rot_floor;
+        const double tf = m_accept_cfg.mahalanobis_trans_floor * m_accept_cfg.mahalanobis_trans_floor;
         for (int k = 0; k < 3; ++k) C(k, k) += rf;
         for (int k = 3; k < 6; ++k) C(k, k) += tf;
         Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(C);
         const double d2 = e.dot(ldlt.solve(e));
-        if (std::isfinite(d2) && d2 > m_accept_cfg.mahalanobis_chi2) return false;
+        if (std::isfinite(d2) && d2 > m_accept_cfg.mahalanobis_chi2) return reject("mahalanobis");
     }
-    if (m_accept_cfg.mode == 0)
-        return res.fitness >= m_accept_cfg.min_coverage;
+    if (m_accept_cfg.mode == 0) {
+        if (res.fitness >= m_accept_cfg.min_coverage) {
+            if (reject_reason) *reject_reason = "accepted";
+            return true;
+        }
+        return reject("coverage");
+    }
 
     // mode 1: 覆盖率达标直接接受; 否则用残差 + 多帧一致性仲裁
     if (res.fitness >= m_accept_cfg.min_coverage) {
         m_corr_prev_valid = false;
         m_consistent_cnt = 0;
+        if (reject_reason) *reject_reason = "accepted";
         return true;
     }
     const double res_icp = res.residual;
     const double res_prior = m_matcher->evaluateResidual(scan, guess);
-    if (res_icp < 0.0 || res_prior <= 1e-6) return false;
+    if (res_icp < 0.0 || res_prior <= 1e-6) return reject("residual");
 
     const double improve = (res_prior - res_icp) / res_prior;
     const V3D corr = res.pose.trans - guess.trans;
@@ -694,22 +706,28 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
     m_corr_prev = corr;
     m_corr_prev_valid = true;
 
-    if (improve > 3.0 * m_accept_cfg.residual_margin) return true;
+    if (improve > 3.0 * m_accept_cfg.residual_margin) {
+        if (reject_reason) *reject_reason = "accepted";
+        return true;
+    }
     if (improve > m_accept_cfg.residual_margin &&
-        m_consistent_cnt >= m_accept_cfg.consistent_frames) return true;
+        m_consistent_cnt >= m_accept_cfg.consistent_frames) {
+        if (reject_reason) *reject_reason = "accepted";
+        return true;
+    }
     // [LocProbe] 拒绝原因 (每 10 帧一行): 定位"匹配成功但不输出"时靠它定位是哪道门限
     {
         static int probe_n = 0;
         if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
-            std::cout << "[LocProbe] REJECT fitness=" << res.fitness
-                      << " (min_coverage=" << m_accept_cfg.min_coverage << ")"
-                      << " improve=" << improve
-                      << " margin=" << m_accept_cfg.residual_margin
-                      << " consistent=" << m_consistent_cnt << "/"
+            std::cout << "[LocProbe] rejected fitness=" << res.fitness
+                      << " min_coverage=" << m_accept_cfg.min_coverage
+                      << " residual_improvement=" << improve
+                      << " residual_margin=" << m_accept_cfg.residual_margin
+                      << " consistent_frames=" << m_consistent_cnt << "/"
                       << m_accept_cfg.consistent_frames << std::endl;
         }
     }
-    return false;
+    return reject("consistent_frames");
 }
 
 void LocalizationPipeline::onLidar(const LidarFrame& f) {
@@ -921,6 +939,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
 
     MatchResult res;
     bool accepted = false;
+    const char* reject_reason = "not_run";
     PoseStamped out_pose = guess;
 
     if (m_hyp.ambiguous()) {
@@ -941,6 +960,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             res.pose = h.pose;
             out_pose = h.pose;
             accepted = h.fitness >= m_accept_cfg.min_coverage;
+            reject_reason = accepted ? "accepted" : "coverage";
         }
         m_has_cached_target = false;
     } else {
@@ -986,13 +1006,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         {
             static int probe_n = 0;
             if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
-                std::cout << "[LocProbe] scan=" << (f.cloud ? f.cloud->size() : 0)
-                          << " target=" << (m_cached_target ? m_cached_target->size() : 0)
-                          << " ok=" << (ok ? 1 : 0) << " converged=" << (res.converged ? 1 : 0)
+                std::cout << "[LocProbe] scan_points=" << (f.cloud ? f.cloud->size() : 0)
+                          << " target_points=" << (m_cached_target ? m_cached_target->size() : 0)
+                          << " match_ok=" << (ok ? 1 : 0)
+                          << " converged=" << (res.converged ? 1 : 0)
                           << " fitness=" << res.fitness << std::endl;
             }
         }
-        accepted = ok && acceptMatch(res, f.cloud, guess);
+        reject_reason = ok ? "accepted" : "matcher_failed";
+        accepted = ok && acceptMatch(res, f.cloud, guess, &reject_reason);
         out_pose = accepted ? res.pose : guess;
     }
 
@@ -1001,10 +1023,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 直接进入 LOST，让恢复策略重新全局重定位。
     if (m_seed_pending) {
         m_seed_pending = false;
-        if (!res.converged || res.fitness < m_accept_cfg.init_accept_score) {
+        if (!res.converged || res.fitness < m_global_cfg.reloc_accept_score) {
             std::ostringstream os;
             os << "initial seed rejected: fitness=" << res.fitness
-               << " < " << m_accept_cfg.init_accept_score << " -> LOST";
+               << " < " << m_global_cfg.reloc_accept_score << " -> LOST";
             diag::log('W', "LocPipeline", os.str());
             FlightRecorder::instance().event("SEED_REJECT", os.str());
             m_initialized = false;
@@ -1051,19 +1073,20 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
-    // [DropProbe] 低fitness/被拒帧逐帧打印 (推行丢定位根因取证; 正常帧仍走10帧一条的LocProbe)。
-    //   lag = 匹配修正量|配准-先验猜测|: 推行时逐帧增大 => 预测跟不上(假设A: 常速外推滞后)
-    //   corr 骤降 => 动态滤波螺旋(滞后>0.4m 时删掉的恰是真实位置的证据)
-    //   tgt 变化 => 目标子图换源(假设B: 关键帧覆盖缺口)
+    // [DropProbe] 低 fitness 或被拒绝帧逐帧打印（正常帧仍走 10 帧一条的 LocProbe）。
+    //   correction_m = |匹配位姿 - 先验猜测|：持续增大说明预测跟不上；
+    //   correspondences 骤降说明动态滤波把真实位置证据删掉；
+    //   target_points 变化说明目标子图换源/关键帧覆盖缺口。
     if (res.fitness < 0.90 || !accepted) {
         const double lag = (out_pose.trans - guess.trans).norm();
-        std::cout << "[DropProbe] fit=" << res.fitness
-                  << " lag=" << lag
-                  << " corr=" << res.correspondences
-                  << " inl=" << res.inliers
-                  << " tgt=" << (m_has_cached_target && m_cached_target ? m_cached_target->size() : 0)
-                  << " acc=" << (accepted ? 1 : 0)
-                  << " coast=" << m_coast_count << std::endl;
+        std::cout << "[DropProbe] fitness=" << res.fitness
+                  << " correction_m=" << lag
+                  << " correspondences=" << res.correspondences
+                  << " inliers=" << res.inliers
+                  << " target_points=" << (m_has_cached_target && m_cached_target ? m_cached_target->size() : 0)
+                  << " accepted=" << (accepted ? 1 : 0)
+                  << " coast_frames=" << m_coast_count
+                  << " rejection=" << reject_reason << std::endl;
     }
     // 飞行记录仪: 每帧一条(与 DropProbe 同字段), LOST 翻转自动落盘
     {
@@ -1142,7 +1165,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         Eigen::Matrix<double, 6, 1> e;
         poseInnovation(res.pose, guess, e);
         Eigen::Matrix<double, 6, 6> C = res.cov;
-        const double rf = 0.0175 * 0.0175, tf = 0.05 * 0.05;
+        const double rf = m_accept_cfg.mahalanobis_rot_floor * m_accept_cfg.mahalanobis_rot_floor;
+        const double tf = m_accept_cfg.mahalanobis_trans_floor * m_accept_cfg.mahalanobis_trans_floor;
         for (int k = 0; k < 3; ++k) C(k, k) += rf;
         for (int k = 3; k < 6; ++k) C(k, k) += tf;
         Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(C);
