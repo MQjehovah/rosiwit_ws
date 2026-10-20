@@ -345,8 +345,17 @@ std::string LocalizationPipeline::describe() const {
 }
 
 void LocalizationPipeline::setMap(const std::string& map_name) {
+    setMapImpl(map_name, false);
+}
+
+void LocalizationPipeline::setMapXzmapOnly(const std::string& map_name) {
+    setMapImpl(map_name, true);
+}
+
+void LocalizationPipeline::setMapImpl(const std::string& map_name, bool xzmap_only) {
     // 换图会替换 local_map/matcher/store/maintainer; 与 onLidar 互斥.
     std::lock_guard<std::mutex> state_lk(m_state_mu);
+    m_cancel_set_map.store(false);
     // 分段计时: /switch_map 曾实测 48s, 必须知道钱花在哪 (每阶段一行, 只在切图时打)
     const auto t_total0 = std::chrono::steady_clock::now();
     auto stage_ms = [](const std::chrono::steady_clock::time_point& t) {
@@ -365,7 +374,7 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
     //    /switch_map 被直接拖慢一倍): 回退路径解析出的关键帧同时供两处使用 ——
     //    重建基准点云 + setKeyframes; PCD 路径下后面才第一次读 xzmap。
     std::vector<io::XzMapKeyframe> kfs;
-    if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
+    if (xzmap_only || pcl::io::loadPCDFile(map_name, *m_map) == -1) {
         // **没有 PCD 的兼容回退**: 老格式 (xz_3d_slam) 的地图只有 <base>.xzmap + pgm/yaml,
         // 关键帧里自带点 —— 直接从关键帧重建基准点云。
         // 这样"切图/定位"就**不再要求 PCD 文件** (旧实现 localiza_ptr_->run("<dir>/map")
@@ -394,6 +403,7 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
                   << std::endl;
     }
     mark("parse");
+    if (m_cancel_set_map.load()) { std::cout << "[LocPipeline] setMap canceled after parse" << std::endl; return; }
     if (m_local_map) m_local_map->setMap(map_name, m_map);
     m_planar.setMap(m_map);
     mark("locmap_planar");
@@ -413,7 +423,12 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
         if (!kfs.empty()) {
             std::vector<LocalKeyframe> lkfs;
             lkfs.reserve(kfs.size());
+            size_t kf_i = 0;
             for (const auto& kf : kfs) {
+                if ((kf_i++ & 0x1f) == 0 && m_cancel_set_map.load()) {
+                    std::cout << "[LocPipeline] setMap canceled during keyframes" << std::endl;
+                    return;
+                }
                 LocalKeyframe lk;
                 lk.pose.trans = V3D(kf.pose.x, kf.pose.y, kf.pose.z);
                 lk.pose.rot = Eigen::AngleAxisd(kf.pose.yaw, V3D::UnitZ()).toRotationMatrix() *
@@ -439,6 +454,7 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
         }
     }
     mark("kfs");
+    if (m_cancel_set_map.load()) { std::cout << "[LocPipeline] setMap canceled after kfs" << std::endl; return; }
     // 全局重定位库**后台**预建: FPFH 对全图算特征+建树实测 ~45s(aarch64)。
     // 演进史: ①最初 setMap 里同步建(切图 48.5s) ②改懒建(切图 3.2s, 但构建被推迟到
     // 首次冷启动的 onLidar 回调里 —— 2026-10-17 推行丢失事故: 判丢后回调内构建

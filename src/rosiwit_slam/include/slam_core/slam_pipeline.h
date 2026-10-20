@@ -77,6 +77,9 @@ public:
 
     bool saveMap(const std::string& path) override;
     bool loadMap(const std::string& path) override;
+    bool loadMapXzmapOnly(const std::string& path) override;
+    bool saveMapXzmapOnly(const std::string& path) override;
+    void cancelMapLoad() override;
     bool appendMap(const std::string& path) override;
     bool resetForNewMapping(const std::string& config_path) override;
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) override;

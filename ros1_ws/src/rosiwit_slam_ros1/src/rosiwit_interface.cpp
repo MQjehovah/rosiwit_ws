@@ -200,14 +200,14 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
 
 bool RosiwitInterface::handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,
                                      rosiwit_slam_ros1::SaveMap::Response& res) {
-    res.success = engine_.algo() && engine_.algo()->saveMap(req.path);
+    res.success = engine_.algo() && engine_.algo()->saveMapXzmapOnly(req.path);
     res.message = res.success ? "ok" : "failed";
     return true;
 }
 
 bool RosiwitInterface::handleLoadMap(rosiwit_slam_ros1::LoadMap::Request& req,
                                      rosiwit_slam_ros1::LoadMap::Response& res) {
-    res.success = engine_.algo() && engine_.algo()->loadMap(req.path);
+    res.success = engine_.algo() && engine_.algo()->loadMapXzmapOnly(req.path);
     res.message = res.success ? "ok" : "failed";
     return true;
 }
@@ -234,6 +234,7 @@ bool RosiwitInterface::handleSaveGridMap(rosiwit_slam_ros1::SaveGridMap::Request
 
 bool RosiwitInterface::handleSetMode(rosiwit_slam_ros1::SetSlamMode::Request& req,
                                      rosiwit_slam_ros1::SetSlamMode::Response& res) {
+    if (engine_.algo() && req.mode == "idle") engine_.algo()->cancelMapLoad();
     res.success = engine_.algo() && engine_.algo()->setPipelineMode(req.mode);
     res.message = res.success ? "ok" : "unsupported";
     return true;

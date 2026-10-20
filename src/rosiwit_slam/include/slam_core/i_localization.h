@@ -11,6 +11,10 @@ public:
     virtual ~ILocalization() = default;
     virtual bool init(const std::string& config_path) = 0;
     virtual void setMap(const std::string& map_name) = 0;
+    /// 仅从 xzmap 构建定位地图（ROS1 老地图没有 PCD，不尝试 PCD）。
+    virtual void setMapXzmapOnly(const std::string& map_name) { setMap(map_name); }
+    /// 取消正在进行的 setMap；实现可在阶段间检查并提前返回。
+    virtual void cancelSetMap() {}
     virtual void setInitPose(const PoseStamped& pose) = 0;
     virtual void onImu(const IMUSample& s) = 0;
     virtual void onLidar(const LidarFrame& f) = 0;

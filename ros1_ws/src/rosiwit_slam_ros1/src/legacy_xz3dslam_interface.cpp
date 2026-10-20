@@ -157,7 +157,7 @@ SlamMode LegacyXz3dSlamInterface::updateModeFromCore() {
         slam_mode_ = SlamMode::FREE;
         // 切图过渡期间 core 会短暂 idle；此时不能清掉刚设置的地图状态。
         if (!map_switch_busy_.load() && !relocating_.load()) {
-            curr_map_name_ = "NULL";
+            curr_map_name_ = "";
             curr_map_path_.clear();
             realtime_grid_map_area_ = 0.0;
             static_map_valid_ = false;
@@ -228,6 +228,7 @@ void LegacyXz3dSlamInterface::resetCoreAndCaches() {
     curr_pose_valid_ = false;
     last_new_pose_ros_ = ros::Time();
     last_high_rate_pub_ = ros::Time();
+    last_high_rate_tf_ = ros::Time();
     last_pose_stamp_ = 0.0;
     mapping_path_msg_ = nav_msgs::Path();
     debug_map_published_ = false;
@@ -653,8 +654,9 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
     }
 
     if (publish_info) publishLocationInfo();
-    // legacy.cpp:1208-1210: 非 FREE 且 use_tf_ 才发 (FREE 下不发)
-    if (slam_mode_ != SlamMode::FREE && use_tf_) sendTransform();
+    // 建图时 TF 跟随 100Hz 位姿定时器；定位时由下面高频块统一限到 20Hz，
+    // 避免每次 10ms tick 都做一次较贵的 base_footprint<-odom 查询。
+    if (slam_mode_ == SlamMode::MAPPING && use_tf_) sendTransform();
 
     // 定位 50Hz 高频输出: 核心匹配约 10Hz，底盘/导航若需要更平滑的
     // /curr_localization_pose 与 map->odom，在两次 10Hz 更新之间重发
@@ -678,7 +680,16 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
                 ps.pose.orientation.z = curr_pose_.q.z();
                 ps.pose.orientation.w = curr_pose_.q.w();
                 pose_puber_.publish(ps);
-                if (use_tf_) sendTransform();
+                // TF 的 lookupTransform 较贵；高频位姿 50Hz，TF 单独限到 20Hz。
+                if (use_tf_ && (last_high_rate_tf_.isZero() ||
+                                (now - last_high_rate_tf_).toSec() >= 0.05)) {
+                    sendTransform();
+                    last_high_rate_tf_ = now;
+                }
+            } else if (use_tf_ && (last_high_rate_tf_.isZero() ||
+                                   (now - last_high_rate_tf_).toSec() >= 0.05)) {
+                sendTransform();
+                last_high_rate_tf_ = now;
             }
             last_high_rate_pub_ = now;
         }
@@ -1110,6 +1121,8 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
         return true;
     }
     // 分支 3: 换图
+    // 打断上一张图的后台加载（核心在阶段边界响应）。
+    if (engine_.algo()) engine_.algo()->cancelMapLoad();
     const uint64_t switch_gen = ++map_switch_generation_;
     relocating_ = true;
     map_switch_busy_.store(true);
@@ -1138,6 +1151,7 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     curr_pose_valid_ = false;
     last_new_pose_ros_ = ros::Time();
     last_high_rate_pub_ = ros::Time();
+    last_high_rate_tf_ = ros::Time();
 
     // 2) 服务立即返回，避免 App 5s 超时；完整定位地图在后台串行加载。
     res.success = detect_ok || pgm_ok;
@@ -1167,7 +1181,7 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
             [this, base, init_pose, switch_gen]() {
                 std::lock_guard<std::mutex> lk(map_switch_mtx_);
                 map_switch_busy_.store(true);
-                const bool loaded = engine_.algo() && engine_.algo()->loadMap(base);
+                const bool loaded = engine_.algo() && engine_.algo()->loadMapXzmapOnly(base);
                 if (switch_gen != map_switch_generation_.load()) {
                     std::cout << "[legacy_iface] /switch_map: discard stale map load: "
                               << base << std::endl;
@@ -1228,9 +1242,9 @@ bool LegacyXz3dSlamInterface::handleStopMap(
 
     // 旧: mapping_ptr_->saveMap(folderPath, "map") -> 等价于 saveMap("<dir>/map")
     const std::string base = legacyMapBase(req.map_dir);
-    if (!engine_.algo()->saveMap(base)) {
-        // 旧实现的 saveMap 返回 void, **不检查**结果 -> 我们只报错, 不改 success
-        ROS_ERROR_STREAM("[legacy_iface] /stop_map_operation: saveMap failed: " << base);
+    if (!engine_.algo()->saveMapXzmapOnly(base)) {
+        // ROS1 老格式只导出 xzmap/scdb，不写 PCD。
+        ROS_ERROR_STREAM("[legacy_iface] /stop_map_operation: saveMapXzmapOnly failed: " << base);
     }
 
     // 同时补 map.pgm / map.yaml: 旧实现的地图目录里有这两个文件, 且旧

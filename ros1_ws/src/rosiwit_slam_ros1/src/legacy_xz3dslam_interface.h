@@ -95,7 +95,7 @@ public:
     void setMapLoaded(bool loaded) { lost_monitor_.setMapLoaded(loaded); }
     /// 换图/进入定位/重定位时调 (旧实现: relocating_ = true)
     void resetLocalizationLatch();
-    /// 旧 `curr_map_name_` (slam/info 的 map_name), 初值 "NULL" (legacy.cpp:93)
+    /// 旧 `curr_map_name_` (slam/info 的 map_name), 初值空串 (legacy.cpp:93)
     void setMapName(const std::string& name) { curr_map_name_ = name; }
 
     /// [T8] /switch_map 里读完 `<map_base>.pgm/.yaml` 后调
@@ -199,7 +199,7 @@ private:
     const bool use_tf_;
 
     SlamMode slam_mode_ = SlamMode::FREE;
-    std::string curr_map_name_ = "NULL";   // legacy.cpp:93
+    std::string curr_map_name_ = "";   // legacy.cpp:93
     LegacyPose curr_pose_;
     double last_pose_stamp_ = 0.0;         // 同帧去重 (legacy.cpp:1116/1121)
 
@@ -211,6 +211,7 @@ private:
     bool curr_pose_valid_ = false;       // 用于定位 50Hz 高频重发
     ros::Time last_new_pose_ros_;
     ros::Time last_high_rate_pub_;
+    ros::Time last_high_rate_tf_;
     std::atomic<bool> relocating_{false};           // 旧 relocating_ (legacy.cpp:1843-1853)
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)

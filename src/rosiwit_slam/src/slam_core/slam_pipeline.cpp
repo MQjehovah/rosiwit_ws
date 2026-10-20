@@ -514,6 +514,14 @@ SlamState SlamPipeline::state() const {
     return SlamState::RUNNING;
 }
 
+bool SlamPipeline::saveMapXzmapOnly(const std::string& path) {
+    // ROS1 老格式：地图只需要 map.xzmap + pgm/yaml，不生成 PCD。
+    if (!m_loop) return false;
+    m_loop->saveDatabase(path + ".scdb");
+    if (!exportXzMap(path)) return false;
+    return true;
+}
+
 bool SlamPipeline::saveMap(const std::string& path) {
     if (!m_map_mgr) return false;
     bool ok = m_map_mgr->saveMap(path);
@@ -584,6 +592,18 @@ bool SlamPipeline::exportXzMap(const std::string& pcd_path) {
     }
     std::cerr << "[SlamPipeline] xzmap save failed: " << xz_path << std::endl;
     return false;
+}
+
+bool SlamPipeline::loadMapXzmapOnly(const std::string& path) {
+    if (!m_localization) return false;
+    m_localization->setMapXzmapOnly(path);
+    m_localization_map_loaded = true;
+    std::cout << "[SlamPipeline] xzmap-only localization map ready: " << path << std::endl;
+    return true;
+}
+
+void SlamPipeline::cancelMapLoad() {
+    if (m_localization) m_localization->cancelSetMap();
 }
 
 bool SlamPipeline::loadMap(const std::string& path) {
