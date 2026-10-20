@@ -34,6 +34,12 @@ global:
   map:
     resolution: 0.2  # 地图/栅格分辨率(m)
     save_voxel: 0.2 # 地图/点云保存降采样体素(m)
+  scan_context:
+    num_rings: 20 # ScanContext环数
+    num_sectors: 60 # ScanContext扇区数
+    max_radius: 80.0 # ScanContext最大半径(m)
+    dist_thresh: 0.4 # ScanContext距离阈值
+    candidate_ratio: 0.3 # 候选比例
 mapping:
   frontend:
     gravity_align: true # 是否用重力方向初始化姿态
@@ -111,9 +117,3 @@ localization:
       alpha: 0.6 # 滤波融合系数
       max_xy_m: 0.5 # 位置修正门限(m)
       max_yaw_deg: 20.0 # 航向修正门限(deg)
-scan_context:
-  num_rings: 20  # ScanContext环数
-  num_sectors: 60 # ScanContext扇区数
-  max_radius: 80.0 # ScanContext最大半径(m)
-  dist_thresh: 0.4 # ScanContext距离阈值
-  candidate_ratio: 0.3 # 候选比例

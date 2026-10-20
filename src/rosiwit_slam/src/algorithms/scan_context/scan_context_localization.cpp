@@ -24,7 +24,9 @@ bool ScanContextLocalization::init(const std::string& config_path) {
         auto loc = config["localization"];
         // ROS1 标准层级: localization.global；旧配置没有该组时退回根节点。
         const YAML::Node g = (loc && loc["global"]) ? loc["global"] : config;
-        const YAML::Node common = config["scan_context"];
+        const YAML::Node common =
+            (config["global"] && config["global"]["scan_context"])
+                ? config["global"]["scan_context"] : config["scan_context"];
         if (g) {
             m_num_rings     = common && common["num_rings"]
                                   ? common["num_rings"].as<int>(m_num_rings)

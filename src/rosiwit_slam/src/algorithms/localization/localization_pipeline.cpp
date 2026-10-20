@@ -120,7 +120,9 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_motion_cfg.gravity = getv<double>(mpc, "gravity", m_motion_cfg.gravity);
         m_motion_cfg.gravity_gain = getv<double>(mpc, "gravity_gain", m_motion_cfg.gravity_gain);
     }
-    const YAML::Node common_sc = root["scan_context"];
+    const YAML::Node common_sc =
+        (root["global"] && root["global"]["scan_context"])
+            ? root["global"]["scan_context"] : root["scan_context"];
     if (common_sc) {
         m_global_cfg.sc_num_rings = getv<int>(common_sc, "num_rings", m_global_cfg.sc_num_rings);
         m_global_cfg.sc_num_sectors = getv<int>(common_sc, "num_sectors", m_global_cfg.sc_num_sectors);

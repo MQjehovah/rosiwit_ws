@@ -24,7 +24,9 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
             auto lc = (config["mapping"] && config["mapping"]["loop_closure"])
                           ? config["mapping"]["loop_closure"]
                           : config["loop_closure"];
-            const YAML::Node common = config["scan_context"];
+            const YAML::Node common =
+                (config["global"] && config["global"]["scan_context"])
+                    ? config["global"]["scan_context"] : config["scan_context"];
             if (lc) {
                 m_min_keyframe_gap = lc["min_keyframe_gap"]
                                          ? lc["min_keyframe_gap"].as<int>(m_min_keyframe_gap)
