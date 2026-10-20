@@ -375,26 +375,14 @@ bool SlamPipeline::tryPopLocalization() {
 void SlamPipeline::handleLocalization(const LidarFrame& f) {
     if (!m_localization) return;
     m_localization->onLidar(f);
-    // 若未定位(含刚丢失/重定位中途), 仍然对外输出**最后一次有效位姿**并标记状态,
-    // 否则上层看到的是"完全没数据"(界面冻结), 且无法区分"丢失"与"节点挂了"。
-    if (m_localization->getStatus() != ILocalization::LOCALIZED) {
-        SlamOutput loose;
-        if (m_localization->getPose(loose.pose)) {
-            loose.state = SlamState::LOST;
-            loose.has_new_pose = true;
-            if (f.cloud && !f.cloud->empty()) {
-                CloudType::Ptr world_scan(new CloudType());
-                Eigen::Affine3d T = Eigen::Affine3d::Identity();
-                T.translate(loose.pose.trans);
-                T.rotate(loose.pose.rot);
-                pcl::transformPointCloud(*f.cloud, *world_scan, T);
-                loose.world_cloud = world_scan;
-                loose.body_cloud = f.cloud;
-            }
-            emitOutput(loose);
-        }
-    }
-    if (m_localization->getStatus() == ILocalization::LOCALIZED) {
+
+    const ILocalization::Status st = m_localization->getStatus();
+    const bool healthy = (st == ILocalization::LOCALIZED);
+    const bool recovering = (st == ILocalization::RECOVERING);
+
+    // RECOVERING 仍然有可用的末位姿，按 RUNNING 输出，状态由核心
+    // localizationStatus() 单独给出；ROS 层不再根据 state 二次猜健康状态。
+    if (healthy || recovering) {
         SlamOutput out;
         m_localization->getPose(out.pose);
         out.state = SlamState::RUNNING;
@@ -409,6 +397,24 @@ void SlamPipeline::handleLocalization(const LidarFrame& f) {
             out.body_cloud = f.cloud;
         }
         emitOutput(out);
+        return;
+    }
+
+    // INIT/LOST: 仍输出最后有效位姿用于界面保持位置，避免“完全没数据”。
+    SlamOutput loose;
+    if (m_localization->getPose(loose.pose)) {
+        loose.state = SlamState::LOST;
+        loose.has_new_pose = true;
+        if (f.cloud && !f.cloud->empty()) {
+            CloudType::Ptr world_scan(new CloudType());
+            Eigen::Affine3d T = Eigen::Affine3d::Identity();
+            T.translate(loose.pose.trans);
+            T.rotate(loose.pose.rot);
+            pcl::transformPointCloud(*f.cloud, *world_scan, T);
+            loose.world_cloud = world_scan;
+            loose.body_cloud = f.cloud;
+        }
+        emitOutput(loose);
     }
 }
 
@@ -653,6 +659,11 @@ std::string SlamPipeline::getPipelineMode() const {
         case PipelineMode::LOCALIZATION:  return "localization";
         default:                          return "idle";
     }
+}
+
+ILocalization::Status SlamPipeline::localizationStatus() const {
+    if (!m_localization) return ILocalization::LOST;
+    return m_localization->getStatus();
 }
 
 bool SlamPipeline::setInitPose(const PoseStamped& pose) {

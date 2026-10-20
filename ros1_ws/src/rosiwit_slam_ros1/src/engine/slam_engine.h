@@ -102,6 +102,8 @@ public:
     /// 丢掉核心的建图状态并重建 (= 旧实现的"删掉建图实例再 new"), 用于进建图模式前清干净。
     bool resetCore();
     std::string pipelineMode() const;
+    /// 核心定位健康状态（唯一权威），ROS 层只做协议映射。
+    rosiwit_slam::ILocalization::Status localizationStatus() const;
     /// 在线时间偏移估计（只读；由上层决定是否写回配置）。
     rosiwit_slam::TimeCalibrationResult onlineTimeCalibration() const;
     /// 在线 yaw 外参估计（IMU 朝向 vs LIO 朝向；只读）。

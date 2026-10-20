@@ -148,10 +148,10 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
     slam_mode_ = SlamMode::LOCALIZATION;
     curr_map_path_ = req.map_dir;
     curr_map_name_ = req.map_name;
-    lost_monitor_.reset();
+    last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
+    core_ever_localized_ = false;
     odom_mon_.reset();
     odom_mon_wrong_prev_ = false;
-    lost_monitor_.setMapLoaded(true);
     setWarningSuppression(true);
     publishZeroPoseInfo();   // 只发一次，之后由核心输出接管
     return ctx;
@@ -237,7 +237,8 @@ bool Ros1SlamInterface::handleRelocation(
     applyInitPose(req.initial_pose, false);
     relocating_ = false;
     // [T11] 进入重定位 -> 清 latch (下次真的定位上之前报 1, 不报 0)
-    lost_monitor_.reset();
+    last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
+    core_ever_localized_ = false;
     odom_mon_.reset();
     odom_mon_wrong_prev_ = false;
     res.success = true;
@@ -312,7 +313,6 @@ bool Ros1SlamInterface::handleGlobalLocalization(std_srvs::Empty::Request&,
     // (localization.pipeline.relocalizer=bbs 时即全局检索; =none 时退化为有界局部重锁)。
     if (!engine_.algo()) return false;
     engine_.requestRelocalization();
-    lost_monitor_.reset();
     odom_mon_.reset();
     odom_mon_wrong_prev_ = false;
     relocating_ = true;
@@ -364,10 +364,10 @@ bool Ros1SlamInterface::handleExpandMap(
             engine_.algo()->setPipelineMode("localization");
             slam_mode_ = SlamMode::LOCALIZATION;
             applyInitPose(req.initial_pose, false);
-            lost_monitor_.reset();
+            last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
+            core_ever_localized_ = false;
     odom_mon_.reset();
     odom_mon_wrong_prev_ = false;
-            lost_monitor_.setMapLoaded(true);
             curr_map_path_ = req.map_dir;
         } else {
             ROS_ERROR_STREAM("[ros1_slam] update_map_operation: loadMap failed: " << base);

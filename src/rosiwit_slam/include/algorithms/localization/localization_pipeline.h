@@ -114,6 +114,8 @@ private:
     CloudType::Ptr m_cached_target;
     PoseStamped m_cached_target_pose;
     bool m_has_cached_target = false;
+    /// setInitPose 后首帧必须通过 init_accept_score，否则判 LOST 进入恢复。
+    bool m_seed_pending = false;
     uint64_t m_cached_target_rev = 0;   // 建缓存时的维护层版本号(overlay 变更 -> 失效)
 
     // 全局重定位库后台构建 (2026-10-17 推行丢失事故: 懒建把 44.6s 的 FPFH 全图特征

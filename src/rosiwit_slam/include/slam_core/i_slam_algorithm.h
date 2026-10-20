@@ -5,6 +5,7 @@
 #include <vector>
 #include "slam_core/slam_types.h"
 #include "slam_core/map_data.h"
+#include "slam_core/i_localization.h"
 #include <cstdint>
 
 namespace rosiwit_slam {
@@ -49,6 +50,8 @@ public:
     virtual bool setPipelineMode(const std::string& /*mode*/) { return false; }
     /// 获取当前管线模式
     virtual std::string getPipelineMode() const { return "mapping"; }
+    /// 定位健康状态（核心唯一权威）：ROS 层只做协议映射，不再二次判定。
+    virtual ILocalization::Status localizationStatus() const { return ILocalization::LOST; }
     /// 设置初始位姿 (定位模式使用)
     virtual bool setInitPose(const PoseStamped& /*pose*/) { return false; }
     /// 获取栅格地图信息 (用于定位模式发布 grid_map)

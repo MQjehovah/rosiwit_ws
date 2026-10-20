@@ -8,7 +8,7 @@ namespace rosiwit_slam {
 
 class ILocalization {
 public:
-    enum Status { INIT, LOCALIZED, LOST };
+    enum Status { INIT, LOCALIZED, RECOVERING, LOST };
     virtual ~ILocalization() = default;
     virtual bool init(const std::string& config_path) = 0;
     virtual void setMap(const std::string& map_name) = 0;

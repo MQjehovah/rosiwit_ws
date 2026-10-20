@@ -246,6 +246,9 @@ struct AcceptConfig {
     int    consistent_frames = 2;    // 修正方向连续一致帧数
     bool   mahalanobis_gate = true;  // 用匹配协方差做 Mahalanobis 门控(抑制离群)
     double mahalanobis_chi2 = 16.81; // 6DoF 99% 卡方阈值
+    // 初始位姿(seed)第一帧匹配的最低覆盖率。低于此值说明 seed 不可信，
+    // 直接判 LOST，交给恢复策略做全局重定位；不进入局部跟踪。
+    double init_accept_score = 0.85;
 };
 
 // ==================== 地面/平面约束 ====================

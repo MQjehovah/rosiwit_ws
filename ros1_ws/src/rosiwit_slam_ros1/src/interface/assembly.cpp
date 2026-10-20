@@ -228,12 +228,16 @@ void Ros1SlamInterface::resetCoreAndCaches() {
     last_mapping_path_pub_ = ros::Time();
     last_location_info_pub_ = ros::Time();
     mapping_path_msg_ = nav_msgs::Path();
+    last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
+    core_ever_localized_ = false;
     debug_map_published_ = false;
     std::cout << "[ros1_slam] core rebuilt + local caches cleared" << std::endl;
 }
 
-void Ros1SlamInterface::resetLocalizationLatch() {    relocating_ = true;
-    lost_monitor_.reset();
+void Ros1SlamInterface::resetLocalizationLatch() {
+    relocating_ = true;
+    last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
+    core_ever_localized_ = false;
     odom_mon_.reset();
     odom_mon_wrong_prev_ = false;
 }

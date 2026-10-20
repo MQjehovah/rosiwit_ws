@@ -191,6 +191,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_accept_cfg.consistent_frames = getv<int>(ac, "consistent_frames", m_accept_cfg.consistent_frames);
         m_accept_cfg.mahalanobis_gate = getv<bool>(ac, "mahalanobis_gate", m_accept_cfg.mahalanobis_gate);
         m_accept_cfg.mahalanobis_chi2 = getv<double>(ac, "mahalanobis_chi2", m_accept_cfg.mahalanobis_chi2);
+        m_accept_cfg.init_accept_score = getv<double>(ac, "init_accept_score", m_accept_cfg.init_accept_score);
     }
     auto mtc = loc["maintainer"];
     if (mtc) {
@@ -362,6 +363,7 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
         timing += std::string(" ") + name + "=" + std::to_string(stage_ms(t_total0));
     };
     m_status = INIT;
+    m_seed_pending = false;
     m_initialized = false;
     m_has_cached_target = false;
     m_map_path = map_name;
@@ -414,6 +416,7 @@ void LocalizationPipeline::setMapData(const MapData& data) {
     std::lock_guard<std::mutex> state_lk(m_state_mu);
     m_cancel_set_map.store(false);
     m_status = INIT;
+    m_seed_pending = false;
     m_initialized = false;
     m_has_cached_target = false;
     m_map_path = data.meta.map_id;
@@ -535,6 +538,7 @@ void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
     m_consistent_cnt = 0;
     m_initialized = true;
     m_status = INIT;
+    m_seed_pending = true;
     m_smoother.reset(m_pose);
     m_hyp.reset(m_pose);
 }
@@ -550,6 +554,7 @@ void LocalizationPipeline::requestRelocalization() {
     std::lock_guard<std::mutex> state_lk(m_state_mu);
     m_status = LOST;
     m_initialized = false;
+    m_seed_pending = false;
     m_reloc_cooldown = 0;
     std::cout << "[LocPipeline] relocalization requested by service" << std::endl;
 }
@@ -991,6 +996,25 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         out_pose = accepted ? res.pose : guess;
     }
 
+    // 初始位姿(seed)首帧校验：seed 错误时局部 GICP 可能在相似结构上得到
+    // 0.8 左右的“看起来不错”分数并被接受；这里用独立、可配置的门限阻断，
+    // 直接进入 LOST，让恢复策略重新全局重定位。
+    if (m_seed_pending) {
+        m_seed_pending = false;
+        if (!res.converged || res.fitness < m_accept_cfg.init_accept_score) {
+            std::ostringstream os;
+            os << "initial seed rejected: fitness=" << res.fitness
+               << " < " << m_accept_cfg.init_accept_score << " -> LOST";
+            diag::log('W', "LocPipeline", os.str());
+            FlightRecorder::instance().event("SEED_REJECT", os.str());
+            m_initialized = false;
+            m_status = LOST;
+            m_last_match = res;
+            m_last_match.pose = guess;
+            return;
+        }
+    }
+
     out_pose.time = f.end_time;
     // L19 绝对约束融合 (门控互补): 新鲜且创新在门限内才采纳
     if (m_abs_cfg.enabled && m_has_abs &&
@@ -1153,7 +1177,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     switch (lvl) {
         case MonitorLevel::INIT:     m_status = INIT; break;
         case MonitorLevel::CREDIBLE: m_status = LOCALIZED; break;
-        case MonitorLevel::DEGRADED: m_status = LOCALIZED; break;
+        case MonitorLevel::DEGRADED: m_status = RECOVERING; break;
         case MonitorLevel::LOST:     m_status = LOST; break;
     }
 }

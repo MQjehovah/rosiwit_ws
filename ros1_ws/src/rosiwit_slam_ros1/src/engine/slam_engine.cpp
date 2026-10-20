@@ -670,13 +670,21 @@ void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& i
 
     Eigen::Quaterniond q(in.pose.pose.orientation.w, in.pose.pose.orientation.x,
                          in.pose.pose.orientation.y, in.pose.pose.orientation.z);
-    // 退化四元数(全零/近零) = "无初始位姿": 不 setInitPose, 让冷启动全局重定位接管。
-    // (2026-10-17 实测: 全零四元数 normalize 后成 NaN, setInitPose 造出 NaN 起点,
-    //  跟踪从垃圾位姿开始 -> 僵尸带)
+    // 退化四元数(全零/近零)不能 normalize。对 /switch_map 这类"默认位姿"入口，
+    // 把它补成 0,0,0 + identity；这仍然是正常 base_link 位姿，不是"无位姿"。
+    // 只有核心后面的 seed 校验失败时，才由恢复策略触发全局重定位。
     if (q.norm() < 0.5) {
-        std::cout << "[slam_engine] degenerate initial pose (|q|<0.5): skip setInitPose,"
-                     " global relocalization will take over" << std::endl;
-        return;
+        if (!zero_if_insane) {
+            std::cout << "[slam_engine] degenerate initial pose (|q|<0.5): skip setInitPose"
+                      << std::endl;
+            return;
+        }
+        std::cout << "[slam_engine] null initial pose -> default 0,0,0 identity"
+                  << std::endl;
+        x = 0.0;
+        y = 0.0;
+        z = 0.0;
+        q = Eigen::Quaterniond::Identity();
     }
     q.normalize();
 
@@ -861,6 +869,10 @@ rosiwit_slam::YawCalibrationResult SlamEngine::onlineYawCalibration() const {
 
 std::string SlamEngine::pipelineMode() const {
     return algo_raw_ ? algo_raw_->getPipelineMode() : std::string();
+}
+
+rosiwit_slam::ILocalization::Status SlamEngine::localizationStatus() const {
+    return algo_raw_ ? algo_raw_->localizationStatus() : rosiwit_slam::ILocalization::LOST;
 }
 
 void SlamEngine::addTickHook(std::function<void()> hook) {

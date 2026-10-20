@@ -90,6 +90,7 @@ public:
     bool setGridMapGenerator(const std::string& name) override;
     bool setPipelineMode(const std::string& mode) override;
     std::string getPipelineMode() const override;
+    ILocalization::Status localizationStatus() const override;
     bool setInitPose(const PoseStamped& pose) override;
     GridInfo getGridInfo() const override;
     uint64_t getRevision() const override;

@@ -36,6 +36,10 @@ void Ros1SlamInterface::publishCurrPose() {
     // 切图期间核心已 idle、旧输出快照已清空；这里再兜底，任何残留的旧图输出都不发布。
     if (slam_mode_ == SlamMode::LOCALIZATION && map_switch_busy_.load()) return;
 
+    // 核心状态变化不一定伴随新位姿（例如 seed 首帧被拒 -> LOST），
+    // 因此状态变化必须独立于 pose 输出立即上报。
+    publishCoreStatusIfChanged();
+
     SlamOutput out;
     const bool have_out = engine_.latestOutput(out) && out.has_new_pose;
 
@@ -118,7 +122,6 @@ Ros1SlamInterface::PoseTickResult Ros1SlamInterface::publishLocalizationPose(
     if (out.state != rosiwit_slam::SlamState::LOST) {
         curr_pose_valid_ = true;
         last_new_pose_ros_ = ros::Time::now();
-        lost_monitor_.onLocalizedPose();
     }
 
     // confidently-wrong 防线：匹配分高但位姿锁错时，激光位移 vs 轮速位移是唯一信号。
@@ -166,6 +169,13 @@ void Ros1SlamInterface::publishMappingPose(const SlamOutput& out, bool have_out)
         mapping_path_msg_.poses.erase(mapping_path_msg_.poses.begin(),
                                       mapping_path_msg_.poses.begin() + drop);
     }
+}
+
+void Ros1SlamInterface::publishCoreStatusIfChanged() {
+    if (slam_mode_ != SlamMode::LOCALIZATION) return;
+    const auto st = engine_.localizationStatus();
+    if (st == last_core_loc_status_) return;
+    publishLocationInfo();
 }
 
 void Ros1SlamInterface::publishSlamInfoThrottled() {
@@ -246,18 +256,32 @@ void Ros1SlamInterface::publishLocationInfo() {
         case SlamMode::LOCALIZATION: {
             slam_state = 1;   // legacy.cpp:1842
             map_area = static_cast<float>(realtime_grid_map_area_);
-            // 旧实现: relocating_ = isRelocalization(); 重定位中 -> 1,
-            // 否则 getLocalizationStatus() ∈{0,1} -> 0, 其它 -> 2。
-            // 核心不暴露 relocalization/status, 用 T3 的 LostMonitor 等价表达 0/1/2 (设计文档 §5.11 B)
-            PoseStamped pose;
-            Eigen::Matrix<double, 6, 6> cov;
-            const bool cov_ok = engine_.getPoseCov(pose, cov);
-            const LocStatus st = lost_monitor_.update(cov_ok);
-            location_status = static_cast<int8_t>(st);
-            relocating_ = (st == LocStatus::RECOVERING);
-            if (!relocating_) {
-                matching_degree = static_cast<float>(engine_.getMatchingDegree());
+
+            // 状态唯一来源：核心 localizationStatus()。
+            // ROS 层只做协议映射：LOCALIZED=0, RECOVERING/INIT=1, LOST=2。
+            const auto st = engine_.localizationStatus();
+            switch (st) {
+                case rosiwit_slam::ILocalization::LOCALIZED:  location_status = 0; break;
+                case rosiwit_slam::ILocalization::RECOVERING:
+                case rosiwit_slam::ILocalization::INIT:       location_status = 1; break;
+                case rosiwit_slam::ILocalization::LOST:        location_status = 2; break;
             }
+            relocating_ = (st == rosiwit_slam::ILocalization::RECOVERING);
+            if (st == rosiwit_slam::ILocalization::LOCALIZED) {
+                matching_degree = static_cast<float>(engine_.getMatchingDegree());
+                core_ever_localized_ = true;
+            } else if (st == rosiwit_slam::ILocalization::RECOVERING) {
+                core_ever_localized_ = true;
+            }
+
+            // LOST 边沿 -> 20003504。状态本身由核心给出，这里只负责告警边沿。
+            if (st == rosiwit_slam::ILocalization::LOST &&
+                last_core_loc_status_ != rosiwit_slam::ILocalization::LOST &&
+                core_ever_localized_) {
+                addWarningCode(20003504);
+                std::cout << "[ros1_slam] core LOST -> warning 20003504 (pose lost)" << std::endl;
+            }
+            last_core_loc_status_ = st;
             break;
         }
         case SlamMode::MAPPING:   // legacy.cpp:1873-1882
@@ -277,16 +301,6 @@ void Ros1SlamInterface::publishLocationInfo() {
     if (relocating_) {
         slam_state = 1;
         location_status = 1;
-    }
-
-    // [T11] 丢失边沿 -> 20003504 (pose lost, level=FAULT, 取自 conf/warning_code.json)。
-    // 与 update() 同一 tick 消费(同线程), 所以真实的丢失不会被漏报;
-    // 被作废的只是"丢失后又立刻恢复、发布方还没看过"的瞬时抖动 (T3 的设计)。
-    // 核心不暴露告警码通道, 旧系统的 20003504 是定位模块自己 push 的
-    // (nano_gicp_localization.cpp:9403) —— 这里是我们**补上**。
-    if (lost_monitor_.consumeLostEdge()) {
-        addWarningCode(20003504);
-        std::cout << "[ros1_slam] localization LOST -> warning 20003504 (pose lost)" << std::endl;
     }
 
     slam_info_puber_.publish(

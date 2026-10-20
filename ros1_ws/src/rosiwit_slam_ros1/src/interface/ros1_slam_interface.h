@@ -54,7 +54,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include "config.h"
-#include "lost_monitor.h"
+#include "lost_monitor.h"  // OdomConsistencyMonitor (LostMonitor 本身已不参与状态判定)
 #include "realtime_grid.h"
 #include "slam_engine.h"
 
@@ -91,8 +91,6 @@ public:
     SlamMode slamMode() const { return slam_mode_; }
 
     // ---- [T8/T11] 地图与定位 latch ----
-    /// 地图加载成功时调 (旧实现: localiza_ptr_ 被创建出来)
-    void setMapLoaded(bool loaded) { lost_monitor_.setMapLoaded(loaded); }
     /// 换图/进入定位/重定位时调 (旧实现: relocating_ = true)
     void resetLocalizationLatch();
     /// 旧 `curr_map_name_` (slam/info 的 map_name), 初值空串 (legacy.cpp:93)
@@ -150,6 +148,7 @@ private:
     PoseTickResult publishLocalizationPose(const rosiwit_slam::SlamOutput& out, bool have_out);
     void publishMappingPose(const rosiwit_slam::SlamOutput& out, bool have_out);
     void publishSlamInfoThrottled();
+    void publishCoreStatusIfChanged();
     void publishHighRateLocalizationPose(bool info_published);
     void publishStaticMapFallback();
     void publishLocationInfo();      // legacy.cpp:1823-1897
@@ -247,7 +246,10 @@ private:
     ros::Time last_location_info_pub_;              // slam/info 节流 (最高 10Hz)
     static constexpr size_t kMaxMappingPathPoses = 10000;
 
-    LostMonitor lost_monitor_;      // T3
+    // 定位状态唯一来源是核心 localizationStatus()；这里只保存上一帧用于 LOST 边沿告警。
+    rosiwit_slam::ILocalization::Status last_core_loc_status_ =
+        rosiwit_slam::ILocalization::INIT;
+    bool core_ever_localized_ = false;
     // confidently-wrong 防线: 激光位姿位移 vs 轮式里程计位移 的窗口一致性
     OdomConsistencyMonitor odom_mon_;
     bool odom_mon_wrong_prev_ = false;

@@ -338,9 +338,9 @@ localization:
   # ---- 健康监测 (monitor: threshold | windowed) —— ★联动(阈值链)见文件头 ----
   monitor:
     enabled: true
-    credible_fitness: 0.75   # 健康线: ≥ 此为 CREDIBLE; 有界恢复达标线
-    lost_fitness: 0.5        # < 此连续 lost_patience_low 帧判 LOST
-    mediocre_patience: 100    # 持续平庸升级: fit∈[0.5,0.75) 连续 N 帧(~10s@10Hz)判丢触发重定位
+    credible_fitness: 0.85   # 健康线: ≥ 此为 CREDIBLE; 有界恢复达标线
+    lost_fitness: 0.75        # < 此连续 lost_patience_low 帧判 LOST
+    mediocre_patience: 100    # 持续平庸升级: fit∈[lost_fitness, credible_fitness) 连续 N 帧(~10s@10Hz)判丢触发重定位
                               # (僵尸带防御: 2026-10-17 推行事故 fitness 0.5~0.67 徘徊
                               #  330s 永不判丢, 位姿被 0.35 的低接受阈值放行散步 18m)
     lost_patience: 3
@@ -355,6 +355,7 @@ localization:
   # ---- s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性) ----
   accept:
     mode: 1
+    init_accept_score: 0.85  # 初始位姿首帧最低覆盖率; 低于此值判 LOST 交给恢复策略
     # 实机: gicp 覆盖率典型 0.43, 原来的 0.5 会一直接受不了 -> 位姿不输出(角标冻结)。
     # 先放到 0.35 让它能锁住; 后面根据 [LocProbe] REJECT 的实际分布再收紧。
     min_coverage: 0.35   # ★联动(阈值链): < lost_fitness(0.5) —— 最底层
