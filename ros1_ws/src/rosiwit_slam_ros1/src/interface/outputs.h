@@ -74,6 +74,9 @@ private:
 
     bool grid_published_ = false;
     nav_msgs::Path path_;
+    double last_pose_time_ = -1.0;      // 同一核心位姿不重复做点云深拷贝/入轨迹
+    ros::Time last_path_pub_;           // lio_path 整条重发节流 (50Hz -> 1Hz)
+    static constexpr size_t kMaxPathPoses = 10000;
 };
 
 } // namespace rosiwit_slam_ros1

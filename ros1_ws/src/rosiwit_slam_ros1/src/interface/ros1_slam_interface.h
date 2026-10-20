@@ -220,6 +220,10 @@ private:
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= config 的 map_resolution)
     nav_msgs::OccupancyGrid global_grid_map_msg_;   // 旧 global_grid_map_ (latch 一次)
     nav_msgs::Path mapping_path_msg_;               // 建图轨迹 (累积后整条重发)
+    double last_mapping_path_time_ = -1.0;          // 轨迹去重: 同一个核心位姿不重复入队
+    ros::Time last_mapping_path_pub_;               // 轨迹整条重发节流 (10Hz -> 1Hz)
+    ros::Time last_location_info_pub_;              // slam/info 节流 (最高 10Hz)
+    static constexpr size_t kMaxMappingPathPoses = 10000;
 
     LostMonitor lost_monitor_;      // T3
     // confidently-wrong 防线: 激光位姿位移 vs 轮式里程计位移 的窗口一致性

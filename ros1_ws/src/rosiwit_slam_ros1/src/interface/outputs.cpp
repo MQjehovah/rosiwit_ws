@@ -74,15 +74,23 @@ void RosiwitInterface::onTick() {
 void RosiwitInterface::publishPose(const SlamOutput& out) {
     // 行业标准: 核心估计 IMU body; 所有对外位姿/TF/body_cloud 在 ROS1 层转 base_link.
     // world_cloud 已在 map 系, 不参与变换。
+    //
+    // onTick 是 50Hz，但核心定位/建图输出通常约 10Hz；同一 timestamp 不重复
+    // 深拷贝 body_cloud，也不重复追加轨迹。lio_odom 仍按 50Hz 重发，保持兼容。
+    const bool new_pose = out.pose.time > last_pose_time_ + 1e-6;
+    if (new_pose) last_pose_time_ = out.pose.time;
+
     PoseStamped pose = out.pose;
-    CloudType::Ptr body_cloud = out.body_cloud;
+    CloudType::Ptr body_cloud;
     if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseImu().valid) {
         // 核心输出/body_cloud 在 IMU body; 对外转 base_link.
         pose = composeRightInv(out.pose, engine_.baseImu());
-        if (out.body_cloud) {
+        if (new_pose && out.body_cloud && body_cloud_pub_.getNumSubscribers() > 0) {
             body_cloud.reset(new CloudType(*out.body_cloud));
             transformCloud(*body_cloud, engine_.baseImu());
         }
+    } else if (new_pose && out.body_cloud && body_cloud_pub_.getNumSubscribers() > 0) {
+        body_cloud = out.body_cloud;
     }
 
     ros::Time stamp;
@@ -124,10 +132,11 @@ void RosiwitInterface::publishPose(const SlamOutput& out) {
         sensor_msgs::PointCloud2 m; pcl::toROSMsg(*c, m);
         m.header.frame_id = fid; m.header.stamp = stamp; p.publish(m);
     };
-    pub_cloud(body_cloud_pub_, body_cloud, engine_.bodyFrame());
-    pub_cloud(world_cloud_pub_, out.world_cloud, engine_.worldFrame());
+    if (new_pose && body_cloud) pub_cloud(body_cloud_pub_, body_cloud, engine_.bodyFrame());
+    if (new_pose && out.world_cloud)
+        pub_cloud(world_cloud_pub_, out.world_cloud, engine_.worldFrame());
 
-    if (path_pub_.getNumSubscribers() > 0) {
+    if (new_pose && path_pub_.getNumSubscribers() > 0) {
         geometry_msgs::PoseStamped ps;
         ps.header.frame_id = engine_.worldFrame(); ps.header.stamp = stamp;
         ps.pose.position.x = pose.trans.x();
@@ -136,8 +145,18 @@ void RosiwitInterface::publishPose(const SlamOutput& out) {
         ps.pose.orientation.x = q.x(); ps.pose.orientation.y = q.y();
         ps.pose.orientation.z = q.z(); ps.pose.orientation.w = q.w();
         path_.poses.push_back(ps);
+        // Path 不能无限长：超过上限丢弃最老的一小段，避免 vector 每次单删。
+        if (path_.poses.size() > kMaxPathPoses) {
+            const size_t drop = kMaxPathPoses / 10;
+            path_.poses.erase(path_.poses.begin(), path_.poses.begin() + drop);
+        }
         path_.header.stamp = stamp;
-        path_pub_.publish(path_);
+        // 整条 Path 序列化是 O(N)；可视化 1Hz 足够，不需 50Hz 重发。
+        if (last_path_pub_.isZero() ||
+            (ros::Time::now() - last_path_pub_).toSec() >= 1.0) {
+            path_pub_.publish(path_);
+            last_path_pub_ = ros::Time::now();
+        }
     }
 }
 
@@ -145,10 +164,9 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
     auto* algo = engine_.algo();
     if (!algo) return;
 
-    const std::string mode = engine_.pipelineMode();
-    const bool is_loc = (mode == "localization");
-    // cloud_map
-    if (is_loc || global_map_pub_.getNumSubscribers() > 0) {
+    // cloud_map / grid_map 都是"有人订阅才发"。以前 is_loc 强制每 2s
+    // getGlobalMap() + getRealtimeGrid()，即使无人订阅也复制整张地图/栅格。
+    if (global_map_pub_.getNumSubscribers() > 0) {
         PointVec pts;
         if (engine_.getGlobalMap(pts) && !pts.empty()) {
             CloudType cloud; cloud.reserve(pts.size());
@@ -160,7 +178,7 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
         }
     }
     // grid_map (+ map, 仅非冲突模式)
-    const bool want_grid = is_loc || grid_map_pub_.getNumSubscribers() > 0 ||
+    const bool want_grid = grid_map_pub_.getNumSubscribers() > 0 ||
                            (!suppress_conflicts_ && map_pub_.getNumSubscribers() > 0);
     if (want_grid) {
         GridInfo gi;
@@ -239,7 +257,6 @@ bool RosiwitInterface::handleSaveGridMap(rosiwit_slam_ros1::SaveGridMap::Request
 
 bool RosiwitInterface::handleSetMode(rosiwit_slam_ros1::SetSlamMode::Request& req,
                                      rosiwit_slam_ros1::SetSlamMode::Response& res) {
-    if (engine_.algo() && req.mode == "idle") engine_.algo()->cancelMapLoad();
     if (engine_.algo() && req.mode == "idle") engine_.algo()->cancelMapLoad();
     res.success = engine_.algo() && engine_.algo()->setPipelineMode(req.mode);
     res.message = res.success ? "ok" : "unsupported";

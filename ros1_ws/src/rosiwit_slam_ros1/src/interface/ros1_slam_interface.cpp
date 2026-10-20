@@ -234,6 +234,9 @@ void Ros1SlamInterface::resetCoreAndCaches() {
     last_high_rate_pub_ = ros::Time();
     last_high_rate_tf_ = ros::Time();
     last_pose_stamp_ = 0.0;
+    last_mapping_path_time_ = -1.0;
+    last_mapping_path_pub_ = ros::Time();
+    last_location_info_pub_ = ros::Time();
     mapping_path_msg_ = nav_msgs::Path();
     debug_map_published_ = false;
     std::cout << "[ros1_slam] core rebuilt + local caches cleared" << std::endl;
@@ -386,7 +389,7 @@ void Ros1SlamInterface::onRawInputCloud(const CloudType& raw_cloud, const ros::T
     }
     // origin_point: 每帧雷达都发 (legacy.cpp:3169/3299/3427)。
     // frame_id 用 "map" 是照抄旧实现 (xz_slam_ros1_interface.cpp:3115) —— 点其实是未配准的输入点。
-    if (!snapshot->empty()) {
+    if (!snapshot->empty() && point_puber_.getNumSubscribers() > 0) {
         point_puber_.publish(toPointCloud2(*snapshot, kMapFrame, stamp));
     }
 }
@@ -438,38 +441,58 @@ void Ros1SlamInterface::publishCurrScan() {
 
     if (slam_mode_ == SlamMode::LOCALIZATION) {
         // scan_f_map: 抽稀到约 2000 + z∈(0.1,2) (legacy.cpp:982-1011 旧带 (0,2) 在
-        // "地面=0" 的车体系下成立; 我们 z_ref 有 ~7cm 标定偏差, 下界抬 0.1 防地面泄漏), **无条件**发
-        CloudType::Ptr shaped = scanShape(world, kLocZMax, 1, scan_ground_z_, kScanZMin);
-        if (shaped->empty()) return;
-        ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
-        // curr_scan_point: 同一个点云, 但只有 debug_publish_ 才发 (legacy.cpp:1007-1009)
-        if (debug_publish_) pointcloud_puber_.publish(toPointCloud2(*shaped, kMapFrame, stamp));
+        // "地面=0" 的车体系下成立; 我们 z_ref 有 ~7cm 标定偏差, 下界抬 0.1 防地面泄漏)。
+        // 先看订阅者：没有订阅时不做 shape/旧 PointCloud 转换。
+        const bool need_scan = ros1_pointcloud_puber_.getNumSubscribers() > 0;
+        const bool need_debug_cloud =
+            debug_publish_ && pointcloud_puber_.getNumSubscribers() > 0;
+        if (need_scan || need_debug_cloud) {
+            CloudType::Ptr shaped = scanShape(world, kLocZMax, 1, scan_ground_z_, kScanZMin);
+            if (!shaped->empty()) {
+                if (need_scan)
+                    ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
+                if (need_debug_cloud)
+                    pointcloud_puber_.publish(toPointCloud2(*shaped, kMapFrame, stamp));
+            }
+        }
         // or_curr_scan_point: 原始输入帧, 抽稀倍率 x2, **不过滤 z** (legacy.cpp:1026-1058)。
         // frame_id "map" 照抄旧实现 (xz_slam_ros1_interface.cpp:1053)。
-        CloudType::Ptr raw_snapshot;
-        ros::Time raw_stamp;
-        {
-            std::lock_guard<std::mutex> lk(raw_input_mtx_);
-            raw_snapshot = raw_input_;
-            raw_stamp = raw_input_stamp_;
-        }
-        if (raw_snapshot && !raw_snapshot->empty()) {
-            CloudType::Ptr orc = scanShape(*raw_snapshot, -1.0, 2, scan_ground_z_);
-            if (!orc->empty())
-                or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_stamp));
+        if (or_pointcloud_puber_.getNumSubscribers() > 0) {
+            CloudType::Ptr raw_snapshot;
+            ros::Time raw_stamp;
+            {
+                std::lock_guard<std::mutex> lk(raw_input_mtx_);
+                raw_snapshot = raw_input_;
+                raw_stamp = raw_input_stamp_;
+            }
+            if (raw_snapshot && !raw_snapshot->empty()) {
+                CloudType::Ptr orc = scanShape(*raw_snapshot, -1.0, 2, scan_ground_z_);
+                if (!orc->empty())
+                    or_pointcloud_puber_.publish(toPointCloud2(*orc, kMapFrame, raw_stamp));
+            }
         }
     } else if (slam_mode_ == SlamMode::MAPPING) {
         // scan_f_map: 抽稀到约 2000 + z∈(0.1,1) (legacy.cpp:1071-1096, 下界同理抬 0.1)
-        CloudType::Ptr shaped = scanShape(world, kMapZMax, 1, scan_ground_z_, kScanZMin);
-        // curr_scan_point: **完整的**去畸变点云 (legacy.cpp:1097 把过滤结果覆盖掉了), 无条件发
-        pointcloud_puber_.publish(toPointCloud2(world, kMapFrame, stamp));
-        if (!shaped->empty()) ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
+        if (pointcloud_puber_.getNumSubscribers() > 0) {
+            pointcloud_puber_.publish(toPointCloud2(world, kMapFrame, stamp));
+        }
+        if (ros1_pointcloud_puber_.getNumSubscribers() > 0) {
+            CloudType::Ptr shaped = scanShape(world, kMapZMax, 1, scan_ground_z_, kScanZMin);
+            if (!shaped->empty())
+                ros1_pointcloud_puber_.publish(toOldPointCloud(*shaped, kMapFrame, stamp));
+        }
         // or_curr_scan_point: 建图**不发** (legacy.cpp:1102 那行是注释掉的)
     }
 }
 
 void Ros1SlamInterface::publishMappingPath() {
+    if (!path_puber_.getNumSubscribers() || mapping_path_msg_.poses.empty()) return;
     mapping_path_msg_.header.frame_id = kMapFrame;
+    // 整条 Path 重发非常贵 (O(轨迹长度))；10Hz 调用只保留 1Hz 实际发送。
+    const ros::Time now = ros::Time::now();
+    if (!last_mapping_path_pub_.isZero() &&
+        (now - last_mapping_path_pub_).toSec() < 1.0) return;
+    last_mapping_path_pub_ = now;
     path_puber_.publish(mapping_path_msg_);   // 整条重发 (legacy.cpp:885-887)
 }
 
@@ -658,11 +681,30 @@ void Ros1SlamInterface::publishCurrPose() {
             ps.pose.orientation.z = curr_pose_.q.z();
             ps.pose.orientation.w = curr_pose_.q.w();
             pose_puber_.publish(ps);
-            mapping_path_msg_.poses.push_back(ps);   // 累积, 供 publishMappingPath 整条重发
+            // 轨迹去重: publishCurrPose 是 100Hz，核心位姿通常 10Hz；
+            // 同一 timestamp 不重复入队，否则 Path 会以 5~10 倍速度膨胀。
+            if (out.pose.time > last_mapping_path_time_ + 1e-6) {
+                last_mapping_path_time_ = out.pose.time;
+                mapping_path_msg_.poses.push_back(ps);
+                if (mapping_path_msg_.poses.size() > kMaxMappingPathPoses) {
+                    const size_t drop = kMaxMappingPathPoses / 10;
+                    mapping_path_msg_.poses.erase(mapping_path_msg_.poses.begin(),
+                                                  mapping_path_msg_.poses.begin() + drop);
+                }
+            }
         }
     }
 
-    if (publish_info) publishLocationInfo();
+    if (publish_info) {
+        // /slam/info 最高 10Hz：FREE/建图分支原来会 100Hz 发同一个状态，网络和
+        // 序列化开销都白付；定位有新位姿时本来约 10Hz，不受影响。
+        const ros::Time now = ros::Time::now();
+        if (last_location_info_pub_.isZero() ||
+            (now - last_location_info_pub_).toSec() >= 0.1) {
+            publishLocationInfo();
+            last_location_info_pub_ = now;
+        }
+    }
     // 建图时 TF 跟随 100Hz 位姿定时器；定位时由下面高频块统一限到 20Hz，
     // 避免每次 10ms tick 都做一次较贵的 base_footprint<-odom 查询。
     if (slam_mode_ == SlamMode::MAPPING && use_tf_) sendTransform();
@@ -719,6 +761,7 @@ void Ros1SlamInterface::publishCurrPose() {
 
 void Ros1SlamInterface::publishZeroPoseInfo() {
     curr_pose_ = Xz3dPose();
+    last_location_info_pub_ = ros::Time::now();
     slam_info_puber_.publish(
         buildSlamInfo(/*slam_state=*/1, /*location_status=*/1, curr_map_name_,
                       0.0, 0.0, 0.0,
