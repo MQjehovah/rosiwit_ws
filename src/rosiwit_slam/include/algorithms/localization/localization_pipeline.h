@@ -46,12 +46,12 @@ public:
 
     // 供离线评估/调试: 最近一帧配准结果与置信度 (加锁返回快照, 供 ROS2 多线程读)
     MatchResult lastMatch() const {
-        std::lock_guard<std::mutex> lk(m_state_mu);
-        return m_last_match;
+        std::lock_guard<std::mutex> lk(m_snapshot_mu);
+        return m_snapshot_match;
     }
     double confidence() const {
-        std::lock_guard<std::mutex> lk(m_state_mu);
-        return m_last_match.fitness;
+        std::lock_guard<std::mutex> lk(m_snapshot_mu);
+        return m_snapshot_confidence;
     }
     std::string describe() const;
 
@@ -63,6 +63,8 @@ private:
     CloudType::Ptr buildTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
     bool ensureRelocalizerMap();   // 全局重定位库就绪检查(后台构建中返回 false, 绝不阻塞)
     void relocBuildWorker();       // 后台构建线程: FPFH 全图特征+建树(~45s, 不进回调)
+    void globalRelocWorker();      // 全局候选搜索线程: 不持 m_state_mu
+    void updateSnapshotLocked();   // onLidar 持锁时刷新无锁读快照
 
     // 各阶段 (由配置选择)
     std::unique_ptr<IGlobalLocalizer>     m_relocalizer;
@@ -90,15 +92,25 @@ private:
     std::string m_maintainer_name = "none";
 
     // 状态
-    // 并发契约 (ROS2 默认 MultiThreadedExecutor):
+    // 并发契约:
     //   - onLidar 是唯一的大状态写入者; 它持 m_state_mu 整个执行期.
-    //   - getStatus/getPose/getPoseCov/confidence/setInitPose/setMap/requestRelocalization
-    //     都走 m_state_mu, 不会与 onLidar 交叠.
-    //   - 高频输出 predictAt 只走 m_prior_mu, 不被长达数秒的 onLidar 阻塞;
-    //     m_initialized 用 atomic 供无锁快速判断.
-    //   - 所有 m_prior->xxx 调用都走 m_prior_mu (onImu/onOdom/predictAt 与 onLidar 内的调用).
+    //   - setMap 走 m_state_mu；setInitPose/requestRelocalization 只入命令队列，
+    //     由 onLidar worker 消费，服务线程不等待长耗时重定位。
+    //   - getStatus/getPose/getPoseCov/confidence 走轻量快照，不等待 onLidar 内的
+    //     全局重定位/GICP，避免 ROS spinner 被拖住。
+    //   - 高频输出 predictAt 只走 m_prior_mu；所有 m_prior->xxx 都走 m_prior_mu.
     mutable std::mutex m_state_mu;
     mutable std::mutex m_prior_mu;
+    mutable std::mutex m_snapshot_mu;
+    mutable std::mutex m_cmd_mu;
+    PoseStamped m_pending_init;
+    bool m_pending_init_valid = false;
+    bool m_pending_reloc = false;
+    PoseStamped m_snapshot_pose;
+    Eigen::Matrix<double, 6, 6> m_snapshot_cov = Eigen::Matrix<double, 6, 6>::Identity();
+    MatchResult m_snapshot_match;
+    bool m_snapshot_valid = false;
+    double m_snapshot_confidence = 0.0;
     CloudType::Ptr m_map;
     std::string m_map_path;
     PoseStamped m_pose;
@@ -106,7 +118,7 @@ private:
     /// 避免运动先验在无修正情况下一直积分, 越漂越远(实机曾漂到离图 96m, 从此再也匹配不上)。
     PoseStamped m_last_accepted;
     bool m_have_last_accepted = false;
-    Status m_status = INIT;
+    std::atomic<Status> m_status{INIT};
     std::atomic<bool> m_initialized{false};
     MatchResult m_last_match;
 
@@ -125,6 +137,18 @@ private:
     std::thread m_reloc_thread;
     std::mutex m_reloc_mu;
     std::condition_variable m_reloc_cv;
+    // 全局重定位搜索线程：只做 FPFH 候选搜索，不持 m_state_mu；
+    // 找到候选后通过 m_pending_init 交给本地 tracking worker。
+    std::thread m_global_thread;
+    std::mutex m_global_mu;
+    std::condition_variable m_global_cv;
+    CloudType::Ptr m_global_scan;
+    uint64_t m_global_scan_generation = 0;
+    bool m_global_scan_valid = false;
+    bool m_global_request = false;
+    bool m_global_stop = false;
+    std::atomic<uint64_t> m_global_generation{0};
+    int m_global_cooldown = 0;
     std::atomic<bool> m_reloc_building{false};
     bool m_reloc_request = false;       // setMap 置位, worker 消费
     bool m_reloc_stop = false;
@@ -144,9 +168,8 @@ private:
     int m_refresh_counter = 0;
     size_t m_last_overlay_size = 0;
 
-    // 过桥(coasting)与重定位节流
+    // 过桥(coasting)计数
     int m_coast_count = 0;
-    int m_reloc_cooldown = 0;
 
     PlanarConstraint m_planar;   // 地面/平面约束 (第7层视觉约束, 可选)
 

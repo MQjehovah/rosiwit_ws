@@ -65,7 +65,9 @@ void Ros1SlamInterface::publishCurrPose() {
     if (slam_mode_ == SlamMode::LOCALIZATION) {
         const PoseTickResult r = publishLocalizationPose(out, have_out);
         if (r == PoseTickResult::DropTick) return;
-        publish_info = (r == PoseTickResult::Info);
+        // 即使没有新位姿（全局重定位/GICP 占用 worker 时），也按 10Hz 节流
+        // 重发 slam/info，让界面持续看到 INIT/LOST，而不是认为节点卡死。
+        publish_info = true;
     } else if (slam_mode_ == SlamMode::MAPPING) {
         publishMappingPose(out, have_out);
     }
