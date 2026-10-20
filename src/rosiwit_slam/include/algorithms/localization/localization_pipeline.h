@@ -71,6 +71,7 @@ private:
     std::unique_ptr<IMotionPrior>         m_prior;
     std::unique_ptr<ILocalMapProvider>    m_local_map;
     std::unique_ptr<IScanMatcher>         m_matcher;
+    std::unique_ptr<IScanMatcher>         m_global_matcher;   // 全局候选精配专用，独立线程使用
     std::unique_ptr<ILocalizationMonitor> m_monitor;
     std::unique_ptr<IMapMaintainer>       m_maintainer;   // 第6阶段: 非破坏性叠加地图维护
     std::atomic<bool> m_cancel_set_map{false};

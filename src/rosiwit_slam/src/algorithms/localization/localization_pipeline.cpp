@@ -290,6 +290,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     if (!m_relocalizer) { std::cerr << "[LocPipeline] unknown relocalizer: " << m_relocalizer_name << std::endl; return false; }
 
     m_matcher->configure(m_matcher_cfg);
+    m_global_matcher = LocalizationFactory::createMatcher(m_matcher_name);
+    if (m_global_matcher) m_global_matcher->configure(m_matcher_cfg);
     m_prior->configure(m_motion_cfg);
     m_local_map->configure(m_local_map_cfg);
     m_monitor->configure(m_monitor_cfg);
@@ -842,13 +844,49 @@ void LocalizationPipeline::globalRelocWorker() {
                   [](const GlobalCandidate& a, const GlobalCandidate& b) {
                       return a.score > b.score;
                   });
-        const GlobalCandidate& best = cands.front();
-        if (best.score < m_global_cfg.reloc_accept_score) {
+        // 全局粗候选不能直接当 seed：用独立 matcher 在全图目标上做精配，
+        // 并检查最优/次优差异，避免在重复结构里把 top1 的错误候选锁进来。
+        CloudType::Ptr global_map;
+        {
+            std::lock_guard<std::mutex> lk(m_state_mu);
+            global_map = m_map;
+        }
+        PoseStamped best_pose;
+        double best_fit = -1.0;
+        double second_fit = -1.0;
+        if (m_global_matcher && global_map && !global_map->empty()) {
+            m_global_matcher->setTarget(global_map);
+            for (const auto& cand : cands) {
+                MatchResult r;
+                if (!m_global_matcher->match(scan, cand.pose, r) || !r.converged)
+                    continue;
+                if (r.fitness > best_fit) {
+                    second_fit = best_fit;
+                    best_fit = r.fitness;
+                    best_pose = r.pose;
+                } else if (r.fitness > second_fit) {
+                    second_fit = r.fitness;
+                }
+            }
+        }
+        if (best_fit < m_global_cfg.reloc_accept_score) {
             std::lock_guard<std::mutex> lk(m_global_mu);
             m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
-            diag::log('W', "LocPipeline",
-                      "global candidate weak: " + std::to_string(best.score) +
-                      " -> retry");
+            std::ostringstream os;
+            os << "global refine weak: best=" << best_fit
+               << " second=" << second_fit << " -> retry";
+            diag::log('W', "LocPipeline", os.str());
+            continue;
+        }
+        const double gap = (second_fit >= 0.0) ? (best_fit - second_fit) : 1.0;
+        if (second_fit >= m_global_cfg.reloc_accept_score &&
+            gap < m_ambiguity_margin) {
+            std::lock_guard<std::mutex> lk(m_global_mu);
+            m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
+            std::ostringstream os;
+            os << "global refine ambiguous: best=" << best_fit
+               << " second=" << second_fit << " gap=" << gap << " -> retry";
+            diag::log('W', "LocPipeline", os.str());
             continue;
         }
         {
@@ -860,7 +898,7 @@ void LocalizationPipeline::globalRelocWorker() {
         }
         {
             std::lock_guard<std::mutex> lk(m_cmd_mu);
-            m_pending_init = best.pose;
+            m_pending_init = best_pose;
             m_pending_init_valid = true;
             m_pending_reloc = false;
         }
@@ -870,7 +908,8 @@ void LocalizationPipeline::globalRelocWorker() {
             m_global_cooldown = 0;
         }
         std::ostringstream os;
-        os << "global candidate injected: score=" << best.score;
+        os << "global candidate injected: best_fit=" << best_fit
+           << " second=" << second_fit << " gap=" << gap;
         diag::log('I', "LocPipeline", os.str());
         FlightRecorder::instance().event("GLOBAL_SEED", os.str());
     }
