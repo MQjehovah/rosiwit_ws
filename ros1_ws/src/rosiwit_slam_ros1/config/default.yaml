@@ -124,8 +124,8 @@ mapping:
     icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
     min_keyframe_gap: 30 # 回环最小关键帧间隔
   map_manager:
-    max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
-    max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
+    max_correction_trans_m: 15 # 后端修正允许的最大平移跳变(m)
+    max_correction_rot_deg: 150 # 后端修正允许的最大旋转跳变(deg)
   grid:
     generator: occupancy_logodds # 2D栅格生成策略 (对齐 Livox)
     min_height: 0.25 # 地面以上障碍最低高度(m) (0.1 -> 0.25, 压制巷道地面黑点)
