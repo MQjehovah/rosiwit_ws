@@ -795,6 +795,12 @@ bool SlamEngine::latestOutput(SlamOutput& out) const {
     return true;
 }
 
+void SlamEngine::clearLatestOutput() {
+    std::lock_guard<std::mutex> lk(out_mutex_);
+    latest_ = SlamOutput();
+    have_output_ = false;
+}
+
 bool SlamEngine::getGlobalMap(PointVec& out) const {
     if (!algo_raw_) return false;
     return algo_raw_->getGlobalMap(out);

@@ -1165,18 +1165,20 @@ ILocalization::Status LocalizationPipeline::getStatus() {
 
 bool LocalizationPipeline::getPose(PoseStamped& out) {
     std::lock_guard<std::mutex> lk(m_state_mu);
-    // LOST 时仍返回最后一次有效位姿; 否则 ROS 层既无法输出 LOST 状态,
-    // 也无法让上层区分"定位丢失"和"节点死了". 从未初始化/从未匹配则返回 false.
-    if (m_status == LOST && !m_initialized.load()) return false;
+    // 从未初始化/从未匹配则返回 false. 否则 ROS 层会把 setMapData 后残留的
+    // 上一张图位姿(或默认 identity)当成"当前位姿"发出去 —— 切图瞬间表现为
+    // 初始位姿相对地图零点偏 90°(IMU body 默认 identity 再被 -90° 输出).
+    // 定位成功过之后 LOST 仍返回最后有效位姿, 供界面保持位置.
+    if (!m_initialized.load()) return false;
     out = m_pose;
     return true;
 }
 
 bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) {
     std::lock_guard<std::mutex> lk(m_state_mu);
-    // LOST 必须返回 false：ROS 层的 LostMonitor 用它判断“当前是否可信”。
-    // getPose() 仍可返回最后有效位姿，供界面保持最后位置显示。
-    if (m_status == LOST) return false;
+    // LOST/未初始化必须返回 false：ROS 层的 LostMonitor 用它判断“当前是否可信”。
+    // getPose() 在定位成功后 LOST 仍可返回最后有效位姿，供界面保持最后位置显示。
+    if (!m_initialized.load() || m_status == LOST) return false;
     out = m_pose;
     cov = m_last_match.cov;
     return true;

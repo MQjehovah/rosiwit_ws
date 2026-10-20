@@ -23,6 +23,14 @@ int64_t OverlayMapMaintainer::voxelKey(int cx, int cy, int cz) {
 }
 
 void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudType::Ptr& base) {
+    // 换图必须清空上一张图的叠加层/体素去重/增量缓存。否则旧 overlay 会
+    // 继续叠加到新图局部目标上，造成"新图里混着上一张图的点" (切图干扰)。
+    m_cells.clear();
+    m_voxel_seen.clear();
+    m_pending_store.reset();
+    m_overlay_count = 0;
+    ++m_revision;
+
     m_map_path = map_path;
     m_voxel = m_cfg.voxel > 0 ? m_cfg.voxel : 0.3;
     m_cell = m_cfg.cell > 0 ? m_cfg.cell : 10.0;

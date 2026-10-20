@@ -151,6 +151,9 @@ void Ros1SlamInterface::initTimerPub() {
 // ---------------------------------------------------------------- 模式
 
 SlamMode Ros1SlamInterface::updateModeFromCore() {
+    // 切图过渡：核心先被置 idle 清输出，本层仍保持 LOCALIZATION 语义，
+    // 避免 timer 把 slam_mode_ 改成 FREE 后界面状态跳变/地图名被清。
+    if (map_switch_busy_.load()) return slam_mode_;
     const std::string m = engine_.pipelineMode();
     if (m == "mapping")           slam_mode_ = SlamMode::MAPPING;
     else if (m == "localization") slam_mode_ = SlamMode::LOCALIZATION;
@@ -544,6 +547,9 @@ void Ros1SlamInterface::timerPublishLocalizationPose(const ros::TimerEvent&) {
 void Ros1SlamInterface::publishCurrPose() {
     updateModeFromCore();
 
+    // 切图期间核心已 idle、旧输出快照已清空；这里再兜底，任何残留的旧图输出都不发布。
+    if (slam_mode_ == SlamMode::LOCALIZATION && map_switch_busy_.load()) return;
+
     SlamOutput out;
     const bool have_out = engine_.latestOutput(out) && out.has_new_pose;
 
@@ -709,6 +715,14 @@ void Ros1SlamInterface::publishCurrPose() {
             last_static_map_pub_ = now;
         }
     }
+}
+
+void Ros1SlamInterface::publishZeroPoseInfo() {
+    curr_pose_ = Xz3dPose();
+    slam_info_puber_.publish(
+        buildSlamInfo(/*slam_state=*/1, /*location_status=*/1, curr_map_name_,
+                      0.0, 0.0, 0.0,
+                      static_cast<float>(realtime_grid_map_area_), 0.0f));
 }
 
 void Ros1SlamInterface::publishLocationInfo() {
@@ -1126,8 +1140,14 @@ bool Ros1SlamInterface::handleSwitchMap(
         return true;
     }
     // 分支 3: 换图
-    // 打断上一张图的后台加载（核心在阶段边界响应）。
-    if (engine_.algo()) engine_.algo()->cancelMapLoad();
+    // 先"停用并清空"上一张图：核心置 idle（不再产出旧图位姿/不再消费定位帧），
+    // 清掉最近一次输出快照。随后后台加载新图，加载完成再切回 localization。
+    // 这是行业常见的 deactivate -> swap -> activate，而不是继续让旧图输出再靠 10Hz 重发掩盖。
+    if (engine_.algo()) {
+        engine_.algo()->cancelMapLoad();
+        engine_.algo()->setPipelineMode("idle");
+    }
+    engine_.clearLatestOutput();
     const uint64_t switch_gen = ++map_switch_generation_;
     relocating_ = true;
     map_switch_busy_.store(true);
@@ -1153,10 +1173,15 @@ bool Ros1SlamInterface::handleSwitchMap(
     }
 
     static_map_valid_ = pgm_ok;
+    // 切图默认显示地图零点 (0,0,0)，不保留上一张图的位姿。
+    // 核心已 idle + 输出快照已清空；这里同步清本层缓存，只发一次零点 slam/info，
+    // 之后等新图加载/定位结果，不再周期性重发。
+    curr_pose_ = Xz3dPose();
     curr_pose_valid_ = false;
     last_new_pose_ros_ = ros::Time();
     last_high_rate_pub_ = ros::Time();
     last_high_rate_tf_ = ros::Time();
+    last_pose_stamp_ = 0.0;
 
     // 2) 服务立即返回，避免 App 5s 超时；完整定位地图在后台串行加载。
     res.success = detect_ok || pgm_ok;
@@ -1168,6 +1193,7 @@ bool Ros1SlamInterface::handleSwitchMap(
     odom_mon_wrong_prev_ = false;
     lost_monitor_.setMapLoaded(true);
     setWarningSuppression(true);
+    publishZeroPoseInfo();   // 立即发布零位姿，App 不必等核心加载完
 
     const geometry_msgs::PoseWithCovarianceStamped init_pose = req.initial_pose;
     {

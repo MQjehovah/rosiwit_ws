@@ -79,6 +79,8 @@ public:
     /// 有输出就拷到 out 返回 true。**不过滤** has_new_pose —— 调用方自己看
     /// (与重构前的 processCB 一致: 反复发布最后一份输出)。
     bool latestOutput(rosiwit_slam::SlamOutput& out) const;
+    /// 丢掉最近一次核心输出快照 (切图时清掉上一张图的位姿，避免旧输出被重发)
+    void clearLatestOutput();
     bool getGlobalMap(rosiwit_slam::PointVec& out) const;
     /// 实时栅格: 走核心 generateGridMap (逐帧观测 + 地面处理), 与存 pgm 同一条路径。
     bool getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out);
