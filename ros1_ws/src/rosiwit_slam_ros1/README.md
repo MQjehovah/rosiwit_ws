@@ -14,16 +14,16 @@ ros1_ws/src/rosiwit_slam_ros1   (本包: ROS1/catkin 薄接口; 由 ros1_ws/COLC
 ros2_ws/src/rosiwit_slam_ros2   (ROS2/ament 薄接口)
 ```
 
-## 两种 profile（`~input_profile`）
+## 单一接口
 
-| profile | 行为 |
-|---|---|
-| `rosiwit`（默认） | 只挂 **新接口**（`RosiwitInterface`）：`lio_odom`/`odom`/`lio_path`/`body_cloud`/`world_cloud`/`cloud_map`/`grid_map`/`map`、TF、4 个服务 |
-| `legacy` | 新接口**抑制部分输出**，并在**同一个核心实例**上再挂 **旧 `xz_3d_slam` 接口**（`LegacyXz3dSlamInterface`），逐条复刻旧话题/服务/TF/告警 |
+节点固定使用一个核心实例和一个 ROS1 接口：
 
-`legacy` 下：`RosiwitInterface` 不发 `odom` 别名、不发任何 TF、不发 `/map`（都归旧接口独占），
-其余 `lio_odom`/`lio_path`/`cloud_map`/`grid_map`/`body_cloud`/`world_cloud` 照发（被本仓库
-其它模块订阅）。输入话题名由旧配置 `conf/slam_conf.json` + `sensor_config.json` 决定。
+- `Ros1SlamInterface`：完整兼容接口（`slam/info`、`/map`、服务、动态 `map->odom` TF 等）
+- `RosiwitInterface`：只保留不冲突的新输出（`lio_odom`/`lio_path`/`cloud_map`/`grid_map`/
+  `body_cloud`/`world_cloud`）
+
+输入话题由机器人现有 `conf/slam_conf.json` + `sensor_config.json` 决定，避免与底盘驱动/launch
+配置脱节。`/odom` 由 `Ros1SlamInterface` 统一订阅并喂给核心，定位模式下的 `imu_ekf` 直接使用。
 
 ## 构建本包（ROS1）
 
@@ -46,8 +46,8 @@ cd src/rosiwit_slam && cmake -S . -B build && cmake --build build -j && ctest --
 启动：
 
 ```bash
-roslaunch rosiwit_slam_ros1 rosiwit_slam.launch          # 新接口 (profile=rosiwit)
-roslaunch rosiwit_slam_ros1 xz_3d_slam.launch model:=XZ-SW50   # 兼容旧系统 (profile=legacy)
+roslaunch rosiwit_slam_ros1 rosiwit_slam.launch          # 只启动 SLAM 节点
+roslaunch rosiwit_slam_ros1 xz_3d_slam.launch model:=XZ-SW50   # 机器人整机 launch
 ```
 
 ## 接口速览
@@ -58,7 +58,7 @@ roslaunch rosiwit_slam_ros1 xz_3d_slam.launch model:=XZ-SW50   # 兼容旧系统
 - TF：`world_frame->body_frame`（动态）、`map->odom`（静态）
 - 服务：`save_map`/`load_map`/`save_grid_map`/`set_slam_mode`
 
-**旧接口**（`LegacyXz3dSlamInterface`，仅 `legacy` profile）
+**兼容接口**（`Ros1SlamInterface`）
 - 14 话题：`global_map`/`global_grid_map`/`/map`/`curr_scan_point`/`scan_f_map`/`curr_submap_point`/
   `or_curr_scan_point`/`curr_localization_pose`/`mapping_path`/`loop_constraint`/`slam/info`/
   `points_2d`/`slam_warning_code`/`origin_point`

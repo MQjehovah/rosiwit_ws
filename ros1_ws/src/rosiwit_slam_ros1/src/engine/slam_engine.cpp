@@ -1,6 +1,6 @@
 // ============================================================================
-// SlamEngine 实现 —— 全部从原 rosiwit_slam_ros1_node.cpp 搬移, 除 input_profile
-// 与 legacy 输入话题覆盖外不改任何行为。
+// SlamEngine 实现 —— 全部从原 rosiwit_slam_ros1_node.cpp 搬移。
+// 输入话题由机器人现有 sensor_config 决定，其余行为保持不变。
 // ============================================================================
 #include "slam_engine.h"
 
@@ -337,8 +337,6 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
 } // namespace
 
 SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
-    // ---- input_profile: 默认 legacy, 老接口优先; 仅选择输入配置, 不再决定输出接口 ----
-    pnh_.param<std::string>("input_profile", input_profile_, "legacy");
     pnh_.param<bool>("online_calibration", online_calib_enabled_, true);
     bool calib_apply = false;
     pnh_.param<bool>("online_calibration_apply", calib_apply, false);
@@ -351,11 +349,6 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     pnh_.param<double>("calib_max_yaw_offset", calib_cfg.max_yaw_offset, 0.15);
     pnh_.param<double>("calib_max_step", calib_cfg.max_step, 0.01);
     calib_controller_.setConfig(calib_cfg);
-    if (input_profile_ != "rosiwit" && input_profile_ != "legacy") {
-        ROS_WARN_STREAM("[slam_engine] unknown input_profile '" << input_profile_
-                        << "', falling back to 'rosiwit'");
-        input_profile_ = "rosiwit";
-    }
 
     std::string algo_name = "fast_lio2_pipeline";
     pnh_.param<std::string>("slam_algorithm", algo_name, algo_name);
@@ -414,8 +407,8 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
         }
     }
 
-    // ---- legacy profile: 旧配置决定输入话题名 (M13: 外参/单位仍取核心 YAML) ----
-    if (xzProfile()) {
+    // ---- ROS1 输入: 沿用机器人现有 sensor_config 决定输入话题; 外参/单位仍取核心 YAML ----
+    {
         std::string model;
         nh_.param<std::string>("/machine/model", model, "");
         xz_cfg_ = Xz3dConfig::load(defaultXz3dPaths(), model);
@@ -435,14 +428,14 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
             if (!xz_cfg_.imu_sub_name.empty())   cfg_.imu_topic   = xz_cfg_.imu_sub_name;
             if (!xz_cfg_.laser_sub_name.empty()) cfg_.lidar_topic = xz_cfg_.laser_sub_name;
         }
-        std::cout << "[slam_engine] legacy laser_type='" << lt << "' -> input topics: imu="
+        std::cout << "[slam_engine] sensor laser_type='" << lt << "' -> input topics: imu="
                   << cfg_.imu_topic << " lidar=" << cfg_.lidar_topic << std::endl;
 
         // ---- M8: 给核心注入 map_directory: "/" 的 override YAML ----
         std::string base = config_path_;
         if (base.empty()) {
             base = ros::package::getPath("rosiwit_slam_ros1") + "/config/default.yaml";
-            ROS_WARN_STREAM("[slam_engine] legacy profile: ~config_file 未设置, 核心 YAML 回落到 "
+            ROS_WARN_STREAM("[slam_engine] ROS1 输入: ~config_file 未设置, 核心 YAML 回落到 "
                             << base);
         }
         // 雷达-IMU 外参: 优先按 TF / 同名帧自动推导; 推不出来就保留基底配置里的值。
@@ -488,24 +481,6 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
                           r_il(2,0), r_il(2,1), r_il(2,2), t_il.x(), t_il.y(), t_il.z());
             std::cout << eb << std::endl;
         }        printCompatDiagnostics(base, config_path_, xz_cfg_);
-    } else {
-        // 行业标准: 算法用 IMU body; r_il/t_il 是 IMU<-lidar 外参, 由 ROS1 层从 TF 推导后注入.
-        std::string base = config_path_;
-        if (base.empty()) {
-            base = ros::package::getPath("rosiwit_slam_ros1") + "/config/default.yaml";
-        }
-        Eigen::Matrix3d r_il = Eigen::Matrix3d::Identity();
-        Eigen::Vector3d t_il = Eigen::Vector3d::Zero();
-        std::string extr_src;
-        const bool have_extr = computeXz3dExtrinsic(r_il, t_il, extr_src);
-        if (!have_extr) extr_src = "config (core yaml)";
-        computeBaseFrames(/*blocking=*/true);
-        Eigen::Matrix3d r_bl = base_lidar_.R;
-        config_path_ = writeXz3dOverrideYaml(base, r_il, t_il, have_extr,
-                                              base_lidar_.valid ? &r_bl : nullptr,
-                                              /*write_map_dir=*/false);
-        std::cout << "[slam_engine] core body=IMU, extrinsic source = " << extr_src
-                  << ", r_il/t_il injected=" << (have_extr ? 1 : 0) << std::endl;
     }
 
     algo_ = SlamFactory::create(algo_name);
@@ -519,10 +494,8 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     imu_sub_  = nh_.subscribe(cfg_.imu_topic, 1000, &SlamEngine::imuCB, this);
     lidar_sub_ = nh_.subscribe(cfg_.lidar_topic, 100, &SlamEngine::lidarCB, this);
     init_pose_sub_ = nh_.subscribe("/initialpose", 10, &SlamEngine::initialPoseCB, this);
-    // 轮式里程计: legacy profile 下由 Ros1SlamInterface 独占订阅 (它无条件喂核心),
-    // 引擎这里就不再重复订阅, 免得同一份 /odom 被注入两次。
-    if (odom_enabled && !xzProfile())
-        odom_sub_ = nh_.subscribe(cfg_.odom_topic, 100, &SlamEngine::odomCB, this);
+    // 轮式里程计由 Ros1SlamInterface 统一订阅并喂核心，避免同一份 /odom 被注入两次。
+    (void)odom_enabled;
     if (vo_enabled) vo_sub_ = nh_.subscribe(cfg_.vo_topic, 100, &SlamEngine::voCB, this);
     if (absolute_enabled) absolute_sub_ = nh_.subscribe(cfg_.absolute_topic, 100, &SlamEngine::absoluteCB, this);
 
@@ -535,8 +508,7 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     // 必须能被读到: 用 std::cout + endl 而不是 ROS_INFO —— roslaunch 把 stdout 重定向到
     // 管道时是块缓冲的, ROS_INFO 要等缓冲满才落盘, 实测在 `roslaunch ... | head` 里看不到。
     // (约定: 所有"上机器人后要核对"的启动日志都用 std::cout << ... << std::endl)
-    std::cout << "[slam_engine] profile=" << input_profile_
-              << " config=" << (config_path_.empty() ? "(none)" : config_path_)
+    std::cout << "[slam_engine] config=" << (config_path_.empty() ? "(none)" : config_path_)
               << " imu=" << cfg_.imu_topic
               << " lidar=" << cfg_.lidar_topic << std::endl;
 }
@@ -757,7 +729,6 @@ void SlamEngine::onOdomMsg(const nav_msgs::Odometry::ConstPtr& msg) {
 
 void SlamEngine::imuCB(const sensor_msgs::Imu::ConstPtr& msg) { onImuMsg(msg); }
 void SlamEngine::lidarCB(const sensor_msgs::PointCloud2::ConstPtr& msg) { onLidarMsg(msg); }
-void SlamEngine::odomCB(const nav_msgs::Odometry::ConstPtr& msg) { onOdomMsg(msg); }
 void SlamEngine::initialPoseCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
     onInitialPoseMsg(msg);
 }

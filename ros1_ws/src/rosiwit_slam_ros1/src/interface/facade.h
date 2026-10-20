@@ -6,7 +6,7 @@
 //   - RosiwitInterface:       仅保留不冲突的新输出 (lio_odom/lio_path/cloud_map/
 //                             grid_map/body_cloud/world_cloud), 冲突项全部抑制
 //
-// 不再有 input_profile 两套接口同时对外; 老接口优先.
+// 只有一个 ROS1 接口对外: 兼容接口 + 不冲突的新输出.
 // ============================================================================
 #pragma once
 

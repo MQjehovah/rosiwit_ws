@@ -1,6 +1,6 @@
 // ============================================================================
 // RosiwitInterface 实现 —— 逐字搬自原 rosiwit_slam_ros1_node.cpp 的
-// 发布器 / 服务 / TF 部分, 仅按 M5/M3 加 profile 抑制。
+// 发布器 / 服务 / TF 部分, 仅抑制兼容接口已经负责的冲突输出。
 // ============================================================================
 #include "outputs.h"
 #include "map_adapter.h"
@@ -19,11 +19,11 @@ namespace rosiwit_slam_ros1 {
 RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine,
                                    bool suppress_conflicts)
     : nh_(nh), pnh_(pnh), engine_(engine),
-      suppress_conflicts_(suppress_conflicts || engine.xzProfile()) {
+      suppress_conflicts_(suppress_conflicts) {
     // ---- 发布 ----
     odom_pub_ = nh_.advertise<nav_msgs::Odometry>("lio_odom", 1000);
     if (!suppress_conflicts_) {
-        // M5: legacy profile 下不发 `odom` 别名 —— 连 advertise 都不做,
+        // 兼容接口已经发布 `odom`, 这里不再发别名 —— 连 advertise 都不做,
         // 免得 `rosnode info` 里多出一条永远不出数据的发布者 (旧系统里
         // /odom 由 robot_localization 提供)。
         odom_nav_pub_ = nh_.advertise<nav_msgs::Odometry>("odom", 10);
@@ -35,12 +35,12 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
     grid_map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("grid_map", 1);
     calib_pub_ = nh_.advertise<std_msgs::String>("slam_calibration", 1, true);
     if (!suppress_conflicts_) {
-        // legacy profile 下 /map 由旧接口独占 (M3)
+        // /map 由兼容接口独占
         map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("map", 1, true);
     }
 
     // ---- TF ----
-    // 非 legacy 才发: legacy 要自己发动态 map->odom (旧实现在 legacy.cpp:1899-1936),
+    // 兼容接口负责动态 map->odom, 这里不再发同边静态 TF,
     // 静态同边会打架; odom->base_link 在旧系统里由 robot_localization 提供。
     if (!suppress_conflicts_) {
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>();

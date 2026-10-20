@@ -7,7 +7,6 @@
   <param name="/machine/model" type="string" value="$(arg model)" />
 
   <node pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" name="xz_3d_slam" output="screen">
-    <param name="input_profile" value="legacy" />
     <param name="config_file" value="$(find rosiwit_slam_ros1)/config/default.yaml" />
   </node>
 </launch>

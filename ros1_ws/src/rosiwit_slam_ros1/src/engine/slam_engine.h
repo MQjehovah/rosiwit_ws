@@ -4,12 +4,8 @@
 // 本类里的内容是从原 `rosiwit_slam_ros1_node.cpp` **原样搬出来**的:
 //   核心 YAML 装载 -> SlamFactory::create -> init -> 输入订阅 -> 输出快照 -> 50Hz 泵
 //
-// 抽出来的唯一理由: 让两套 ROS 接口(rosiwit 新接口 / 旧 3d_slam 接口)共用**同一个**
-// 核心实例 —— 一个进程、一个核心、两套接口同时对外, 而不是起两个进程各跑一份 SLAM。
-//
-// **行为契约**: 默认 legacy (老接口优先); input_profile 仅选择输入配置
-// (话题名、发布频率、TF、服务名都不变)。`legacy` 只额外做一件事:
-// 输入话题名改由旧配置(见 T1 的 Xz3dConfig)决定。
+// 一个进程、一个核心实例、一个 ROS1 对外接口；输入话题由机器人现有
+// sensor_config(见 Xz3dConfig) 决定，避免与底盘现有驱动/launch 配置脱节。
 // ============================================================================
 #pragma once
 
@@ -62,11 +58,7 @@ public:
     rosiwit_slam::ISlamAlgorithm* algo() const { return algo_raw_; }
     rosiwit_slam::SlamBase* base() const { return base_; }
 
-    // ---- profile ----
-    const std::string& inputProfile() const { return input_profile_; }
-    bool xzProfile() const { return input_profile_ == "legacy"; }
     const std::string& configPath() const { return config_path_; }
-    /// 仅 legacy profile 有意义 (否则是默认构造的全默认值)
     const Xz3dConfig& xzConfig() const { return xz_cfg_; }
 
     // ---- 帧名 / 话题名 ----
@@ -159,7 +151,6 @@ private:
     void imuCB(const sensor_msgs::Imu::ConstPtr& msg);
     void lidarCB(const sensor_msgs::PointCloud2::ConstPtr& msg);
     void initialPoseCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg);
-    void odomCB(const nav_msgs::Odometry::ConstPtr& msg);
     void voCB(const nav_msgs::Odometry::ConstPtr& msg);
     void absoluteCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg);
     void onOutput(const rosiwit_slam::SlamOutput& out);
@@ -168,7 +159,6 @@ private:
     ros::NodeHandle nh_, pnh_;
     Cfg cfg_;
 
-    std::string input_profile_ = "legacy";
     std::string config_path_;
     Xz3dConfig xz_cfg_;
 
@@ -186,7 +176,7 @@ private:
     double last_imu_stamp_ = -1.0;
     bool have_imu_yaw_ = false;
 
-    ros::Subscriber imu_sub_, lidar_sub_, init_pose_sub_, odom_sub_, vo_sub_, absolute_sub_;
+    ros::Subscriber imu_sub_, lidar_sub_, init_pose_sub_, vo_sub_, absolute_sub_;
     ros::Timer process_timer_;
 
     mutable std::mutex out_mutex_;

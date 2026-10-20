@@ -28,7 +28,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "=== 起节点 (input_profile=legacy) ==="
+echo "=== 起节点 ==="
 roslaunch rosiwit_slam_ros1 legacy_dev.launch > /tmp/smoke_node.log 2>&1 &
 LP=$!
 sleep 12

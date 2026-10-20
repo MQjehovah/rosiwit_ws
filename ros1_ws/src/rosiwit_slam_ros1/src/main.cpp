@@ -24,8 +24,7 @@ int main(int argc, char** argv) {
     // 唯一对外接口: 老接口优先, 新输出只保留不冲突项.
     rosiwit_slam_ros1::SlamRos1Interface iface(nh, pnh, engine);
 
-    ROS_INFO("[rosiwit_slam_ros1] node up: profile=%s (single interface)",
-             engine.inputProfile().c_str());
+    ROS_INFO("[rosiwit_slam_ros1] node up (single interface)");
     ros::spin();
     return 0;
 }

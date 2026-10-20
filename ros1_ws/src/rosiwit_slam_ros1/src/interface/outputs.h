@@ -2,15 +2,15 @@
 // RosiwitInterface —— rosiwit_slam 原有的"新接口"(计划 T4)
 //
 // 全部从原 rosiwit_slam_ros1_node.cpp 搬过来, 内容逐字保留:
-//   发布: lio_odom / odom(仅 rloiwit profile) / lio_path / body_cloud / world_cloud /
-//         cloud_map / grid_map / map(仅 rosiwit profile)
-//   TF:   odom->base_link(动态, 50Hz), map->odom(静态, 启动时一次)
+//   发布: lio_odom / lio_path / body_cloud / world_cloud / cloud_map / grid_map
+//         (`odom` 和 `/map` 由兼容接口负责)
+//   TF:   兼容接口负责 map->odom；本接口不重复发布
 //   服务: save_map / load_map / save_grid_map / set_slam_mode
 //
-// legacy profile 下的抑制 (设计文档 M5 / M3):
+// 兼容接口冲突输出抑制:
 //   - 不发 `odom` 别名, 不发任何 TF —— 旧接口要自己发 map->odom 动态 TF, 抢同一个
 //     父子边会打架; 而 odom->base_link 在旧系统里由 robot_localization 负责。
-//   - **不发布 /map** —— legacy profile 下 /map 归旧接口独占 (M3: 只有一个 /map 发布者,
+//   - **不发布 /map** —— /map 归兼容接口独占 (只有一个 /map 发布者,
 //     建图=周期实时栅格, 定位=锁存全局栅格)。
 // 其它话题 (lio_odom / lio_path / cloud_map / grid_map / body_cloud / world_cloud) 照旧,
 // 因为仓库里 perception 等模块订阅的就是 /lio_odom。
@@ -77,7 +77,7 @@ private:
 
     ros::NodeHandle nh_, pnh_;
     SlamEngine& engine_;
-    const bool suppress_conflicts_;   // engine_.legacyProfile() 的快照
+    const bool suppress_conflicts_;   // 冲突输出抑制开关
 
     ros::Publisher odom_pub_, odom_nav_pub_, path_pub_, body_cloud_pub_, world_cloud_pub_,
                    global_map_pub_, grid_map_pub_, map_pub_, calib_pub_;
