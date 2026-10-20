@@ -254,13 +254,13 @@ localization:
     alpha: 0.5                # 融合权重
     max_trans: 2.0            # 创新门限(m)
     max_yaw_deg: 30.0
-
-  # 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层
     topic: absolute_pose # 绝对位姿话题
     datum_x: 0.0 # 绝对源系到地图系x偏移(m)
     datum_y: 0.0 # 绝对源系到地图系y偏移(m)
     datum_z: 0.0 # 绝对源系到地图系z偏移(m)
     datum_yaw_deg: 0.0 # 绝对源系到地图系yaw偏移(deg)
+
+  # 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层
   maintainer:
     enabled: true
     fitness_trigger: 0.5      # fitness 低于此判为环境变化
