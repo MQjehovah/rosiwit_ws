@@ -184,11 +184,9 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     if (moc) {
         m_monitor_cfg.enabled            = getv<bool>(moc, "enabled", m_monitor_cfg.enabled);
         m_monitor_cfg.credible_fitness   = getv<double>(moc, "credible_fitness", m_monitor_cfg.credible_fitness);
-        m_monitor_cfg.mediocre_patience  = getv<int>(moc, "mediocre_patience", m_monitor_cfg.mediocre_patience);
         m_monitor_cfg.lost_fitness       = getv<double>(moc, "lost_fitness", m_monitor_cfg.lost_fitness);
+        m_monitor_cfg.localized_patience = getv<int>(moc, "localized_patience", m_monitor_cfg.localized_patience);
         m_monitor_cfg.lost_patience      = getv<int>(moc, "lost_patience", m_monitor_cfg.lost_patience);
-        m_monitor_cfg.lost_patience_low  = getv<int>(moc, "lost_patience_low", m_monitor_cfg.lost_patience_low);
-        m_monitor_cfg.coast_patience     = getv<int>(moc, "coast_patience", m_monitor_cfg.coast_patience);
         m_monitor_cfg.nees_threshold     = getv<double>(moc, "nees_threshold", m_monitor_cfg.nees_threshold);
         m_monitor_cfg.window_length      = getv<int>(moc, "window_length", m_monitor_cfg.window_length);
         m_monitor_cfg.window_std_k       = getv<double>(moc, "window_std_k", m_monitor_cfg.window_std_k);
@@ -377,6 +375,8 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     };
     m_status = INIT;
     m_seed_pending = false;
+    m_healthy_streak = 0;
+    m_unhealthy_streak = 0;
     m_initialized = false;
     m_has_cached_target = false;
     m_map_path = map_name;
@@ -430,6 +430,8 @@ void LocalizationPipeline::setMapData(const MapData& data) {
     m_cancel_set_map.store(false);
     m_status = INIT;
     m_seed_pending = false;
+    m_healthy_streak = 0;
+    m_unhealthy_streak = 0;
     m_initialized = false;
     m_has_cached_target = false;
     m_map_path = data.meta.map_id;
@@ -546,7 +548,8 @@ void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
         if (m_prior) m_prior->reset(pose);
     }
     if (m_monitor) m_monitor->reset();
-    m_mediocre_streak = 0;
+    m_healthy_streak = 0;
+    m_unhealthy_streak = 0;
     m_corr_prev_valid = false;
     m_consistent_cnt = 0;
     m_initialized = true;
@@ -565,9 +568,12 @@ void LocalizationPipeline::requestRelocalization() {
     // 上层 /global_localization 触发: 强制回到未定位状态, 下一次 onLidar 走冷启动分支
     // (relocalizer=bbs 时即全局检索; =none 时退化为 tryBoundedRecovery 的有界局部重锁)
     std::lock_guard<std::mutex> state_lk(m_state_mu);
-    m_status = LOST;
+    // 重定位属于 INIT：等待健康帧累计到 localized_patience 才进入 LOCALIZED。
+    m_status = INIT;
     m_initialized = false;
     m_seed_pending = false;
+    m_healthy_streak = 0;
+    m_unhealthy_streak = 0;
     m_reloc_cooldown = 0;
     std::cout << "[LocPipeline] relocalization requested by service" << std::endl;
 }
@@ -659,7 +665,8 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
         m_prior->reset(m_pose);
     }
     m_monitor->reset();
-    m_mediocre_streak = 0;
+    m_healthy_streak = 0;
+    m_unhealthy_streak = 0;
     m_has_cached_target = false;
     m_coast_count = 0;
     diag::log('I', "LocPipeline", "bounded recovery, fitness=" + std::to_string(best_fit));
@@ -750,11 +757,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
 
     // 冷启动 / 丢失恢复: 尝试全局重定位 (多候选, 取最优通过者), 节流避免在未知环境刷爆
     if (!m_initialized || m_status == LOST) {
+        // LOST 后的后台全局重定位阶段归入 INIT；成功后仍需 localized_patience 确认。
+        if (m_status == LOST) m_status = INIT;
         if (m_reloc_cooldown > 0) {
             --m_reloc_cooldown;
         } else if (m_initialized && tryBoundedRecovery(f.cloud)) {
-            // 出口重锁成功
-            m_status = LOCALIZED;
+            // 出口重锁成功：先进入 INIT，等连续健康帧确认后再 LOCALIZED。
+            m_status = INIT;
+            m_healthy_streak = 0;
+            m_unhealthy_streak = 0;
             m_reloc_cooldown = 0;
             m_last_match = MatchResult();
             m_last_match.converged = true;
@@ -791,9 +802,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     m_prior->reset(m_pose);
                 }
                 m_monitor->reset();
-                m_mediocre_streak = 0;
+                m_healthy_streak = 0;
+                m_unhealthy_streak = 0;
                 m_initialized = true;
-                m_status = LOCALIZED;
+                m_status = INIT;
                 m_coast_count = 0;
                 m_reloc_cooldown = 0;
                 m_has_cached_target = false;
@@ -916,7 +928,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }
                 m_smoother.reset(m_pose);
                 m_initialized = true;
-                m_status = LOCALIZED;
+                m_status = INIT;
+                m_healthy_streak = 0;
+                m_unhealthy_streak = 0;
                 m_last_match = MatchResult();
                 m_last_match.converged = true;
                 m_last_match.fitness = best_fit;
@@ -940,7 +954,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             }
         }
         if (!m_initialized && m_status != LOCALIZED) return;  // 尚无初值
-        if (m_status == LOCALIZED) return;
+        if (m_status == INIT || m_status == LOCALIZED) return;
     }
 
     PoseStamped guess;
@@ -1031,21 +1045,21 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
 
     // 初始位姿(seed)首帧校验：seed 错误时局部 GICP 可能在相似结构上得到
-    // 0.8 左右的“看起来不错”分数并被接受；这里用独立、可配置的门限阻断，
-    // 直接进入 LOST，让恢复策略重新全局重定位。
+    // 0.8 左右的“看起来不错”分数并被接受；这里用独立、可配置的门限阻断。
+    // 失败仍保持 INIT，交给统一的 lost_patience 连续帧计数判丢。
+    bool seed_failed = false;
     if (m_seed_pending) {
         m_seed_pending = false;
         if (!res.converged || res.fitness < m_global_cfg.reloc_accept_score) {
+            seed_failed = true;
+            m_status = INIT;
             std::ostringstream os;
             os << "initial seed rejected: fitness=" << res.fitness
-               << " < " << m_global_cfg.reloc_accept_score << " -> LOST";
+               << " < " << m_global_cfg.reloc_accept_score << " -> INIT";
             diag::log('W', "LocPipeline", os.str());
             FlightRecorder::instance().event("SEED_REJECT", os.str());
-            m_initialized = false;
-            m_status = LOST;
             m_last_match = res;
             m_last_match.pose = guess;
-            return;
         }
     }
 
@@ -1186,35 +1200,39 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         if (std::isfinite(d2)) mi.nees = d2;
     }
     MonitorLevel lvl = m_monitor->update(mi);
-    // 过桥期(连续未采纳未超 coast_patience): 不判丢失, 保持降级连续外推
-    if (lvl == MonitorLevel::LOST && m_coast_count < m_monitor_cfg.coast_patience)
-        lvl = MonitorLevel::DEGRADED;
-    // 僵尸带直通判丢(管线层, 不受过桥钳制): monitor 的平庸升级会被上面的过桥
-    // 条款吞掉 —— acc 偶尔通过(0.6 > min_coverage 0.35)清零 coast, LOST 永远
-    // 被降级(2026-10-17 实测: fitness 0.64 僵尸 4 分钟不判丢不恢复)。这里用
-    // res.fitness 独立计数: 连续 mediocre_patience 帧上不了 credible 线直接
-    // LOST -> 触发冷启动重定位(要么确认要么纠正, 代价一次几秒尝试)。
-    m_mediocre_streak =
-        (res.converged && res.fitness < m_monitor_cfg.credible_fitness)
-            ? (m_mediocre_streak + 1) : 0;
-    if (m_monitor_cfg.mediocre_patience > 0 &&
-        m_mediocre_streak >= m_monitor_cfg.mediocre_patience) {
-        m_status = LOST;
-        {
+    // 统一状态机：INIT/LOCALIZED 共用同一个连续帧计数器。
+    //   INIT  -> LOCALIZED：连续 localized_patience 帧健康
+    //   INIT/LOCALIZED -> LOST：连续 lost_patience 帧不健康
+    // LOCALIZED 不因单帧异常回到 INIT；只有显式重定位才会进入 INIT。
+    const double healthy_fitness = (m_status == INIT)
+                                       ? m_global_cfg.reloc_accept_score
+                                       : m_monitor_cfg.credible_fitness;
+    const bool healthy = !seed_failed && res.converged &&
+                         lvl == MonitorLevel::CREDIBLE &&
+                         res.fitness >= healthy_fitness;
+    if (healthy) {
+        ++m_healthy_streak;
+        m_unhealthy_streak = 0;
+        if (m_status != LOCALIZED &&
+            m_healthy_streak >= std::max(1, m_monitor_cfg.localized_patience)) {
+            m_status = LOCALIZED;
+            diag::log('I', "LocPipeline", "localized after " +
+                      std::to_string(m_healthy_streak) + " healthy frames");
+            FlightRecorder::instance().event("LOCALIZED",
+                                             "healthy_frames=" + std::to_string(m_healthy_streak));
+        }
+    } else {
+        m_healthy_streak = 0;
+        ++m_unhealthy_streak;
+        if (m_unhealthy_streak >= std::max(1, m_monitor_cfg.lost_patience)) {
+            m_status = LOST;
             std::ostringstream os;
-            os << "fitness<" << m_monitor_cfg.credible_fitness
-               << " sustained " << m_mediocre_streak << " frames -> relocate";
-            diag::log('W', "LocPipeline", "zombie-band LOST: " + os.str());
-            FlightRecorder::instance().event("LOST", "zombie-band: " + os.str());
+            os << "unhealthy frames=" << m_unhealthy_streak
+               << " >= " << m_monitor_cfg.lost_patience << " -> LOST";
+            diag::log('W', "LocPipeline", os.str());
+            FlightRecorder::instance().event("LOST", os.str());
             FlightRecorder::instance().onStatusChange(true);
         }
-        return;
-    }
-    switch (lvl) {
-        case MonitorLevel::INIT:     m_status = INIT; break;
-        case MonitorLevel::CREDIBLE: m_status = LOCALIZED; break;
-        case MonitorLevel::DEGRADED: m_status = RECOVERING; break;
-        case MonitorLevel::LOST:     m_status = LOST; break;
     }
 }
 

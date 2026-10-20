@@ -8,7 +8,8 @@ namespace rosiwit_slam {
 
 class ILocalization {
 public:
-    enum Status { INIT, LOCALIZED, RECOVERING, LOST };
+    // 定位状态只有三种。原 RECOVERING 语义并入 INIT：未确认/重定位中。
+    enum Status { INIT, LOCALIZED, LOST };
     virtual ~ILocalization() = default;
     virtual bool init(const std::string& config_path) = 0;
     virtual void setMap(const std::string& map_name) = 0;

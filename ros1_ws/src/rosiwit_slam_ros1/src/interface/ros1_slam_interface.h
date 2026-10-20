@@ -152,7 +152,7 @@ private:
     void publishHighRateLocalizationPose(bool info_published);
     void publishStaticMapFallback();
     void publishLocationInfo();      // legacy.cpp:1823-1897
-    /// 切图/未定位阶段的零点位姿 slam/info (1 = RECOVERING, 0,0,0)
+    /// 切图/未定位阶段的零点位姿 slam/info (1 = INIT, 0,0,0)
     void publishZeroPoseInfo();
 
     SlamMode updateModeFromCore();   // 核心 pipeline mode -> 旧 SLAMMODE

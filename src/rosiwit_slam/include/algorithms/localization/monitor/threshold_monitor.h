@@ -4,7 +4,7 @@
 
 namespace rosiwit_slam {
 
-/// 阈值监测: 仅按 fitness 阈值 + 连续低分计数判定, 实现简单稳健.
+/// 阈值监测: 仅做当前帧 fitness 健康分类；连续判丢由 pipeline 统一计数.
 class ThresholdMonitor : public ILocalizationMonitor {
 public:
     std::string name() const override { return "threshold"; }
@@ -14,8 +14,6 @@ public:
 
 private:
     MonitorConfig m_cfg;
-    int m_low_count = 0;
-    int m_mediocre_count = 0;
     MonitorLevel m_level = MonitorLevel::INIT;
 };
 

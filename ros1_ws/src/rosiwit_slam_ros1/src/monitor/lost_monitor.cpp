@@ -1,8 +1,8 @@
 // ============================================================================
 // 定位丢失状态机的实现 (设计文档 §5.11 B)
 // 规则表 (状态 -> location_status):
-//   !map_loaded                    -> RECOVERING(1)   定位链路还没就绪
-//   !ever_localized_               -> RECOVERING(1)   等价于旧 relocating_ == true
+//   !map_loaded                    -> INIT(1)   定位链路还没就绪
+//   !ever_localized_               -> INIT(1)   等价于旧 relocating_ == true
 //   ever_localized_ && !pose_cov_ok-> FAILED(2)       并且置一次 lost_edge
 //   ever_localized_ &&  pose_cov_ok-> SUCCESS(0)
 // ============================================================================
@@ -31,7 +31,7 @@ LocStatus LostMonitor::update(bool pose_cov_ok) {
         // 还没到"能谈丢失"的阶段: 一律 1, 并清掉可能挂着的边沿
         last_failed_ = false;
         lost_edge_ = false;
-        return LocStatus::RECOVERING;
+        return LocStatus::INIT;
     }
 
     if (!pose_cov_ok) {

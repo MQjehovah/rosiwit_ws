@@ -114,7 +114,8 @@ private:
     CloudType::Ptr m_cached_target;
     PoseStamped m_cached_target_pose;
     bool m_has_cached_target = false;
-    /// setInitPose 后首帧必须通过 global.reloc_accept_score，否则判 LOST 进入恢复。
+    /// setInitPose 后首帧必须通过 global.reloc_accept_score；失败仍留在 INIT，
+    /// 由 lost_patience 连续帧计数决定何时 LOST。
     bool m_seed_pending = false;
     uint64_t m_cached_target_rev = 0;   // 建缓存时的维护层版本号(overlay 变更 -> 失效)
 
@@ -134,8 +135,10 @@ private:
     double m_ambiguity_margin = 0.02;
     // 跟踪期重播种可达性门控: 候选离当前位姿超该值不进假设池(31m 瞬移教训)
     double m_reseed_radius = 5.0;
-    // 僵尸带直通计数: 连续平庸(<credible)帧数, 超 mediocre_patience 直接 LOST
-    int m_mediocre_streak = 0;
+    // 状态机连续帧计数：健康帧累计到 localized_patience -> LOCALIZED；
+    // 不健康帧累计到 lost_patience -> LOST。LOCALIZED 不因单帧异常回到 INIT。
+    int m_healthy_streak = 0;
+    int m_unhealthy_streak = 0;
 
     // lifelong: 用叠加层刷新全局重定位器
     int m_refresh_counter = 0;

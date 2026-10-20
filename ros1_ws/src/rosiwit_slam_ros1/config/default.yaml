@@ -16,8 +16,9 @@
 #   ≤ global.reloc_accept_score(0.85)   必须保持此序!
 #   - min_coverage: 单帧匹配被接受的最低覆盖率。过高 -> 有效匹配被拒, 位姿冻结;
 #     过低 -> 错位姿被放行"散步"(事故: 0.35 放行 0.6 的垃圾匹配走了 18m)。
-#   - credible_fitness: 健康线。低于它连续 mediocre_patience 帧 -> 强制判丢重定位
-#     (僵尸带出口); 有界恢复必须达到此线才算成功, 否则放行全局重定位。
+#   - credible_fitness: 健康线。低于它连续 lost_patience 帧 -> 判丢重定位
+#     (统一替代原 mediocre_patience / lost_patience_low / coast_patience 三条路径);
+#     有界恢复必须达到此线才算成功, 否则放行全局重定位。
 #   - reloc_accept_score: 冷启动接受线。低于它宁可保持 LOST(界面如实), 不接受弱锁。
 #  [匹配捕获-滤波螺旋]
 #   matcher.dynamic_dist(0.4) ↔ matcher.max_correspondence_dist(2.5) ↔ local_map.cache_move(0.5):
@@ -290,14 +291,12 @@ localization:
     min_radius: 2.0 # 重定位候选最小半径(m)
   monitor:
     enabled: true
-    credible_fitness: 0.85   # 健康线: ≥ 此为 CREDIBLE; 有界恢复达标线
-    lost_fitness: 0.75        # < 此连续 lost_patience_low 帧判 LOST
-    mediocre_patience: 100    # 持续平庸升级: fit∈[lost_fitness, credible_fitness) 连续 N 帧(~10s@10Hz)判丢触发重定位
-                              # (僵尸带防御: 2026-10-17 推行事故 fitness 0.5~0.67 徘徊
-                              #  330s 永不判丢, 位姿被 0.35 的低接受阈值放行散步 18m)
-    lost_patience: 3
-    lost_patience_low: 8
-    coast_patience: 150       # 连续未采纳帧数上限(内=降级外推, 超=判丢失)
+    credible_fitness: 0.85   # 健康线: ≥ 此为健康帧; 有界恢复达标线
+    lost_fitness: 0.75        # 低于此值直接判为不健康帧
+    localized_patience: 3     # 连续健康帧数达到此值 -> LOCALIZED
+    lost_patience: 100        # 连续不健康帧数达到此值 -> LOST
+                              # (统一替代原 mediocre_patience / lost_patience_low / coast_patience;
+                              #  2026-10-17 僵尸带事故: fitness 长期 0.5~0.67 时必须能判丢)
     window_length: 20
     window_std_k: 2.0
     max_trans_step: 1.0

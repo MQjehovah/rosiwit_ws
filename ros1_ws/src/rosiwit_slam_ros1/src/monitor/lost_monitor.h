@@ -11,7 +11,7 @@
 //     的 latch 区分, 否则会把 INIT 误报成 SUCCESS(0)。这就是 ever_localized_ 存在的唯一理由,
 //     也是 onLocalizedPose() 唯一的职责。
 //  2. **DEGRADED 分辨不出**: 核心把 MonitorLevel::DEGRADED 也映射成 LOCALIZED
-//     (localization_pipeline.cpp:627), 所以 1(RECOVERING) 只用于"重定位进行中",
+//     (localization_pipeline.cpp:627), 所以 1(INIT) 只用于"重定位进行中",
 //     不用于"降级"(D11)。降级时我们照样报 0。
 // ============================================================================
 #pragma once
@@ -23,8 +23,8 @@
 namespace rosiwit_slam_ros1 {
 
 /// 与 xzrobot_ros_dependency/msg/SlamInfo.msg 的常量一一对应
-/// (int8 SUCCESS=0 / RECOVERING=1 / FAILED=2)
-enum class LocStatus : int8_t { SUCCESS = 0, RECOVERING = 1, FAILED = 2 };
+/// (int8 SUCCESS=0 / INIT=1 / FAILED=2)
+enum class LocStatus : int8_t { SUCCESS = 0, INIT = 1, FAILED = 2 };
 
 /// 纯逻辑状态机, 无线程、无 ROS 依赖 —— 便于单测。
 /// **线程约定**: 所有方法必须在同一线程调用 (T11 里统放在 100Hz 的 pose 定时器里)。

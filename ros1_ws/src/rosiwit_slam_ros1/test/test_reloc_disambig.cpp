@@ -172,43 +172,25 @@ TEST(ImuOdomGate, SlipSampleDropped) {
     EXPECT_LT(p2.trans.x(), 3.0) << "滑移样本被丢弃后不得外推到 12m";
 }
 
-// ---- 4. 僵尸带防御: 持续平庸 fitness 必须升级判丢 (2026-10-17 推行事故) ----
+// ---- 4. 监测器只做单帧健康分类；连续判丢由 LocalizationPipeline 的 lost_patience 负责 ----
 #include "algorithms/localization/monitor/windowed_monitor.h"
 
-TEST(ZombieBand, SustainedMediocreEscalatesToLost) {
+TEST(MonitorHealth, MediocreIsDegradedAndCredibleIsHealthy) {
     WindowedMonitor mon;
     MonitorConfig cfg;
-    cfg.mediocre_patience = 10;
+    cfg.credible_fitness = 0.75;
+    cfg.lost_fitness = 0.5;
     mon.configure(cfg);
     mon.reset();
-    MonitorInput in;
-    in.match.converged = true;
-    in.match.fitness = 0.6;   // 僵尸带 [0.5, 0.75)
-    in.pose.rot = Eigen::Matrix3d::Identity();
-    MonitorLevel lv = MonitorLevel::INIT;
-    for (int i = 0; i < 9; ++i) lv = mon.update(in);
-    EXPECT_NE(lv, MonitorLevel::LOST) << "9 帧平庸还应 DEGRADED";
-    lv = mon.update(in);
-    EXPECT_EQ(lv, MonitorLevel::LOST) << "第 10 帧平庸必须升级 LOST 触发重定位";
-}
 
-TEST(ZombieBand, CredibleFrameResetsCounter) {
-    WindowedMonitor mon;
-    MonitorConfig cfg;
-    cfg.mediocre_patience = 10;
-    mon.configure(cfg);
-    mon.reset();
     MonitorInput in;
     in.match.converged = true;
     in.pose.rot = Eigen::Matrix3d::Identity();
-    in.match.fitness = 0.6;
-    for (int i = 0; i < 5; ++i) mon.update(in);
-    in.match.fitness = 0.95;   // 一帧健康 -> 计数清零
-    mon.update(in);
-    in.match.fitness = 0.6;
-    MonitorLevel lv = MonitorLevel::INIT;
-    for (int i = 0; i < 9; ++i) lv = mon.update(in);
-    EXPECT_NE(lv, MonitorLevel::LOST) << "健康帧后计数必须清零, 9 帧平庸不应判丢";
+    in.match.fitness = 0.6;   // 僵尸带 [0.5, 0.75) -> 单帧不健康
+    EXPECT_EQ(mon.update(in), MonitorLevel::DEGRADED);
+
+    in.match.fitness = 0.95;  // 健康帧
+    EXPECT_EQ(mon.update(in), MonitorLevel::CREDIBLE);
 }
 
 int main(int argc, char** argv) {

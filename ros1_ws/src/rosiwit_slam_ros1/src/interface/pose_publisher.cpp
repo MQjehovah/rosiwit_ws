@@ -258,19 +258,16 @@ void Ros1SlamInterface::publishLocationInfo() {
             map_area = static_cast<float>(realtime_grid_map_area_);
 
             // 状态唯一来源：核心 localizationStatus()。
-            // ROS 层只做协议映射：LOCALIZED=0, RECOVERING/INIT=1, LOST=2。
+            // ROS 层只做协议映射：LOCALIZED=0, INIT=1, LOST=2。
             const auto st = engine_.localizationStatus();
             switch (st) {
                 case rosiwit_slam::ILocalization::LOCALIZED:  location_status = 0; break;
-                case rosiwit_slam::ILocalization::RECOVERING:
                 case rosiwit_slam::ILocalization::INIT:       location_status = 1; break;
                 case rosiwit_slam::ILocalization::LOST:        location_status = 2; break;
             }
-            relocating_ = (st == rosiwit_slam::ILocalization::RECOVERING);
+            relocating_ = (st == rosiwit_slam::ILocalization::INIT);
             if (st == rosiwit_slam::ILocalization::LOCALIZED) {
                 matching_degree = static_cast<float>(engine_.getMatchingDegree());
-                core_ever_localized_ = true;
-            } else if (st == rosiwit_slam::ILocalization::RECOVERING) {
                 core_ever_localized_ = true;
             }
 

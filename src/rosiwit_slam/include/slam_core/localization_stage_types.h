@@ -224,12 +224,12 @@ struct MonitorConfig {
     bool   enabled = true;
     double credible_fitness = 0.75;  // >= 判 CREDIBLE
     double lost_fitness = 0.5;       // < 判 DEGRADED, 连续 patience 次判 LOST
-    int    mediocre_patience = 100;  // 持续平庸升级: fit∈[lost,credible) 连续 N 帧判 LOST
-                                     // (0=关。僵尸带防御: 2026-10-17 推行事故 fitness
-                                     //  0.5~0.67 徘徊 330s, 永不判丢也永不恢复)
-    int    lost_patience = 3;        // 连续低 fitness 次数
-    int    lost_patience_low = 8;    // fitness<lost_fitness 的连续次数
-    int    coast_patience = 100;     // 配准未采纳连续帧数上限(内=降级外推, 超=判丢失)
+    // 状态机唯一使用的两个连续帧计数器：
+    //   INIT -> LOCALIZED 需要连续 localized_patience 帧健康；
+    //   INIT/LOCALIZED -> LOST 需要连续 lost_patience 帧不健康。
+    // 原 mediocre_patience / lost_patience_low / coast_patience 已合并到 lost_patience。
+    int    localized_patience = 3;   // 连续健康帧数 -> LOCALIZED
+    int    lost_patience = 100;      // 连续不健康帧数 -> LOST
     int    window_length = 20;       // windowed: 滑窗长度
     double window_std_k = 2.0;       // windowed: 均值±kσ 门限
     double max_trans_step = 1.0;     // 单帧位移跳变门限(m)

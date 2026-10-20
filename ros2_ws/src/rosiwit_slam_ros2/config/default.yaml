@@ -202,9 +202,9 @@ localization:
     enabled: true
     credible_fitness: 0.75
     lost_fitness: 0.5
-    lost_patience: 3
-    lost_patience_low: 8
-    coast_patience: 150       # 连续未采纳帧数上限(内=降级外推, 超=判丢失)
+    localized_patience: 3     # 连续健康帧数达到此值 -> LOCALIZED
+    lost_patience: 100        # 连续不健康帧数达到此值 -> LOST
+                              # (统一替代原 mediocre_patience / lost_patience_low / coast_patience)
     window_length: 20
     window_std_k: 2.0
     max_trans_step: 1.0

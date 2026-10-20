@@ -382,12 +382,12 @@ void SlamPipeline::handleLocalization(const LidarFrame& f) {
     m_localization->onLidar(f);
 
     const ILocalization::Status st = m_localization->getStatus();
-    const bool healthy = (st == ILocalization::LOCALIZED);
-    const bool recovering = (st == ILocalization::RECOVERING);
+    const bool pose_usable = (st == ILocalization::LOCALIZED ||
+                              st == ILocalization::INIT);
 
-    // RECOVERING 仍然有可用的末位姿，按 RUNNING 输出，状态由核心
-    // localizationStatus() 单独给出；ROS 层不再根据 state 二次猜健康状态。
-    if (healthy || recovering) {
+    // INIT 仍然有可用的末位姿，按 RUNNING 输出；是否可信由核心
+    // localizationStatus() 单独给出，ROS 层不再根据 state 二次猜健康状态。
+    if (pose_usable) {
         SlamOutput out;
         m_localization->getPose(out.pose);
         out.state = SlamState::RUNNING;

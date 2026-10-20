@@ -196,7 +196,7 @@ TEST(XzMapIoTest, WriteReadRoundTrip) {
 TEST(MonitorTest, ThresholdDetectsLost) {
     auto m = LocalizationFactory::createMonitor("threshold");
     ASSERT_NE(m, nullptr);
-    MonitorConfig cfg; cfg.credible_fitness = 0.75; cfg.lost_fitness = 0.5; cfg.lost_patience_low = 3;
+    MonitorConfig cfg; cfg.credible_fitness = 0.75; cfg.lost_fitness = 0.5;
     m->configure(cfg);
     m->reset();
 
@@ -204,9 +204,8 @@ TEST(MonitorTest, ThresholdDetectsLost) {
     EXPECT_EQ(m->update(good), MonitorLevel::CREDIBLE);
 
     MonitorInput bad; bad.match.converged = true; bad.match.fitness = 0.1;
-    EXPECT_NE(m->update(bad), MonitorLevel::LOST);
-    EXPECT_NE(m->update(bad), MonitorLevel::LOST);
-    EXPECT_EQ(m->update(bad), MonitorLevel::LOST);
+    EXPECT_EQ(m->update(bad), MonitorLevel::DEGRADED);
+    EXPECT_EQ(m->update(bad), MonitorLevel::DEGRADED);
 }
 
 // ---- 全局重定位契约 ----
@@ -746,7 +745,7 @@ TEST(TrajectoryRegressionTest, SyntheticSequenceAteAndLoss) {
              "  monitor:\n"
              "    credible_fitness: 0.6\n"
              "    lost_fitness: 0.4\n"
-             "    lost_patience_low: 30\n";
+             "    lost_patience: 30\n";
     }
 
     LocalizationPipeline lp;
@@ -803,7 +802,7 @@ std::string writeAbsCfg(const std::string& base, double max_trans) {
          "  monitor:\n"
          "    credible_fitness: 0.6\n"
          "    lost_fitness: 0.4\n"
-         "    lost_patience_low: 30\n"
+         "    lost_patience: 30\n"
          "  absolute:\n"
          "    enabled: true\n"
          "    window: 0.5\n"
