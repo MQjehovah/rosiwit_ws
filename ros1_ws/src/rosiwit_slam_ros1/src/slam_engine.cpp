@@ -24,6 +24,7 @@
 #include <sys/types.h>
 
 #include "slam_core/slam_factory.h"
+#include "slam_core/slam_pipeline.h"
 
 namespace rosiwit_slam_ros1 {
 
@@ -736,7 +737,14 @@ void SlamEngine::onOutput(const SlamOutput& out) {
 }
 
 void SlamEngine::processCB(const ros::TimerEvent&) {
-    if (base_) { while (base_->tryPopAndProcess()) {} }
+    if (base_) {
+        while (base_->tryPopAndProcess()) {}
+        // 定位模式的 LiDAR 是入队后由 work timer 处理的（ROS2 同样逻辑）。
+        // 漏掉这一步会导致切图后定位永不产出新位姿。
+        if (auto* pipeline = dynamic_cast<rosiwit_slam::SlamPipeline*>(base_)) {
+            while (pipeline->tryPopLocalization()) {}
+        }
+    }
     for (auto& h : tick_hooks_) if (h) h();
 }
 

@@ -97,6 +97,15 @@ LegacyXz3dSlamInterface::LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeH
                                                  : 1));
 }
 
+LegacyXz3dSlamInterface::~LegacyXz3dSlamInterface() {
+    // 后台切图任务若还在解析地图，等它结束；避免析构后访问 engine/this。
+    std::lock_guard<std::mutex> lk(map_switch_jobs_mtx_);
+    for (auto& job : map_switch_jobs_) {
+        if (!job.valid()) continue;
+        try { job.get(); } catch (...) {}
+    }
+}
+
 void LegacyXz3dSlamInterface::initPub() {
     // legacy.cpp:282-297 逐字: 名字 / 类型 / queue / latch 都不改
     point_map_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("global_map", 1, true);
@@ -161,6 +170,7 @@ void LegacyXz3dSlamInterface::applyModeToCore(SlamMode m) {
 
 void LegacyXz3dSlamInterface::setModeFromLegacy(SlamMode m) {
     const bool changed = (slam_mode_ != m);
+    if (m != SlamMode::LOCALIZATION) static_map_valid_ = false;
     slam_mode_ = m;
     applyModeToCore(m);
     if (changed) {
@@ -624,6 +634,18 @@ void LegacyXz3dSlamInterface::publishCurrPose() {
     if (publish_info) publishLocationInfo();
     // legacy.cpp:1208-1210: 非 FREE 且 use_tf_ 才发 (FREE 下不发)
     if (slam_mode_ != SlamMode::FREE && use_tf_) sendTransform();
+
+    // 兼容兜底: 部分实机上 realtime_grid_map_timer_ 在切定位后不再触发
+    // (定时器本身无异常，表现是 /map 一直停在切换瞬间)。用 100Hz 的
+    // 位姿定时器按 1Hz 重发已加载的 PGM，保证 App/RViz 能拿到灰色未知区。
+    if (slam_mode_ == SlamMode::LOCALIZATION && static_map_valid_ &&
+        !realtime_grid_map_.data.empty()) {
+        const ros::Time now = ros::Time::now();
+        if (last_static_map_pub_.isZero() || (now - last_static_map_pub_).toSec() >= 1.0) {
+            realtime_grid_map_puber_.publish(realtime_grid_map_);
+            last_static_map_pub_ = now;
+        }
+    }
 }
 
 void LegacyXz3dSlamInterface::publishLocationInfo() {
@@ -644,6 +666,7 @@ void LegacyXz3dSlamInterface::publishLocationInfo() {
     switch (slam_mode_) {
         case SlamMode::LOCALIZATION: {
             slam_state = 1;   // legacy.cpp:1842
+            map_area = static_cast<float>(realtime_grid_map_area_);
             // 旧实现: relocating_ = isRelocalization(); 重定位中 -> 1,
             // 否则 getLocalizationStatus() ∈{0,1} -> 0, 其它 -> 2。
             // 核心不暴露 relocalization/status, 用 T3 的 LostMonitor 等价表达 0/1/2 (设计文档 §5.11 B)
@@ -1036,31 +1059,63 @@ bool LegacyXz3dSlamInterface::handleSwitchMap(
     }
     // 分支 3: 换图
     relocating_ = true;
-    // **切图不清图** (用户要求, 也与旧实现的实际效果一致):
-    // 旧实现在这里删的是"建图实例", 定位实例由 loadMap() 原地替换; 我们若在这里重建核心,
-    // 会对 /switch_map 引入一次 STOP+join(后端忙时把服务线程卡死, 现场表现"切图卡住"),
-    // 还要重新做一次 IMU 初始化(2s), 纯属浪费。地图由下面的 loadMap() 替换即可。
-    // 清图只在"进建图"时做(handleModeSwitch -> 清上一轮残留)。
-    std::cout << "[legacy_iface] /switch_map: keep core, just load the new map" << std::endl;
     const bool detect_ok = callSetDetectMode(0);
-    res.success = detect_ok;   // 旧实现: **该结果单独决定** success
-
     const std::string base = legacyMapBase(req.map_dir);   // "/dir/map"
-    if (engine_.algo() && !engine_.algo()->loadMap(base)) {
-        // D13: 旧实现不检查加载结果; 我们检查并报错(同时把 success 拉低)
-        res.success = false;
-        ROS_ERROR_STREAM("[legacy_iface] /switch_map: loadMap failed: " << base);
+
+    // 1) 先在 ROS 层把老地图的 PGM 发布出去。App/RViz 依赖 /map，
+    //    不能等核心解析完 25s 的 xzmap 才更新；PGM 的 127/128 会保持灰色未知区。
+    rosiwit_slam::GridInfo static_grid;
+    const bool pgm_ok = legacy_internal::loadLegacyGridPgm(base, static_grid) &&
+        static_grid.width > 0 && static_grid.height > 0;
+    if (pgm_ok) {
+        realtime_grid_map_ = toLegacyGrid(static_grid, kMapFrame);
+        realtime_grid_map_area_ =
+            static_cast<double>(static_grid.width) * static_grid.height *
+            static_grid.resolution * static_grid.resolution;
+        realtime_grid_map_.info.origin.position.z = realtime_grid_map_area_ * 0.00001;
+        realtime_grid_map_puber_.publish(realtime_grid_map_);
+        std::cout << "[legacy_iface] /switch_map: published PGM map "
+                  << static_grid.width << "x" << static_grid.height
+                  << " unknown=" << std::count(static_grid.data.begin(), static_grid.data.end(), -1)
+                  << std::endl;
     }
-    if (engine_.algo()) engine_.algo()->setPipelineMode("localization");
+
+    static_map_valid_ = pgm_ok;
+
+    // 2) 服务立即返回，避免 App 5s 超时；完整定位地图在后台串行加载。
+    res.success = detect_ok || pgm_ok;
     slam_mode_ = SlamMode::LOCALIZATION;
     curr_map_path_ = req.map_dir;
     curr_map_name_ = req.map_name;
-    applyInitPose(req.initial_pose, true);
     lost_monitor_.reset();
     odom_mon_.reset();
     odom_mon_wrong_prev_ = false;
     lost_monitor_.setMapLoaded(true);
-    setWarningSuppression(true);   // 旧实现这里也调 run() (legacy.cpp:2345)
+    setWarningSuppression(true);
+
+    const geometry_msgs::PoseWithCovarianceStamped init_pose = req.initial_pose;
+    {
+        std::lock_guard<std::mutex> jobs_lk(map_switch_jobs_mtx_);
+        map_switch_jobs_.push_back(std::async(std::launch::async,
+            [this, base, init_pose]() {
+                std::lock_guard<std::mutex> lk(map_switch_mtx_);
+                map_switch_busy_.store(true);
+                const bool loaded = engine_.algo() && engine_.algo()->loadMap(base);
+                if (!loaded) {
+                    ROS_ERROR_STREAM("[legacy_iface] /switch_map background loadMap failed: "
+                                     << base);
+                    relocating_ = false;
+                    map_switch_busy_.store(false);
+                    return;
+                }
+                engine_.algo()->setPipelineMode("localization");
+                applyInitPose(init_pose, true);
+                relocating_ = false;
+                map_switch_busy_.store(false);
+                std::cout << "[legacy_iface] /switch_map background localization map ready: "
+                          << base << std::endl;
+            }));
+    }
     return true;
 }
 

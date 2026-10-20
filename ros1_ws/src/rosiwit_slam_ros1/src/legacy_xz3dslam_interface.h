@@ -26,8 +26,11 @@
 #include <std_srvs/Trigger.h>
 #include <visualization_msgs/MarkerArray.h>
 
+#include <atomic>
+#include <future>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -70,6 +73,7 @@ struct LegacyPose {
 class LegacyXz3dSlamInterface {
 public:
     LegacyXz3dSlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine);
+    ~LegacyXz3dSlamInterface();
 
     // ---- [T6] 订阅侧往这里喂数据 ----
     /// 每收到一帧**原始输入**(未配准、在传感器自身坐标系)点云就调一次:
@@ -202,6 +206,8 @@ private:
     bool have_imu_ = false, have_laser_ = false;    // legacy 的 get_imu_data_/get_laser_data_
     bool debug_map_published_ = false;              // 每进一次模式只发一次 global_map
     double realtime_grid_map_area_ = 0.0;
+    bool static_map_valid_ = false;      // /switch_map 已加载 PGM，由 pose 定时器兜底重发
+    ros::Time last_static_map_pub_;
     bool relocating_ = false;                       // 旧 relocating_ (legacy.cpp:1843-1853)
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)
@@ -273,6 +279,13 @@ private:
                        srv_dump_recorder_;
     std::string curr_map_path_;    // 旧 curr_map_path_
     ros::Time last_switch_map_time_;   // /switch_map 的 10s 限流 (legacy.cpp:2121-2137)
+    // ROS 层兼容：大图 xzmap 解析/关键帧重建在 aarch64 上可达 25s，
+    // 不能让 /switch_map 服务线程被拖到 App 超时。PGM 先同步发布，
+    // 完整定位地图在后台串行加载。
+    std::mutex map_switch_mtx_;
+    std::mutex map_switch_jobs_mtx_;
+    std::vector<std::future<void>> map_switch_jobs_;
+    std::atomic<bool> map_switch_busy_{false};
 
     // ---- [T9] TF ----
     // 旧实现: listener_ = new tf2_ros::TransformListener(tfBuffer_) (legacy.cpp:94)。
