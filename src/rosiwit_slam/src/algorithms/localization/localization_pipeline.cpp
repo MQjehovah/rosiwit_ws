@@ -1227,45 +1227,26 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         const double d2 = e.dot(ldlt.solve(e));
         if (std::isfinite(d2)) mi.nees = d2;
     }
-    MonitorLevel lvl = m_monitor->update(mi);
+    (void)m_monitor->update(mi);   // 更新滑窗，只用于诊断/其它策略
     // 统一状态机：INIT/LOCALIZED 共用同一个连续帧计数器。
-    //   INIT  -> LOCALIZED：连续 localized_patience 帧健康
-    //   INIT/LOCALIZED -> LOST：连续 lost_patience 帧不健康
-    // LOCALIZED 不因单帧异常回到 INIT；只有显式重定位才会进入 INIT。
-    const double healthy_fitness = (m_status == INIT)
-                                       ? m_global_cfg.reloc_accept_score
-                                       : m_monitor_cfg.credible_fitness;
-    // GICP 在局部子图点数少/视角变化大时 fitness 可能只有 0.5~0.8，但残差/
-    // 一致性门控仍 accepted=1，且位姿修正很小。只看 fitness 会把这种有效
-    // 跟踪误判为 LOST (转头时最常见). LOCALIZED 阶段以 accepted + 足够 inlier
-    // + 小修正量作为健康依据；冷启动(INIT)仍坚持 reloc_accept_score.
-    const double accepted_lag = (out_pose.trans - guess.trans).norm();
-    const bool accepted_healthy =
-        (m_status != INIT) && accepted && res.converged &&
-        res.inliers >= 50 && res.correspondences >= 50 &&
-        res.inliers * 2 >= res.correspondences &&
-        accepted_lag <= 0.75;
-    const bool healthy = !seed_failed && res.converged &&
-                         (lvl == MonitorLevel::CREDIBLE || accepted_healthy) &&
-                         (res.fitness >= healthy_fitness || accepted_healthy);
-    if (healthy) {
-        ++m_healthy_streak;
-        m_unhealthy_streak = 0;
-        if (m_status != LOCALIZED &&
-            m_healthy_streak >= std::max(1, m_monitor_cfg.localized_patience)) {
-            m_status = LOCALIZED;
-            {
-                std::lock_guard<std::mutex> lk(m_global_mu);
-                m_global_request = false;
-            }
-            diag::log('I', "LocPipeline", "localized after " +
-                      std::to_string(m_healthy_streak) + " healthy frames");
-            FlightRecorder::instance().event("LOCALIZED",
-                                             "healthy_frames=" + std::to_string(m_healthy_streak));
+    //   INIT  -> LOCALIZED：连续 localized_patience 帧高置信健康
+    //   LOCALIZED -> LOST：连续 lost_patience 帧 fitness < lost_fitness
+    // credible_fitness 是高置信/恢复线；lost_fitness 才是丢失线。
+    // 位于 lost_fitness 与 credible_fitness 之间只是 degraded/coast，不能判丢。
+    const bool hard_unhealthy =
+        seed_failed || !res.converged ||
+        res.fitness < m_monitor_cfg.lost_fitness;
+    const bool init_healthy =
+        !seed_failed && res.converged && accepted &&
+        res.fitness >= m_global_cfg.reloc_accept_score;
+
+    if (m_status == LOCALIZED) {
+        // 跟踪阶段只要不低于 lost_fitness 就继续运行；不要求达到 credible_fitness。
+        if (hard_unhealthy) {
+            ++m_unhealthy_streak;
+        } else {
+            m_unhealthy_streak = 0;
         }
-    } else {
-        m_healthy_streak = 0;
-        ++m_unhealthy_streak;
         if (m_unhealthy_streak >= std::max(1, m_monitor_cfg.lost_patience)) {
             const bool was_lost = (m_status == LOST);
             m_status = LOST;
@@ -1283,6 +1264,44 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 diag::log('W', "LocPipeline", os.str());
                 FlightRecorder::instance().event("LOST", os.str());
                 FlightRecorder::instance().onStatusChange(true);
+            }
+        }
+    } else {
+        // INIT / 重定位后：必须连续高置信帧才恢复 LOCALIZED。
+        if (init_healthy) {
+            ++m_healthy_streak;
+            m_unhealthy_streak = 0;
+            if (m_status != LOCALIZED &&
+                m_healthy_streak >= std::max(1, m_monitor_cfg.localized_patience)) {
+                m_status = LOCALIZED;
+                {
+                    std::lock_guard<std::mutex> lk(m_global_mu);
+                    m_global_request = false;
+                }
+                diag::log('I', "LocPipeline", "localized after " +
+                          std::to_string(m_healthy_streak) + " healthy frames");
+                FlightRecorder::instance().event("LOCALIZED",
+                                                 "healthy_frames=" + std::to_string(m_healthy_streak));
+            }
+        } else {
+            m_healthy_streak = 0;
+            if (hard_unhealthy) ++m_unhealthy_streak;
+            if (m_unhealthy_streak >= std::max(1, m_monitor_cfg.lost_patience)) {
+                const bool was_lost = (m_status == LOST);
+                m_status = LOST;
+                {
+                    std::lock_guard<std::mutex> lk(m_global_mu);
+                    m_global_request = true;
+                    m_global_cooldown = 0;
+                }
+                if (!was_lost) {
+                    std::ostringstream os;
+                    os << "unhealthy frames=" << m_unhealthy_streak
+                       << " >= " << m_monitor_cfg.lost_patience << " -> LOST";
+                    diag::log('W', "LocPipeline", os.str());
+                    FlightRecorder::instance().event("LOST", os.str());
+                    FlightRecorder::instance().onStatusChange(true);
+                }
             }
         }
     }
