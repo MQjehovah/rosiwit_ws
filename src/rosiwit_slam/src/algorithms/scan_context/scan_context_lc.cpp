@@ -202,6 +202,17 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         return false;
     }
 
+    // 起点关键帧必须参与回环验证: 采图 bag 常常从起点出发、回到起点结束,
+    // 但 RingKey 的 top-N 筛选可能把起点挤掉. 这里强制保留前几帧作为候选.
+    for (size_t i = 0; i < 5 && i + static_cast<size_t>(m_min_keyframe_gap) < latest_idx; ++i) {
+        if (!m_keyframes[i].has_descriptor) continue;
+        bool present = false;
+        for (const auto& c : candidates) {
+            if (c.idx == i) { present = true; break; }
+        }
+        if (!present) candidates.push_back({i, 0.0});
+    }
+
     std::sort(candidates.begin(), candidates.end(),
               [](const Candidate& a, const Candidate& b) { return a.rk_dist < b.rk_dist; });
 
@@ -223,16 +234,44 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
 
         int col_shift = 0;
         double desc_d = ScanContext::distance(cand_rec.desc, latest.desc, &col_shift);
+        if (cand.idx < 5) {
+            std::cout << "[ScanContextLC] start candidate kf_" << cand.idx
+                      << " <-> kf_" << latest_idx << " desc=" << desc_d << std::endl;
+        }
         if (desc_d >= m_dist_thresh) continue;
 
-        // ICP 验证
+        // ICP 验证. ScanContext 的列偏移方向依赖于描述子的约定,
+        // 这里同时尝试 +yaw 和 -yaw, 避免正确的起点/终点回环因为初值符号错误被拒.
         double yaw_diff = 2.0 * M_PI * col_shift / m_cfg_num_sectors;
         Eigen::Matrix4f init_guess = Eigen::Matrix4f::Identity();
         init_guess.block<3,3>(0,0) = Eigen::AngleAxisf(yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
 
         Eigen::Matrix4f delta;
-        float fitness;
-        if (!icpVerify(latest.cloud, cand_rec.cloud, init_guess, delta, fitness)) {
+        float fitness = std::numeric_limits<float>::infinity();
+        bool icp_ok = icpVerify(latest.cloud, cand_rec.cloud, init_guess, delta, fitness);
+        if (!icp_ok) {
+            Eigen::Matrix4f init_guess_flip = Eigen::Matrix4f::Identity();
+            init_guess_flip.block<3,3>(0,0) =
+                Eigen::AngleAxisf(-yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
+            Eigen::Matrix4f delta_flip;
+            float fitness_flip = std::numeric_limits<float>::infinity();
+            if (icpVerify(latest.cloud, cand_rec.cloud, init_guess_flip, delta_flip, fitness_flip)) {
+                icp_ok = true;
+                delta = delta_flip;
+                fitness = fitness_flip;
+            }
+        }
+        // 起终点通常姿态接近; ScanContext 列偏移可能给错初值, 对起点额外尝试单位初值.
+        if (!icp_ok && cand.idx < 5) {
+            Eigen::Matrix4f delta_id;
+            float fitness_id = std::numeric_limits<float>::infinity();
+            if (icpVerify(latest.cloud, cand_rec.cloud, Eigen::Matrix4f::Identity(), delta_id, fitness_id)) {
+                icp_ok = true;
+                delta = delta_id;
+                fitness = fitness_id;
+            }
+        }
+        if (!icp_ok) {
             std::cout << "[ScanContextLC] ICP failed: desc=" << desc_d
                       << ", fitness=" << fitness << std::endl;
             continue;

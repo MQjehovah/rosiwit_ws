@@ -67,7 +67,7 @@ mapping:
     imu_lidar_translation: [0.0, 0.0, 0.0] # 初始IMU<-lidar平移(m)
     estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
   loop_closure:
-    icp_fitness_thresh: 1.0 # 回环ICP适应度阈值
+    icp_fitness_thresh: 0.5 # 回环ICP适应度阈值 (配合几何门控)
     icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)
     icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
     min_keyframe_gap: 30 # 回环最小关键帧间隔
