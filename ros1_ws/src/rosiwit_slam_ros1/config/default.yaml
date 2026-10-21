@@ -150,7 +150,7 @@ mapping:
     generator: ray_casting # 2D栅格生成策略 (统一射线方案, 0.05m)
     resolution: 0.05 # 最终 2D 栅格/PGM 分辨率(m)
     realtime_resolution: 0.3 # 实时 /map 分辨率(m)
-    min_height: 0.25 # 地面以上障碍最低高度(m) (0.1 -> 0.25, 压制巷道地面黑点)
+    min_height: 0.35 # 地面以上障碍最低高度(m); 0.25 仍有地面残留, 0.35 更干净
     max_height: 2.0 # 地面以上障碍最高高度(m)
     occupied_thresh: 1 # 每格最少点数判占据
     dilate_radius: 1 # 障碍膨胀半径(格)
