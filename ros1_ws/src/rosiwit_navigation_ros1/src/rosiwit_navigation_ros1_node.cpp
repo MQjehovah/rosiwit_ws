@@ -219,6 +219,28 @@ private:
     task_cfg.back_speed = movebase_back_speed_;
     task_cfg.rotate_speed = movebase_rotate_speed_;
     action_task_.configure(task_cfg);
+
+    // 实车参数必须能从启动日志一眼核对 (否则很容易又跑成仿真值).
+    if (!movebase_footprint_.empty()) {
+      double min_x = std::numeric_limits<double>::max();
+      double max_x = std::numeric_limits<double>::lowest();
+      double min_y = std::numeric_limits<double>::max();
+      double max_y = std::numeric_limits<double>::lowest();
+      for (const auto & point : movebase_footprint_) {
+        min_x = std::min(min_x, point.x);
+        max_x = std::max(max_x, point.x);
+        min_y = std::min(min_y, point.y);
+        max_y = std::max(max_y, point.y);
+      }
+      ROS_INFO("[rosiwit_navigation_ros1] footprint(%zu pts) x[%.2f,%.2f] y[%.2f,%.2f] "
+               "robot_radius=%.2f inflation_radius=%.2f safety_footprint=%zu pts",
+               movebase_footprint_.size(), min_x, max_x, min_y, max_y,
+               robot_radius_, inflation_radius_, footprint.size() / 2);
+      if (max_x > 0.55 + 0.01 || max_y > 0.34 || min_x < -0.26) {
+        ROS_WARN("[rosiwit_navigation_ros1] footprint 与实车 (x[-0.25,0.55] y[-0.33,0.33]) "
+                 "不一致, 请确认不是仿真参数");
+      }
+    }
   }
 
   // ---- 核心策略 (来自算法核心, ROS 无关) ----

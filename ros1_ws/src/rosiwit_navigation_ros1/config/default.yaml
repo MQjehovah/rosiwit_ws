@@ -1,42 +1,49 @@
 # ============================================================
-# rosiwit_navigation_ros1 默认参数 (与 ROS2 config/params.yaml 对应)
+# rosiwit_navigation_ros1 默认参数
+#
+# ⚠ 车体/安全参数取自实车 192.168.21.166 的 /robot_move_base/*，
+#   不是仿真值。robot_movebase 兼容接口请用 config/movebase_compat.yaml。
+# 速度/加速度/容差/前瞻/安全距离的实车依据见
+# docs/superpowers/specs/2026-10-21-ros1-movebase-interface-compat-design.md §9。
 # ============================================================
-# 速度限制
-max_velocity_x: 0.5
+# 速度限制 (实车 max_speed=0.8, speed_lim_w=0.5)
+max_velocity_x: 0.8
 min_velocity_x: 0.0
-max_velocity_theta: 1.0
+max_velocity_theta: 0.5
 
-max_accel_x: 0.4
-max_accel_theta: 0.8
+max_accel_x: 0.3
+max_accel_theta: 0.2
 
 planner_max_iterations: 200000
 planner_timeout: 2.0
 
-# 频率
-controller_frequency: 20.0
+# 频率 (实车 g_control_freq=10)
+controller_frequency: 10.0
 planner_frequency: 1.0
 
 # 规划器 / 控制器
 planner_name: "astar"
 controller_name: "dwa"
 
-# 坐标系
+# 坐标系 (实车 robot_base_frame=base_footprint)
 global_frame: "map"
-robot_frame: "base_link"
+robot_frame: "base_footprint"
 map_frame: "map"
 
-# 导航容差
+# 导航容差 (实车 xy/yaw_goal_tolerance=0.1)
 goal_tolerance_xy: 0.1
 goal_tolerance_yaw: 0.1
 
-# Pure Pursuit 前瞻距离
-lookahead_distance: 0.8
-min_lookahead_distance: 0.4
-max_lookahead_distance: 1.2
+# 前瞻距离 (实车 min/max_lookahead_dist=0.3/0.9)
+lookahead_distance: 0.6
+min_lookahead_distance: 0.3
+max_lookahead_distance: 0.9
 
-# 机器人 / 膨胀半径 (m)
-robot_radius: 0.30
-inflation_radius: 1.0
+# 规划安全距离 (m)
+# robot_radius = 实车 g_min_safe (硬禁区); inflation_radius = g_max_safe 的等效膨胀.
+# 实车 footprint x[-0.25,0.55] y[-0.33,0.33] 由 safety_footprint 表达.
+robot_radius: 0.39
+inflation_radius: 0.62
 
 # 里程计话题
 odom_topic: /odom
@@ -46,12 +53,14 @@ safety_enabled: true
 safety_self_filter_radius: 0.25
 safety_fail_safe_on_timeout: true
 safety_source_timeout: 0.5
-safety_stop_polygon: [-0.55, -0.40, 0.55, -0.40, 0.55, 0.40, -0.55, 0.40]
-safety_slowdown_polygon: [-0.75, -0.55, 0.85, -0.55, 0.85, 0.55, -0.75, 0.55]
+# 实车 footprint 外扩 stop_dist=0.12 / g_robot_safe_dist=0.30
+safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]
+safety_slowdown_polygon: [-0.55, -0.63, 0.85, -0.63, 0.85, 0.63, -0.55, 0.63]
 safety_slowdown_ratio: 0.5
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
-safety_footprint: [-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22]
+# 实车 footprint
+safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 
 # 动态障碍跟踪
 tracking_enabled: true

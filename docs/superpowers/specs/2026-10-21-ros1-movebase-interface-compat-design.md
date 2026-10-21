@@ -146,11 +146,13 @@ src/rosiwit_navigation/               算法核心 (零 ROS 依赖, ROS1/ROS2 �
 | `movebase_compat_enabled` | `true` | 关掉后不建 action/旧话题 |
 | `cmd_vel_topic` | `/cmd_vel` | 原生命令话题 |
 | `movebase_cmd_vel_topic` | `/movebase_cmd_vel` | 旧包底盘控制话题 |
-| `movebase_robot_footprint` | 旧包 footprint | 车体框，供 `/robot_footprint` |
+| `movebase_robot_footprint` | **实车 footprint** | 车体框，供 `/robot_footprint` |
 | `movebase_default_speed` | `max_velocity_x` | `robot_vel<=0` 时的速度 |
 | `movebase_back_speed` | `0.1` | 倒车速度 |
 | `movebase_rotate_speed` | `0.6` | 旋转角速度上限 |
 | `movebase_stuck_timeout` | `60` | 卡死判定（旧包 `check_stop_time` 默认 300s，见 §5） |
+| `robot_radius` | `0.39` | 硬禁区（= 实车 `g_min_safe`，非几何半径） |
+| `inflation_radius` | `0.62` | 软代价上限（= 实车 `g_max_safe` 的等效膨胀，见 §9） |
 
 启动：
 
@@ -317,3 +319,56 @@ goal/cancel 回调在 `ros::spin` 线程内，完成时由定时器调用 `setSu
   独立 master（`127.0.0.1:114xx`）+ `/navtest` 命名空间内完成，不碰实车。
 * 切换实车导航需要另行确认：停 `robot_move_base`、把 bringup 指向
   `roslaunch rosiwit_navigation_ros1 movebase_compat.launch`，并保留回滚命令。
+
+
+## 9. 实车 footprint / 规划参数（192.168.21.166，2026-10-21）
+
+**结论：不再使用 `robot_movebase` 源码里的 `robot_movebase_v1.yaml`。**
+源码里的 footprint 是 `[-0.2,-0.35] … [0.6,0.35]`，而实车运行参数是另一份：
+
+```text
+/robot_move_base/footprint:
+  [-0.25,-0.33] [0.45,-0.33] [0.55,-0.20]
+  [ 0.55, 0.20] [0.45, 0.33] [-0.25, 0.33]
+/robot_move_base/g_max_safe: 0.42
+/robot_move_base/g_min_safe: 0.39
+/robot_move_base/max_speed: 0.8
+/robot_move_base/speed_lim_w: 0.5
+/robot_move_base/accel_lim_v_x: 0.3
+/robot_move_base/accel_lim_w: 0.2
+/robot_move_base/min_lookahead_dist: 0.3
+/robot_move_base/max_lookahead_dist: 0.9
+/robot_move_base/xy_goal_tolerance: 0.1
+/robot_move_base/yaw_goal_tolerance: 0.1
+/robot_move_base/g_control_freq: 10
+/robot_move_base/stop_dist: 0.12
+/robot_move_base/g_robot_safe_dist: 0.3
+```
+
+映射到本包（见 `config/movebase_compat.yaml`）：
+
+| 本包参数 | 值 | 来源/理由 |
+|---|---|---|
+| `movebase_robot_footprint` / `safety_footprint` | 实车 6 点 footprint | `/robot_move_base/footprint` |
+| `robot_radius` | `0.39` | 实车 `g_min_safe`（旧节点第二档规划膨胀） |
+| `inflation_radius` | `0.62` | 旧节点 `CostMapInflate(0.1)` + `g_max_safe(0.42)` + 2×cell(0.05) 的等效半径；本包用硬禁区 0.39 + 软代价到 0.62 表达旧包“先 max 后 min”的两档 |
+| `safety_stop_polygon` | footprint 外扩 `stop_dist=0.12` | `[-0.37,-0.45] … [0.67,0.45]` |
+| `safety_slowdown_polygon` | footprint 外扩 `g_robot_safe_dist=0.30` | `[-0.55,-0.63] … [0.85,0.63]` |
+| `max_velocity_x` | `0.8` | `max_speed` |
+| `max_velocity_theta` | `0.5` | `speed_lim_w` |
+| `max_accel_x` / `max_accel_theta` | `0.3` / `0.2` | `accel_lim_v_x` / `accel_lim_w` |
+| `goal_tolerance_xy` / `_yaw` | `0.1` / `0.1` | `xy/yaw_goal_tolerance` |
+| `lookahead_distance` / min / max | `0.6` / `0.3` / `0.9` | `min/max_lookahead_dist` |
+| `movebase_default_speed` | `0.8` | `max_speed` |
+| `movebase_rotate_speed` | `0.5` | `speed_lim_w` |
+| `controller_frequency` | `10` | `g_control_freq` |
+
+节点启动时会打印一行，便于现场核对（不是仿真值）：
+
+```text
+[rosiwit_navigation_ros1] footprint(6 pts) x[-0.25,0.55] y[-0.33,0.33]
+robot_radius=0.39 inflation_radius=0.62 safety_footprint=6 pts
+```
+
+如果 footprint 的 x/y 范围超出实车值，节点会额外打
+`footprint 与实车 ... 不一致, 请确认不是仿真参数` 的 WARN。

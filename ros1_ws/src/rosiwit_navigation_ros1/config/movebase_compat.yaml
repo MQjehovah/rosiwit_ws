@@ -1,24 +1,37 @@
 # ============================================================================
 # movebase_compat.yaml — 用 rosiwit_navigation_ros1 顶替 robot_movebase 时的参数
 #
-# 与 config/default.yaml 的区别只在"对齐旧包"的部分:
-#   * 坐标系: map / base_footprint (旧包 robot_base_frame)
-#   * 控制频率 10Hz (旧包 g_control_freq)
-#   * 速度上限 0.8 m/s (旧包 max_speed)
-#   * 车体轮廓取旧包 config/robot_movebase_v1.yaml 的 footprint
-#   * 打开 movebase 兼容层 (action + 旧话题)
-# 明确不追求一致的: 局部控制器旧包用 TEB, 这里默认 dwa (核心 TEB 是轻量实现);
-# 需要时把 controller_name 改成 "teb" 或 "mppi"。
+# ⚠ 本文件是「实车参数」，不是仿真/源码默认值。
+#   数据来源: 192.168.21.166 上正在运行的 /robot_move_base/* (2026-10-21 读取),
+#   与 robot_movebase 源码里的 config/robot_movebase_v1.yaml **不同**。
+#
+#   实车 footprint (base_footprint):
+#       [-0.25,-0.33] [0.45,-0.33] [0.55,-0.20]
+#       [ 0.55, 0.20] [0.45, 0.33] [-0.25, 0.33]
+#   实车规划安全距离: g_min_safe=0.39, g_max_safe=0.42
+#     旧节点: CostMapInflate(map, 0.1) 后再 RobotNaviMakePlan(..., g_max_safe),
+#     每次膨胀还会加 1 个 cell (0.05), 失败才降到 g_min_safe。等效半径:
+#       max: 0.10 + 0.42 + 2*0.05 = 0.62
+#       min: 0.10 + 0.39 + 2*0.05 = 0.59
+#   → 本包单次规划: robot_radius=0.39 (硬禁区=旧 min) /
+#     inflation_radius=0.62 (软代价上限=旧 max), 用一份代价图同时表达两档。
+#
+#   其余对齐: max_speed=0.8, speed_lim_w=0.5, accel_lim_v_x=0.3, accel_lim_w=0.2,
+#             min/max_lookahead_dist=0.3/0.9, xy/yaw_goal_tolerance=0.1,
+#             g_control_freq=10, global_frame=map, robot_base_frame=base_footprint。
+#
+#   局部控制器旧包用 TEB, 这里默认 dwa (核心 TEB 是轻量实现); 需要时改 "teb"。
 # ============================================================================
 
 # ---- robot_movebase 接口 ----
 movebase_compat_enabled: true
 cmd_vel_topic: "/cmd_vel"
 movebase_cmd_vel_topic: "/movebase_cmd_vel"
-movebase_robot_footprint: [-0.2, -0.35, 0.425, -0.35, 0.6, -0.18, 0.6, 0.18, 0.425, 0.35, -0.2, 0.35]
+# 实车 footprint 展平 (x,y,...)
+movebase_robot_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 movebase_default_speed: 0.8
 movebase_back_speed: 0.1
-movebase_rotate_speed: 0.6
+movebase_rotate_speed: 0.5
 movebase_stuck_timeout: 60.0
 movebase_goal_yaw_tolerance: 0.1
 movebase_rotate_tolerance: 0.05
@@ -28,12 +41,12 @@ movebase_prediction_horizon: 1.0
 controller_frequency: 10.0
 planner_frequency: 1.0
 
-# ---- 速度 ----
+# ---- 速度 / 加速度 (实车) ----
 max_velocity_x: 0.8
 min_velocity_x: 0.0
-max_velocity_theta: 1.0
-max_accel_x: 0.4
-max_accel_theta: 0.8
+max_velocity_theta: 0.5
+max_accel_x: 0.3
+max_accel_theta: 0.2
 
 # ---- 规划器 / 控制器 ----
 planner_name: "astar"
@@ -47,28 +60,31 @@ robot_frame: "base_footprint"
 map_frame: "map"
 odom_topic: "/odom"
 
-# ---- 容差 / 前瞻 ----
-goal_tolerance_xy: 0.15
+# ---- 容差 / 前瞻 (实车 0.3~0.9) ----
+goal_tolerance_xy: 0.1
 goal_tolerance_yaw: 0.1
-lookahead_distance: 0.8
-min_lookahead_distance: 0.4
-max_lookahead_distance: 1.2
+lookahead_distance: 0.6
+min_lookahead_distance: 0.3
+max_lookahead_distance: 0.9
 
-# ---- 机器人 / 膨胀 ----
-robot_radius: 0.30
-inflation_radius: 0.25
+# ---- 规划安全距离 (实车 g_min_safe=0.39 / g_max_safe 等效 0.62) ----
+robot_radius: 0.39
+inflation_radius: 0.62
 
-# ---- 安全层 (用旧包的车体轮廓) ----
+# ---- 安全层 (实车 footprint + stop_dist=0.12 / g_robot_safe_dist=0.3) ----
 safety_enabled: true
 safety_self_filter_radius: 0.25
 safety_fail_safe_on_timeout: true
 safety_source_timeout: 0.5
-safety_stop_polygon: [-0.55, -0.40, 0.55, -0.40, 0.55, 0.40, -0.55, 0.40]
-safety_slowdown_polygon: [-0.75, -0.55, 0.85, -0.55, 0.85, 0.55, -0.75, 0.55]
+# 实车 footprint 外扩 0.12m
+safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]
+# 实车 footprint 外扩 0.30m
+safety_slowdown_polygon: [-0.55, -0.63, 0.85, -0.63, 0.85, 0.63, -0.55, 0.63]
 safety_slowdown_ratio: 0.5
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
-safety_footprint: [-0.2, -0.35, 0.425, -0.35, 0.6, -0.18, 0.6, 0.18, 0.425, 0.35, -0.2, 0.35]
+# 实车 footprint
+safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 
 # ---- 动态障碍 ----
 tracking_enabled: true

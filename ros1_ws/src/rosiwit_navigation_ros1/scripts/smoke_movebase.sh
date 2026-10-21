@@ -46,10 +46,15 @@ for _ in $(seq 1 40); do
     sleep 0.5
 done
 
+# 用真实部署配置 (movebase_compat.yaml) 跑, 只把两个输出话题改到 /navtest,
+# 避免碰到实车 (私有 master 本身也不会影响实车).
+CONFIG="$(rospack find rosiwit_navigation_ros1)/config/movebase_compat.yaml"
+rosparam load "$CONFIG" /navtest/navtest
+rosparam set /navtest/navtest/cmd_vel_topic /navtest/cmd_vel
+rosparam set /navtest/navtest/movebase_cmd_vel_topic /navtest/movebase_cmd_vel
+
 rosrun rosiwit_navigation_ros1 rosiwit_navigation_ros1_node \
-    __name:=navtest __ns:=/navtest _robot_frame:=base_footprint \
-    _cmd_vel_topic:=/navtest/cmd_vel \
-    _movebase_cmd_vel_topic:=/navtest/movebase_cmd_vel \
+    __name:=navtest __ns:=/navtest \
     >/tmp/movebase_smoke_node.log 2>&1 &
 NODE_PID=$!
 

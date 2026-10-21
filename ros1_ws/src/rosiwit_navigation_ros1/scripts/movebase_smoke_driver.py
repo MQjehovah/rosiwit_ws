@@ -67,6 +67,10 @@ def start_odom():
             msg.header.frame_id = "map"
             msg.child_frame_id = "base_footprint"
             msg.pose.pose.orientation.w = 1.0
+            # DWA/MPPI 会按 odom 的当前速度做加速度限制; 假 odom 必须回填
+            # 上一条控制量, 否则永远从 0 加速, 只能看到 0.03m/s.
+            msg.twist.twist.linear.x = last_cmd["linear"]
+            msg.twist.twist.angular.z = last_cmd["angular"]
             publisher.publish(msg)
             try:
                 rate.sleep()
