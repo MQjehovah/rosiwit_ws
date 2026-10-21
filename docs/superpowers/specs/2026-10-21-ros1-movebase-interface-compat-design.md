@@ -241,3 +241,76 @@ rosrun rosiwit_navigation_ros1 check_movebase_interface.sh
 
   编译通过后按 §6 的 6 步真机验证；其中第 2–5 步是接口语义的核心验收。
 
+
+## 8. 真机实测记录（2026-10-21，192.168.21.166）
+
+环境：Ubuntu 18.04 aarch64 / ROS Melodic / CMake 3.25 / GCC 7.5；
+`robot_move_base` 正在 11311 上运行（本次**未改动**在跑导航）。
+
+### 8.1 现场消息包与源码不一致（已按现场修正）
+
+`robot_movebase/action/NaviCmdAction.action` 比机器人上安装的
+`/opt/ros/melodic/share/xzrobot_ros_dependency/action/NaviCmdAction.action` **新**：
+
+| 字段 | 源码 .action | 现场安装包 | 处理 |
+|---|---|---|---|
+| Goal `set_navi_mode` | 有 | **无** | 不访问 |
+| Goal `record_path` | 无 | 有 | 忽略 |
+| Result/Feedback `clean_area` | 无（`#if CLEAN_AREA`） | 有 | 回 0 |
+| Feedback `access_turnstile_id` | 无 | 有 | 回空串 |
+
+结论：**以现场安装的消息包为准编译**，否则 `catkin_make` 直接报
+`has no member named 'set_navi_mode'`。
+
+### 8.2 Action 生命周期：SimpleActionServer 不可用
+
+第一版用 `SimpleActionServer`，控制循环由定时器驱动、goal 回调立即返回，
+actionlib 会打印：
+
+```
+Your executeCallback did not set the goal to a terminal status.
+For now, the ActionServer will set this goal to aborted
+```
+
+即所有 goal 立即被 abort。已改为 `actionlib::ActionServer` + `ServerGoalHandle`：
+goal/cancel 回调在 `ros::spin` 线程内，完成时由定时器调用 `setSucceeded/setCanceled`。
+
+另一个坑：**cancel 请求到达时 actionlib 已把状态改成 `PREEMPTING`**，
+此时 `GoalStatus == ACTIVE` 判断为假；必须对 `ACTIVE || PREEMPTING` 调
+`setCanceled()`，否则客户端永远等不到 result（表现为 `wait_for_result` 超时）。
+
+### 8.3 取消后被旧规划结果重新拉起（已修）
+
+`stopNavigation()` 原先只停速度，不处理在途的 `std::async` 规划。
+复现：navi_cmd=2 取消后约 1s，旧规划结果被 `applyPlanningResult()` 应用，
+`is_navigating_=true`，车重新开始走。现在取消时同时
+`planning_active_=false`、`plan_generation_++`、`async_planner_->cancel()`。
+
+### 8.4 校验脚本修正
+
+初版 golden 把 `/RobotNaviCmdAction/{goal,cancel,feedback,result,status}` 写在
+`[services]`。actionlib 这 5 个是**话题**，不是服务；已修正为 22 话题 + 1 服务
+（`/nav_stop`），共 23 项。
+
+### 8.5 实测结果
+
+| 项 | 结果 |
+|---|---|
+| 真机 `catkin_make --pkg rosiwit_navigation_ros1` | **exit=0** |
+| `catkin_make run_tests_rosiwit_navigation_ros1` | **15/15** |
+| 隔离 master（127.0.0.1:114xx）端到端 15 项 | **全 PASS** |
+| 接口一致性脚本（namespace 隔离） | **23/23，不符 0** |
+
+端到端覆盖：action 可用、navi_cmd=4→-4 且无速度、navi_cmd=1 空点位→-1、
+6 输出 +0.6rad/s、7 输出 -0.1m/s、2/3 规划/跟踪后输出正线速度、
+四种命令 cancel→PREEMPTED、取消后保持停止。
+
+### 8.6 部署位置与边界
+
+* 源码：`/home/xzrobot/rosiwit_ws/src/rosiwit_navigation` +
+  `/home/xzrobot/rosiwit_ws/ros1_ws/src/rosiwit_navigation_ros1`
+* 构建：`/home/xzrobot/rosiwit_ws/ros1_ws/devel`（**未 install 到 /opt/ros**）
+* 在跑的 `robot_move_base`（11311）未重启、未改 launch；本次所有运行验证都在
+  独立 master（`127.0.0.1:114xx`）+ `/navtest` 命名空间内完成，不碰实车。
+* 切换实车导航需要另行确认：停 `robot_move_base`、把 bringup 指向
+  `roslaunch rosiwit_navigation_ros1 movebase_compat.launch`，并保留回滚命令。
