@@ -34,7 +34,10 @@ add_executable(rosiwit_navigation_ros1_node
     src/rosiwit_navigation_ros1_node.cpp
     src/movebase_protocol.cpp
     src/movebase_interface.cpp)
+# 源码内联的算法核心头文件必须优先于 /opt/ros 里可能存在的旧安装头文件,
+# 否则 add_subdirectory 用的是新库, 头文件却是旧的.
 target_include_directories(rosiwit_navigation_ros1_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include
     ${catkin_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(rosiwit_navigation_ros1_node PRIVATE -pipe -pthread)
@@ -56,6 +59,7 @@ if(CATKIN_ENABLE_TESTING)
         src/movebase_protocol.cpp)
     if(TARGET test_movebase_protocol)
         target_include_directories(test_movebase_protocol PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src)
         target_link_libraries(test_movebase_protocol rosiwit_navigation)
     endif()

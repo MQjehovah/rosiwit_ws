@@ -214,6 +214,15 @@ private:
     }
     if (movebase_default_speed_ <= 0.0) { movebase_default_speed_ = max_velocity_x_; }
 
+    // 长方形车体的 footprint-aware 控制: 控制器按 footprint 采样点查 raw costmap.
+    pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
+    pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
+    configured_footprint_.clear();
+    controller_footprint_.clear();  // 实际是否启用由 setupCore 按控制器能力决定
+    if (footprint_aware_control_) {
+      configured_footprint_ = toPolygon(footprint);
+    }
+
     core::ActionTaskConfig task_cfg;
     task_cfg.goal_yaw_tolerance = movebase_goal_yaw_tolerance_;
     task_cfg.rotate_tolerance = movebase_rotate_tolerance_;
@@ -237,9 +246,11 @@ private:
         max_y = std::max(max_y, point.y);
       }
       ROS_INFO("[rosiwit_navigation_ros1] footprint(%zu pts) x[%.2f,%.2f] y[%.2f,%.2f] "
-               "robot_radius=%.2f inflation_radius=%.2f safety_footprint=%zu pts",
+               "robot_radius=%.2f inflation_radius=%.2f safety_footprint=%zu pts "
+               "footprint_aware=%d configured_pts=%zu",
                movebase_footprint_.size(), min_x, max_x, min_y, max_y,
-               robot_radius_, inflation_radius_, footprint.size() / 2);
+               robot_radius_, inflation_radius_, footprint.size() / 2,
+               static_cast<int>(footprint_aware_control_), configured_footprint_.size());
       if (max_x > 0.55 + 0.01 || max_y > 0.34 || min_x < -0.26) {
         ROS_WARN("[rosiwit_navigation_ros1] footprint 与实车 (x[-0.25,0.55] y[-0.33,0.33]) "
                  "不一致, 请确认不是仿真参数");
@@ -279,6 +290,17 @@ private:
     }
 
     controller_strategy_ = nav_core::NavigationFactory::createController(controller_name_);
+    // footprint-aware 只对真正实现了 footprint 代价的控制器生效;
+    // 否则必须保留局部 costmap 的圆形膨胀, 不能接未膨胀地图.
+    controller_footprint_.clear();
+    if (footprint_aware_control_ && controller_strategy_ &&
+        controller_strategy_->supportsFootprint()) {
+      controller_footprint_ = configured_footprint_;
+    }
+    ROS_INFO("[rosiwit_navigation_ros1] footprint_aware: requested=%d active=%d controller=%s",
+             static_cast<int>(footprint_aware_control_),
+             static_cast<int>(!controller_footprint_.empty()),
+             controller_name_.c_str());
     if (controller_strategy_) {
       core::ControllerConfig cfg;
       cfg.lookahead_distance = lookahead_distance_;
@@ -293,6 +315,8 @@ private:
       cfg.max_accel_theta = max_accel_theta_;
       cfg.kinematics.max_velocity_x = max_velocity_x_;
       cfg.kinematics.max_velocity_theta = max_velocity_theta_;
+      cfg.footprint = controller_footprint_;
+      cfg.footprint_sample_spacing = footprint_sample_spacing_;
       controller_strategy_->initialize(cfg);
     } else {
       ROS_WARN("[rosiwit_navigation_ros1] controller '%s' not found", controller_name_.c_str());
@@ -1425,7 +1449,13 @@ private:
       grid.info.resolution = local_costmap.info.resolution;
       grid.info.origin.position.x = local_costmap.info.origin.position.x;
       grid.info.origin.position.y = local_costmap.info.origin.position.y;
-      grid.data = local_costmap.data;
+      if (!controller_footprint_.empty()) {
+        // footprint-aware: 控制器用未膨胀的实时障碍, 由 footprint 采样点负责
+        // 车体形状; 不能再用 0.62m 圆形膨胀, 否则等于把车体算了两遍.
+        grid.data = raw;
+      } else {
+        grid.data = local_costmap.data;
+      }
       controller_strategy_->setLocalCostmap(grid);
     }
   }
@@ -1892,6 +1922,10 @@ private:
   std::string odom_topic_;
   std::string rviz_goal_topic_ = "/move_base_simple/goal";
   bool rviz_goal_align_yaw_ = true;
+  bool footprint_aware_control_ = false;
+  double footprint_sample_spacing_ = 0.05;
+  core::Footprint configured_footprint_;
+  core::Footprint controller_footprint_;
 
   std::unique_ptr<core::IPlannerStrategy> planner_strategy_;
   std::unique_ptr<core::IPlannerStrategy> async_planner_;

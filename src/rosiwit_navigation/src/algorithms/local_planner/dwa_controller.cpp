@@ -24,8 +24,12 @@ bool DwaController::initialize(const core::ControllerConfig& config) {
       (config.kinematics.max_velocity_x > 0 ? config.kinematics.max_velocity_x : 0.5);
     max_dvw_ = config.max_accel_theta > 0 ? config.max_accel_theta : 1.0;
     goal_tol_ = config.xy_goal_tolerance > 0 ? config.xy_goal_tolerance : 0.1;
+    footprint_ = config.footprint;
+    footprint_samples_ = core::sampleFootprint(footprint_, config.footprint_sample_spacing);
     initialized_ = true;
-    LOG_INFO(logger_, "DWA initialized: vmax=%.2f, wmax=%.2f, accel=%.2f, waccel=%.2f", max_vx_, max_vw_, max_accel_, max_dvw_);
+    LOG_INFO(logger_, "DWA initialized: vmax=%.2f, wmax=%.2f, accel=%.2f, waccel=%.2f, footprint=%zu samples=%zu",
+             max_vx_, max_vw_, max_accel_, max_dvw_,
+             footprint_.size(), footprint_samples_.size());
     return true;
 }
 
@@ -131,31 +135,39 @@ core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const 
         py += s.v * std::sin(pt) * dt_;
         pt += s.w * dt_;
         double step_min = 5.0;
-        for (const auto& obs : obstacles_) {
-            double dx = px - obs.x, dy = py - obs.y;
-            double d = std::sqrt(dx * dx + dy * dy) - obs.radius;
-            if (d < step_min) step_min = d;
+        if (!obstacles_.empty()) {
+            if (footprint_samples_.empty()) {
+                for (const auto& obs : obstacles_) {
+                    double dx = px - obs.x, dy = py - obs.y;
+                    double d = std::sqrt(dx * dx + dy * dy) - obs.radius;
+                    if (d < step_min) step_min = d;
+                }
+            } else {
+                // 长方形车体: 每个 footprint 采样点都要离障碍物足够远.
+                const double c = std::cos(pt), sn = std::sin(pt);
+                for (const auto& sample : footprint_samples_) {
+                    const double wx = px + c * sample.first - sn * sample.second;
+                    const double wy = py + sn * sample.first + c * sample.second;
+                    for (const auto& obs : obstacles_) {
+                        double dx = wx - obs.x, dy = wy - obs.y;
+                        double d = std::sqrt(dx * dx + dy * dy) - obs.radius;
+                        if (d < step_min) step_min = d;
+                    }
+                }
+            }
         }
         // 记录全程最小距离，不提前退出（碰撞后继续模拟，但距离为负时 penalty 递增）
         if (step_min < s.clearance) s.clearance = step_min;
 
-        // 直接使用局部 costmap: 已包含静态地图 + 3D 点云 + 安全膨胀.
+        // 局部 costmap: footprint 非空时按整个车体取最大代价, 否则只看中心.
         if (has_local_costmap_) {
-            const auto& info = local_costmap_.info;
-            const int mx = static_cast<int>(std::floor((px - info.origin.position.x) / info.resolution));
-            const int my = static_cast<int>(std::floor((py - info.origin.position.y) / info.resolution));
-            if (mx < 0 || my < 0 ||
-                mx >= static_cast<int>(info.width) || my >= static_cast<int>(info.height)) {
+            const int v = core::footprintCost(
+                local_costmap_, core::Pose2D(px, py, pt), footprint_samples_);
+            if (v >= 100) {
                 s.clearance = std::min(s.clearance, 0.0);
-            } else {
-                const int v = local_costmap_.data[
-                    static_cast<size_t>(my) * info.width + static_cast<size_t>(mx)];
-                if (v >= 100) {
-                    s.clearance = std::min(s.clearance, 0.0);
-                } else if (v > 0) {
-                    s.clearance = std::min(s.clearance,
-                        (100.0 - static_cast<double>(v)) / 100.0 * 0.5);
-                }
+            } else if (v > 0) {
+                s.clearance = std::min(s.clearance,
+                    (100.0 - static_cast<double>(v)) / 100.0 * 0.5);
             }
         }
     }

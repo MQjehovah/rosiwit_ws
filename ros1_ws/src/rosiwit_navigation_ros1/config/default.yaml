@@ -43,6 +43,14 @@ max_lookahead_distance: 0.9
 # robot_radius = 实车 g_min_safe (硬禁区); inflation_radius = g_max_safe 的等效膨胀.
 # 实车 footprint x[-0.25,0.55] y[-0.33,0.33] 由 safety_footprint 表达.
 robot_radius: 0.39
+# 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
+# 默认关闭: A/B 实测 DWA+footprint 会绕圈, 建议按下面组合验证后再打开:
+#   controller_name: mppi
+#   footprint_aware_control: true
+#   max_accel_theta: 0.3
+# 报告: docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md
+footprint_aware_control: false
+footprint_sample_spacing: 0.05
 inflation_radius: 0.62
 
 # 里程计话题

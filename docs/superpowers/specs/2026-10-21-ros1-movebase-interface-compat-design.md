@@ -409,3 +409,26 @@ robot_radius=0.39 inflation_radius=0.62 safety_footprint=6 pts
 
 如果 footprint 的 x/y 范围超出实车值，节点会额外打
 `footprint 与实车 ... 不一致, 请确认不是仿真参数` 的 WARN。
+
+## 10. footprint-aware 控制（2026-10-21）
+
+长方形车体的碰撞检查已从“只看中心点”扩展为 footprint 采样：
+
+* 核心新增 `nav_core/footprint.{hpp,cpp}`，提供 `sampleFootprint/footprintCost`；
+* `ControllerConfig` 增加 `footprint` / `footprint_sample_spacing`；
+* DWA/MPPI 的候选轨迹改用 footprint 最大代价；`supportsFootprint()` 为 true；
+* 节点 `footprint_aware_control=true` 且控制器支持时，给控制器注入**未膨胀**
+  局部 costmap；否则保持原圆形膨胀，避免 pure_pursuit/TEB 丢掉安全余量；
+* **默认关闭**，不影响当前实车（仍是旧 DWA 二进制）。
+
+A/B（合成长方形车体场景，ARM 实测）：
+
+| 组合 | 到达 | 碰撞步数 | 耗时 |
+|---|---|---:|---:|
+| DWA / MPPI 点模型 | ✅ | 28 / 30 | 0.1 / 1.95 ms |
+| DWA + footprint | ❌ 绕圈 | 0 | 0.84 ms |
+| MPPI + footprint (wacc 0.2) | ❌ | 6 | 2.84 ms |
+| **MPPI + footprint (wacc 0.3)** | **✅** | **0** | **3.59 ms** |
+
+完整数据、场景与复现命令见
+`docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md`。

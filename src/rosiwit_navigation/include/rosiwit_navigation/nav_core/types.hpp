@@ -6,6 +6,7 @@
 #include <memory>
 #include <cstdint>
 #include <cmath>
+#include <utility>
 
 namespace rosiwit_navigation
 {
@@ -71,6 +72,9 @@ struct KinematicsLimits
   double max_velocity_theta;
 };
 
+// 机器人坐标系下的多边形 footprint: (x, y) 米. 空 = 点模型.
+using Footprint = std::vector<std::pair<double, double>>;
+
 struct ControllerConfig
 {
   double lookahead_distance;
@@ -84,6 +88,10 @@ struct ControllerConfig
   double max_angular_velocity;
   double max_accel_x = 0.0;
   double max_accel_theta = 0.0;
+  // 长方形车体: 控制器在候选轨迹上按这个多边形做碰撞/代价检查.
+  // 为空时退化为原来的"只看中心点"行为.
+  Footprint footprint;
+  double footprint_sample_spacing = 0.10;  // 多边形边采样间距 (m)
 };
 
 struct CostmapGridInfo

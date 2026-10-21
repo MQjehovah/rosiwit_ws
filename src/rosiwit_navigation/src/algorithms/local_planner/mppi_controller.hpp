@@ -9,6 +9,7 @@
 #include "rosiwit_navigation/nav_core/i_controller.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
 #include "rosiwit_navigation/nav_core/logger.hpp"
+#include "rosiwit_navigation/nav_core/footprint.hpp"
 
 namespace rosiwit_navigation {
 namespace controllers {
@@ -34,6 +35,7 @@ public:
   std::string getVersion() const override;
   void setObstacles(const core::ObstacleArray& obstacles) override;
   void setLocalCostmap(const core::CostmapGrid& costmap) override;
+  bool supportsFootprint() const override { return true; }
   std::string getDiagnostics() const override;
 
 private:
@@ -41,7 +43,6 @@ private:
 
   size_t nearestPathIndex(const core::Pose2D& pose) const;
   size_t nearestPathIndex(const core::Pose2D& pose, size_t begin, size_t end) const;
-  int localCostAt(const core::Pose2D& pose) const;
   static double normAngle(double a);
   static core::Pose2D integrate(
     const core::Pose2D& pose, double v, double w, double dt);
@@ -53,6 +54,8 @@ private:
   core::Path path_;
   core::CostmapGrid local_costmap_;
   core::ObstacleArray obstacles_;
+  core::Footprint footprint_;
+  std::vector<std::pair<double, double>> footprint_samples_;
   bool has_local_costmap_{false};
   bool initialized_{false};
   size_t idx_{0};

@@ -29,6 +29,9 @@ public:
   virtual std::string getVersion() const = 0;
   virtual void setObstacles(const ObstacleArray & obstacles) = 0;
   virtual void setLocalCostmap(const CostmapGrid & /*costmap*/) {}
+  // 控制器是否真的实现了 footprint 代价检查. 只有支持的控制器才能接
+  // 未膨胀的局部 costmap, 否则会丢掉圆形膨胀的安全余量.
+  virtual bool supportsFootprint() const { return false; }
   virtual std::string getDiagnostics() const { return {}; }
 };
 

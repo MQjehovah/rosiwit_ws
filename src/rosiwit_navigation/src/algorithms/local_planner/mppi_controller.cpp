@@ -19,10 +19,12 @@ bool MppiController::initialize(const core::ControllerConfig& config) {
   max_ax_ = config.max_accel_x > 0.0 ? config.max_accel_x : 0.4;
   max_aw_ = config.max_accel_theta > 0.0 ? config.max_accel_theta : 0.8;
   goal_tol_ = config.xy_goal_tolerance > 0.0 ? config.xy_goal_tolerance : 0.2;
+  footprint_ = config.footprint;
+  footprint_samples_ = core::sampleFootprint(footprint_, config.footprint_sample_spacing);
   resetNominal();
   initialized_ = true;
-  LOG_INFO(logger_, "MPPI initialized: vmax=%.2f wmax=%.2f H=%d K=%d",
-    max_vx_, max_vw_, horizon_, samples_);
+  LOG_INFO(logger_, "MPPI initialized: vmax=%.2f wmax=%.2f H=%d K=%d footprint=%zu samples=%zu",
+    max_vx_, max_vw_, horizon_, samples_, footprint_.size(), footprint_samples_.size());
   return true;
 }
 
@@ -72,19 +74,6 @@ size_t MppiController::nearestPathIndex(
     }
   }
   return best;
-}
-
-int MppiController::localCostAt(const core::Pose2D& pose) const {
-  if (!has_local_costmap_) return 0;
-  const auto& info = local_costmap_.info;
-  const int mx = static_cast<int>(std::floor((pose.x - info.origin.position.x) / info.resolution));
-  const int my = static_cast<int>(std::floor((pose.y - info.origin.position.y) / info.resolution));
-  if (mx < 0 || my < 0 ||
-      mx >= static_cast<int>(info.width) || my >= static_cast<int>(info.height)) {
-    return 100;
-  }
-  return local_costmap_.data[
-    static_cast<size_t>(my) * info.width + static_cast<size_t>(mx)];
 }
 
 double MppiController::normAngle(double a) {
@@ -175,7 +164,7 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       cost += path_weight_ * lateral2 +
               heading_weight_ * heading_err * heading_err;
 
-      const int cell = localCostAt(p);
+      const int cell = core::footprintCost(local_costmap_, p, footprint_samples_);
       if (cell >= 100) {
         cost += 1000.0;
       } else if (cell > 60) {

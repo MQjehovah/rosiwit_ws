@@ -14,6 +14,16 @@
 兼容语义、支持的命令（`navi_cmd` 1/2/3/6/7）与有意偏差见
 [`docs/superpowers/specs/2026-10-21-ros1-movebase-interface-compat-design.md`](../../../docs/superpowers/specs/2026-10-21-ros1-movebase-interface-compat-design.md)。
 
+## 长方形车体 / footprint-aware 控制
+
+实车 footprint 从 `config/movebase_compat.yaml` 读取，默认用于安全层与全局规划膨胀。
+当 `footprint_aware_control=true` 且控制器是 `dwa`/`mppi` 时，控制器会对候选轨迹的
+footprint 采样点查**未膨胀**的局部 costmap（由车体形状负责碰撞，而不是再用 0.62m 圆形膨胀）。
+
+该功能**默认关闭**。A/B 实测结论：DWA + footprint 会绕圈；推荐
+`controller_name: mppi` + `footprint_aware_control: true` + `max_accel_theta: 0.3`。
+详见 [`docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md`](../../../docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md)。
+
 ## 分层
 
 ```
