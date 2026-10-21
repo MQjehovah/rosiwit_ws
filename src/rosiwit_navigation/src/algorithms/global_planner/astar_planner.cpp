@@ -161,15 +161,18 @@ void AStarPlanner::inflateCostmap()
 
     // 根据距离设置膨胀代价
     const unsigned char lethal = AStarConstants::kObstacleThreshold;
-    float inv_radius = 1.0f / (radius_cells - safety_cells);
+    const float inv_radius = 1.0f / std::max(1, radius_cells - safety_cells);
 
     for (size_t i = 0; i < nx_ * ny_; ++i) {
         if (costmap_data_[i] >= lethal) continue;
 
         float d = dist[i];
         if (d <= safety_cells) {
-            // 安全缓冲区 → lethal，规划器必须绕行
-            costmap_data_[i] = lethal;
+            // 安全缓冲区不能写成 lethal(254): 机器人在窄走廊/墙边起步时
+            // 自身就落在安全区内, 会被误判成 Start in obstacle.
+            // 保持高代价(253)让 A* 可以离开, 真实墙仍是 255.
+            costmap_data_[i] = std::max(costmap_data_[i],
+                static_cast<unsigned char>(lethal - 1));
         } else if (d <= radius_cells) {
             // 膨胀区 → 梯度代价（靠近障碍物越高）
             float ratio = 1.0f - (d - safety_cells) * inv_radius;

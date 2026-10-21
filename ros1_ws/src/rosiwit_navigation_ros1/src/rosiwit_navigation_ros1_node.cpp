@@ -1708,7 +1708,9 @@ private:
       for (size_t i = 0; i < w * h; ++i) {
         if (cm.data[i] >= 254) { costmap_msg.data[i] = 100; continue; }
         const float d = dist[i];
-        if (d <= safety_cells) { costmap_msg.data[i] = 100; }
+        // 安全缓冲区只显示为高代价(99), 不是 lethal(100). A* 也把它当
+        // 高代价而非障碍; 否则 costmap 视觉上会把机器人周围画成黑墙.
+        if (d <= safety_cells) { costmap_msg.data[i] = 99; }
         else if (d <= inflate_cells) {
           costmap_msg.data[i] = static_cast<int8_t>((1.0f - (d - safety_cells) * inv) * 99);
         } else { costmap_msg.data[i] = 0; }
@@ -1926,7 +1928,8 @@ private:
     for (int i = 0; i < lw * lw; ++i) {
       if (raw[i] >= 100) { local_costmap.data[i] = 100; continue; }
       const float d = ldist[i];
-      if (d <= l_safety) { local_costmap.data[i] = 100; }
+      // 膨胀安全环显示为 99, 真实障碍 raw 仍是 100.
+      if (d <= l_safety) { local_costmap.data[i] = 99; }
       else if (d <= l_inflate) {
         local_costmap.data[i] = static_cast<int8_t>((1.0f - (d - l_safety) * linv) * 99);
       } else { local_costmap.data[i] = 0; }
