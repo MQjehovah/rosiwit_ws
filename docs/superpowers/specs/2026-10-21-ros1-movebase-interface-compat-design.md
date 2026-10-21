@@ -224,6 +224,9 @@ rostopic pub -1 /move_base_simple/goal geometry_msgs/PoseStamped ...   # 原生�
 ```bash
 rosrun rosiwit_navigation_ros1 check_movebase_interface.sh
 # 期望: "检查项 23 个, 不符 0 个" / exit=0
+
+# 隔离冒烟: 私有 roscore + /navtest, 造 /map//odom/TF, 15 项断言
+rosrun rosiwit_navigation_ros1 smoke_movebase.sh
 ```
 
 ## 7. 本次验证结果

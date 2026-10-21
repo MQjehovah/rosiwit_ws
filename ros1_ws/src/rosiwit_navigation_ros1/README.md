@@ -43,6 +43,9 @@ roslaunch rosiwit_navigation_ros1 movebase_compat.launch
 # 接口一致性（节点运行时；机器人上最有用的自检）
 rosrun rosiwit_navigation_ros1 check_movebase_interface.sh
 
+# 隔离冒烟（私有 master + /navtest，不碰实车；15 项断言）
+rosrun rosiwit_navigation_ros1 smoke_movebase.sh
+
 # 协议解析（不依赖 ROS 运行时）
 catkin_make run_tests_rosiwit_navigation_ros1
 # 或直接:
