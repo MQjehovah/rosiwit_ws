@@ -138,6 +138,10 @@ private:
     pnh_.param<std::string>("planner_name", planner_name_, "astar");
     pnh_.param<std::string>("controller_name", controller_name_, "pure_pursuit");
     pnh_.param<std::string>("odom_topic", odom_topic_, "/odom");
+    // RViz "2D Nav Goal" 默认发 /move_base_simple/goal (不是 /goal_pose).
+    pnh_.param<std::string>("rviz_goal_topic", rviz_goal_topic_,
+                            "/move_base_simple/goal");
+    pnh_.param<bool>("rviz_goal_align_yaw", rviz_goal_align_yaw_, true);
 
     pnh_.param<bool>("safety_enabled", safety_enabled_, true);
     pnh_.param<double>("safety_self_filter_radius", safety_self_filter_radius_, 0.25);
@@ -314,6 +318,10 @@ private:
                                  &RosiwitNavigationRos1Node::voxelCallback, this);
     }
     goal_sub_ = nh_.subscribe("/goal_pose", 1, &RosiwitNavigationRos1Node::goalCallback, this);
+    if (!rviz_goal_topic_.empty() && rviz_goal_topic_ != "/goal_pose") {
+      rviz_goal_sub_ = nh_.subscribe(
+        rviz_goal_topic_, 1, &RosiwitNavigationRos1Node::rvizGoalCallback, this);
+    }
     nav_stop_srv_ = nh_.advertiseService(
       "/nav_stop", &RosiwitNavigationRos1Node::navStopCallback, this);
 
@@ -449,6 +457,23 @@ private:
     voxel_layer_.update(points, msg->header.stamp.toSec());
   }
 
+  bool transformGoalToMap(geometry_msgs::PoseStamped & goal, const char * source)
+  {
+    if (goal.header.frame_id.empty()) {
+      goal.header.frame_id = map_frame_;
+      return true;
+    }
+    if (goal.header.frame_id == map_frame_) { return true; }
+    try {
+      tf_buffer_.transform(goal, goal, map_frame_, ros::Duration(0.1));
+    } catch (tf2::TransformException & ex) {
+      ROS_ERROR("[rosiwit_navigation_ros1] %s frame transform failed: %s",
+                source, ex.what());
+      return false;
+    }
+    return true;
+  }
+
   void goalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
   {
     // 原生 /goal_pose 与 action 共用一套控制循环; 新目标先让旧 action 结束.
@@ -458,22 +483,63 @@ private:
       if (mb_) { mb_->preempted(); }
     }
     geometry_msgs::PoseStamped goal = *msg;
-    if (goal.header.frame_id.empty()) {
-      goal.header.frame_id = map_frame_;
-    } else if (goal.header.frame_id != map_frame_) {
-      try {
-        tf_buffer_.transform(goal, goal, map_frame_, ros::Duration(0.1));
-      } catch (tf2::TransformException & ex) {
-        ROS_ERROR("[rosiwit_navigation_ros1] goal frame transform failed: %s", ex.what());
-        setGoalStatus("REJECTED_FRAME");
-        return;
-      }
+    if (!transformGoalToMap(goal, "goal_pose")) {
+      setGoalStatus("REJECTED_FRAME");
+      return;
     }
     ROS_INFO("[rosiwit_navigation_ros1] received goal: (%.2f, %.2f) frame=%s",
              goal.pose.position.x, goal.pose.position.y, goal.header.frame_id.c_str());
     goal_pose_ = goal;
     setGoalStatus("ACCEPTED");
     executeNavigation(goal_pose_);
+  }
+
+  // RViz "2D Nav Goal": 当作一次原生任务交给 core::ActionTask,
+  // 到位后按 RViz 箭头方向对齐 (rviz_goal_align_yaw). 没有 action handle,
+  // 所以不会回 action result, 但会走同一套进度/卡死/末端航向逻辑.
+  void rvizGoalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
+  {
+    if (action_active_) {
+      ROS_WARN("[rosiwit_navigation_ros1] 收到 RViz goal, 结束进行中的 movebase action");
+      clearActionState();
+      if (mb_) { mb_->preempted(); }
+    }
+    geometry_msgs::PoseStamped goal = *msg;
+    if (!transformGoalToMap(goal, "rviz_goal")) {
+      setGoalStatus("REJECTED_FRAME");
+      return;
+    }
+    if (!updateCurrentPose()) {
+      setGoalStatus("FAILED_POSE");
+      return;
+    }
+
+    core::ActionTaskCommand task_command;
+    task_command.kind = core::ActionKind::NAVIGATE;
+    task_command.final_rotate = rviz_goal_align_yaw_;
+    task_command.final_yaw = yawFromQuat(goal.pose.orientation);
+
+    action_active_ = true;
+    action_goal_ = movebase::Goal();
+    action_traveled_.clear();
+    action_traveled_.push_back(current_pose_);
+    action_speed_ = movebase_default_speed_;
+    if (controller_strategy_) {
+      controller_strategy_->setVelocityLimit(action_speed_, max_velocity_theta_);
+    }
+    if (!action_task_.start(task_command, toCorePose(current_pose_),
+                            ros::Time::now().toSec())) {
+      clearActionState();
+      setGoalStatus("FAILED_PLAN");
+      return;
+    }
+
+    goal_pose_ = goal;
+    setGoalStatus("ACCEPTED");
+    ROS_INFO("[rosiwit_navigation_ros1] RViz goal: (%.2f, %.2f, yaw=%.2f) align_yaw=%d",
+             goal.pose.position.x, goal.pose.position.y,
+             task_command.final_yaw, static_cast<int>(rviz_goal_align_yaw_));
+    startPlanning(goal_pose_, /*allow_initial_rotate=*/true, /*restart=*/true);
   }
 
   bool navStopCallback(std_srvs::Trigger::Request &, std_srvs::Trigger::Response & res)
@@ -1824,6 +1890,8 @@ private:
   std::string planner_name_;
   std::string controller_name_;
   std::string odom_topic_;
+  std::string rviz_goal_topic_ = "/move_base_simple/goal";
+  bool rviz_goal_align_yaw_ = true;
 
   std::unique_ptr<core::IPlannerStrategy> planner_strategy_;
   std::unique_ptr<core::IPlannerStrategy> async_planner_;
@@ -1842,6 +1910,7 @@ private:
   ros::Subscriber scan_sub_;
   ros::Subscriber voxel_sub_;
   ros::Subscriber goal_sub_;
+  ros::Subscriber rviz_goal_sub_;
   ros::Publisher cmd_vel_pub_;
   ros::Publisher path_pub_;
   ros::Publisher global_path_pub_;

@@ -132,6 +132,10 @@ src/rosiwit_navigation/               算法核心 (零 ROS 依赖, ROS1/ROS2 �
 * **路径跟踪**（cmd 3）：不调用全局规划，直接把路径给控制器；关闭周期重规划，
   避免把给定路径改掉。
 * **旋转/倒车**：`core::ActionTask` 给出角速度/线速度 primitive，接口层只做安全过滤与发布。
+* **RViz "2D Nav Goal"**：订阅 `/move_base_simple/goal`（参数 `rviz_goal_topic`），
+  当作一次原生 `NAVIGATE` 任务交给 `core::ActionTask`；到位后按箭头方向对齐
+  （`rviz_goal_align_yaw=true`）。旧 `robot_movebase` 完全不订阅任何 goal 话题，
+  所以这是新增能力，不影响原接口。
 * **反馈**：`execution_percent` 0..1；`execution_index` 用控制器当前点；
   `execution_path` 为已走过轨迹（>0.1m 采样）；`local_path` 为剩余参考路径前 200 点；
   `navi_state=2` 当安全层发生减速/停止。
@@ -151,6 +155,8 @@ src/rosiwit_navigation/               算法核心 (零 ROS 依赖, ROS1/ROS2 �
 | `movebase_back_speed` | `0.1` | 倒车速度 |
 | `movebase_rotate_speed` | `0.6` | 旋转角速度上限 |
 | `movebase_stuck_timeout` | `60` | 卡死判定（旧包 `check_stop_time` 默认 300s，见 §5） |
+| `rviz_goal_topic` | `/move_base_simple/goal` | RViz "2D Nav Goal" 话题 |
+| `rviz_goal_align_yaw` | `true` | RViz goal 到位后按箭头方向对齐 |
 | `robot_radius` | `0.39` | 硬禁区（= 实车 `g_min_safe`，非几何半径） |
 | `inflation_radius` | `0.62` | 软代价上限（= 实车 `g_max_safe` 的等效膨胀，见 §9） |
 
@@ -303,12 +309,12 @@ goal/cancel 回调在 `ros::spin` 线程内，完成时由定时器调用 `setSu
 |---|---|
 | 真机 `catkin_make --pkg rosiwit_navigation_ros1` | **exit=0** |
 | `catkin_make run_tests_rosiwit_navigation_ros1` | **15/15** |
-| 隔离 master（127.0.0.1:114xx）端到端 15 项 | **全 PASS** |
+| 隔离 master（127.0.0.1:114xx）端到端 16 项（含 RViz goal） | **全 PASS** |
 | 接口一致性脚本（namespace 隔离） | **23/23，不符 0** |
 
 端到端覆盖：action 可用、navi_cmd=4→-4 且无速度、navi_cmd=1 空点位→-1、
-6 输出 +0.6rad/s、7 输出 -0.1m/s、2/3 规划/跟踪后输出正线速度、
-四种命令 cancel→PREEMPTED、取消后保持停止。
+6 输出 +0.5rad/s、7 输出 -0.1m/s、2/3 规划/跟踪后输出正线速度、
+四种命令 cancel→PREEMPTED、取消后保持停止、RViz goal 触发导航且可被 `/nav_stop` 停止。
 
 ### 8.6 实车切换记录（2026-10-21 15:18 已切换）
 
@@ -332,6 +338,7 @@ goal/cancel 回调在 `ros::spin` 线程内，完成时由定时器调用 `setSu
   /robot_move_base 进程                          -> rosiwit_navigation_ros1_node
   /RobotNaviCmdAction/goal                       -> app publisher, 本节点 subscriber
   /RobotNaviCmdAction/status                     -> status_list: [] (空闲)
+  /move_base_simple/goal                         -> 本节点已订阅 (RViz 2D Nav Goal)
   check_movebase_interface.sh                    -> 23/23
   启动日志                                        -> footprint(6 pts) x[-0.25,0.55] y[-0.33,0.33]
                                                    robot_radius=0.39 inflation_radius=0.62

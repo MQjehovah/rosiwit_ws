@@ -55,6 +55,7 @@ rosparam set /navtest/navtest/movebase_cmd_vel_topic /navtest/movebase_cmd_vel
 
 rosrun rosiwit_navigation_ros1 rosiwit_navigation_ros1_node \
     __name:=navtest __ns:=/navtest \
+    _rviz_goal_topic:=/navtest/move_base_simple/goal \
     >/tmp/movebase_smoke_node.log 2>&1 &
 NODE_PID=$!
 

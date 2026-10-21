@@ -47,6 +47,9 @@ inflation_radius: 0.62
 
 # 里程计话题
 odom_topic: /odom
+# RViz "2D Nav Goal" 默认话题; 订阅后按 goal 的箭头方向对齐末端航向
+rviz_goal_topic: "/move_base_simple/goal"
+rviz_goal_align_yaw: true
 
 # 安全层 (Nav2 Collision Monitor 等价)
 safety_enabled: true

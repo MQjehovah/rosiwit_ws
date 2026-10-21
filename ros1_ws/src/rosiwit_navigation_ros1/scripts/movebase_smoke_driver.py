@@ -17,8 +17,9 @@ import actionlib
 import rospy
 import tf2_ros
 
-from geometry_msgs.msg import Pose2D, TransformStamped, Twist
+from geometry_msgs.msg import Pose2D, PoseStamped, TransformStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry
+from std_srvs.srv import Trigger
 from xzrobot_ros_dependency.msg import NaviCmdActionAction, NaviCmdActionGoal
 
 ACTION = "/navtest/RobotNaviCmdAction"
@@ -71,7 +72,10 @@ def start_odom():
             # 上一条控制量, 否则永远从 0 加速, 只能看到 0.03m/s.
             msg.twist.twist.linear.x = last_cmd["linear"]
             msg.twist.twist.angular.z = last_cmd["angular"]
-            publisher.publish(msg)
+            try:
+                publisher.publish(msg)
+            except rospy.ROSException:
+                break  # 退出时 publisher 已关闭, 不是测试失败
             try:
                 rate.sleep()
             except rospy.ROSInterruptException:
@@ -219,6 +223,31 @@ def main():
     check("路径跟踪取消 -> PREEMPTED",
           finished and client.get_state() == actionlib.GoalStatus.PREEMPTED,
           "finished=%s state=%s" % (finished, client.get_state()))
+
+
+    # 8) RViz 2D Nav Goal: /move_base_simple/goal (原生目标, 走 ActionTask)
+    rospy.sleep(0.5)
+    last_cmd["linear"] = 0.0
+    goal_pub = rospy.Publisher("/navtest/move_base_simple/goal", PoseStamped,
+                               queue_size=1)
+    rospy.sleep(0.3)
+    rviz_goal = PoseStamped()
+    rviz_goal.header.frame_id = "map"
+    rviz_goal.header.stamp = rospy.Time.now()
+    rviz_goal.pose.position.x = 1.0
+    rviz_goal.pose.orientation.w = 1.0
+    goal_pub.publish(rviz_goal)
+    moved = wait_until(lambda: last_cmd["linear"] > 0.05, timeout=6.0)
+    check("RViz goal 触发导航", moved, "v=%.3f" % last_cmd["linear"])
+    try:
+        stop_nav = rospy.ServiceProxy("/nav_stop", Trigger)
+        stop_nav()
+        rospy.sleep(0.8)
+        check("RViz goal 可被 /nav_stop 停止",
+              abs(last_cmd["linear"]) < 1e-6 and abs(last_cmd["angular"]) < 1e-6,
+              "v=%.3f w=%.3f" % (last_cmd["linear"], last_cmd["angular"]))
+    except rospy.ServiceException as exc:
+        check("RViz goal 可被 /nav_stop 停止", False, str(exc))
 
     print("")
     if failures:

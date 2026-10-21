@@ -59,6 +59,9 @@ global_frame: "map"
 robot_frame: "base_footprint"
 map_frame: "map"
 odom_topic: "/odom"
+# RViz "2D Nav Goal" 默认话题; 订阅后按 goal 的箭头方向对齐末端航向
+rviz_goal_topic: "/move_base_simple/goal"
+rviz_goal_align_yaw: true
 
 # ---- 容差 / 前瞻 (实车 0.3~0.9) ----
 goal_tolerance_xy: 0.1

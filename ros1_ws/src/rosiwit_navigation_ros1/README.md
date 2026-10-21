@@ -7,7 +7,7 @@
 
 | 入口 | 说明 |
 |---|---|
-| 原生 | `/goal_pose`（`geometry_msgs/PoseStamped`）、`/nav_stop`（`std_srvs/Trigger`）、`/cmd_vel`、`/local_path`、`/global_path`、`/local_costmap`、`/global_costmap`、`/goal_status`、`/nav_diagnostics`、`/tracked_obstacles` |
+| 原生 | `/goal_pose`、**RViz `/move_base_simple/goal`**（`geometry_msgs/PoseStamped`）、`/nav_stop`（`std_srvs/Trigger`）、`/cmd_vel`、`/local_path`、`/global_path`、`/local_costmap`、`/global_costmap`、`/goal_status`、`/nav_diagnostics`、`/tracked_obstacles` |
 | robot_movebase 兼容 | action `/RobotNaviCmdAction`（`xzrobot_ros_dependency/NaviCmdActionAction`）+ `/movebase_cmd_vel`、`/local_map`、`/makeplan_map`、`/robot_footprint`、`/prediction_robot_footprint`、`/prediction_path`、`/movebae_robot_path`、`/back_off_path`、`/docking_path`、`/re_point` 等旧话题 |
 
 两套入口共用同一个控制循环，兼容层由参数 `movebase_compat_enabled`（默认 `true`）控制。
@@ -43,7 +43,7 @@ roslaunch rosiwit_navigation_ros1 movebase_compat.launch
 # 接口一致性（节点运行时；机器人上最有用的自检）
 rosrun rosiwit_navigation_ros1 check_movebase_interface.sh
 
-# 隔离冒烟（私有 master + /navtest，不碰实车；15 项断言）
+# 隔离冒烟（私有 master + /navtest，不碰实车；16 项断言，含 RViz goal）
 rosrun rosiwit_navigation_ros1 smoke_movebase.sh
 
 # 协议解析（不依赖 ROS 运行时）
