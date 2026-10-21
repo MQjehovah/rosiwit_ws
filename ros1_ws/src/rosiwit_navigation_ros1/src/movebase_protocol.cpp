@@ -397,6 +397,19 @@ Decoded decodeGoal(const Goal & goal)
       out.supported = true;
       return out;
 
+    case 20:
+      out.command = Command::COVERAGE;
+      // 只读 tracking_path 作为区域多边形; 其余字段忽略.
+      if (goal.tracking_path.size() < 3) {
+        out.reject_result = RESULT_POSE_ERROR;
+        return out;
+      }
+      out.polygon = goal.tracking_path;
+      out.speed = goal.robot_vel;
+      out.valid = true;
+      out.supported = true;
+      return out;
+
     case 7:
       out.command = Command::BACK_OFF;
       // 旧实现: backing_dist <= 0.1 时按 0.3m 倒车.

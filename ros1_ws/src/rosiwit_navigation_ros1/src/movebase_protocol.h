@@ -38,6 +38,7 @@ enum class Command : int
   EXIT_ELEVATOR = 5,   // 出梯 (核心不支持)
   ROTATE_180 = 6,      // 原地旋转 180°
   BACK_OFF = 7,        // 倒车
+  COVERAGE = 20,       // 动态覆盖清洁 (tracking_path=区域多边形)
   UNKNOWN = 100,
 };
 
@@ -82,6 +83,7 @@ struct Decoded
   bool use_file = false;    // 需要节点解析 file_path
 
   std::vector<core::Pose2D> path;  // FOLLOW_PATH: 待跟踪路径 (已从 path_index 裁剪)
+  std::vector<core::Pose2D> polygon;  // COVERAGE: 区域多边形
   core::Pose2D start;              // TWO_POINTS: 显式起点
   bool has_start = false;
   core::Pose2D target;             // 单点/两点目标

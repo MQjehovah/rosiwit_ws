@@ -141,6 +141,30 @@ TEST(MovebaseProtocol, RotateAndBackOffAreSupported)
   EXPECT_DOUBLE_EQ(decodeGoal(explicit_back).back_distance, 1.5);
 }
 
+TEST(MovebaseProtocol, CoverageUsesTrackingPathAsPolygon)
+{
+  Goal goal = makeGoal(20);
+  goal.robot_vel = 0.4;
+  goal.tracking_path = {makePose(-1.0, -1.0), makePose(1.0, -1.0),
+                        makePose(1.0, 1.0), makePose(-1.0, 1.0)};
+  const Decoded decoded = decodeGoal(goal);
+  EXPECT_TRUE(decoded.valid);
+  EXPECT_TRUE(decoded.supported);
+  EXPECT_EQ(decoded.command, Command::COVERAGE);
+  ASSERT_EQ(decoded.polygon.size(), 4u);
+  EXPECT_DOUBLE_EQ(decoded.polygon[2].x, 1.0);
+  EXPECT_DOUBLE_EQ(decoded.speed, 0.4);
+}
+
+TEST(MovebaseProtocol, CoverageNeedsAtLeastThreeVertices)
+{
+  Goal goal = makeGoal(20);
+  goal.tracking_path = {makePose(0.0, 0.0), makePose(1.0, 0.0)};
+  const Decoded decoded = decodeGoal(goal);
+  EXPECT_FALSE(decoded.supported);
+  EXPECT_EQ(decoded.reject_result, RESULT_POSE_ERROR);
+}
+
 TEST(MovebaseProtocol, ElevatorAndCleaningCommandsFailExplicitly)
 {
   for (int cmd : {4, 5, 8, 9, 10, 11, 12, 13, 42}) {

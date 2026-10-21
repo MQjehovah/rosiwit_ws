@@ -52,6 +52,7 @@ struct Feedback
   long execution_path_segment_index = 0;
   std::vector<core::Pose2D> execution_path;  // 已走过的轨迹
   std::vector<core::Pose2D> local_path;      // 剩余/局部路径
+  double clean_area = 0.0;                   // 覆盖清洁面积 m^2
   int navi_state = 1;                        // 1 正常导航, 2 避障中
 };
 
@@ -62,6 +63,7 @@ struct Outcome
   long execution_index = 0;
   long execution_path_segment_index = 0;
   std::vector<core::Pose2D> execution_path;
+  double clean_area = 0.0;                   // 覆盖清洁面积 m^2
 };
 
 class Interface
@@ -95,6 +97,10 @@ public:
   void publishTraveledPath(const std::vector<geometry_msgs::PoseStamped> & poses);
   void publishLookahead(const geometry_msgs::PointStamped & point);
   void publishBackOffPath(const nav_msgs::Path & path);
+  // 覆盖清洁: 复用 robot_movebase 已有的 clean_* 话题
+  void publishCoverageMap(const nav_msgs::OccupancyGrid & map);
+  void publishCoveredArea(double area_m2);
+  void publishCoverageStatus(const std::string & json);
 
   // ---- action 生命周期 ----
   void publishFeedback(const Feedback & feedback);

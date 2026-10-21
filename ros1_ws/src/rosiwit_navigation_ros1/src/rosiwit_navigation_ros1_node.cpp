@@ -35,6 +35,7 @@
 #include <limits>
 #include <memory>
 #include <queue>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <future>
@@ -50,6 +51,7 @@
 #include "rosiwit_navigation/nav_core/task_state_machine.hpp"
 #include "rosiwit_navigation/nav_core/voxel_layer.hpp"
 #include "rosiwit_navigation/nav_core/action_task.hpp"
+#include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 #include "path_smoother.hpp"
 #include "movebase_protocol.h"
 #include "movebase_interface.h"
@@ -214,6 +216,21 @@ private:
     }
     if (movebase_default_speed_ <= 0.0) { movebase_default_speed_ = max_velocity_x_; }
 
+    // ---- 动态覆盖清洁 (navi_cmd=20) ----
+    pnh_.param<double>("coverage_sweep_width", coverage_sweep_width_, 0.5);
+    pnh_.param<double>("coverage_max_speed", coverage_max_speed_, 0.4);
+    pnh_.param<double>("coverage_resolution", coverage_resolution_, 0.05);
+    pnh_.param<double>("coverage_replan_period", coverage_replan_period_, 10.0);
+    pnh_.param<double>("coverage_horizon", coverage_horizon_, 2.5);
+    pnh_.param<double>("coverage_retry_timeout", coverage_retry_timeout_, 10.0);
+    pnh_.param<double>("coverage_complete_rate", coverage_complete_rate_, 0.995);
+    pnh_.param<double>("coverage_blocked_inflation", coverage_blocked_inflation_, 0.10);
+    pnh_.param<double>("coverage_plan_inflation", coverage_plan_inflation_, 0.0);
+    pnh_.param<double>("coverage_plan_robot_radius", coverage_plan_robot_radius_, 0.0);
+    pnh_.param<std::string>("coverage_controller_name", coverage_controller_name_,
+                            "pure_pursuit");
+    pnh_.param<std::string>("coverage_report_path", coverage_report_path_, "");
+
     // 长方形车体的 footprint-aware 控制: 控制器按 footprint 采样点查 raw costmap.
     pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
@@ -297,6 +314,30 @@ private:
         controller_strategy_->supportsFootprint()) {
       controller_footprint_ = configured_footprint_;
     }
+    // 覆盖模式单独一个控制器: 覆盖路径是长直线/行段, pure_pursuit 比
+    // MPPI 更稳; 正常导航仍用 controller_name 指定的 MPPI.
+    const std::string cov_ctrl = coverage_controller_name_.empty() ?
+      controller_name_ : coverage_controller_name_;
+    coverage_controller_ = nav_core::NavigationFactory::createController(cov_ctrl);
+    if (coverage_controller_) {
+      core::ControllerConfig ccfg;
+      ccfg.lookahead_distance = lookahead_distance_;
+      ccfg.xy_goal_tolerance = 0.15;
+      ccfg.slow_down_distance = 1.0;
+      ccfg.lookahead_gain = 1.0;
+      ccfg.max_lookahead_distance = max_lookahead_distance_;
+      ccfg.min_lookahead_distance = min_lookahead_distance_;
+      ccfg.max_linear_velocity = std::max(0.1, coverage_max_speed_);
+      ccfg.max_angular_velocity = max_velocity_theta_;
+      ccfg.max_accel_x = max_accel_x_;
+      ccfg.max_accel_theta = max_accel_theta_;
+      ccfg.kinematics.max_velocity_x = max_velocity_x_;
+      ccfg.kinematics.max_velocity_theta = max_velocity_theta_;
+      coverage_controller_->initialize(ccfg);
+    } else {
+      ROS_WARN("[coverage] controller '%s' not found", cov_ctrl.c_str());
+    }
+
     ROS_INFO("[rosiwit_navigation_ros1] footprint_aware: requested=%d active=%d controller=%s",
              static_cast<int>(footprint_aware_control_),
              static_cast<int>(!controller_footprint_.empty()),
@@ -381,6 +422,9 @@ private:
   void mapCallback(const nav_msgs::OccupancyGrid::ConstPtr & msg)
   {
     current_map_ = msg;
+    if (coverage_active_ && coverage_grid_.ready()) {
+      coverage_grid_.updateStaticObstacles(msg->data);
+    }
     last_global_costmap_update_ = ros::Time(0);
     updateCostmap();
     ROS_INFO("[rosiwit_navigation_ros1] map received: %d x %d, res=%.3f",
@@ -694,6 +738,9 @@ private:
       case movebase::Command::BACK_OFF:
         startActionBackOff();
         break;
+      case movebase::Command::COVERAGE:
+        startActionCoverage();
+        break;
       default:
         failAction(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
         break;
@@ -877,6 +924,10 @@ private:
 
   void clearActionState()
   {
+    if (coverage_active_) { stopCoverageInternal(); }
+    coverage_state_ = "IDLE";
+    last_coverage_rate_ = 0.0;
+    last_clean_area_ = 0.0;
     action_active_ = false;
     action_task_.reset();
     if (controller_strategy_) {
@@ -884,8 +935,27 @@ private:
     }
   }
 
+  core::IControllerStrategy * activeController() const
+  {
+    if (coverage_active_ && coverage_controller_) { return coverage_controller_.get(); }
+    return controller_strategy_.get();
+  }
+
+  geometry_msgs::Twist coverageCommand()
+  {
+    if (!coverage_controller_) { return geometry_msgs::Twist(); }
+    return toRosTwist(coverage_controller_->computeVelocityCommand(
+      toCorePose(current_pose_), toCoreVelocity(current_velocity_)));
+  }
+
   double actionProgress() const
   {
+    if (coverage_active_) {
+      return coverage_grid_.ready() ? coverage_grid_.stats().coverageRate() : 0.0;
+    }
+    if (coverage_state_ == "DONE" || coverage_state_ == "STOPPED") {
+      return last_coverage_rate_;
+    }
     return action_active_ ? action_task_.progress() : 0.0;
   }
 
@@ -894,9 +964,9 @@ private:
     movebase::Feedback feedback;
     feedback.execution_percent = actionProgress();
     feedback.execution_path_segment_index = action_goal_.path_segment_index;
-    if (controller_strategy_) {
+    if (activeController()) {
       feedback.execution_index =
-        static_cast<long>(controller_strategy_->getCurrentWaypointIndex());
+        static_cast<long>(activeController()->getCurrentWaypointIndex());
     }
     if (action_task_.backing()) {
       // 倒车没有路径索引, 用剩余距离的百分比作为下标语义没有意义, 保持 0.
@@ -915,8 +985,10 @@ private:
         current_path_.poses[i].pose.position.y,
         yawFromQuat(current_path_.poses[i].pose.orientation));
     }
+    feedback.clean_area = last_clean_area_;
     feedback.navi_state =
-      (last_safety_state_ != "PASS" || last_safety_scale_ < 0.999) ? 2 : 1;
+      (last_safety_state_ != "PASS" || last_safety_scale_ < 0.999 ||
+       (coverage_active_ && coverage_grid_.dynamicCount() > 0)) ? 2 : 1;
     return feedback;
   }
 
@@ -926,9 +998,10 @@ private:
     outcome.tracking_path_result = result_code;
     outcome.execution_percent = actionProgress();
     outcome.execution_path_segment_index = action_goal_.path_segment_index;
-    if (controller_strategy_ && !action_task_.backing()) {
+    outcome.clean_area = last_clean_area_;
+    if (activeController() && !action_task_.backing()) {
       outcome.execution_index =
-        static_cast<long>(controller_strategy_->getCurrentWaypointIndex());
+        static_cast<long>(activeController()->getCurrentWaypointIndex());
     }
     for (const auto & pose : action_traveled_) {
       outcome.execution_path.emplace_back(
@@ -1000,9 +1073,9 @@ private:
     nav_msgs::Path prediction;
     prediction.header.frame_id = map_frame_;
     prediction.header.stamp = ros::Time::now();
-    if (!current_path_.poses.empty() && controller_strategy_) {
+    if (!current_path_.poses.empty() && activeController()) {
       const size_t index = std::min(
-        controller_strategy_->getCurrentWaypointIndex(), current_path_.poses.size() - 1);
+        activeController()->getCurrentWaypointIndex(), current_path_.poses.size() - 1);
       const size_t limit = std::min(current_path_.poses.size(), index + 50);
       for (size_t i = index; i < limit; ++i) {
         prediction.poses.push_back(current_path_.poses[i]);
@@ -1042,9 +1115,9 @@ private:
 
   bool findLookaheadPose(double distance, geometry_msgs::PoseStamped & out) const
   {
-    if (!controller_strategy_ || current_path_.poses.empty()) { return false; }
+    if (!activeController() || current_path_.poses.empty()) { return false; }
     size_t index = std::min(
-      controller_strategy_->getCurrentWaypointIndex(), current_path_.poses.size() - 1);
+      activeController()->getCurrentWaypointIndex(), current_path_.poses.size() - 1);
     double accumulated = 0.0;
     for (size_t i = index + 1; i < current_path_.poses.size(); ++i) {
       const auto & prev = current_path_.poses[i - 1].pose.position;
@@ -1076,6 +1149,410 @@ private:
     publishCommand(applySafety(cmd));
     recordActionTraveled();
     publishActionOutputs();
+  }
+
+
+  // ==========================================================================
+  // 动态覆盖清洁 (navi_cmd=20)
+  //   tracking_path = 区域多边形; robot_vel = 最大速度 (<=0 用参数)
+  //   宽度/重规划/超时等全部走私有参数; 不新增 action/service.
+  // ==========================================================================
+  void startActionCoverage()
+  {
+    if (!current_map_) {
+      failAction(movebase::RESULT_GLOBAL_MAP_ERROR, "FAILED_MAP");
+      return;
+    }
+    if (action_cmd_.polygon.size() < 3) {
+      ROS_ERROR("[coverage] 多边形顶点不足 (%zu)", action_cmd_.polygon.size());
+      failAction(movebase::RESULT_POSE_ERROR, "FAILED_COVERAGE_POLYGON");
+      return;
+    }
+    if (!updateCurrentPose()) {
+      failAction(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
+      return;
+    }
+
+    core::CostmapGridInfo info;
+    info.width = current_map_->info.width;
+    info.height = current_map_->info.height;
+    info.resolution = current_map_->info.resolution;
+    info.origin.position.x = current_map_->info.origin.position.x;
+    info.origin.position.y = current_map_->info.origin.position.y;
+    if (std::fabs(coverage_resolution_ - info.resolution) > 1e-3) {
+      ROS_WARN("[coverage] coverage_resolution=%.3f 与地图分辨率 %.3f 不一致, 按地图分辨率",
+               coverage_resolution_, info.resolution);
+    }
+
+    coverage_config_.sweep_width = coverage_sweep_width_;
+    coverage_config_.obstacle_dilation = coverage_blocked_inflation_;
+    // v1: 允许目标到区域边缘, 由下面的“预测位姿越界即停”守卫防止车体中心跑出.
+    coverage_config_.center_inset = 0.0;
+    if (!coverage_grid_.initialize(info, action_cmd_.polygon, coverage_config_)) {
+      failAction(movebase::RESULT_POSE_ERROR, "FAILED_COVERAGE_AREA");
+      return;
+    }
+    coverage_grid_.updateStaticObstacles(current_map_->data);
+    const core::Pose2D pose = toCorePose(current_pose_);
+    if (!coverage_grid_.contains(pose)) {
+      ROS_ERROR("[coverage] 起点 (%.2f, %.2f) 不在区域内或落在障碍上",
+                pose.x, pose.y);
+      failAction(movebase::RESULT_PLAN_FAILED, "FAILED_COVERAGE_START");
+      return;
+    }
+    coverage_grid_.resetPose(pose);
+
+    coverage_active_ = true;
+    coverage_state_ = "COVERING";
+    coverage_last_plan_ = ros::Time(0);
+    coverage_last_progress_ = ros::Time::now();
+    coverage_last_status_ = ros::Time(0);
+    coverage_last_dynamic_ = ros::Time(0);
+    coverage_last_covered_count_ = 0;
+    coverage_last_progress_pose_ = pose;
+    coverage_last_motion_pose_ = pose;
+    coverage_last_motion_time_ = ros::Time::now();
+    coverage_has_target_ = false;
+    last_clean_area_ = 0.0;
+
+    action_speed_ = action_cmd_.speed > 0.01 ? action_cmd_.speed : coverage_max_speed_;
+    action_speed_ = std::min(action_speed_, max_velocity_x_);
+    if (coverage_controller_) {
+      coverage_controller_->setVelocityLimit(action_speed_, max_velocity_theta_);
+      coverage_controller_->reset();
+    }
+    current_path_.poses.clear();
+    is_navigating_ = true;
+    is_paused_ = false;
+    planning_active_ = false;
+
+    ROS_INFO("[coverage] start: %zu vertices, sweep=%.2f m, speed=%.2f m/s, horizon=%.1f m",
+             action_cmd_.polygon.size(), coverage_sweep_width_, action_speed_,
+             coverage_horizon_);
+    publishCoverageOutputs(ros::Time::now(), false);
+    coveragePlanTick();
+  }
+
+  void coverageControlStep()
+  {
+    if (!coverage_active_) { return; }
+    const ros::Time now = ros::Time::now();
+    const core::Pose2D pose = toCorePose(current_pose_);
+
+    coverage_grid_.updateCovered(pose);
+    recordActionTraveled();
+
+    if (coverage_last_dynamic_.isZero() ||
+        (now - coverage_last_dynamic_).toSec() >= 0.2) {
+      std::vector<core::Pose2D> dynamic_points;
+      dynamic_points.reserve(laser_points_.size());
+      for (const auto & p : laser_points_) {
+        if (std::hypot(p.x - pose.x, p.y - pose.y) < safety_self_filter_radius_) {
+          continue;  // 过滤自身点
+        }
+        dynamic_points.emplace_back(p.x, p.y, 0.0);
+      }
+      coverage_grid_.updateDynamicObstacles(dynamic_points);
+      coverage_last_dynamic_ = now;
+    }
+
+    const auto stats = coverage_grid_.stats();
+    if (stats.covered > coverage_last_covered_count_) {
+      coverage_last_covered_count_ = stats.covered;
+      coverage_last_progress_ = now;
+      coverage_last_progress_pose_ = pose;
+    } else if (pose.distanceTo(coverage_last_progress_pose_) > 0.3) {
+      coverage_last_progress_ = now;
+      coverage_last_progress_pose_ = pose;
+    }
+    if (pose.distanceTo(coverage_last_motion_pose_) > 0.1) {
+      coverage_last_motion_pose_ = pose;
+      coverage_last_motion_time_ = now;
+    }
+    last_clean_area_ = stats.coveredArea(current_map_->info.resolution);
+
+    // 最后几个格子可能永远在边界/盲区里打转; 达到完成阈值就收尾,
+    // 把剩余未覆盖标成不可达并写进报告.
+    if (stats.coverageRate() >= coverage_complete_rate_ &&
+        stats.uncovered > 0) {
+      coverage_grid_.markAllUncoveredBlocked();
+      finishCoverage();
+      return;
+    }
+
+    if (coverage_last_status_.isZero() ||
+        (now - coverage_last_status_).toSec() >= 1.0) {
+      publishCoverageOutputs(now, false);
+      coverage_last_status_ = now;
+    }
+
+    const bool path_done = current_path_.poses.size() < 2 ||
+      (coverage_controller_ && coverage_controller_->isGoalReached(pose));
+    // 2s 就重规划会把 MPPI 的加速过程反复打断; 给当前段足够时间走完.
+    const bool no_motion = current_path_.poses.size() >= 2 &&
+      (now - coverage_last_motion_time_).toSec() > 6.0 &&
+      (now - coverage_last_plan_).toSec() > 3.0;
+    const bool replan_due = coverage_last_plan_.isZero() ||
+      (now - coverage_last_plan_).toSec() >= coverage_replan_period_ ||
+      no_motion;
+    if (path_done || replan_due) {
+      coveragePlanTick();
+      if (!coverage_active_) { return; }
+    }
+
+    if (!coverage_grid_.hasUncoveredReachable(pose, true)) {
+      if (coverage_grid_.hasAnyUncovered()) {
+        if ((now - coverage_last_progress_).toSec() > coverage_retry_timeout_) {
+          ROS_WARN("[coverage] %.0fs 内没有进展, 把剩余未覆盖标为不可达",
+                   coverage_retry_timeout_);
+          coverage_grid_.markAllUncoveredBlocked();
+          finishCoverage();
+        } else {
+          coverage_state_ = "WAITING_OBSTACLE";
+          publishCommand(applySafety(geometry_msgs::Twist()));
+          publishActionOutputs();
+        }
+        return;
+      }
+      finishCoverage();
+      return;
+    }
+
+    if (current_path_.poses.size() >= 2) {
+      coverage_state_ = "COVERING";
+      geometry_msgs::Twist cmd = applySafety(coverageCommand());
+      // 预测一步: 如果车体中心会跑出区域/撞进障碍, 停线速度 (保留转向).
+      if (coverage_grid_.contains(pose)) {
+        const double dt = 0.1;
+        core::Pose2D next(pose.x + cmd.linear.x * std::cos(pose.theta) * dt,
+                          pose.y + cmd.linear.x * std::sin(pose.theta) * dt,
+                          pose.theta + cmd.angular.z * dt);
+        if (!coverage_grid_.contains(next)) {
+          cmd.linear.x = 0.0;
+          coverage_state_ = "BOUNDARY";
+        }
+      }
+      publishCommand(cmd);
+      path_pub_.publish(current_path_);
+      global_path_pub_.publish(current_path_);
+      publishActionOutputs();
+    } else {
+      publishCommand(applySafety(geometry_msgs::Twist()));
+      publishActionOutputs();
+    }
+  }
+
+  void coveragePlanTick()
+  {
+    if (!coverage_active_ || !current_map_ || !coverage_grid_.ready() ||
+        !planner_strategy_ || !coverage_controller_) {
+      return;
+    }
+    const ros::Time now = ros::Time::now();
+    const core::Pose2D pose = toCorePose(current_pose_);
+    std::vector<core::Pose2D> segment;
+    if (!coverage_grid_.nextCoverageSegment(pose, coverage_horizon_, segment)) {
+      coverage_last_plan_ = now;
+      if (coverage_grid_.hasAnyUncovered()) {
+        if ((now - coverage_last_progress_).toSec() > coverage_retry_timeout_) {
+          coverage_grid_.markAllUncoveredBlocked();
+          finishCoverage();
+        } else {
+          coverage_state_ = "WAITING_OBSTACLE";
+          current_path_.poses.clear();
+          coverage_controller_->reset();
+        }
+      } else {
+        finishCoverage();
+      }
+      return;
+    }
+    coverage_target_ = segment.back();
+    coverage_has_target_ = true;
+
+    core::Path path;
+    if (pose.distanceTo(segment.front()) > 0.3) {
+      core::Costmap costmap;
+      buildCoverageCostmap(costmap);
+      planner_strategy_->setInflationRadius(coverage_plan_inflation_);
+      planner_strategy_->setRobotRadius(coverage_plan_robot_radius_);
+      planner_strategy_->setCostmap(costmap);
+      const core::Result<core::Path> approach =
+        planner_strategy_->plan(pose, segment.front());
+      planner_strategy_->setInflationRadius(inflation_radius_);
+      planner_strategy_->setRobotRadius(robot_radius_);
+      coverage_last_plan_ = now;
+      if (!approach.is_ok()) {
+        ROS_WARN("[coverage] approach to row (%.2f, %.2f) failed: %s",
+                 segment.front().x, segment.front().y,
+                 approach.error_message().c_str());
+        coverage_has_target_ = false;
+        current_path_.poses.clear();
+        coverage_controller_->reset();
+        coverage_state_ = "REPLAN";
+        return;
+      }
+      path = approach.value();
+      for (size_t i = 1; i < segment.size(); ++i) {
+        core::PathPoint pt;
+        pt.pose = segment[i];
+        path.points.push_back(pt);
+      }
+    } else {
+      for (const auto & point : segment) {
+        core::PathPoint pt;
+        pt.pose = point;
+        path.points.push_back(pt);
+      }
+    }
+    coverage_last_plan_ = now;
+    if (path.points.size() < 2) {
+      current_path_.poses.clear();
+      coverage_controller_->reset();
+      return;
+    }
+
+    current_path_ = toRosPath(path, map_frame_, now);
+    coverage_controller_->setPath(path);
+    coverage_state_ = "COVERING";
+    ROS_INFO_THROTTLE(2.0, "[coverage] row=(%.2f,%.2f)->(%.2f,%.2f) path=%zu pts",
+                      segment.front().x, segment.front().y,
+                      segment.back().x, segment.back().y, path.points.size());
+  }
+
+  void buildCoverageCostmap(core::Costmap & costmap) const
+  {
+    const auto encoded = coverage_grid_.plannerCostmap(current_map_->data);
+    auto grid = std::make_shared<core::CostmapGrid>();
+    grid->info.width = current_map_->info.width;
+    grid->info.height = current_map_->info.height;
+    grid->info.resolution = current_map_->info.resolution;
+    grid->info.origin.position.x = current_map_->info.origin.position.x;
+    grid->info.origin.position.y = current_map_->info.origin.position.y;
+    grid->data.assign(encoded.size(), 0);
+    costmap.data.assign(encoded.size(), 0);
+    for (size_t i = 0; i < encoded.size(); ++i) {
+      if (encoded[i] >= 100) {
+        grid->data[i] = 100;
+        costmap.data[i] = 255;
+      }
+    }
+    // 允许 A* 从当前格起步 (起点可能落在 center_inset 带里).
+    const int sx = static_cast<int>(std::floor(
+      (current_pose_.pose.position.x - current_map_->info.origin.position.x) /
+      current_map_->info.resolution));
+    const int sy = static_cast<int>(std::floor(
+      (current_pose_.pose.position.y - current_map_->info.origin.position.y) /
+      current_map_->info.resolution));
+    if (sx >= 0 && sy >= 0 &&
+        sx < static_cast<int>(current_map_->info.width) &&
+        sy < static_cast<int>(current_map_->info.height)) {
+      const size_t idx = static_cast<size_t>(sy) * current_map_->info.width + sx;
+      const int recover_cells = std::max(1, static_cast<int>(std::ceil(
+        0.25 / current_map_->info.resolution)));
+      for (int dy = -recover_cells; dy <= recover_cells; ++dy) {
+        for (int dx = -recover_cells; dx <= recover_cells; ++dx) {
+          if (dx * dx + dy * dy > recover_cells * recover_cells) { continue; }
+          const int nx = sx + dx;
+          const int ny = sy + dy;
+          if (nx < 0 || ny < 0 ||
+              nx >= static_cast<int>(current_map_->info.width) ||
+              ny >= static_cast<int>(current_map_->info.height)) { continue; }
+          const size_t nidx = static_cast<size_t>(ny) * current_map_->info.width + nx;
+          if (nidx < grid->data.size()) {
+            grid->data[nidx] = 0;
+            costmap.data[nidx] = 0;
+          }
+        }
+      }
+    }
+    costmap.grid = grid;
+    costmap.width = current_map_->info.width;
+    costmap.height = current_map_->info.height;
+    costmap.resolution = current_map_->info.resolution;
+    costmap.origin_x = current_map_->info.origin.position.x;
+    costmap.origin_y = current_map_->info.origin.position.y;
+  }
+
+  void publishCoverageOutputs(const ros::Time & stamp, bool force_report)
+  {
+    if (!mb_ || !coverage_grid_.ready() || !current_map_) { return; }
+    const auto stats = coverage_grid_.stats();
+    const double res = current_map_->info.resolution;
+    last_clean_area_ = stats.coveredArea(res);
+    last_coverage_rate_ = stats.coverageRate();
+
+    nav_msgs::OccupancyGrid map_msg;
+    map_msg.header.frame_id = map_frame_;
+    map_msg.header.stamp = stamp;
+    map_msg.info = current_map_->info;
+    map_msg.data = coverage_grid_.encode();
+    mb_->publishCoverageMap(map_msg);
+    mb_->publishCoveredArea(last_clean_area_);
+
+    std::ostringstream os;
+    os << "{\"state\":\"" << coverage_state_ << "\","
+       << "\"coverage_rate\":" << stats.coverageRate() << ","
+       << "\"covered_area\":" << last_clean_area_ << ","
+       << "\"total_area\":" << stats.total * res * res << ","
+       << "\"uncovered_area\":" << stats.uncovered * res * res << ","
+       << "\"blocked_area\":" << stats.blocked * res * res << ","
+       << "\"obstacle_area\":" << stats.obstacle * res * res << ","
+       << "\"dynamic_cells\":" << coverage_grid_.dynamicCount() << ","
+       << "\"unreachable\":[";
+    const auto regions = coverage_grid_.blockedRegions(1);
+    for (size_t r = 0; r < regions.size(); ++r) {
+      if (r > 0) { os << ","; }
+      os << "[";
+      for (size_t i = 0; i < regions[r].size(); ++i) {
+        if (i > 0) { os << ","; }
+        os << "[" << regions[r][i].x << "," << regions[r][i].y << "]";
+      }
+      os << "]";
+    }
+    os << "]}";
+    const std::string json = os.str();
+    mb_->publishCoverageStatus(json);
+
+    if (!coverage_report_path_.empty() &&
+        (force_report || coverage_state_ == "DONE" || coverage_state_ == "STOPPED")) {
+      std::ofstream out(coverage_report_path_ + "/coverage_report.json");
+      if (out.is_open()) { out << json; }
+    }
+  }
+
+  void finishCoverage()
+  {
+    if (!coverage_active_) { return; }
+    const core::Pose2D pose = toCorePose(current_pose_);
+    coverage_grid_.markUnreachable(pose);
+    if (coverage_grid_.hasAnyUncovered()) {
+      coverage_grid_.markAllUncoveredBlocked();
+    }
+    coverage_state_ = "DONE";
+    publishCoverageOutputs(ros::Time::now(), true);
+    const auto stats = coverage_grid_.stats();
+    coverage_active_ = false;
+    coverage_has_target_ = false;
+    current_path_.poses.clear();
+    if (coverage_controller_) { coverage_controller_->reset(); }
+    setGoalStatus("SUCCEEDED");
+    finishAction(movebase::RESULT_SUCCESS);
+    ROS_INFO("[coverage] done: rate=%.3f covered=%.2f m2 blocked=%.2f m2",
+             stats.coverageRate(), last_clean_area_,
+             stats.blocked * current_map_->info.resolution *
+             current_map_->info.resolution);
+  }
+
+  void stopCoverageInternal()
+  {
+    if (!coverage_active_) { return; }
+    coverage_active_ = false;
+    coverage_state_ = "STOPPED";
+    coverage_has_target_ = false;
+    current_path_.poses.clear();
+    if (coverage_controller_) { coverage_controller_->reset(); }
+    publishCoverageOutputs(ros::Time::now(), true);
   }
 
   void setGoalStatus(const std::string & status)
@@ -1617,6 +2094,7 @@ private:
 
   void replanningCheck(const ros::TimerEvent &)
   {
+    if (coverage_active_) return;
     if (!is_navigating_ || is_paused_ || m_need_initial_rotate_ || planning_active_) return;
     // 只有"规划到目标点"的任务会周期重规划; 跟踪固定路径/旋转/倒车不重规划.
     if (action_active_ &&
@@ -1653,6 +2131,11 @@ private:
         setGoalStatus("FAILED_TF");
         stopNavigation();
       }
+      return;
+    }
+
+    if (coverage_active_) {
+      coverageControlStep();
       return;
     }
 
@@ -1938,6 +2421,7 @@ private:
   core::Costmap planner_costmap_;
   bool m_has_planner_costmap_ = false;
   std::unique_ptr<core::IControllerStrategy> controller_strategy_;
+  std::unique_ptr<core::IControllerStrategy> coverage_controller_;
 
   ros::Subscriber odom_sub_;
   ros::Subscriber map_sub_;
@@ -1990,6 +2474,36 @@ private:
   // 任务执行语义在算法层; 这里只保留接口层状态.
   core::ActionTask action_task_;
   bool action_active_ = false;
+
+  // ---- 动态覆盖清洁 ----
+  bool coverage_active_ = false;
+  core::CoverageGrid coverage_grid_;
+  core::CoverageConfig coverage_config_;
+  ros::Time coverage_last_plan_;
+  ros::Time coverage_last_progress_;
+  ros::Time coverage_last_status_;
+  ros::Time coverage_last_dynamic_;
+  size_t coverage_last_covered_count_ = 0;
+  bool coverage_has_target_ = false;
+  core::Pose2D coverage_target_;
+  core::Pose2D coverage_last_progress_pose_;
+  core::Pose2D coverage_last_motion_pose_;
+  ros::Time coverage_last_motion_time_;
+  std::string coverage_state_ = "IDLE";
+  double last_clean_area_ = 0.0;
+  double last_coverage_rate_ = 0.0;
+  double coverage_sweep_width_ = 0.5;
+  double coverage_max_speed_ = 0.4;
+  double coverage_resolution_ = 0.05;
+  double coverage_replan_period_ = 10.0;
+  double coverage_horizon_ = 2.5;
+  double coverage_retry_timeout_ = 10.0;
+  double coverage_complete_rate_ = 0.995;
+  double coverage_blocked_inflation_ = 0.10;
+  double coverage_plan_inflation_ = 0.0;
+  double coverage_plan_robot_radius_ = 0.0;
+  std::string coverage_controller_name_ = "pure_pursuit";
+  std::string coverage_report_path_;
   movebase::Goal action_goal_;
   movebase::Decoded action_cmd_;
   double action_speed_ = 0.0;

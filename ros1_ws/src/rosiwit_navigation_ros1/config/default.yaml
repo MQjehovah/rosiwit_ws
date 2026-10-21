@@ -87,3 +87,17 @@ voxel_min_height: -0.20
 voxel_max_height: 2.00
 voxel_decay: 2.0
 voxel_inflation: 0.15
+
+# ---- 动态覆盖清洁 (navi_cmd=20) ----
+coverage_controller_name: "pure_pursuit"  # 覆盖模式单独控制器
+coverage_sweep_width: 0.5          # 清扫宽度 m
+coverage_max_speed: 0.4            # robot_vel<=0 时的覆盖速度 m/s
+coverage_resolution: 0.05          # 与地图分辨率一致最好
+coverage_replan_period: 10.0       # 周期兜底；正常按“路径走完/2s 不动”重规划
+coverage_horizon: 2.5              # 每段执行长度 m
+coverage_retry_timeout: 10.0       # 被动态障碍挡住多久后标不可达
+coverage_complete_rate: 0.995      # 覆盖率达到多少就收尾, 剩余标不可达
+coverage_blocked_inflation: 0.10   # 动态障碍点膨胀 m
+coverage_plan_inflation: 0.0       # 覆盖 A* 不再膨胀：区域边界=硬边界, 车体形状交给 footprint
+coverage_plan_robot_radius: 0.0
+coverage_report_path: ""           # 非空则结束写 coverage_report.json

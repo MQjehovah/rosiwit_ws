@@ -267,6 +267,27 @@ void Interface::publishBackOffPath(const nav_msgs::Path & path)
   if (enabled_ && back_off_path_pub_) { back_off_path_pub_.publish(path); }
 }
 
+void Interface::publishCoverageMap(const nav_msgs::OccupancyGrid & map)
+{
+  if (enabled_ && clean_map_pub_) { clean_map_pub_.publish(map); }
+}
+
+void Interface::publishCoveredArea(double area_m2)
+{
+  if (!enabled_ || !clean_area_pub_) { return; }
+  std_msgs::Float64 msg;
+  msg.data = area_m2;
+  clean_area_pub_.publish(msg);
+}
+
+void Interface::publishCoverageStatus(const std::string & json)
+{
+  if (!enabled_ || !clean_part_status_pub_) { return; }
+  std_msgs::String msg;
+  msg.data = json;
+  clean_part_status_pub_.publish(msg);
+}
+
 void Interface::publishFeedback(const Feedback & feedback)
 {
   if (!enabled_ || !has_goal_ || !isGoalActive(current_goal_)) {
@@ -280,7 +301,7 @@ void Interface::publishFeedback(const Feedback & feedback)
   msg.execution_path = toRosPose2DArray(feedback.execution_path);
   msg.local_path = toRosPose2DArray(feedback.local_path);
   // 现场消息包的清洁/闸机字段: 本包没有清洁业务, 回中性值.
-  msg.clean_area = 0.0f;
+  msg.clean_area = static_cast<float>(feedback.clean_area);
   msg.access_turnstile_id.clear();
   current_goal_.publishFeedback(msg);
 }
@@ -298,7 +319,7 @@ void Interface::succeed(const Outcome & outcome)
   msg.execution_index = outcome.execution_index;
   msg.execution_path_segment_index = outcome.execution_path_segment_index;
   msg.execution_path = toRosPose2DArray(outcome.execution_path);
-  msg.clean_area = 0.0f;
+  msg.clean_area = static_cast<float>(outcome.clean_area);
   has_goal_ = false;
   if (isGoalActive(current_goal_)) {
     // 旧实现对成功和失败都调用 setSucceeded, 失败信息只在 tracking_path_result 里.

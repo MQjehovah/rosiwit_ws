@@ -433,3 +433,16 @@ A/B（合成长方形车体场景，ARM 实测）：
 
 完整数据、场景与复现命令见
 `docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md`。
+
+## 11. 动态覆盖清洁（navi_cmd=20）
+
+按“覆盖状态驱动”实现，不再先规划长路径再盲跟踪：
+
+* `navi_cmd=20`，`tracking_path` = 区域多边形，`robot_vel` = 最大速度，其余字段忽略；
+* 覆盖宽度等全部走参数（`coverage_sweep_width=0.5`）；
+* 核心 `CoverageGrid` + 行段调度（最近未覆盖格所在的一整行/列，A* 到行端后扫过去）；
+* 动态障碍/不可达区分，输出 `/clean_map`、`/clean_area`、`/clean_part_status`；
+* 覆盖模式独立 `pure_pursuit` 控制器，正常导航仍是 MPPI+footprint。
+
+详细设计、接口、实测（2m×1m 区域 99.6% 覆盖）见
+`docs/superpowers/specs/2026-10-21-ros1-dynamic-coverage-design.md`。

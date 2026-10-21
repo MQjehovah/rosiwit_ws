@@ -24,6 +24,20 @@ footprint 采样点查**未膨胀**的局部 costmap（由车体形状负责碰�
 `controller_name: mppi` + `footprint_aware_control: true` + `max_accel_theta: 0.3`。
 详见 [`docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md`](../../../docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md)。
 
+## 动态覆盖清洁（navi_cmd=20）
+
+```text
+navi_cmd = 20
+tracking_path = 区域多边形顶点（map 系 Pose2D[]，>=3）
+robot_vel     = 覆盖最大速度（<=0 用 coverage_max_speed）
+```
+
+- 宽度等全部走参数：`coverage_sweep_width`（默认 0.5）；
+- 覆盖状态实时维护，按行段滚动执行，不是静态长路径；
+- 障碍导致的不可达通过 `/clean_map`(80) + `/clean_part_status` JSON 标注；
+- 覆盖模式用独立的 `pure_pursuit` 控制器，正常导航仍用 MPPI；
+- 设计/实测：`docs/superpowers/specs/2026-10-21-ros1-dynamic-coverage-design.md`。
+
 ## 分层
 
 ```
@@ -55,6 +69,9 @@ rosrun rosiwit_navigation_ros1 check_movebase_interface.sh
 
 # 隔离冒烟（私有 master + /navtest，不碰实车；16 项断言，含 RViz goal）
 rosrun rosiwit_navigation_ros1 smoke_movebase.sh
+
+# 动态覆盖闭环冒烟（2m×1m 假区域，约 90s；需先手动起隔离节点）
+python scripts/coverage_drive_smoke.py
 
 # 协议解析（不依赖 ROS 运行时）
 catkin_make run_tests_rosiwit_navigation_ros1
