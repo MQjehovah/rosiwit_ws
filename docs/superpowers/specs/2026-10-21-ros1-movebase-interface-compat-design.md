@@ -310,16 +310,46 @@ goal/cancel 回调在 `ros::spin` 线程内，完成时由定时器调用 `setSu
 6 输出 +0.6rad/s、7 输出 -0.1m/s、2/3 规划/跟踪后输出正线速度、
 四种命令 cancel→PREEMPTED、取消后保持停止。
 
-### 8.6 部署位置与边界
+### 8.6 实车切换记录（2026-10-21 15:18 已切换）
 
 * 源码：`/home/xzrobot/rosiwit_ws/src/rosiwit_navigation` +
   `/home/xzrobot/rosiwit_ws/ros1_ws/src/rosiwit_navigation_ros1`
-* 构建：`/home/xzrobot/rosiwit_ws/ros1_ws/devel`（**未 install 到 /opt/ros**）
-* 在跑的 `robot_move_base`（11311）未重启、未改 launch；本次所有运行验证都在
-  独立 master（`127.0.0.1:114xx`）+ `/navtest` 命名空间内完成，不碰实车。
-* 切换实车导航需要另行确认：停 `robot_move_base`、把 bringup 指向
-  `roslaunch rosiwit_navigation_ros1 movebase_compat.launch`，并保留回滚命令。
+* 已安装到 `/opt/ros/melodic`（`lib/librosiwit_navigation.so`、
+  `lib/rosiwit_navigation_ros1/rosiwit_navigation_ros1_node`、
+  `share/rosiwit_navigation_ros1/{config,launch,scripts}`），
+  这样 systemd 的整机栈（只 source `/opt/ros/melodic/setup.bash`）能找到本包。
+* 替换 bringup：
+  `/opt/ros/melodic/share/robot_movebase/launch/xz_robot_movebase.launch`
+  → 启动 `rosiwit_navigation_ros1_node`，节点名仍为 `robot_move_base`。
+  备份：`xz_robot_movebase.launch.rosiwit_bak_20261021`。
+* **不能只 kill 旧节点**：该 launch 是 `respawn="true"`，2 秒后会被拉回来。
+  正确切换方式是替换 launch 后 `sudo systemctl restart xzrobot.service`
+  （会重启整机 ROS 栈，包括 SLAM/相机，需要等定位恢复）。
+* 切换后验证（实测）：
 
+  ```text
+  systemctl is-active xzrobot.service           -> active
+  /robot_move_base 进程                          -> rosiwit_navigation_ros1_node
+  /RobotNaviCmdAction/goal                       -> app publisher, 本节点 subscriber
+  /RobotNaviCmdAction/status                     -> status_list: [] (空闲)
+  check_movebase_interface.sh                    -> 23/23
+  启动日志                                        -> footprint(6 pts) x[-0.25,0.55] y[-0.33,0.33]
+                                                   robot_radius=0.39 inflation_radius=0.62
+  /map                                           -> ~1Hz, 750x525@0.05
+  tf map->base_footprint                         -> 正常
+  /movebase_cmd_vel                              -> 空闲无输出
+  ```
+
+* 回滚：
+
+  ```bash
+  L=/opt/ros/melodic/share/robot_movebase/launch/xz_robot_movebase.launch
+  sudo cp -a $L.rosiwit_bak_20261021 $L
+  sudo systemctl restart xzrobot.service
+  ```
+* 已知缺口（应用侧感知）：`navi_cmd` 4/5/8..13 会明确失败；`clean_area=0`、
+  `access_turnstile_id` 为空；`/RobotNaviState` 不再存在（旧节点本来也从不 publish）；
+  `/area_type`、`/clean_*` 只 advertise 不发数据。普通导航 1/2/3/6/7 可用。
 
 ## 9. 实车 footprint / 规划参数（192.168.21.166，2026-10-21）
 
