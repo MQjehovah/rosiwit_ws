@@ -1235,13 +1235,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     const double healthy_fitness = (m_status == INIT)
                                        ? m_global_cfg.reloc_accept_score
                                        : m_monitor_cfg.credible_fitness;
-    // GICP 在局部子图点数较少时 fitness 可能只有 0.73~0.82，但残差/一致性
-    // 门控仍可能 accepted=1. 只看 fitness 会把这类有效跟踪误判为 LOST.
-    // LOCALIZED 阶段只要本次匹配被接受且不低于 lost_fitness，就继续视为健康；
-    // 冷启动(INIT)仍坚持 reloc_accept_score.
+    // GICP 在局部子图点数少/视角变化大时 fitness 可能只有 0.5~0.8，但残差/
+    // 一致性门控仍 accepted=1，且位姿修正很小。只看 fitness 会把这种有效
+    // 跟踪误判为 LOST (转头时最常见). LOCALIZED 阶段以 accepted + 足够 inlier
+    // + 小修正量作为健康依据；冷启动(INIT)仍坚持 reloc_accept_score.
+    const double accepted_lag = (out_pose.trans - guess.trans).norm();
     const bool accepted_healthy =
-        (m_status != INIT) && accepted &&
-        res.fitness >= m_monitor_cfg.lost_fitness;
+        (m_status != INIT) && accepted && res.converged &&
+        res.inliers >= 50 && res.correspondences >= 50 &&
+        res.inliers * 2 >= res.correspondences &&
+        accepted_lag <= 0.75;
     const bool healthy = !seed_failed && res.converged &&
                          (lvl == MonitorLevel::CREDIBLE || accepted_healthy) &&
                          (res.fitness >= healthy_fitness || accepted_healthy);
