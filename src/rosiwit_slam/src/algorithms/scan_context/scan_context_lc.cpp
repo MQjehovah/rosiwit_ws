@@ -204,7 +204,7 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
 
     // 起点关键帧必须参与回环验证: 采图 bag 常常从起点出发、回到起点结束,
     // 但 RingKey 的 top-N 筛选可能把起点挤掉. 这里强制保留前几帧作为候选.
-    for (size_t i = 0; i < 5 && i + static_cast<size_t>(m_min_keyframe_gap) < latest_idx; ++i) {
+    for (size_t i = 0; i < 20 && i + static_cast<size_t>(m_min_keyframe_gap) < latest_idx; ++i) {
         if (!m_keyframes[i].has_descriptor) continue;
         bool present = false;
         for (const auto& c : candidates) {
@@ -234,7 +234,7 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
 
         int col_shift = 0;
         double desc_d = ScanContext::distance(cand_rec.desc, latest.desc, &col_shift);
-        if (cand.idx < 5) {
+        if (cand.idx < 20) {
             std::cout << "[ScanContextLC] start candidate kf_" << cand.idx
                       << " <-> kf_" << latest_idx << " desc=" << desc_d << std::endl;
         }
@@ -262,7 +262,7 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
             }
         }
         // 起终点通常姿态接近; ScanContext 列偏移可能给错初值, 对起点额外尝试单位初值.
-        if (!icp_ok && cand.idx < 5) {
+        if (!icp_ok && cand.idx < 20) {
             Eigen::Matrix4f delta_id;
             float fitness_id = std::numeric_limits<float>::infinity();
             if (icpVerify(latest.cloud, cand_rec.cloud, Eigen::Matrix4f::Identity(), delta_id, fitness_id)) {
