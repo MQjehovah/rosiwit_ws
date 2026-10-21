@@ -69,12 +69,24 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
         }
     }
     if (all.empty()) return false;
-    XYBounds bb = robustXYBounds(xs, ys);
+    XYBounds bb = robustXYBounds(xs, ys, 0.005, 0.995);
+    // 观测原点也要用稳健分位数: 单个后端异常位姿会把地图范围拉到上千米,
+    // 0.05m 栅格随即触发降分辨率并拖垮后端. 这里不再让任意一个原点无限扩边.
+    std::vector<double> oxs, oys;
+    oxs.reserve(obs.size());
+    oys.reserve(obs.size());
     for (const auto& o : obs) {
-        bb.min_x = std::min(bb.min_x, o.origin.x());
-        bb.max_x = std::max(bb.max_x, o.origin.x());
-        bb.min_y = std::min(bb.min_y, o.origin.y());
-        bb.max_y = std::max(bb.max_y, o.origin.y());
+        if (std::isfinite(o.origin.x()) && std::isfinite(o.origin.y())) {
+            oxs.push_back(o.origin.x());
+            oys.push_back(o.origin.y());
+        }
+    }
+    if (!oxs.empty()) {
+        const XYBounds ob = robustXYBounds(oxs, oys, 0.01, 0.99);
+        bb.min_x = std::min(bb.min_x, ob.min_x);
+        bb.max_x = std::max(bb.max_x, ob.max_x);
+        bb.min_y = std::min(bb.min_y, ob.min_y);
+        bb.max_y = std::max(bb.max_y, ob.max_y);
     }
     double min_x = bb.min_x, max_x = bb.max_x;
     double min_y = bb.min_y, max_y = bb.max_y;

@@ -234,6 +234,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.grid_map_resolution = (gmap && gmap["resolution"])
                                             ? gmap["resolution"].as<double>(m_cfg.grid_map_resolution)
                                             : cfg["map_resolution"].as<double>(m_cfg.grid_map_resolution);
+            m_cfg.realtime_grid_resolution = (gmap && gmap["realtime_resolution"])
+                                                 ? gmap["realtime_resolution"].as<double>(m_cfg.realtime_grid_resolution)
+                                                 : m_cfg.realtime_grid_resolution;
             m_cfg.map_publish_period = (cfg["ros2"] && cfg["ros2"]["map_publish_period"])
                                            ? cfg["ros2"]["map_publish_period"].as<double>(m_cfg.map_publish_period)
                                            : cfg["map_publish_period"].as<double>(m_cfg.map_publish_period);
@@ -886,7 +889,7 @@ void SlamNode::mapTimerCB() {
             have_grid = grid_info.width > 0 && grid_info.height > 0;
         } else {
             // 走 generateGridMap 的同一路径 (逐帧观测 + 地面处理), 保证实时图与存盘一致.
-            have_grid = m_algo_raw->getRealtimeGrid(m_cfg.grid_map_resolution, grid_info);
+            have_grid = m_algo_raw->getRealtimeGrid(m_cfg.realtime_grid_resolution, grid_info);
             if (!have_grid) {
                 grid_info = m_algo_raw->getGridInfo();
                 have_grid = grid_info.width > 0 && grid_info.height > 0;

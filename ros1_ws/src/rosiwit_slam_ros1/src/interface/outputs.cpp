@@ -205,7 +205,8 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
         GridInfo gi;
         // 必须走 getRealtimeGrid, 它会按当前观测重建栅格; 只读 getGridInfo
         // 会在建图过程中一直发旧缓存. 核心内部按 revision 缓存, 不重复重建.
-        if (engine_.getRealtimeGrid(0.05, gi) && gi.width > 0 && gi.height > 0) {
+        // 实时图用 0.3m; 0.05m 只用于最终 save_grid_map.
+        if (engine_.getRealtimeGrid(0.3, gi) && gi.width > 0 && gi.height > 0) {
             nav_msgs::OccupancyGrid grid;
             grid.header.frame_id = engine_.worldFrame();
             grid.header.stamp = ros::Time::now();

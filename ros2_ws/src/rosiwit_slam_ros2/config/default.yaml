@@ -29,7 +29,8 @@ global:
     map_frame: map # 地图frame
     odom_frame: odom # 里程计frame
   map:
-    resolution: 0.3  # 地图/栅格分辨率(m)
+    resolution: 0.05  # 地图/栅格分辨率(m)
+    realtime_resolution: 0.3 # 实时 /map 分辨率(m); 0.05 仅用于最终保存
     save_voxel: 0.3 # 地图/点云保存降采样体素(m)
   scan_context:
     num_rings: 20 # ScanContext环数
@@ -74,7 +75,7 @@ mapping:
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
   grid:
-    generator: height_projection  # 2D栅格生成策略
+    generator: ray_casting  # 2D栅格生成策略 (统一射线方案, 0.05m)
     min_height: 0.1 # 地面以上障碍最低高度(m)
     max_height: 2.0 # 地面以上障碍最高高度(m)
     occupied_thresh: 1 # 每格最少点数判占据

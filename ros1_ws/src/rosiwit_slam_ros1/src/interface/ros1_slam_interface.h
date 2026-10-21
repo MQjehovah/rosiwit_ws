@@ -243,6 +243,7 @@ private:
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= config 的 map_resolution)
+    double realtime_grid_resolution_ = 0.3;         // 实时 /map 用较粗分辨率, 避免 0.05 ray casting 拖垮后端
     nav_msgs::OccupancyGrid global_grid_map_msg_;   // 旧 global_grid_map_ (latch 一次)
     nav_msgs::Path mapping_path_msg_;               // 建图轨迹 (累积后整条重发)
     double last_mapping_path_time_ = -1.0;          // 轨迹去重: 同一个核心位姿不重复入队

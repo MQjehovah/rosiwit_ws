@@ -81,7 +81,10 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     // 之前是自己拿合并后的全局点云 gen->build(), 没有地面处理 -> 实时图有地面噪点而 pgm 干净。
     realtime_grid_.setGridSource([this](rosiwit_slam::GridInfo& out) {
         if (slam_mode_ != SlamMode::MAPPING) return false;   // 非建图模式没必要算
-        return engine_.getRealtimeGrid(grid_resolution_, out);
+        // 没人订阅 /map 时不做全量栅格重建: ray casting 是 O(点数) 的重活,
+        // 0.05/0.3 反复重建都会挤占后端线程. 最终 0.05 图由 save_grid_map 服务生成.
+        if (realtime_grid_map_puber_.getNumSubscribers() == 0) return false;
+        return engine_.getRealtimeGrid(realtime_grid_resolution_, out);
     });
     // 重算频率与发布频率一致 (旧实现是"发布前若变了就重算")
     realtime_grid_.start(static_cast<double>(cfg_.rt_grid_map_publish_hz > 0
