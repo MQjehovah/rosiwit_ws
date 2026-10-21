@@ -1651,9 +1651,12 @@ private:
       cm.origin_y = oy;
       cm.data.assign(current_map_->data.size(), 0);
       for (size_t i = 0; i < current_map_->data.size(); ++i) {
-        // unknown 不是障碍。以前把 <0 也写成 255, 地图边缘/未观测区会被当成
-        // 实墙并向外膨胀, 大面积走廊会被 costmap 封死, 规划直接 FAILED_PLAN.
-        cm.data[i] = (current_map_->data[i] >= 100) ? 255 : 0;
+        // unknown 对规划仍是障碍(254), 但不参与膨胀; 真实占据才是 255.
+        // 若把 unknown 当 free, 规划会穿未知区域撞墙; 若把 unknown 当 255,
+        // 它会向外膨胀, 把已知 free 的走廊也封死.
+        cm.data[i] = (current_map_->data[i] >= 100)
+                         ? 255
+                         : (current_map_->data[i] < 0 ? 254 : 0);
       }
       for (const auto & pt : laser_points_) {
         const int mx = static_cast<int>((pt.x - ox) / res);
@@ -1673,7 +1676,8 @@ private:
       std::queue<std::pair<int, int>> q;
       for (unsigned int y = 0; y < h; ++y) {
         for (unsigned int x = 0; x < w; ++x) {
-          if (cm.data[y * w + x] >= 254) { dist[y * w + x] = 0.0f; q.push({x, y}); }
+          // unknown=254 只为 planner 阻挡路径, 不形成膨胀 halo.
+          if (cm.data[y * w + x] >= 255) { dist[y * w + x] = 0.0f; q.push({x, y}); }
         }
       }
       const int dx4[4] = {-1, 0, 1, 0};
