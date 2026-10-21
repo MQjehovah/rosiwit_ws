@@ -97,7 +97,9 @@ safety_time_before_collision: 2.0
 safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 
 # ---- 动态障碍 ----
-tracking_enabled: true
+# 2026-10-22 实车: 墙/货架扫描被聚成 radius≈4.86m 的动态障碍圆,
+# local costmap 出现超大黑色圆; 暂时关闭.
+tracking_enabled: false
 tracking_horizon: 0.5
 tracking_cluster_distance: 0.35
 tracking_confirm_hits: 3
