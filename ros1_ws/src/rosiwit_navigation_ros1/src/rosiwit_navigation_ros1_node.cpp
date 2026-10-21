@@ -1651,7 +1651,9 @@ private:
       cm.origin_y = oy;
       cm.data.assign(current_map_->data.size(), 0);
       for (size_t i = 0; i < current_map_->data.size(); ++i) {
-        cm.data[i] = (current_map_->data[i] >= 100 || current_map_->data[i] < 0) ? 255 : 0;
+        // unknown 不是障碍。以前把 <0 也写成 255, 地图边缘/未观测区会被当成
+        // 实墙并向外膨胀, 大面积走廊会被 costmap 封死, 规划直接 FAILED_PLAN.
+        cm.data[i] = (current_map_->data[i] >= 100) ? 255 : 0;
       }
       for (const auto & pt : laser_points_) {
         const int mx = static_cast<int>((pt.x - ox) / res);
@@ -1839,7 +1841,8 @@ private:
         const int gx = dx + win_half;
         const int gy = dy + win_half;
         const int8_t mv = current_map_->data[my * w + mx];
-        raw[gy * lw + gx] = (mv >= 100 || mv < 0) ? 100 : 0;
+        // unknown 保持 free; 只有真实占据格才是障碍.
+        raw[gy * lw + gx] = (mv >= 100) ? 100 : 0;
       }
     }
     for (const auto& pt : laser_points_) {
