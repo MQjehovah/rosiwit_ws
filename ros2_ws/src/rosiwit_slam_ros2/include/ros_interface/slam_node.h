@@ -56,6 +56,10 @@ private:
         int    lidar_filter_num = 3;
         double lidar_min_range  = 0.5;
         double lidar_max_range  = 100.0;
+        bool   self_filter_enabled = false;
+        double self_x_min = -0.45, self_x_max = 0.75;
+        double self_y_min = -0.55, self_y_max = 0.55;
+        double self_z_min = 0.05, self_z_max = 1.40;
         float  scan_period_ms   = 100.0f;   // LiDAR 扫描周期 (毫秒), 用于点时间戳
         bool   vision_enabled    = false;    // 视觉松耦合开关
         std::string vo_topic     = "visual_odometry";  // VO 库发布的里程计话题
@@ -82,6 +86,7 @@ private:
 
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg);
     void lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+    void applySelfFilter(rosiwit_slam::CloudType& cloud);
     void voCB(const nav_msgs::msg::Odometry::SharedPtr msg);   // 视觉里程计 (可选)
     void odomCB(const nav_msgs::msg::Odometry::SharedPtr msg); // 轮式里程计 (可选)
     void absoluteCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);  // 绝对约束 (可选)

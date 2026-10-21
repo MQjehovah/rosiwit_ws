@@ -388,6 +388,22 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
                 cfg_.lidar_filter_num = gi("lidar_filter_num").as<int>(cfg_.lidar_filter_num);
                 cfg_.lidar_min_range = gi("lidar_min_range").as<double>(cfg_.lidar_min_range);
                 cfg_.lidar_max_range = gi("lidar_max_range").as<double>(cfg_.lidar_max_range);
+                // 机身自过滤: mapping.frontend.self_filter.*
+                const YAML::Node frontend =
+                    (c["mapping"] && c["mapping"]["frontend"])
+                        ? c["mapping"]["frontend"] : YAML::Node();
+                const YAML::Node sf =
+                    (frontend && frontend["self_filter"])
+                        ? frontend["self_filter"] : YAML::Node();
+                if (sf) {
+                    cfg_.self_filter_enabled = sf["enabled"].as<bool>(cfg_.self_filter_enabled);
+                    cfg_.self_x_min = sf["x_min"].as<double>(cfg_.self_x_min);
+                    cfg_.self_x_max = sf["x_max"].as<double>(cfg_.self_x_max);
+                    cfg_.self_y_min = sf["y_min"].as<double>(cfg_.self_y_min);
+                    cfg_.self_y_max = sf["y_max"].as<double>(cfg_.self_y_max);
+                    cfg_.self_z_min = sf["z_min"].as<double>(cfg_.self_z_min);
+                    cfg_.self_z_max = sf["z_max"].as<double>(cfg_.self_z_max);
+                }
                 cfg_.odom_topic = gi("odom_topic").as<std::string>(cfg_.odom_topic);
                 if (c["localization"] && c["localization"]["absolute"]) {
                     const YAML::Node a = c["localization"]["absolute"];
@@ -708,6 +724,41 @@ void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
     if (algo_) algo_->onImu(s);
 }
 
+void SlamEngine::applySelfFilter(CloudType::Ptr& cloud) {
+    if (!cfg_.self_filter_enabled || !cloud || cloud->empty()) return;
+    const RigidTransform& base_lidar = baseLidar();
+    if (!base_lidar.valid) {
+        static bool warned = false;
+        if (!warned) {
+            ROS_WARN("[slam_engine] self_filter enabled but base_link <- lidar TF is invalid; skip");
+            warned = true;
+        }
+        return;
+    }
+
+    CloudType::Ptr out(new CloudType());
+    out->reserve(cloud->size());
+    size_t removed = 0;
+    for (const auto& p : cloud->points) {
+        const Eigen::Vector3d q = base_lidar.R * Eigen::Vector3d(p.x, p.y, p.z) + base_lidar.t;
+        const bool in_body = q.x() >= cfg_.self_x_min && q.x() <= cfg_.self_x_max &&
+                             q.y() >= cfg_.self_y_min && q.y() <= cfg_.self_y_max &&
+                             q.z() >= cfg_.self_z_min && q.z() <= cfg_.self_z_max;
+        if (in_body) { ++removed; continue; }
+        out->push_back(p);
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    out->is_dense = false;
+    cloud = out;
+
+    static int log_i = 0;
+    if (++log_i % 100 == 0) {
+        std::cout << "[slam_engine] self_filter removed " << removed << "/"
+                  << (removed + cloud->size()) << " points" << std::endl;
+    }
+}
+
 void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_) return;
@@ -722,6 +773,8 @@ void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
     LidarFrame f;
     f.cloud = ros2Pcl(msg, cfg_.lidar_filter_num, cfg_.lidar_min_range, cfg_.lidar_max_range);
     if (!f.cloud || f.cloud->empty()) return;
+    applySelfFilter(f.cloud);
+    if (f.cloud->empty()) return;
     f.start_time = getSec(msg->header.stamp);
     f.end_time = f.start_time + cfg_.scan_period_ms / 1000.0;
     if (input_seen_hook_) input_seen_hook_(true);

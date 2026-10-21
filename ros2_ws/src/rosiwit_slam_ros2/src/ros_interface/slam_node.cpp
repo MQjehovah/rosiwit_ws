@@ -216,6 +216,21 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.lidar_filter_num = gi("lidar_filter_num").as<int>(m_cfg.lidar_filter_num);
             m_cfg.lidar_min_range  = gi("lidar_min_range").as<double>(m_cfg.lidar_min_range);
             m_cfg.lidar_max_range  = gi("lidar_max_range").as<double>(m_cfg.lidar_max_range);
+            const YAML::Node frontend =
+                (cfg["mapping"] && cfg["mapping"]["frontend"])
+                    ? cfg["mapping"]["frontend"] : YAML::Node();
+            const YAML::Node sf =
+                (frontend && frontend["self_filter"])
+                    ? frontend["self_filter"] : YAML::Node();
+            if (sf) {
+                m_cfg.self_filter_enabled = sf["enabled"].as<bool>(m_cfg.self_filter_enabled);
+                m_cfg.self_x_min = sf["x_min"].as<double>(m_cfg.self_x_min);
+                m_cfg.self_x_max = sf["x_max"].as<double>(m_cfg.self_x_max);
+                m_cfg.self_y_min = sf["y_min"].as<double>(m_cfg.self_y_min);
+                m_cfg.self_y_max = sf["y_max"].as<double>(m_cfg.self_y_max);
+                m_cfg.self_z_min = sf["z_min"].as<double>(m_cfg.self_z_min);
+                m_cfg.self_z_max = sf["z_max"].as<double>(m_cfg.self_z_max);
+            }
             m_cfg.scan_period_ms   = gi("scan_period_ms").as<float>(m_cfg.scan_period_ms);
             if (gin && gin["use_odom"]) {
                 m_cfg.use_wheel_odom = gin["use_odom"].as<bool>(m_cfg.use_wheel_odom);
@@ -444,9 +459,46 @@ void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {
     m_algo->onImu(s);
 }
 
+void SlamNode::applySelfFilter(rosiwit_slam::CloudType& cloud) {
+    if (!m_cfg.self_filter_enabled || cloud.empty()) return;
+    RigidTransform base_lidar;
+    {
+        std::lock_guard<std::mutex> lk(m_mount_mu);
+        base_lidar = m_base_lidar;
+    }
+    if (!base_lidar.valid) {
+        ensureBaseFrames();
+        std::lock_guard<std::mutex> lk(m_mount_mu);
+        base_lidar = m_base_lidar;
+        if (!base_lidar.valid) return;
+    }
+
+    rosiwit_slam::CloudType out;
+    out.reserve(cloud.size());
+    size_t removed = 0;
+    for (const auto& p : cloud.points) {
+        const Eigen::Vector3d q =
+            base_lidar.R * Eigen::Vector3d(p.x, p.y, p.z) + base_lidar.t;
+        const bool in_body = q.x() >= m_cfg.self_x_min && q.x() <= m_cfg.self_x_max &&
+                             q.y() >= m_cfg.self_y_min && q.y() <= m_cfg.self_y_max &&
+                             q.z() >= m_cfg.self_z_min && q.z() <= m_cfg.self_z_max;
+        if (in_body) { ++removed; continue; }
+        out.push_back(p);
+    }
+    cloud.swap(out);
+    cloud.width = static_cast<uint32_t>(cloud.size());
+    cloud.height = 1;
+    cloud.is_dense = false;
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000,
+                         "self_filter removed %zu/%zu points",
+                         removed, cloud.size() + removed);
+}
+
 void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     LidarFrame f;
     f.cloud = RosUtils::ros2PCL(msg, m_cfg.lidar_filter_num, m_cfg.lidar_min_range, m_cfg.lidar_max_range, m_cfg.scan_period_ms);
+    applySelfFilter(*f.cloud);
+    if (f.cloud->empty()) return;
     std::sort(f.cloud->points.begin(), f.cloud->points.end(), [](const PointType& a, const PointType& b){ return a.curvature < b.curvature; });
     f.start_time = RosUtils::getSec(msg->header);
     f.end_time = f.start_time + (f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0);

@@ -63,6 +63,14 @@ mapping:
     imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
     imu_lidar_translation: [0.0, 0.0, 0.0] # 初始IMU<-lidar平移(m)
     estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
+    self_filter:
+      enabled: false # 仿真不启用机身过滤
+      x_min: -0.45
+      x_max: 0.75
+      y_min: -0.55
+      y_max: 0.55
+      z_min: 0.05
+      z_max: 1.40
   map_manager:
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)

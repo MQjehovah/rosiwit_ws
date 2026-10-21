@@ -118,6 +118,16 @@ mapping:
     imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
     imu_lidar_translation: [0.0, 0.0, 0.0905] # 初始IMU<-lidar平移(m)
     estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
+    # 机身自过滤: base_link 下的机体包围盒, 删除万集低层 ring 打到车体的回波.
+    # 只过滤机身内部, 不影响机体外的近处障碍物.
+    self_filter:
+      enabled: true
+      x_min: -0.45 # 车体后缘(m)
+      x_max: 0.75 # 车体前缘(m)
+      y_min: -0.55 # 车体左缘(m)
+      y_max: 0.55 # 车体右缘(m)
+      z_min: 0.05 # 车体底部(m)
+      z_max: 1.40 # 车体顶部(m)
   loop_closure:
     icp_fitness_thresh: 0.5 # 回环ICP适应度阈值 (PCL 均方误差; 实测起点回环 fitness≈0.39, 0.2 会误拒)
     icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)

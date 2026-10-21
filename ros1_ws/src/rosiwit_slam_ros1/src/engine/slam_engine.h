@@ -143,6 +143,11 @@ private:
         float scan_period_ms = 100.0f;
         int lidar_filter_num = 3;
         double lidar_min_range = 0.5, lidar_max_range = 100.0;
+        // 机身自过滤: 在 base_link 下按包围盒删除机体自身回波.
+        bool self_filter_enabled = false;
+        double self_x_min = -0.45, self_x_max = 0.75;
+        double self_y_min = -0.55, self_y_max = 0.55;
+        double self_z_min = 0.05, self_z_max = 1.40;
     };
 
     static double getSec(const ros::Time& t) { return t.toSec(); }
@@ -150,6 +155,8 @@ private:
     /// 与重构前逐字一致: 抽稀 + 去 NaN + 距离裁剪
     static rosiwit_slam::CloudType::Ptr ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
                                                int filter_num, double min_r, double max_r);
+    /// 删除 base_link 机身盒内的点 (输入点云仍为雷达系, 用 base_lidar_ 变换).
+    void applySelfFilter(rosiwit_slam::CloudType::Ptr& cloud);
 
     void imuCB(const sensor_msgs::Imu::ConstPtr& msg);
     void lidarCB(const sensor_msgs::PointCloud2::ConstPtr& msg);
