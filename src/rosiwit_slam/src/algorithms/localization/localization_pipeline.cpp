@@ -97,6 +97,12 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_local_map_cfg.max_keyframes    = getv<int>(lmc, "max_keyframes", m_local_map_cfg.max_keyframes);
         m_local_map_cfg.cache_move       = getv<double>(lmc, "cache_move", m_local_map_cfg.cache_move);
     }
+    auto dkc = loc["deskew"];
+    if (dkc) {
+        m_deskew_enabled       = getv<bool>(dkc, "enabled", m_deskew_enabled);
+        m_deskew_max_gap       = getv<double>(dkc, "max_gap", m_deskew_max_gap);
+        m_deskew_min_angle_deg = getv<double>(dkc, "min_angle_deg", m_deskew_min_angle_deg);
+    }
     auto mpc = loc["motion_prior"];
     if (mpc) {
         m_motion_cfg.max_dt  = getv<double>(mpc, "max_dt", m_motion_cfg.max_dt);
@@ -640,6 +646,71 @@ void LocalizationPipeline::onOdom(const PoseStamped& odom) {
     if (m_prior) m_prior->onOdom(odom);
 }
 
+CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseStamped& end_pose) {
+    if (!m_deskew_enabled || !f.cloud || f.cloud->empty() || !m_have_last_accepted)
+        return f.cloud;
+
+    const PoseStamped& start_pose = m_last_accepted;
+    const double span = f.end_time - f.start_time;
+    const double gap = f.start_time - start_pose.time;
+    if (span <= 1e-3 || start_pose.time < 0.0 ||
+        gap < -0.05 || gap > m_deskew_max_gap ||
+        end_pose.time <= start_pose.time)
+        return f.cloud;
+
+    // 检查逐点时间是否真的可用; 全 0 说明驱动/ROS 层没填时间, 不能盲目补偿.
+    double max_curv = 0.0;
+    for (const auto& p : f.cloud->points) {
+        if (std::isfinite(p.curvature) && p.curvature > max_curv)
+            max_curv = p.curvature;
+    }
+    if (max_curv <= 1e-3) return f.cloud;
+
+    Eigen::Quaterniond q0(start_pose.rot);
+    Eigen::Quaterniond q1(end_pose.rot);
+    q0.normalize();
+    q1.normalize();
+    Eigen::Quaterniond qrel = q0.conjugate() * q1;
+    qrel.normalize();
+    const double angle = 2.0 * std::acos(std::min(1.0, std::fabs(qrel.w())));
+    if (angle * 57.2957795 < m_deskew_min_angle_deg) return f.cloud;
+    // 单帧估计不应有这么大旋转; 先验跳变时宁可不去畸变, 也不要主动把点云转坏.
+    if (angle > 0.8) return f.cloud;
+
+    CloudType::Ptr out(new CloudType());
+    out->header = f.cloud->header;
+    out->reserve(f.cloud->size());
+    const double span_ms = span * 1000.0;
+    for (const auto& p : f.cloud->points) {
+        if (!pcl::isFinite(p)) continue;
+        double alpha = (std::isfinite(p.curvature) ? p.curvature : 0.0) / span_ms;
+        alpha = std::max(0.0, std::min(1.0, alpha));
+        const Eigen::Quaterniond qt = q0.slerp(alpha, q1);
+        const M3D rt = qt.toRotationMatrix();
+        const V3D tt = (1.0 - alpha) * start_pose.trans + alpha * end_pose.trans;
+        const V3D pw = rt * V3D(p.x, p.y, p.z) + tt;
+        const V3D pe = q1.conjugate() * (pw - end_pose.trans);
+
+        PointType q = p;
+        q.x = static_cast<float>(pe.x());
+        q.y = static_cast<float>(pe.y());
+        q.z = static_cast<float>(pe.z());
+        const V3D n(p.normal_x, p.normal_y, p.normal_z);
+        if (n.norm() > 1e-6) {
+            const V3D ne = q1.conjugate() * (rt * n);
+            q.normal_x = static_cast<float>(ne.x());
+            q.normal_y = static_cast<float>(ne.y());
+            q.normal_z = static_cast<float>(ne.z());
+        }
+        out->push_back(q);
+    }
+    if (out->empty()) return f.cloud;
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    out->is_dense = f.cloud->is_dense;
+    return out;
+}
+
 CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     CloudType::Ptr target = m_local_map->getLocalMap(pose);
     // [LocProbe] 诊断: 局部地图到底取到多少点 (NO Effective Points 排查)
@@ -990,6 +1061,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
         guess = m_prior->predict(f.end_time);
     }
+    // 定位路径原来直接用原始点云做 GICP；建图前端有 IMU 去畸变, 定位路径没有,
+    // 转圈时一帧 100ms 内的旋转会让扫描在时间上被拉斜, 表现为 fitness 从 0.9
+    // 掉到 0.4~0.7、inlier 比例骤降, 但 accepted 仍为 1. 这里按逐点时间戳和
+    // 帧首/帧末位姿先补偿到帧末坐标系.
+    CloudType::Ptr scan = deskewScan(f, guess);
 
     MatchResult res;
     bool accepted = false;
@@ -1003,7 +1079,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             const PoseStamped g = m_hyp.all()[i].pose;
             if (!m_matcher->usesStore()) m_matcher->setTarget(buildTarget(g));
             MatchResult r;
-            if (m_matcher->match(f.cloud, g, r)) m_hyp.update(i, r);
+            if (m_matcher->match(scan, g, r)) m_hyp.update(i, r);
         }
         const int bi = m_hyp.best();
         m_hyp.prune(m_hyp_margin, m_hyp_stale);
@@ -1055,12 +1131,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_has_cached_target = true;
             m_matcher->setTarget(target);
         }
-        const bool ok = m_matcher->match(f.cloud, guess, res);
+        const bool ok = m_matcher->match(scan, guess, res);
         // [LocProbe] 诊断: 输入扫描点数 / 匹配结果 (NO Effective Points 排查)
         {
             static int probe_n = 0;
             if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
-                std::cout << "[LocProbe] scan_points=" << (f.cloud ? f.cloud->size() : 0)
+                std::cout << "[LocProbe] scan_points=" << (scan ? scan->size() : 0)
                           << " target_points=" << (m_cached_target ? m_cached_target->size() : 0)
                           << " match_ok=" << (ok ? 1 : 0)
                           << " converged=" << (res.converged ? 1 : 0)
@@ -1068,7 +1144,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             }
         }
         reject_reason = ok ? "accepted" : "matcher_failed";
-        accepted = ok && acceptMatch(res, f.cloud, guess, &reject_reason);
+        accepted = ok && acceptMatch(res, scan, guess, &reject_reason);
         out_pose = accepted ? res.pose : guess;
     }
 
@@ -1161,7 +1237,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     if (!m_hyp.ambiguous()) m_hyp.reset(m_pose);
 
     // 地图维护: 仅在位姿可信(配准被采纳)时写入/雕刻叠加层
-    if (m_maintainer) m_maintainer->onLocalized(out_pose, f.cloud, m_last_match, accepted);
+    if (m_maintainer) m_maintainer->onLocalized(out_pose, scan, m_last_match, accepted);
 
     // 过桥计数: 连续未采纳帧数
     m_coast_count = accepted ? 0 : (m_coast_count + 1);
@@ -1172,7 +1248,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         m_low_fit_frames >= m_hyp_reseed_frames &&
         ensureRelocalizerMap()) {
         std::vector<GlobalCandidate> cands;
-        const int nk = m_relocalizer->localizeTopK(f.cloud, std::max(1, m_global_cfg.top_k), cands);
+        const int nk = m_relocalizer->localizeTopK(scan, std::max(1, m_global_cfg.top_k), cands);
         if (nk > 1) {
             std::vector<PoseStamped> hp;
             std::vector<double> hs;

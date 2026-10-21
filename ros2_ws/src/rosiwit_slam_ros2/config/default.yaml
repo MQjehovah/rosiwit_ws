@@ -177,6 +177,12 @@ localization:
     max_keyframes: 15   # keyframe_submap: 最近关键帧数上限
     cache_move: 0.5     # 位姿移动小于该值复用上一帧局部地图(m, 提速)
 
+  # 定位扫描运动补偿 (逐点时间戳 -> 帧末位姿)
+  deskew:
+    enabled: true
+    max_gap: 0.30
+    min_angle_deg: 0.2
+
   # 运动先验参数 (motion_prior: constant_velocity | imu)
   motion_prior:
     max_dt: 0.2

@@ -249,6 +249,14 @@ localization:
     max_keyframes: 15   # keyframe_submap: 最近关键帧数上限
     cache_move: 0.5     # 位姿移动小于该值复用上一帧局部地图(m, 提速)
 
+  # ---- 定位扫描运动补偿 (逐点时间戳 -> 帧末位姿) ----
+  # 建图前端已有 IMU 去畸变; 定位路径原来直接用原始点云, 转圈时扫描被拉斜,
+  # 表现为 fitness 0.4~0.7、inlier 比例下降. 这里按上一接受帧/当前先验插值补偿.
+  deskew:
+    enabled: true
+    max_gap: 0.30        # 上一接受帧到当前帧起始的最大时间间隔(s)
+    min_angle_deg: 0.2   # 小于此旋转量不补偿
+
   # ---- 运动先验 (motion_prior: constant_velocity | imu | imu_ekf) ----
   motion_prior:
     max_dt: 0.2

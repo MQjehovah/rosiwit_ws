@@ -59,6 +59,8 @@ private:
     void setMapImpl(const std::string& map_name);
     bool acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
                      const PoseStamped& guess, const char** reject_reason = nullptr);
+    /// 按逐点时间戳把一帧扫描补偿到帧末位姿; 旋转时避免点云在时间上被拉斜.
+    CloudType::Ptr deskewScan(const LidarFrame& f, const PoseStamped& end_pose);
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)
     CloudType::Ptr buildTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
     bool ensureRelocalizerMap();   // 全局重定位库就绪检查(后台构建中返回 false, 绝不阻塞)
@@ -119,6 +121,9 @@ private:
     /// 避免运动先验在无修正情况下一直积分, 越漂越远(实机曾漂到离图 96m, 从此再也匹配不上)。
     PoseStamped m_last_accepted;
     bool m_have_last_accepted = false;
+    bool m_deskew_enabled = true;
+    double m_deskew_max_gap = 0.30;       // 上一接受帧到当前帧起始的最大间隔(s)
+    double m_deskew_min_angle_deg = 0.2;  // 小于此旋转量不做补偿
     std::atomic<Status> m_status{INIT};
     std::atomic<bool> m_initialized{false};
     MatchResult m_last_match;
