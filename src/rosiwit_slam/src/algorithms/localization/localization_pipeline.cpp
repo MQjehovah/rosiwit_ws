@@ -1235,9 +1235,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     const double healthy_fitness = (m_status == INIT)
                                        ? m_global_cfg.reloc_accept_score
                                        : m_monitor_cfg.credible_fitness;
+    // GICP 在局部子图点数较少时 fitness 可能只有 0.73~0.82，但残差/一致性
+    // 门控仍可能 accepted=1. 只看 fitness 会把这类有效跟踪误判为 LOST.
+    // LOCALIZED 阶段只要本次匹配被接受且不低于 lost_fitness，就继续视为健康；
+    // 冷启动(INIT)仍坚持 reloc_accept_score.
+    const bool accepted_healthy =
+        (m_status != INIT) && accepted &&
+        res.fitness >= m_monitor_cfg.lost_fitness;
     const bool healthy = !seed_failed && res.converged &&
-                         lvl == MonitorLevel::CREDIBLE &&
-                         res.fitness >= healthy_fitness;
+                         (lvl == MonitorLevel::CREDIBLE || accepted_healthy) &&
+                         (res.fitness >= healthy_fitness || accepted_healthy);
     if (healthy) {
         ++m_healthy_streak;
         m_unhealthy_streak = 0;
@@ -1257,18 +1264,23 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         m_healthy_streak = 0;
         ++m_unhealthy_streak;
         if (m_unhealthy_streak >= std::max(1, m_monitor_cfg.lost_patience)) {
+            const bool was_lost = (m_status == LOST);
             m_status = LOST;
             {
                 std::lock_guard<std::mutex> lk(m_global_mu);
                 m_global_request = true;
                 m_global_cooldown = 0;
             }
-            std::ostringstream os;
-            os << "unhealthy frames=" << m_unhealthy_streak
-               << " >= " << m_monitor_cfg.lost_patience << " -> LOST";
-            diag::log('W', "LocPipeline", os.str());
-            FlightRecorder::instance().event("LOST", os.str());
-            FlightRecorder::instance().onStatusChange(true);
+            // 只在真正进入 LOST 的那一帧记录/落盘; 之前这里每帧调用，
+            // 一次丢定位会在 /tmp/slam_flight 生成上千个 100KB+ 文件并拖慢系统.
+            if (!was_lost) {
+                std::ostringstream os;
+                os << "unhealthy frames=" << m_unhealthy_streak
+                   << " >= " << m_monitor_cfg.lost_patience << " -> LOST";
+                diag::log('W', "LocPipeline", os.str());
+                FlightRecorder::instance().event("LOST", os.str());
+                FlightRecorder::instance().onStatusChange(true);
+            }
         }
     }
 }
