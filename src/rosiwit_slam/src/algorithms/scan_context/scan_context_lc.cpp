@@ -40,6 +40,10 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                 m_icp_fitness_thresh = lc["icp_fitness_thresh"].as<float>(m_icp_fitness_thresh);
                 m_icp_max_corr_dist  = lc["icp_max_corr_dist"].as<float>(m_icp_max_corr_dist);
                 m_icp_voxel_res      = lc["icp_voxel_res"].as<float>(m_icp_voxel_res);
+                m_max_relative_trans_m = lc["max_relative_trans_m"].as<double>(m_max_relative_trans_m);
+                m_max_relative_rot_deg = lc["max_relative_rot_deg"].as<double>(m_max_relative_rot_deg);
+                m_max_consistency_trans_m = lc["max_consistency_trans_m"].as<double>(m_max_consistency_trans_m);
+                m_max_consistency_rot_deg = lc["max_consistency_rot_deg"].as<double>(m_max_consistency_rot_deg);
 
                 ScanContext::Config sc_cfg;
                 sc_cfg.num_rings   = common && common["num_rings"]
@@ -252,6 +256,40 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
     relative_pose.time = latest.pose.time;
     relative_pose.rot = best_delta.block<3,3>(0,0).cast<double>();
     relative_pose.trans = best_delta.block<3,1>(0,3).cast<double>();
+
+    // 假回环保护: ICP 通过不等于几何合理. 几十米/上百度的相对位姿
+    // 会把 Ceres 位姿图整体拉坏, 必须在进入后端前拒绝.
+    const double rel_trans = relative_pose.trans.norm();
+    const Eigen::AngleAxisd rel_aa(relative_pose.rot);
+    const double rel_rot_deg = std::abs(rel_aa.angle()) * 180.0 / M_PI;
+    if (rel_trans > m_max_relative_trans_m || rel_rot_deg > m_max_relative_rot_deg) {
+        std::cout << "[ScanContextLC] reject relative loop: kf_" << best_idx
+                  << " <-> kf_" << latest_idx
+                  << " d_trans=" << rel_trans << "m"
+                  << " d_rot=" << rel_rot_deg << "deg"
+                  << " (limits " << m_max_relative_trans_m << "m/"
+                  << m_max_relative_rot_deg << "deg)" << std::endl;
+        return false;
+    }
+
+    // 与前端里程计先验做一致性检查: 回环测量不能和当前轨迹相差过大,
+    // 否则 Ceres 会把一串关键帧整体拉走 (实测 30~500m / 170° 的假回环).
+    PoseStamped odom_rel;
+    odom_rel.time = latest.pose.time;
+    odom_rel.rot = match.pose.rot.transpose() * latest.pose.rot;
+    odom_rel.trans = match.pose.rot.transpose() * (latest.pose.trans - match.pose.trans);
+    const double consist_t = (relative_pose.trans - odom_rel.trans).norm();
+    const Eigen::AngleAxisd consist_aa(relative_pose.rot.transpose() * odom_rel.rot);
+    const double consist_rot_deg = std::abs(consist_aa.angle()) * 180.0 / M_PI;
+    if (consist_t > m_max_consistency_trans_m || consist_rot_deg > m_max_consistency_rot_deg) {
+        std::cout << "[ScanContextLC] reject inconsistent loop: kf_" << best_idx
+                  << " <-> kf_" << latest_idx
+                  << " odom_delta=" << consist_t << "m/"
+                  << consist_rot_deg << "deg"
+                  << " (limits " << m_max_consistency_trans_m << "m/"
+                  << m_max_consistency_rot_deg << "deg)" << std::endl;
+        return false;
+    }
 
     cov = std::min(1.0, best_desc_dist / m_dist_thresh);
 

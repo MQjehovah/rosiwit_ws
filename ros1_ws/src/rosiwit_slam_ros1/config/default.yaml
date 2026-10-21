@@ -124,6 +124,10 @@ mapping:
     icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)
     icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
     min_keyframe_gap: 30 # 回环最小关键帧间隔
+    max_relative_trans_m: 8.0 # 进入后端的回环相对平移上限(m)
+    max_relative_rot_deg: 30.0 # 进入后端的回环相对旋转上限(deg)
+    max_consistency_trans_m: 8.0 # 回环与里程计先验的最大平移偏差(m)
+    max_consistency_rot_deg: 30.0 # 回环与里程计先验的最大旋转偏差(deg)
   map_manager:
     max_correction_trans_m: 15 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 150 # 后端修正允许的最大旋转跳变(deg)

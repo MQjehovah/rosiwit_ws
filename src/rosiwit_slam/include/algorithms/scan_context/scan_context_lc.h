@@ -55,6 +55,12 @@ private:
     float m_icp_fitness_thresh = 1.0f;
     int m_icp_max_iter = 32;
     float m_icp_voxel_res = 0.3f;
+    // 回环约束进入后端前的相对位姿门控: 拒绝几十米/上百度的假回环.
+    double m_max_relative_trans_m = 8.0;
+    double m_max_relative_rot_deg = 30.0;
+    // 回环相对位姿必须与前端里程计先验相差不大, 防止几何上自洽但实际错配的假回环.
+    double m_max_consistency_trans_m = 8.0;
+    double m_max_consistency_rot_deg = 30.0;
 
     std::vector<std::pair<size_t, size_t>> m_detected_loops;
 };

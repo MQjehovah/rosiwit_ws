@@ -178,6 +178,9 @@ bool CeresBackend::optimize() {
     options.minimizer_progress_to_stdout = false;
 
     ceres::Solver::Summary summary;
+    std::vector<PoseStamped> before;
+    before.reserve(N);
+    for (const auto& kf : keyframes_) before.push_back(kf.pose);
     ceres::Solve(options, &problem, &summary);
 
     if (!summary.IsSolutionUsable()) {
@@ -186,6 +189,20 @@ bool CeresBackend::optimize() {
     }
 
     updatePoses(param_blocks);
+
+    // 诊断: 证明 optimize 是否真的改变了位姿, 以及回环约束是否进入问题.
+    double max_dt = 0.0, max_dr = 0.0;
+    for (size_t i = 0; i < N; ++i) {
+        max_dt = std::max(max_dt, (before[i].trans - keyframes_[i].pose.trans).norm());
+        const Eigen::AngleAxisd aa(before[i].rot.transpose() * keyframes_[i].pose.rot);
+        max_dr = std::max(max_dr, std::abs(aa.angle()) * 180.0 / M_PI);
+    }
+    std::cout << "[CeresBackend] optimize N=" << N
+              << " loop=" << constraints_.size()
+              << " cost=" << summary.initial_cost << "->" << summary.final_cost
+              << " iter=" << summary.iterations.size()
+              << " max_dt=" << max_dt << "m"
+              << " max_dr=" << max_dr << "deg" << std::endl;
 
     num_optimizations_++;
     return true;
