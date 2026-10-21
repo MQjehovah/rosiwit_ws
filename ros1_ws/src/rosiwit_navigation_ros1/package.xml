@@ -21,4 +21,10 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>std_srvs</depend>
   <depend>visualization_msgs</depend>
+  <!-- robot_movebase action 接口 (RobotNaviCmdAction) 的消息包 -->
+  <depend>actionlib</depend>
+  <depend>actionlib_msgs</depend>
+  <depend>xzrobot_ros_dependency</depend>
+
+  <test_depend>gtest</test_depend>
 </package>

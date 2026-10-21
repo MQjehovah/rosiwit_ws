@@ -1,0 +1,31 @@
+# robot_movebase 兼容接口的期望集合
+# 格式: 名字 类型   ([topics] / [services])
+# 依据: robot_movebase/src/RobotMovebaseNode.cpp 构造函数 + action 名 RobotNaviCmdAction
+
+[topics]
+/movebase_cmd_vel                geometry_msgs/Twist
+/local_map                       nav_msgs/OccupancyGrid
+/makeplan_map                    nav_msgs/OccupancyGrid
+/robot_footprint                 geometry_msgs/PolygonStamped
+/prediction_robot_footprint      geometry_msgs/PolygonStamped
+/prediction_path                 nav_msgs/Path
+/movebae_robot_path              nav_msgs/Path
+/back_off_path                   nav_msgs/Path
+/docking_path                    nav_msgs/Path
+/re_point                        geometry_msgs/PointStamped
+/area_type                       std_msgs/String
+/clean_map                       nav_msgs/OccupancyGrid
+/clean_area                      std_msgs/Float64
+/clean_part_status               std_msgs/String
+# 保留的原生接口 (兼容层不应把它们挤掉)
+/cmd_vel                         geometry_msgs/Twist
+/global_path                     nav_msgs/Path
+/local_path                      nav_msgs/Path
+
+[services]
+/RobotNaviCmdAction/goal         xzrobot_ros_dependency/NaviCmdActionActionGoal
+/RobotNaviCmdAction/cancel       actionlib_msgs/GoalID
+/RobotNaviCmdAction/feedback     xzrobot_ros_dependency/NaviCmdActionActionFeedback
+/RobotNaviCmdAction/result       xzrobot_ros_dependency/NaviCmdActionActionResult
+/RobotNaviCmdAction/status       actionlib_msgs/GoalStatusArray
+/nav_stop                        std_srvs/Trigger

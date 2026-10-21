@@ -1,0 +1,19 @@
+<launch>
+  <!-- ========================================================================
+       robot_movebase 兼容启动:
+         * action: /RobotNaviCmdAction (xzrobot_ros_dependency/NaviCmdActionAction)
+         * 控制量: /movebase_cmd_vel (同时保留 /cmd_vel)
+         * 调试话题: /global_path /local_path /local_map /makeplan_map
+                    /robot_footprint /prediction_robot_footprint /prediction_path
+                    /movebae_robot_path /back_off_path /docking_path /re_point
+       节点名默认 robot_move_base, 方便沿用旧 bringup 里按节点名做的检查;
+       按节点名传参的地方需要同步改成 /robot_move_base_rosiwit。
+       ======================================================================== -->
+  <arg name="config_file" default="$(find rosiwit_navigation_ros1)/config/movebase_compat.yaml"/>
+  <arg name="node_name" default="robot_move_base"/>
+
+  <node pkg="rosiwit_navigation_ros1" type="rosiwit_navigation_ros1_node"
+        name="$(arg node_name)" output="screen" respawn="true" respawn_delay="2">
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+</launch>

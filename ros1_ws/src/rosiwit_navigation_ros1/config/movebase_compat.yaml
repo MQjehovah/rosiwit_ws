@@ -1,0 +1,86 @@
+# ============================================================================
+# movebase_compat.yaml — 用 rosiwit_navigation_ros1 顶替 robot_movebase 时的参数
+#
+# 与 config/default.yaml 的区别只在"对齐旧包"的部分:
+#   * 坐标系: map / base_footprint (旧包 robot_base_frame)
+#   * 控制频率 10Hz (旧包 g_control_freq)
+#   * 速度上限 0.8 m/s (旧包 max_speed)
+#   * 车体轮廓取旧包 config/robot_movebase_v1.yaml 的 footprint
+#   * 打开 movebase 兼容层 (action + 旧话题)
+# 明确不追求一致的: 局部控制器旧包用 TEB, 这里默认 dwa (核心 TEB 是轻量实现);
+# 需要时把 controller_name 改成 "teb" 或 "mppi"。
+# ============================================================================
+
+# ---- robot_movebase 接口 ----
+movebase_compat_enabled: true
+cmd_vel_topic: "/cmd_vel"
+movebase_cmd_vel_topic: "/movebase_cmd_vel"
+movebase_robot_footprint: [-0.2, -0.35, 0.425, -0.35, 0.6, -0.18, 0.6, 0.18, 0.425, 0.35, -0.2, 0.35]
+movebase_default_speed: 0.8
+movebase_back_speed: 0.1
+movebase_rotate_speed: 0.6
+movebase_stuck_timeout: 60.0
+movebase_goal_yaw_tolerance: 0.1
+movebase_rotate_tolerance: 0.05
+movebase_prediction_horizon: 1.0
+
+# ---- 频率 ----
+controller_frequency: 10.0
+planner_frequency: 1.0
+
+# ---- 速度 ----
+max_velocity_x: 0.8
+min_velocity_x: 0.0
+max_velocity_theta: 1.0
+max_accel_x: 0.4
+max_accel_theta: 0.8
+
+# ---- 规划器 / 控制器 ----
+planner_name: "astar"
+controller_name: "dwa"
+planner_max_iterations: 200000
+planner_timeout: 2.0
+
+# ---- 坐标系 ----
+global_frame: "map"
+robot_frame: "base_footprint"
+map_frame: "map"
+odom_topic: "/odom"
+
+# ---- 容差 / 前瞻 ----
+goal_tolerance_xy: 0.15
+goal_tolerance_yaw: 0.1
+lookahead_distance: 0.8
+min_lookahead_distance: 0.4
+max_lookahead_distance: 1.2
+
+# ---- 机器人 / 膨胀 ----
+robot_radius: 0.30
+inflation_radius: 0.25
+
+# ---- 安全层 (用旧包的车体轮廓) ----
+safety_enabled: true
+safety_self_filter_radius: 0.25
+safety_fail_safe_on_timeout: true
+safety_source_timeout: 0.5
+safety_stop_polygon: [-0.55, -0.40, 0.55, -0.40, 0.55, 0.40, -0.55, 0.40]
+safety_slowdown_polygon: [-0.75, -0.55, 0.85, -0.55, 0.85, 0.55, -0.75, 0.55]
+safety_slowdown_ratio: 0.5
+safety_approach_enabled: true
+safety_time_before_collision: 2.0
+safety_footprint: [-0.2, -0.35, 0.425, -0.35, 0.6, -0.18, 0.6, 0.18, 0.425, 0.35, -0.2, 0.35]
+
+# ---- 动态障碍 ----
+tracking_enabled: true
+tracking_horizon: 0.5
+tracking_cluster_distance: 0.35
+tracking_confirm_hits: 3
+
+# ---- 3D 体素 ----
+voxel_enabled: true
+voxel_cloud_topic: "/world_cloud"
+voxel_resolution: 0.10
+voxel_min_height: -0.20
+voxel_max_height: 2.00
+voxel_decay: 2.0
+voxel_inflation: 0.15
