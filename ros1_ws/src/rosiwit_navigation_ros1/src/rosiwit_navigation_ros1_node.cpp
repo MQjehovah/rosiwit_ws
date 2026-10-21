@@ -1658,13 +1658,9 @@ private:
                          ? 255
                          : (current_map_->data[i] < 0 ? 254 : 0);
       }
-      for (const auto & pt : laser_points_) {
-        const int mx = static_cast<int>((pt.x - ox) / res);
-        const int my = static_cast<int>((pt.y - oy) / res);
-        if (mx >= 0 && mx < static_cast<int>(w) && my >= 0 && my < static_cast<int>(h)) {
-          cm.data[my * w + mx] = 255;
-        }
-      }
+      // /scan 是实时传感器障碍层: 只进入 local costmap/controller/safety,
+      // 不能直接写成 global planner 的 lethal。否则 15Hz 的瞬态点会被 A*
+      // 当成全局永久障碍, 形成大面积假墙并让全局路径无法生成.
       planner_strategy_->setCostmap(cm);
       planner_costmap_ = cm;
       m_has_planner_costmap_ = true;
