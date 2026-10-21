@@ -83,8 +83,12 @@ bool VgicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
         CloudType::Ptr f(new CloudType());
         f->reserve(src->size());
+        const Eigen::Matrix4d guess_T = poseToMatrix(guess);
+        const Eigen::Matrix3d R = guess_T.block<3, 3>(0, 0);
+        const Eigen::Vector3d t = guess_T.block<3, 1>(0, 3);
         for (const auto& p : src->points) {
-            Voxel* v = findVoxel(Eigen::Vector3d(p.x, p.y, p.z));
+            const Eigen::Vector3d q = R * Eigen::Vector3d(p.x, p.y, p.z) + t;
+            Voxel* v = findVoxel(q);
             if (v && v->valid) f->push_back(p);
         }
         src = f;

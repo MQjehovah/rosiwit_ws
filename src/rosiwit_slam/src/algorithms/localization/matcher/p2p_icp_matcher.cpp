@@ -39,7 +39,7 @@ bool P2pIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
     if (!m_store && m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
-        src = filterByMapProximity(src, m_kdtree, m_cfg.dynamic_dist);
+        src = filterByMapProximity(src, m_kdtree, poseToMatrix(guess), m_cfg.dynamic_dist);
         if (!src || src->empty()) return false;
     }
 

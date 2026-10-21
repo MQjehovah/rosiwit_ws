@@ -647,10 +647,14 @@ void LocalizationPipeline::onOdom(const PoseStamped& odom) {
 }
 
 CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseStamped& end_pose) {
-    if (!m_deskew_enabled || !f.cloud || f.cloud->empty() || !m_have_last_accepted)
-        return f.cloud;
+    if (!m_deskew_enabled || !f.cloud || f.cloud->empty()) return f.cloud;
+    if (!m_have_last_accepted && m_pose.time < 0.0) return f.cloud;
 
-    const PoseStamped& start_pose = m_last_accepted;
+    // 优先用上一帧输出位姿；它即使本帧未 accepted 也仍然跟着先验走。
+    // 只用 last_accepted 会在连续拒绝时很快超过 max_gap，去畸变随即失效。
+    const PoseStamped* start = &m_last_accepted;
+    if (m_pose.time > start->time) start = &m_pose;
+    const PoseStamped& start_pose = *start;
     const double span = f.end_time - f.start_time;
     const double gap = f.start_time - start_pose.time;
     if (span <= 1e-3 || start_pose.time < 0.0 ||

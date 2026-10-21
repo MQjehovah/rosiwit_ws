@@ -40,8 +40,10 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
     if (probe) ms_ds = ms_since(t0);
+    const Eigen::Matrix4d guess_T = poseToMatrix(guess);
     if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
-        src = filterByMapProximity(src, m_kdtree, m_cfg.dynamic_dist);
+        // 源点在雷达系, 目标地图在世界系; 必须用 guess 变换后再查地图.
+        src = filterByMapProximity(src, m_kdtree, guess_T, m_cfg.dynamic_dist);
         if (!src || src->empty()) return false;
     }
     if (probe) ms_df = ms_since(t0) - ms_ds;
@@ -50,7 +52,7 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     if (src->size() < static_cast<size_t>(std::max(1, m_cfg.min_match_points))) return false;
 
     const auto t1 = std::chrono::steady_clock::now();
-    Eigen::Matrix4f g = poseToMatrix(guess).cast<float>();
+    Eigen::Matrix4f g = guess_T.cast<float>();
     m_gicp.setInputSource(src);
     // 目标指针没变就别重设: PCL 1.8 setInputTarget 无条件置脏 target_cloud_updated_
     // (每帧重建 ~6k 点目标 KD 树) 且 GICP 子类再 reset target_covariances_

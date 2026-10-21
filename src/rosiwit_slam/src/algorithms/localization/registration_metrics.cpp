@@ -71,15 +71,23 @@ CoverageStats evaluateCoverage(const pcl::KdTreeFLANN<PointType>& kdtree,
 
 CloudType::Ptr filterByMapProximity(const CloudType::Ptr& scan,
                                     const pcl::KdTreeFLANN<PointType>& kdtree,
+                                    const Eigen::Matrix4d& T,
                                     double max_dist) {
     CloudType::Ptr out(new CloudType());
     if (!scan || scan->empty()) return out;
     const double d2 = max_dist * max_dist;
     std::vector<int> idx(1);
     std::vector<float> sq(1);
+    const Eigen::Matrix3d R = T.block<3, 3>(0, 0);
+    const Eigen::Vector3d t = T.block<3, 1>(0, 3);
     out->reserve(scan->size());
     for (const auto& p : scan->points) {
-        if (kdtree.nearestKSearch(p, 1, idx, sq) > 0 && sq[0] <= d2) out->push_back(p);
+        const Eigen::Vector3d q = R * Eigen::Vector3d(p.x, p.y, p.z) + t;
+        PointType qp;
+        qp.x = static_cast<float>(q.x());
+        qp.y = static_cast<float>(q.y());
+        qp.z = static_cast<float>(q.z());
+        if (kdtree.nearestKSearch(qp, 1, idx, sq) > 0 && sq[0] <= d2) out->push_back(p);
     }
     return out;
 }

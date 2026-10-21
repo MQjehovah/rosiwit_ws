@@ -32,10 +32,12 @@ double evaluatePoint2PlaneResidual(const pcl::KdTreeFLANN<PointType>& kdtree,
                                    int max_points = 2000,
                                    double plane_valid_thr = 0.10);
 
-/// 动态/变化物剔除: 仅保留与目标地图最近距离 <= max_dist 的源点.
+/// 动态/变化物剔除: 仅保留变换到地图系后与目标地图最近距离 <= max_dist 的源点.
 /// (人来人往/叉车/未入图的新堆货 = 离地图远 -> 剔除, 定位以静态结构为准)
+/// T 必须是 world<-source (通常是当前 guess); 不能拿原始雷达系点直接查世界地图.
 CloudType::Ptr filterByMapProximity(const CloudType::Ptr& scan,
                                     const pcl::KdTreeFLANN<PointType>& kdtree,
+                                    const Eigen::Matrix4d& T,
                                     double max_dist);
 
 // ---- 存储底座(IMapStore)版本 (P3: 存储与算法解耦) ----
