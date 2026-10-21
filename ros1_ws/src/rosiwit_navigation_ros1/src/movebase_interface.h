@@ -22,7 +22,7 @@
 #include <vector>
 
 #include <ros/ros.h>
-#include <actionlib/server/simple_action_server.h>
+#include <actionlib/server/action_server.h>
 #include <xzrobot_ros_dependency/NaviCmdActionAction.h>
 
 #include <geometry_msgs/PointStamped.h>
@@ -67,7 +67,11 @@ struct Outcome
 class Interface
 {
 public:
-  using Server = actionlib::SimpleActionServer<xzrobot_ros_dependency::NaviCmdActionAction>;
+  // 用 ActionServer(GoalHandle) 而不是 SimpleActionServer:
+  // 我们的运动由定时器驱动, goal 回调必须能立即返回,
+  // 而 SimpleActionServer 会在 execute 回调返回时把 goal 自动 abort.
+  using Server = actionlib::ActionServer<xzrobot_ros_dependency::NaviCmdActionAction>;
+  using GoalHandle = Server::GoalHandle;
   using GoalCallback = boost::function<void(const Goal &)>;
   using CancelCallback = boost::function<void()>;
 
@@ -98,8 +102,8 @@ public:
   void preempted();                        // 对应旧实现 preemptCB 的 setPreempted()
 
 private:
-  void goalCallback(const Server::GoalConstPtr & msg);
-  void preemptCallback();
+  void goalCallback(GoalHandle handle);
+  void cancelCallback(GoalHandle handle);
   void publishDockingPathOnce();
 
   ros::NodeHandle nh_;
@@ -113,6 +117,7 @@ private:
   std::string map_frame_ = "map";
 
   std::unique_ptr<Server> server_;
+  GoalHandle current_goal_;
   GoalCallback on_goal_;
   CancelCallback on_cancel_;
 

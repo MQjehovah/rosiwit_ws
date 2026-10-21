@@ -1,6 +1,9 @@
 # robot_movebase 兼容接口的期望集合
 # 格式: 名字 类型   ([topics] / [services])
 # 依据: robot_movebase/src/RobotMovebaseNode.cpp 构造函数 + action 名 RobotNaviCmdAction
+#
+# 注意: actionlib 的 goal/cancel/feedback/result/status 是**话题**, 不是服务
+#       (actionlib 整体建立在 topic 上), 不要写到 [services] 里.
 
 [topics]
 /movebase_cmd_vel                geometry_msgs/Twist
@@ -21,11 +24,12 @@
 /cmd_vel                         geometry_msgs/Twist
 /global_path                     nav_msgs/Path
 /local_path                      nav_msgs/Path
-
-[services]
+# action 端点 (话题)
 /RobotNaviCmdAction/goal         xzrobot_ros_dependency/NaviCmdActionActionGoal
 /RobotNaviCmdAction/cancel       actionlib_msgs/GoalID
 /RobotNaviCmdAction/feedback     xzrobot_ros_dependency/NaviCmdActionActionFeedback
 /RobotNaviCmdAction/result       xzrobot_ros_dependency/NaviCmdActionActionResult
 /RobotNaviCmdAction/status       actionlib_msgs/GoalStatusArray
+
+[services]
 /nav_stop                        std_srvs/Trigger

@@ -64,7 +64,6 @@ struct Goal
   double robot_vel = 0.0;
   long path_index = 0;
   long path_segment_index = 0;
-  int set_navi_mode = 0;
   double backing_dist = 0.0;
   std::vector<core::Pose2D> tracking_path;
   std::string file_path;

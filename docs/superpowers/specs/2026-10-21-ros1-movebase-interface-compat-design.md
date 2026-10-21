@@ -16,14 +16,16 @@
 xzrobot_ros_dependency/NaviCmdActionAction
 ```
 
-Goal：`navi_cmd / robot_vel / path_index / path_segment_index / set_navi_mode /
-backing_dist / tracking_path(Pose2D[]) / file_path`
+Goal（**以现场安装的 xzrobot_ros_dependency 为准**，见 §5-11）：
+`navi_cmd / robot_vel / path_index / path_segment_index / backing_dist /
+record_path(Pose2D[]) / tracking_path(Pose2D[]) / file_path`
 
 Feedback：`execution_percent / execution_index / execution_path_segment_index /
-execution_path(Pose2D[]) / local_path(Pose2D[]) / navi_state`
+clean_area / navi_state / execution_path(Pose2D[]) / local_path(Pose2D[]) /
+access_turnstile_id`
 
 Result：`execution_percent / execution_index / execution_path_segment_index /
-execution_path(Pose2D[]) / tracking_path_result`
+clean_area / execution_path(Pose2D[]) / tracking_path_result`
 
 关键语义（`ExecuteCb()`，`src/RobotMovebaseNode.cpp:2244`）：
 
@@ -173,9 +175,12 @@ roslaunch rosiwit_navigation_ros1 movebase_compat.launch
 7. **`execution_percent` 在路径跟踪时来自控制器进度**，不是旧包的“路径索引/总点数”，
    数值范围一致（0..1），但拐弯/重规划时可能有小幅跳变。
 8. **`tracking_path` 视为 map 系 Pose2D**（旧协议没有 frame 字段），与旧包一致。
-9. **`set_navi_mode`（0 正常 / 1 停障）不区分**：安全层始终按“减速 + 停车”处理；
-   旧包在停障模式下会先等待 `nav_wait_time` 再脱困，本包没有脱困，不复制该行为。
+9. **现场消息包没有 `set_navi_mode`**：`robot_movebase/action/NaviCmdAction.action`
+   源码里这个字段比机器人上安装的 `xzrobot_ros_dependency` 新。本包按现场包编译，
+   同时不复制“停障模式先等待再脱困”的行为（本包没有脱困）。
 10. **`robot_vel` 只作为速度上限**，且会被 `max_velocity_x` 收敛；日志会打印收敛值。
+11. **清洁/闸机字段回中性值**：`clean_area=0`、`access_turnstile_id` 为空串；
+   本包没有清洁与闸机业务。
 
 ## 6. 验证
 
@@ -186,7 +191,7 @@ roslaunch rosiwit_navigation_ros1 movebase_compat.launch
 g++ -std=c++17 -I src/rosiwit_navigation/include \
     ros1_ws/src/rosiwit_navigation_ros1/test/test_movebase_protocol.cpp \
     ros1_ws/src/rosiwit_navigation_ros1/src/movebase_protocol.cpp \
-    -lgtest -lgtest_main -pthread -o /tmp/t && /tmp/t
+    -lgtest -pthread -o /tmp/t && /tmp/t
 
 # 任务状态机
 g++ -std=c++17 -I src/rosiwit_navigation/include \

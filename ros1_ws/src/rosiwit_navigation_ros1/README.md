@@ -48,7 +48,7 @@ catkin_make run_tests_rosiwit_navigation_ros1
 # 或直接:
 g++ -std=c++17 -I src/rosiwit_navigation/include \
     test/test_movebase_protocol.cpp src/movebase_protocol.cpp \
-    -lgtest -lgtest_main -pthread -o /tmp/t && /tmp/t
+    -lgtest -pthread -o /tmp/t && /tmp/t
 
 # 任务状态机（核心单测）
 g++ -std=c++17 -I src/rosiwit_navigation/include \

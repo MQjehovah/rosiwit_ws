@@ -8,7 +8,7 @@
 // 不需要 ROS1 环境:
 //   g++ -std=c++17 -I src/rosiwit_navigation/include
 //       test/test_movebase_protocol.cpp src/movebase_protocol.cpp
-//       -lgtest -lgtest_main -pthread -o /tmp/test_movebase_protocol
+//       -lgtest -pthread -o /tmp/test_movebase_protocol
 // ============================================================================
 #include <gtest/gtest.h>
 
@@ -216,4 +216,12 @@ TEST(MovebaseProtocol, PathHelpers)
   EXPECT_DOUBLE_EQ(clampPercent(1.7), 1.0);
   EXPECT_DOUBLE_EQ(clampPercent(-0.2), 0.0);
   EXPECT_DOUBLE_EQ(clampPercent(std::nan("")), 0.0);
+}
+
+// catkin_add_gtest 在 melodic 上只链接 gtest、不链接 gtest_main,
+// 所以自己提供 main (与 rosiwit_slam_ros1 的单测一致).
+int main(int argc, char ** argv)
+{
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
 }

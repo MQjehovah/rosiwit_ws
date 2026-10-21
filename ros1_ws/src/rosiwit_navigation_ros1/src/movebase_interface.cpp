@@ -9,6 +9,8 @@
 
 #include <boost/bind.hpp>
 
+#include <actionlib_msgs/GoalStatus.h>
+
 namespace rosiwit_navigation
 {
 namespace movebase
@@ -33,6 +35,25 @@ std::vector<geometry_msgs::Pose2D> toRosPose2DArray(const std::vector<core::Pose
   out.reserve(count);
   for (size_t i = 0; i < count; ++i) { out.push_back(toRosPose2D(poses[i])); }
   return out;
+}
+
+// ServerGoalHandle 没有 isActive(); 用 GoalStatus 判断.
+bool isGoalActive(
+  const actionlib::ActionServer<xzrobot_ros_dependency::NaviCmdActionAction>::GoalHandle & handle)
+{
+  return handle.isValid() &&
+         handle.getGoalStatus().status == actionlib_msgs::GoalStatus::ACTIVE;
+}
+
+// 收到 cancel 后 actionlib 会先把状态改成 PREEMPTING 再调回调,
+// 此时仍然必须 setCanceled() 才能把 result 发回客户端.
+bool isGoalPending(
+  const actionlib::ActionServer<xzrobot_ros_dependency::NaviCmdActionAction>::GoalHandle & handle)
+{
+  if (!handle.isValid()) { return false; }
+  const auto status = handle.getGoalStatus().status;
+  return status == actionlib_msgs::GoalStatus::ACTIVE ||
+         status == actionlib_msgs::GoalStatus::PREEMPTING;
 }
 
 double yawFromQuat(const geometry_msgs::Quaternion & q)
@@ -80,10 +101,10 @@ Interface::Interface(ros::NodeHandle & nh, ros::NodeHandle & pnh)
 
   publishDockingPathOnce();
 
-  // ---- action ----
-  server_.reset(new Server(nh_, action_name_,
-                           boost::bind(&Interface::goalCallback, this, _1), false));
-  server_->registerPreemptCallback(boost::bind(&Interface::preemptCallback, this));
+  // ---- action (异步 GoalHandle, 由控制定时器负责完成) ----
+  server_.reset(new Server(nh_, action_name_, false));
+  server_->registerGoalCallback(boost::bind(&Interface::goalCallback, this, _1));
+  server_->registerCancelCallback(boost::bind(&Interface::cancelCallback, this, _1));
   server_->start();
   ROS_INFO("[movebase_iface] action 服务端已启动: /%s (velocity: %s + %s)",
            action_name_.c_str(), cmd_vel_topic_.c_str(), movebase_cmd_vel_topic_.c_str());
@@ -91,7 +112,7 @@ Interface::Interface(ros::NodeHandle & nh, ros::NodeHandle & pnh)
 
 Interface::~Interface()
 {
-  if (server_) { server_->shutdown(); }
+  // ActionServer 的析构会停掉内部定时器/订阅; 它没有显式 shutdown().
 }
 
 void Interface::configure(const GoalCallback & on_goal, const CancelCallback & on_cancel)
@@ -100,24 +121,38 @@ void Interface::configure(const GoalCallback & on_goal, const CancelCallback & o
   on_cancel_ = on_cancel;
 }
 
-void Interface::goalCallback(const Server::GoalConstPtr & msg)
+void Interface::goalCallback(GoalHandle handle)
 {
   if (!enabled_) { return; }
+
+  // 新 goal 覆盖旧 goal: 照旧包"新目标先 preempt 旧目标"的行为.
+  if (has_goal_ && isGoalPending(current_goal_)) {
+    Server::Result canceled;
+    current_goal_.setCanceled(canceled);
+    has_goal_ = false;
+    if (on_cancel_) { on_cancel_(); }
+  }
+
+  current_goal_ = handle;
+  current_goal_.setAccepted();
   has_goal_ = true;
+
   if (!on_goal_) {
-    ROS_ERROR("[movebase_iface] 未注册 goal 回调, 拒绝 navi_cmd=%d", msg->navi_cmd);
+    ROS_ERROR("[movebase_iface] 未注册 goal 回调, 拒绝 navi_cmd=%d", handle.getGoal()->navi_cmd);
     Outcome outcome;
     outcome.tracking_path_result = RESULT_PLAN_FAILED;
     succeed(outcome);
     return;
   }
 
+  const auto msg = handle.getGoal();
   Goal goal;
   goal.navi_cmd = msg->navi_cmd;
   goal.robot_vel = msg->robot_vel;
   goal.path_index = msg->path_index;
   goal.path_segment_index = msg->path_segment_index;
-  goal.set_navi_mode = msg->set_navi_mode;
+  // 现场 xzrobot_ros_dependency 版本没有 set_navi_mode 字段
+  // (robot_movebase 源码里的 .action 比现场消息包新), 不能访问它.
   goal.backing_dist = msg->backing_dist;
   goal.tracking_path.reserve(msg->tracking_path.size());
   for (const auto & pose : msg->tracking_path) {
@@ -125,16 +160,20 @@ void Interface::goalCallback(const Server::GoalConstPtr & msg)
   }
   goal.file_path = msg->file_path;
 
-  has_goal_ = true;
+  // goal 回调在 ros::spin 线程里; on_goal_ 只做解码/启动, 不阻塞.
   on_goal_(goal);
 }
 
-void Interface::preemptCallback()
+void Interface::cancelCallback(GoalHandle /*handle*/)
 {
+  if (!enabled_) { return; }
   ROS_INFO("[movebase_iface] 收到 cancel, 停止当前导航");
   if (on_cancel_) { on_cancel_(); }
-  // 旧实现 preemptCB(): 立即 setPreempted(), 不等控制循环.
-  preempted();
+  Server::Result canceled;
+  if (isGoalPending(current_goal_)) {
+    current_goal_.setCanceled(canceled);
+  }
+  has_goal_ = false;
 }
 
 void Interface::publishCmdVel(const geometry_msgs::Twist & cmd)
@@ -230,7 +269,9 @@ void Interface::publishBackOffPath(const nav_msgs::Path & path)
 
 void Interface::publishFeedback(const Feedback & feedback)
 {
-  if (!enabled_ || !server_ || !has_goal_ || !server_->isActive()) { return; }
+  if (!enabled_ || !has_goal_ || !isGoalActive(current_goal_)) {
+    return;
+  }
   Server::Feedback msg;
   msg.execution_percent = static_cast<float>(clampPercent(feedback.execution_percent));
   msg.execution_index = feedback.execution_index;
@@ -238,7 +279,10 @@ void Interface::publishFeedback(const Feedback & feedback)
   msg.navi_state = static_cast<int8_t>(feedback.navi_state);
   msg.execution_path = toRosPose2DArray(feedback.execution_path);
   msg.local_path = toRosPose2DArray(feedback.local_path);
-  server_->publishFeedback(msg);
+  // 现场消息包的清洁/闸机字段: 本包没有清洁业务, 回中性值.
+  msg.clean_area = 0.0f;
+  msg.access_turnstile_id.clear();
+  current_goal_.publishFeedback(msg);
 }
 
 void Interface::succeed(const Outcome & outcome)
@@ -254,10 +298,11 @@ void Interface::succeed(const Outcome & outcome)
   msg.execution_index = outcome.execution_index;
   msg.execution_path_segment_index = outcome.execution_path_segment_index;
   msg.execution_path = toRosPose2DArray(outcome.execution_path);
+  msg.clean_area = 0.0f;
   has_goal_ = false;
-  if (server_->isActive()) {
+  if (isGoalActive(current_goal_)) {
     // 旧实现对成功和失败都调用 setSucceeded, 失败信息只在 tracking_path_result 里.
-    server_->setSucceeded(msg);
+    current_goal_.setSucceeded(msg);
   }
   ROS_INFO("[movebase_iface] 导航结束: result=%d percent=%.2f",
            outcome.tracking_path_result, outcome.execution_percent);
@@ -266,8 +311,11 @@ void Interface::succeed(const Outcome & outcome)
 void Interface::preempted()
 {
   if (!enabled_ || !server_) { return; }
+  Server::Result canceled;
+  if (isGoalPending(current_goal_)) {
+    current_goal_.setCanceled(canceled);
+  }
   has_goal_ = false;
-  if (server_->isActive()) { server_->setPreempted(); }
 }
 
 void Interface::publishDockingPathOnce()

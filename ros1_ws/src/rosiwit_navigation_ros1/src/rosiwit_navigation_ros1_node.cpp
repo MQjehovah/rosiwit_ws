@@ -1686,6 +1686,13 @@ private:
   {
     is_navigating_ = false;
     is_paused_ = false;
+    // 取消/结束导航时必须同时作废在途的异步规划, 否则 pollPlanning 会把这个
+    // 结果 applyPlanningResult() 回来, 让已经停止的任务重新跑起来.
+    if (planning_active_ || async_plan_future_.valid()) {
+      planning_active_ = false;
+      ++plan_generation_;
+      if (async_planner_) { async_planner_->cancel(); }
+    }
     geometry_msgs::Twist stop_cmd;
     publishCommand(stop_cmd);
   }
