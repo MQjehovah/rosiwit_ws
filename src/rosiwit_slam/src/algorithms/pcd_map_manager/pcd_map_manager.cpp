@@ -118,6 +118,27 @@ bool PcdMapManager::init(const std::string& config_path) {
         if (gv("skeleton_width")) grid_post_cfg_.skeleton_width = gv("skeleton_width").as<int>();
         if (gv("line_min_len_m")) grid_post_cfg_.line_min_len_m = gv("line_min_len_m").as<double>();
         if (gv("axis_snap")) grid_post_cfg_.axis_snap = gv("axis_snap").as<bool>();
+
+        // 实时 /map: 默认继承最终图参数, 但允许单独覆盖.
+        // 0.3m 实时图若沿用 0.05m 的 30 格去噪/3 格骨架, 会删掉整段墙并压成粗线.
+        grid_realtime_post_cfg_ = grid_post_cfg_;
+        if (gv("realtime_post_pipeline")) {
+            grid_realtime_post_cfg_.pipeline =
+                parsePostPipeline(gv("realtime_post_pipeline").as<std::string>());
+        }
+        if (gv("realtime_min_component_cells")) {
+            grid_realtime_post_cfg_.min_component_cells =
+                gv("realtime_min_component_cells").as<int>();
+        }
+        if (gv("realtime_close_radius")) {
+            grid_realtime_post_cfg_.close_radius = gv("realtime_close_radius").as<int>();
+        }
+        if (gv("realtime_dilate_radius")) {
+            grid_realtime_post_cfg_.dilate_radius = gv("realtime_dilate_radius").as<int>();
+        }
+        if (gv("realtime_skeleton_width")) {
+            grid_realtime_post_cfg_.skeleton_width = gv("realtime_skeleton_width").as<int>();
+        }
     } catch (const std::exception& e) {
         std::cerr << "[PcdMapManager] Config parse error: " << e.what() << std::endl;
         return false;
@@ -442,7 +463,7 @@ bool PcdMapManager::generateGridMap(double resolution) {
             global_map.reset(new CloudType(*global_map));
         }
         cfg = grid_cfg_;
-        post = grid_post_cfg_;
+        post = grid_realtime_post_cfg_;   // 实时分辨率不能用最终 0.05 的骨架/大去噪
         gen_name = grid_gen_name_;
         save_voxel = save_voxel_;
     }

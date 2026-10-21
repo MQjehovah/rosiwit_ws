@@ -107,11 +107,15 @@ mapping:
     min_hits: 2 # occupancy_logodds占据命中次数
     min_misses: 2 # occupancy_logodds自由未命中次数
     mark_radius: 0 # 栅格标记半径(格)
-    post_pipeline: denoise,close,dilate # 2D后处理管道
+    post_pipeline: denoise,close # 最终 PGM 只去噪+闭运算; 不做骨架化
     connectivity: 8 # 后处理连通性 4|8
     open_radius: 0 # 开运算半径(格)
     fill_max_hole_cells: 0 # 填洞最大格数
-    skeleton_width: 0 # 骨架膨胀宽度(格)
+    skeleton_width: 0 # 骨架化关闭
+    realtime_post_pipeline: denoise,close
+    realtime_min_component_cells: 3
+    realtime_close_radius: 1
+    realtime_skeleton_width: 0
     line_min_len_m: 0.0 # Hough线段最小长度(m)
     axis_snap: false # Hough线段吸附水平/垂直
 localization:

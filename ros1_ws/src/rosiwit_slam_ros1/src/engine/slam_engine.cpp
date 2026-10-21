@@ -449,10 +449,15 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
 
         // ---- M8: 给核心注入 map_directory: "/" 的 override YAML ----
         std::string base = config_path_;
-        if (base.empty()) {
+        // 某些现场 launch 会把 config_file 留在上一轮生成的 override 上; 不能把它当基底,
+        // 否则新参数(如 self_filter / realtime_post_pipeline)永远写不进核心 YAML.
+        if (base.empty() || base.find("compat_legacy.yaml") != std::string::npos ||
+            base.find("core_extrinsic.yaml") != std::string::npos) {
             base = ros::package::getPath("rosiwit_slam_ros1") + "/config/default.yaml";
-            ROS_WARN_STREAM("[slam_engine] ROS1 输入: ~config_file 未设置, 核心 YAML 回落到 "
-                            << base);
+            if (config_path_.empty()) {
+                ROS_WARN_STREAM("[slam_engine] ROS1 输入: ~config_file 未设置, 核心 YAML 回落到 "
+                                << base);
+            }
         }
         // 雷达-IMU 外参: 优先按 TF / 同名帧自动推导; 推不出来就保留基底配置里的值。
         Eigen::Matrix3d r_il = Eigen::Matrix3d::Identity();

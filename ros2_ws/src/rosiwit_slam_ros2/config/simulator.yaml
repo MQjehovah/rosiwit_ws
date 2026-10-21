@@ -91,7 +91,11 @@ mapping:
     max_range: 50.0 # 射线有效距离(m),0=不限
     ground_method: ransac # 地面提取方法 ransac|percentile
     ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
-    post_pipeline: "close,dilate" # 2D后处理管道
+    post_pipeline: "denoise,close" # 2D后处理管道
+    realtime_post_pipeline: "denoise,close"
+    realtime_min_component_cells: 1
+    realtime_close_radius: 1
+    realtime_skeleton_width: 0
 localization:
   global:
     icp_voxel_res: 0.5

@@ -71,7 +71,8 @@ private:
     std::unique_ptr<IGridMapGenerator> grid_gen_;
     std::string grid_gen_name_ = "height_projection";
     GridMapConfig grid_cfg_;
-    GridPostConfig grid_post_cfg_;      // 2D 后处理管道 (可组合/可关闭)
+    GridPostConfig grid_post_cfg_;      // 最终 PGM 的 2D 后处理管道
+    GridPostConfig grid_realtime_post_cfg_; // 实时 /map 的后处理; 不继承 0.05 的骨架/大去噪
     std::vector<Observation> observations_;   // 逐帧观测(原点+世界系扫描), 供射线类策略使用
 };
 
