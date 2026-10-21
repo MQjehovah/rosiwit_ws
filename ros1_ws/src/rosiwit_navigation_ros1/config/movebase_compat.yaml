@@ -103,7 +103,9 @@ tracking_cluster_distance: 0.35
 tracking_confirm_hits: 3
 
 # ---- 3D 体素 ----
-voxel_enabled: true
+# 2026-10-22 实车排查: /world_cloud 投到 local costmap 形成大障碍,
+# 暂时关闭; /scan 安全层与全局静态地图保持启用.
+voxel_enabled: false
 voxel_cloud_topic: "/world_cloud"
 voxel_resolution: 0.10
 voxel_min_height: -0.20
