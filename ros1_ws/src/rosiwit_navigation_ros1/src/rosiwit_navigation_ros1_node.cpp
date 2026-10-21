@@ -1732,8 +1732,18 @@ private:
     core::ObstacleArray obstacles;
     std::vector<std::vector<bool>> visited(h, std::vector<bool>(w, false));
     const int step = std::max(1, static_cast<int>(0.3 / res));
+    // 局部障碍聚类只允许在机器人附近的窗口内扩张. 以前 BFS 从窗口内的墙点
+    // 出发会沿整张连通墙一路蔓延到全图 (310k 格), 再被 15Hz /scan 反复触发,
+    // 把单线程 spinner 卡在 updateCostmap(), action goal/status 全部饿死.
+    const int local_x0 = std::max(0, cx - win_half);
+    const int local_x1 = std::min(static_cast<int>(w) - 1, cx + win_half);
+    const int local_y0 = std::max(0, cy - win_half);
+    const int local_y1 = std::min(static_cast<int>(h) - 1, cy + win_half);
 
     auto isObstacleCell = [&](int mx, int my) -> bool {
+      if (mx < local_x0 || mx > local_x1 || my < local_y0 || my > local_y1) {
+        return false;
+      }
       if (current_map_->data[my * w + mx] >= 100) { return true; }
       for (const auto & pt : laser_points_) {
         const int lx = static_cast<int>((pt.x - ox) / res);
