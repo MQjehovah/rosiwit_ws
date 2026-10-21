@@ -110,8 +110,10 @@
 * footprint-aware 时控制器用**原始局部 costmap**，全局规划仍是 0.39/0.62
   圆形膨胀；两者语义不同，现场要观察窄通道通过性。
 * MPPI 的 `H=20/K=160/lambda/sigma/权重` 仍是硬编码，没有 ROS 参数入口。
-* **实车没有切换**：`/opt/ros/melodic` 里仍是旧 DWA 二进制；本次只做离线 A/B。
-  新代码默认 `footprint_aware_control: false`，不会因为重启而改变现有行为。
+* **实车已按推荐值上车（2026-10-21）**：
+  `controller_name=mppi`、`footprint_aware_control=true`、`max_accel_theta=0.4`。
+  仍属现场验证阶段；回退只需把这两个参数改回
+  `controller_name=dwa` / `footprint_aware_control=false` 并重载参数/重启节点。
 
 ## 6. 复现
 

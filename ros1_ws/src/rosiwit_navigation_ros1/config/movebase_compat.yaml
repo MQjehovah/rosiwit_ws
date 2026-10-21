@@ -20,7 +20,9 @@
 #             min/max_lookahead_dist=0.3/0.9, xy/yaw_goal_tolerance=0.1,
 #             g_control_freq=10, global_frame=map, robot_base_frame=base_footprint。
 #
-#   局部控制器旧包用 TEB, 这里默认 dwa (核心 TEB 是轻量实现); 需要时改 "teb"。
+#   控制器: 实车 2026-10-21 起用 MPPI + footprint-aware (A/B 推荐).
+#   回退: controller_name: "dwa" + footprint_aware_control: false。
+#   报告: docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md
 # ============================================================================
 
 # ---- robot_movebase 接口 ----
@@ -46,11 +48,11 @@ max_velocity_x: 0.8
 min_velocity_x: 0.0
 max_velocity_theta: 0.5
 max_accel_x: 0.3
-max_accel_theta: 0.2
+max_accel_theta: 0.4   # A/B 推荐 0.4; 实车 accel_lim_w=0.2/max_w_inc=0.3, 现场确认
 
 # ---- 规划器 / 控制器 ----
 planner_name: "astar"
-controller_name: "dwa"
+controller_name: "mppi"
 planner_max_iterations: 200000
 planner_timeout: 2.0
 
@@ -73,12 +75,9 @@ max_lookahead_distance: 0.9
 # ---- 规划安全距离 (实车 g_min_safe=0.39 / g_max_safe 等效 0.62) ----
 robot_radius: 0.39
 # 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
-# 默认关闭: A/B 实测 DWA+footprint 会绕圈, 建议按下面组合验证后再打开:
-#   controller_name: mppi
-#   footprint_aware_control: true
-#   max_accel_theta: 0.3
+# 实车已开启 (A/B: MPPI+footprint 零碰撞). 回退时改 false + controller_name: dwa.
 # 报告: docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md
-footprint_aware_control: false
+footprint_aware_control: true
 footprint_sample_spacing: 0.05
 inflation_radius: 0.62
 

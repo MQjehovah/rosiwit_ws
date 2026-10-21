@@ -419,7 +419,8 @@ robot_radius=0.39 inflation_radius=0.62 safety_footprint=6 pts
 * DWA/MPPI 的候选轨迹改用 footprint 最大代价；`supportsFootprint()` 为 true；
 * 节点 `footprint_aware_control=true` 且控制器支持时，给控制器注入**未膨胀**
   局部 costmap；否则保持原圆形膨胀，避免 pure_pursuit/TEB 丢掉安全余量；
-* **默认关闭**，不影响当前实车（仍是旧 DWA 二进制）。
+* 代码默认关闭；实车 `movebase_compat.yaml` 已按 A/B 推荐开启 MPPI+footprint+0.4，
+  回退为 `controller_name=dwa` / `footprint_aware_control=false`。
 
 A/B（合成长方形车体场景，ARM 实测）：
 
