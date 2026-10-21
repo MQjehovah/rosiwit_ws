@@ -6,6 +6,7 @@
 #include <limits>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/kdtree/kdtree_flann.h>
 
 #ifndef YAML_CPP_DISABLED
 #include <yaml-cpp/yaml.h>
@@ -45,6 +46,8 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                 m_max_relative_rot_deg = lc["max_relative_rot_deg"].as<double>(m_max_relative_rot_deg);
                 m_max_consistency_trans_m = lc["max_consistency_trans_m"].as<double>(m_max_consistency_trans_m);
                 m_max_consistency_rot_deg = lc["max_consistency_rot_deg"].as<double>(m_max_consistency_rot_deg);
+                m_submap_half_window = lc["submap_half_window"].as<int>(m_submap_half_window);
+                m_min_overlap = lc["min_overlap"].as<float>(m_min_overlap);
 
                 ScanContext::Config sc_cfg;
                 sc_cfg.num_rings   = common && common["num_rings"]
@@ -91,11 +94,39 @@ void ScanContextLoopClosure::addKeyFrame(const KeyFrame& kf) {
     m_keyframes.push_back(std::move(rec));
 }
 
+CloudType::Ptr ScanContextLoopClosure::buildSubmap(size_t center_idx, int half_window) const {
+    CloudType::Ptr out(new CloudType());
+    if (center_idx >= m_keyframes.size()) return out;
+    const auto& center = m_keyframes[center_idx];
+    const size_t lo = center_idx > static_cast<size_t>(half_window)
+                          ? center_idx - static_cast<size_t>(half_window) : 0;
+    const size_t hi = std::min(m_keyframes.size() - 1,
+                               center_idx + static_cast<size_t>(half_window));
+    for (size_t i = lo; i <= hi; ++i) {
+        const auto& rec = m_keyframes[i];
+        if (!rec.cloud || rec.cloud->empty()) continue;
+        // 转到子图中心帧的局部坐标, 只保留短时间窗口内的几何结构.
+        Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+        T.block<3,3>(0,0) =
+            (center.pose.rot.transpose() * rec.pose.rot).cast<float>();
+        T.block<3,1>(0,3) =
+            (center.pose.rot.transpose() * (rec.pose.trans - center.pose.trans)).cast<float>();
+        CloudType transformed;
+        pcl::transformPointCloud(*rec.cloud, transformed, T);
+        *out += transformed;
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    out->is_dense = false;
+    return out;
+}
+
 bool ScanContextLoopClosure::icpVerify(
     const CloudType::Ptr& src, const CloudType::Ptr& tgt,
     const Eigen::Matrix4f& init_guess,
-    Eigen::Matrix4f& out_delta, float& out_fitness)
+    Eigen::Matrix4f& out_delta, float& out_fitness, float& out_overlap)
 {
+    out_overlap = 0.0f;
     // 降采样
     auto downsample = [&](const CloudType::Ptr& in) -> CloudType::Ptr {
         CloudType::Ptr out(new CloudType);
@@ -127,7 +158,20 @@ bool ScanContextLoopClosure::icpVerify(
     out_fitness = gicp.getFitnessScore();
     out_delta = gicp.getFinalTransformation();
 
-    return out_fitness < m_icp_fitness_thresh;
+    // 重叠率: 配准后源点云有多少点能在目标点云中找到近邻.
+    pcl::KdTreeFLANN<PointType> tree;
+    tree.setInputCloud(tgt_down);
+    int hit = 0;
+    std::vector<int> idx(1);
+    std::vector<float> d2(1);
+    const float ov_dist2 = m_icp_max_corr_dist * m_icp_max_corr_dist;
+    for (const auto& p : aligned.points) {
+        if (!pcl::isFinite(p)) continue;
+        if (tree.nearestKSearch(p, 1, idx, d2) > 0 && d2[0] <= ov_dist2) ++hit;
+    }
+    out_overlap = aligned.empty() ? 0.0f
+                                  : static_cast<float>(hit) / aligned.size();
+    return out_fitness < m_icp_fitness_thresh && out_overlap >= m_min_overlap;
 }
 
 bool ScanContextLoopClosure::saveDatabase(const std::string& path) {
@@ -226,7 +270,10 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
     int best_idx = -1;
     double best_desc_dist = 0.0;
     double best_fitness = std::numeric_limits<double>::infinity();
+    float best_overlap = 0.0f;
     Eigen::Matrix4f best_delta = Eigen::Matrix4f::Identity();
+    // 当前端附近的小子图只构建一次; 候选侧按需构建.
+    CloudType::Ptr latest_sub = buildSubmap(latest_idx, m_submap_half_window);
 
     for (size_t ci = 0; ci < num_candidates; ++ci) {
         const auto& cand = candidates[ci];
@@ -245,37 +292,48 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         double yaw_diff = 2.0 * M_PI * col_shift / m_cfg_num_sectors;
         Eigen::Matrix4f init_guess = Eigen::Matrix4f::Identity();
         init_guess.block<3,3>(0,0) = Eigen::AngleAxisf(yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
+        CloudType::Ptr cand_sub = buildSubmap(cand.idx, m_submap_half_window);
 
         Eigen::Matrix4f delta;
         float fitness = std::numeric_limits<float>::infinity();
-        bool icp_ok = icpVerify(latest.cloud, cand_rec.cloud, init_guess, delta, fitness);
+        float overlap = 0.0f;
+        bool icp_ok = icpVerify(latest_sub, cand_sub, init_guess, delta, fitness, overlap);
         if (!icp_ok) {
             Eigen::Matrix4f init_guess_flip = Eigen::Matrix4f::Identity();
             init_guess_flip.block<3,3>(0,0) =
                 Eigen::AngleAxisf(-yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
             Eigen::Matrix4f delta_flip;
             float fitness_flip = std::numeric_limits<float>::infinity();
-            if (icpVerify(latest.cloud, cand_rec.cloud, init_guess_flip, delta_flip, fitness_flip)) {
+            float overlap_flip = 0.0f;
+            if (icpVerify(latest_sub, cand_sub, init_guess_flip, delta_flip,
+                          fitness_flip, overlap_flip)) {
                 icp_ok = true;
                 delta = delta_flip;
                 fitness = fitness_flip;
+                overlap = overlap_flip;
             }
         }
         // 起终点通常姿态接近; ScanContext 列偏移可能给错初值, 对起点额外尝试单位初值.
         if (!icp_ok && cand.idx < 20) {
             Eigen::Matrix4f delta_id;
             float fitness_id = std::numeric_limits<float>::infinity();
-            if (icpVerify(latest.cloud, cand_rec.cloud, Eigen::Matrix4f::Identity(), delta_id, fitness_id)) {
+            float overlap_id = 0.0f;
+            if (icpVerify(latest_sub, cand_sub, Eigen::Matrix4f::Identity(), delta_id,
+                          fitness_id, overlap_id)) {
                 icp_ok = true;
                 delta = delta_id;
                 fitness = fitness_id;
+                overlap = overlap_id;
             }
         }
         if (!icp_ok) {
             std::cout << "[ScanContextLC] ICP failed: desc=" << desc_d
-                      << ", fitness=" << fitness << std::endl;
+                      << ", fitness=" << fitness
+                      << ", overlap=" << overlap << std::endl;
             continue;
         }
+        std::cout << "[ScanContextLC] ICP passed: desc=" << desc_d
+                  << ", fitness=" << fitness << ", overlap=" << overlap << std::endl;
 
         // 先在候选层做几何门控, 再按 ICP fitness 选择最优候选.
         // 不能按 desc_dist 贪心: 假回环的 desc 往往比真回环更小.
@@ -316,6 +374,7 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
                   << consist_rot_deg << "deg" << std::endl;
         if (fitness < best_fitness) {
             best_fitness = fitness;
+            best_overlap = overlap;
             best_desc_dist = desc_d;
             best_idx = static_cast<int>(cand.idx);
             best_delta = delta;
@@ -369,13 +428,17 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         return false;
     }
 
-    cov = std::min(1.0, best_desc_dist / m_dist_thresh);
+    // 回环协方差反映 ICP 质量: fitness 越差、overlap 越低, 后端权重越小.
+    cov = std::max(0.05, best_fitness / std::max(0.1, static_cast<double>(best_overlap)));
 
     m_detected_loops.emplace_back(best_idx, latest_idx);
 
     std::cout << "[ScanContextLC] Loop detected: kf_" << best_idx
               << " <-> kf_" << latest_idx
-              << " (desc_dist=" << best_desc_dist << ")" << std::endl;
+              << " (desc_dist=" << best_desc_dist
+              << ", fitness=" << best_fitness
+              << ", overlap=" << best_overlap
+              << ", cov=" << cov << ")" << std::endl;
 
     return true;
 }

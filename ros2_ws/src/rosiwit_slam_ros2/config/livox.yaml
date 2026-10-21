@@ -70,6 +70,8 @@ mapping:
     max_relative_rot_deg: 30.0 # 进入后端的回环相对旋转上限(deg)
     max_consistency_trans_m: 8.0 # 回环与里程计先验的最大平移偏差(m)
     max_consistency_rot_deg: 30.0 # 回环与里程计先验的最大旋转偏差(deg)
+    submap_half_window: 3 # 回环 ICP 使用前后各 3 个关键帧组成局部子图
+    min_overlap: 0.35 # ICP 配准后源点云最近邻命中率下限
   map_manager:
     max_correction_trans_m: 15 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 150 # 后端修正允许的最大旋转跳变(deg)

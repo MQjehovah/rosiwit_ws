@@ -35,7 +35,10 @@ private:
                    const CloudType::Ptr& tgt,
                    const Eigen::Matrix4f& init_guess,
                    Eigen::Matrix4f& out_delta,
-                   float& out_fitness);
+                   float& out_fitness,
+                   float& out_overlap);
+    /// 以 center 关键帧为参考，把邻近关键帧拼成局部子图；单帧 ICP 太容易受视角/稀疏影响.
+    CloudType::Ptr buildSubmap(size_t center_idx, int half_window) const;
 
     std::deque<KeyFrameRecord> m_keyframes;
     std::unordered_map<std::string, size_t> m_kf_index;
@@ -55,6 +58,8 @@ private:
     float m_icp_fitness_thresh = 1.0f;
     int m_icp_max_iter = 32;
     float m_icp_voxel_res = 0.3f;
+    int m_submap_half_window = 3;       // 局部回环子图: 左右各取几个关键帧
+    float m_min_overlap = 0.35f;        // ICP 后最近邻命中率下限
     // 回环约束进入后端前的相对位姿门控: 拒绝几十米/上百度的假回环.
     double m_max_relative_trans_m = 8.0;
     double m_max_relative_rot_deg = 30.0;
