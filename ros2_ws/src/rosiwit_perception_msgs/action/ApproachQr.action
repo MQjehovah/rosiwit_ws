@@ -1,0 +1,11 @@
+# 视觉伺服靠近指定二维码（用于充电桩/工位对接）
+string text
+float32 target_distance 0.60
+float32 timeout 30.0
+---
+bool success
+string message
+---
+float32 distance
+float32 bearing
+float32 elapsed

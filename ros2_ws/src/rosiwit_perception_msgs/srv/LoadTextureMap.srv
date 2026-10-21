@@ -1,0 +1,5 @@
+# 加载地面纹理地图
+string path
+---
+bool success
+string message

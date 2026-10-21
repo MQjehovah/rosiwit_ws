@@ -64,24 +64,28 @@ CAMERA_CONFIGS = {
     'front': {
         'position': [0.21, 0, 0.15],
         'R': _front_R, 't': _front_t,
+        'frame': 'front_camera_link',
         'topic': '/camera_front/camera/image_raw',
         'info_topic': '/camera_front/camera/camera_info',
     },
     'right': {
         'position': [0, 0.21, 0.15],
         'R': _right_R, 't': _right_t,
+        'frame': 'right_camera_link',
         'topic': '/camera_right/camera/image_raw',
         'info_topic': '/camera_right/camera/camera_info',
     },
     'back': {
         'position': [-0.21, 0, 0.15],
         'R': _back_R, 't': _back_t,
+        'frame': 'back_camera_link',
         'topic': '/camera_back/camera/image_raw',
         'info_topic': '/camera_back/camera/camera_info',
     },
     'left': {
         'position': [0, -0.21, 0.15],
         'R': _left_R, 't': _left_t,
+        'frame': 'left_camera_link',
         'topic': '/camera_left/camera/image_raw',
         'info_topic': '/camera_left/camera/camera_info',
     },

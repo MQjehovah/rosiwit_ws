@@ -1,0 +1,9 @@
+# 用当前 AVM 帧在已加载的地面纹理地图中重定位
+geometry_msgs/PoseStamped prior_pose
+float32 search_radius   # 位置搜索半径（米）
+float32 search_angle    # 角度搜索范围（弧度，±）
+---
+bool success
+geometry_msgs/PoseStamped pose
+float32 score
+string message

@@ -1,6 +1,5 @@
 import numpy as np
 import cv2
-from scipy.spatial.transform import Rotation as Rot
 from .config import (
     IMG_W, IMG_H, FX, FY, CX, CY,
     CAMERA_CONFIGS,
@@ -16,6 +15,20 @@ _R_LINK_TO_OPTICAL = np.array([
     [0,  0, -1],
     [1,  0,  0],
 ], dtype=np.float64)
+
+
+def _quat_to_matrix(q) -> np.ndarray:
+    """四元数 (x, y, z, w) -> 3x3 旋转矩阵（不依赖 scipy）。"""
+    x, y, z, w = (float(q[0]), float(q[1]), float(q[2]), float(q[3]))
+    norm = np.sqrt(x * x + y * y + z * z + w * w)
+    if norm <= 0.0:
+        return np.eye(3)
+    x, y, z, w = x / norm, y / norm, z / norm, w / norm
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ])
 
 
 def _pinhole_project(world_points, R, t, fx, fy, cx, cy):
@@ -108,6 +121,112 @@ def precompute_maps_with_intrinsics(fx, fy, cx, cy):
     return maps
 
 
+def precompute_maps_from_models(camera_models, tf_transforms=None):
+    """用每路相机独立的内参/畸变/外参构建 BEV remap。
+
+    Parameters
+    ----------
+    camera_models:
+        ``{cam_name: {'fx','fy','cx','cy','dist','R','t'}}``。``dist`` 可为
+        None 或长度 4/5/8/12 的畸变系数；``R``/``t`` 为 ``config.py`` 约定的
+        camera_link -> optical 变换（``t = R @ position``）。
+    tf_transforms:
+        可选的 ``{cam_name: geometry_msgs/Transform}``（base_link ->
+        camera_link）。提供时优先使用 TF 外参。
+
+    Returns
+    -------
+    与 :func:`precompute_maps_with_intrinsics` 相同的 maps 字典。
+    """
+    maps = {}
+
+    half_w = BEV_WIDTH / 2.0
+    half_h = BEV_HEIGHT / 2.0
+    u_idx = np.arange(BEV_WIDTH, dtype=np.float32)
+    v_idx = np.arange(BEV_HEIGHT, dtype=np.float32)
+    uu, vv = np.meshgrid(u_idx, v_idx)
+    world_x = (half_h - vv) * BEV_RESOLUTION
+    world_y = (half_w - uu) * BEV_RESOLUTION
+    world_z = np.full_like(world_x, -0.11)
+    world_points = np.stack(
+        [world_x, world_y, world_z], axis=-1).reshape(-1, 3)
+
+    for cam_name, model in camera_models.items():
+        if tf_transforms and cam_name in tf_transforms:
+            tf = tf_transforms[cam_name]
+            r_link = _quat_to_matrix([
+                tf.rotation.x, tf.rotation.y, tf.rotation.z, tf.rotation.w])
+            R = _R_LINK_TO_OPTICAL @ r_link
+            t = R @ np.array([
+                tf.translation.x, tf.translation.y, tf.translation.z],
+                dtype=np.float64)
+        else:
+            R = np.asarray(model['R'], dtype=np.float64)
+            t = np.asarray(model['t'], dtype=np.float64)
+
+        fx = float(model.get('fx', FX))
+        fy = float(model.get('fy', FY))
+        cx = float(model.get('cx', CX))
+        cy = float(model.get('cy', CY))
+        if fx <= 0.0 or fy <= 0.0:
+            fx, fy, cx, cy = FX, FY, CX, CY
+        dist = model.get('dist')
+        dist = (np.zeros(5, dtype=np.float64)
+                if dist is None else np.asarray(dist, dtype=np.float64))
+
+        k = np.array([[fx, 0.0, cx],
+                      [0.0, fy, cy],
+                      [0.0, 0.0, 1.0]], dtype=np.float64)
+        rvec, _ = cv2.Rodrigues(R)
+
+        try:
+            img_pts, _ = cv2.projectPoints(
+                world_points.reshape(-1, 1, 3), rvec, -t, k, dist)
+            u = img_pts[:, 0, 0].astype(np.float32)
+            v = img_pts[:, 0, 1].astype(np.float32)
+        except cv2.error:
+            # 畸变系数非法时退回无畸变针孔投影
+            u, v, _ = _pinhole_project(
+                world_points, R, t, fx, fy, cx, cy)
+
+        pos = R.T @ t
+        p_cam = (R @ (world_points - pos).T).T
+        valid = (p_cam[:, 2] > 1e-6) & \
+            (u >= 0) & (u < IMG_W - 1) & (v >= 0) & (v < IMG_H - 1)
+
+        map_x = np.where(valid, u, -1.0).reshape(
+            BEV_HEIGHT, BEV_WIDTH).astype(np.float32)
+        map_y = np.where(valid, v, -1.0).reshape(
+            BEV_HEIGHT, BEV_WIDTH).astype(np.float32)
+        mask = valid.reshape(BEV_HEIGHT, BEV_WIDTH).astype(np.uint8) * 255
+
+        center_dir = R.T @ np.array([0, 0, 1], dtype=np.float64)
+        center_dir = center_dir / np.linalg.norm(center_dir)
+        pts = world_points.reshape(BEV_HEIGHT, BEV_WIDTH, 3)
+        to_pt = pts - pos
+        norms = np.linalg.norm(to_pt, axis=2)
+        dirs = to_pt / (norms[:, :, np.newaxis] + 1e-10)
+        dot = np.sum(dirs * center_dir, axis=2)
+        angle = np.arccos(np.clip(dot, -1, 1))
+        weight = np.where(mask > 0, 1.0 / (angle + 0.01), 0.0)
+        weight = weight.astype(np.float32)
+
+        valid_px = int(np.sum(valid))
+        print(f'  {cam_name}: fx={fx:.2f} fy={fy:.2f} cx={cx:.1f} cy={cy:.1f} '
+              f'dist={len(dist)} -> {valid_px} valid BEV pixels '
+              f'({100 * valid_px / (BEV_WIDTH * BEV_HEIGHT):.1f}%)')
+
+        maps[cam_name] = {
+            'map_x': map_x,
+            'map_y': map_y,
+            'mask': mask,
+            'weight': weight,
+        }
+
+    print(f'AVM maps ready (per-camera models): {len(maps)} cameras')
+    return maps
+
+
 def precompute_maps_from_tf(tf_transforms, fx, fy, cx, cy):
     """
     Build BEV maps using exact TF transforms from Gazebo.
@@ -140,7 +259,7 @@ def precompute_maps_from_tf(tf_transforms, fx, fy, cx, cy):
 
         # Rotation quaternion -> matrix (base_link -> camera_link)
         q = [tf.rotation.x, tf.rotation.y, tf.rotation.z, tf.rotation.w]
-        R_link = Rot.from_quat(q).as_matrix()  # transforms base_link vecs to camera_link frame
+        R_link = _quat_to_matrix(q)  # transforms base_link vecs to camera_link frame
 
         # Apply optical frame conversion: camera_link -> optical
         # R_optical = R_LINK_TO_OPTICAL @ R_link

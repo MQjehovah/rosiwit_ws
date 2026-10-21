@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rosiwit-perception"
 version = "0.1.0"
-description = "ROS-agnostic perception algorithm core (AVM bird's-eye view + ground texture mapping)"
+description = "ROS-agnostic perception algorithm core (AVM bird's-eye view, ground texture, QR, obstacle detection)"
 requires-python = ">=3.8"
 dependencies = [
     "numpy",

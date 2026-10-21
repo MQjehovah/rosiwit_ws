@@ -6,7 +6,9 @@ alpha blending, with optional local template-match pose refinement.
 仅依赖 numpy / cv2，不依赖任何 ROS 接口。
 """
 
+import json
 import math
+import os
 
 import numpy as np
 import cv2
@@ -38,22 +40,42 @@ class GroundTextureMap:
         self.frame_count = 0
 
     # ------------------------------------------------------------------ #
-    # 位姿精化 (模板匹配对齐已有纹理, 修正 LIO 漂移)
+    # 位姿精化 / 重定位 (模板匹配对齐已有纹理)
     # ------------------------------------------------------------------ #
     def refine_pose(self, bev, x, y, yaw):
         if self.frame_count < 5:
             return x, y, yaw  # not enough canvas yet
+        x, y, yaw, _ = self._match_pose(bev, x, y, yaw, min_score=0.3)
+        return x, y, yaw
 
+    def localize(self, bev, x, y, yaw,
+                 search_radius=0.5, search_angle=0.3, patch_r=150,
+                 min_score=0.35):
+        """在已有纹理地图中重定位。
+
+        Returns ``(success, x, y, yaw, score)``。与 ``refine_pose`` 不同，
+        这里不做 ``frame_count`` 限制，也不会修改地图，供重定位服务使用。
+        """
+        search_radius = float(np.clip(search_radius, 0.0, 2.0))
+        search_angle = float(np.clip(search_angle, 0.0, math.pi))
+        x, y, yaw, score = self._match_pose(
+            bev, x, y, yaw, search_radius, search_angle, patch_r,
+            min_score=0.0)
+        return score >= min_score, x, y, yaw, score
+
+    def _match_pose(self, bev, x, y, yaw,
+                    search_radius_m=0.15, search_angle_rad=0.05,
+                    patch_r=150, min_score=0.3):
+        """在当前纹理画布中搜索最佳 (x, y, yaw)，返回 ``(x, y, yaw, score)``。"""
         res = self.bev_resolution
-        search_radius = int(0.15 / res)          # ±15cm
-        search_angles = np.linspace(-0.05, 0.05, 7)  # ±2.9°
+        search_radius = max(1, int(search_radius_m / res))
+        search_angles = np.linspace(-search_angle_rad, search_angle_rad, 7)
         bcx_val = self.bev_size / 2.0
 
-        patch_r = 150
         bc = self.bev_size // 2
-        template = cv2.cvtColor(
-            bev[bc - patch_r:bc + patch_r, bc - patch_r:bc + patch_r],
-            cv2.COLOR_BGR2GRAY)
+        patch_r = min(int(patch_r), bc)
+        if patch_r <= 0:
+            return x, y, yaw, -1.0
 
         best_score = -1.0
         best_dx = best_dy = 0
@@ -77,6 +99,16 @@ class GroundTextureMap:
 
             px = int(x / res + cx_canvas)
             py = int(-y / res + cy_canvas)
+
+            # 模板必须从 warp 后的 BEV 取：BEV 的 x 轴朝上，画布 y 轴朝下，
+            # 两者相差 90°，直接拿原 BEV 的 patch 去匹配会永远对不上。
+            tx0, ty0 = px - patch_r, py - patch_r
+            tx1, ty1 = px + patch_r, py + patch_r
+            if tx0 < 0 or ty0 < 0 or tx1 > self.canvas_size or ty1 > self.canvas_size:
+                continue
+            template = cv2.cvtColor(
+                warped[ty0:ty1, tx0:tx1], cv2.COLOR_BGR2GRAY)
+
             search_r = patch_r + search_radius
             x0 = max(0, px - search_r)
             y0 = max(0, py - search_r)
@@ -87,31 +119,85 @@ class GroundTextureMap:
 
             search_region = cv2.cvtColor(
                 self.texture_canvas[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
-            warped_region = cv2.cvtColor(
-                warped[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
 
-            mask = (warped_region > 10) & (search_region > 10)
-            if mask.sum() < patch_r * patch_r:
+            if np.count_nonzero(search_region > 10) < patch_r * patch_r:
                 continue
 
             try:
                 result = cv2.matchTemplate(
                     search_region, template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                if max_val > best_score:
-                    best_score = max_val
-                    best_dx = max_loc[0] - (patch_r + search_radius - patch_r)
-                    best_dy = max_loc[1] - (patch_r + search_radius - patch_r)
-                    best_dyaw = d_yaw
             except cv2.error:
                 continue
 
-        if best_score > 0.3:
+            if max_val > best_score:
+                best_score = max_val
+                best_dx = max_loc[0] - search_radius
+                best_dy = max_loc[1] - search_radius
+                best_dyaw = d_yaw
+
+        if best_score >= min_score:
             x += best_dx * res
             y += -best_dy * res   # flip Y
             yaw += best_dyaw
 
-        return x, y, yaw
+        return x, y, yaw, best_score
+
+    # ------------------------------------------------------------------ #
+    # 持久化
+    # ------------------------------------------------------------------ #
+    def save(self, path):
+        """保存纹理地图（.npz，原子写入），返回实际文件路径。"""
+        path = str(path)
+        if not path.endswith('.npz'):
+            path += '.npz'
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
+
+        meta = {
+            'bev_resolution': self.bev_resolution,
+            'bev_size': self.bev_size,
+            'canvas_size': self.canvas_size,
+            'canvas_center_x': self.canvas_center_x,
+            'canvas_center_y': self.canvas_center_y,
+            'canvas_expand_step': self.canvas_expand_step,
+            'ground_z': self.ground_z,
+            'frame_count': self.frame_count,
+        }
+        tmp = path + '.tmp.npz'
+        np.savez_compressed(
+            tmp,
+            texture=self.texture_canvas,
+            weight=self.weight_canvas,
+            meta=np.array(json.dumps(meta)),
+        )
+        os.replace(tmp, path)
+        return path
+
+    @classmethod
+    def load(cls, path):
+        """从 ``save()`` 生成的 .npz 恢复纹理地图。"""
+        with np.load(str(path), allow_pickle=False) as data:
+            meta = json.loads(str(data['meta'].item()))
+            obj = cls(
+                bev_resolution=meta['bev_resolution'],
+                bev_size=meta['bev_size'],
+                initial_canvas_size=meta['canvas_size'],
+                canvas_expand_step=meta['canvas_expand_step'],
+                ground_z=meta['ground_z'],
+            )
+            texture = data['texture']
+            weight = data['weight']
+            if texture.shape != (meta['canvas_size'], meta['canvas_size'], 3):
+                raise ValueError(f'texture shape mismatch: {texture.shape}')
+            if weight.shape != (meta['canvas_size'], meta['canvas_size']):
+                raise ValueError(f'weight shape mismatch: {weight.shape}')
+            obj.texture_canvas = texture.astype(np.uint8, copy=True)
+            obj.weight_canvas = weight.astype(np.float32, copy=True)
+            obj.canvas_center_x = int(meta['canvas_center_x'])
+            obj.canvas_center_y = int(meta['canvas_center_y'])
+            obj.frame_count = int(meta['frame_count'])
+            return obj
 
     # ------------------------------------------------------------------ #
     # 画布管理

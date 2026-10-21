@@ -1,0 +1,92 @@
+# 感知统一配置：所有节点由 perception.launch.py 一键启动。
+# 节点名必须与 launch 文件中的 name 一致。
+
+perception_manager:
+  ros__parameters:
+    modules: ["avm", "ground_texture", "qr_detector", "obstacle_detector"]
+    timeout: 3.0
+    publish_rate: 1.0
+    heartbeat_topic: /perception/heartbeat
+    status_topic: /perception/status
+    healthy_topic: /perception/healthy
+    diagnostics_topic: /diagnostics
+
+avm_node:
+  ros__parameters:
+    use_test_pattern: false
+    stitch_rate: 15.0
+    sync_slop: 0.03
+    camera_timeout: 1.0
+    min_cameras: 3
+    # true 时从 base_link -> *_camera_link 的 TF 读取外参；
+    # 实车确认 TF 树与 config.py 一致后再打开。
+    use_tf_extrinsics: false
+    heartbeat_topic: /perception/heartbeat
+    heartbeat_rate: 1.0
+
+ground_texture_mapper:
+  ros__parameters:
+    bev_resolution: 0.005
+    bev_size: 800
+    ground_z: -0.11
+    initial_canvas_size: 2000
+    canvas_expand_step: 1000
+    map_frame: odom
+    save_path: "~/.ros/rosiwit_ground_texture.npz"
+    auto_load: false
+    relocalize_search_radius: 0.5
+    relocalize_search_angle: 0.3
+    heartbeat_topic: /perception/heartbeat
+    heartbeat_rate: 1.0
+
+obstacle_detector:
+  ros__parameters:
+    camera_name: front
+    image_topic: /camera_front/camera/image_raw
+    camera_info_topic: /camera_front/camera/camera_info
+    cloud_topic: /perception/obstacles
+    stop_topic: /perception/obstacle_stop
+    stop_distance: 0.35
+    obstacle_height: 0.10
+    max_rate_hz: 10.0
+    ground_z: -0.11
+    max_distance: 3.0
+    max_lateral: 1.5
+    min_area_ratio: 0.0015
+    color_threshold: 35.0
+    roi_top_ratio: 0.30
+    use_tf_extrinsics: false
+    heartbeat_topic: /perception/heartbeat
+    heartbeat_rate: 1.0
+
+qr_detector:
+  ros__parameters:
+    image_topic: /camera_front/camera/image_raw
+    camera_info_topic: /camera_front/camera/camera_info
+    detections_topic: /qr/detections
+    codes_topic: /qr/codes
+    debug_image_topic: /qr/debug_image
+    qr_size: 0.10
+    min_size_px: 24.0
+    max_rate_hz: 10.0
+    publish_empty: false
+    publish_debug_image: true
+    confirm_hits: 2
+    confirm_max_age: 0.5
+    target_frame: map
+    use_tf: true
+    tf_timeout: 0.05
+    action_name: /qr/approach
+    cmd_vel_topic: /cmd_vel
+    approach_k_linear: 0.8
+    approach_k_angular: 1.2
+    approach_max_linear: 0.15
+    approach_max_angular: 0.5
+    approach_bearing_gate: 0.5
+    approach_distance_tol: 0.03
+    approach_bearing_tol: 0.03
+    approach_loss_timeout: 0.8
+    default_target_distance: 0.6
+    default_timeout: 30.0
+    heartbeat_topic: /perception/heartbeat
+    heartbeat_rate: 1.0
