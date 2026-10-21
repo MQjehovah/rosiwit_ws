@@ -3,6 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <limits>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
 
@@ -212,8 +213,8 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
     std::cout << "[ScanContextLC] " << candidates.size() << " candidates, top "
               << num_candidates << " to check" << std::endl;
     int best_idx = -1;
-    int best_col_shift = 0;
-    double best_desc_dist = m_dist_thresh;
+    double best_desc_dist = 0.0;
+    double best_fitness = std::numeric_limits<double>::infinity();
     Eigen::Matrix4f best_delta = Eigen::Matrix4f::Identity();
 
     for (size_t ci = 0; ci < num_candidates; ++ci) {
@@ -222,7 +223,7 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
 
         int col_shift = 0;
         double desc_d = ScanContext::distance(cand_rec.desc, latest.desc, &col_shift);
-        if (desc_d >= best_desc_dist) continue;
+        if (desc_d >= m_dist_thresh) continue;
 
         // ICP 验证
         double yaw_diff = 2.0 * M_PI * col_shift / m_cfg_num_sectors;
@@ -231,16 +232,54 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
 
         Eigen::Matrix4f delta;
         float fitness;
-        if (icpVerify(latest.cloud, cand_rec.cloud, init_guess, delta, fitness)) {
-            std::cout << "[ScanContextLC] ICP passed: desc=" << desc_d
-                      << ", fitness=" << fitness << std::endl;
-            best_desc_dist = desc_d;
-            best_idx = static_cast<int>(cand.idx);
-            best_col_shift = col_shift;
-            best_delta = delta;
-        } else {
+        if (!icpVerify(latest.cloud, cand_rec.cloud, init_guess, delta, fitness)) {
             std::cout << "[ScanContextLC] ICP failed: desc=" << desc_d
                       << ", fitness=" << fitness << std::endl;
+            continue;
+        }
+
+        // 先在候选层做几何门控, 再按 ICP fitness 选择最优候选.
+        // 不能按 desc_dist 贪心: 假回环的 desc 往往比真回环更小.
+        PoseStamped cand_rel;
+        cand_rel.rot = delta.block<3,3>(0,0).cast<double>();
+        cand_rel.trans = delta.block<3,1>(0,3).cast<double>();
+        const double rel_trans = cand_rel.trans.norm();
+        const Eigen::AngleAxisd rel_aa(cand_rel.rot);
+        const double rel_rot_deg = std::abs(rel_aa.angle()) * 180.0 / M_PI;
+        if (rel_trans > m_max_relative_trans_m || rel_rot_deg > m_max_relative_rot_deg) {
+            std::cout << "[ScanContextLC] reject relative loop: kf_" << cand.idx
+                      << " <-> kf_" << latest_idx
+                      << " d_trans=" << rel_trans << "m"
+                      << " d_rot=" << rel_rot_deg << "deg" << std::endl;
+            continue;
+        }
+
+        PoseStamped odom_rel;
+        odom_rel.rot = cand_rec.pose.rot.transpose() * latest.pose.rot;
+        odom_rel.trans = cand_rec.pose.rot.transpose() *
+                         (latest.pose.trans - cand_rec.pose.trans);
+        const double consist_t = (cand_rel.trans - odom_rel.trans).norm();
+        const Eigen::AngleAxisd consist_aa(cand_rel.rot.transpose() * odom_rel.rot);
+        const double consist_rot_deg = std::abs(consist_aa.angle()) * 180.0 / M_PI;
+        if (consist_t > m_max_consistency_trans_m ||
+            consist_rot_deg > m_max_consistency_rot_deg) {
+            std::cout << "[ScanContextLC] reject inconsistent loop: kf_" << cand.idx
+                      << " <-> kf_" << latest_idx
+                      << " odom_delta=" << consist_t << "m/"
+                      << consist_rot_deg << "deg" << std::endl;
+            continue;
+        }
+
+        std::cout << "[ScanContextLC] ICP candidate passed: kf_" << cand.idx
+                  << " <-> kf_" << latest_idx
+                  << " desc=" << desc_d << " fitness=" << fitness
+                  << " odom_delta=" << consist_t << "m/"
+                  << consist_rot_deg << "deg" << std::endl;
+        if (fitness < best_fitness) {
+            best_fitness = fitness;
+            best_desc_dist = desc_d;
+            best_idx = static_cast<int>(cand.idx);
+            best_delta = delta;
         }
     }
 
