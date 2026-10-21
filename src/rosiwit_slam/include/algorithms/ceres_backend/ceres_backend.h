@@ -51,7 +51,12 @@ private:
     int optimize_period_ = 10;
     int num_optimizations_ = 0;
     double huber_loss_ = 1.0;
+    double loop_loss_scale_ = 5.0;          // 回环因子 Cauchy 核尺度(m); 假回环会被强降权
+    double max_optimization_trans_m_ = 20.0; // 单次含新约束优化的最大平移修正
+    double max_optimization_rot_deg_ = 60.0; // 单次含新约束优化的最大旋转修正
     int max_iterations_ = 50;
+    // 上一次成功优化时的约束数; 失败时截断到该值, 防止假回环永久留在图里.
+    size_t last_success_constraints_ = 0;
 };
 
 } // namespace rosiwit_slam

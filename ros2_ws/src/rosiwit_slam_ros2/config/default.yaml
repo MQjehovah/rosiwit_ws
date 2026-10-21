@@ -29,8 +29,7 @@ global:
     map_frame: map # 地图frame
     odom_frame: odom # 里程计frame
   map:
-    resolution: 0.05  # 地图/栅格分辨率(m)
-    realtime_resolution: 0.3 # 实时 /map 分辨率(m); 0.05 仅用于最终保存
+    voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
     save_voxel: 0.3 # 地图/点云保存降采样体素(m)
   scan_context:
     num_rings: 20 # ScanContext环数
@@ -73,15 +72,21 @@ mapping:
     min_keyframe_gap: 30 # 回环最小关键帧间隔
     max_relative_trans_m: 8.0 # 进入后端的回环相对平移上限(m)
     max_relative_rot_deg: 30.0 # 进入后端的回环相对旋转上限(deg)
-    max_consistency_trans_m: 8.0 # 回环与里程计先验的最大平移偏差(m)
-    max_consistency_rot_deg: 30.0 # 回环与里程计先验的最大旋转偏差(deg)
+    max_consistency_trans_m: 8.0 # 一致性软尺度(m); 实际超过 2.5 倍(20m)的明显假回环才拒绝
+    max_consistency_rot_deg: 30.0 # 一致性软尺度(deg); 实际超过 2.5 倍(75deg)的明显假回环才拒绝
     submap_half_window: 3 # 回环 ICP 使用前后各 3 个关键帧组成局部子图
     min_overlap: 0.35 # ICP 配准后源点云最近邻命中率下限
   map_manager:
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
+  backend:
+    loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m)
+    max_optimization_trans_m: 20 # 含新约束的单次优化最大平移修正
+    max_optimization_rot_deg: 60 # 含新约束的单次优化最大旋转修正
   grid:
     generator: ray_casting  # 2D栅格生成策略 (统一射线方案, 0.05m)
+    resolution: 0.05 # 最终 2D 栅格/PGM 分辨率(m)
+    realtime_resolution: 0.3 # 实时 /map 分辨率(m)
     min_height: 0.1 # 地面以上障碍最低高度(m)
     max_height: 2.0 # 地面以上障碍最高高度(m)
     occupied_thresh: 1 # 每格最少点数判占据

@@ -43,9 +43,20 @@ void BackendWorker::start() {
     if (m_thread.joinable()) return;
     auto self = shared_from_this();
     m_thread = std::thread([self] { self->run(); });
+    m_loop_thread = std::thread([self] { self->runLoop(); });
 }
 
 void BackendWorker::push(BackendTask task, const KeyFrame& kf) {
+    // 回环检测走独立队列/线程, 不进入主后端队列.
+    if (task == BackendTask::LOOP_CLOSURE) {
+        std::lock_guard<std::mutex> lk(m_loop_mu);
+        if (m_loop_stop) return;
+        constexpr size_t kMaxLoopQueue = 200;
+        if (m_loop_queue.size() >= kMaxLoopQueue) m_loop_queue.pop_front();
+        m_loop_queue.push_back(kf);
+        m_loop_cv.notify_one();
+        return;
+    }
     {
         std::lock_guard<std::mutex> lk(m_mu);
         if (m_stop) return;
@@ -57,19 +68,9 @@ void BackendWorker::push(BackendTask task, const KeyFrame& kf) {
         }
         constexpr size_t kMaxQueue = 500;
         if (m_queue.size() >= kMaxQueue) {
-            // 队列满时优先丢弃可重算的 LOOP_CLOSURE, 不能丢 ADD_KF/MAP_SUBMAP,
-            // 否则地图缺关键帧/子图. OPTIMIZE 已在上面合并, 不在这里丢.
-            auto it = std::find_if(m_queue.begin(), m_queue.end(),
-                [](const BackendItem& item) {
-                    return item.task == BackendTask::LOOP_CLOSURE;
-                });
-            if (it != m_queue.end()) {
-                m_queue.erase(it);
-                std::cerr << "[BackendWorker] queue full; dropped one LOOP_CLOSURE task" << std::endl;
-            } else {
-                m_queue.pop_front();
-                std::cerr << "[BackendWorker] queue full; dropped oldest task" << std::endl;
-            }
+            // 回环任务已独立队列; 主队列只保留 ADD_KF/MAP_SUBMAP.
+            m_queue.pop_front();
+            std::cerr << "[BackendWorker] queue full; dropped oldest task" << std::endl;
         }
         m_queue.push_back({task, kf});
     }
@@ -81,10 +82,17 @@ void BackendWorker::stopAsync() {
         std::lock_guard<std::mutex> lk(m_mu);
         m_stop = true;
     }
+    {
+        std::lock_guard<std::mutex> lk(m_loop_mu);
+        m_loop_stop = true;
+        m_loop_queue.clear();
+    }
     m_cv.notify_all();
+    m_loop_cv.notify_all();
     // 不 join: 后端可能正卡在一次 optimize() 里, join 会把调用线程(ROS 服务线程)挂死。
     // worker 只持有自己的 shared 状态, 线程结束后自然释放。
     if (m_thread.joinable()) m_thread.detach();
+    if (m_loop_thread.joinable()) m_loop_thread.detach();
 }
 
 void BackendWorker::optimizeAndPublishAnchor() {
@@ -125,23 +133,6 @@ void BackendWorker::run() {
             if (item.task == BackendTask::MAP_SUBMAP && m_map_mgr) {
                 m_map_mgr->addSubMap(item.kf);
             }
-            if (item.task == BackendTask::LOOP_CLOSURE && m_loop) {
-                m_loop->addKeyFrame(item.kf);
-                if (++m_lc_keyframes % 30 == 0) {
-                    PoseStamped rel_pose;
-                    double cov = 0;
-                    std::string matched_id;
-                    if (m_loop->detect(rel_pose, cov, matched_id) && m_backend) {
-                        Constraint c;
-                        c.from_kf = matched_id;
-                        c.to_kf = item.kf.id;
-                        c.relative_pose = rel_pose;
-                        c.cov = cov;
-                        m_backend->addConstraints({c});
-                        optimizeAndPublishAnchor();
-                    }
-                }
-            }
         }
 
         // 队列排空后执行合并的优化请求. 若新任务已经到达则先继续消费,
@@ -158,6 +149,50 @@ void BackendWorker::run() {
             std::cout << "[BackendWorker] optimize (coalesced request)" << std::endl;
             optimizeAndPublishAnchor();
         }
+    }
+}
+
+void BackendWorker::requestOptimize() {
+    {
+        std::lock_guard<std::mutex> lk(m_mu);
+        if (m_stop) return;
+        m_optimize_requested = true;
+    }
+    m_cv.notify_one();
+}
+
+void BackendWorker::runLoop() {
+    while (true) {
+        KeyFrame kf;
+        {
+            std::unique_lock<std::mutex> lk(m_loop_mu);
+            m_loop_cv.wait(lk, [this] {
+                return m_loop_stop || !m_loop_queue.empty();
+            });
+            if (m_loop_stop) break;
+            if (m_loop_queue.empty()) continue;
+            kf = std::move(m_loop_queue.front());
+            m_loop_queue.pop_front();
+        }
+        if (!m_loop) continue;
+
+        // ScanContext + local-submap GICP 只在这个线程里跑.
+        m_loop->addKeyFrame(kf);
+        if (++m_loop_lc_keyframes % 30 != 0) continue;
+
+        PoseStamped rel_pose;
+        double cov = 0.0;
+        std::string matched_id;
+        if (!m_loop->detect(rel_pose, cov, matched_id) || !m_backend) continue;
+
+        Constraint c;
+        c.from_kf = matched_id;
+        c.to_kf = kf.id;
+        c.relative_pose = rel_pose;
+        c.cov = cov;
+        m_backend->addConstraints({c});
+        // 只请求优化, 由主 backend worker 串行执行 Ceres/map rebuild.
+        requestOptimize();
     }
 }
 

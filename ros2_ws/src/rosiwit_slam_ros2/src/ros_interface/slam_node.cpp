@@ -186,7 +186,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             const YAML::Node glob = cfg["global"];
             const YAML::Node gin = (glob && glob["input"]) ? glob["input"] : YAML::Node();
             const YAML::Node gf = (glob && glob["frames"]) ? glob["frames"] : YAML::Node();
-            const YAML::Node gmap = (glob && glob["map"]) ? glob["map"] : YAML::Node();
+            const YAML::Node grid = (cfg["mapping"] && cfg["mapping"]["grid"])
+                                        ? cfg["mapping"]["grid"] : YAML::Node();
             auto gi = [&](const char* key) -> YAML::Node {
                 if (gin && gin[key]) return gin[key];
                 return cfg[key];
@@ -231,12 +232,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.output_filter_alpha = out["filter_alpha"].as<double>(m_cfg.output_filter_alpha);
             m_cfg.output_filter_beta  = out["filter_beta"].as<double>(m_cfg.output_filter_beta);
             m_cfg.output_extrap_max_s = out["extrap_max_s"].as<double>(m_cfg.output_extrap_max_s);
-            m_cfg.grid_map_resolution = (gmap && gmap["resolution"])
-                                            ? gmap["resolution"].as<double>(m_cfg.grid_map_resolution)
-                                            : cfg["map_resolution"].as<double>(m_cfg.grid_map_resolution);
-            m_cfg.realtime_grid_resolution = (gmap && gmap["realtime_resolution"])
-                                                 ? gmap["realtime_resolution"].as<double>(m_cfg.realtime_grid_resolution)
-                                                 : m_cfg.realtime_grid_resolution;
+            m_cfg.grid_map_resolution = grid["resolution"].as<double>(m_cfg.grid_map_resolution);
+            m_cfg.realtime_grid_resolution =
+                grid["realtime_resolution"].as<double>(m_cfg.realtime_grid_resolution);
             m_cfg.map_publish_period = (cfg["ros2"] && cfg["ros2"]["map_publish_period"])
                                            ? cfg["ros2"]["map_publish_period"].as<double>(m_cfg.map_publish_period)
                                            : cfg["map_publish_period"].as<double>(m_cfg.map_publish_period);

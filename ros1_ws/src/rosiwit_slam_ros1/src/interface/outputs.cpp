@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <sstream>
 
+#include <yaml-cpp/yaml.h>
+
 using namespace rosiwit_slam;
 
 namespace rosiwit_slam_ros1 {
@@ -53,6 +55,21 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
     }
 
     path_.header.frame_id = engine_.worldFrame();
+
+    // 实时栅格分辨率: mapping.grid.realtime_resolution
+    try {
+        const std::string config_path = engine_.configPath();
+        if (!config_path.empty()) {
+            const YAML::Node cfg = YAML::LoadFile(config_path);
+            if (cfg["mapping"] && cfg["mapping"]["grid"] &&
+                cfg["mapping"]["grid"]["realtime_resolution"]) {
+                realtime_grid_resolution_ =
+                    cfg["mapping"]["grid"]["realtime_resolution"].as<double>();
+            }
+        }
+    } catch (const std::exception& e) {
+        ROS_WARN_STREAM("[rosiwit_interface] realtime grid resolution parse failed: " << e.what());
+    }
 
     // ---- 服务 ----
     srv_save_map_ = nh_.advertiseService("save_map", &RosiwitInterface::handleSaveMap, this);
@@ -205,8 +222,8 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
         GridInfo gi;
         // 必须走 getRealtimeGrid, 它会按当前观测重建栅格; 只读 getGridInfo
         // 会在建图过程中一直发旧缓存. 核心内部按 revision 缓存, 不重复重建.
-        // 实时图用 0.3m; 0.05m 只用于最终 save_grid_map.
-        if (engine_.getRealtimeGrid(0.3, gi) && gi.width > 0 && gi.height > 0) {
+        // 实时图用 mapping.grid.realtime_resolution; 最终图才用 ray_casting 0.05.
+        if (engine_.getRealtimeGrid(realtime_grid_resolution_, gi) && gi.width > 0 && gi.height > 0) {
             nav_msgs::OccupancyGrid grid;
             grid.header.frame_id = engine_.worldFrame();
             grid.header.stamp = ros::Time::now();

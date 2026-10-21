@@ -81,9 +81,8 @@ void loadGridConfigFromYaml(const std::string& yaml_path,
         if (gv("line_min_len_m")) post.line_min_len_m = gv("line_min_len_m").as<double>();
         if (gv("axis_snap")) post.axis_snap = gv("axis_snap").as<bool>();
 
-        // ---- 分辨率与点间距: 核心是在 generateGridMap() 里赋的, 这里在装载时定下来 ----
-        if (gmap && gmap["resolution"]) cfg.resolution = gmap["resolution"].as<double>();
-        else if (c["map_resolution"]) cfg.resolution = c["map_resolution"].as<double>();
+        // ---- 分辨率与点间距: 最终 2D 图在 mapping.grid.resolution, 3D 在 global.map.voxel_resolution ----
+        if (grid && grid["resolution"]) cfg.resolution = grid["resolution"].as<double>();
         const double voxel = (gmap && gmap["save_voxel"])
                                  ? gmap["save_voxel"].as<double>()
                                  : (gv("save_voxel") ? gv("save_voxel").as<double>()

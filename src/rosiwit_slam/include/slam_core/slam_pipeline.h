@@ -49,6 +49,8 @@ public:
 
 private:
     void run();
+    void runLoop();
+    void requestOptimize();
 
     void optimizeAndPublishAnchor();
 
@@ -56,15 +58,23 @@ private:
     std::shared_ptr<IMapManager> m_map_mgr;
     std::shared_ptr<ILoopClosure> m_loop;
     std::shared_ptr<AnchorState> m_anchor;
-    int m_lc_keyframes = 0;
 
     std::thread m_thread;
     std::mutex m_mu;
     std::condition_variable m_cv;
     std::deque<BackendItem> m_queue;
     bool m_stop = false;
-    // OPTIMIZE 不占队列: 队列满时先丢掉可重算的 loop 任务, 优化请求合并保留,
-    // 等 worker 排空后必跑一次, 避免"后端优化被 queue full 静默吞掉".
+
+    // 回环检测单独线程: ScanContext + GICP 很重, 绝不能和 ADD_KF/MAP_SUBMAP
+    // 共用同一个 worker, 否则一次 top-K ICP 会把后端队列堵满并丢关键帧.
+    std::thread m_loop_thread;
+    std::mutex m_loop_mu;
+    std::condition_variable m_loop_cv;
+    std::deque<KeyFrame> m_loop_queue;
+    int m_loop_lc_keyframes = 0;
+    bool m_loop_stop = false;
+    // OPTIMIZE 不占队列: 合并成 pending 标志, 等主队列排空后必跑一次,
+    // 避免"后端优化被 queue full 静默吞掉".
     bool m_optimize_requested = false;
 };
 

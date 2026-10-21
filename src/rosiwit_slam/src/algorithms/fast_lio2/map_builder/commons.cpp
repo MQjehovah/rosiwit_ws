@@ -47,9 +47,10 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.scan_resolution  = get_input("scan_voxel","scan_resolution").as<double>(out_cfg.scan_resolution);
         const YAML::Node gmap = (config["global"] && config["global"]["map"])
                                     ? config["global"]["map"] : YAML::Node();
-        out_cfg.map_resolution   = (gmap && gmap["resolution"])
-                                       ? gmap["resolution"].as<double>()
-                                       : get_input("map_resolution","map_resolution").as<double>(out_cfg.map_resolution);
+        // global.map.voxel_resolution 是 3D 点云地图分辨率; 2D 栅格分辨率在 mapping.grid.resolution.
+        out_cfg.map_resolution   = (gmap && gmap["voxel_resolution"])
+                                       ? gmap["voxel_resolution"].as<double>()
+                                       : out_cfg.map_resolution;
         out_cfg.cube_len         = get_alias("local_map_size","cube_len").as<double>(out_cfg.cube_len);
         out_cfg.det_range        = get_alias("detection_range","det_range").as<double>(out_cfg.det_range);
         out_cfg.move_thresh      = get_alias("map_move_threshold","move_thresh").as<double>(out_cfg.move_thresh);

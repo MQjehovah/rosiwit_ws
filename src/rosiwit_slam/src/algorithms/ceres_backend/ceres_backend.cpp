@@ -75,6 +75,16 @@ bool CeresBackend::init(const std::string& config_path) {
             huber_loss_ = config["huber_loss"].as<double>();
         if (config["max_iterations"])
             max_iterations_ = config["max_iterations"].as<int>();
+        const YAML::Node backend =
+            (config["mapping"] && config["mapping"]["backend"])
+                ? config["mapping"]["backend"] : YAML::Node();
+        if (backend) {
+            loop_loss_scale_ = backend["loop_loss_scale"].as<double>(loop_loss_scale_);
+            max_optimization_trans_m_ =
+                backend["max_optimization_trans_m"].as<double>(max_optimization_trans_m_);
+            max_optimization_rot_deg_ =
+                backend["max_optimization_rot_deg"].as<double>(max_optimization_rot_deg_);
+        }
     } catch (const std::exception& e) {
         std::cerr << "[CeresBackend] Failed to parse config: " << e.what() << std::endl;
         return false;
@@ -172,6 +182,10 @@ bool CeresBackend::optimize() {
     addOdometryConstraints(problem, param_blocks);
     addLoopConstraints(problem, param_blocks);
 
+    const size_t new_constraints =
+        constraints_.size() > last_success_constraints_
+            ? constraints_.size() - last_success_constraints_ : 0;
+
     ceres::Solver::Options options;
     options.max_num_iterations = max_iterations_;
     options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
@@ -197,13 +211,30 @@ bool CeresBackend::optimize() {
         const Eigen::AngleAxisd aa(before[i].rot.transpose() * keyframes_[i].pose.rot);
         max_dr = std::max(max_dr, std::abs(aa.angle()) * 180.0 / M_PI);
     }
+    // 有新增约束时做一次事务检查: 假回环可能让 ICP 自洽, 但会把整条轨迹拉走.
+    // 这里不盲目接受大修正, 而是回滚位姿并丢弃本次新增约束.
+    if (new_constraints > 0 &&
+        (max_dt > max_optimization_trans_m_ ||
+         max_dr > max_optimization_rot_deg_)) {
+        for (size_t i = 0; i < N; ++i) keyframes_[i].pose = before[i];
+        constraints_.resize(last_success_constraints_);
+        std::cout << "[CeresBackend] REJECT new constraints: max_dt=" << max_dt
+                  << "m max_dr=" << max_dr << "deg (limits "
+                  << max_optimization_trans_m_ << "m/"
+                  << max_optimization_rot_deg_ << "deg); rolled back "
+                  << new_constraints << " constraint(s)" << std::endl;
+        return false;
+    }
+
     std::cout << "[CeresBackend] optimize N=" << N
               << " loop=" << constraints_.size()
+              << " new=" << new_constraints
               << " cost=" << summary.initial_cost << "->" << summary.final_cost
               << " iter=" << summary.iterations.size()
               << " max_dt=" << max_dt << "m"
               << " max_dr=" << max_dr << "deg" << std::endl;
 
+    last_success_constraints_ = constraints_.size();
     num_optimizations_++;
     return true;
 }
@@ -259,8 +290,10 @@ void CeresBackend::addLoopConstraints(ceres::Problem& problem, std::vector<doubl
             new RelativePoseError(t_rel, q_rel));
 
         double weight = 1.0 / c.cov;
+        // 回环使用 Cauchy 核: 真回环在尺度内仍会被拉回, 假回环(几十米级残差)
+        // 的梯度会被显著压低. 里程计边仍用 Huber, 保持轨迹连续.
         auto* loss = new ceres::ScaledLoss(
-            new ceres::HuberLoss(huber_loss_), weight, ceres::TAKE_OWNERSHIP);
+            new ceres::CauchyLoss(loop_loss_scale_), weight, ceres::TAKE_OWNERSHIP);
 
         problem.AddResidualBlock(cost_fn, loss,
                                   param_blocks[from_i], param_blocks[from_i + 1],

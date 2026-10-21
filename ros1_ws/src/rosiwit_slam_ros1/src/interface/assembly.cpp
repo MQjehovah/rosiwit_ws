@@ -75,7 +75,17 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     std::string yaml = engine_.configPath();
     if (yaml.empty()) yaml = ros::package::getPath("rosiwit_slam_ros1") + "/config/default.yaml";
     loadGridConfigFromYaml(yaml, gcfg, gpost, gen);
-    grid_resolution_ = gcfg.resolution;   // 存 pgm/yaml 时用同一个分辨率
+    grid_resolution_ = gcfg.resolution;   // 存 pgm/yaml 时用 mapping.grid.resolution
+    try {
+        const YAML::Node yc = YAML::LoadFile(yaml);
+        if (yc["mapping"] && yc["mapping"]["grid"] &&
+            yc["mapping"]["grid"]["realtime_resolution"]) {
+            realtime_grid_resolution_ =
+                yc["mapping"]["grid"]["realtime_resolution"].as<double>();
+        }
+    } catch (const std::exception& e) {
+        ROS_WARN_STREAM("[ros1_slam] realtime grid resolution parse failed: " << e.what());
+    }
     realtime_grid_.setConfig(gcfg, gpost, gen);
     // **实时 /map 走核心的 generateGridMap 路径** (逐帧观测 + 地面处理), 与存 pgm 完全一致。
     // 之前是自己拿合并后的全局点云 gen->build(), 没有地面处理 -> 实时图有地面噪点而 pgm 干净。

@@ -87,6 +87,7 @@ private:
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_;
 
     bool grid_published_ = false;
+    double realtime_grid_resolution_ = 0.3;  // 实时栅格分辨率 (= mapping.grid.realtime_resolution)
     nav_msgs::Path path_;
     double last_pose_time_ = -1.0;      // 同一核心位姿不重复做点云深拷贝/入轨迹
     ros::Time last_path_pub_;           // lio_path 整条重发节流 (50Hz -> 1Hz)

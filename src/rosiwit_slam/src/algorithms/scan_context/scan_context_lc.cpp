@@ -358,12 +358,17 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         const double consist_t = (cand_rel.trans - odom_rel.trans).norm();
         const Eigen::AngleAxisd consist_aa(cand_rel.rot.transpose() * odom_rel.rot);
         const double consist_rot_deg = std::abs(consist_aa.angle()) * 180.0 / M_PI;
-        if (consist_t > m_max_consistency_trans_m ||
-            consist_rot_deg > m_max_consistency_rot_deg) {
-            std::cout << "[ScanContextLC] reject inconsistent loop: kf_" << cand.idx
+        // 一致性不再做 8m/30° 的硬拒绝: 真回环回到起点时航向可能差 40°+,
+        // 这种硬门控会把真回环全部拒掉. 这里只拒绝明显离谱的候选, 其余转成
+        // 后端协方差软权重; 更细的保护由 Ceres 的 Cauchy 核 + 事务回滚完成.
+        const double consist_ratio = std::max(
+            consist_t / std::max(1e-6, m_max_consistency_trans_m),
+            consist_rot_deg / std::max(1e-6, m_max_consistency_rot_deg));
+        if (consist_ratio > 2.5) {
+            std::cout << "[ScanContextLC] reject gross inconsistent loop: kf_" << cand.idx
                       << " <-> kf_" << latest_idx
                       << " odom_delta=" << consist_t << "m/"
-                      << consist_rot_deg << "deg" << std::endl;
+                      << consist_rot_deg << "deg ratio=" << consist_ratio << std::endl;
             continue;
         }
 
@@ -418,18 +423,21 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
     const double consist_t = (relative_pose.trans - odom_rel.trans).norm();
     const Eigen::AngleAxisd consist_aa(relative_pose.rot.transpose() * odom_rel.rot);
     const double consist_rot_deg = std::abs(consist_aa.angle()) * 180.0 / M_PI;
-    if (consist_t > m_max_consistency_trans_m || consist_rot_deg > m_max_consistency_rot_deg) {
-        std::cout << "[ScanContextLC] reject inconsistent loop: kf_" << best_idx
+    const double consist_ratio = std::max(
+        consist_t / std::max(1e-6, m_max_consistency_trans_m),
+        consist_rot_deg / std::max(1e-6, m_max_consistency_rot_deg));
+    if (consist_ratio > 2.5) {
+        std::cout << "[ScanContextLC] reject gross inconsistent loop: kf_" << best_idx
                   << " <-> kf_" << latest_idx
                   << " odom_delta=" << consist_t << "m/"
-                  << consist_rot_deg << "deg"
-                  << " (limits " << m_max_consistency_trans_m << "m/"
-                  << m_max_consistency_rot_deg << "deg)" << std::endl;
+                  << consist_rot_deg << "deg ratio=" << consist_ratio << std::endl;
         return false;
     }
 
     // 回环协方差反映 ICP 质量: fitness 越差、overlap 越低, 后端权重越小.
+    // 与里程计先验差得越多, 也降低权重, 而不是直接一刀切拒绝.
     cov = std::max(0.05, best_fitness / std::max(0.1, static_cast<double>(best_overlap)));
+    cov *= (1.0 + consist_ratio);
 
     m_detected_loops.emplace_back(best_idx, latest_idx);
 

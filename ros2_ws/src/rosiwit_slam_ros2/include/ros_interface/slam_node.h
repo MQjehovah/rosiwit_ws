@@ -65,8 +65,8 @@ private:
         double output_filter_alpha = 0.5;    // 输出 alpha-beta 滤波 alpha
         double output_filter_beta  = 0.2;    // 输出 alpha-beta 滤波 beta
         double output_extrap_max_s = 0.3;    // 外推上限(s)
-        double grid_map_resolution = 0.3;    // 最终地图分辨率(m)
-        double realtime_grid_resolution = 0.3; // 实时 /map 分辨率(m), 避免 0.05 全量重建拖垮后端
+        double grid_map_resolution = 0.3;    // 最终地图分辨率(m), 来自 mapping.grid.resolution
+        double realtime_grid_resolution = 0.3; // 实时 /map 分辨率(m), 来自 mapping.grid.realtime_resolution
         double map_publish_period = 0.2;     // /map 发布周期(s)
         bool   absolute_enabled  = false;    // 绝对约束(GNSS/UWB/反光标/二维码)开关
         std::string absolute_topic = "absolute_pose";  // geometry_msgs/PoseWithCovarianceStamped
