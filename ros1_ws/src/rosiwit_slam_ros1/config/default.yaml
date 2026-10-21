@@ -323,7 +323,7 @@ localization:
     credible_fitness: 0.85   # 健康线: ≥ 此为健康帧; 有界恢复达标线
     lost_fitness: 0.75        # 低于此值直接判为不健康帧
     localized_patience: 3     # 连续健康帧数达到此值 -> LOCALIZED
-    lost_patience: 100        # 连续不健康帧数达到此值 -> LOST
+    lost_patience: 30         # 连续不健康帧数达到此值 -> LOST (约3s, 避免LOST后HMI仍显示成功10s)
                               # (统一替代原 mediocre_patience / lost_patience_low / coast_patience;
                               #  2026-10-17 僵尸带事故: fitness 长期 0.5~0.67 时必须能判丢)
     window_length: 20
