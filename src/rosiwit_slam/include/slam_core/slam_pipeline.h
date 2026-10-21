@@ -63,6 +63,9 @@ private:
     std::condition_variable m_cv;
     std::deque<BackendItem> m_queue;
     bool m_stop = false;
+    // OPTIMIZE 不占队列: 队列满时先丢掉可重算的 loop 任务, 优化请求合并保留,
+    // 等 worker 排空后必跑一次, 避免"后端优化被 queue full 静默吞掉".
+    bool m_optimize_requested = false;
 };
 
 class SlamPipeline : public SlamBase {

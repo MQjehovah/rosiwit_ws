@@ -49,21 +49,27 @@ void BackendWorker::push(BackendTask task, const KeyFrame& kf) {
     {
         std::lock_guard<std::mutex> lk(m_mu);
         if (m_stop) return;
+        // OPTIMIZE 合并成一个 pending 标志, 不占队列, 也不会被 queue full 丢掉.
+        if (task == BackendTask::OPTIMIZE) {
+            m_optimize_requested = true;
+            m_cv.notify_one();
+            return;
+        }
         constexpr size_t kMaxQueue = 500;
         if (m_queue.size() >= kMaxQueue) {
-            // 队列满时优先丢弃可重算的 LOOP_CLOSURE/OPTIMIZE, 不能丢
-            // ADD_KF/MAP_SUBMAP (否则地图缺关键帧). 极端情况下丢最旧任务.
+            // 队列满时优先丢弃可重算的 LOOP_CLOSURE, 不能丢 ADD_KF/MAP_SUBMAP,
+            // 否则地图缺关键帧/子图. OPTIMIZE 已在上面合并, 不在这里丢.
             auto it = std::find_if(m_queue.begin(), m_queue.end(),
                 [](const BackendItem& item) {
-                    return item.task == BackendTask::LOOP_CLOSURE ||
-                           item.task == BackendTask::OPTIMIZE;
+                    return item.task == BackendTask::LOOP_CLOSURE;
                 });
             if (it != m_queue.end()) {
                 m_queue.erase(it);
+                std::cerr << "[BackendWorker] queue full; dropped one LOOP_CLOSURE task" << std::endl;
             } else {
                 m_queue.pop_front();
+                std::cerr << "[BackendWorker] queue full; dropped oldest task" << std::endl;
             }
-            std::cerr << "[BackendWorker] queue full; dropped one task" << std::endl;
         }
         m_queue.push_back({task, kf});
     }
@@ -99,37 +105,57 @@ void BackendWorker::optimizeAndPublishAnchor() {
 void BackendWorker::run() {
     while (true) {
         BackendItem item;
+        bool have_item = false;
         {
             std::unique_lock<std::mutex> lk(m_mu);
-            m_cv.wait(lk, [this] { return m_stop || !m_queue.empty(); });
+            m_cv.wait(lk, [this] {
+                return m_stop || m_optimize_requested || !m_queue.empty();
+            });
             if (m_stop) break;
-            item = std::move(m_queue.front());
-            m_queue.pop_front();
+            if (!m_queue.empty()) {
+                item = std::move(m_queue.front());
+                m_queue.pop_front();
+                have_item = true;
+            }
         }
-        if (item.task == BackendTask::ADD_KF && m_backend) {
-            m_backend->addKeyFrame(item.kf);
-        }
-        if (item.task == BackendTask::MAP_SUBMAP && m_map_mgr) {
-            m_map_mgr->addSubMap(item.kf);
-        }
-        if (item.task == BackendTask::LOOP_CLOSURE && m_loop) {
-            m_loop->addKeyFrame(item.kf);
-            if (++m_lc_keyframes % 30 == 0) {
-                PoseStamped rel_pose;
-                double cov = 0;
-                std::string matched_id;
-                if (m_loop->detect(rel_pose, cov, matched_id) && m_backend) {
-                    Constraint c;
-                    c.from_kf = matched_id;
-                    c.to_kf = item.kf.id;
-                    c.relative_pose = rel_pose;
-                    c.cov = cov;
-                    m_backend->addConstraints({c});
-                    optimizeAndPublishAnchor();
+        if (have_item) {
+            if (item.task == BackendTask::ADD_KF && m_backend) {
+                m_backend->addKeyFrame(item.kf);
+            }
+            if (item.task == BackendTask::MAP_SUBMAP && m_map_mgr) {
+                m_map_mgr->addSubMap(item.kf);
+            }
+            if (item.task == BackendTask::LOOP_CLOSURE && m_loop) {
+                m_loop->addKeyFrame(item.kf);
+                if (++m_lc_keyframes % 30 == 0) {
+                    PoseStamped rel_pose;
+                    double cov = 0;
+                    std::string matched_id;
+                    if (m_loop->detect(rel_pose, cov, matched_id) && m_backend) {
+                        Constraint c;
+                        c.from_kf = matched_id;
+                        c.to_kf = item.kf.id;
+                        c.relative_pose = rel_pose;
+                        c.cov = cov;
+                        m_backend->addConstraints({c});
+                        optimizeAndPublishAnchor();
+                    }
                 }
             }
         }
-        if (item.task == BackendTask::OPTIMIZE && m_backend) {
+
+        // 队列排空后执行合并的优化请求. 若新任务已经到达则先继续消费,
+        // 保证 ADD_KF/MAP_SUBMAP 不因一次长时间 Ceres 优化而积压。
+        bool optimize_now = false;
+        {
+            std::lock_guard<std::mutex> lk(m_mu);
+            if (m_optimize_requested && m_queue.empty()) {
+                m_optimize_requested = false;
+                optimize_now = true;
+            }
+        }
+        if (optimize_now) {
+            std::cout << "[BackendWorker] optimize (coalesced request)" << std::endl;
             optimizeAndPublishAnchor();
         }
     }
