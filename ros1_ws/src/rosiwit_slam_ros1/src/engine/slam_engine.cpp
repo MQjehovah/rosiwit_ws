@@ -511,9 +511,87 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     std::cout << "[slam_engine] config=" << (config_path_.empty() ? "(none)" : config_path_)
               << " imu=" << cfg_.imu_topic
               << " lidar=" << cfg_.lidar_topic << std::endl;
+    input_worker_ = std::thread(&SlamEngine::inputWorkerLoop, this);
 }
 
-SlamEngine::~SlamEngine() = default;
+SlamEngine::~SlamEngine() { stopInputWorker(); }
+
+void SlamEngine::enqueueInput(InputItem item) {
+    bool dropped = false;
+    InputKind dropped_kind = InputKind::IMU;
+    {
+        std::lock_guard<std::mutex> lk(input_queue_mu_);
+        if (input_stop_) return;
+        // 队列满时丢最旧的一帧并显式告警: 宁可丢输入, 也不能让 ROS 回调无限增长.
+        if (input_queue_.size() >= kMaxInputQueue) {
+            dropped = true;
+            dropped_kind = input_queue_.front().kind;
+            input_queue_.pop_front();
+            if (dropped_kind == InputKind::IMU) ++input_imu_dropped_;
+            else ++input_lidar_dropped_;
+        }
+        if (item.kind == InputKind::IMU) ++input_imu_in_;
+        else ++input_lidar_in_;
+        input_queue_.push_back(std::move(item));
+    }
+    if (dropped) {
+        ROS_WARN_THROTTLE(1.0, "[slam_engine] input queue full, drop oldest %s",
+                          dropped_kind == InputKind::IMU ? "IMU" : "LiDAR");
+    }
+    input_queue_cv_.notify_one();
+}
+
+void SlamEngine::inputWorkerLoop() {
+    while (true) {
+        InputItem item;
+        {
+            std::unique_lock<std::mutex> lk(input_queue_mu_);
+            input_queue_cv_.wait(lk, [this] {
+                return input_stop_ || !input_queue_.empty();
+            });
+            if (input_stop_) break;
+            item = std::move(input_queue_.front());
+            input_queue_.pop_front();
+        }
+        if (item.kind == InputKind::IMU) {
+            ++input_imu_done_;
+            onImuMsg(item.imu);
+        } else {
+            ++input_lidar_done_;
+            onLidarMsg(item.lidar);
+        }
+        logInputStats();
+    }
+}
+
+void SlamEngine::stopInputWorker() {
+    {
+        std::lock_guard<std::mutex> lk(input_queue_mu_);
+        input_stop_ = true;
+        input_queue_.clear();
+    }
+    input_queue_cv_.notify_all();
+    if (input_worker_.joinable()) input_worker_.join();
+}
+
+void SlamEngine::logInputStats() {
+    const uint64_t done = input_imu_done_.load() + input_lidar_done_.load();
+    static uint64_t last_log_done = 0;
+    if (done - last_log_done < 1000) return;
+    last_log_done = done;
+    size_t q = 0;
+    {
+        std::lock_guard<std::mutex> lk(input_queue_mu_);
+        q = input_queue_.size();
+    }
+    ROS_INFO("[slam_engine] input queue: imu in/drop/done=%lu/%lu/%lu, lidar in/drop/done=%lu/%lu/%lu, pending=%zu",
+             static_cast<unsigned long>(input_imu_in_.load()),
+             static_cast<unsigned long>(input_imu_dropped_.load()),
+             static_cast<unsigned long>(input_imu_done_.load()),
+             static_cast<unsigned long>(input_lidar_in_.load()),
+             static_cast<unsigned long>(input_lidar_dropped_.load()),
+             static_cast<unsigned long>(input_lidar_done_.load()), q);
+}
 
 CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
                                    int filter_num, double min_r, double max_r) {
@@ -610,6 +688,7 @@ CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg
 }
 
 void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     if (online_calib_enabled_) {
         std::lock_guard<std::mutex> lk(calib_mutex_);
         online_time_calib_.addImu(msg->header.stamp.toSec(), msg->angular_velocity.z);
@@ -630,6 +709,7 @@ void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
 }
 
 void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_) return;
 
     // FREE/idle 不跑算法，也不做昂贵的 PointCloud2 -> PCL 转换。
@@ -665,6 +745,7 @@ std::string SlamEngine::dumpFlightRecorder(const std::string& reason) {
 
 void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
                                bool zero_if_insane, bool force_z_zero) {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return;
     double x = in.pose.pose.position.x;
     double y = in.pose.pose.position.y;
@@ -715,6 +796,7 @@ void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& i
 }
 
 void SlamEngine::onOdomMsg(const nav_msgs::Odometry::ConstPtr& msg) {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_) return;
     PoseStamped p;
     p.time = getSec(msg->header.stamp);
@@ -727,8 +809,12 @@ void SlamEngine::onOdomMsg(const nav_msgs::Odometry::ConstPtr& msg) {
     algo_->onOdom(composeRight(p, imu_child));
 }
 
-void SlamEngine::imuCB(const sensor_msgs::Imu::ConstPtr& msg) { onImuMsg(msg); }
-void SlamEngine::lidarCB(const sensor_msgs::PointCloud2::ConstPtr& msg) { onLidarMsg(msg); }
+void SlamEngine::imuCB(const sensor_msgs::Imu::ConstPtr& msg) {
+    enqueueInput(InputItem{InputKind::IMU, msg, nullptr});
+}
+void SlamEngine::lidarCB(const sensor_msgs::PointCloud2::ConstPtr& msg) {
+    enqueueInput(InputItem{InputKind::LIDAR, nullptr, msg});
+}
 void SlamEngine::initialPoseCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
     onInitialPoseMsg(msg);
 }
@@ -831,6 +917,7 @@ double SlamEngine::getMatchingDegree() const {
 }
 
 bool SlamEngine::resetCore() {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return false;
     // 先复位 latch/快照类状态, 免得重建后还带着上一轮的位姿
     {

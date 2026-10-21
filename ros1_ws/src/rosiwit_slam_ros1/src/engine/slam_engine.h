@@ -18,11 +18,14 @@
 #include <sensor_msgs/PointCloud2.h>
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <tf2_ros/buffer.h>
@@ -156,6 +159,20 @@ private:
     void onOutput(const rosiwit_slam::SlamOutput& out);
     void processCB(const ros::TimerEvent&);
 
+    // 传感器输入队列: ROS 回调只入队, 重处理在独立线程串行执行。
+    // 这样 Lidar 的 PCL 转换和核心 onLidar 不再阻塞 spinner/timer。
+    enum class InputKind { IMU, LIDAR };
+    struct InputItem {
+        InputKind kind;
+        sensor_msgs::Imu::ConstPtr imu;
+        sensor_msgs::PointCloud2::ConstPtr lidar;
+    };
+    static constexpr size_t kMaxInputQueue = 4096;
+    void enqueueInput(InputItem item);
+    void inputWorkerLoop();
+    void stopInputWorker();
+    void logInputStats();
+
     ros::NodeHandle nh_, pnh_;
     Cfg cfg_;
 
@@ -178,6 +195,19 @@ private:
 
     ros::Subscriber imu_sub_, lidar_sub_, init_pose_sub_, vo_sub_, absolute_sub_;
     ros::Timer process_timer_;
+
+    std::mutex core_mu_;                 // 保护 algo_ 的输入与重建, 避免 reset 与 worker 并发
+    std::deque<InputItem> input_queue_;
+    std::mutex input_queue_mu_;
+    std::condition_variable input_queue_cv_;
+    std::thread input_worker_;
+    bool input_stop_ = false;
+    std::atomic<uint64_t> input_imu_in_{0};
+    std::atomic<uint64_t> input_lidar_in_{0};
+    std::atomic<uint64_t> input_imu_dropped_{0};
+    std::atomic<uint64_t> input_lidar_dropped_{0};
+    std::atomic<uint64_t> input_imu_done_{0};
+    std::atomic<uint64_t> input_lidar_done_{0};
 
     mutable std::mutex out_mutex_;
     rosiwit_slam::SlamOutput latest_;
