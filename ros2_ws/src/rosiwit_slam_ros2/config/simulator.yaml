@@ -97,6 +97,10 @@ mapping:
     realtime_close_radius: 1
     realtime_skeleton_width: 0
 localization:
+  # gicp_localization 没有 predictAt() 高频外推实现, 必须关闭高频输出,
+  # 否则定位模式只走 highRateCB 而返回 false -> /lio_odom 和 map->odom TF 都不发布.
+  output:
+    rate_hz: 0
   global:
     icp_voxel_res: 0.5
     icp_max_corr_dist: 2.0

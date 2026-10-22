@@ -57,7 +57,7 @@ def generate_launch_description():
 
     world_name_arg = DeclareLaunchArgument(
         'world_name',
-        default_value=os.path.join(simulator_dir, 'world', 'large.world')
+        default_value=os.path.join(simulator_dir, 'world', 'house.world')
     )
     use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='true')
     gui_arg = DeclareLaunchArgument('gui', default_value='true')
@@ -66,9 +66,9 @@ def generate_launch_description():
     debug_arg = DeclareLaunchArgument('debug', default_value='false')
     use_3d_lidar_arg = DeclareLaunchArgument('use_3d_lidar', default_value='true')
     spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='0')
-    spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='-18')
+    spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='0')
     spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='0.1')
-    spawn_yaw_arg = DeclareLaunchArgument('spawn_yaw', default_value='1.57')
+    spawn_yaw_arg = DeclareLaunchArgument('spawn_yaw', default_value='0')
 
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(

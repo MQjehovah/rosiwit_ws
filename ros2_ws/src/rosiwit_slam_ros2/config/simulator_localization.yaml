@@ -1,0 +1,225 @@
+# rosiwit_slam - Velodyne VLP-16 仿真配置
+# 用于 Gazebo 仿真环境中的 VLP-16 激光雷达 + IMU
+
+global:
+  slam_algorithm: fast_lio2_pipeline  # 核心算法名
+  pipeline: "rosiwit_slam" # 管线名称
+  pipeline_mode: localization # 启动模式 mapping|localization|idle
+  modules:
+    frontend: "fast_lio2_frontend"
+    backend: "ceres_pose_graph"
+    loop_closure: "" # 探索阶段先关闭 ScanContext/ICP, 避免 TF 被回环线程拖停; 建图稳定后再开
+    map_manager: "pcd_map_manager"
+    localization: "localization_pipeline"
+
+  input:
+    imu_topic: imu  # IMU话题
+    lidar_topic: velodyne_points # 雷达点云话题
+    odom_topic: odom # 轮式里程计话题
+    lidar_filter_num: 2 # 雷达点抽稀倍数
+    lidar_min_range: 0.10 # 雷达最小有效距离(m)
+    lidar_max_range: 100.0 # 雷达最大有效距离(m)
+    scan_period_ms: 0.0 # 单帧扫描周期(ms)
+    use_odom: false # 是否订阅并使用轮式odom
+  frames:
+    lidar_frame: lidar_link  # 雷达frame
+    imu_frame: imu_link # IMU frame
+    body_frame: base_footprint # 车体frame
+    world_frame: map # 世界frame
+    map_frame: map # 地图frame
+    odom_frame: odom # 里程计frame
+  map:
+    voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
+    save_voxel: 0.3 # 地图/点云保存降采样体素(m)
+  scan_context:
+    num_rings: 20 # ScanContext环数
+    num_sectors: 60 # ScanContext扇区数
+    max_radius: 80.0 # ScanContext最大半径(m)
+    dist_thresh: 0.4 # ScanContext距离阈值
+    candidate_ratio: 0.3 # 候选比例
+mapping:
+  frontend:
+    gravity_align: true # 是否用重力方向初始化姿态
+    undistort_enable: false # 是否启用运动畸变补偿
+    lidar_cov_inv: 1000.0 # 激光观测信息矩阵权重
+    robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
+    robust_scale: 0.5 # 鲁棒核尺度
+    robust_floor: 0.1 # 鲁棒权重下限
+    dynamic_removal: true # 是否剔除动态障碍物点
+    persist_thresh: 2 # 动态点持久确认帧数
+    persist_window: 20 # 动态点确认窗口帧数
+    dynamic_residual_thresh: 1.0 # 动态点残差阈值
+    local_map_size: 300          # 局部地图立方体边长(m)
+    detection_range: 60          # 雷达有效检测距离(m)
+    map_move_threshold: 1.5      # 局部地图滑动窗口阈值比例
+    acc_noise: 0.01              # 加速度计白噪声
+    gyro_noise: 0.01             # 陀螺白噪声
+    acc_bias_random_walk: 0.0001 # 加速度计零偏随机游走
+    gyro_bias_random_walk: 0.0001 # 陀螺零偏随机游走
+    imu_init_samples: 20         # IMU静止初始化样本数
+    nearest_search_points: 5     # 近邻搜索点数
+    iekf_max_iterations: 5       # IEKF最大迭代次数
+    scan_voxel: 0.2              # 前端扫描降采样体素(m)
+    imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
+    imu_lidar_translation: [0.0, 0.0, 0.0] # 初始IMU<-lidar平移(m)
+    estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
+    self_filter:
+      enabled: false # 仿真不启用机身过滤
+      x_min: -0.45
+      x_max: 0.75
+      y_min: -0.55
+      y_max: 0.55
+      z_min: 0.05
+      z_max: 1.40
+  map_manager:
+    max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
+    max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
+  backend:
+    loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m)
+    max_optimization_trans_m: 20 # 含新约束的单次优化最大平移修正
+    max_optimization_rot_deg: 60 # 含新约束的单次优化最大旋转修正
+  grid:
+    generator: ray_casting  # 2D栅格生成策略
+    resolution: 0.05 # 最终 2D 栅格/PGM 分辨率(m)
+    realtime_resolution: 0.3 # 实时 /map 分辨率(m)
+    min_height: 0.1 # 地面以上障碍最低高度(m)
+    max_height: 2.0 # 地面以上障碍最高高度(m)
+    occupied_thresh: 1 # 每格最少点数判占据
+    dilate_radius: 0 # 障碍膨胀半径(格)
+    close_radius: 1 # 形态学闭运算半径(格)
+    min_component_cells: 1 # 去噪最小连通域格数
+    max_range: 50.0 # 射线有效距离(m),0=不限
+    ground_method: ransac # 地面提取方法 ransac|percentile
+    ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
+    post_pipeline: "denoise,close" # 2D后处理管道
+    realtime_post_pipeline: "denoise,close"
+    realtime_min_component_cells: 1
+    realtime_close_radius: 1
+    realtime_skeleton_width: 0
+localization:
+  # ==================== 新版可编排定位流水线 ====================
+  pipeline:
+    relocalizer: bbs          # 已知起点时仅作丢失后的全局重锁备份
+    motion_prior: imu
+    local_map: radius_submap
+    matcher: pp_icp
+    monitor: windowed
+    map_maintainer: none
+
+  matcher:
+    voxel_resolution: 0.3
+    max_iterations: 32
+    max_correspondence_dist: 2.0
+    transformation_epsilon: 0.000001
+    inlier_dist: 0.3
+    use_corr_decay: true
+    corr_dist_init: 4.0
+    corr_dist_min: 1.0
+    use_huber: true
+    huber_delta: 0.25
+    robust_kernel: cauchy
+    use_edge_feature: true
+    edge_line_ratio: 0.12
+    edge_valid_thr: 0.10
+    edge_min_extent: 0.20
+    edge_vertical_cos: 0.866
+    degeneracy_gate: true
+    degeneracy_eig_ratio: 0.001
+    min_correspondences: 20
+    dynamic_filter: true
+    dynamic_dist: 0.4
+
+  local_map:
+    voxel_resolution: 0.3
+    radius: 30.0
+    cell_size: 10.0
+    max_keyframes: 15
+    cache_move: 0.5
+
+  deskew:
+    enabled: true
+    max_gap: 0.30
+    min_angle_deg: 0.2
+
+  motion_prior:
+    max_dt: 0.2
+    max_vel: 10.0
+    use_odom: false
+    use_gravity: true
+    gravity: 9.81
+    gravity_gain: 0.05
+
+  global:
+    min_score: 0.5
+    top_k: 5
+    retry_interval: 30
+    voxel_resolution: 0.3
+    icp_max_corr_dist: 2.0
+    icp_fitness_thresh: 1.0
+    icp_max_iter: 32
+    # bbs 专用
+    bbs_z_min: -1.0
+    bbs_z_max: 1.0
+    bbs_theta_bins: 60
+    bbs_max_levels: 6
+    bbs_min_points_per_cell: 5.0
+    icp_voxel_res: 0.3
+    min_radius: 2.0
+
+  monitor:
+    enabled: true
+    credible_fitness: 0.75
+    lost_fitness: 0.5
+    localized_patience: 3
+    lost_patience: 100
+    window_length: 20
+    window_std_k: 2.0
+    max_trans_step: 1.0
+    max_yaw_step_deg: 20.0
+    nees_threshold: 50.0
+
+  accept:
+    mode: 1
+    min_coverage: 0.5
+    residual_margin: 0.10
+    consistent_frames: 2
+    mahalanobis_gate: true
+    mahalanobis_chi2: 16.81
+
+  planar:
+    mode: ground_plane
+    z: 0.0
+    sensor_height: 0.0
+    cell: 1.0
+    ground_band: 0.3
+    max_tilt_deg: 35.0
+
+  hypothesis:
+    max: 4
+    margin: 0.25
+    stale: 10
+    reseed_frames: 0
+
+  smoother:
+    enabled: false
+    lag_sec: 2.0
+    motion_trans_sigma: 0.05
+    motion_rot_sigma: 0.02
+
+  map_store: none
+
+  output:
+    rate_hz: 100
+    filter_alpha: 0.5
+    filter_beta: 0.2
+    extrap_max_s: 0.3
+
+localization_map: /home/jmq/rosiwit_ws/docs/maps/map/map.pcd
+init_pose:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+
+ros2:
+  odom_tf_publisher: wheel  # odom->base TF发布方式
+  map_publish_period: 1.0 # 地图发布周期(s)

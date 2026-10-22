@@ -268,6 +268,10 @@ void GicpLocalization::onLidar(const LidarFrame& f) {
         if (!first_scan_) status_ = LOST;
     }
 
+    // 输出位姿必须带当前扫描时间戳. 否则 setInitPose 之后 current_pose_.time
+    // 永远停在初始位姿时间, ROS 层会因相邻输出 stamp 相同而抑制 odom/TF.
+    current_pose_.time = f.end_time;
+
     // 清空已消费的 IMU 缓存
     m_imu_buffer.clear();
     m_has_imu_propagation = false;
