@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>rosiwit_simulation_ros1</name>
+  <version>1.0.0</version>
+  <description>
+    ROS1 Gazebo simulation resources for the rosiwit mobile robot.
+    Aligned with rosiwit_simulation_ros2 (same worlds, robot geometry and
+    default spawn), using ROS1 gazebo_ros/gazebo_plugins interfaces.
+  </description>
+
+  <maintainer email="jmq@todo.todo">jmq</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>gazebo_plugins</exec_depend>
+  <exec_depend>gazebo_msgs</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>tf</exec_depend>
+</package>

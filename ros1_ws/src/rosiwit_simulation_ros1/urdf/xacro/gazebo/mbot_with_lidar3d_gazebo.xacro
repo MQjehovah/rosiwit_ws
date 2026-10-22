@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<robot name="mbot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!--
+        Combined model: mbot_base + 3D LiDAR (VLP-16) + IMU (ROS1)
+        This is the ROS1 equivalent of the default model used by
+        rosiwit_simulation_ros2's simulator_gazebo launch.
+    -->
+
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/gazebo/mbot_base.xacro" />
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/lidar3d_gazebo.xacro" />
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/imu_gazebo.xacro" />
+
+    <xacro:lidar3d_gazebo prefix="lidar"/>
+    <xacro:imu prefix="imu"/>
+
+    <xacro:mbot_base/>
+
+</robot>

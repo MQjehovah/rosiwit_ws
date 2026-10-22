@@ -13,7 +13,7 @@ source /opt/ros/humble/setup.bash
 source ~/rosiwit_ws/ros2_ws/install/setup.bash
 
 ros2 launch rosiwit_exploration_ros2 explore_mapping.launch.py \
-  world_name:=$HOME/rosiwit_ws/ros2_ws/install/rosiwit_simulator/share/rosiwit_simulator/world/house.world \
+  world_name:=$HOME/rosiwit_ws/ros2_ws/install/rosiwit_simulation_ros2/share/rosiwit_simulation_ros2/world/house.world \
   save_map_on_finish:=true \
   save_map_path:=/tmp/rosiwit_exploration_map
 ```

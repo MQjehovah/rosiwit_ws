@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<robot name="mbot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- Combined model: mbot_base + 2D LiDAR + IMU (ROS1) -->
+
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/gazebo/mbot_base.xacro" />
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/lidar_gazebo.xacro" />
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/imu_gazebo.xacro" />
+
+    <xacro:imu prefix="imu"/>
+    <xacro:rplidar prefix="laser"/>
+
+    <xacro:mbot_base/>
+
+</robot>

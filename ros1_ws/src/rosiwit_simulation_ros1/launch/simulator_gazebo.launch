@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<launch>
+    <!--
+        ROS1 equivalent of rosiwit_simulation_ros2/launch/simulator_gazebo.launch.py
+        Starts Gazebo, publishes the mbot robot description and spawns it.
+    -->
+
+    <arg name="world_name" default="$(find rosiwit_simulation_ros1)/world/house.world"/>
+    <arg name="gui" default="true"/>
+    <arg name="paused" default="false"/>
+    <arg name="debug" default="false"/>
+    <arg name="use_sim_time" default="true"/>
+    <arg name="spawn_x" default="0.0"/>
+    <arg name="spawn_y" default="0.0"/>
+    <arg name="spawn_z" default="0.1"/>
+    <arg name="spawn_yaw" default="0.0"/>
+    <arg name="robot_name" default="mrobot"/>
+
+    <!-- Gazebo 11 media/model paths. ROS setup scripts do not source
+         /usr/share/gazebo-11/setup.sh, so set them explicitly. -->
+    <env name="GAZEBO_RESOURCE_PATH"
+         value="/usr/share/gazebo-11:$(optenv GAZEBO_RESOURCE_PATH)"/>
+    <env name="GAZEBO_MODEL_PATH"
+         value="$(find rosiwit_simulation_ros1)/models:/usr/share/gazebo-11/models:$(optenv GAZEBO_MODEL_PATH)"/>
+    <env name="GAZEBO_PLUGIN_PATH"
+         value="/opt/ros/$(env ROS_DISTRO)/lib:$(optenv GAZEBO_PLUGIN_PATH)"/>
+
+    <include file="$(find gazebo_ros)/launch/empty_world.launch">
+        <arg name="world_name" value="$(arg world_name)"/>
+        <arg name="gui" value="$(arg gui)"/>
+        <arg name="paused" value="$(arg paused)"/>
+        <arg name="debug" value="$(arg debug)"/>
+        <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    </include>
+
+    <param name="robot_description"
+           command="$(find xacro)/xacro '$(find rosiwit_simulation_ros1)/urdf/xacro/gazebo/mbot_with_lidar3d_gazebo.xacro'"/>
+
+    <node pkg="joint_state_publisher" type="joint_state_publisher"
+          name="joint_state_publisher" output="screen"/>
+    <node pkg="robot_state_publisher" type="robot_state_publisher"
+          name="robot_state_publisher" output="screen"/>
+
+    <node pkg="gazebo_ros" type="spawn_model" name="spawn_$(arg robot_name)"
+          args="-urdf -param robot_description -model $(arg robot_name)
+                -x $(arg spawn_x) -y $(arg spawn_y) -z $(arg spawn_z) -Y $(arg spawn_yaw)"
+          output="screen"/>
+</launch>

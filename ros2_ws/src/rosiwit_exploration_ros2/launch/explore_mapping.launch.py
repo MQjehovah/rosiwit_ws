@@ -28,7 +28,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     exploration_dir = get_package_share_directory('rosiwit_exploration_ros2')
-    simulator_dir = get_package_share_directory('rosiwit_simulator')
+    simulator_dir = get_package_share_directory('rosiwit_simulation_ros2')
     slam_dir = get_package_share_directory('rosiwit_slam_ros2')
     navigation_dir = get_package_share_directory('rosiwit_navigation_ros2')
 

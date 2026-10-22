@@ -6,7 +6,7 @@
 
 | 子系统 | 包名 | 功能 |
 |--------|------|------|
-| 模拟器 | `rosiwit_simulator` | 提供仿真传感器数据 (LiDAR/IMU/Odom) |
+| 模拟器 | `rosiwit_simulation_ros2` | 提供仿真传感器数据 (LiDAR/IMU/Odom) |
 | SLAM | `rosiwit_slam` | Fast-LIO2 建图定位 |
 | 导航 | `diffbot_navigation` | Nav2 自主导航 |
 

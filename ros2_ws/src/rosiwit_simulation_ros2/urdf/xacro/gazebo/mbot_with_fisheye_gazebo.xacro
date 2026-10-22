@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<robot name="arm" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <xacro:include filename="$(find rosiwit_simulation_ros2)/urdf/xacro/gazebo/mbot_base.xacro" />
+    <xacro:include filename="$(find rosiwit_simulation_ros2)/urdf/xacro/sensors/lidar_gazebo.xacro" />
+    <xacro:include filename="$(find rosiwit_simulation_ros2)/urdf/xacro/sensors/lidar3d_gazebo.xacro" />
+    <xacro:include filename="$(find rosiwit_simulation_ros2)/urdf/xacro/sensors/imu_gazebo.xacro" />
+    <xacro:include filename="$(find rosiwit_simulation_ros2)/urdf/xacro/sensors/fisheye_camera_gazebo.xacro" />
+
+    <xacro:imu prefix="imu"/>
+    <xacro:rplidar prefix="laser"/>
+    <xacro:lidar3d_gazebo prefix="lidar"/>
+
+    <!-- 4 个广角相机，90°间隔，360°全覆盖，向下倾斜 20° 看到地面 -->
+    <!-- 位置：底座半径 0.21m，高出底座 0.15m -->
+    <!-- 朝向：所有相机 pitch=0.35 统一向下倾斜，yaw 分别指向各方向 -->
+    <xacro:fisheye_camera prefix="front" xyz="0.21 0 0.15"   rpy="0 0.35 0"        ns="camera_front" />
+    <xacro:fisheye_camera prefix="right" xyz="0 0.21 0.15"   rpy="0 0.35 1.5708"   ns="camera_right" />
+    <xacro:fisheye_camera prefix="back"  xyz="-0.21 0 0.15"  rpy="0 0.35 3.1416"   ns="camera_back"  />
+    <xacro:fisheye_camera prefix="left"  xyz="0 -0.21 0.15"  rpy="0 0.35 -1.5708"  ns="camera_left" />
+
+    <xacro:mbot_base/>
+
+</robot>

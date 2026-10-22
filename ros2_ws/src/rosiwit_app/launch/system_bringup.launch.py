@@ -78,7 +78,7 @@ def generate_launch_description():
                 # --- Gazebo 模式 ---
                 actions.append(LogInfo(msg='[system_bringup] Starting Gazebo simulator...'))
 
-                simulator_dir = get_package_share_directory('rosiwit_simulator')
+                simulator_dir = get_package_share_directory('rosiwit_simulation_ros2')
                 gazebo_ros_dir = get_package_share_directory('gazebo_ros')
 
                 # 设置 Gazebo 模型路径
@@ -133,7 +133,7 @@ def generate_launch_description():
 
                 # 自动驾驶脚本
                 actions.append(Node(
-                    package='rosiwit_simulator',
+                    package='rosiwit_simulation_ros2',
                     executable='sim_drive.py',
                     name='figure8_driver',
                     output='screen',
@@ -152,7 +152,7 @@ def generate_launch_description():
                 # --- Python 脚本模式 ---
                 actions.append(LogInfo(msg='[system_bringup] Starting Python script simulator...'))
                 actions.append(Node(
-                    package='rosiwit_simulator',
+                    package='rosiwit_simulation_ros2',
                     executable='simulated_sensor.py',
                     name='simulated_sensor',
                     output='screen',

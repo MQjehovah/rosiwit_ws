@@ -4,7 +4,7 @@
 # Multi-stage build: dev (full tools) + runtime (slim)
 # ============================================================
 # This image orchestrates the complete robot system:
-#   - rosiwit_simulator (sensor simulation)
+#   - rosiwit_simulation_ros2 (sensor simulation)
 #   - rosiwit_slam (Fast-LIO2 SLAM)
 #   - diffbot_navigation (Nav2-based navigation)
 #   - rosiwit_app (dispatch & state machine)
