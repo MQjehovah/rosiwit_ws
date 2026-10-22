@@ -50,6 +50,44 @@ roslaunch rosiwit_slam_ros1 rosiwit_slam.launch          # 只启动 SLAM 节点
 roslaunch rosiwit_slam_ros1 xz_3d_slam.launch model:=XZ-SW50   # 机器人整机 launch
 ```
 
+### 载入已有地图（docs/maps/map）
+
+```bash
+rosservice call /switch_map "map_name: 'map'
+map_dir: '/home/jmq/rosiwit_ws/docs/maps/map/map.yaml'
+map_resolution: 0.05
+map_origin: [-9.84335, -5.85306, 0.0]
+map_negate: false
+map_occupied_thresh: 0.65
+map_free_thresh: 0.25
+initial_pose:
+  header: {frame_id: 'map'}
+  pose:
+    pose:
+      position: {x: 0.0, y: 0.0, z: 0.0}
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+vir_obs: ''"
+```
+
+`/switch_map` 会读取 `map_dir` 去掉后缀后的 `map.pgm` + `map.yaml` 发布 `/map`，
+并用同目录的 `map.pcd` 载入定位地图（没有 `.xzmap` 时走 PCD fallback），
+随后自动切到 localization。请把 `map_dir` 改成你机器上的实际路径。
+
+> 导航端若出现 `STOPPED_ODOM`，或 RViz 的 2D Nav Goal 没反应，先检查
+> `rostopic hz /lio_odom` 和 `/slam/info` 的 `location_status`。地图加载后必须有
+> 有效定位；可以用 PCD 重新初始化：
+>
+> ```bash
+> rosservice call /load_map "path: '/home/jmq/rosiwit_ws/docs/maps/map/map.pcd'"
+> rosservice call /set_slam_mode "mode: 'localization'"
+> rostopic pub -1 /initialpose geometry_msgs/PoseWithCovarianceStamped \
+> "{header: {frame_id: 'map'}, pose: {pose: {position: {x: 0.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}"
+> ```
+>
+> 然后在 RViz 里先用 **2D Pose Estimate**（`/initialpose`），再点 **2D Nav Goal**；
+> 确认 Nav Goal 工具的话题是 `/move_base_simple/goal`（`rostopic info` 应能看到
+> `/rviz_...` 发布者）。
+
 ## 接口速览
 
 **新接口**（`RosiwitInterface`）
