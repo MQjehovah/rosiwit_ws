@@ -1759,6 +1759,8 @@ private:
        << ",\"scan_pts\":" << laser_points_.size()
        << ",\"scan_cap\":" << laser_points_.capacity()
        << ",\"track_pts_cap\":" << tracker_points_.capacity()
+       << ",\"map_w\":" << (current_map_ ? static_cast<int>(current_map_->info.width) : -1)
+       << ",\"map_h\":" << (current_map_ ? static_cast<int>(current_map_->info.height) : -1)
        << ",\"odom_age\":" << (last_odom_stamp_.isZero() ? -1.0 : (ros::Time::now() - last_odom_stamp_).toSec())
        << "}";
     std_msgs::String msg;
@@ -1776,6 +1778,12 @@ private:
     const float res = current_map_->info.resolution;
     const double ox = current_map_->info.origin.position.x;
     const double oy = current_map_->info.origin.position.y;
+    if (w == 0 || h == 0 ||
+        static_cast<uint64_t>(w) * static_cast<uint64_t>(h) > 4000000ULL) {
+      ROS_ERROR_THROTTLE(2.0,
+        "[rosiwit_navigation_ros1] rejecting abnormal map %ux%u for costmap", w, h);
+      return;
+    }
 
     const bool need_global = last_global_costmap_update_.isZero() ||
       (ros::Time::now() - last_global_costmap_update_).toSec() >= 1.0;
