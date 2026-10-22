@@ -288,6 +288,9 @@ private:
 
     pnh_.param<bool>("recovery_enabled", recovery_enabled_, true);
     pnh_.param<int>("recovery_max_attempts", recovery_max_attempts_, 2);
+    // 默认关闭无碰撞检查的 primitive fallback. 旧版反向规划失败后会直接
+    // 后退/旋转, 在后方没有 /scan 覆盖时会撞墙; 现在失败就停车报错.
+    pnh_.param<bool>("recovery_primitive_fallback", recovery_primitive_fallback_, false);
     pnh_.param<double>("recovery_back_distance", recovery_back_distance_, 0.60);
     pnh_.param<double>("recovery_rotate_angle", recovery_rotate_angle_, M_PI / 2.0);
     pnh_.param<double>("recovery_timeout", recovery_timeout_, 8.0);
@@ -2308,7 +2311,11 @@ private:
       recovery_planner_->setCostmap(planner_costmap_);
       for (size_t i = 0; i < targets.size(); ++i) {
         const auto result = recovery_planner_->plan(pose, targets[i]);
-        if (!result.is_ok()) continue;
+        if (!result.is_ok()) {
+          ROS_WARN("[rosiwit_navigation_ros1] reverse escape candidate=%zu failed: %s",
+                   i + 1, result.error_message().c_str());
+          continue;
+        }
         recovery_core_path_ = result.value();
         current_path_ = toRosPath(recovery_core_path_, map_frame_, ros::Time::now());
         controller_strategy_->setPath(recovery_core_path_);
@@ -2319,7 +2326,13 @@ private:
                  current_path_.poses.size());
         return true;
       }
-      ROS_WARN("[rosiwit_navigation_ros1] reverse escape planning failed; fallback primitive");
+      ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed; "
+                "refusing blind backoff/rotate (recovery_primitive_fallback=%s)",
+                recovery_primitive_fallback_ ? "true" : "false");
+    }
+
+    if (!recovery_primitive_fallback_) {
+      return false;
     }
 
     core::ActionTaskCommand cmd;
@@ -2840,7 +2853,8 @@ private:
   core::ActionTask action_task_;
   bool action_active_ = false;
 
-  // 统一恢复: 优先规划一条反向后退出路径; 失败才回退到 primitive backoff/rotate.
+  // 恢复: 优先规划反向后退出路径; primitive fallback 默认关闭, 防止无后向
+  // 感知/地图校验时直接撞墙.
   enum class RecoveryStage { NONE, FOLLOW, BACK, ROTATE };
   RecoveryStage recovery_stage_ = RecoveryStage::NONE;
   std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
@@ -2848,6 +2862,7 @@ private:
   bool recovery_enabled_ = true;
   int recovery_max_attempts_ = 2;
   int recovery_attempts_ = 0;
+  bool recovery_primitive_fallback_ = false;
   double recovery_back_distance_ = 0.60;
   double recovery_rotate_angle_ = M_PI / 2.0;
   double recovery_timeout_ = 8.0;
