@@ -40,6 +40,16 @@ Path makeStraightPath()
   return path;
 }
 
+Path makeReversePath()
+{
+  Path path;
+  for (double x = 0.0; x >= -0.8 - 1e-9; x -= 0.1) {
+    path.points.emplace_back(Pose2D(x, 0.0, 0.0));
+    path.points.back().velocity_x = -1.0;
+  }
+  return path;
+}
+
 CostmapGrid makeLocalGrid(int value)
 {
   CostmapGrid grid;
@@ -119,6 +129,22 @@ TEST(MppiController, RampsWhenMeasuredVelocityIsZero)
   ASSERT_EQ(speeds.size(), 10u);
   EXPECT_GT(speeds.back(), speeds.front() + 0.02);
   EXPECT_GT(speeds.back(), 0.10);
+}
+
+TEST(MppiController, ReversePathCommandsNegativeVelocity)
+{
+  auto controller = makeController();
+  controller.setPath(makeReversePath());
+  controller.setLocalCostmap(makeLocalGrid(0));
+
+  std::vector<double> speeds;
+  for (int i = 0; i < 5; ++i) {
+    const auto command = controller.computeVelocityCommand(
+      Pose2D(0.0, 0.0, 0.0), VelocityCommand(0.0, 0.0, 0.0));
+    speeds.push_back(command.linear_x);
+  }
+  ASSERT_EQ(speeds.size(), 5u);
+  EXPECT_LT(speeds.back(), -0.03);
 }
 
 TEST(MppiController, ReportsGoalReachedAtPathEnd)

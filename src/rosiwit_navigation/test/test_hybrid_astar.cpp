@@ -101,6 +101,62 @@ TEST(HybridAStar, RejectsGoalInObstacle)
   EXPECT_TRUE(result.is_error());
 }
 
+TEST(HybridAStar, ReverseOnlyPathMarksReverseVelocity)
+{
+  auto planner = nav_core::NavigationFactory::createPlanner("hybrid_astar");
+  ASSERT_NE(planner, nullptr);
+  core::PlannerConfig cfg;
+  cfg.name = "hybrid_astar";
+  cfg.resolution = 0.05;
+  cfg.max_iterations = 50000;
+  cfg.timeout = 2.0;
+  cfg.allow_reverse = true;
+  cfg.reverse_only = true;
+  ASSERT_TRUE(planner->initialize(cfg));
+
+  auto cm = makeMap(200, 200, 0.05);
+  planner->setCostmap(cm);
+  planner->setRobotRadius(0.20);
+
+  const auto result = planner->plan({3.0, 5.0, 0.0}, {2.0, 5.0, 0.0});
+  ASSERT_TRUE(result.is_ok()) << result.error_message();
+  ASSERT_GE(result.value().points.size(), 3u);
+  bool saw_reverse = false;
+  for (size_t i = 1; i + 1 < result.value().points.size(); ++i) {
+    if (result.value().points[i].velocity_x < -0.1) saw_reverse = true;
+  }
+  EXPECT_TRUE(saw_reverse);
+}
+
+TEST(HybridAStar, RecoveryStartClearanceAllowsEscapingFootprintOverlap)
+{
+  auto planner = nav_core::NavigationFactory::createPlanner("hybrid_astar");
+  ASSERT_NE(planner, nullptr);
+  core::PlannerConfig cfg;
+  cfg.name = "hybrid_astar";
+  cfg.resolution = 0.05;
+  cfg.max_iterations = 50000;
+  cfg.timeout = 2.0;
+  cfg.allow_reverse = true;
+  cfg.reverse_only = true;
+  cfg.start_relax_radius = 0.65;
+  ASSERT_TRUE(planner->initialize(cfg));
+
+  auto cm = makeMap(200, 200, 0.05);
+  // Start center is free; the front-right footprint corner overlaps this cell.
+  const int ox = 52;
+  const int oy = 44;
+  cm.grid->data[static_cast<size_t>(oy) * 200 + ox] = 100;
+  cm.data[static_cast<size_t>(oy) * 200 + ox] = 255;
+  planner->setCostmap(cm);
+  planner->setRobotRadius(0.20);
+  planner->setRobotFootprint(realFootprint());
+
+  const auto result = planner->plan({2.0, 2.0, 0.0}, {1.4, 2.0, 0.0});
+  ASSERT_TRUE(result.is_ok()) << result.error_message();
+  EXPECT_GE(result.value().points.size(), 3u);
+}
+
 TEST(HybridAStar, FootprintCapabilityIsExplicit)
 {
   auto astar = nav_core::NavigationFactory::createPlanner("astar");

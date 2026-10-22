@@ -124,10 +124,12 @@ safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.3
 
 # ---- 动态障碍 ----
 # tracker 已有 max_radius 限制，重新开启；当前配置为 1.2m。
-# 统一恢复: 后退 -> 原地转向 -> 重试原任务
+# 恢复: 优先用 reverse-only Hybrid A* 规划倒车脱离路径, 再重试原任务;
+# 只有倒车规划失败时才回退到 后退 -> 原地转向 primitive.
 recovery_enabled: true
 recovery_max_attempts: 2
-recovery_back_distance: 0.30
+# 倒车脱离目标距离; 太小会让车头仍卡在障碍里.
+recovery_back_distance: 0.60
 recovery_rotate_angle: 1.5708
 recovery_timeout: 8.0
 tracking_enabled: true

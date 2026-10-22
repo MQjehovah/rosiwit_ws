@@ -110,6 +110,10 @@ private:
   std::vector<std::pair<double, double>> footprint_samples_;
   double footprint_sample_spacing_ = 0.05;
   std::vector<unsigned char> inflation_field_;
+  // recovery-only: tolerate the current footprint overlapping the map so a
+  // reverse escape path can be generated; normal planning keeps this at 0.
+  core::Pose2D start_pose_;
+  bool start_relaxed_ = false;
   std::vector<MotionPrimitive> primitives_;
   bool planning_active_ = false;
   bool cancel_requested_ = false;

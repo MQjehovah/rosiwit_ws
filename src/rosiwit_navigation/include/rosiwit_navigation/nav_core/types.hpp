@@ -68,6 +68,10 @@ struct PlannerConfig
   bool allow_reverse = true;
   /// Optional cap for a single reverse maneuver (0 = no explicit cap).
   double max_reverse_distance = 1.0;
+  /// Recovery-only: only expand reverse primitives.
+  bool reverse_only = false;
+  /// Recovery-only start clearance (m); normal planning should leave 0.
+  double start_relax_radius = 0.0;
 };
 
 struct KinematicsLimits
@@ -98,6 +102,7 @@ struct ControllerConfig
   double footprint_sample_spacing = 0.10;  // 多边形边采样间距 (m)
   /// 外部路径跟踪时把稀疏 waypoint 插值到最大间距(m); 0=关闭.
   double path_resample_step = 0.08;
+  bool allow_reverse = true;
   // MPPI tuning (ignored by other controllers).
   int mppi_horizon = 20;
   int mppi_samples = 160;

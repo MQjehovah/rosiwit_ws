@@ -109,7 +109,7 @@ tracking_min_prediction_speed: 0.15
 # 统一恢复: 后退 -> 原地转向 -> 重试原任务
 recovery_enabled: true
 recovery_max_attempts: 2
-recovery_back_distance: 0.30
+recovery_back_distance: 0.60
 recovery_rotate_angle: 1.5708
 recovery_timeout: 8.0
 

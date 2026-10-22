@@ -58,6 +58,8 @@ private:
   std::vector<std::pair<double, double>> footprint_samples_;
   bool has_local_costmap_{false};
   bool initialized_{false};
+  bool reverse_mode_{false};
+  bool allow_reverse_{true};
   size_t idx_{0};
 
   double max_vx_{0.5};

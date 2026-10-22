@@ -28,10 +28,21 @@ core::Path resamplePath(const core::Path& in, double max_step) {
       core::PathPoint p;
       p.pose.x = a.x + t * dx;
       p.pose.y = a.y + t * dy;
-      // Keep the requested final heading; intermediate points follow tangent.
-      p.pose.theta = (i + 1 == in.points.size() && k == n)
-                       ? b.theta : tangent;
-      p.velocity_x = 0.0;
+      // Keep the requested final heading.  For forward paths the tangent is
+      // the driving direction; for a reverse segment the robot still faces
+      // a.theta/b.theta, so interpolate the supplied heading instead of
+      // turning the reference 180 degrees backwards.
+      if (i + 1 == in.points.size() && k == n) {
+        p.pose.theta = b.theta;
+      } else if (in.points[i].velocity_x < -0.1) {
+        double da = b.theta - a.theta;
+        while (da > M_PI) da -= 2.0 * M_PI;
+        while (da < -M_PI) da += 2.0 * M_PI;
+        p.pose.theta = a.theta + t * da;
+      } else {
+        p.pose.theta = tangent;
+      }
+      p.velocity_x = in.points[i].velocity_x;
       p.velocity_theta = 0.0;
       out.points.push_back(p);
     }
@@ -50,6 +61,7 @@ bool MppiController::initialize(const core::ControllerConfig& config) {
   max_ax_ = config.max_accel_x > 0.0 ? config.max_accel_x : 0.4;
   max_aw_ = config.max_accel_theta > 0.0 ? config.max_accel_theta : 0.8;
   goal_tol_ = config.xy_goal_tolerance > 0.0 ? config.xy_goal_tolerance : 0.2;
+  allow_reverse_ = config.allow_reverse;
   footprint_ = config.footprint;
   footprint_samples_ = core::sampleFootprint(footprint_, config.footprint_sample_spacing);
   horizon_ = std::max(1, config.mppi_horizon);
@@ -75,7 +87,8 @@ void MppiController::resetNominal() {
   // 不要从全 0 控制开始: 采样噪声在 0 附近对称, 加权平均后的第一个
   // 控制量可能只有 0.01, 低于底盘的静止判定, 机器人会一直 recovery.
   const double seed_v = std::max(0.0, max_vx_ * 0.8);
-  nominal_.assign(static_cast<size_t>(horizon_), Control{seed_v, 0.0});
+  const double seed = reverse_mode_ ? -seed_v : seed_v;
+  nominal_.assign(static_cast<size_t>(horizon_), Control{seed, 0.0});
 }
 
 void MppiController::setPath(const core::Path& path) {
@@ -87,6 +100,19 @@ void MppiController::setPath(const core::Path& path) {
     same_goal = path_.points.back().pose.distanceTo(path_in.points.back().pose) < 0.30;
   }
   path_ = path_in;
+  const bool was_reverse = reverse_mode_;
+  reverse_mode_ = false;
+  if (allow_reverse_) {
+    // Use the first directed segment.  A mixed forward/reverse path is
+    // supported by computeVelocityCommand(), which re-evaluates direction at
+    // the current path index.
+    for (const auto& p : path_.points) {
+      if (std::fabs(p.velocity_x) > 0.1) {
+        reverse_mode_ = p.velocity_x < 0.0;
+        break;
+      }
+    }
+  }
   // 重规划后的路径从当前位姿开始. 同一目标下保留进度比例, 不能每秒
   // 重规划都把 idx_ 拉回 0, 否则 MPPI 会在同一段路径上反复起步/抖动.
   if (!path_.points.empty()) {
@@ -101,8 +127,9 @@ void MppiController::setPath(const core::Path& path) {
   } else {
     idx_ = 0;
   }
-  if (!same_goal) {
-    // 新目标从静止加速度约束重新起步, 不能沿用上一条路径的速度命令.
+  if (!same_goal || was_reverse != reverse_mode_) {
+    // 新目标/前进倒车方向切换都必须从静止加速度约束重新起步, 不能沿用
+    // 上一方向的速度命令.
     last_output_v_ = 0.0;
     last_output_w_ = 0.0;
     resetNominal();
@@ -162,6 +189,23 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   // 最近点跳到 U 型路径的另一段导致参考航向突变.
   const size_t progress_begin = idx_ > 2 ? idx_ - 2 : 0;
   idx_ = std::max(idx_, nearestPathIndex(pose, progress_begin, path_.points.size()));
+
+  // A Hybrid A* path may contain both forward and reverse segments.  Select
+  // the direction of the upcoming segment rather than treating the whole path
+  // as reverse just because one later segment is reverse.
+  bool local_reverse = reverse_mode_;
+  for (size_t k = idx_; k < std::min(path_.points.size(), idx_ + 6); ++k) {
+    if (std::fabs(path_.points[k].velocity_x) > 0.1) {
+      local_reverse = path_.points[k].velocity_x < 0.0;
+      break;
+    }
+  }
+  if (local_reverse != reverse_mode_) {
+    reverse_mode_ = local_reverse;
+    last_output_v_ = 0.0;
+    last_output_w_ = 0.0;
+    resetNominal();
+  }
   if (nominal_.size() != static_cast<size_t>(horizon_)) resetNominal();
 
   std::normal_distribution<double> noise_v(0.0, sigma_v_);
@@ -177,7 +221,10 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   // 当前速度来自里程计, 但本项目的 odom/twist 可能滞后甚至为 0.
   // 把上一周期实际下发的命令也作为加速度状态, 否则第一段控制量会被
   // 永久压到 max_accel*dt (0.04m/s), 机器人看起来一直不走.
-  const double base_v = std::max(0.0, std::max(vel.linear_x, last_output_v_));
+  const double vmin = reverse_mode_ ? -max_vx_ : 0.0;
+  const double vmax = reverse_mode_ ? 0.0 : max_vx_;
+  const double base_v = std::max(vmin, std::min(vmax,
+    std::max(vel.linear_x, last_output_v_)));
   const double base_w = std::abs(vel.angular_z) > 0.02 ?
     vel.angular_z : last_output_w_;
   const size_t kLookaheadPoints = 80;
@@ -194,8 +241,8 @@ core::VelocityCommand MppiController::computeVelocityCommand(
     for (int t = 0; t < horizon_; ++t) {
       double v = sample.controls[static_cast<size_t>(t)].v + noise_v(rng_);
       double w = sample.controls[static_cast<size_t>(t)].w + noise_w(rng_);
-      v = std::clamp(v, std::max(0.0, prev_v - max_ax_ * dt_),
-                        std::min(max_vx_, prev_v + max_ax_ * dt_));
+      v = std::clamp(v, std::max(vmin, prev_v - max_ax_ * dt_),
+                        std::min(vmax, prev_v + max_ax_ * dt_));
       w = std::clamp(w, prev_w - max_aw_ * dt_, prev_w + max_aw_ * dt_);
       w = std::clamp(w, -max_vw_, max_vw_);
       sample.controls[static_cast<size_t>(t)] = {v, w};
@@ -235,7 +282,7 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       cost += control_weight_ * (v * v + w * w);
       // 巡航目标就是配置的 max_velocity_x; 实际值由加速度、路径和
       // 障碍代价约束. 旧实现固定 75%, 导致把上限设成 1.0 也只能跑 ~0.75.
-      const double v_ref = max_vx_;
+      const double v_ref = reverse_mode_ ? -max_vx_ : max_vx_;
       cost += speed_weight_ * (v - v_ref) * (v - v_ref) * dt_;
       cost += 0.02 * ((v - prev_v) * (v - prev_v) +
                       (w - prev_w) * (w - prev_w));
@@ -272,7 +319,7 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   // 滚动时域: 平移标称控制序列, 最后一个保持.
   for (size_t t = 0; t + 1 < nominal_.size(); ++t) nominal_[t] = nominal_[t + 1];
 
-  last_output_v_ = std::clamp(first.v, 0.0, max_vx_);
+  last_output_v_ = std::clamp(first.v, vmin, vmax);
   last_output_w_ = std::clamp(first.w, -max_vw_, max_vw_);
   last_nearest_idx_ = nearestPathIndex(pose);
   last_goal_error_ = pose.distanceTo(path_.points.back().pose);
@@ -306,6 +353,7 @@ double MppiController::getProgress() const {
 void MppiController::reset() {
   idx_ = 0;
   path_.points.clear();
+  reverse_mode_ = false;
   last_output_v_ = 0.0;
   last_output_w_ = 0.0;
   resetNominal();

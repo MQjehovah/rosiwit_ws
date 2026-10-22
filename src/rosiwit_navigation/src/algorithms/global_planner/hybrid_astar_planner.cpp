@@ -46,8 +46,10 @@ void HybridAStarPlanner::buildPrimitives()
   // 前进/后退各 3 种曲率，覆盖直线、左转、右转。
   const double forward[] = {0.35, 0.60};
   const double curvatures[] = {-1.2, 0.0, 1.2};
-  for (double d : forward) {
-    for (double k : curvatures) primitives_.push_back({d, k});
+  if (!config_.reverse_only) {
+    for (double d : forward) {
+      for (double k : curvatures) primitives_.push_back({d, k});
+    }
   }
   if (config_.allow_reverse) {
     const double reverse = -std::min(
@@ -211,7 +213,18 @@ bool HybridAStarPlanner::checkPose(const core::Pose2D & pose) const
   // Orientation-aware: check the actual polygon when supplied.  The radius
   // circle remains the fallback for callers that only know a robot radius.
   if (!footprint_samples_.empty()) {
-    return core::footprintCost(*costmap_->grid, pose, footprint_samples_) < 100;
+    if (core::footprintCost(*costmap_->grid, pose, footprint_samples_) < 100)
+      return true;
+    // Recovery-only start clearance: allow the current footprint to overlap
+    // briefly so a reverse escape path can be planned. Normal planning sets
+    // start_relax_radius=0.
+    if (start_relaxed_ && config_.start_relax_radius > 0.0 &&
+        std::hypot(pose.x - start_pose_.x, pose.y - start_pose_.y) <=
+          config_.start_relax_radius &&
+        !isObstacle(ix, iy)) {
+      return true;
+    }
+    return false;
   }
 
   const int r = std::max(1, static_cast<int>(std::ceil(robot_radius_ / resolution_)));
@@ -270,13 +283,14 @@ core::Path HybridAStarPlanner::reconstruct(
 
   core::Path path;
   if (chain.empty()) return path;
-  auto add_pose = [&path](double x, double y, double theta) {
+  auto add_pose = [&path](double x, double y, double theta, double direction) {
     core::PathPoint pt;
     pt.pose = core::Pose2D(x, y, theta);
+    pt.velocity_x = direction;
     path.points.push_back(pt);
   };
   add_pose(nodes[chain.front()].x, nodes[chain.front()].y,
-           nodes[chain.front()].theta);
+           nodes[chain.front()].theta, 0.0);
 
   for (size_t k = 1; k < chain.size(); ++k) {
     const Node & from = nodes[chain[k - 1]];
@@ -296,7 +310,7 @@ core::Path HybridAStarPlanner::reconstruct(
       x += std::cos(mid_th) * ds * sign;
       y += std::sin(mid_th) * ds * sign;
       th = normalizeAngle(th + dtheta);
-      add_pose(x, y, th);
+      add_pose(x, y, th, sign);
     }
   }
   return path;
@@ -327,7 +341,19 @@ core::Result<core::Path> HybridAStarPlanner::plan(
     return core::Result<core::Path>::error(
       core::ErrorCode::GOAL_IN_OBSTACLE, "Goal outside costmap");
   }
-  if (isObstacle(sx, sy) || !checkPose(start)) {
+  if (isObstacle(sx, sy)) {
+    planning_active_ = false;
+    return core::Result<core::Path>::error(
+      core::ErrorCode::START_IN_OBSTACLE, "Start in obstacle");
+  }
+  start_pose_ = start;
+  start_relaxed_ = false;
+  if (!checkPose(start) && config_.start_relax_radius > 0.0) {
+    start_relaxed_ = true;
+    LOG_WARN(logger_, "Start footprint overlaps costmap; recovery start clearance=%.2fm",
+             config_.start_relax_radius);
+  }
+  if (!checkPose(start)) {
     planning_active_ = false;
     return core::Result<core::Path>::error(
       core::ErrorCode::START_IN_OBSTACLE, "Start in obstacle");

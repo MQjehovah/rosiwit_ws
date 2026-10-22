@@ -288,7 +288,7 @@ private:
 
     pnh_.param<bool>("recovery_enabled", recovery_enabled_, true);
     pnh_.param<int>("recovery_max_attempts", recovery_max_attempts_, 2);
-    pnh_.param<double>("recovery_back_distance", recovery_back_distance_, 0.30);
+    pnh_.param<double>("recovery_back_distance", recovery_back_distance_, 0.60);
     pnh_.param<double>("recovery_rotate_angle", recovery_rotate_angle_, M_PI / 2.0);
     pnh_.param<double>("recovery_timeout", recovery_timeout_, 8.0);
 
@@ -360,6 +360,27 @@ private:
       async_planner_->setRobotRadius(robot_radius_);
       if (async_planner_->supportsFootprint() && !configured_footprint_.empty()) {
         async_planner_->setRobotFootprint(configured_footprint_);
+      }
+    }
+
+    // Recovery planner: reverse-only Hybrid A*. It is independent from the
+    // normal planner so recovery cannot change the main navigation policy.
+    recovery_planner_ = nav_core::NavigationFactory::createPlanner("hybrid_astar");
+    if (recovery_planner_) {
+      core::PlannerConfig rcfg;
+      rcfg.name = "hybrid_astar";
+      rcfg.resolution = 0.05;
+      rcfg.max_iterations = planner_max_iterations_;
+      rcfg.timeout = planner_timeout_ > 0.0 ?
+        std::min(planner_timeout_, 1.5) : 1.5;
+      rcfg.allow_reverse = true;
+      rcfg.reverse_only = true;
+      rcfg.start_relax_radius = 0.65;
+      recovery_planner_->initialize(rcfg);
+      recovery_planner_->setInflationRadius(inflation_radius_);
+      recovery_planner_->setRobotRadius(robot_radius_);
+      if (!configured_footprint_.empty()) {
+        recovery_planner_->setRobotFootprint(configured_footprint_);
       }
     }
 
@@ -2164,7 +2185,7 @@ private:
       ROS_ERROR("[rosiwit_navigation_ros1] planner '%s' failed: %s",
                 planner_name_.c_str(), result.error_message().c_str());
       if (startRecovery()) {
-        ROS_WARN("[rosiwit_navigation_ros1] planning failed, recovery back/turn then retry");
+        ROS_WARN("[rosiwit_navigation_ros1] planning failed, reverse escape recovery then retry");
         return;
       }
       if (action_active_) {
@@ -2182,7 +2203,9 @@ private:
   {
     current_path_ = toRosPath(result.value(), pending_goal_.header.frame_id, ros::Time::now());
 
-    if (controller_strategy_) controller_strategy_->setPath(toCorePath(current_path_));
+    // 直接把核心路径交给控制器, 不能用 toCorePath(ROS Path) 转一圈: ROS
+    // Path 没有前进/倒车方向字段, 会把 Hybrid A* 的反向段丢成“前进”.
+    if (controller_strategy_) controller_strategy_->setPath(result.value());
     global_path_pub_.publish(current_path_);
 
     m_need_initial_rotate_ = false;
@@ -2227,6 +2250,7 @@ private:
   {
     recovery_stage_ = RecoveryStage::NONE;
     recovery_task_.reset();
+    recovery_core_path_.points.clear();
     recovery_for_action_ = false;
     recovery_started_ = ros::Time(0);
   }
@@ -2253,6 +2277,50 @@ private:
     if (async_planner_) { async_planner_->cancel(); }
     is_navigating_ = true;
     m_need_initial_rotate_ = false;
+
+    // Prefer a real reverse escape path over a fixed primitive. A short
+    // reverse-only Hybrid A* plan can back out of a dead end/start collision
+    // while preserving the normal planner's forward policy.
+    if (recovery_planner_ && !planner_costmap_.data.empty() && controller_strategy_) {
+      const core::Pose2D pose = toCorePose(current_pose_);
+      const double back = std::max(0.30, recovery_back_distance_);
+      const double side = std::max(0.20, back * 0.55);
+      // 先在正后方找目标; 如果正后方被堵, 再试后左/后右, 让 Hybrid A*
+      // 用倒车弧线从死角/断头路里退出来, 而不是只会直线后退.
+      std::vector<core::Pose2D> targets;
+      targets.push_back({
+        pose.x - std::cos(pose.theta) * back,
+        pose.y - std::sin(pose.theta) * back,
+        pose.theta});
+      targets.push_back({
+        pose.x - std::cos(pose.theta) * back * 0.85 -
+          std::cos(pose.theta + M_PI / 2.0) * side,
+        pose.y - std::sin(pose.theta) * back * 0.85 -
+          std::sin(pose.theta + M_PI / 2.0) * side,
+        pose.theta});
+      targets.push_back({
+        pose.x - std::cos(pose.theta) * back * 0.85 +
+          std::cos(pose.theta + M_PI / 2.0) * side,
+        pose.y - std::sin(pose.theta) * back * 0.85 +
+          std::sin(pose.theta + M_PI / 2.0) * side,
+        pose.theta});
+
+      recovery_planner_->setCostmap(planner_costmap_);
+      for (size_t i = 0; i < targets.size(); ++i) {
+        const auto result = recovery_planner_->plan(pose, targets[i]);
+        if (!result.is_ok()) continue;
+        recovery_core_path_ = result.value();
+        current_path_ = toRosPath(recovery_core_path_, map_frame_, ros::Time::now());
+        controller_strategy_->setPath(recovery_core_path_);
+        recovery_stage_ = RecoveryStage::FOLLOW;
+        ROS_WARN("[rosiwit_navigation_ros1] recovery %d/%d: planned reverse escape "
+                 "candidate=%zu distance=%.2fm (%zu pts)",
+                 recovery_attempts_, recovery_max_attempts_, i + 1, back,
+                 current_path_.poses.size());
+        return true;
+      }
+      ROS_WARN("[rosiwit_navigation_ros1] reverse escape planning failed; fallback primitive");
+    }
 
     core::ActionTaskCommand cmd;
     cmd.kind = core::ActionKind::BACK_OFF;
@@ -2316,6 +2384,21 @@ private:
       return;
     }
     const core::Pose2D pose = toCorePose(current_pose_);
+
+    if (recovery_stage_ == RecoveryStage::FOLLOW) {
+      if (!controller_strategy_ || current_path_.poses.empty()) {
+        failRecovery();
+        return;
+      }
+      if (controller_strategy_->isGoalReached(pose)) {
+        finishRecovery();
+        return;
+      }
+      publishCommand(applySafety(computeVelocityCommand()));
+      recordActionTraveled();
+      if (action_active_) publishActionOutputs();
+      return;
+    }
 
     if (recovery_stage_ == RecoveryStage::BACK) {
       const auto st = recovery_task_.update(pose, now.toSec(), false, 0.0);
@@ -2757,13 +2840,15 @@ private:
   core::ActionTask action_task_;
   bool action_active_ = false;
 
-  // 统一恢复: 后退 -> 原地转向 -> 重试原任务.
-  enum class RecoveryStage { NONE, BACK, ROTATE };
+  // 统一恢复: 优先规划一条反向后退出路径; 失败才回退到 primitive backoff/rotate.
+  enum class RecoveryStage { NONE, FOLLOW, BACK, ROTATE };
   RecoveryStage recovery_stage_ = RecoveryStage::NONE;
+  std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
+  core::Path recovery_core_path_;
   bool recovery_enabled_ = true;
   int recovery_max_attempts_ = 2;
   int recovery_attempts_ = 0;
-  double recovery_back_distance_ = 0.30;
+  double recovery_back_distance_ = 0.60;
   double recovery_rotate_angle_ = M_PI / 2.0;
   double recovery_timeout_ = 8.0;
   int recovery_turn_sign_ = 1;

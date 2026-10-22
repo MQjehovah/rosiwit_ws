@@ -1414,7 +1414,8 @@ void NavigationNode::applyPlanningResult(const core::Result<core::Path> & result
     // 中间路径仍发布, 由安全层兜底.
     const double now_sec = now().seconds();
     if (now_sec - last_controller_path_sec_ >= 0.5) {
-      controller_strategy_->setPath(RosUtils::toCorePath(current_path_));
+      // Keep the core path: ROS Path has no forward/reverse direction field.
+      controller_strategy_->setPath(result.value());
       last_controller_path_sec_ = now_sec;
     }
   }
@@ -1554,9 +1555,9 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
 
   current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
 
-  // 将路径注入控制器
+  // 将核心路径直接注入控制器, 保留 Hybrid A* 的倒车方向标记.
   if (controller_strategy_) {
-    controller_strategy_->setPath(RosUtils::toCorePath(current_path_));
+    controller_strategy_->setPath(result.value());
     last_controller_path_sec_ = now().seconds();
   }
 
