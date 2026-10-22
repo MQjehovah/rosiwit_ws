@@ -185,6 +185,7 @@ void Interface::cancelCallback(GoalHandle /*handle*/)
     current_goal_.setCanceled(canceled);
   }
   has_goal_ = false;
+  current_goal_ = GoalHandle();
 }
 
 void Interface::publishCmdVel(const geometry_msgs::Twist & cmd)
@@ -336,6 +337,9 @@ void Interface::succeed(const Outcome & outcome)
     // 旧实现对成功和失败都调用 setSucceeded, 失败信息只在 tracking_path_result 里.
     current_goal_.setSucceeded(msg);
   }
+  // GoalHandle may retain the complete goal message (including a huge
+  // FOLLOW_PATH tracking_path) after the result.  Release it explicitly.
+  current_goal_ = GoalHandle();
   ROS_INFO("[movebase_iface] 导航结束: result=%d percent=%.2f",
            outcome.tracking_path_result, outcome.execution_percent);
 }
@@ -348,6 +352,7 @@ void Interface::preempted()
     current_goal_.setCanceled(canceled);
   }
   has_goal_ = false;
+  current_goal_ = GoalHandle();
 }
 
 void Interface::publishDockingPathOnce()
