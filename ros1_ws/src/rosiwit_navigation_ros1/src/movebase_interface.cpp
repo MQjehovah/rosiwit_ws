@@ -154,8 +154,19 @@ void Interface::goalCallback(GoalHandle handle)
   // 现场 xzrobot_ros_dependency 版本没有 set_navi_mode 字段
   // (robot_movebase 源码里的 .action 比现场消息包新), 不能访问它.
   goal.backing_dist = msg->backing_dist;
-  goal.tracking_path.reserve(msg->tracking_path.size());
-  for (const auto & pose : msg->tracking_path) {
+  // A malformed/very large tracking_path would otherwise be copied several
+  // times (action message -> Goal -> action_goal_ -> Decoded::path) and can
+  // exhaust the 7.7GB robot.  Keep a hard bound on what this node accepts.
+  constexpr size_t kMaxGoalPathPoints = 20000;
+  const size_t incoming_points = msg->tracking_path.size();
+  if (incoming_points > kMaxGoalPathPoints) {
+    ROS_ERROR("[movebase_iface] tracking_path has %zu points (max %zu); truncating",
+              incoming_points, kMaxGoalPathPoints);
+  }
+  const size_t copy_points = std::min(incoming_points, kMaxGoalPathPoints);
+  goal.tracking_path.reserve(copy_points);
+  for (size_t i = 0; i < copy_points; ++i) {
+    const auto & pose = msg->tracking_path[i];
     goal.tracking_path.emplace_back(pose.x, pose.y, pose.theta);
   }
   goal.file_path = msg->file_path;

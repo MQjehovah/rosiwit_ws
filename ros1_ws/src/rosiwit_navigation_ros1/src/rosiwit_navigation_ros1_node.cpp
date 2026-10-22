@@ -1062,6 +1062,11 @@ private:
     last_clean_area_ = 0.0;
     action_active_ = false;
     action_task_.reset();
+    // action_goal_/action_cmd_ 可能持有 FOLLOW_PATH/COVERAGE 的整条路径.
+    // 任务结束后必须释放, 否则一次异常大 goal 会永久占住内存.
+    action_goal_ = movebase::Goal();
+    action_cmd_ = movebase::Decoded();
+    action_traveled_.clear();
     resetRecovery();
     recovery_attempts_ = 0;
     if (controller_strategy_) {
@@ -1761,6 +1766,8 @@ private:
        << ",\"track_pts_cap\":" << tracker_points_.capacity()
        << ",\"map_w\":" << (current_map_ ? static_cast<int>(current_map_->info.width) : -1)
        << ",\"map_h\":" << (current_map_ ? static_cast<int>(current_map_->info.height) : -1)
+       << ",\"goal_path\":" << action_goal_.tracking_path.size()
+       << ",\"cmd_path\":" << action_cmd_.path.size()
        << ",\"odom_age\":" << (last_odom_stamp_.isZero() ? -1.0 : (ros::Time::now() - last_odom_stamp_).toSec())
        << "}";
     std_msgs::String msg;
