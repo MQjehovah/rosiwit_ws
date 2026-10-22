@@ -49,13 +49,26 @@ void MppiController::resetNominal() {
 
 void MppiController::setPath(const core::Path& path) {
   bool same_goal = false;
+  const size_t old_size = path_.points.size();
+  const size_t old_idx = idx_;
   if (!path_.points.empty() && !path.points.empty()) {
     same_goal = path_.points.back().pose.distanceTo(path.points.back().pose) < 0.30;
   }
   path_ = path;
-  // 重规划后的路径从当前位姿开始; 旧 idx_ 可能已越过新绕行段, 必须回到
-  // 起点重新找最近点, 否则控制器会跳过新避障路径.
-  idx_ = 0;
+  // 重规划后的路径从当前位姿开始. 同一目标下保留进度比例, 不能每秒
+  // 重规划都把 idx_ 拉回 0, 否则 MPPI 会在同一段路径上反复起步/抖动.
+  if (!path_.points.empty()) {
+    if (same_goal && old_size > 1) {
+      const double progress = static_cast<double>(old_idx) /
+                              static_cast<double>(old_size);
+      idx_ = std::min(path_.points.size() - 1,
+                      static_cast<size_t>(progress * path_.points.size()));
+    } else {
+      idx_ = 0;
+    }
+  } else {
+    idx_ = 0;
+  }
   if (!same_goal) {
     // 新目标从静止加速度约束重新起步, 不能沿用上一条路径的速度命令.
     last_output_v_ = 0.0;
