@@ -14,9 +14,9 @@
 #include <iomanip>
 #include <utility>
 
-#include "path_smoother.hpp"
 #include "tf2/utils.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
@@ -419,6 +419,11 @@ void NavigationNode::loadSafetyParameters()
   declareIfNeeded("safety_base_frame", std::string("base_footprint"));
   declareIfNeeded("safety_source_timeout", 2.0);
   declareIfNeeded("safety_self_filter_radius", 0.20);
+  declareIfNeeded("scan_self_filter_enabled", true);
+  declareIfNeeded("scan_self_x_min", -0.45);
+  declareIfNeeded("scan_self_x_max", 0.75);
+  declareIfNeeded("scan_self_y_min", -0.55);
+  declareIfNeeded("scan_self_y_max", 0.55);
   declareIfNeeded("safety_fail_safe_on_timeout", false);
   declareIfNeeded("safety_min_height", 0.05);
   declareIfNeeded("safety_max_height", 1.0);
@@ -444,6 +449,11 @@ void NavigationNode::loadSafetyParameters()
   get_parameter("safety_base_frame", safety_base_frame_);
   get_parameter("safety_source_timeout", safety_source_timeout_);
   get_parameter("safety_self_filter_radius", safety_self_filter_radius_);
+  get_parameter("scan_self_filter_enabled", scan_self_filter_enabled_);
+  get_parameter("scan_self_x_min", scan_self_x_min_);
+  get_parameter("scan_self_x_max", scan_self_x_max_);
+  get_parameter("scan_self_y_min", scan_self_y_min_);
+  get_parameter("scan_self_y_max", scan_self_y_max_);
   get_parameter("safety_fail_safe_on_timeout", safety_fail_safe_on_timeout_);
   get_parameter("safety_min_height", safety_min_height_);
   get_parameter("safety_max_height", safety_max_height_);
@@ -770,6 +780,15 @@ void NavigationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
       tf2::durationFromSec(0.1));
   } catch (tf2::TransformException &) { return; }
 
+  geometry_msgs::msg::TransformStamped base_tf;
+  if (scan_self_filter_enabled_) {
+    try {
+      base_tf = tf_buffer_->lookupTransform(
+        robot_frame_, msg->header.frame_id, msg->header.stamp,
+        tf2::durationFromSec(0.05));
+    } catch (tf2::TransformException &) { return; }
+  }
+
   last_scan_sec_ = now().seconds();
   laser_points_.clear();
   double angle = msg->angle_min;
@@ -780,6 +799,14 @@ void NavigationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
     lp.point.x = msg->ranges[i] * std::cos(angle);
     lp.point.y = msg->ranges[i] * std::sin(angle);
     lp.point.z = 0.0;
+    if (scan_self_filter_enabled_) {
+      geometry_msgs::msg::PointStamped bp;
+      tf2::doTransform(lp, bp, base_tf);
+      if (bp.point.x >= scan_self_x_min_ && bp.point.x <= scan_self_x_max_ &&
+          bp.point.y >= scan_self_y_min_ && bp.point.y <= scan_self_y_max_) {
+        continue;
+      }
+    }
     geometry_msgs::msg::PointStamped mp;
     tf2::doTransform(lp, mp, tf);
     laser_points_.push_back(mp.point);
@@ -1322,7 +1349,6 @@ void NavigationNode::applyPlanningResult(const core::Result<core::Path> & result
   }
 
   current_path_ = RosUtils::toRosPath(result.value(), goal_pose_.header.frame_id, now());
-  smoothCurrentPath(current_path_);
   if (controller_strategy_) {
     // DWA/MPPI 的 setPath 会重置进度; 地图 1Hz 重规划时最多 2Hz 刷给控制器,
     // 中间路径仍发布, 由安全层兜底.
@@ -1467,7 +1493,6 @@ void NavigationNode::executeNavigation(const geometry_msgs::msg::PoseStamped & g
   }
 
   current_path_ = RosUtils::toRosPath(result.value(), goal.header.frame_id, now());
-  smoothCurrentPath(current_path_);
 
   // 将路径注入控制器
   if (controller_strategy_) {
@@ -1802,61 +1827,6 @@ void NavigationNode::publishDiagnostics()
     last_local_blue_cells_, current_path_.poses.size(), recovery_active_ ? 1 : 0);
 }
 
-void NavigationNode::smoothCurrentPath(nav_msgs::msg::Path & path)
-{
-  if (!enable_path_smoothing_ || path.poses.size() < 3) return;
-  // The smoother only checks the center line; it would destroy the
-  // orientation-aware footprint clearance produced by Hybrid A*.
-  if (planner_strategy_ && planner_strategy_->supportsFootprint()) return;
-
-  planners::SmootherConfig smoother_cfg;
-  smoother_cfg.max_iterations = 100;
-  smoother_cfg.alpha_start = 0.5;
-  smoother_cfg.alpha_end = 0.1;
-
-  std::shared_ptr<core::CostmapGrid> core_map;
-  // 优先用已膨胀的 global costmap 做碰撞检测, 防止平滑把路径拉进安全区.
-  if (m_has_global_costmap_) {
-    core_map = std::make_shared<core::CostmapGrid>();
-    core_map->info.width = global_costmap_msg_.info.width;
-    core_map->info.height = global_costmap_msg_.info.height;
-    core_map->info.resolution = global_costmap_msg_.info.resolution;
-    core_map->info.origin.position.x = global_costmap_msg_.info.origin.position.x;
-    core_map->info.origin.position.y = global_costmap_msg_.info.origin.position.y;
-    core_map->data = global_costmap_msg_.data;
-  } else if (current_map_) {
-    core_map = std::make_shared<core::CostmapGrid>();
-    core_map->info.width = current_map_->info.width;
-    core_map->info.height = current_map_->info.height;
-    core_map->info.resolution = current_map_->info.resolution;
-    core_map->info.origin.position.x = current_map_->info.origin.position.x;
-    core_map->info.origin.position.y = current_map_->info.origin.position.y;
-    core_map->data = current_map_->data;
-  }
-  if (!core_map) return;
-
-  const nav_msgs::msg::Path raw_path = path;
-  core::Path core_path = RosUtils::toCorePath(path);
-  core_path = planners::smoothPath(core_path, core_map, smoother_cfg);
-  path = RosUtils::toRosPath(core_path, path.header.frame_id, now());
-
-  // 平滑后再逐段检查一次; 平滑器只保证新顶点/线段不进 100 区, 这里
-  // 作为最终安全闸, 失败就退回 A* 原始路径.
-  if (m_has_global_costmap_ && pathCollides(path, global_costmap_msg_)) {
-    path = raw_path;
-    if (pathCollides(path, global_costmap_msg_)) {
-      // 不再把路径清空. 新地图/新激光和 A* 规划用的 costmap 可能差一个
-      // 更新周期; 清空会让机器人立即停死. 保留 A* 路径, 由下一周期
-      // replan 修正, 同时局部 costmap/安全层负责实时避障.
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "Raw A* path intersects updated costmap; keeping path for replan");
-    } else {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "Smoothed path collides; using raw A* path");
-    }
-  }
-}
-
 bool NavigationNode::adjustGoalToFree(core::Pose2D & goal) const
 {
   if (!m_has_global_costmap_ || global_costmap_msg_.data.empty()) return false;
@@ -1899,43 +1869,6 @@ bool NavigationNode::adjustGoalToFree(core::Pose2D & goal) const
     "Goal in obstacle; nudged to nearby lowest-cost cell (%.2f, %.2f), cost=%d",
     goal.x, goal.y, best_cost);
   return true;
-}
-
-bool NavigationNode::pathCollides(const nav_msgs::msg::Path & path,
-  const nav_msgs::msg::OccupancyGrid & costmap) const
-{
-  if (path.poses.empty() || costmap.data.empty()) return false;
-  const double res = costmap.info.resolution;
-  const double ox = costmap.info.origin.position.x;
-  const double oy = costmap.info.origin.position.y;
-  const auto & start = path.poses.front().pose.position;
-  auto lethal = [&](double wx, double wy) -> bool {
-    // 机器人起点可能因贴墙/地图抖动落在 100 内; A* 会清出起点小区域.
-    // 这里跳过起点近旁的检查, 否则会把刚规划好的路径误清空, 机器人停死.
-    if (std::hypot(wx - start.x, wy - start.y) < 0.5) return false;
-    const int mx = static_cast<int>(std::floor((wx - ox) / res));
-    const int my = static_cast<int>(std::floor((wy - oy) / res));
-    if (mx < 0 || mx >= static_cast<int>(costmap.info.width) ||
-        my < 0 || my >= static_cast<int>(costmap.info.height)) return true;
-    const size_t idx = static_cast<size_t>(my) * costmap.info.width +
-                       static_cast<size_t>(mx);
-    return costmap.data[idx] >= 100;
-  };
-  if (path.poses.size() == 1) {
-    return lethal(path.poses.front().pose.position.x,
-                  path.poses.front().pose.position.y);
-  }
-  for (size_t i = 1; i < path.poses.size(); ++i) {
-    const auto & a = path.poses[i-1].pose.position;
-    const auto & b = path.poses[i].pose.position;
-    const double dist = std::hypot(b.x - a.x, b.y - a.y);
-    const int steps = std::max(1, static_cast<int>(std::ceil(dist / (res * 0.5))));
-    for (int s = 0; s <= steps; ++s) {
-      const double t = static_cast<double>(s) / steps;
-      if (lethal(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)) return true;
-    }
-  }
-  return false;
 }
 
 void NavigationNode::publishPath(const nav_msgs::msg::Path & path)

@@ -18,6 +18,7 @@
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Point.h>
+#include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <sensor_msgs/LaserScan.h>
 #include <sensor_msgs/PointCloud2.h>
@@ -52,7 +53,6 @@
 #include "rosiwit_navigation/nav_core/voxel_layer.hpp"
 #include "rosiwit_navigation/nav_core/action_task.hpp"
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
-#include "path_smoother.hpp"
 #include "movebase_protocol.h"
 #include "movebase_interface.h"
 
@@ -159,6 +159,14 @@ private:
     pnh_.param<std::vector<double>>("safety_stop_polygon", stop_poly, default_stop);
     pnh_.param<std::vector<double>>("safety_slowdown_polygon", slow_poly, default_slow);
     pnh_.param<std::vector<double>>("safety_footprint", footprint, default_footprint);
+
+    // 与 3D 前端相同的车体自过滤: /scan 在 base 系下落在车体包围盒内的点
+    // 不进入 costmap/safety. 只过滤车体内部, 车外近障碍仍保留.
+    pnh_.param<bool>("scan_self_filter_enabled", scan_self_filter_enabled_, true);
+    pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
+    pnh_.param<double>("scan_self_x_max", scan_self_x_max_, 0.75);
+    pnh_.param<double>("scan_self_y_min", scan_self_y_min_, -0.55);
+    pnh_.param<double>("scan_self_y_max", scan_self_y_max_, 0.55);
 
     core::SafetyMonitorConfig safety_cfg;
     safety_cfg.enabled = safety_enabled_;
@@ -466,6 +474,17 @@ private:
     // 会误以为仍有实时数据.
     last_scan_stamp_ = ros::Time::now();
 
+    // /scan 与 3D 前端使用同一套 base 系车体包围盒自过滤.
+    geometry_msgs::TransformStamped base_tf;
+    if (scan_self_filter_enabled_) {
+      try {
+        base_tf = tf_buffer_.lookupTransform(robot_frame_, msg->header.frame_id,
+                                             msg->header.stamp, ros::Duration(0.05));
+      } catch (tf2::TransformException &) {
+        return;
+      }
+    }
+
     const double tyaw = yawFromQuat(tf.transform.rotation);
     const double tx = tf.transform.translation.x;
     const double ty = tf.transform.translation.y;
@@ -479,6 +498,18 @@ private:
       if (r < msg->range_min || r > msg->range_max) { continue; }
       const double lx = r * std::cos(angle);
       const double ly = r * std::sin(angle);
+      if (scan_self_filter_enabled_) {
+        geometry_msgs::PointStamped lp;
+        lp.header = msg->header;
+        lp.point.x = lx;
+        lp.point.y = ly;
+        geometry_msgs::PointStamped bp;
+        tf2::doTransform(lp, bp, base_tf);
+        if (bp.point.x >= scan_self_x_min_ && bp.point.x <= scan_self_x_max_ &&
+            bp.point.y >= scan_self_y_min_ && bp.point.y <= scan_self_y_max_) {
+          continue;
+        }
+      }
       geometry_msgs::Point p;
       p.x = tx + lx * cy - ly * sy;
       p.y = ty + lx * sy + ly * cy;
@@ -867,29 +898,6 @@ private:
       ros_path.poses.push_back(stamped);
     }
     current_path_ = ros_path;
-
-    // 规划结果平滑只检查中心线；Hybrid A* 的 footprint 约束会在平滑时
-    // 被破坏（车角切进墙）。footprint-aware 规划/控制时跳过中心线平滑，
-    // 保留规划器输出的圆弧路径；A* fallback 仍走原有平滑。
-    const bool footprint_aware_path =
-        (planner_strategy_ && planner_strategy_->supportsFootprint()) ||
-        !controller_footprint_.empty();
-    if (current_path_.poses.size() >= 3 && current_map_ && !footprint_aware_path) {
-      planners::SmootherConfig smoother_cfg;
-      smoother_cfg.max_iterations = 100;
-      smoother_cfg.alpha_start = 0.5;
-      smoother_cfg.alpha_end = 0.1;
-      auto core_map = std::make_shared<core::CostmapGrid>();
-      core_map->info.width = current_map_->info.width;
-      core_map->info.height = current_map_->info.height;
-      core_map->info.resolution = current_map_->info.resolution;
-      core_map->info.origin.position.x = current_map_->info.origin.position.x;
-      core_map->info.origin.position.y = current_map_->info.origin.position.y;
-      core_map->data = current_map_->data;
-      current_path_ = toRosPath(
-        planners::smoothPath(toCorePath(current_path_), core_map, smoother_cfg),
-        map_frame_, ros::Time::now());
-    }
 
     core::ActionTaskCommand task_command;
     task_command.kind = core::ActionKind::FOLLOW_PATH;
@@ -2118,30 +2126,6 @@ private:
   {
     current_path_ = toRosPath(result.value(), pending_goal_.header.frame_id, ros::Time::now());
 
-    // smoothPath 只保证中心线不碰障碍，不保证矩形 footprint；
-    // footprint-aware 规划器输出的圆弧路径不能再用中心线平滑.
-    const bool footprint_aware_path =
-        (planner_strategy_ && planner_strategy_->supportsFootprint()) ||
-        !controller_footprint_.empty();
-    if (current_path_.poses.size() >= 3 && !footprint_aware_path) {
-      planners::SmootherConfig smoother_cfg;
-      smoother_cfg.max_iterations = 100;
-      smoother_cfg.alpha_start = 0.5;
-      smoother_cfg.alpha_end = 0.1;
-      std::shared_ptr<core::CostmapGrid> core_map;
-      if (current_map_) {
-        core_map = std::make_shared<core::CostmapGrid>();
-        core_map->info.width = current_map_->info.width;
-        core_map->info.height = current_map_->info.height;
-        core_map->info.resolution = current_map_->info.resolution;
-        core_map->info.origin.position.x = current_map_->info.origin.position.x;
-        core_map->info.origin.position.y = current_map_->info.origin.position.y;
-        core_map->data = current_map_->data;
-      }
-      core::Path core_path = planners::smoothPath(toCorePath(current_path_), core_map, smoother_cfg);
-      current_path_ = toRosPath(core_path, pending_goal_.header.frame_id, ros::Time::now());
-    }
-
     if (controller_strategy_) controller_strategy_->setPath(toCorePath(current_path_));
     global_path_pub_.publish(current_path_);
 
@@ -2445,6 +2429,11 @@ private:
 
   bool safety_enabled_ = true;
   double safety_self_filter_radius_ = 0.25;
+  bool scan_self_filter_enabled_ = true;
+  double scan_self_x_min_ = -0.45;
+  double scan_self_x_max_ = 0.75;
+  double scan_self_y_min_ = -0.55;
+  double scan_self_y_max_ = 0.55;
   bool safety_fail_safe_on_timeout_ = true;
   double safety_source_timeout_ = 0.5;
   double safety_slowdown_ratio_ = 0.5;

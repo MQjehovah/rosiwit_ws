@@ -249,9 +249,6 @@ protected:
    * @brief 发布路径（用于可视化）
    */
   void publishPath(const nav_msgs::msg::Path & path);
-  void smoothCurrentPath(nav_msgs::msg::Path & path);
-  bool pathCollides(const nav_msgs::msg::Path & path,
-    const nav_msgs::msg::OccupancyGrid & costmap) const;
   bool adjustGoalToFree(core::Pose2D & goal) const;
   void publishLocalCostmap();
 
@@ -321,6 +318,11 @@ private:
   double last_controller_path_sec_ = 0.0;
   double tf_stale_timeout_{0.6};
   double safety_self_filter_radius_{0.20};
+  bool scan_self_filter_enabled_{true};
+  double scan_self_x_min_{-0.45};
+  double scan_self_x_max_{0.75};
+  double scan_self_y_min_{-0.55};
+  double scan_self_y_max_{0.55};
   double local_clear_radius_{0.20};
   bool local_unknown_as_lethal_{false};
   double last_odom_sec_{-1e9};

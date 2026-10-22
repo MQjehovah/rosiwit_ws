@@ -4,6 +4,7 @@
 // ============================================================
 
 #include "astar_planner.hpp"
+#include "path_smoother.hpp"
 #include "rosiwit_navigation/nav_core/exceptions.hpp"
 
 #include <algorithm>
@@ -302,6 +303,11 @@ core::Result<core::Path> AStarPlanner::plan(
         if (current.x == goal_x && current.y == goal_y) {
             core::Path path;
             reconstructPath(current, path);
+            // 平滑属于规划算法层；A* 的栅格折线在这里处理一次,
+            // ROS 接口层不再重复修改路径.
+            if (path.points.size() >= 3 && costmap_) {
+                path = smoothPath(path, costmap_->grid, SmootherConfig());
+            }
             planning_active_ = false;
             return core::Result<core::Path>::ok(path);
         }

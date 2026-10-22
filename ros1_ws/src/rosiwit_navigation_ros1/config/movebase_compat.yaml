@@ -87,6 +87,12 @@ inflation_radius: 0.62
 # ---- 安全层 (实车 footprint + stop_dist=0.12 / g_robot_safe_dist=0.3) ----
 safety_enabled: true
 safety_self_filter_radius: 0.25
+# 与 3D 前端相同的车体自过滤 (base_footprint 系包围盒):
+scan_self_filter_enabled: true
+scan_self_x_min: -0.45
+scan_self_x_max: 0.75
+scan_self_y_min: -0.55
+scan_self_y_max: 0.55
 safety_fail_safe_on_timeout: true
 safety_source_timeout: 0.5
 # 实车 footprint 外扩 0.12m
