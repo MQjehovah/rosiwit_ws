@@ -28,10 +28,52 @@ std::string mapBase(const std::string& path) {
 
 }  // namespace
 
+/// Load a plain PCD as a single-keyframe map (same semantics as the ROS2
+/// /load_map service). This lets ROS1 consume the maps shipped in docs/maps.
+bool loadPcdMapData(const std::string& pcd_path, const std::string& base,
+                    rosiwit_slam::MapData& out) {
+    rosiwit_slam::CloudType::Ptr cloud(new rosiwit_slam::CloudType());
+    if (pcl::io::loadPCDFile(pcd_path, *cloud) != 0 || cloud->empty()) {
+        std::cerr << "[map_adapter] cannot read PCD " << pcd_path << std::endl;
+        return false;
+    }
+
+    out = rosiwit_slam::MapData{};
+    out.meta.map_id = base;
+    out.meta.frame_id = "map";
+    out.meta.resolution = 0.05;
+
+    rosiwit_slam::KeyFrame kf;
+    kf.pose.time = -1.0;
+    kf.pose.trans = Eigen::Vector3d::Zero();
+    kf.pose.rot = Eigen::Matrix3d::Identity();
+    kf.cloud = cloud;
+    out.keyframes.push_back(kf);
+
+    auto store = std::make_shared<rosiwit_slam::VoxelMapStore>(0.3);
+    store->buildFromCloud(cloud);
+    out.points = store;
+
+    std::cout << "[map_adapter] loaded PCD " << pcd_path << " ("
+              << cloud->size() << " pts) as 1 keyframe" << std::endl;
+    return true;
+}
+
 bool loadMapData(const std::string& path, rosiwit_slam::MapData& out) {
     const std::string base = mapBase(path);
+
+    // Direct PCD (e.g. /load_map with docs/maps/map/map.pcd).
+    if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".pcd") == 0) {
+        return loadPcdMapData(path, base, out);
+    }
+
     std::vector<rosiwit_slam::io::XzMapKeyframe> kfs;
     if (!rosiwit_slam::io::readXzMap(base + ".xzmap", kfs) || kfs.empty()) {
+        // /switch_map passes a basename: accept <base>.pcd when no xzmap exists.
+        std::ifstream pcd_probe(base + ".pcd");
+        if (pcd_probe.good()) {
+            return loadPcdMapData(base + ".pcd", base, out);
+        }
         std::cerr << "[map_adapter] cannot read " << base << ".xzmap" << std::endl;
         return false;
     }

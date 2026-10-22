@@ -267,9 +267,19 @@ bool RosiwitInterface::handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,
 
 bool RosiwitInterface::handleLoadMap(rosiwit_slam_ros1::LoadMap::Request& req,
                                      rosiwit_slam_ros1::LoadMap::Response& res) {
-    rosiwit_slam::MapData data;
-    res.success = engine_.algo() && map_adapter::loadMapData(req.path, data) &&
-                  engine_.algo()->loadLocalizationMapData(data);
+    // Plain PCD goes through the core's loadMap(), matching the ROS2 service:
+    // PcdMapManager loads it and the configured localization module (e.g.
+    // gicp_localization) receives the PCD path directly. The MapData branch is
+    // for the legacy xzmap (keyframe) map format.
+    const bool is_pcd = req.path.size() >= 4 &&
+                        req.path.compare(req.path.size() - 4, 4, ".pcd") == 0;
+    if (is_pcd) {
+        res.success = engine_.algo() && engine_.algo()->loadMap(req.path);
+    } else {
+        rosiwit_slam::MapData data;
+        res.success = engine_.algo() && map_adapter::loadMapData(req.path, data) &&
+                      engine_.algo()->loadLocalizationMapData(data);
+    }
     res.message = res.success ? "ok" : "failed";
     return true;
 }
