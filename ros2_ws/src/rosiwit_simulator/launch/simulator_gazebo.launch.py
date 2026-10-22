@@ -14,12 +14,45 @@ def generate_launch_description():
     simulator_dir = get_package_share_directory('rosiwit_simulator')
     gazebo_ros_dir = get_package_share_directory('gazebo_ros')
 
-    os.environ['LIBGL_ALWAYS_SOFTWARE'] = '0'
-    os.environ['GALLIUM_DRIVER'] = 'd3d12'
+    # WSLg exposes D3D12 as the GPU driver; on native Linux Mesa picks the
+    # right one by itself.
+    if os.path.exists('/dev/dxg'):
+        os.environ.setdefault('LIBGL_ALWAYS_SOFTWARE', '0')
+        os.environ.setdefault('GALLIUM_DRIVER', 'd3d12')
+
+    # ROS 2's setup.bash does not source Gazebo's own setup.sh, so these are
+    # normally unset. gazebo_ros launch files then override
+    # GAZEBO_RESOURCE_PATH with ROS package shares only, Gazebo cannot find
+    # media/materials/scripts/gazebo.material, RenderEngine fails to create
+    # the scene and gzclient aborts in GLWidget::showEvent.
+    gazebo_share = '/usr/share/gazebo-11'
+    gazebo_plugins = '/usr/lib/x86_64-linux-gnu/gazebo-11/plugins'
+
+    def prepend_env(name, value):
+        if not os.path.isdir(value):
+            return
+        current = os.environ.get(name, '')
+        if value not in current.split(os.pathsep):
+            os.environ[name] = os.pathsep.join(filter(None, [value, current]))
+
+    prepend_env('GAZEBO_RESOURCE_PATH', gazebo_share)
+    prepend_env('GAZEBO_PLUGIN_PATH', gazebo_plugins)
+    prepend_env('GAZEBO_MODEL_PATH', os.path.join(gazebo_share, 'models'))
 
     set_gazebo_model_path = SetEnvironmentVariable(
         name='GAZEBO_MODEL_PATH',
-        value=os.path.join(simulator_dir, 'models')
+        value=os.pathsep.join(filter(None, [
+            os.path.join(simulator_dir, 'models'),
+            os.environ.get('GAZEBO_MODEL_PATH', ''),
+        ]))
+    )
+    set_gazebo_resource_path = SetEnvironmentVariable(
+        name='GAZEBO_RESOURCE_PATH',
+        value=os.environ.get('GAZEBO_RESOURCE_PATH', '')
+    )
+    set_gazebo_plugin_path = SetEnvironmentVariable(
+        name='GAZEBO_PLUGIN_PATH',
+        value=os.environ.get('GAZEBO_PLUGIN_PATH', '')
     )
 
     world_name_arg = DeclareLaunchArgument(
@@ -103,6 +136,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         set_gazebo_model_path,
+        set_gazebo_resource_path,
+        set_gazebo_plugin_path,
         world_name_arg, use_sim_time_arg, gui_arg, paused_arg, headless_arg, debug_arg,
         use_3d_lidar_arg, spawn_x_arg, spawn_y_arg, spawn_z_arg, spawn_yaw_arg,
         gazebo,
