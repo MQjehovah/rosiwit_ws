@@ -67,6 +67,7 @@ footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.2
 # 报告: docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md
 footprint_aware_control: false
 footprint_sample_spacing: 0.05
+path_resample_step: 0.08
 inflation_radius: 0.62
 
 # 里程计话题
@@ -102,6 +103,13 @@ tracking_cluster_distance: 0.35
 tracking_confirm_hits: 3
 tracking_max_radius: 1.2
 tracking_min_prediction_speed: 0.15
+
+# 统一恢复: 后退 -> 原地转向 -> 重试原任务
+recovery_enabled: true
+recovery_max_attempts: 2
+recovery_back_distance: 0.30
+recovery_rotate_angle: 1.5708
+recovery_timeout: 8.0
 
 # 3D 体素 / STVL 层
 voxel_enabled: true

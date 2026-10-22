@@ -9,6 +9,37 @@
 namespace rosiwit_navigation {
 namespace controllers {
 
+namespace {
+core::Path resamplePath(const core::Path& in, double max_step) {
+  if (in.points.size() < 2 || max_step <= 1e-4) return in;
+  const double step = std::max(0.02, max_step);
+  core::Path out;
+  out.points.reserve(in.points.size() * 4);
+  out.points.push_back(in.points.front());
+  for (size_t i = 1; i < in.points.size(); ++i) {
+    const auto& a = in.points[i - 1].pose;
+    const auto& b = in.points[i].pose;
+    const double dx = b.x - a.x, dy = b.y - a.y;
+    const double dist = std::hypot(dx, dy);
+    const int n = std::max(1, static_cast<int>(std::ceil(dist / step)));
+    const double tangent = std::atan2(dy, dx);
+    for (int k = 1; k <= n; ++k) {
+      const double t = static_cast<double>(k) / n;
+      core::PathPoint p;
+      p.pose.x = a.x + t * dx;
+      p.pose.y = a.y + t * dy;
+      // Keep the requested final heading; intermediate points follow tangent.
+      p.pose.theta = (i + 1 == in.points.size() && k == n)
+                       ? b.theta : tangent;
+      p.velocity_x = 0.0;
+      p.velocity_theta = 0.0;
+      out.points.push_back(p);
+    }
+  }
+  return out;
+}
+}  // namespace
+
 MppiController::MppiController()
 : name_("mppi"), logger_("mppi") {}
 
@@ -48,13 +79,14 @@ void MppiController::resetNominal() {
 }
 
 void MppiController::setPath(const core::Path& path) {
+  const core::Path path_in = resamplePath(path, cfg_.path_resample_step);
   bool same_goal = false;
   const size_t old_size = path_.points.size();
   const size_t old_idx = idx_;
-  if (!path_.points.empty() && !path.points.empty()) {
-    same_goal = path_.points.back().pose.distanceTo(path.points.back().pose) < 0.30;
+  if (!path_.points.empty() && !path_in.points.empty()) {
+    same_goal = path_.points.back().pose.distanceTo(path_in.points.back().pose) < 0.30;
   }
-  path_ = path;
+  path_ = path_in;
   // 重规划后的路径从当前位姿开始. 同一目标下保留进度比例, 不能每秒
   // 重规划都把 idx_ 拉回 0, 否则 MPPI 会在同一段路径上反复起步/抖动.
   if (!path_.points.empty()) {

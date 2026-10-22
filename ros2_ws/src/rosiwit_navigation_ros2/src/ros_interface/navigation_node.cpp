@@ -169,6 +169,7 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     ctrl_cfg.mppi_goal_weight = mppi_goal_weight_;
     ctrl_cfg.footprint = configured_footprint_;
     ctrl_cfg.footprint_sample_spacing = 0.05;
+    ctrl_cfg.path_resample_step = path_resample_step_;
     controller_strategy_->initialize(ctrl_cfg);
     RCLCPP_INFO(get_logger(), "Created controller strategy: %s", controller_name_.c_str());
   } else {
@@ -350,6 +351,7 @@ void NavigationNode::loadParameters()
   declareIfNeeded("local_costmap_size", 8.0);
   declareIfNeeded("tf_stale_timeout", 0.6);
   declareIfNeeded("local_clear_radius", 0.20);
+  declareIfNeeded("path_resample_step", 0.08);
   declareIfNeeded("local_unknown_as_lethal", false);
   declareIfNeeded("enable_path_smoothing", false);
   declareIfNeeded("recovery_enabled", true);
@@ -410,6 +412,7 @@ void NavigationNode::loadParameters()
   get_parameter("local_costmap_size", local_costmap_size_);
   get_parameter("tf_stale_timeout", tf_stale_timeout_);
   get_parameter("local_clear_radius", local_clear_radius_);
+  get_parameter("path_resample_step", path_resample_step_);
   get_parameter("local_unknown_as_lethal", local_unknown_as_lethal_);
   get_parameter("enable_path_smoothing", enable_path_smoothing_);
   get_parameter("recovery_enabled", recovery_enabled_);

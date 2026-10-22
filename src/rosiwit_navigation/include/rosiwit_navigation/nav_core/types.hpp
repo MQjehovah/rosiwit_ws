@@ -92,6 +92,8 @@ struct ControllerConfig
   // 为空时退化为原来的"只看中心点"行为.
   Footprint footprint;
   double footprint_sample_spacing = 0.10;  // 多边形边采样间距 (m)
+  /// 外部路径跟踪时把稀疏 waypoint 插值到最大间距(m); 0=关闭.
+  double path_resample_step = 0.08;
   // MPPI tuning (ignored by other controllers).
   int mppi_horizon = 20;
   int mppi_samples = 160;

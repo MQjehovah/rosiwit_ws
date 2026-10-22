@@ -96,6 +96,7 @@ footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.2
 # 报告: docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md
 footprint_aware_control: true
 footprint_sample_spacing: 0.05
+path_resample_step: 0.08
 inflation_radius: 0.62
 
 # ---- 安全层 (实车 footprint + stop_dist=0.12 / g_robot_safe_dist=0.3) ----
@@ -121,6 +122,12 @@ safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.3
 
 # ---- 动态障碍 ----
 # tracker 已有 max_radius 限制，重新开启；当前配置为 1.2m。
+# 统一恢复: 后退 -> 原地转向 -> 重试原任务
+recovery_enabled: true
+recovery_max_attempts: 2
+recovery_back_distance: 0.30
+recovery_rotate_angle: 1.5708
+recovery_timeout: 8.0
 tracking_enabled: true
 tracking_horizon: 0.5
 tracking_cluster_distance: 0.35

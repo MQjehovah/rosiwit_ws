@@ -258,6 +258,7 @@ private:
     // 长方形车体的 footprint-aware 控制: 控制器按 footprint 采样点查 raw costmap.
     pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
+    pnh_.param<double>("path_resample_step", path_resample_step_, 0.08);
     configured_footprint_.clear();
     controller_footprint_.clear();  // 实际是否启用由 setupCore 按控制器能力决定
     // 规划器/控制器统一车体轮廓；优先读显式 footprint，缺失时回退到
@@ -281,6 +282,13 @@ private:
     task_cfg.back_speed = movebase_back_speed_;
     task_cfg.rotate_speed = movebase_rotate_speed_;
     action_task_.configure(task_cfg);
+    recovery_task_.configure(task_cfg);
+
+    pnh_.param<bool>("recovery_enabled", recovery_enabled_, true);
+    pnh_.param<int>("recovery_max_attempts", recovery_max_attempts_, 2);
+    pnh_.param<double>("recovery_back_distance", recovery_back_distance_, 0.30);
+    pnh_.param<double>("recovery_rotate_angle", recovery_rotate_angle_, M_PI / 2.0);
+    pnh_.param<double>("recovery_timeout", recovery_timeout_, 8.0);
 
     // 实车参数必须能从启动日志一眼核对 (否则很容易又跑成仿真值).
     if (!movebase_footprint_.empty()) {
@@ -391,6 +399,7 @@ private:
       ccfg.max_accel_theta = max_accel_theta_;
       ccfg.kinematics.max_velocity_x = max_velocity_x_;
       ccfg.kinematics.max_velocity_theta = max_velocity_theta_;
+      ccfg.path_resample_step = path_resample_step_;
       set_mppi_params(ccfg);
       coverage_controller_->initialize(ccfg);
     } else {
@@ -417,6 +426,7 @@ private:
       cfg.kinematics.max_velocity_theta = max_velocity_theta_;
       cfg.footprint = controller_footprint_;
       cfg.footprint_sample_spacing = footprint_sample_spacing_;
+      cfg.path_resample_step = path_resample_step_;
       set_mppi_params(cfg);
       controller_strategy_->initialize(cfg);
     } else {
@@ -997,6 +1007,8 @@ private:
     last_clean_area_ = 0.0;
     action_active_ = false;
     action_task_.reset();
+    resetRecovery();
+    recovery_attempts_ = 0;
     if (controller_strategy_) {
       controller_strategy_->setVelocityLimit(max_velocity_x_, max_velocity_theta_);
     }
@@ -2145,6 +2157,10 @@ private:
     if (!result.is_ok()) {
       ROS_ERROR("[rosiwit_navigation_ros1] planner '%s' failed: %s",
                 planner_name_.c_str(), result.error_message().c_str());
+      if (startRecovery()) {
+        ROS_WARN("[rosiwit_navigation_ros1] planning failed, recovery back/turn then retry");
+        return;
+      }
       if (action_active_) {
         failAction(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
       } else {
@@ -2199,6 +2215,139 @@ private:
     startPlanning(goal, allow_initial_rotate, /*restart=*/true);
   }
 
+  void resetRecovery()
+  {
+    recovery_stage_ = RecoveryStage::NONE;
+    recovery_task_.reset();
+    recovery_for_action_ = false;
+    recovery_started_ = ros::Time(0);
+  }
+
+  bool startRecovery()
+  {
+    if (!recovery_enabled_ || recovery_attempts_ >= recovery_max_attempts_) {
+      return false;
+    }
+    if (action_active_ &&
+        !(action_cmd_.command == movebase::Command::SINGLE_POINT ||
+          action_cmd_.command == movebase::Command::TWO_POINTS ||
+          action_cmd_.command == movebase::Command::FOLLOW_PATH)) {
+      return false;
+    }
+    if (!updateCurrentPose()) return false;
+
+    ++recovery_attempts_;
+    recovery_for_action_ = action_active_;
+    recovery_turn_sign_ = (recovery_attempts_ % 2 == 0) ? -1 : 1;
+    recovery_started_ = ros::Time::now();
+    planning_active_ = false;
+    is_navigating_ = true;
+    m_need_initial_rotate_ = false;
+
+    core::ActionTaskCommand cmd;
+    cmd.kind = core::ActionKind::BACK_OFF;
+    cmd.back_distance = std::max(0.05, recovery_back_distance_);
+    if (!recovery_task_.start(cmd, toCorePose(current_pose_),
+                              ros::Time::now().toSec())) {
+      return false;
+    }
+    recovery_stage_ = RecoveryStage::BACK;
+    ROS_WARN("[rosiwit_navigation_ros1] recovery %d/%d: back %.2fm, then turn %.0fdeg",
+             recovery_attempts_, recovery_max_attempts_, recovery_back_distance_,
+             recovery_rotate_angle_ * 57.2957795);
+    return true;
+  }
+
+  void failRecovery()
+  {
+    const bool was_action = recovery_for_action_ && action_active_;
+    resetRecovery();
+    if (was_action) {
+      failAction(movebase::RESULT_NO_PROGRESS, "FAILED_RECOVERY");
+    } else {
+      setGoalStatus("FAILED_RECOVERY");
+      stopNavigation();
+    }
+  }
+
+  void finishRecovery()
+  {
+    const bool was_action = recovery_for_action_;
+    resetRecovery();
+    if (was_action && action_active_) {
+      switch (action_cmd_.command) {
+        case movebase::Command::SINGLE_POINT:
+        case movebase::Command::TWO_POINTS:
+          startActionNavigation();
+          return;
+        case movebase::Command::FOLLOW_PATH:
+          startActionFollowPath();
+          return;
+        default:
+          failRecovery();
+          return;
+      }
+    }
+    if (!goal_pose_.header.frame_id.empty()) {
+      startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/true);
+    } else {
+      stopNavigation();
+    }
+  }
+
+  void recoveryControlStep()
+  {
+    if (recovery_stage_ == RecoveryStage::NONE) return;
+    const ros::Time now = ros::Time::now();
+    if (recovery_timeout_ > 0.0 &&
+        (now - recovery_started_).toSec() > recovery_timeout_) {
+      ROS_WARN("[rosiwit_navigation_ros1] recovery timeout");
+      failRecovery();
+      return;
+    }
+    const core::Pose2D pose = toCorePose(current_pose_);
+
+    if (recovery_stage_ == RecoveryStage::BACK) {
+      const auto st = recovery_task_.update(pose, now.toSec(), false, 0.0);
+      if (st == core::ActionTaskStatus::FAILED_STUCK) {
+        failRecovery();
+        return;
+      }
+      if (st == core::ActionTaskStatus::SUCCEEDED) {
+        core::ActionTaskCommand cmd;
+        cmd.kind = core::ActionKind::ROTATE;
+        cmd.rotate_angle = recovery_turn_sign_ * recovery_rotate_angle_;
+        recovery_task_.start(cmd, pose, now.toSec());
+        recovery_stage_ = RecoveryStage::ROTATE;
+        recovery_started_ = now;
+        return;
+      }
+      geometry_msgs::Twist cmd;
+      cmd.linear.x = recovery_task_.backOffCommand();
+      publishCommand(applySafety(cmd));
+      recordActionTraveled();
+      if (action_active_) publishActionOutputs();
+      return;
+    }
+
+    if (recovery_stage_ == RecoveryStage::ROTATE) {
+      const auto st = recovery_task_.update(pose, now.toSec(), false, 0.0);
+      if (st == core::ActionTaskStatus::FAILED_STUCK) {
+        failRecovery();
+        return;
+      }
+      if (st == core::ActionTaskStatus::SUCCEEDED) {
+        finishRecovery();
+        return;
+      }
+      geometry_msgs::Twist cmd;
+      cmd.angular.z = recovery_task_.rotationCommand(pose);
+      publishCommand(applySafety(cmd));
+      recordActionTraveled();
+      if (action_active_) publishActionOutputs();
+    }
+  }
+
   void controlLoop(const ros::TimerEvent &)
   {
     if (planning_active_) pollPlanning();
@@ -2229,6 +2378,11 @@ private:
       return;
     }
 
+    if (recovery_stage_ != RecoveryStage::NONE) {
+      recoveryControlStep();
+      return;
+    }
+
     // ---- movebase action: 状态/进度/到位/卡死全部交给算法层 ----
     if (action_active_) {
       const bool xy_reached =
@@ -2246,6 +2400,10 @@ private:
         return;
       }
       if (task_status == core::ActionTaskStatus::FAILED_STUCK) {
+        if (startRecovery()) {
+          ROS_WARN("[movebase_iface] 判定卡死, 尝试后退/转向恢复");
+          return;
+        }
         ROS_ERROR("[movebase_iface] 超过 %.0f 秒没有进展, 判定卡死",
                   movebase_stuck_timeout_);
         failAction(movebase::RESULT_NO_PROGRESS, "FAILED_STUCK");
@@ -2375,6 +2533,7 @@ private:
 
   void stopNavigation()
   {
+    resetRecovery();
     is_navigating_ = false;
     is_paused_ = false;
     // 取消/结束导航时必须同时作废在途的异步规划, 否则 pollPlanning 会把这个
@@ -2488,6 +2647,7 @@ private:
   core::SafetyMonitor safety_monitor_;
   core::ObstacleTracker tracker_;
   core::TaskStateMachine task_sm_;
+  core::ActionTask recovery_task_;
   core::VoxelLayer voxel_layer_;
   bool voxel_enabled_ = true;
   std::string voxel_cloud_topic_ = "/world_cloud";
@@ -2516,6 +2676,7 @@ private:
   bool rviz_goal_align_yaw_ = true;
   bool footprint_aware_control_ = false;
   double footprint_sample_spacing_ = 0.05;
+  double path_resample_step_ = 0.08;
   core::Footprint configured_footprint_;
   core::Footprint controller_footprint_;
 
@@ -2583,6 +2744,19 @@ private:
   // 任务执行语义在算法层; 这里只保留接口层状态.
   core::ActionTask action_task_;
   bool action_active_ = false;
+
+  // 统一恢复: 后退 -> 原地转向 -> 重试原任务.
+  enum class RecoveryStage { NONE, BACK, ROTATE };
+  RecoveryStage recovery_stage_ = RecoveryStage::NONE;
+  bool recovery_enabled_ = true;
+  int recovery_max_attempts_ = 2;
+  int recovery_attempts_ = 0;
+  double recovery_back_distance_ = 0.30;
+  double recovery_rotate_angle_ = M_PI / 2.0;
+  double recovery_timeout_ = 8.0;
+  int recovery_turn_sign_ = 1;
+  bool recovery_for_action_ = false;
+  ros::Time recovery_started_;
 
   // ---- 动态覆盖清洁 ----
   bool coverage_active_ = false;

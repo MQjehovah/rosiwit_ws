@@ -372,6 +372,7 @@ private:
   core::VoxelLayer voxel_layer_;
   core::TaskStateMachine task_sm_;
   core::Footprint configured_footprint_;
+  double path_resample_step_{0.08};
   int mppi_horizon_{20};
   int mppi_samples_{160};
   double mppi_dt_{0.0};

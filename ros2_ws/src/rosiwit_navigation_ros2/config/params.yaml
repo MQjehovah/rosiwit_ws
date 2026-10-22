@@ -49,6 +49,7 @@ rosiwit_navigation_node:
     robot_radius: 0.30
     # 规划器/控制器共用车体轮廓 (x,y,...); Hybrid A* 使用它.
     footprint: [-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22]
+    path_resample_step: 0.08
 
     # 障碍物膨胀半径（路径离障碍物的距离）
     inflation_radius: 1.0
