@@ -44,12 +44,16 @@ void HybridAStarPlanner::buildPrimitives()
 {
   primitives_.clear();
   // 前进/后退各 3 种曲率，覆盖直线、左转、右转。
-  const double distances[] = {0.35, 0.60, -0.35};
+  const double forward[] = {0.35, 0.60};
   const double curvatures[] = {-1.2, 0.0, 1.2};
-  for (double d : distances) {
-    for (double k : curvatures) {
-      primitives_.push_back({d, k});
-    }
+  for (double d : forward) {
+    for (double k : curvatures) primitives_.push_back({d, k});
+  }
+  if (config_.allow_reverse) {
+    const double reverse = -std::min(
+      std::fabs(0.35), config_.max_reverse_distance > 0.0
+                           ? config_.max_reverse_distance : 0.35);
+    for (double k : curvatures) primitives_.push_back({reverse, k});
   }
 }
 

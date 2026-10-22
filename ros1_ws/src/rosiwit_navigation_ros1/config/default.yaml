@@ -30,6 +30,8 @@ mppi_goal_weight: 1.5
 
 planner_max_iterations: 200000
 planner_timeout: 2.0
+planner_allow_reverse: true
+planner_max_reverse_distance: 1.0
 
 # 频率 (实车 g_control_freq=10)
 controller_frequency: 10.0

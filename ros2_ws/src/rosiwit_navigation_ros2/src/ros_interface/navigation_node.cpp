@@ -105,6 +105,8 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     // "iteration limit exceeded", 看起来像临时失败. 覆盖整张地图.
     planner_cfg.max_iterations = planner_max_iterations_;
     planner_cfg.timeout = planner_timeout_;
+    planner_cfg.allow_reverse = planner_allow_reverse_;
+    planner_cfg.max_reverse_distance = planner_max_reverse_distance_;
     planner_strategy_->initialize(planner_cfg);
     // costmap 已包含安全环 + 蓝色梯度; A* 再膨胀一次会与显示图不一致.
     planner_strategy_->setInflationRadius(0.0);
@@ -130,6 +132,8 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     async_cfg.resolution = 0.05;
     async_cfg.max_iterations = planner_max_iterations_;
     async_cfg.timeout = planner_timeout_;
+    async_cfg.allow_reverse = planner_allow_reverse_;
+    async_cfg.max_reverse_distance = planner_max_reverse_distance_;
     async_planner_->initialize(async_cfg);
     async_planner_->setInflationRadius(0.0);
     async_planner_->setRobotRadius(0.0);
@@ -346,6 +350,8 @@ void NavigationNode::loadParameters()
   declareIfNeeded("controller_name", std::string("pure_pursuit"));
   declareIfNeeded("planner_max_iterations", 200000);
   declareIfNeeded("planner_timeout", 2.0);
+  declareIfNeeded("planner_allow_reverse", true);
+  declareIfNeeded("planner_max_reverse_distance", 1.0);
   declareIfNeeded("inflation_radius", 0.5);
   declareIfNeeded("robot_radius", 0.21);
   declareIfNeeded("local_costmap_size", 8.0);
@@ -407,6 +413,8 @@ void NavigationNode::loadParameters()
   get_parameter("controller_name", controller_name_);
   get_parameter("planner_max_iterations", planner_max_iterations_);
   get_parameter("planner_timeout", planner_timeout_);
+  get_parameter("planner_allow_reverse", planner_allow_reverse_);
+  get_parameter("planner_max_reverse_distance", planner_max_reverse_distance_);
   get_parameter("inflation_radius", inflation_radius_);
   get_parameter("robot_radius", robot_radius_);
   get_parameter("local_costmap_size", local_costmap_size_);

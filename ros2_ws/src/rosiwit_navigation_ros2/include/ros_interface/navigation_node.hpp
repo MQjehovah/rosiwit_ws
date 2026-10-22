@@ -426,6 +426,8 @@ private:
   std::string controller_name_;
   int planner_max_iterations_{200000};
   double planner_timeout_{2.0};
+  bool planner_allow_reverse_{true};
+  double planner_max_reverse_distance_{1.0};
   double inflation_radius_ = 0.5;
   double robot_radius_ = 0.21;
   bool enable_path_smoothing_ = false;

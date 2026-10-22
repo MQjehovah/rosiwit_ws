@@ -69,6 +69,8 @@ planner_name: "hybrid_astar"
 controller_name: "mppi"
 planner_max_iterations: 200000
 planner_timeout: 2.0
+planner_allow_reverse: true
+planner_max_reverse_distance: 1.0
 
 # ---- 坐标系 ----
 global_frame: "map"

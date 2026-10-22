@@ -64,6 +64,10 @@ struct PlannerConfig
   double resolution;
   int max_iterations;
   double timeout;
+  /// Hybrid A*: allow reverse motion primitives (D* forward-only if false).
+  bool allow_reverse = true;
+  /// Optional cap for a single reverse maneuver (0 = no explicit cap).
+  double max_reverse_distance = 1.0;
 };
 
 struct KinematicsLimits

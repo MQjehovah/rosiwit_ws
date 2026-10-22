@@ -131,6 +131,8 @@ private:
     pnh_.param<double>("robot_radius", robot_radius_, 0.21);
     pnh_.param<int>("planner_max_iterations", planner_max_iterations_, 200000);
     pnh_.param<double>("planner_timeout", planner_timeout_, 2.0);
+    pnh_.param<bool>("planner_allow_reverse", planner_allow_reverse_, true);
+    pnh_.param<double>("planner_max_reverse_distance", planner_max_reverse_distance_, 1.0);
     pnh_.param<double>("max_accel_x", max_accel_x_, 0.4);
     pnh_.param<double>("max_accel_theta", max_accel_theta_, 0.8);
     pnh_.param<int>("mppi_horizon", mppi_horizon_, 20);
@@ -325,6 +327,8 @@ private:
       cfg.resolution = 0.05;
       cfg.max_iterations = planner_max_iterations_;
       cfg.timeout = planner_timeout_;
+      cfg.allow_reverse = planner_allow_reverse_;
+      cfg.max_reverse_distance = planner_max_reverse_distance_;
       planner_strategy_->initialize(cfg);
       planner_strategy_->setInflationRadius(inflation_radius_);
       planner_strategy_->setRobotRadius(robot_radius_);
@@ -349,6 +353,8 @@ private:
       acfg.resolution = 0.05;
       acfg.max_iterations = planner_max_iterations_;
       acfg.timeout = planner_timeout_;
+      acfg.allow_reverse = planner_allow_reverse_;
+      acfg.max_reverse_distance = planner_max_reverse_distance_;
       async_planner_->initialize(acfg);
       async_planner_->setInflationRadius(inflation_radius_);
       async_planner_->setRobotRadius(robot_radius_);
@@ -2201,6 +2207,8 @@ private:
   void replanningCheck(const ros::TimerEvent &)
   {
     if (coverage_active_) return;
+    // 恢复期间禁止周期重规划, 否则会打断 backoff/rotate 并再次报 Start in obstacle.
+    if (recovery_stage_ != RecoveryStage::NONE) return;
     if (!is_navigating_ || is_paused_ || m_need_initial_rotate_ || planning_active_) return;
     // 只有"规划到目标点"的任务会周期重规划; 跟踪固定路径/旋转/倒车不重规划.
     if (action_active_ &&
@@ -2241,6 +2249,8 @@ private:
     recovery_turn_sign_ = (recovery_attempts_ % 2 == 0) ? -1 : 1;
     recovery_started_ = ros::Time::now();
     planning_active_ = false;
+    ++plan_generation_;
+    if (async_planner_) { async_planner_->cancel(); }
     is_navigating_ = true;
     m_need_initial_rotate_ = false;
 
@@ -2617,6 +2627,8 @@ private:
   double robot_radius_ = 0.21;
   int planner_max_iterations_ = 200000;
   double planner_timeout_ = 2.0;
+  bool planner_allow_reverse_ = true;
+  double planner_max_reverse_distance_ = 1.0;
   double max_accel_x_ = 0.4;
   double max_accel_theta_ = 0.8;
   int mppi_horizon_ = 20;
