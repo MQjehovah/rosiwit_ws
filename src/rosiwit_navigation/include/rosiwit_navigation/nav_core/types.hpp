@@ -92,6 +92,19 @@ struct ControllerConfig
   // 为空时退化为原来的"只看中心点"行为.
   Footprint footprint;
   double footprint_sample_spacing = 0.10;  // 多边形边采样间距 (m)
+  // MPPI tuning (ignored by other controllers).
+  int mppi_horizon = 20;
+  int mppi_samples = 160;
+  double mppi_dt = 0.1;
+  double mppi_lambda = 0.8;
+  double mppi_sigma_v = 0.18;
+  double mppi_sigma_w = 0.35;
+  double mppi_path_weight = 2.0;
+  double mppi_heading_weight = 0.4;
+  double mppi_obstacle_weight = 0.03;
+  double mppi_control_weight = 0.03;
+  double mppi_speed_weight = 2.0;
+  double mppi_goal_weight = 1.5;
 };
 
 struct CostmapGridInfo

@@ -133,6 +133,18 @@ private:
     pnh_.param<double>("planner_timeout", planner_timeout_, 2.0);
     pnh_.param<double>("max_accel_x", max_accel_x_, 0.4);
     pnh_.param<double>("max_accel_theta", max_accel_theta_, 0.8);
+    pnh_.param<int>("mppi_horizon", mppi_horizon_, 20);
+    pnh_.param<int>("mppi_samples", mppi_samples_, 160);
+    pnh_.param<double>("mppi_dt", mppi_dt_, 0.0);
+    pnh_.param<double>("mppi_lambda", mppi_lambda_, 0.8);
+    pnh_.param<double>("mppi_sigma_v", mppi_sigma_v_, 0.18);
+    pnh_.param<double>("mppi_sigma_w", mppi_sigma_w_, 0.35);
+    pnh_.param<double>("mppi_path_weight", mppi_path_weight_, 2.0);
+    pnh_.param<double>("mppi_heading_weight", mppi_heading_weight_, 0.4);
+    pnh_.param<double>("mppi_obstacle_weight", mppi_obstacle_weight_, 0.03);
+    pnh_.param<double>("mppi_control_weight", mppi_control_weight_, 0.03);
+    pnh_.param<double>("mppi_speed_weight", mppi_speed_weight_, 2.0);
+    pnh_.param<double>("mppi_goal_weight", mppi_goal_weight_, 1.5);
 
     pnh_.param<std::string>("global_frame", global_frame_, "map");
     pnh_.param<std::string>("robot_frame", robot_frame_, "base_link");
@@ -336,6 +348,21 @@ private:
     }
 
     controller_strategy_ = nav_core::NavigationFactory::createController(controller_name_);
+    auto set_mppi_params = [this](core::ControllerConfig & c) {
+      c.mppi_horizon = mppi_horizon_;
+      c.mppi_samples = mppi_samples_;
+      c.mppi_dt = mppi_dt_ > 0.0 ? mppi_dt_
+                                 : 1.0 / std::max(1.0, controller_frequency_);
+      c.mppi_lambda = mppi_lambda_;
+      c.mppi_sigma_v = mppi_sigma_v_;
+      c.mppi_sigma_w = mppi_sigma_w_;
+      c.mppi_path_weight = mppi_path_weight_;
+      c.mppi_heading_weight = mppi_heading_weight_;
+      c.mppi_obstacle_weight = mppi_obstacle_weight_;
+      c.mppi_control_weight = mppi_control_weight_;
+      c.mppi_speed_weight = mppi_speed_weight_;
+      c.mppi_goal_weight = mppi_goal_weight_;
+    };
     // footprint-aware 只对真正实现了 footprint 代价的控制器生效;
     // 否则必须保留局部 costmap 的圆形膨胀, 不能接未膨胀地图.
     controller_footprint_.clear();
@@ -362,6 +389,7 @@ private:
       ccfg.max_accel_theta = max_accel_theta_;
       ccfg.kinematics.max_velocity_x = max_velocity_x_;
       ccfg.kinematics.max_velocity_theta = max_velocity_theta_;
+      set_mppi_params(ccfg);
       coverage_controller_->initialize(ccfg);
     } else {
       ROS_WARN("[coverage] controller '%s' not found", cov_ctrl.c_str());
@@ -387,6 +415,7 @@ private:
       cfg.kinematics.max_velocity_theta = max_velocity_theta_;
       cfg.footprint = controller_footprint_;
       cfg.footprint_sample_spacing = footprint_sample_spacing_;
+      set_mppi_params(cfg);
       controller_strategy_->initialize(cfg);
     } else {
       ROS_WARN("[rosiwit_navigation_ros1] controller '%s' not found", controller_name_.c_str());
@@ -1747,7 +1776,10 @@ private:
       costmap_msg.data.resize(w * h);
       const float inv = 1.0f / std::max(1, inflate_cells - safety_cells);
       for (size_t i = 0; i < w * h; ++i) {
-        if (cm.data[i] >= 254) { costmap_msg.data[i] = 100; continue; }
+        // 可视化区分 unknown(-1) 与真实障碍(100); planner_costmap_ 仍保留
+        // 254 作为不可穿越栅格, 不会因为显示而放行未知区域.
+        if (cm.data[i] == 254) { costmap_msg.data[i] = -1; continue; }
+        if (cm.data[i] >= 255) { costmap_msg.data[i] = 100; continue; }
         const float d = dist[i];
         // 安全缓冲区只显示为高代价(99), 不是 lethal(100). A* 也把它当
         // 高代价而非障碍; 否则 costmap 视觉上会把机器人周围画成黑墙.
@@ -2426,6 +2458,18 @@ private:
   double planner_timeout_ = 2.0;
   double max_accel_x_ = 0.4;
   double max_accel_theta_ = 0.8;
+  int mppi_horizon_ = 20;
+  int mppi_samples_ = 160;
+  double mppi_dt_ = 0.0;
+  double mppi_lambda_ = 0.8;
+  double mppi_sigma_v_ = 0.18;
+  double mppi_sigma_w_ = 0.35;
+  double mppi_path_weight_ = 2.0;
+  double mppi_heading_weight_ = 0.4;
+  double mppi_obstacle_weight_ = 0.03;
+  double mppi_control_weight_ = 0.03;
+  double mppi_speed_weight_ = 2.0;
+  double mppi_goal_weight_ = 1.5;
 
   bool safety_enabled_ = true;
   double safety_self_filter_radius_ = 0.25;

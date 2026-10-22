@@ -21,6 +21,18 @@ bool MppiController::initialize(const core::ControllerConfig& config) {
   goal_tol_ = config.xy_goal_tolerance > 0.0 ? config.xy_goal_tolerance : 0.2;
   footprint_ = config.footprint;
   footprint_samples_ = core::sampleFootprint(footprint_, config.footprint_sample_spacing);
+  horizon_ = std::max(1, config.mppi_horizon);
+  samples_ = std::max(1, config.mppi_samples);
+  dt_ = config.mppi_dt > 1e-4 ? config.mppi_dt : 0.1;
+  lambda_ = std::max(1e-4, config.mppi_lambda);
+  sigma_v_ = std::max(1e-4, config.mppi_sigma_v);
+  sigma_w_ = std::max(1e-4, config.mppi_sigma_w);
+  path_weight_ = std::max(0.0, config.mppi_path_weight);
+  heading_weight_ = std::max(0.0, config.mppi_heading_weight);
+  obstacle_weight_ = std::max(0.0, config.mppi_obstacle_weight);
+  control_weight_ = std::max(0.0, config.mppi_control_weight);
+  speed_weight_ = std::max(0.0, config.mppi_speed_weight);
+  goal_weight_ = std::max(0.0, config.mppi_goal_weight);
   resetNominal();
   initialized_ = true;
   LOG_INFO(logger_, "MPPI initialized: vmax=%.2f wmax=%.2f H=%d K=%d footprint=%zu samples=%zu",

@@ -14,6 +14,20 @@ max_velocity_theta: 0.5
 max_accel_x: 0.3
 max_accel_theta: 0.2
 
+# MPPI 采样/代价参数
+mppi_horizon: 20
+mppi_samples: 160
+mppi_dt: 0.0
+mppi_lambda: 0.8
+mppi_sigma_v: 0.18
+mppi_sigma_w: 0.35
+mppi_path_weight: 2.0
+mppi_heading_weight: 0.4
+mppi_obstacle_weight: 0.03
+mppi_control_weight: 0.03
+mppi_speed_weight: 2.0
+mppi_goal_weight: 1.5
+
 planner_max_iterations: 200000
 planner_timeout: 2.0
 
@@ -92,10 +106,10 @@ tracking_max_radius: 1.2
 voxel_enabled: true
 voxel_cloud_topic: "/world_cloud"
 voxel_resolution: 0.10
-voxel_min_height: -0.20
-voxel_max_height: 2.00
+voxel_min_height: 0.15
+voxel_max_height: 1.60
 voxel_decay: 2.0
-voxel_inflation: 0.15
+voxel_inflation: 0.05
 
 # ---- 动态覆盖清洁 (navi_cmd=20) ----
 coverage_controller_name: "pure_pursuit"  # 覆盖模式单独控制器

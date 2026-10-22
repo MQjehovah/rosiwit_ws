@@ -33,7 +33,19 @@ rosiwit_navigation_node:
     min_lookahead_distance: 0.4
     max_lookahead_distance: 1.2
 
-    # 机器人半径 (m)
+    # MPPI 采样/代价参数
+    mppi_horizon: 20
+    mppi_samples: 160
+    mppi_dt: 0.0
+    mppi_lambda: 0.8
+    mppi_sigma_v: 0.18
+    mppi_sigma_w: 0.35
+    mppi_path_weight: 2.0
+    mppi_heading_weight: 0.4
+    mppi_obstacle_weight: 0.03
+    mppi_control_weight: 0.03
+    mppi_speed_weight: 2.0
+    mppi_goal_weight: 1.5
     robot_radius: 0.30
     # 规划器/控制器共用车体轮廓 (x,y,...); Hybrid A* 使用它.
     footprint: [-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22]

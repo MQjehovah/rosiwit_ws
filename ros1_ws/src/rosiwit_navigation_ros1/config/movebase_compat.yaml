@@ -50,6 +50,20 @@ max_velocity_theta: 0.5
 max_accel_x: 0.3
 max_accel_theta: 0.4   # A/B 推荐 0.4; 实车 accel_lim_w=0.2/max_w_inc=0.3, 现场确认
 
+# MPPI 采样/代价参数 (不再硬编码)
+mppi_horizon: 20
+mppi_samples: 160
+mppi_dt: 0.0          # <=0 使用 1/controller_frequency
+mppi_lambda: 0.8
+mppi_sigma_v: 0.18
+mppi_sigma_w: 0.35
+mppi_path_weight: 2.0
+mppi_heading_weight: 0.4
+mppi_obstacle_weight: 0.03
+mppi_control_weight: 0.03
+mppi_speed_weight: 2.0
+mppi_goal_weight: 1.5
+
 # ---- 规划器 / 控制器 ----
 planner_name: "hybrid_astar"
 controller_name: "mppi"
@@ -106,24 +120,23 @@ safety_time_before_collision: 2.0
 safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 
 # ---- 动态障碍 ----
-# 2026-10-22 实车: 墙/货架扫描被聚成 radius≈4.86m 的动态障碍圆,
-# local costmap 出现超大黑色圆; 暂时关闭.
-tracking_enabled: false
+# tracker 已有 max_radius 限制，重新开启；当前配置为 1.2m。
+tracking_enabled: true
 tracking_horizon: 0.5
 tracking_cluster_distance: 0.35
 tracking_confirm_hits: 3
 tracking_max_radius: 1.2
 
 # ---- 3D 体素 ----
-# 2026-10-22 实车排查: /world_cloud 投到 local costmap 形成大障碍,
-# 暂时关闭; /scan 安全层与全局静态地图保持启用.
-voxel_enabled: false
+# 3D 体素层恢复开启；只保留车体以上、约 1.6m 以下的静态/动态结构，
+# 避免地面和顶部结构投影成障碍。实时 /scan 安全层仍然保留。
+voxel_enabled: true
 voxel_cloud_topic: "/world_cloud"
 voxel_resolution: 0.10
-voxel_min_height: -0.20
-voxel_max_height: 2.00
+voxel_min_height: 0.15
+voxel_max_height: 1.60
 voxel_decay: 2.0
-voxel_inflation: 0.15
+voxel_inflation: 0.05
 
 # ---- 动态覆盖清洁 (navi_cmd=20) ----
 coverage_controller_name: "pure_pursuit"  # 覆盖模式单独控制器

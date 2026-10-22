@@ -154,6 +154,19 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     ctrl_cfg.max_accel_theta = params_.max_accel_theta;
     ctrl_cfg.kinematics.max_velocity_x = params_.max_velocity_x;
     ctrl_cfg.kinematics.max_velocity_theta = params_.max_velocity_theta;
+    ctrl_cfg.mppi_horizon = mppi_horizon_;
+    ctrl_cfg.mppi_samples = mppi_samples_;
+    ctrl_cfg.mppi_dt = mppi_dt_ > 0.0 ? mppi_dt_ :
+      1.0 / std::max(1.0, params_.controller_frequency);
+    ctrl_cfg.mppi_lambda = mppi_lambda_;
+    ctrl_cfg.mppi_sigma_v = mppi_sigma_v_;
+    ctrl_cfg.mppi_sigma_w = mppi_sigma_w_;
+    ctrl_cfg.mppi_path_weight = mppi_path_weight_;
+    ctrl_cfg.mppi_heading_weight = mppi_heading_weight_;
+    ctrl_cfg.mppi_obstacle_weight = mppi_obstacle_weight_;
+    ctrl_cfg.mppi_control_weight = mppi_control_weight_;
+    ctrl_cfg.mppi_speed_weight = mppi_speed_weight_;
+    ctrl_cfg.mppi_goal_weight = mppi_goal_weight_;
     ctrl_cfg.footprint = configured_footprint_;
     ctrl_cfg.footprint_sample_spacing = 0.05;
     controller_strategy_->initialize(ctrl_cfg);
@@ -304,6 +317,18 @@ void NavigationNode::loadParameters()
   declareIfNeeded("min_velocity_x", -0.5);
   declareIfNeeded("max_accel_x", 0.5);
   declareIfNeeded("max_accel_theta", 1.0);
+  declareIfNeeded("mppi_horizon", 20);
+  declareIfNeeded("mppi_samples", 160);
+  declareIfNeeded("mppi_dt", 0.0);
+  declareIfNeeded("mppi_lambda", 0.8);
+  declareIfNeeded("mppi_sigma_v", 0.18);
+  declareIfNeeded("mppi_sigma_w", 0.35);
+  declareIfNeeded("mppi_path_weight", 2.0);
+  declareIfNeeded("mppi_heading_weight", 0.4);
+  declareIfNeeded("mppi_obstacle_weight", 0.03);
+  declareIfNeeded("mppi_control_weight", 0.03);
+  declareIfNeeded("mppi_speed_weight", 2.0);
+  declareIfNeeded("mppi_goal_weight", 1.5);
   declareIfNeeded("goal_tolerance_xy", 0.1);
   declareIfNeeded("goal_tolerance_yaw", 0.1);
   declareIfNeeded("enforce_goal_yaw", false);
@@ -352,6 +377,18 @@ void NavigationNode::loadParameters()
   get_parameter("min_velocity_x", params_.min_velocity_x);
   get_parameter("max_accel_x", params_.max_accel_x);
   get_parameter("max_accel_theta", params_.max_accel_theta);
+  get_parameter("mppi_horizon", mppi_horizon_);
+  get_parameter("mppi_samples", mppi_samples_);
+  get_parameter("mppi_dt", mppi_dt_);
+  get_parameter("mppi_lambda", mppi_lambda_);
+  get_parameter("mppi_sigma_v", mppi_sigma_v_);
+  get_parameter("mppi_sigma_w", mppi_sigma_w_);
+  get_parameter("mppi_path_weight", mppi_path_weight_);
+  get_parameter("mppi_heading_weight", mppi_heading_weight_);
+  get_parameter("mppi_obstacle_weight", mppi_obstacle_weight_);
+  get_parameter("mppi_control_weight", mppi_control_weight_);
+  get_parameter("mppi_speed_weight", mppi_speed_weight_);
+  get_parameter("mppi_goal_weight", mppi_goal_weight_);
   get_parameter("goal_tolerance_xy", params_.goal_tolerance_xy);
   get_parameter("goal_tolerance_yaw", params_.goal_tolerance_yaw);
   get_parameter("enforce_goal_yaw", enforce_goal_yaw_);
@@ -906,7 +943,10 @@ void NavigationNode::updateCostmap()
     const int inv_span = std::max(1, inflate_cells - safety_cells);
     float inv = 1.0f / static_cast<float>(inv_span);
     for (size_t i = 0; i < w * h; ++i) {
-      if (cm.data[i] >= 254) { costmap_msg.data[i] = 100; continue; }
+      // unknown 显示为 -1, 不再冒充黑色致命障碍; planner_costmap_
+      // 会通过 makePlannerCostmap 保持 254 不可穿越.
+      if (cm.data[i] == 254) { costmap_msg.data[i] = -1; continue; }
+      if (cm.data[i] >= 255) { costmap_msg.data[i] = 100; continue; }
       float d = dist[i];
       if (d <= safety_cells) costmap_msg.data[i] = 100;
       else if (d <= inflate_cells) costmap_msg.data[i] = static_cast<int8_t>(
@@ -1084,7 +1124,13 @@ void NavigationNode::publishLocalCostmap()
     grid.info.resolution = local_costmap.info.resolution;
     grid.info.origin.position.x = local_costmap.info.origin.position.x;
     grid.info.origin.position.y = local_costmap.info.origin.position.y;
-    grid.data = local_costmap.data;
+    // Footprint-aware controller uses the un-inflated obstacle layer;
+    // applying the circular safety ring as well would double-count the body.
+    if (controller_strategy_->supportsFootprint() && !configured_footprint_.empty()) {
+      grid.data = raw;
+    } else {
+      grid.data = local_costmap.data;
+    }
     controller_strategy_->setLocalCostmap(grid);
   }
   local_costmap_pub_->publish(local_costmap);
@@ -1836,7 +1882,8 @@ bool NavigationNode::adjustGoalToFree(core::Pose2D & goal) const
   const int h = static_cast<int>(cm.info.height);
   auto costAt = [&](int mx, int my) -> int {
     if (mx < 0 || mx >= w || my < 0 || my >= h) return 100;
-    return cm.data[static_cast<size_t>(my) * w + mx];
+    const int v = cm.data[static_cast<size_t>(my) * w + mx];
+    return v < 0 ? 100 : v;
   };
   const int cx = static_cast<int>(std::floor((goal.x - cm.info.origin.position.x) / res));
   const int cy = static_cast<int>(std::floor((goal.y - cm.info.origin.position.y) / res));

@@ -372,6 +372,18 @@ private:
   core::VoxelLayer voxel_layer_;
   core::TaskStateMachine task_sm_;
   core::Footprint configured_footprint_;
+  int mppi_horizon_{20};
+  int mppi_samples_{160};
+  double mppi_dt_{0.0};
+  double mppi_lambda_{0.8};
+  double mppi_sigma_v_{0.18};
+  double mppi_sigma_w_{0.35};
+  double mppi_path_weight_{2.0};
+  double mppi_heading_weight_{0.4};
+  double mppi_obstacle_weight_{0.03};
+  double mppi_control_weight_{0.03};
+  double mppi_speed_weight_{2.0};
+  double mppi_goal_weight_{1.5};
   bool tracking_enabled_{true};
   double tracking_horizon_{0.5};
   double tracking_cluster_distance_{0.35};
