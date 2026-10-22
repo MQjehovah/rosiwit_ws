@@ -49,6 +49,7 @@ rosiwit_navigation_node:
     tracking_horizon: 0.5
     tracking_cluster_distance: 0.35
     tracking_confirm_hits: 3
+    tracking_max_radius: 1.2
 
     # 3D 体素 / STVL
     voxel_enabled: true

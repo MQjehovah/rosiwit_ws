@@ -86,6 +86,9 @@ std::vector<ObstacleTracker::Cluster> ObstacleTracker::cluster(
         max_r2 = std::max(max_r2, dx * dx + dy * dy);
       }
       c.radius = std::max(0.1, std::sqrt(max_r2) + 0.05);
+      // 一面长墙/货架会形成半径数米的连通簇; 它不是可跟踪的动态圆,
+      // 不能把整面墙膨胀成 predicted obstacle.
+      if (c.radius > config_.max_radius) continue;
       clusters.push_back(c);
     }
   }

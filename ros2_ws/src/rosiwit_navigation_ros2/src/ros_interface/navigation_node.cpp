@@ -337,6 +337,7 @@ void NavigationNode::loadParameters()
   declareIfNeeded("tracking_horizon", 0.5);
   declareIfNeeded("tracking_cluster_distance", 0.35);
   declareIfNeeded("tracking_confirm_hits", 3);
+  declareIfNeeded("tracking_max_radius", 1.2);
   declareIfNeeded("voxel_enabled", true);
   declareIfNeeded("voxel_cloud_topic", std::string("world_cloud"));
   declareIfNeeded("voxel_resolution", 0.10);
@@ -383,6 +384,7 @@ void NavigationNode::loadParameters()
   get_parameter("tracking_horizon", tracking_horizon_);
   get_parameter("tracking_cluster_distance", tracking_cluster_distance_);
   get_parameter("tracking_confirm_hits", tracking_confirm_hits_);
+  get_parameter("tracking_max_radius", tracking_max_radius_);
   get_parameter("voxel_enabled", voxel_enabled_);
   get_parameter("voxel_cloud_topic", voxel_cloud_topic_);
   get_parameter("voxel_resolution", voxel_resolution_);
@@ -393,6 +395,7 @@ void NavigationNode::loadParameters()
     core::ObstacleTrackerConfig tcfg;
     tcfg.cluster_distance = tracking_cluster_distance_;
     tcfg.confirm_hits = tracking_confirm_hits_;
+    tcfg.max_radius = tracking_max_radius_;
     tracker_.setConfig(tcfg);
     core::VoxelLayerConfig vcfg;
     vcfg.resolution = voxel_resolution_;
@@ -835,17 +838,8 @@ void NavigationNode::updateCostmap()
       else cm.data[i] = 0;
     }
 
-    // 叠加激光实时障碍物; 扫描停止后不能把旧点永久写进规划图.
-    const bool laser_fresh = last_scan_sec_ > 0.0 &&
-      (now().seconds() - last_scan_sec_ <= 1.0);
-    if (laser_fresh) {
-      for (const auto& pt : laser_points_) {
-        int mx = static_cast<int>(std::floor((pt.x - ox) / res));
-        int my = static_cast<int>(std::floor((pt.y - oy) / res));
-        if (mx >= 0 && mx < static_cast<int>(w) && my >= 0 && my < static_cast<int>(h))
-          cm.data[my * w + mx] = 255;
-      }
-    }
+    // /scan 属于局部实时障碍层; 不能写进全局规划 costmap.
+    // 全局只保留静态地图/持久占据, 否则瞬态激光点会变成全局假墙.
 
     // 发布用 costmap 用原始地图 + 安全环; 路径硬边界比它多一格,
     // 避免路径落在显示的 100 区内.
@@ -1811,6 +1805,9 @@ void NavigationNode::publishDiagnostics()
 void NavigationNode::smoothCurrentPath(nav_msgs::msg::Path & path)
 {
   if (!enable_path_smoothing_ || path.poses.size() < 3) return;
+  // The smoother only checks the center line; it would destroy the
+  // orientation-aware footprint clearance produced by Hybrid A*.
+  if (planner_strategy_ && planner_strategy_->supportsFootprint()) return;
 
   planners::SmootherConfig smoother_cfg;
   smoother_cfg.max_iterations = 100;

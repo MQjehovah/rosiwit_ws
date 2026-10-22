@@ -48,6 +48,8 @@ struct ObstacleTrackerConfig
   int confirm_hits = 3;
   int max_misses = 5;
   double max_speed = 2.0;           // 过滤离群速度
+  /// 聚类最大半径: 墙/货架是长条连通域，不能当成半径数米的动态圆.
+  double max_radius = 1.2;
   size_t max_points = 4000;
 };
 

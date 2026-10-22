@@ -174,9 +174,11 @@ private:
     pnh_.param<double>("tracking_horizon", tracking_horizon_, 0.5);
     pnh_.param<double>("tracking_cluster_distance", tracking_cluster_distance_, 0.35);
     pnh_.param<int>("tracking_confirm_hits", tracking_confirm_hits_, 3);
+    pnh_.param<double>("tracking_max_radius", tracking_max_radius_, 1.2);
     core::ObstacleTrackerConfig tracking_cfg;
     tracking_cfg.cluster_distance = tracking_cluster_distance_;
     tracking_cfg.confirm_hits = tracking_confirm_hits_;
+    tracking_cfg.max_radius = tracking_max_radius_;
     tracker_.setConfig(tracking_cfg);
 
     pnh_.param<bool>("voxel_enabled", voxel_enabled_, true);
@@ -453,7 +455,6 @@ private:
 
   void scanCallback(const sensor_msgs::LaserScan::ConstPtr & msg)
   {
-    last_scan_stamp_ = ros::Time::now();
     geometry_msgs::TransformStamped tf;
     try {
       tf = tf_buffer_.lookupTransform(map_frame_, msg->header.frame_id,
@@ -461,6 +462,9 @@ private:
     } catch (tf2::TransformException &) {
       return;
     }
+    // 只有成功转换到 map 的扫描才算 fresh; 否则 safety/局部 costmap
+    // 会误以为仍有实时数据.
+    last_scan_stamp_ = ros::Time::now();
 
     const double tyaw = yawFromQuat(tf.transform.rotation);
     const double tx = tf.transform.translation.x;
@@ -864,8 +868,13 @@ private:
     }
     current_path_ = ros_path;
 
-    // 与规划结果同样做一次平滑; 地图不可用时跳过.
-    if (current_path_.poses.size() >= 3 && current_map_) {
+    // 规划结果平滑只检查中心线；Hybrid A* 的 footprint 约束会在平滑时
+    // 被破坏（车角切进墙）。footprint-aware 规划/控制时跳过中心线平滑，
+    // 保留规划器输出的圆弧路径；A* fallback 仍走原有平滑。
+    const bool footprint_aware_path =
+        (planner_strategy_ && planner_strategy_->supportsFootprint()) ||
+        !controller_footprint_.empty();
+    if (current_path_.poses.size() >= 3 && current_map_ && !footprint_aware_path) {
       planners::SmootherConfig smoother_cfg;
       smoother_cfg.max_iterations = 100;
       smoother_cfg.alpha_start = 0.5;
@@ -1395,11 +1404,18 @@ private:
       buildCoverageCostmap(costmap);
       planner_strategy_->setInflationRadius(coverage_plan_inflation_);
       planner_strategy_->setRobotRadius(coverage_plan_robot_radius_);
+      // 覆盖模式使用自己预先膨胀的边界; Hybrid A* 若继续带普通导航 footprint,
+      // 会和 coverage_plan_robot_radius=0 的语义冲突. 这里临时清空轮廓,
+      // 规划完恢复, 正常导航仍使用 footprint.
+      if (planner_strategy_->supportsFootprint())
+        planner_strategy_->setRobotFootprint({});
       planner_strategy_->setCostmap(costmap);
       const core::Result<core::Path> approach =
         planner_strategy_->plan(pose, segment.front());
       planner_strategy_->setInflationRadius(inflation_radius_);
       planner_strategy_->setRobotRadius(robot_radius_);
+      if (planner_strategy_->supportsFootprint())
+        planner_strategy_->setRobotFootprint(configured_footprint_);
       coverage_last_plan_ = now;
       if (!approach.is_ok()) {
         ROS_WARN("[coverage] approach to row (%.2f, %.2f) failed: %s",
@@ -1754,6 +1770,11 @@ private:
     const int cx = static_cast<int>((rx - ox) / res);
     const int cy = static_cast<int>((ry - oy) / res);
 
+    // /scan 停止后不能把最后一帧点云永久当成实时障碍; safety 会停车,
+    // 局部 costmap/聚类也不能继续使用陈旧点.
+    const bool scan_fresh = !last_scan_stamp_.isZero() &&
+      (ros::Time::now() - last_scan_stamp_).toSec() <= safety_source_timeout_;
+
     core::ObstacleArray obstacles;
     std::vector<std::vector<bool>> visited(h, std::vector<bool>(w, false));
     const int step = std::max(1, static_cast<int>(0.3 / res));
@@ -1770,10 +1791,12 @@ private:
         return false;
       }
       if (current_map_->data[my * w + mx] >= 100) { return true; }
-      for (const auto & pt : laser_points_) {
-        const int lx = static_cast<int>((pt.x - ox) / res);
-        const int ly = static_cast<int>((pt.y - oy) / res);
-        if (std::abs(lx - mx) <= 1 && std::abs(ly - my) <= 1) { return true; }
+      if (scan_fresh) {
+        for (const auto & pt : laser_points_) {
+          const int lx = static_cast<int>((pt.x - ox) / res);
+          const int ly = static_cast<int>((pt.y - oy) / res);
+          if (std::abs(lx - mx) <= 1 && std::abs(ly - my) <= 1) { return true; }
+        }
       }
       return false;
     };
@@ -1842,6 +1865,11 @@ private:
     const int win_half = static_cast<int>(std::ceil(win_width * 0.5 / res));
     const int cx = static_cast<int>((rx - ox) / res);
     const int cy = static_cast<int>((ry - oy) / res);
+
+    // 与 updateCostmap 一致: 超时的 /scan 不再写入实时障碍.
+    const bool scan_fresh = !last_scan_stamp_.isZero() &&
+      (ros::Time::now() - last_scan_stamp_).toSec() <= safety_source_timeout_;
+
     const int lw = win_half * 2 + 1;
 
     nav_msgs::OccupancyGrid local_costmap;
@@ -1868,13 +1896,15 @@ private:
         raw[gy * lw + gx] = (mv >= 100) ? 100 : 0;
       }
     }
-    for (const auto& pt : laser_points_) {
-      const int mx = static_cast<int>(std::floor((pt.x - ox) / res));
-      const int my = static_cast<int>(std::floor((pt.y - oy) / res));
-      const int dx = mx - cx;
-      const int dy = my - cy;
-      if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) continue;
-      raw[(dy + win_half) * lw + (dx + win_half)] = 100;
+    if (scan_fresh) {
+      for (const auto& pt : laser_points_) {
+        const int mx = static_cast<int>(std::floor((pt.x - ox) / res));
+        const int my = static_cast<int>(std::floor((pt.y - oy) / res));
+        const int dx = mx - cx;
+        const int dy = my - cy;
+        if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) continue;
+        raw[(dy + win_half) * lw + (dx + win_half)] = 100;
+      }
     }
     if (tracking_enabled_) {
       const auto predicted = tracker_.predicted(tracking_horizon_);
@@ -2088,7 +2118,12 @@ private:
   {
     current_path_ = toRosPath(result.value(), pending_goal_.header.frame_id, ros::Time::now());
 
-    if (current_path_.poses.size() >= 3) {
+    // smoothPath 只保证中心线不碰障碍，不保证矩形 footprint；
+    // footprint-aware 规划器输出的圆弧路径不能再用中心线平滑.
+    const bool footprint_aware_path =
+        (planner_strategy_ && planner_strategy_->supportsFootprint()) ||
+        !controller_footprint_.empty();
+    if (current_path_.poses.size() >= 3 && !footprint_aware_path) {
       planners::SmootherConfig smoother_cfg;
       smoother_cfg.max_iterations = 100;
       smoother_cfg.alpha_start = 0.5;
@@ -2430,6 +2465,7 @@ private:
   double tracking_horizon_ = 0.5;
   double tracking_cluster_distance_ = 0.35;
   int tracking_confirm_hits_ = 3;
+  double tracking_max_radius_ = 1.2;
   std::vector<core::Point2D> tracker_points_;
   std::string last_safety_state_ = "PASS";
   double last_safety_scale_ = 1.0;
