@@ -195,10 +195,12 @@ private:
     pnh_.param<double>("tracking_cluster_distance", tracking_cluster_distance_, 0.35);
     pnh_.param<int>("tracking_confirm_hits", tracking_confirm_hits_, 3);
     pnh_.param<double>("tracking_max_radius", tracking_max_radius_, 1.2);
+    pnh_.param<double>("tracking_min_prediction_speed", tracking_min_prediction_speed_, 0.15);
     core::ObstacleTrackerConfig tracking_cfg;
     tracking_cfg.cluster_distance = tracking_cluster_distance_;
     tracking_cfg.confirm_hits = tracking_confirm_hits_;
     tracking_cfg.max_radius = tracking_max_radius_;
+    tracking_cfg.min_prediction_speed = tracking_min_prediction_speed_;
     tracker_.setConfig(tracking_cfg);
 
     pnh_.param<bool>("voxel_enabled", voxel_enabled_, true);
@@ -2499,6 +2501,7 @@ private:
   double tracking_cluster_distance_ = 0.35;
   int tracking_confirm_hits_ = 3;
   double tracking_max_radius_ = 1.2;
+  double tracking_min_prediction_speed_ = 0.15;
   std::vector<core::Point2D> tracker_points_;
   std::string last_safety_state_ = "PASS";
   double last_safety_scale_ = 1.0;

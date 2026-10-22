@@ -39,3 +39,16 @@ TEST(ObstacleTracker, DropsMissedTracks)
   tracker.update({}, 1.3, 0.1);
   EXPECT_TRUE(tracker.tracked(false).empty());
 }
+
+TEST(ObstacleTracker, DoesNotPredictStaticCluster)
+{
+  ObstacleTrackerConfig cfg;
+  cfg.confirm_hits = 1;
+  ObstacleTracker tracker(cfg);
+  const std::vector<Point2D> static_cluster{{2.0, 1.0}, {2.05, 1.02}, {1.98, 0.99}};
+  tracker.update(static_cluster, 1.0, 0.1);
+  tracker.update(static_cluster, 1.1, 0.1);
+  EXPECT_EQ(tracker.tracked().size(), 1u);
+  // 静态货架/墙段仍可由静态地图表达, 但不能生成动态预测圆.
+  EXPECT_TRUE(tracker.predicted(0.5).empty());
+}

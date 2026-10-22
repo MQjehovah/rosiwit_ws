@@ -389,6 +389,7 @@ private:
   double tracking_cluster_distance_{0.35};
   int tracking_confirm_hits_{3};
   double tracking_max_radius_{1.2};
+  double tracking_min_prediction_speed_{0.15};
   bool voxel_enabled_{true};
   std::string voxel_cloud_topic_{"world_cloud"};
   double voxel_resolution_{0.10};

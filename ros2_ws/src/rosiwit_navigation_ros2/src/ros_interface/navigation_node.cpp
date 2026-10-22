@@ -363,6 +363,7 @@ void NavigationNode::loadParameters()
   declareIfNeeded("tracking_cluster_distance", 0.35);
   declareIfNeeded("tracking_confirm_hits", 3);
   declareIfNeeded("tracking_max_radius", 1.2);
+  declareIfNeeded("tracking_min_prediction_speed", 0.15);
   declareIfNeeded("voxel_enabled", true);
   declareIfNeeded("voxel_cloud_topic", std::string("world_cloud"));
   declareIfNeeded("voxel_resolution", 0.10);
@@ -422,6 +423,7 @@ void NavigationNode::loadParameters()
   get_parameter("tracking_cluster_distance", tracking_cluster_distance_);
   get_parameter("tracking_confirm_hits", tracking_confirm_hits_);
   get_parameter("tracking_max_radius", tracking_max_radius_);
+  get_parameter("tracking_min_prediction_speed", tracking_min_prediction_speed_);
   get_parameter("voxel_enabled", voxel_enabled_);
   get_parameter("voxel_cloud_topic", voxel_cloud_topic_);
   get_parameter("voxel_resolution", voxel_resolution_);
@@ -433,6 +435,7 @@ void NavigationNode::loadParameters()
     tcfg.cluster_distance = tracking_cluster_distance_;
     tcfg.confirm_hits = tracking_confirm_hits_;
     tcfg.max_radius = tracking_max_radius_;
+    tcfg.min_prediction_speed = tracking_min_prediction_speed_;
     tracker_.setConfig(tcfg);
     core::VoxelLayerConfig vcfg;
     vcfg.resolution = voxel_resolution_;

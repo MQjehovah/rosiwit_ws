@@ -126,6 +126,7 @@ tracking_horizon: 0.5
 tracking_cluster_distance: 0.35
 tracking_confirm_hits: 3
 tracking_max_radius: 1.2
+tracking_min_prediction_speed: 0.15
 
 # ---- 3D 体素 ----
 # 3D 体素层恢复开启；只保留车体以上、约 1.6m 以下的静态/动态结构，

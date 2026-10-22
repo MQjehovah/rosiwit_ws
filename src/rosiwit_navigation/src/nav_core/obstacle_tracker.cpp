@@ -193,6 +193,9 @@ std::vector<TrackedObstacle> ObstacleTracker::predicted(double horizon) const
   out.reserve(tracks_.size());
   for (const auto & t : tracks_) {
     if (!t.confirmed) continue;
+    // 静止目标已经由静态地图和实时 /scan 障碍层表达; 这里只预测运动目标,
+    // 否则货架/墙段会被当成永久动态圆持续叠加到局部 costmap.
+    if (t.speed() < config_.min_prediction_speed) continue;
     TrackedObstacle p = t;
     p.x += p.vx * horizon;
     p.y += p.vy * horizon;

@@ -50,6 +50,9 @@ struct ObstacleTrackerConfig
   double max_speed = 2.0;           // 过滤离群速度
   /// 聚类最大半径: 墙/货架是长条连通域，不能当成半径数米的动态圆.
   double max_radius = 1.2;
+  /// 只预测真正在运动的目标; 静止簇交给静态地图/实时 /scan 障碍层,
+  /// 避免静止货架/墙段在地图里生成虚假的动态圆.
+  double min_prediction_speed = 0.15;
   size_t max_points = 4000;
 };
 

@@ -101,6 +101,7 @@ tracking_horizon: 0.5
 tracking_cluster_distance: 0.35
 tracking_confirm_hits: 3
 tracking_max_radius: 1.2
+tracking_min_prediction_speed: 0.15
 
 # 3D 体素 / STVL 层
 voxel_enabled: true
