@@ -212,6 +212,7 @@ private:
     pnh_.param<double>("voxel_max_height", voxel_max_height_, 2.00);
     pnh_.param<double>("voxel_decay", voxel_decay_, 2.0);
     pnh_.param<double>("voxel_inflation", voxel_inflation_, 0.15);
+    pnh_.param<int>("voxel_max_points", voxel_max_points_, 200000);
     core::VoxelLayerConfig voxel_cfg;
     voxel_cfg.resolution = voxel_resolution_;
     voxel_cfg.min_height = voxel_min_height_;
@@ -629,12 +630,25 @@ private:
     const double zy = 2.0 * (qy * qz + qx * qw);
     const double zz = 1.0 - 2.0 * (qx * qx + qy * qy);
 
+    // /world_cloud can be a very large accumulated cloud.  Never materialize
+    // the whole cloud: cap the number of points and stride-sample large frames.
+    // Otherwise a single callback can allocate GBs and push the whole robot
+    // into swap (which also delays the control/safety timers).
+    const size_t total_points = static_cast<size_t>(msg->width) * msg->height;
+    const size_t max_points = static_cast<size_t>(
+      std::max(1000, voxel_max_points_));
+    const size_t stride = total_points > max_points ?
+      std::max<size_t>(1, total_points / max_points) : 1;
+    const size_t reserve_count = std::min(total_points, max_points);
     std::vector<core::Point3D> points;
-    points.reserve(std::min<size_t>(msg->width * msg->height, 200000));
+    points.reserve(reserve_count);
     sensor_msgs::PointCloud2ConstIterator<float> ix(*msg, "x");
     sensor_msgs::PointCloud2ConstIterator<float> iy(*msg, "y");
     sensor_msgs::PointCloud2ConstIterator<float> iz(*msg, "z");
-    for (; ix != ix.end(); ++ix, ++iy, ++iz) {
+    size_t index = 0;
+    for (; ix != ix.end() && points.size() < max_points;
+         ++ix, ++iy, ++iz, ++index) {
+      if (stride > 1 && (index % stride) != 0) continue;
       const double px = *ix, py = *iy, pz = *iz;
       if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)) continue;
       core::Point3D p;
@@ -2696,6 +2710,7 @@ private:
   core::VoxelLayer voxel_layer_;
   bool voxel_enabled_ = true;
   std::string voxel_cloud_topic_ = "/world_cloud";
+  int voxel_max_points_ = 200000;
   double voxel_resolution_ = 0.10;
   double voxel_min_height_ = -0.20;
   double voxel_max_height_ = 2.00;

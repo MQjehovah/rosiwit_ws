@@ -116,6 +116,7 @@ recovery_timeout: 8.0
 voxel_enabled: true
 voxel_cloud_topic: "/world_cloud"
 voxel_resolution: 0.10
+voxel_max_points: 200000
 voxel_min_height: 0.15
 voxel_max_height: 1.60
 voxel_decay: 2.0
