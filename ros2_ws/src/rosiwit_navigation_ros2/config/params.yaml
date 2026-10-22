@@ -35,6 +35,8 @@ rosiwit_navigation_node:
 
     # 机器人半径 (m)
     robot_radius: 0.30
+    # 规划器/控制器共用车体轮廓 (x,y,...); Hybrid A* 使用它.
+    footprint: [-0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22]
 
     # 障碍物膨胀半径（路径离障碍物的距离）
     inflation_radius: 1.0

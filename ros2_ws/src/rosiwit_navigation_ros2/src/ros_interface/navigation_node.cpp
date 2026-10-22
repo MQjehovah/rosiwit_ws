@@ -434,6 +434,7 @@ void NavigationNode::loadSafetyParameters()
   declareIfNeeded("safety_simulation_time_step", 0.1);
   declareIfNeeded("safety_footprint", std::vector<double>{
     -0.25, -0.22, 0.25, -0.22, 0.25, 0.22, -0.25, 0.22});
+  declareIfNeeded("footprint", std::vector<double>{});
 
   get_parameter("safety_enabled", safety_enabled_);
   get_parameter("safety_pointcloud_topic", safety_pointcloud_topic_);
@@ -477,7 +478,11 @@ void NavigationNode::loadSafetyParameters()
     this->get_parameter("safety_simulation_time_step").as_double();
   cfg.footprint = to_polygon(
     this->get_parameter("safety_footprint").as_double_array());
-  configured_footprint_ = cfg.footprint;
+  std::vector<double> planner_footprint =
+    this->get_parameter("footprint").as_double_array();
+  if (planner_footprint.empty()) planner_footprint =
+    this->get_parameter("safety_footprint").as_double_array();
+  configured_footprint_ = to_polygon(planner_footprint);
   safety_monitor_.configure(cfg);
 
   RCLCPP_INFO(get_logger(),

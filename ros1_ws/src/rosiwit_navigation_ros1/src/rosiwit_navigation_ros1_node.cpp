@@ -236,8 +236,14 @@ private:
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
     configured_footprint_.clear();
     controller_footprint_.clear();  // 实际是否启用由 setupCore 按控制器能力决定
-    // 全局 Hybrid A* 也需要车体轮廓；是否使用由 supportsFootprint() 决定。
-    configured_footprint_ = toPolygon(footprint);
+    // 规划器/控制器统一车体轮廓；优先读显式 footprint，缺失时回退到
+    // movebase_robot_footprint / safety_footprint（166 三处目前是同一组点）。
+    std::vector<double> robot_footprint;
+    pnh_.param<std::vector<double>>("footprint", robot_footprint,
+                                    std::vector<double>{});
+    if (robot_footprint.empty()) robot_footprint = movebase_footprint;
+    if (robot_footprint.empty()) robot_footprint = footprint;
+    configured_footprint_ = toPolygon(robot_footprint);
     if (footprint_aware_control_) {
       controller_footprint_ = configured_footprint_;
     }
@@ -1623,6 +1629,8 @@ private:
        << "\",\"safety\":\"" << last_safety_state_
        << "\",\"safety_scale\":" << last_safety_scale_
        << ",\"path_points\":" << current_path_.poses.size()
+       << ",\"planner\":\"" << planner_name_ << "\""
+       << ",\"planner_footprint\":" << configured_footprint_.size()
        << ",\"tracks\":" << tracker_.tracked().size()
        << ",\"task_state\":\"" << task_sm_.stateName() << "\""
        << ",\"voxels\":" << voxel_layer_.size()

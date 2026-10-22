@@ -51,7 +51,7 @@ max_accel_x: 0.3
 max_accel_theta: 0.4   # A/B 推荐 0.4; 实车 accel_lim_w=0.2/max_w_inc=0.3, 现场确认
 
 # ---- 规划器 / 控制器 ----
-planner_name: "astar"
+planner_name: "hybrid_astar"
 controller_name: "mppi"
 planner_max_iterations: 200000
 planner_timeout: 2.0
@@ -74,6 +74,9 @@ max_lookahead_distance: 0.9
 
 # ---- 规划安全距离 (实车 g_min_safe=0.39 / g_max_safe 等效 0.62) ----
 robot_radius: 0.39
+# 规划器/控制器共用车体轮廓 (x,y,...), 与 safety_footprint 同一组实车点.
+# Hybrid A* 使用此 footprint; A* 只使用 robot_radius 圆形模型.
+footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 # 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
 # 实车已开启 (A/B: MPPI+footprint 零碰撞). 回退时改 false + controller_name: dwa.
 # 报告: docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md
