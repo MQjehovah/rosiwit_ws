@@ -20,6 +20,10 @@ public:
   virtual void setCostmap(const Costmap & costmap) = 0;
   virtual void setInflationRadius(double /*radius_meters*/) {}  // optional
   virtual void setRobotRadius(double /*radius*/) {}
+  /// 朝向感知的规划器 (Hybrid A*) 使用真实车体轮廓; 栅格 A* 无法使用,
+  /// 默认忽略并由 supportsFootprint() 明确声明.
+  virtual void setRobotFootprint(const Footprint & /*footprint*/) {}
+  virtual bool supportsFootprint() const { return false; }
   virtual Result<Path> plan(const Pose2D & start, const Pose2D & goal) = 0;
   virtual void planAsync(const Pose2D & start, const Pose2D & goal,
                           std::function<void(const Result<Path> &)> callback) = 0;

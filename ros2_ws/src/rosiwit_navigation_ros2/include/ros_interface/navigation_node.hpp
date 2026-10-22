@@ -369,6 +369,7 @@ private:
   core::ObstacleTracker tracker_;
   core::VoxelLayer voxel_layer_;
   core::TaskStateMachine task_sm_;
+  core::Footprint configured_footprint_;
   bool tracking_enabled_{true};
   double tracking_horizon_{0.5};
   double tracking_cluster_distance_{0.35};

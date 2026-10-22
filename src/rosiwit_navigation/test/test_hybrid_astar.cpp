@@ -1,12 +1,19 @@
 #include <gtest/gtest.h>
 
 #include "rosiwit_navigation/nav_core/navigation_factory.hpp"
+#include "rosiwit_navigation/nav_core/footprint.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
 
 using namespace rosiwit_navigation;
 
 namespace
 {
+core::Footprint realFootprint()
+{
+  return {
+    {-0.25, -0.33}, {0.45, -0.33}, {0.55, -0.20},
+    {0.55, 0.20}, {0.45, 0.33}, {-0.25, 0.33}};
+}
 core::Costmap makeMap(int w, int h, double res)
 {
   core::Costmap cm;
@@ -92,5 +99,44 @@ TEST(HybridAStar, RejectsGoalInObstacle)
   planner->setCostmap(cm);
   const auto result = planner->plan({0.5, 0.5, 0.0}, {2.5, 2.5, 0.0});
   EXPECT_TRUE(result.is_error());
+}
+
+TEST(HybridAStar, FootprintCapabilityIsExplicit)
+{
+  auto astar = nav_core::NavigationFactory::createPlanner("astar");
+  auto hybrid = nav_core::NavigationFactory::createPlanner("hybrid_astar");
+  ASSERT_NE(astar, nullptr);
+  ASSERT_NE(hybrid, nullptr);
+  EXPECT_FALSE(astar->supportsFootprint());
+  EXPECT_TRUE(hybrid->supportsFootprint());
+}
+
+TEST(HybridAStar, FootprintRejectsGoalTooCloseToWall)
+{
+  auto planner = nav_core::NavigationFactory::createPlanner("hybrid_astar");
+  ASSERT_NE(planner, nullptr);
+  core::PlannerConfig cfg;
+  cfg.name = "hybrid_astar";
+  cfg.resolution = 0.05;
+  cfg.max_iterations = 50000;
+  cfg.timeout = 2.0;
+  ASSERT_TRUE(planner->initialize(cfg));
+
+  auto cm = makeMap(200, 200, 0.05);
+  // wall at x=5m; goal center 4.5m => front footprint (0.55m) hits wall.
+  const int wall_x = 100;
+  for (int y = 0; y < 200; ++y) {
+    cm.grid->data[static_cast<size_t>(y) * 200 + wall_x] = 100;
+    cm.data[static_cast<size_t>(y) * 200 + wall_x] = 255;
+  }
+  planner->setCostmap(cm);
+  planner->setRobotRadius(0.20);
+  planner->setRobotFootprint(realFootprint());
+
+  const auto result = planner->plan({1.0, 5.0, 0.0}, {4.5, 5.0, 0.0});
+  EXPECT_TRUE(result.is_error());
+  if (result.is_error()) {
+    EXPECT_EQ(result.error_code(), core::ErrorCode::GOAL_IN_OBSTACLE);
+  }
 }
 

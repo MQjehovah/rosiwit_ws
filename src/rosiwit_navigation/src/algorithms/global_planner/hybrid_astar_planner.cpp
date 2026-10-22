@@ -81,8 +81,82 @@ void HybridAStarPlanner::setCostmap(const core::Costmap & costmap)
   }
 
   step_length_ = std::max(0.25, 8.0 * resolution_);
+  buildInflationField();
   LOG_INFO(logger_, "Costmap set: %ux%u res=%.3f step=%.3f",
            nx_, ny_, resolution_, step_length_);
+}
+
+void HybridAStarPlanner::setInflationRadius(double radius_meters)
+{
+  inflation_radius_ = std::max(0.0, radius_meters);
+  if (costmap_ && costmap_data_.size() == static_cast<size_t>(nx_) * ny_)
+    buildInflationField();
+}
+
+void HybridAStarPlanner::setRobotFootprint(const core::Footprint & footprint)
+{
+  footprint_ = footprint;
+  footprint_samples_ = core::sampleFootprint(footprint_, footprint_sample_spacing_);
+  LOG_INFO(logger_, "Robot footprint: %zu vertices, %zu samples",
+           footprint_.size(), footprint_samples_.size());
+}
+
+void HybridAStarPlanner::buildInflationField()
+{
+  const size_t n = static_cast<size_t>(nx_) * ny_;
+  inflation_field_.assign(n, 0);
+  if (inflation_radius_ <= 0.0 || n == 0 || costmap_data_.size() != n) return;
+
+  const int radius_cells = std::max(1, static_cast<int>(
+    std::ceil(inflation_radius_ / std::max(1e-6, resolution_))));
+  std::vector<float> dist(n, std::numeric_limits<float>::max());
+  std::queue<std::pair<int, int>> q;
+  for (int y = 0; y < static_cast<int>(ny_); ++y) {
+    for (int x = 0; x < static_cast<int>(nx_); ++x) {
+      const size_t idx = static_cast<size_t>(y) * nx_ + x;
+      // Unknown (254) is a blocked boundary, not a physical obstacle;
+      // only real occupied cells define the soft clearance field.
+      if (costmap_data_[idx] >= 255) {
+        dist[idx] = 0.0f;
+        q.push({x, y});
+      }
+    }
+  }
+  const int dx4[4] = {-1, 0, 1, 0};
+  const int dy4[4] = {0, -1, 0, 1};
+  while (!q.empty()) {
+    const auto c = q.front();
+    q.pop();
+    const float cd = dist[static_cast<size_t>(c.second) * nx_ + c.first];
+    if (cd >= radius_cells) continue;
+    for (int i = 0; i < 4; ++i) {
+      const int x = c.first + dx4[i];
+      const int y = c.second + dy4[i];
+      if (x < 0 || y < 0 || x >= static_cast<int>(nx_) ||
+          y >= static_cast<int>(ny_)) continue;
+      const size_t idx = static_cast<size_t>(y) * nx_ + x;
+      if (dist[idx] > cd + 1.0f) {
+        dist[idx] = cd + 1.0f;
+        q.push({x, y});
+      }
+    }
+  }
+  for (size_t i = 0; i < n; ++i) {
+    if (dist[i] >= radius_cells) continue;
+    const double ratio = 1.0 - static_cast<double>(dist[i]) /
+                               static_cast<double>(radius_cells);
+    inflation_field_[i] = static_cast<unsigned char>(
+      std::max(0.0, std::min(255.0, ratio * 90.0)));
+  }
+}
+
+unsigned char HybridAStarPlanner::inflationCostAt(int ix, int iy) const
+{
+  if (ix < 0 || iy < 0 || ix >= static_cast<int>(nx_) ||
+      iy >= static_cast<int>(ny_) ||
+      inflation_field_.size() != static_cast<size_t>(nx_) * ny_)
+    return 0;
+  return inflation_field_[static_cast<size_t>(iy) * nx_ + ix];
 }
 
 bool HybridAStarPlanner::worldToGrid(double x, double y, int & ix, int & iy) const
@@ -126,10 +200,16 @@ unsigned char HybridAStarPlanner::costAt(int ix, int iy) const
 
 bool HybridAStarPlanner::checkPose(const core::Pose2D & pose) const
 {
+  if (!costmap_ || !costmap_->grid) return false;
   int ix = 0, iy = 0;
   if (!worldToGrid(pose.x, pose.y, ix, iy)) return false;
 
-  // 用机器人外接半径检查一圈栅格，而不是只看中心点。
+  // Orientation-aware: check the actual polygon when supplied.  The radius
+  // circle remains the fallback for callers that only know a robot radius.
+  if (!footprint_samples_.empty()) {
+    return core::footprintCost(*costmap_->grid, pose, footprint_samples_) < 100;
+  }
+
   const int r = std::max(1, static_cast<int>(std::ceil(robot_radius_ / resolution_)));
   for (int dy = -r; dy <= r; ++dy) {
     for (int dx = -r; dx <= r; ++dx) {
@@ -278,7 +358,9 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       const double travel = std::fabs(primitive.distance);
       const double reversing_penalty = primitive.distance < 0.0 ? 1.35 : 1.0;
       const double heading_penalty = std::fabs(primitive.curvature) * 0.08;
-      const double cost_factor = 1.0 + static_cast<double>(costAt(ix, iy)) / 255.0 * 1.5;
+      const double cost_factor =
+        1.0 + static_cast<double>(costAt(ix, iy)) / 255.0 * 1.5 +
+        static_cast<double>(inflationCostAt(ix, iy)) / 255.0;
       const double g = current.g + travel * cost_factor * reversing_penalty + heading_penalty;
 
       auto it = best_g.find(key);

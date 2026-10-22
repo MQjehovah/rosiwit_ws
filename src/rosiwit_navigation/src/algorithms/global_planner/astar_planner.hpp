@@ -165,6 +165,8 @@ public:
     void setCostmap(const core::Costmap& costmap) override;
     void setInflationRadius(double radius_meters);
     void setRobotRadius(double radius) { robot_radius_ = radius; }
+    // Grid A* has no heading dimension; footprint is not meaningful here.
+    bool supportsFootprint() const override { return false; }
     core::Result<core::Path> plan(const core::Pose2D& start, const core::Pose2D& goal) override;
     void planAsync(const core::Pose2D& start, const core::Pose2D& goal,
                    std::function<void(const core::Result<core::Path>&)> callback) override;

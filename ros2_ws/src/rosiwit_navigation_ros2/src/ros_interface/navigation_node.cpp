@@ -111,6 +111,11 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     // 硬安全缓冲已在 updateCostmap 里预先膨胀到 planner_cm;
     // A* 内部只保留 1 格 (0.05m) 缓冲, 避免双重膨胀把门洞堵死.
     planner_strategy_->setRobotRadius(0.0);
+    if (planner_strategy_->supportsFootprint() && !configured_footprint_.empty()) {
+      planner_strategy_->setRobotFootprint(configured_footprint_);
+      RCLCPP_INFO(get_logger(), "Planner '%s' footprint-aware (%zu pts)",
+                  planner_name_.c_str(), configured_footprint_.size());
+    }
     RCLCPP_INFO(get_logger(), "Created planner strategy: %s", planner_name_.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "Planner '%s' not found, falling back to PathPlanner", planner_name_.c_str());
@@ -128,6 +133,9 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     async_planner_->initialize(async_cfg);
     async_planner_->setInflationRadius(0.0);
     async_planner_->setRobotRadius(0.0);
+    if (async_planner_->supportsFootprint() && !configured_footprint_.empty()) {
+      async_planner_->setRobotFootprint(configured_footprint_);
+    }
   }
 
   // 使用NavigationFactory创建控制器策略
@@ -146,6 +154,8 @@ LifecycleNode::CallbackReturn NavigationNode::on_configure(const rclcpp_lifecycl
     ctrl_cfg.max_accel_theta = params_.max_accel_theta;
     ctrl_cfg.kinematics.max_velocity_x = params_.max_velocity_x;
     ctrl_cfg.kinematics.max_velocity_theta = params_.max_velocity_theta;
+    ctrl_cfg.footprint = configured_footprint_;
+    ctrl_cfg.footprint_sample_spacing = 0.05;
     controller_strategy_->initialize(ctrl_cfg);
     RCLCPP_INFO(get_logger(), "Created controller strategy: %s", controller_name_.c_str());
   } else {
@@ -467,6 +477,7 @@ void NavigationNode::loadSafetyParameters()
     this->get_parameter("safety_simulation_time_step").as_double();
   cfg.footprint = to_polygon(
     this->get_parameter("safety_footprint").as_double_array());
+  configured_footprint_ = cfg.footprint;
   safety_monitor_.configure(cfg);
 
   RCLCPP_INFO(get_logger(),

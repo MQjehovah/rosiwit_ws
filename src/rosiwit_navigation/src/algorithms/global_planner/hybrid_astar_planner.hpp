@@ -19,6 +19,7 @@
 
 #include "rosiwit_navigation/nav_core/i_planner.hpp"
 #include "rosiwit_navigation/nav_core/logger.hpp"
+#include "rosiwit_navigation/nav_core/footprint.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
 
 namespace rosiwit_navigation
@@ -34,8 +35,10 @@ public:
 
   bool initialize(const core::PlannerConfig & config) override;
   void setCostmap(const core::Costmap & costmap) override;
-  void setInflationRadius(double radius_meters) override { inflation_radius_ = radius_meters; }
+  void setInflationRadius(double radius_meters) override;
   void setRobotRadius(double radius) override { robot_radius_ = radius; }
+  void setRobotFootprint(const core::Footprint & footprint) override;
+  bool supportsFootprint() const override { return true; }
   core::Result<core::Path> plan(
     const core::Pose2D & start, const core::Pose2D & goal) override;
   void planAsync(
@@ -79,6 +82,8 @@ private:
   int stateKey(int ix, int iy, int itheta) const;
   bool isObstacle(int ix, int iy) const;
   unsigned char costAt(int ix, int iy) const;
+  unsigned char inflationCostAt(int ix, int iy) const;
+  void buildInflationField();
   bool checkPose(const core::Pose2D & pose) const;
   bool checkArc(const core::Pose2D & from, const MotionPrimitive & motion,
                 core::Pose2D & to) const;
@@ -101,6 +106,10 @@ private:
   double step_length_ = 0.35;
   double max_curvature_ = 1.5;
   int heading_bins_ = 72;
+  core::Footprint footprint_;
+  std::vector<std::pair<double, double>> footprint_samples_;
+  double footprint_sample_spacing_ = 0.05;
+  std::vector<unsigned char> inflation_field_;
   std::vector<MotionPrimitive> primitives_;
   bool planning_active_ = false;
   bool cancel_requested_ = false;

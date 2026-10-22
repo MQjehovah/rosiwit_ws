@@ -236,8 +236,10 @@ private:
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
     configured_footprint_.clear();
     controller_footprint_.clear();  // 实际是否启用由 setupCore 按控制器能力决定
+    // 全局 Hybrid A* 也需要车体轮廓；是否使用由 supportsFootprint() 决定。
+    configured_footprint_ = toPolygon(footprint);
     if (footprint_aware_control_) {
-      configured_footprint_ = toPolygon(footprint);
+      controller_footprint_ = configured_footprint_;
     }
 
     core::ActionTaskConfig task_cfg;
@@ -288,6 +290,14 @@ private:
       planner_strategy_->initialize(cfg);
       planner_strategy_->setInflationRadius(inflation_radius_);
       planner_strategy_->setRobotRadius(robot_radius_);
+      if (planner_strategy_->supportsFootprint() && !configured_footprint_.empty()) {
+        planner_strategy_->setRobotFootprint(configured_footprint_);
+        ROS_INFO("[rosiwit_navigation_ros1] planner '%s' footprint-aware (%zu pts)",
+                 planner_name_.c_str(), configured_footprint_.size());
+      } else {
+        ROS_INFO("[rosiwit_navigation_ros1] planner '%s' circular robot_radius=%.2f",
+                 planner_name_.c_str(), robot_radius_);
+      }
     } else {
       ROS_WARN("[rosiwit_navigation_ros1] planner '%s' not found", planner_name_.c_str());
     }
@@ -304,6 +314,9 @@ private:
       async_planner_->initialize(acfg);
       async_planner_->setInflationRadius(inflation_radius_);
       async_planner_->setRobotRadius(robot_radius_);
+      if (async_planner_->supportsFootprint() && !configured_footprint_.empty()) {
+        async_planner_->setRobotFootprint(configured_footprint_);
+      }
     }
 
     controller_strategy_ = nav_core::NavigationFactory::createController(controller_name_);
