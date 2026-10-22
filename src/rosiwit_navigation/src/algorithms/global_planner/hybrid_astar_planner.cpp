@@ -256,16 +256,45 @@ double HybridAStarPlanner::heuristic(
 core::Path HybridAStarPlanner::reconstruct(
   const std::vector<Node> & nodes, int goal_index) const
 {
+  // Reconstruct the actual arcs, not just the node centers.  A straight line
+  // between two arc endpoints can cut a footprint corner even though both
+  // endpoints are collision-free.
+  std::vector<int> chain;
+  for (int index = goal_index; index >= 0; index = nodes[index].parent)
+    chain.push_back(index);
+  std::reverse(chain.begin(), chain.end());
+
   core::Path path;
-  int index = goal_index;
-  while (index >= 0) {
-    const Node & n = nodes[index];
+  if (chain.empty()) return path;
+  auto add_pose = [&path](double x, double y, double theta) {
     core::PathPoint pt;
-    pt.pose = core::Pose2D(n.x, n.y, n.theta);
+    pt.pose = core::Pose2D(x, y, theta);
     path.points.push_back(pt);
-    index = n.parent;
+  };
+  add_pose(nodes[chain.front()].x, nodes[chain.front()].y,
+           nodes[chain.front()].theta);
+
+  for (size_t k = 1; k < chain.size(); ++k) {
+    const Node & from = nodes[chain[k - 1]];
+    const Node & to = nodes[chain[k]];
+    const MotionPrimitive & m = to.motion;
+    const double sign = m.distance >= 0.0 ? 1.0 : -1.0;
+    const double distance = std::fabs(m.distance);
+    const int samples = std::max(2, static_cast<int>(
+      std::ceil(distance / std::max(1e-6, resolution_ * 0.8))));
+    const double ds = distance / static_cast<double>(samples);
+    double x = from.x;
+    double y = from.y;
+    double th = from.theta;
+    for (int i = 0; i < samples; ++i) {
+      const double dtheta = m.curvature * ds * sign;
+      const double mid_th = th + 0.5 * dtheta;
+      x += std::cos(mid_th) * ds * sign;
+      y += std::sin(mid_th) * ds * sign;
+      th = normalizeAngle(th + dtheta);
+      add_pose(x, y, th);
+    }
   }
-  std::reverse(path.points.begin(), path.points.end());
   return path;
 }
 
@@ -377,6 +406,7 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       node.ix = ix;
       node.iy = iy;
       node.itheta = ith;
+      node.motion = primitive;
       nodes.push_back(node);
       open.push({node.f, static_cast<int>(nodes.size()) - 1});
     }

@@ -53,10 +53,9 @@ public:
 private:
   struct MotionPrimitive
   {
-    double distance;   // 有符号，负值表示倒车
-    double curvature;  // 1/R，0 表示直线
+    double distance = 0.0;   // 有符号，负值表示倒车
+    double curvature = 0.0;  // 1/R，0 表示直线
   };
-
   struct Node
   {
     double x = 0.0;
@@ -68,6 +67,7 @@ private:
     int ix = 0;
     int iy = 0;
     int itheta = 0;
+    MotionPrimitive motion;   // edge from parent to this node
   };
 
   struct QueueItem
