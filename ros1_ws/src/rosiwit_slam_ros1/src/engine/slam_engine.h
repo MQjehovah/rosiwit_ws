@@ -47,6 +47,7 @@ namespace rosiwit_slam_ros1 {
 /// 装机后 = /opt/ros/melodic/share/xz_3d_slam, 开发时 = 源码目录。
 /// ros::package::getPath 恰好两种情况都能给出正确目录, 所以用它等价替换。
 Xz3dConfPaths defaultXz3dPaths();
+Xz3dConfPaths defaultXz3dPaths(ros::NodeHandle& pnh);
 
 class SlamEngine {
 public:

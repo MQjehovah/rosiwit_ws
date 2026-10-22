@@ -23,10 +23,10 @@
       </link>
     </model>
 
-    <!-- 回环走廊: 外圈 60x40m, 内圈 52x32m, 走廊宽 4m -->
-    <!-- 每段墙: 长度 厚度 高度, 位置 x y z, 绕 Z 旋转 -->
+    <!-- (comment omitted for ASCII compatibility) -->
+    <!-- (comment omitted for ASCII compatibility) -->
 
-    <!-- 外墙 -->
+    <!-- (comment omitted for ASCII compatibility) -->
     <model name='outer_walls'>
       <static>1</static>
       <link name='bottom'><pose>0 -20 0 0 0 0</pose>
@@ -55,7 +55,7 @@
       </link>
     </model>
 
-    <!-- 内墙 -->
+    <!-- (comment omitted for ASCII compatibility) -->
     <model name='inner_walls'>
       <static>1</static>
       <link name='bottom'><pose>0 -16 0 0 0 0</pose>
@@ -84,7 +84,7 @@
       </link>
     </model>
 
-    <!-- 延伸走廊 (北侧 30m 死胡同) -->
+    <!-- (comment omitted for ASCII compatibility) -->
     <model name='ext_corridor'>
       <static>1</static>
       <link name='left'><pose>-2 31 0 0 0 0</pose>
@@ -109,7 +109,7 @@
       </link>
     </model>
 
-    <!-- 庭院内放些彩色方块 -->
+    <!-- (comment omitted for ASCII compatibility) -->
     <model name='block_1'><static>1</static>
       <pose>-8 6 0 0 0 0</pose>
       <link name='l'><pose>0 0 0.5 0 0 0</pose>

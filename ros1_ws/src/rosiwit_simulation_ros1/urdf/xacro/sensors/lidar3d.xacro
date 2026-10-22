@@ -36,8 +36,8 @@
 
         <!-- base_link top face z = base_length/2 = 0.08
              VLP-16 half height = 0.0717/2 = 0.03585
-             gap ≈ 0.005
-             total z offset = 0.08 + 0.005 + 0.03585 ≈ 0.12085 → rounded to 0.121
+             gap ~ 0.005
+             total z offset = 0.08 + 0.005 + 0.03585 ~ 0.12085 -> rounded to 0.121
              But for visual clearance on top of the base + sensor stack: 0.1955
              (matches architecture spec) -->
         <joint name="${prefix}_joint" type="fixed">

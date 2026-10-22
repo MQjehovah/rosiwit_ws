@@ -46,13 +46,13 @@
                 <always_on>true</always_on>
                 <update_rate>100</update_rate>
                 <visualize>true</visualize>
-                <plugin name="imu_plugin" filename="libgazebo_ros_imu.so">
-                    <alwaysOn>true</alwaysOn>
+                <plugin name="imu_plugin" filename="libgazebo_ros_imu_sensor.so">
+                    <robotNamespace>/</robotNamespace>
                     <topicName>imu</topicName>
-                    <bodyName>imu_link</bodyName>
                     <frameName>imu_link</frameName>
-                    <updateRate>100.0</updateRate>
+                    <updateRateHZ>100.0</updateRateHZ>
                     <gaussianNoise>0.0</gaussianNoise>
+                    <initialOrientationAsReference>true</initialOrientationAsReference>
                 </plugin>
                 <pose>0 0 0 0 0 0</pose>
             </sensor>

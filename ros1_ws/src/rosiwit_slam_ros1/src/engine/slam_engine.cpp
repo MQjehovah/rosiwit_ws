@@ -29,7 +29,8 @@ namespace rosiwit_slam_ros1 {
 
 using namespace rosiwit_slam;
 
-Xz3dConfPaths defaultXz3dPaths() {
+namespace {
+Xz3dConfPaths defaultXz3dPathsImpl(ros::NodeHandle* pnh) {
     Xz3dConfPaths p;
     // 旧实现 (xz_3d_slam/CMakeLists.txt:24/26):
     //   install 分支  PROJECT_PATH = /opt/ros/melodic/share/xz_3d_slam
@@ -42,14 +43,21 @@ Xz3dConfPaths defaultXz3dPaths() {
         ROS_WARN("[slam_engine] ros::package::getPath('rosiwit_slam_ros1') failed; "
                  "legacy conf falls back to built-in defaults");
     }
-    // **优先读老包的那份**: 旧实现的主配置 = 编译期 PROJECT_PATH/conf/slam_conf.json,
-    // 装机后就是 /opt/ros/melodic/share/xz_3d_slam/conf/slam_conf.json —— 那才是这台机器
-    // 真正生效的配置 (运维可能改过, 且与我们随包的那份并不一致: 实测老包那份没有
-    // laser_params 子树、x_new/z_new 也不同)。读不到才退回我们自己 conf/ 里的副本。
-    const std::string old_pkg = "/opt/ros/melodic/share/xz_3d_slam";
-    const std::string old_conf = old_pkg + "/conf/slam_conf.json";
-    std::ifstream probe(old_conf);
-    p.proj_conf_json = probe.good() ? old_conf : (pkg + "/conf/slam_conf.json");
+    // Simulation / alternate sensor rigs can point at their own legacy JSON.
+    std::string legacy_override;
+    if (pnh) pnh->param<std::string>("legacy_conf_file", legacy_override, "");
+    if (!legacy_override.empty()) {
+        p.proj_conf_json = legacy_override;
+    } else {
+        // **优先读老包的那份**: 旧实现的主配置 = 编译期 PROJECT_PATH/conf/slam_conf.json,
+        // 装机后就是 /opt/ros/melodic/share/xz_3d_slam/conf/slam_conf.json —— 那才是这台机器
+        // 真正生效的配置 (运维可能改过, 且与我们随包的那份并不一致: 实测老包那份没有
+        // laser_params 子树、x_new/z_new 也不同)。读不到才退回我们自己 conf/ 里的副本。
+        const std::string old_pkg = "/opt/ros/melodic/share/xz_3d_slam";
+        const std::string old_conf = old_pkg + "/conf/slam_conf.json";
+        std::ifstream probe(old_conf);
+        p.proj_conf_json = probe.good() ? old_conf : (pkg + "/conf/slam_conf.json");
+    }
     std::cout << "[slam_engine] legacy main conf source: " << p.proj_conf_json << std::endl;
     // 旧实现只有一个主配置来源。T1 的 Xz3dConfig 留了 proj(优先)/pkg(兜底) 两级,
     // 这里让二者指向同一份文件。见计划 §5.6。
@@ -58,6 +66,10 @@ Xz3dConfPaths defaultXz3dPaths() {
     p.opt_slam_json = "/opt/xzrobot/configs/3d_slam/slam_conf.json";
     return p;
 }
+}  // namespace
+
+Xz3dConfPaths defaultXz3dPaths() { return defaultXz3dPathsImpl(nullptr); }
+Xz3dConfPaths defaultXz3dPaths(ros::NodeHandle& pnh) { return defaultXz3dPathsImpl(&pnh); }
 
 namespace {
 
@@ -427,7 +439,7 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     {
         std::string model;
         nh_.param<std::string>("/machine/model", model, "");
-        xz_cfg_ = Xz3dConfig::load(defaultXz3dPaths(), model);
+        xz_cfg_ = Xz3dConfig::load(defaultXz3dPaths(pnh_), model);
         // 旧实现 startSub (legacy.cpp:200-207) 选输入话题靠的是 **laser_type**,
         // 不是 imu_sub_name/laser_sub_name:
         //   mid360 / new_mid360 -> "livox/imu" + "livox/lidar"

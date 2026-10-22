@@ -11,7 +11,7 @@ robot, aligned with `rosiwit_simulation_ros2`.
 | 世界 | `world/{house,large,simple}.world` | 相同（复制） |
 | 机器人模型 | `mbot_with_lidar3d_gazebo.xacro` | 相同结构，ROS1 Gazebo 插件 |
 | 默认出生点 | house.world `(0, 0, 0.1)` yaw 0 | 相同 |
-| 3D 雷达 | `libgazebo_ros_ray_sensor.so` (ROS2) | 同名插件（ROS1 参数） |
+| 3D 雷达 | `libgazebo_ros_ray_sensor.so` (ROS2) | `libgazebo_ros_velodyne_laser.so` (`velodyne_gazebo_plugins`) |
 | IMU | `libgazebo_ros_imu_sensor.so` (ROS2) | `libgazebo_ros_imu.so` |
 | 差速驱动 | `libgazebo_ros_diff_drive.so` (ROS2) | 同名插件（camelCase 参数） |
 | 模型/网格 | 包内自带 | 软链接到 `ros2_ws/.../rosiwit_simulation_ros2/{models,meshes}` |

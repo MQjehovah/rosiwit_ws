@@ -1,0 +1,137 @@
+# ============================================================
+# rosiwit_navigation_ros1 默认参数
+#
+# ⚠ 车体/安全参数取自实车 192.168.21.166 的 /robot_move_base/*，
+#   不是仿真值。robot_movebase 兼容接口请用 config/movebase_compat.yaml。
+# 速度/加速度/容差/前瞻/安全距离的实车依据见
+# docs/superpowers/specs/2026-10-21-ros1-movebase-interface-compat-design.md §9。
+# ============================================================
+# 速度限制 (实车 max_speed=0.8, speed_lim_w=0.5)
+max_velocity_x: 0.8
+min_velocity_x: 0.0
+max_velocity_theta: 0.5
+
+max_accel_x: 0.3
+max_accel_theta: 0.2
+
+# MPPI 采样/代价参数
+mppi_horizon: 20
+mppi_samples: 160
+mppi_dt: 0.0
+mppi_lambda: 0.8
+mppi_sigma_v: 0.18
+mppi_sigma_w: 0.35
+mppi_path_weight: 2.0
+mppi_heading_weight: 0.4
+mppi_obstacle_weight: 0.03
+mppi_control_weight: 0.03
+mppi_speed_weight: 2.0
+mppi_goal_weight: 1.5
+
+planner_max_iterations: 200000
+planner_timeout: 2.0
+planner_allow_reverse: true
+planner_max_reverse_distance: 1.0
+
+# 频率 (实车 g_control_freq=10)
+controller_frequency: 10.0
+planner_frequency: 1.0
+
+# 规划器 / 控制器
+planner_name: "astar"
+controller_name: "dwa"
+
+# 坐标系 (实车 robot_base_frame=base_footprint)
+global_frame: "map"
+robot_frame: "base_footprint"
+map_frame: "map"
+
+# 导航容差 (实车 xy/yaw_goal_tolerance=0.1)
+goal_tolerance_xy: 0.1
+goal_tolerance_yaw: 0.1
+
+# 前瞻距离 (实车 min/max_lookahead_dist=0.3/0.9)
+lookahead_distance: 0.6
+min_lookahead_distance: 0.3
+max_lookahead_distance: 0.9
+
+# 规划安全距离 (m)
+# robot_radius = 实车 g_min_safe (硬禁区); inflation_radius = g_max_safe 的等效膨胀.
+# 实车 footprint x[-0.25,0.55] y[-0.33,0.33] 由 safety_footprint 表达.
+robot_radius: 0.39
+# 规划器/控制器共用车体轮廓; Hybrid A* 使用它, A* 只使用 robot_radius.
+footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+# 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
+# 默认关闭: A/B 实测 DWA+footprint 会绕圈, 建议按下面组合验证后再打开:
+#   controller_name: mppi
+#   footprint_aware_control: true
+#   max_accel_theta: 0.3
+# 报告: docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md
+footprint_aware_control: false
+footprint_sample_spacing: 0.05
+path_resample_step: 0.08
+inflation_radius: 0.62
+
+# 里程计话题
+odom_topic: /lio_odom
+# RViz "2D Nav Goal" 默认话题; 订阅后按 goal 的箭头方向对齐末端航向
+rviz_goal_topic: "/move_base_simple/goal"
+rviz_goal_align_yaw: true
+
+# 安全层 (Nav2 Collision Monitor 等价)
+safety_enabled: true
+safety_self_filter_radius: 0.25
+# 与 3D 前端相同的车体自过滤 (base_footprint 系包围盒):
+scan_self_filter_enabled: true
+scan_self_x_min: -0.45
+scan_self_x_max: 0.75
+scan_self_y_min: -0.55
+scan_self_y_max: 0.55
+safety_fail_safe_on_timeout: true
+safety_source_timeout: 0.5
+# 实车 footprint 外扩 stop_dist=0.12 / g_robot_safe_dist=0.30
+safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]
+safety_slowdown_polygon: [-0.55, -0.63, 0.85, -0.63, 0.85, 0.63, -0.55, 0.63]
+safety_slowdown_ratio: 0.5
+safety_approach_enabled: true
+safety_time_before_collision: 2.0
+# 实车 footprint
+safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+
+# 动态障碍跟踪
+tracking_enabled: true
+tracking_horizon: 0.5
+tracking_cluster_distance: 0.35
+tracking_confirm_hits: 3
+tracking_max_radius: 1.2
+tracking_min_prediction_speed: 0.15
+
+# 统一恢复: 后退 -> 原地转向 -> 重试原任务
+recovery_enabled: true
+recovery_max_attempts: 2
+recovery_back_distance: 0.60
+recovery_timeout: 8.0
+
+# 3D 体素 / STVL 层
+voxel_enabled: true
+voxel_cloud_topic: "/world_cloud"
+voxel_resolution: 0.10
+voxel_max_points: 200000
+voxel_min_height: 0.15
+voxel_max_height: 1.60
+voxel_decay: 2.0
+voxel_inflation: 0.05
+
+# ---- 动态覆盖清洁 (navi_cmd=20) ----
+coverage_controller_name: "pure_pursuit"  # 覆盖模式单独控制器
+coverage_sweep_width: 0.5          # 清扫宽度 m
+coverage_max_speed: 0.4            # robot_vel<=0 时的覆盖速度 m/s
+coverage_resolution: 0.05          # 与地图分辨率一致最好
+coverage_replan_period: 10.0       # 周期兜底；正常按“路径走完/2s 不动”重规划
+coverage_horizon: 2.5              # 每段执行长度 m
+coverage_retry_timeout: 10.0       # 被动态障碍挡住多久后标不可达
+coverage_complete_rate: 0.995      # 覆盖率达到多少就收尾, 剩余标不可达
+coverage_blocked_inflation: 0.10   # 动态障碍点膨胀 m
+coverage_plan_inflation: 0.0       # 覆盖 A* 不再膨胀：区域边界=硬边界, 车体形状交给 footprint
+coverage_plan_robot_radius: 0.0
+coverage_report_path: ""           # 非空则结束写 coverage_report.json

@@ -5,7 +5,7 @@
 #   add_subdirectory 内联复用本库, 保持薄接口且等价。
 #   本目录含 COLCON_IGNORE, 不被 colcon 单独构建 (由接口包内联构建)。
 # ============================================================================
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.10)
 project(rosiwit_navigation VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
