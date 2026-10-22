@@ -559,9 +559,24 @@ private:
     const double cy = std::cos(tyaw);
     const double sy = std::sin(tyaw);
 
+    // /scan 正常约 1000 点，但异常/测试源可能给出超大 ranges。vector::clear()
+    // 只清元素不释放容量，一次异常大帧就会把容量永久撑到数 GB。这里做
+    // 上限 + stride 抽样，并在容量异常时真正 shrink.
+    constexpr size_t kMaxScanPoints = 4000;
     laser_points_.clear();
+    tracker_points_.clear();
+    if (laser_points_.capacity() > kMaxScanPoints * 4) {
+      laser_points_.shrink_to_fit();
+    }
+    if (tracker_points_.capacity() > kMaxScanPoints * 4) {
+      tracker_points_.shrink_to_fit();
+    }
+    const size_t total_ranges = msg->ranges.size();
+    const size_t scan_stride = total_ranges > kMaxScanPoints ?
+      std::max<size_t>(1, total_ranges / kMaxScanPoints) : 1;
     double angle = msg->angle_min;
-    for (size_t i = 0; i < msg->ranges.size(); ++i, angle += msg->angle_increment) {
+    for (size_t i = 0; i < total_ranges; i += scan_stride,
+         angle += msg->angle_increment * static_cast<double>(scan_stride)) {
       const float r = msg->ranges[i];
       if (r < msg->range_min || r > msg->range_max) { continue; }
       const double lx = r * std::cos(angle);
@@ -1741,6 +1756,9 @@ private:
        << ",\"tracks\":" << tracker_.tracked().size()
        << ",\"task_state\":\"" << task_sm_.stateName() << "\""
        << ",\"voxels\":" << voxel_layer_.size()
+       << ",\"scan_pts\":" << laser_points_.size()
+       << ",\"scan_cap\":" << laser_points_.capacity()
+       << ",\"track_pts_cap\":" << tracker_points_.capacity()
        << ",\"odom_age\":" << (last_odom_stamp_.isZero() ? -1.0 : (ros::Time::now() - last_odom_stamp_).toSec())
        << "}";
     std_msgs::String msg;
