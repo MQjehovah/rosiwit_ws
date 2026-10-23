@@ -215,13 +215,14 @@ bool HybridAStarPlanner::checkPose(const core::Pose2D & pose) const
   if (!footprint_samples_.empty()) {
     if (core::footprintCost(*costmap_->grid, pose, footprint_samples_) < 100)
       return true;
-    // Recovery-only start clearance: allow the current footprint to overlap
-    // briefly so a reverse escape path can be planned. Normal planning sets
-    // start_relax_radius=0.
+    // Recovery-only start clearance: the robot is already standing inside the
+    // occupied cells (stale map / charger / self-projection).  Ignore both the
+    // footprint and the centre cell inside start_relax_radius so a reverse path
+    // can leave; outside that radius the normal costmap applies.  Normal
+    // planning sets start_relax_radius=0 and never takes this branch.
     if (start_relaxed_ && config_.start_relax_radius > 0.0 &&
         std::hypot(pose.x - start_pose_.x, pose.y - start_pose_.y) <=
-          config_.start_relax_radius &&
-        !isObstacle(ix, iy)) {
+          config_.start_relax_radius) {
       return true;
     }
     return false;

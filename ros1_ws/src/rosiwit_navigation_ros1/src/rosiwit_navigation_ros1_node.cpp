@@ -53,6 +53,7 @@
 #include "rosiwit_navigation/nav_core/voxel_layer.hpp"
 #include "rosiwit_navigation/nav_core/action_task.hpp"
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
+#include "rosiwit_navigation/nav_core/footprint.hpp"
 #include "movebase_protocol.h"
 #include "movebase_interface.h"
 
@@ -355,11 +356,12 @@ private:
     pnh_.param<int>("recovery_max_attempts", recovery_max_attempts_, 2);
     // 恢复只允许规划得到的倒车路径. 不再保留 primitive 后退/旋转后备.
     pnh_.param<double>("recovery_back_distance", recovery_back_distance_, 0.60);
-    pnh_.param<double>("recovery_timeout", recovery_timeout_, 8.0);
+    pnh_.param<double>("recovery_timeout", recovery_timeout_, 20.0);
     // 恢复规划: 当前 footprint 压住的栅格视为 free, 否则反向 escape
     // 会在起点直接报 Start in obstacle. 正常规划不使用这个副本.
     pnh_.param<bool>("recovery_clear_start_footprint", recovery_clear_start_footprint_, true);
     pnh_.param<double>("recovery_start_clear_margin", recovery_start_clear_margin_, 0.05);
+    pnh_.param<double>("recovery_start_relax_radius", recovery_start_relax_radius_, 1.0);
 
     // 孤立激光点滤波: 只保留与相邻扫描点足够近的点.
     pnh_.param<bool>("laser_filter_enabled", laser_filter_enabled_, true);
@@ -447,16 +449,45 @@ private:
       rcfg.resolution = 0.05;
       rcfg.max_iterations = planner_max_iterations_;
       rcfg.timeout = planner_timeout_ > 0.0 ?
-        std::min(planner_timeout_, 1.5) : 1.5;
+        std::min(planner_timeout_, 2.0) : 2.0;
       rcfg.allow_reverse = true;
       rcfg.reverse_only = true;
-      rcfg.start_relax_radius = 0.65;
+      rcfg.start_relax_radius = recovery_start_relax_radius_;
+      ROS_INFO("[rosiwit_navigation_ros1] recovery planner config: reverse_only=%d "
+               "start_relax_radius=%.2f timeout=%.2f",
+               static_cast<int>(rcfg.reverse_only),
+               rcfg.start_relax_radius, rcfg.timeout);
       recovery_planner_->initialize(rcfg);
       recovery_planner_->setInflationRadius(inflation_radius_);
       recovery_planner_->setRobotRadius(robot_radius_);
       if (!configured_footprint_.empty()) {
         recovery_planner_->setRobotFootprint(configured_footprint_);
       }
+    }
+
+    // Recovery path is reverse-only.  MPPI's local-costmap collision term is
+    // intentionally conservative and refuses to follow a recovery path that
+    // starts inside the occupied map cells, so recovery execution gets its own
+    // path follower.  It still goes through applySafety() (scan stop/slowdown).
+    recovery_controller_ = nav_core::NavigationFactory::createController("diff_drive");
+    if (recovery_controller_) {
+      core::ControllerConfig rcc;
+      rcc.lookahead_distance = 0.35;
+      rcc.xy_goal_tolerance = 0.12;
+      rcc.slow_down_distance = 0.20;
+      rcc.max_lookahead_distance = 0.60;
+      rcc.min_lookahead_distance = 0.20;
+      rcc.lookahead_gain = 1.0;
+      rcc.kinematics.max_velocity_x = 0.30;
+      rcc.kinematics.max_velocity_theta = max_velocity_theta_;
+      rcc.max_linear_velocity = 0.30;
+      rcc.max_angular_velocity = std::max(0.35, max_velocity_theta_);
+      rcc.path_resample_step = 0.08;
+      rcc.allow_reverse = true;
+      recovery_controller_->initialize(rcc);
+      ROS_INFO("[rosiwit_navigation_ros1] recovery controller: diff_drive "
+               "vmax=%.2f lookahead=%.2f", rcc.max_linear_velocity,
+               rcc.lookahead_distance);
     }
 
     controller_strategy_ = nav_core::NavigationFactory::createController(controller_name_);
@@ -840,6 +871,11 @@ private:
 
     action_active_ = true;
     action_goal_ = movebase::Goal();
+    // Native goals are not movebase action tasks.  Clear any stale decoded
+    // action command so recovery treats this as a normal navigate goal and
+    // finishRecovery() goes back through goal_pose_ instead of startActionNavigation().
+    action_cmd_ = movebase::Decoded();
+    recovery_attempts_ = 0;
     action_traveled_.clear();
     action_traveled_.push_back(current_pose_);
     action_speed_ = movebase_default_speed_;
@@ -2452,6 +2488,7 @@ private:
   {
     recovery_stage_ = RecoveryStage::NONE;
     recovery_core_path_.points.clear();
+    if (recovery_controller_) { recovery_controller_->reset(); }
     recovery_for_action_ = false;
     recovery_started_ = ros::Time(0);
   }
@@ -2552,7 +2589,10 @@ private:
     if (!recovery_enabled_ || recovery_attempts_ >= recovery_max_attempts_) {
       return false;
     }
-    if (action_active_ &&
+    // Native /goal_pose goals use action_active_ without a decoded movebase
+    // command.  Only block recovery for valid action commands that are not
+    // point/path navigation (coverage, rotate primitive, back-off primitive).
+    if (action_active_ && action_cmd_.valid &&
         !(action_cmd_.command == movebase::Command::SINGLE_POINT ||
           action_cmd_.command == movebase::Command::TWO_POINTS ||
           action_cmd_.command == movebase::Command::FOLLOW_PATH)) {
@@ -2561,7 +2601,7 @@ private:
     if (!updateCurrentPose()) return false;
 
     ++recovery_attempts_;
-    recovery_for_action_ = action_active_;
+    recovery_for_action_ = action_active_ && action_cmd_.valid;
     recovery_started_ = ros::Time::now();
     planning_active_ = false;
     ++plan_generation_;
@@ -2572,10 +2612,11 @@ private:
     // Prefer a real reverse escape path over a fixed primitive. A short
     // reverse-only Hybrid A* plan can back out of a dead end/start collision
     // while preserving the normal planner's forward policy.
-    if (recovery_planner_ && !planner_costmap_.data.empty() && controller_strategy_) {
+    if (recovery_planner_ && !planner_costmap_.data.empty() && recovery_controller_) {
       const core::Pose2D pose = toCorePose(current_pose_);
       const double back = std::max(0.30, recovery_back_distance_);
       const double side = std::max(0.20, back * 0.55);
+      const double wide = std::max(0.45, back);
       // 先在正后方找目标; 再试更近/更远的目标和后左/后右弧线, 让
       // Hybrid A* 用反向路径绕开障碍, 而不是原地后退/旋转.
       auto behind = [&pose](double distance, double lateral) {
@@ -2586,16 +2627,61 @@ private:
           pose.y - sy * distance + cy * lateral,
           pose.theta);
       };
+      auto behind_turn = [&pose](double distance, double lateral, double dyaw) {
+        const double cy = std::cos(pose.theta);
+        const double sy = std::sin(pose.theta);
+        return core::Pose2D(
+          pose.x - cy * distance - sy * lateral,
+          pose.y - sy * distance + cy * lateral,
+          pose.theta + dyaw);
+      };
+      const double inner = std::max(0.35, back * 0.83);
       std::vector<core::Pose2D> targets;
       targets.push_back(behind(back, 0.0));
       targets.push_back(behind(back * 0.70, 0.0));   // 后方目标太靠墙时退近一点
       targets.push_back(behind(back * 1.35, 0.0));    // 需要更长距离才能让开
       targets.push_back(behind(back * 0.85, side));   // 反向弧线绕左
       targets.push_back(behind(back * 0.85, -side));  // 反向弧线绕右
+      // 贴着墙/充电桩时, 终点朝向也必须允许转开. 只要求目标位置和同一
+      // 航向会让反向-only Hybrid A* 必须走 S 形, 短距离内几何不可达.
+      // 左/右各试 ±0.6/±0.3rad 的终点航向, footprint 必须 free.
+      for (double d : {back, back * 1.33, back * 1.66}) {
+        for (double lateral : {-inner, inner}) {
+          for (double dyaw : {-0.6, 0.6, -0.3, 0.3, 0.0}) {
+            targets.push_back(behind_turn(d, lateral, dyaw));
+          }
+        }
+      }
+      // 更宽的侧向逃逸目标 (车身长边贴墙时 0.33m 仍不够).
+      targets.push_back(behind(back * 0.70, wide));
+      targets.push_back(behind(back * 0.70, -wide));
+      targets.push_back(behind(back * 1.05, wide));
+      targets.push_back(behind(back * 1.05, -wide));
+      targets.push_back(behind(back * 2.0, wide));
+      targets.push_back(behind(back * 2.0, -wide));
 
       const core::Costmap recovery_costmap = buildRecoveryCostmap();
       recovery_planner_->setCostmap(recovery_costmap);
+      std::vector<std::pair<double, double>> footprint_samples;
+      if (!configured_footprint_.empty()) {
+        footprint_samples = core::sampleFootprint(
+          configured_footprint_, std::max(0.02, footprint_sample_spacing_));
+      }
+      auto target_free = [&](const core::Pose2D & target) {
+        if (footprint_samples.empty() || !recovery_costmap.grid) { return true; }
+        return core::footprintCost(*recovery_costmap.grid, target,
+                                   footprint_samples) < 100;
+      };
+      const ros::Time planning_started = ros::Time::now();
+      const double planning_budget = recovery_timeout_ > 0.0
+        ? std::min(6.0, recovery_timeout_ * 0.8) : 6.0;
       for (size_t i = 0; i < targets.size(); ++i) {
+        if ((ros::Time::now() - planning_started).toSec() > planning_budget) {
+          ROS_WARN("[rosiwit_navigation_ros1] reverse escape planning budget %.1fs "
+                   "exceeded after %zu candidates", planning_budget, i);
+          break;
+        }
+        if (!target_free(targets[i])) { continue; }
         const auto result = recovery_planner_->plan(pose, targets[i]);
         if (!result.is_ok()) {
           ROS_WARN("[rosiwit_navigation_ros1] reverse escape candidate=%zu failed: %s",
@@ -2604,7 +2690,7 @@ private:
         }
         recovery_core_path_ = result.value();
         current_path_ = toRosPath(recovery_core_path_, map_frame_, ros::Time::now());
-        controller_strategy_->setPath(recovery_core_path_);
+        recovery_controller_->setPath(recovery_core_path_);
         recovery_stage_ = RecoveryStage::FOLLOW;
         // 规划本身可能耗时; 超时只约束路径执行阶段.
         recovery_started_ = ros::Time::now();
@@ -2671,15 +2757,17 @@ private:
     const core::Pose2D pose = toCorePose(current_pose_);
 
     if (recovery_stage_ == RecoveryStage::FOLLOW) {
-      if (!controller_strategy_ || current_path_.poses.empty()) {
+      if (!recovery_controller_ || current_path_.poses.empty()) {
         failRecovery();
         return;
       }
-      if (controller_strategy_->isGoalReached(pose)) {
+      if (recovery_controller_->isGoalReached(pose)) {
         finishRecovery();
         return;
       }
-      publishCommand(applySafety(computeVelocityCommand()));
+      const auto core_cmd = recovery_controller_->computeVelocityCommand(
+        pose, toCoreVelocity(current_velocity_));
+      publishCommand(applySafety(toRosTwist(core_cmd)));
       recordActionTraveled();
       if (action_active_) publishActionOutputs();
       return;
@@ -3160,15 +3248,17 @@ private:
   enum class RecoveryStage { NONE, FOLLOW };
   RecoveryStage recovery_stage_ = RecoveryStage::NONE;
   std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
+  std::unique_ptr<core::IControllerStrategy> recovery_controller_;
   std::unique_ptr<core::IPlannerStrategy> coverage_planner_;
   core::Path recovery_core_path_;
   bool recovery_enabled_ = true;
   int recovery_max_attempts_ = 2;
   int recovery_attempts_ = 0;
   double recovery_back_distance_ = 0.60;
-  double recovery_timeout_ = 8.0;
+  double recovery_timeout_ = 20.0;
   bool recovery_clear_start_footprint_ = true;
   double recovery_start_clear_margin_ = 0.05;
+  double recovery_start_relax_radius_ = 1.0;
   bool laser_filter_enabled_ = true;
   double laser_filter_radius_ = 0.15;
   int laser_filter_min_neighbors_ = 1;

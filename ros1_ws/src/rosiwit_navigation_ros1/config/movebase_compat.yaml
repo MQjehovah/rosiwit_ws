@@ -130,7 +130,7 @@ recovery_enabled: true
 recovery_max_attempts: 2
 # 倒车脱离目标距离; 太小会让车头仍卡在障碍里.
 recovery_back_distance: 0.60
-recovery_timeout: 8.0
+recovery_timeout: 20.0
 tracking_enabled: true
 tracking_horizon: 0.5
 tracking_cluster_distance: 0.35
@@ -200,3 +200,4 @@ laser_filter_window: 2
 # ---- 恢复规划: 忽略当前 footprint 压住的障碍 ----
 recovery_clear_start_footprint: true
 recovery_start_clear_margin: 0.05
+recovery_start_relax_radius: 1.0
