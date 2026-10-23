@@ -870,10 +870,8 @@ private:
     task_command.final_yaw = yawFromQuat(goal.pose.orientation);
 
     action_active_ = true;
+    action_interface_active_ = false;
     action_goal_ = movebase::Goal();
-    // Native goals are not movebase action tasks.  Clear any stale decoded
-    // action command so recovery treats this as a normal navigate goal and
-    // finishRecovery() goes back through goal_pose_ instead of startActionNavigation().
     action_cmd_ = movebase::Decoded();
     recovery_attempts_ = 0;
     action_traveled_.clear();
@@ -1019,6 +1017,7 @@ private:
     }
 
     action_active_ = true;
+    action_interface_active_ = true;
     action_traveled_.push_back(current_pose_);
     action_speed_ = action_cmd_.speed > 0.01 ? action_cmd_.speed : movebase_default_speed_;
     if (action_speed_ > max_velocity_x_) {
@@ -1217,6 +1216,7 @@ private:
     last_coverage_rate_ = 0.0;
     last_clean_area_ = 0.0;
     action_active_ = false;
+    action_interface_active_ = false;
     action_task_.reset();
     // action_goal_/action_cmd_ 可能持有 FOLLOW_PATH/COVERAGE 的整条路径.
     // 任务结束后必须释放, 否则一次异常大 goal 会永久占住内存.
@@ -2489,7 +2489,6 @@ private:
     recovery_stage_ = RecoveryStage::NONE;
     recovery_core_path_.points.clear();
     if (recovery_controller_) { recovery_controller_->reset(); }
-    recovery_for_action_ = false;
     recovery_started_ = ros::Time(0);
   }
 
@@ -2586,22 +2585,21 @@ private:
 
   bool startRecovery()
   {
-    if (!recovery_enabled_ || recovery_attempts_ >= recovery_max_attempts_) {
+    if (!recovery_enabled_ || coverage_active_ ||
+        recovery_attempts_ >= recovery_max_attempts_) {
       return false;
     }
-    // Native /goal_pose goals use action_active_ without a decoded movebase
-    // command.  Only block recovery for valid action commands that are not
-    // point/path navigation (coverage, rotate primitive, back-off primitive).
-    if (action_active_ && action_cmd_.valid &&
-        !(action_cmd_.command == movebase::Command::SINGLE_POINT ||
-          action_cmd_.command == movebase::Command::TWO_POINTS ||
-          action_cmd_.command == movebase::Command::FOLLOW_PATH)) {
+    // Recovery is for navigation/path tasks only.  This uses the algorithm
+    // layer's ActionTask kind, so /goal_pose and RobotNaviCmdAction take the
+    // same path; only ROTATE/BACK_OFF primitives are excluded.
+    if (action_active_ &&
+        action_task_.kind() != core::ActionKind::NAVIGATE &&
+        action_task_.kind() != core::ActionKind::FOLLOW_PATH) {
       return false;
     }
     if (!updateCurrentPose()) return false;
 
     ++recovery_attempts_;
-    recovery_for_action_ = action_active_ && action_cmd_.valid;
     recovery_started_ = ros::Time::now();
     planning_active_ = false;
     ++plan_generation_;
@@ -2709,9 +2707,8 @@ private:
 
   void failRecovery()
   {
-    const bool was_action = recovery_for_action_ && action_active_;
     resetRecovery();
-    if (was_action) {
+    if (action_interface_active_) {
       failAction(movebase::RESULT_NO_PROGRESS, "FAILED_RECOVERY");
     } else {
       setGoalStatus("FAILED_RECOVERY");
@@ -2721,27 +2718,20 @@ private:
 
   void finishRecovery()
   {
-    const bool was_action = recovery_for_action_;
+    // Resume the same high-level ActionTask regardless of whether the goal
+    // came from /goal_pose or the RobotNaviCmdAction interface.  NAVIGATE goals
+    // both carry goal_pose_; FOLLOW_PATH re-enters the path follower.
+    const core::ActionKind kind = action_task_.kind();
     resetRecovery();
-    if (was_action && action_active_) {
-      switch (action_cmd_.command) {
-        case movebase::Command::SINGLE_POINT:
-        case movebase::Command::TWO_POINTS:
-          startActionNavigation();
-          return;
-        case movebase::Command::FOLLOW_PATH:
-          startActionFollowPath();
-          return;
-        default:
-          failRecovery();
-          return;
-      }
+    if (action_active_ && kind == core::ActionKind::FOLLOW_PATH) {
+      startActionFollowPath();
+      return;
     }
-    if (!goal_pose_.header.frame_id.empty()) {
+    if (action_active_ && !goal_pose_.header.frame_id.empty()) {
       startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/true);
-    } else {
-      stopNavigation();
+      return;
     }
+    stopNavigation();
   }
 
   void recoveryControlStep()
@@ -3263,7 +3253,7 @@ private:
   double laser_filter_radius_ = 0.15;
   int laser_filter_min_neighbors_ = 1;
   int laser_filter_window_ = 2;
-  bool recovery_for_action_ = false;
+  bool action_interface_active_ = false;
   ros::Time recovery_started_;
 
   // ---- 动态覆盖清洁 ----
