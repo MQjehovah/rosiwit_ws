@@ -101,7 +101,10 @@ core::VelocityCommand DiffDriveController::purePursuit(
     double alpha = normAngle(std::atan2(dy, dx) - pose.theta);
 
     double vx = std::clamp(max_vx_ * std::cos(alpha), -max_vx_ * 0.5, max_vx_);
-    double wz = std::clamp(2.0 * std::sin(alpha) / lookahead_ * max_vx_, -max_vw_, max_vw_);
+    // Signed pure-pursuit curvature: for a reverse path vx<0, so the yaw rate
+    // must also change sign.  The old formula always used +max_vx_, which
+    // steered the wrong way when following a reverse escape path.
+    double wz = std::clamp(2.0 * vx * std::sin(alpha) / lookahead_, -max_vw_, max_vw_);
     return {vx, 0, wz};
 }
 
