@@ -319,6 +319,16 @@ private:
     // 恢复只允许规划得到的倒车路径. 不再保留 primitive 后退/旋转后备.
     pnh_.param<double>("recovery_back_distance", recovery_back_distance_, 0.60);
     pnh_.param<double>("recovery_timeout", recovery_timeout_, 8.0);
+    // 规划反向路径失败时的最后手段: 低速盲退一小段再重试.
+    pnh_.param<bool>("recovery_blind_backoff_enabled", recovery_blind_backoff_enabled_, true);
+    pnh_.param<double>("recovery_blind_backoff_speed", recovery_blind_backoff_speed_, 0.10);
+    pnh_.param<double>("recovery_blind_backoff_time", recovery_blind_backoff_time_, 1.5);
+
+    // 孤立激光点滤波: 只保留与相邻扫描点足够近的点.
+    pnh_.param<bool>("laser_filter_enabled", laser_filter_enabled_, true);
+    pnh_.param<double>("laser_filter_radius", laser_filter_radius_, 0.15);
+    pnh_.param<int>("laser_filter_min_neighbors", laser_filter_min_neighbors_, 1);
+    pnh_.param<int>("laser_filter_window", laser_filter_window_, 2);
 
     // 实车参数必须能从启动日志一眼核对 (否则很容易又跑成仿真值).
     if (!movebase_footprint_.empty()) {
@@ -646,12 +656,35 @@ private:
       p.y = ty + lx * sy + ly * cy;
       p.z = 0.0;
       laser_points_.push_back(p);
-      if (tracking_enabled_) {
+    }
+    // 孤立点滤波: 真实障碍在相邻扫描束上会有邻居; 单点噪声/反光点没有.
+    if (laser_filter_enabled_ && laser_points_.size() >= 3) {
+      std::vector<geometry_msgs::Point> filtered;
+      filtered.reserve(laser_points_.size());
+      const int window = std::max(1, laser_filter_window_);
+      const int min_neighbors = std::max(1, laser_filter_min_neighbors_);
+      const double radius2 = laser_filter_radius_ * laser_filter_radius_;
+      for (size_t i = 0; i < laser_points_.size(); ++i) {
+        int neighbors = 0;
+        for (int k = -window; k <= window && neighbors < min_neighbors; ++k) {
+          if (k == 0) { continue; }
+          const long j = static_cast<long>(i) + k;
+          if (j < 0 || j >= static_cast<long>(laser_points_.size())) { continue; }
+          const double dx = laser_points_[i].x - laser_points_[j].x;
+          const double dy = laser_points_[i].y - laser_points_[j].y;
+          if (dx * dx + dy * dy <= radius2) { ++neighbors; }
+        }
+        if (neighbors >= min_neighbors) { filtered.push_back(laser_points_[i]); }
+      }
+      laser_points_.swap(filtered);
+    }
+    if (tracking_enabled_) {
+      tracker_points_.clear();
+      tracker_points_.reserve(laser_points_.size());
+      for (const auto & p : laser_points_) {
         core::Point2D tp; tp.x = p.x; tp.y = p.y;
         tracker_points_.push_back(tp);
       }
-    }
-    if (tracking_enabled_) {
       tracker_.update(tracker_points_, msg->header.stamp.toSec());
       tracker_points_.clear();
       publishTrackedObstacles();
@@ -2453,8 +2486,19 @@ private:
                  current_path_.poses.size());
         return true;
       }
-      ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed; "
-                "no primitive fallback, stopping instead of blind backoff/rotate");
+      ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed");
+    }
+    if (recovery_blind_backoff_enabled_) {
+      recovery_core_path_.points.clear();
+      current_path_.poses.clear();
+      controller_strategy_->reset();
+      recovery_stage_ = RecoveryStage::BLIND_BACKOFF;
+      recovery_started_ = ros::Time::now();
+      ROS_WARN("[rosiwit_navigation_ros1] recovery %d/%d: start in obstacle, "
+               "blind backoff %.2f m/s for %.1fs",
+               recovery_attempts_, recovery_max_attempts_,
+               recovery_blind_backoff_speed_, recovery_blind_backoff_time_);
+      return true;
     }
     return false;
   }
@@ -2507,6 +2551,20 @@ private:
       return;
     }
     const core::Pose2D pose = toCorePose(current_pose_);
+
+    if (recovery_stage_ == RecoveryStage::BLIND_BACKOFF) {
+      if (recovery_blind_backoff_time_ > 0.0 &&
+          (now - recovery_started_).toSec() >= recovery_blind_backoff_time_) {
+        finishRecovery();
+        return;
+      }
+      geometry_msgs::Twist cmd;
+      cmd.linear.x = -std::max(0.02, recovery_blind_backoff_speed_);
+      publishCommand(applySafety(cmd));
+      recordActionTraveled();
+      if (action_active_) publishActionOutputs();
+      return;
+    }
 
     if (recovery_stage_ == RecoveryStage::FOLLOW) {
       if (!controller_strategy_ || current_path_.poses.empty()) {
@@ -2995,7 +3053,7 @@ private:
   bool action_active_ = false;
 
   // 恢复只使用规划器产生的反向路径 (Hybrid A*, reverse-only).
-  enum class RecoveryStage { NONE, FOLLOW };
+  enum class RecoveryStage { NONE, FOLLOW, BLIND_BACKOFF };
   RecoveryStage recovery_stage_ = RecoveryStage::NONE;
   std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
   std::unique_ptr<core::IPlannerStrategy> coverage_planner_;
@@ -3005,6 +3063,13 @@ private:
   int recovery_attempts_ = 0;
   double recovery_back_distance_ = 0.60;
   double recovery_timeout_ = 8.0;
+  bool recovery_blind_backoff_enabled_ = true;
+  double recovery_blind_backoff_speed_ = 0.10;
+  double recovery_blind_backoff_time_ = 1.5;
+  bool laser_filter_enabled_ = true;
+  double laser_filter_radius_ = 0.15;
+  int laser_filter_min_neighbors_ = 1;
+  int laser_filter_window_ = 2;
   bool recovery_for_action_ = false;
   ros::Time recovery_started_;
 

@@ -161,3 +161,14 @@ replan_max_interval: 5.0
 replan_min_interval: 1.0
 replan_on_blocked: true
 costmap_update_rate: 5.0
+
+# ---- 激光孤立点滤波 ----
+laser_filter_enabled: true
+laser_filter_radius: 0.15
+laser_filter_min_neighbors: 1
+laser_filter_window: 2
+
+# ---- 起点在障碍内: 规划反向失败后的盲退 ----
+recovery_blind_backoff_enabled: true
+recovery_blind_backoff_speed: 0.10
+recovery_blind_backoff_time: 3.0
