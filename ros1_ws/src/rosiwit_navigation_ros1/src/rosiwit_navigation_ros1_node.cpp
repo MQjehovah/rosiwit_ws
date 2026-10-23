@@ -154,6 +154,34 @@ private:
     pnh_.param<std::string>("planner_name", planner_name_, "astar");
     pnh_.param<std::string>("controller_name", controller_name_, "pure_pursuit");
     pnh_.param<std::string>("odom_topic", odom_topic_, "/odom");
+    pnh_.param<std::string>("map_topic", map_topic_, "/map");
+    pnh_.param<std::string>("scan_topic", scan_topic_, "/scan");
+    pnh_.param<std::string>("goal_topic", goal_topic_, "/goal_pose");
+    pnh_.param<std::string>("nav_stop_service", nav_stop_service_, "/nav_stop");
+    pnh_.param<std::string>("global_path_topic", global_path_topic_, "/global_path");
+    pnh_.param<std::string>("local_path_topic", local_path_topic_, "/local_path");
+    pnh_.param<std::string>("global_costmap_topic", global_costmap_topic_, "/global_costmap");
+    pnh_.param<std::string>("local_costmap_topic", local_costmap_topic_, "/local_costmap");
+    pnh_.param<std::string>("goal_status_topic", goal_status_topic_, "/goal_status");
+    pnh_.param<std::string>("diagnostics_topic", diagnostics_topic_, "/nav_diagnostics");
+    pnh_.param<std::string>("tracked_obstacles_topic", tracked_obstacles_topic_,
+                            "/tracked_obstacles");
+
+    // 传感器 fail-safe
+    pnh_.param<double>("map_timeout", map_timeout_, 0.0);
+    pnh_.param<double>("scan_timeout", scan_timeout_, 0.5);
+    pnh_.param<double>("cloud_timeout", cloud_timeout_, 1.0);
+    pnh_.param<bool>("require_scan", require_scan_, true);
+    pnh_.param<bool>("require_cloud", require_cloud_, false);
+
+    // 重规划滞回
+    pnh_.param<double>("replan_max_interval", replan_max_interval_, 5.0);
+    pnh_.param<double>("replan_min_interval", replan_min_interval_, 1.0);
+    pnh_.param<bool>("replan_on_blocked", replan_on_blocked_, true);
+
+    // costmap 构建节流 (scan 回调不再每个 scan 都做完整聚类)
+    pnh_.param<double>("costmap_update_rate", costmap_update_rate_, 5.0);
+
     // RViz "2D Nav Goal" 默认发 /move_base_simple/goal (不是 /goal_pose).
     pnh_.param<std::string>("rviz_goal_topic", rviz_goal_topic_,
                             "/move_base_simple/goal");
@@ -250,7 +278,7 @@ private:
     pnh_.param<double>("coverage_replan_period", coverage_replan_period_, 10.0);
     pnh_.param<double>("coverage_horizon", coverage_horizon_, 2.5);
     pnh_.param<double>("coverage_retry_timeout", coverage_retry_timeout_, 10.0);
-    pnh_.param<double>("coverage_complete_rate", coverage_complete_rate_, 0.995);
+    pnh_.param<double>("coverage_complete_rate", coverage_complete_rate_, 0.99);
     pnh_.param<double>("coverage_blocked_inflation", coverage_blocked_inflation_, 0.10);
     pnh_.param<double>("coverage_plan_inflation", coverage_plan_inflation_, 0.0);
     pnh_.param<double>("coverage_plan_robot_radius", coverage_plan_robot_radius_, 0.0);
@@ -403,10 +431,29 @@ private:
     // footprint-aware 只对真正实现了 footprint 代价的控制器生效;
     // 否则必须保留局部 costmap 的圆形膨胀, 不能接未膨胀地图.
     controller_footprint_.clear();
+    const bool dwa_controller = (controller_name_ == "dwa");
+    if (footprint_aware_control_ && controller_strategy_ && dwa_controller) {
+      ROS_WARN("[rosiwit_navigation_ros1] DWA + footprint 已知会绕圈, "
+               "自动回退为圆形膨胀 (DWA 仍可用)");
+    }
     if (footprint_aware_control_ && controller_strategy_ &&
-        controller_strategy_->supportsFootprint()) {
+        controller_strategy_->supportsFootprint() && !dwa_controller) {
       controller_footprint_ = configured_footprint_;
     }
+    // 覆盖模式的 approach 用独立 A*: 正常 planner 可能是 Hybrid A* + footprint,
+    // 它会把区域边缘的目标判成 Goal in obstacle.
+    coverage_planner_ = nav_core::NavigationFactory::createPlanner("astar");
+    if (coverage_planner_) {
+      core::PlannerConfig pcfg;
+      pcfg.name = "astar";
+      pcfg.resolution = 0.05;
+      pcfg.max_iterations = planner_max_iterations_;
+      pcfg.timeout = planner_timeout_;
+      coverage_planner_->initialize(pcfg);
+      coverage_planner_->setInflationRadius(0.0);
+      coverage_planner_->setRobotRadius(0.0);
+    }
+
     // 覆盖模式单独一个控制器: 覆盖路径是长直线/行段, pure_pursuit 比
     // MPPI 更稳; 正常导航仍用 controller_name 指定的 MPPI.
     const std::string cov_ctrl = coverage_controller_name_.empty() ?
@@ -464,28 +511,28 @@ private:
   void setupRos()
   {
     cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 1);
-    path_pub_ = nh_.advertise<nav_msgs::Path>("/local_path", 1);
-    global_path_pub_ = nh_.advertise<nav_msgs::Path>("/global_path", 1);
-    global_costmap_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("/global_costmap", 1, true);
-    local_costmap_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("/local_costmap", 1, true);
-    goal_status_pub_ = nh_.advertise<std_msgs::String>("/goal_status", 1, true);
-    diagnostics_pub_ = nh_.advertise<std_msgs::String>("/nav_diagnostics", 1);
-    tracked_obs_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/tracked_obstacles", 1);
+    path_pub_ = nh_.advertise<nav_msgs::Path>(local_path_topic_, 1);
+    global_path_pub_ = nh_.advertise<nav_msgs::Path>(global_path_topic_, 1);
+    global_costmap_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>(global_costmap_topic_, 1, true);
+    local_costmap_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>(local_costmap_topic_, 1, true);
+    goal_status_pub_ = nh_.advertise<std_msgs::String>(goal_status_topic_, 1, true);
+    diagnostics_pub_ = nh_.advertise<std_msgs::String>(diagnostics_topic_, 1);
+    tracked_obs_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(tracked_obstacles_topic_, 1);
 
     odom_sub_ = nh_.subscribe(odom_topic_, 1, &RosiwitNavigationRos1Node::odomCallback, this);
-    map_sub_ = nh_.subscribe("/map", 1, &RosiwitNavigationRos1Node::mapCallback, this);
-    scan_sub_ = nh_.subscribe("/scan", 1, &RosiwitNavigationRos1Node::scanCallback, this);
+    map_sub_ = nh_.subscribe(map_topic_, 1, &RosiwitNavigationRos1Node::mapCallback, this);
+    scan_sub_ = nh_.subscribe(scan_topic_, 1, &RosiwitNavigationRos1Node::scanCallback, this);
     if (voxel_enabled_ && !voxel_cloud_topic_.empty()) {
       voxel_sub_ = nh_.subscribe(voxel_cloud_topic_, 1,
                                  &RosiwitNavigationRos1Node::voxelCallback, this);
     }
-    goal_sub_ = nh_.subscribe("/goal_pose", 1, &RosiwitNavigationRos1Node::goalCallback, this);
+    goal_sub_ = nh_.subscribe(goal_topic_, 1, &RosiwitNavigationRos1Node::goalCallback, this);
     if (!rviz_goal_topic_.empty() && rviz_goal_topic_ != "/goal_pose") {
       rviz_goal_sub_ = nh_.subscribe(
         rviz_goal_topic_, 1, &RosiwitNavigationRos1Node::rvizGoalCallback, this);
     }
     nav_stop_srv_ = nh_.advertiseService(
-      "/nav_stop", &RosiwitNavigationRos1Node::navStopCallback, this);
+      nav_stop_service_, &RosiwitNavigationRos1Node::navStopCallback, this);
 
     control_timer_ = nh_.createTimer(
       ros::Duration(1.0 / std::max(1.0, controller_frequency_)),
@@ -519,6 +566,7 @@ private:
   void mapCallback(const nav_msgs::OccupancyGrid::ConstPtr & msg)
   {
     current_map_ = msg;
+    last_map_stamp_ = ros::Time::now();
     if (coverage_active_ && coverage_grid_.ready()) {
       coverage_grid_.updateStaticObstacles(msg->data);
     }
@@ -608,7 +656,14 @@ private:
       tracker_points_.clear();
       publishTrackedObstacles();
     }
-    updateCostmap();
+    const ros::Time now = ros::Time::now();
+    const double period = costmap_update_rate_ > 0.0 ?
+      1.0 / costmap_update_rate_ : 0.0;
+    if (period <= 0.0 || last_costmap_build_.isZero() ||
+        (now - last_costmap_build_).toSec() >= period) {
+      updateCostmap();
+      last_costmap_build_ = now;
+    }
   }
 
   void voxelCallback(const sensor_msgs::PointCloud2::ConstPtr & msg)
@@ -619,6 +674,7 @@ private:
       if (f.name == "x") has_xyz = true;
     }
     if (!has_xyz) return;
+    last_cloud_stamp_ = ros::Time::now();
 
     double tx = 0.0, ty = 0.0, tz = 0.0;
     double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
@@ -692,40 +748,15 @@ private:
     return true;
   }
 
-  void goalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
-  {
-    // 原生 /goal_pose 与 action 共用一套控制循环; 新目标先让旧 action 结束.
-    if (action_active_) {
-      ROS_WARN("[rosiwit_navigation_ros1] 收到 /goal_pose, 结束进行中的 movebase action");
-      clearActionState();
-      if (mb_) { mb_->preempted(); }
-    }
-    geometry_msgs::PoseStamped goal = *msg;
-    if (!transformGoalToMap(goal, "goal_pose")) {
-      setGoalStatus("REJECTED_FRAME");
-      return;
-    }
-    ROS_INFO("[rosiwit_navigation_ros1] received goal: (%.2f, %.2f) frame=%s",
-             goal.pose.position.x, goal.pose.position.y, goal.header.frame_id.c_str());
-    goal_pose_ = goal;
-    setGoalStatus("ACCEPTED");
-    executeNavigation(goal_pose_);
-  }
-
-  // RViz "2D Nav Goal": 当作一次原生任务交给 core::ActionTask,
-  // 到位后按 RViz 箭头方向对齐 (rviz_goal_align_yaw). 没有 action handle,
-  // 所以不会回 action result, 但会走同一套进度/卡死/末端航向逻辑.
-  void rvizGoalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
+  // 原生 goal (RViz /goal_pose 或 /move_base_simple/goal) 统一走 ActionTask:
+  // 与 action 单点共用进度/卡死/末端航向逻辑, 只是没有 action handle.
+  void startNativeGoal(const geometry_msgs::PoseStamped & goal,
+                       const char * source, bool align_yaw)
   {
     if (action_active_) {
-      ROS_WARN("[rosiwit_navigation_ros1] 收到 RViz goal, 结束进行中的 movebase action");
+      ROS_WARN("[rosiwit_navigation_ros1] 收到 %s, 结束进行中的任务", source);
       clearActionState();
       if (mb_) { mb_->preempted(); }
-    }
-    geometry_msgs::PoseStamped goal = *msg;
-    if (!transformGoalToMap(goal, "rviz_goal")) {
-      setGoalStatus("REJECTED_FRAME");
-      return;
     }
     if (!updateCurrentPose()) {
       setGoalStatus("FAILED_POSE");
@@ -734,7 +765,7 @@ private:
 
     core::ActionTaskCommand task_command;
     task_command.kind = core::ActionKind::NAVIGATE;
-    task_command.final_rotate = rviz_goal_align_yaw_;
+    task_command.final_rotate = align_yaw;
     task_command.final_yaw = yawFromQuat(goal.pose.orientation);
 
     action_active_ = true;
@@ -751,13 +782,32 @@ private:
       setGoalStatus("FAILED_PLAN");
       return;
     }
-
     goal_pose_ = goal;
     setGoalStatus("ACCEPTED");
-    ROS_INFO("[rosiwit_navigation_ros1] RViz goal: (%.2f, %.2f, yaw=%.2f) align_yaw=%d",
-             goal.pose.position.x, goal.pose.position.y,
-             task_command.final_yaw, static_cast<int>(rviz_goal_align_yaw_));
+    ROS_INFO("[rosiwit_navigation_ros1] %s goal: (%.2f, %.2f, yaw=%.2f) align_yaw=%d",
+             source, goal.pose.position.x, goal.pose.position.y,
+             task_command.final_yaw, static_cast<int>(align_yaw));
     startPlanning(goal_pose_, /*allow_initial_rotate=*/true, /*restart=*/true);
+  }
+
+  void goalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
+  {
+    geometry_msgs::PoseStamped goal = *msg;
+    if (!transformGoalToMap(goal, "goal_pose")) {
+      setGoalStatus("REJECTED_FRAME");
+      return;
+    }
+    startNativeGoal(goal, "goal_pose", /*align_yaw=*/true);
+  }
+
+  void rvizGoalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
+  {
+    geometry_msgs::PoseStamped goal = *msg;
+    if (!transformGoalToMap(goal, "rviz_goal")) {
+      setGoalStatus("REJECTED_FRAME");
+      return;
+    }
+    startNativeGoal(goal, "rviz_goal", rviz_goal_align_yaw_);
   }
 
   bool navStopCallback(std_srvs::Trigger::Request &, std_srvs::Trigger::Response & res)
@@ -1484,7 +1534,7 @@ private:
   void coveragePlanTick()
   {
     if (!coverage_active_ || !current_map_ || !coverage_grid_.ready() ||
-        !planner_strategy_ || !coverage_controller_) {
+        !coverage_planner_ || !coverage_controller_) {
       return;
     }
     const ros::Time now = ros::Time::now();
@@ -1510,7 +1560,7 @@ private:
     coverage_has_target_ = true;
 
     core::Path path;
-    if (pose.distanceTo(segment.front()) > 0.3) {
+    if (pose.distanceTo(segment.front()) > 0.8) {
       core::Costmap costmap;
       buildCoverageCostmap(costmap);
       planner_strategy_->setInflationRadius(coverage_plan_inflation_);
@@ -1529,20 +1579,24 @@ private:
         planner_strategy_->setRobotFootprint(configured_footprint_);
       coverage_last_plan_ = now;
       if (!approach.is_ok()) {
-        ROS_WARN("[coverage] approach to row (%.2f, %.2f) failed: %s",
+        // 区域边缘的短 approach 在 A* 里可能被膨胀/边界误判; 直接沿行段走,
+        // 由控制器和安全层兜底, 不要因此把整块标不可达.
+        ROS_WARN("[coverage] approach to row (%.2f, %.2f) failed: %s; direct row",
                  segment.front().x, segment.front().y,
                  approach.error_message().c_str());
-        coverage_has_target_ = false;
-        current_path_.poses.clear();
-        coverage_controller_->reset();
-        coverage_state_ = "REPLAN";
-        return;
-      }
-      path = approach.value();
-      for (size_t i = 1; i < segment.size(); ++i) {
-        core::PathPoint pt;
-        pt.pose = segment[i];
-        path.points.push_back(pt);
+        path.points.clear();
+        for (const auto & point : segment) {
+          core::PathPoint pt;
+          pt.pose = point;
+          path.points.push_back(pt);
+        }
+      } else {
+        path = approach.value();
+        for (size_t i = 1; i < segment.size(); ++i) {
+          core::PathPoint pt;
+          pt.pose = segment[i];
+          path.points.push_back(pt);
+        }
       }
     } else {
       for (const auto & point : segment) {
@@ -2267,10 +2321,34 @@ private:
     }
 
     task_sm_.handle(core::TaskEvent::PLAN_OK);
+    last_plan_time_ = ros::Time::now();
     is_navigating_ = true;
     is_paused_ = false;
     ROS_INFO("[rosiwit_navigation_ros1] path planned with %zu points",
              current_path_.poses.size());
+  }
+
+  bool pathBlocked() const
+  {
+    if (current_path_.poses.empty() || planner_costmap_.data.empty() ||
+        planner_costmap_.resolution <= 0.0) {
+      return false;
+    }
+    const int width = static_cast<int>(planner_costmap_.width);
+    const int height = static_cast<int>(planner_costmap_.height);
+    const size_t stride = std::max<size_t>(1, current_path_.poses.size() / 100);
+    for (size_t i = 0; i < current_path_.poses.size(); i += stride) {
+      const auto & p = current_path_.poses[i].pose.position;
+      const int mx = static_cast<int>(std::floor(
+        (p.x - planner_costmap_.origin_x) / planner_costmap_.resolution));
+      const int my = static_cast<int>(std::floor(
+        (p.y - planner_costmap_.origin_y) / planner_costmap_.resolution));
+      if (mx < 0 || my < 0 || mx >= width || my >= height) { return true; }
+      if (planner_costmap_.data[static_cast<size_t>(my) * width + mx] >= 254) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void replanningCheck(const ros::TimerEvent &)
@@ -2283,6 +2361,14 @@ private:
     if (action_active_ &&
         (action_task_.kind() != core::ActionKind::NAVIGATE || action_task_.rotating())) return;
     if (goal_pose_.header.frame_id.empty() || !m_has_planner_costmap_) return;
+    const ros::Time now = ros::Time::now();
+    const bool path_empty = current_path_.poses.empty();
+    const bool blocked = replan_on_blocked_ && pathBlocked();
+    const double since_plan = last_plan_time_.isZero() ? 1e9 :
+      (now - last_plan_time_).toSec();
+    const bool due = path_empty || since_plan >= replan_max_interval_;
+    const bool blocked_due = blocked && since_plan >= replan_min_interval_;
+    if (!due && !blocked_due) return;
     startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/false);
   }
 
@@ -2439,6 +2525,38 @@ private:
 
   }
 
+  bool sensorFailSafe(std::string & status, int & result_code) const
+  {
+    const ros::Time now = ros::Time::now();
+    if (!current_map_) {
+      status = "STOPPED_MAP";
+      result_code = movebase::RESULT_GLOBAL_MAP_ERROR;
+      return false;
+    }
+    // 地图是静态产物, 可能只发一次/latch; map_timeout<=0 表示不按新鲜度判.
+    if (map_timeout_ > 0.0 && !last_map_stamp_.isZero() &&
+        (now - last_map_stamp_).toSec() > map_timeout_) {
+      status = "STOPPED_MAP";
+      result_code = movebase::RESULT_GLOBAL_MAP_ERROR;
+      return false;
+    }
+    if (require_scan_ &&
+        (last_scan_stamp_.isZero() ||
+         (now - last_scan_stamp_).toSec() > scan_timeout_)) {
+      status = "STOPPED_SCAN";
+      result_code = movebase::RESULT_PERCEPTION_TIMEOUT;
+      return false;
+    }
+    if (voxel_enabled_ && require_cloud_ &&
+        (last_cloud_stamp_.isZero() ||
+         (now - last_cloud_stamp_).toSec() > cloud_timeout_)) {
+      status = "STOPPED_CLOUD";
+      result_code = movebase::RESULT_PERCEPTION_TIMEOUT;
+      return false;
+    }
+    return true;
+  }
+
   void controlLoop(const ros::TimerEvent &)
   {
     if (planning_active_) pollPlanning();
@@ -2462,6 +2580,20 @@ private:
         stopNavigation();
       }
       return;
+    }
+
+    {
+      std::string status;
+      int result_code = movebase::RESULT_PERCEPTION_TIMEOUT;
+      if (!sensorFailSafe(status, result_code)) {
+        if (action_active_) {
+          failAction(result_code, status);
+        } else {
+          setGoalStatus(status);
+          stopNavigation();
+        }
+        return;
+      }
     }
 
     if (coverage_active_) {
@@ -2765,6 +2897,26 @@ private:
   std::string planner_name_;
   std::string controller_name_;
   std::string odom_topic_;
+  std::string map_topic_ = "/map";
+  std::string scan_topic_ = "/scan";
+  std::string goal_topic_ = "/goal_pose";
+  std::string nav_stop_service_ = "/nav_stop";
+  std::string global_path_topic_ = "/global_path";
+  std::string local_path_topic_ = "/local_path";
+  std::string global_costmap_topic_ = "/global_costmap";
+  std::string local_costmap_topic_ = "/local_costmap";
+  std::string goal_status_topic_ = "/goal_status";
+  std::string diagnostics_topic_ = "/nav_diagnostics";
+  std::string tracked_obstacles_topic_ = "/tracked_obstacles";
+  double map_timeout_ = 2.0;
+  double scan_timeout_ = 0.5;
+  double cloud_timeout_ = 1.0;
+  bool require_scan_ = true;
+  bool require_cloud_ = false;
+  double replan_max_interval_ = 5.0;
+  double replan_min_interval_ = 1.0;
+  bool replan_on_blocked_ = true;
+  double costmap_update_rate_ = 5.0;
   std::string rviz_goal_topic_ = "/move_base_simple/goal";
   bool rviz_goal_align_yaw_ = true;
   bool footprint_aware_control_ = false;
@@ -2804,6 +2956,10 @@ private:
   std::string goal_status_ = "IDLE";
   ros::Time last_odom_stamp_;
   ros::Time last_scan_stamp_;
+  ros::Time last_map_stamp_;
+  ros::Time last_cloud_stamp_;
+  ros::Time last_plan_time_;
+  ros::Time last_costmap_build_;
   ros::Time last_global_costmap_update_;
   ros::Timer control_timer_;
   ros::Timer local_costmap_timer_;
@@ -2842,6 +2998,7 @@ private:
   enum class RecoveryStage { NONE, FOLLOW };
   RecoveryStage recovery_stage_ = RecoveryStage::NONE;
   std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
+  std::unique_ptr<core::IPlannerStrategy> coverage_planner_;
   core::Path recovery_core_path_;
   bool recovery_enabled_ = true;
   int recovery_max_attempts_ = 2;
@@ -2874,7 +3031,7 @@ private:
   double coverage_replan_period_ = 10.0;
   double coverage_horizon_ = 2.5;
   double coverage_retry_timeout_ = 10.0;
-  double coverage_complete_rate_ = 0.995;
+  double coverage_complete_rate_ = 0.99;
   double coverage_blocked_inflation_ = 0.10;
   double coverage_plan_inflation_ = 0.0;
   double coverage_plan_robot_radius_ = 0.0;

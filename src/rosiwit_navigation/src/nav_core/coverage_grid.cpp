@@ -451,8 +451,31 @@ bool CoverageGrid::nextCoverageSegment(const Pose2D & pose, double max_length,
   const Pose2D a = cellToWorld(static_cast<int>(start_x), static_cast<int>(start_y));
   const Pose2D b = cellToWorld(static_cast<int>(end_x), static_cast<int>(end_y));
   const bool near_a = pose.distanceTo(a) <= pose.distanceTo(b);
-  const Pose2D from = near_a ? a : b;
-  const Pose2D to = near_a ? b : a;
+  Pose2D from = near_a ? a : b;
+  Pose2D to = near_a ? b : a;
+
+  // 如果机器人已经在这一行上, 从它的投影直接往远端扫, 不要先退回到行端.
+  const double perp = scan_vertical_ ? std::fabs(pose.x - a.x) : std::fabs(pose.y - a.y);
+  if (perp <= config_.sweep_width * 0.6) {
+    const double lo_w = scan_vertical_ ? std::min(a.y, b.y) : std::min(a.x, b.x);
+    const double hi_w = scan_vertical_ ? std::max(a.y, b.y) : std::max(a.x, b.x);
+    const double along = scan_vertical_ ? pose.y : pose.x;
+    if (along > lo_w - info_.resolution && along < hi_w + info_.resolution) {
+      Pose2D projected;
+      if (scan_vertical_) {
+        projected = Pose2D(a.x, std::max(lo_w, std::min(hi_w, along)), 0.0);
+      } else {
+        projected = Pose2D(std::max(lo_w, std::min(hi_w, along)), a.y, 0.0);
+      }
+      const double da = projected.distanceTo(a);
+      const double db = projected.distanceTo(b);
+      if (std::max(da, db) > info_.resolution) {
+        from = projected;
+        to = db > da ? b : a;
+      }
+    }
+  }
+  from.theta = std::atan2(to.y - from.y, to.x - from.x);
   const double length = from.distanceTo(to);
   if (length < info_.resolution) { return false; }
 
