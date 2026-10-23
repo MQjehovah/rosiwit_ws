@@ -49,7 +49,6 @@
 #include "rosiwit_navigation/nav_core/types.hpp"
 #include "rosiwit_navigation/nav_core/safety_monitor.hpp"
 #include "rosiwit_navigation/nav_core/obstacle_tracker.hpp"
-#include "rosiwit_navigation/nav_core/task_state_machine.hpp"
 #include "rosiwit_navigation/nav_core/voxel_layer.hpp"
 #include "rosiwit_navigation/nav_core/action_task.hpp"
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
@@ -849,12 +848,47 @@ private:
     return true;
   }
 
+  // Common navigate-task entry.  /goal_pose and RobotNaviCmdAction both
+  // reach this function; the only differences are already encoded in the
+  // ActionTaskCommand, the start pose override and the result adapter.
+  bool beginNavigationTask(const geometry_msgs::PoseStamped & goal,
+                           const core::ActionTaskCommand & command,
+                           const core::Pose2D & start,
+                           bool allow_initial_rotate,
+                           const core::Pose2D * start_override,
+                           double speed)
+  {
+    task_active_ = true;
+    recovery_attempts_ = 0;
+    action_speed_ = speed > 0.01 ? speed : movebase_default_speed_;
+    if (action_speed_ > max_velocity_x_) {
+      action_speed_ = max_velocity_x_;
+    }
+    if (controller_strategy_) {
+      controller_strategy_->setVelocityLimit(action_speed_, max_velocity_theta_);
+    }
+    action_traveled_.clear();
+    action_traveled_.push_back(current_pose_);
+    if (!action_task_.start(command, start, ros::Time::now().toSec())) {
+      failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
+      return false;
+    }
+    goal_pose_ = goal;
+    if (!current_path_.poses.empty()) {
+      current_path_.poses.clear();
+      global_path_pub_.publish(current_path_);
+    }
+    setGoalStatus("ACCEPTED");
+    startPlanning(goal_pose_, allow_initial_rotate, /*restart=*/true, start_override);
+    return true;
+  }
+
   // 原生 goal (RViz /goal_pose 或 /move_base_simple/goal) 统一走 ActionTask:
   // 与 action 单点共用进度/卡死/末端航向逻辑, 只是没有 action handle.
   void startNativeGoal(const geometry_msgs::PoseStamped & goal,
                        const char * source, bool align_yaw)
   {
-    if (action_active_) {
+    if (task_active_) {
       ROS_WARN("[rosiwit_navigation_ros1] 收到 %s, 结束进行中的任务", source);
       clearActionState();
       if (mb_) { mb_->preempted(); }
@@ -869,29 +903,15 @@ private:
     task_command.final_rotate = align_yaw;
     task_command.final_yaw = yawFromQuat(goal.pose.orientation);
 
-    action_active_ = true;
     action_interface_active_ = false;
     action_goal_ = movebase::Goal();
     action_cmd_ = movebase::Decoded();
-    recovery_attempts_ = 0;
-    action_traveled_.clear();
-    action_traveled_.push_back(current_pose_);
-    action_speed_ = movebase_default_speed_;
-    if (controller_strategy_) {
-      controller_strategy_->setVelocityLimit(action_speed_, max_velocity_theta_);
-    }
-    if (!action_task_.start(task_command, toCorePose(current_pose_),
-                            ros::Time::now().toSec())) {
-      clearActionState();
-      setGoalStatus("FAILED_PLAN");
-      return;
-    }
-    goal_pose_ = goal;
-    setGoalStatus("ACCEPTED");
     ROS_INFO("[rosiwit_navigation_ros1] %s goal: (%.2f, %.2f, yaw=%.2f) align_yaw=%d",
              source, goal.pose.position.x, goal.pose.position.y,
              task_command.final_yaw, static_cast<int>(align_yaw));
-    startPlanning(goal_pose_, /*allow_initial_rotate=*/true, /*restart=*/true);
+    beginNavigationTask(goal, task_command, toCorePose(current_pose_),
+                        /*allow_initial_rotate=*/true, nullptr,
+                        movebase_default_speed_);
   }
 
   void goalCallback(const geometry_msgs::PoseStamped::ConstPtr & msg)
@@ -917,7 +937,7 @@ private:
   bool navStopCallback(std_srvs::Trigger::Request &, std_srvs::Trigger::Response & res)
   {
     stopNavigation();
-    if (action_active_) {
+    if (task_active_) {
       clearActionState();
       if (mb_) { mb_->preempted(); }
     }
@@ -989,6 +1009,7 @@ private:
 
     // actionlib 在收到新 goal 前会先触发 preempt; 这里再清一次, 保证状态干净.
     clearActionState();
+    action_interface_active_ = true;
     action_traveled_.clear();
     action_goal_ = goal;
     action_cmd_ = movebase::decodeGoal(goal);
@@ -996,28 +1017,27 @@ private:
     if (!action_cmd_.valid || !action_cmd_.supported) {
       ROS_WARN("[movebase_iface] navi_cmd=%d 当前核心不支持或参数非法, 回 result=%d",
                goal.navi_cmd, action_cmd_.reject_result);
-      finishAction(action_cmd_.reject_result);
+      finishTask(action_cmd_.reject_result);
       return;
     }
     if (action_cmd_.command == movebase::Command::CANCEL) {
       stopNavigation();
-      finishAction(movebase::RESULT_SUCCESS);
+      finishTask(movebase::RESULT_SUCCESS);
       return;
     }
 
     if (!updateCurrentPose()) {
       ROS_ERROR("[movebase_iface] 获取坐标失败");
-      failAction(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
+      failTask(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
       return;
     }
     if (!current_map_) {
       ROS_ERROR("[movebase_iface] 全局地图未就绪");
-      failAction(movebase::RESULT_GLOBAL_MAP_ERROR, "FAILED_MAP");
+      failTask(movebase::RESULT_GLOBAL_MAP_ERROR, "FAILED_MAP");
       return;
     }
 
-    action_active_ = true;
-    action_interface_active_ = true;
+    task_active_ = true;
     action_traveled_.push_back(current_pose_);
     action_speed_ = action_cmd_.speed > 0.01 ? action_cmd_.speed : movebase_default_speed_;
     if (action_speed_ > max_velocity_x_) {
@@ -1047,7 +1067,7 @@ private:
         startActionCoverage();
         break;
       default:
-        failAction(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
+        failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
         break;
     }
   }
@@ -1062,11 +1082,11 @@ private:
       std::string error;
       if (!movebase::loadPathFile(action_goal_.file_path, segments, &error)) {
         ROS_ERROR("[movebase_iface] 加载路径文件失败: %s", error.c_str());
-        failAction(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
+        failTask(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
         return;
       }
       if (segments.empty()) {
-        failAction(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
+        failTask(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
         return;
       }
       const size_t seg = std::min<size_t>(
@@ -1074,7 +1094,7 @@ private:
       const std::vector<core::Pose2D> tail =
         movebase::slicePath(segments[seg], action_cmd_.path_index);
       if (tail.empty()) {
-        failAction(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
+        failTask(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
         return;
       }
       target = tail.front();
@@ -1082,12 +1102,6 @@ private:
 
     const core::Pose2D start = action_cmd_.has_start
       ? action_cmd_.start : toCorePose(current_pose_);
-    if (!action_task_.start(toTaskCommand(action_cmd_, target), start,
-                            ros::Time::now().toSec())) {
-      failAction(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
-      return;
-    }
-
     geometry_msgs::PoseStamped goal;
     goal.header.frame_id = map_frame_;
     goal.header.stamp = ros::Time::now();
@@ -1095,22 +1109,19 @@ private:
     goal.pose.position.y = target.y;
     goal.pose.position.z = 0.0;
     goal.pose.orientation = quatFromYaw(target.theta);
-    goal_pose_ = goal;
-
-    if (!current_path_.poses.empty()) { current_path_.poses.clear(); }
-    global_path_pub_.publish(current_path_);
 
     const core::Pose2D * start_override = action_cmd_.has_start ? &action_cmd_.start : nullptr;
     // 两点导航的起点由调用方给定, 与车头朝向无关, 不做起步原地旋转.
     const bool allow_initial_rotate =
       (action_cmd_.command == movebase::Command::SINGLE_POINT);
-    startPlanning(goal_pose_, allow_initial_rotate, /*restart=*/true, start_override);
+    beginNavigationTask(goal, toTaskCommand(action_cmd_, target), start,
+                        allow_initial_rotate, start_override, action_speed_);
   }
 
   void startActionFollowPath()
   {
     if (!controller_strategy_) {
-      failAction(movebase::RESULT_LOCAL_MAP_ERROR, "FAILED_CONTROLLER");
+      failTask(movebase::RESULT_LOCAL_MAP_ERROR, "FAILED_CONTROLLER");
       return;
     }
 
@@ -1120,11 +1131,11 @@ private:
       std::string error;
       if (!movebase::loadPathFile(action_goal_.file_path, segments, &error)) {
         ROS_ERROR("[movebase_iface] 加载路径文件失败: %s", error.c_str());
-        failAction(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
+        failTask(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
         return;
       }
       if (segments.empty()) {
-        failAction(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
+        failTask(movebase::RESULT_FILE_ERROR, "FAILED_FILE");
         return;
       }
       const size_t seg = std::min<size_t>(
@@ -1133,7 +1144,7 @@ private:
     }
     if (path.size() < 2) {
       ROS_ERROR("[movebase_iface] 跟踪路径点数不足 (%zu)", path.size());
-      failAction(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
+      failTask(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
       return;
     }
 
@@ -1154,7 +1165,7 @@ private:
     task_command.kind = core::ActionKind::FOLLOW_PATH;
     if (!action_task_.start(task_command, toCorePose(current_pose_),
                             ros::Time::now().toSec())) {
-      failAction(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
+      failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
       return;
     }
 
@@ -1165,7 +1176,6 @@ private:
     is_navigating_ = true;
     is_paused_ = false;
     m_need_initial_rotate_ = false;
-    task_sm_.handle(core::TaskEvent::PLAN_OK);
     ROS_INFO("[movebase_iface] 开始跟踪路径: %zu 点, %.2f m",
              current_path_.poses.size(), movebase::pathLength(path));
   }
@@ -1176,7 +1186,7 @@ private:
     task_command.kind = core::ActionKind::ROTATE;
     const core::Pose2D pose = toCorePose(current_pose_);
     if (!action_task_.start(task_command, pose, ros::Time::now().toSec())) {
-      failAction(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
+      failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
       return;
     }
     planning_active_ = false;
@@ -1196,7 +1206,7 @@ private:
     task_command.back_distance = action_cmd_.back_distance;
     if (!action_task_.start(task_command, toCorePose(current_pose_),
                             ros::Time::now().toSec())) {
-      failAction(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
+      failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
       return;
     }
     planning_active_ = false;
@@ -1215,7 +1225,7 @@ private:
     coverage_state_ = "IDLE";
     last_coverage_rate_ = 0.0;
     last_clean_area_ = 0.0;
-    action_active_ = false;
+    task_active_ = false;
     action_interface_active_ = false;
     action_task_.reset();
     // action_goal_/action_cmd_ 可能持有 FOLLOW_PATH/COVERAGE 的整条路径.
@@ -1251,7 +1261,7 @@ private:
     if (coverage_state_ == "DONE" || coverage_state_ == "STOPPED") {
       return last_coverage_rate_;
     }
-    return action_active_ ? action_task_.progress() : 0.0;
+    return task_active_ ? action_task_.progress() : 0.0;
   }
 
   movebase::Feedback actionFeedback() const
@@ -1306,29 +1316,27 @@ private:
     return outcome;
   }
 
-  void finishAction(int result_code)
+  // One completion path for /goal_pose and RobotNaviCmdAction.  The action
+  // server is only an output adapter; behaviour/state lives in ActionTask.
+  void finishTask(int result_code, const std::string & status = "SUCCEEDED")
   {
-    if (mb_ && mb_->hasGoal()) {
+    if (action_interface_active_ && mb_ && mb_->hasGoal()) {
       mb_->succeed(actionOutcome(result_code));
     }
+    setGoalStatus(status);
     clearActionState();
     stopNavigation();
   }
 
-  void failAction(int result_code, const std::string & status)
+  void failTask(int result_code, const std::string & status)
   {
-    if (action_active_ || (mb_ && mb_->hasGoal())) {
-      finishAction(result_code);
-    } else {
-      stopNavigation();
-    }
-    setGoalStatus(status);
+    finishTask(result_code, status);
   }
 
   // 只做"已走过轨迹"的展示采样; 进度/卡死判定在 core::ActionTask.
   void recordActionTraveled()
   {
-    if (!action_active_) { return; }
+    if (!task_active_) { return; }
     if (action_traveled_.empty()) {
       action_traveled_.push_back(current_pose_);
       return;
@@ -1345,7 +1353,7 @@ private:
 
   void publishActionOutputs()
   {
-    if (!action_active_ || !mb_) { return; }
+    if (!task_active_ || !action_interface_active_ || !mb_) { return; }
     mb_->publishFeedback(actionFeedback());
     mb_->publishFootprints(current_pose_, current_velocity_, movebase_footprint_);
     mb_->publishTraveledPath(action_traveled_);
@@ -1455,16 +1463,16 @@ private:
   void startActionCoverage()
   {
     if (!current_map_) {
-      failAction(movebase::RESULT_GLOBAL_MAP_ERROR, "FAILED_MAP");
+      failTask(movebase::RESULT_GLOBAL_MAP_ERROR, "FAILED_MAP");
       return;
     }
     if (action_cmd_.polygon.size() < 3) {
       ROS_ERROR("[coverage] 多边形顶点不足 (%zu)", action_cmd_.polygon.size());
-      failAction(movebase::RESULT_POSE_ERROR, "FAILED_COVERAGE_POLYGON");
+      failTask(movebase::RESULT_POSE_ERROR, "FAILED_COVERAGE_POLYGON");
       return;
     }
     if (!updateCurrentPose()) {
-      failAction(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
+      failTask(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
       return;
     }
 
@@ -1484,7 +1492,7 @@ private:
     // v1: 允许目标到区域边缘, 由下面的“预测位姿越界即停”守卫防止车体中心跑出.
     coverage_config_.center_inset = 0.0;
     if (!coverage_grid_.initialize(info, action_cmd_.polygon, coverage_config_)) {
-      failAction(movebase::RESULT_POSE_ERROR, "FAILED_COVERAGE_AREA");
+      failTask(movebase::RESULT_POSE_ERROR, "FAILED_COVERAGE_AREA");
       return;
     }
     coverage_grid_.updateStaticObstacles(current_map_->data);
@@ -1492,7 +1500,7 @@ private:
     if (!coverage_grid_.contains(pose)) {
       ROS_ERROR("[coverage] 起点 (%.2f, %.2f) 不在区域内或落在障碍上",
                 pose.x, pose.y);
-      failAction(movebase::RESULT_PLAN_FAILED, "FAILED_COVERAGE_START");
+      failTask(movebase::RESULT_PLAN_FAILED, "FAILED_COVERAGE_START");
       return;
     }
     coverage_grid_.resetPose(pose);
@@ -1843,7 +1851,7 @@ private:
     current_path_.poses.clear();
     if (coverage_controller_) { coverage_controller_->reset(); }
     setGoalStatus("SUCCEEDED");
-    finishAction(movebase::RESULT_SUCCESS);
+    finishTask(movebase::RESULT_SUCCESS);
     ROS_INFO("[coverage] done: rate=%.3f covered=%.2f m2 blocked=%.2f m2",
              stats.coverageRate(), last_clean_area_,
              stats.blocked * current_map_->info.resolution *
@@ -1861,18 +1869,20 @@ private:
     publishCoverageOutputs(ros::Time::now(), true);
   }
 
+  std::string navigationStateName() const
+  {
+    if (coverage_active_) { return coverage_state_; }
+    if (recovery_stage_ != RecoveryStage::NONE) { return "RECOVERY"; }
+    if (planning_active_) { return "PLANNING"; }
+    if (is_navigating_) { return "NAVIGATING"; }
+    if (goal_status_.rfind("FAILED", 0) == 0) { return "FAILED"; }
+    if (goal_status_.rfind("STOPPED", 0) == 0) { return "STOPPED"; }
+    return "IDLE";
+  }
+
   void setGoalStatus(const std::string & status)
   {
     goal_status_ = status;
-    if (status == "ACCEPTED") {
-      task_sm_.handle(core::TaskEvent::GOAL_RECEIVED);
-    } else if (status.rfind("FAILED", 0) == 0) {
-      task_sm_.handle(core::TaskEvent::PLAN_FAIL);
-    } else if (status == "SUCCEEDED") {
-      task_sm_.handle(core::TaskEvent::GOAL_REACHED);
-    } else if (status.rfind("STOPPED", 0) == 0 || status == "REJECTED_FRAME") {
-      task_sm_.handle(core::TaskEvent::STOP);
-    }
     std_msgs::String msg;
     msg.data = status;
     if (goal_status_pub_) goal_status_pub_.publish(msg);
@@ -1919,7 +1929,7 @@ private:
        << ",\"planner\":\"" << planner_name_ << "\""
        << ",\"planner_footprint\":" << configured_footprint_.size()
        << ",\"tracks\":" << tracker_.tracked().size()
-       << ",\"task_state\":\"" << task_sm_.stateName() << "\""
+       << ",\"task_state\":\"" << navigationStateName() << "\""
        << ",\"voxels\":" << voxel_layer_.size()
        << ",\"scan_pts\":" << laser_points_.size()
        << ",\"scan_cap\":" << laser_points_.capacity()
@@ -2307,8 +2317,8 @@ private:
     if (!async_planner_ || !m_has_planner_costmap_) {
       ROS_ERROR("[rosiwit_navigation_ros1] planner/costmap not ready");
       planning_active_ = false;
-      if (action_active_) {
-        failAction(movebase::RESULT_GLOBAL_MAP_ERROR, "FAILED_PLAN");
+      if (task_active_) {
+        failTask(movebase::RESULT_GLOBAL_MAP_ERROR, "FAILED_PLAN");
       } else {
         setGoalStatus("FAILED_PLAN");
         stopNavigation();
@@ -2340,8 +2350,8 @@ private:
     }
     if (!updateCurrentPose()) {
       ROS_ERROR("[rosiwit_navigation_ros1] cannot get current pose for planning");
-      if (action_active_) {
-        failAction(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
+      if (task_active_) {
+        failTask(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
       } else {
         setGoalStatus("FAILED_POSE");
         stopNavigation();
@@ -2394,8 +2404,8 @@ private:
         ROS_WARN("[rosiwit_navigation_ros1] planning failed, reverse escape recovery then retry");
         return;
       }
-      if (action_active_) {
-        failAction(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
+      if (task_active_) {
+        failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
       } else {
         setGoalStatus("FAILED_PLAN");
         stopNavigation();
@@ -2426,7 +2436,6 @@ private:
       }
     }
 
-    task_sm_.handle(core::TaskEvent::PLAN_OK);
     last_plan_time_ = ros::Time::now();
     is_navigating_ = true;
     is_paused_ = false;
@@ -2464,7 +2473,7 @@ private:
     if (recovery_stage_ != RecoveryStage::NONE) return;
     if (!is_navigating_ || is_paused_ || m_need_initial_rotate_ || planning_active_) return;
     // 只有"规划到目标点"的任务会周期重规划; 跟踪固定路径/旋转/倒车不重规划.
-    if (action_active_ &&
+    if (task_active_ &&
         (action_task_.kind() != core::ActionKind::NAVIGATE || action_task_.rotating())) return;
     if (goal_pose_.header.frame_id.empty() || !m_has_planner_costmap_) return;
     const ros::Time now = ros::Time::now();
@@ -2592,7 +2601,7 @@ private:
     // Recovery is for navigation/path tasks only.  This uses the algorithm
     // layer's ActionTask kind, so /goal_pose and RobotNaviCmdAction take the
     // same path; only ROTATE/BACK_OFF primitives are excluded.
-    if (action_active_ &&
+    if (task_active_ &&
         action_task_.kind() != core::ActionKind::NAVIGATE &&
         action_task_.kind() != core::ActionKind::FOLLOW_PATH) {
       return false;
@@ -2708,12 +2717,7 @@ private:
   void failRecovery()
   {
     resetRecovery();
-    if (action_interface_active_) {
-      failAction(movebase::RESULT_NO_PROGRESS, "FAILED_RECOVERY");
-    } else {
-      setGoalStatus("FAILED_RECOVERY");
-      stopNavigation();
-    }
+    failTask(movebase::RESULT_NO_PROGRESS, "FAILED_RECOVERY");
   }
 
   void finishRecovery()
@@ -2723,11 +2727,11 @@ private:
     // both carry goal_pose_; FOLLOW_PATH re-enters the path follower.
     const core::ActionKind kind = action_task_.kind();
     resetRecovery();
-    if (action_active_ && kind == core::ActionKind::FOLLOW_PATH) {
+    if (task_active_ && kind == core::ActionKind::FOLLOW_PATH) {
       startActionFollowPath();
       return;
     }
-    if (action_active_ && !goal_pose_.header.frame_id.empty()) {
+    if (task_active_ && !goal_pose_.header.frame_id.empty()) {
       startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/true);
       return;
     }
@@ -2759,7 +2763,7 @@ private:
         pose, toCoreVelocity(current_velocity_));
       publishCommand(applySafety(toRosTwist(core_cmd)));
       recordActionTraveled();
-      if (action_active_) publishActionOutputs();
+      if (task_active_) publishActionOutputs();
       return;
     }
 
@@ -2803,8 +2807,8 @@ private:
     if (!is_navigating_ || is_paused_) { return; }
     if (last_odom_stamp_.isZero() ||
         (ros::Time::now() - last_odom_stamp_).toSec() > 0.6) {
-      if (action_active_) {
-        failAction(movebase::RESULT_PERCEPTION_TIMEOUT, "STOPPED_ODOM");
+      if (task_active_) {
+        failTask(movebase::RESULT_PERCEPTION_TIMEOUT, "STOPPED_ODOM");
       } else {
         setGoalStatus("STOPPED_ODOM");
         stopNavigation();
@@ -2813,8 +2817,8 @@ private:
     }
     if (!updateCurrentPose()) {
       // 定位/TF 失效时必须主动发零, 不能保留上一条 cmd_vel.
-      if (action_active_) {
-        failAction(movebase::RESULT_POSE_ERROR, "FAILED_TF");
+      if (task_active_) {
+        failTask(movebase::RESULT_POSE_ERROR, "FAILED_TF");
       } else {
         setGoalStatus("FAILED_TF");
         stopNavigation();
@@ -2826,8 +2830,8 @@ private:
       std::string status;
       int result_code = movebase::RESULT_PERCEPTION_TIMEOUT;
       if (!sensorFailSafe(status, result_code)) {
-        if (action_active_) {
-          failAction(result_code, status);
+        if (task_active_) {
+          failTask(result_code, status);
         } else {
           setGoalStatus(status);
           stopNavigation();
@@ -2847,7 +2851,7 @@ private:
     }
 
     // ---- movebase action: 状态/进度/到位/卡死全部交给算法层 ----
-    if (action_active_) {
+    if (task_active_) {
       const bool xy_reached =
         !planning_active_ && !current_path_.poses.empty() && isGoalReached();
       const double controller_progress =
@@ -2858,8 +2862,7 @@ private:
 
       if (task_status == core::ActionTaskStatus::SUCCEEDED) {
         ROS_INFO("[rosiwit_navigation_ros1] goal reached");
-        setGoalStatus("SUCCEEDED");
-        finishAction(movebase::RESULT_SUCCESS);
+        finishTask(movebase::RESULT_SUCCESS);
         return;
       }
       if (task_status == core::ActionTaskStatus::FAILED_STUCK) {
@@ -2869,7 +2872,7 @@ private:
         }
         ROS_ERROR("[movebase_iface] 超过 %.0f 秒没有进展, 判定卡死",
                   movebase_stuck_timeout_);
-        failAction(movebase::RESULT_NO_PROGRESS, "FAILED_STUCK");
+        failTask(movebase::RESULT_NO_PROGRESS, "FAILED_STUCK");
         return;
       }
       // 原地旋转 (navi_cmd=6 / 单点末端对齐) 与倒车 (navi_cmd=7):
@@ -2899,7 +2902,7 @@ private:
         rot_cmd.angular.z = std::max(-0.8, std::min(0.8, 1.5 * angle_error));
         publishCommand(applySafety(rot_cmd));
         recordActionTraveled();
-        if (action_active_) { publishActionOutputs(); }
+        if (task_active_) { publishActionOutputs(); }
         return;
       }
     }
@@ -2907,7 +2910,7 @@ private:
     publishCommand(applySafety(computeVelocityCommand()));
     path_pub_.publish(current_path_);
     recordActionTraveled();
-    if (action_active_) { publishActionOutputs(); }
+    if (task_active_) { publishActionOutputs(); }
   }
 
   bool updateCurrentPose()
@@ -3111,7 +3114,6 @@ private:
   double safety_time_before_collision_ = 2.0;
   core::SafetyMonitor safety_monitor_;
   core::ObstacleTracker tracker_;
-  core::TaskStateMachine task_sm_;
   core::VoxelLayer voxel_layer_;
   bool voxel_enabled_ = true;
   std::string voxel_cloud_topic_ = "/world_cloud";
@@ -3232,7 +3234,7 @@ private:
 
   // 任务执行语义在算法层; 这里只保留接口层状态.
   core::ActionTask action_task_;
-  bool action_active_ = false;
+  bool task_active_ = false;
 
   // 恢复只使用规划器产生的反向路径 (Hybrid A*, reverse-only).
   enum class RecoveryStage { NONE, FOLLOW };
