@@ -197,7 +197,6 @@ laser_filter_radius: 0.15
 laser_filter_min_neighbors: 1
 laser_filter_window: 2
 
-# ---- 起点在障碍内: 规划反向失败后的盲退 ----
-recovery_blind_backoff_enabled: true
-recovery_blind_backoff_speed: 0.10
-recovery_blind_backoff_time: 3.0
+# ---- 恢复规划: 忽略当前 footprint 压住的障碍 ----
+recovery_clear_start_footprint: true
+recovery_start_clear_margin: 0.05

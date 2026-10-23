@@ -347,9 +347,14 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       core::ErrorCode::START_IN_OBSTACLE, "Start in obstacle");
   }
   start_pose_ = start;
-  start_relaxed_ = false;
-  if (!checkPose(start) && config_.start_relax_radius > 0.0) {
-    start_relaxed_ = true;
+  // Recovery planner (start_relax_radius > 0) keeps footprint relaxation active
+  // even when the start pose is free after the caller cleared the cells under
+  // the current footprint.  As soon as the robot moves, its footprint sweeps
+  // cells that were not under the original footprint; without this the reverse
+  // escape would still be rejected a few centimetres from the start.
+  // Normal planner sets start_relax_radius=0, so its behaviour is unchanged.
+  start_relaxed_ = config_.start_relax_radius > 0.0;
+  if (!checkPose(start) && start_relaxed_) {
     LOG_WARN(logger_, "Start footprint overlaps costmap; recovery start clearance=%.2fm",
              config_.start_relax_radius);
   }

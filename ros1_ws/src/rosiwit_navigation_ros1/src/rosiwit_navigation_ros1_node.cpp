@@ -98,6 +98,43 @@ std::vector<std::pair<double, double>> toPolygon(const std::vector<double> & fla
   return polygon;
 }
 
+bool pointInPolygon(double x, double y, const core::Footprint & polygon)
+{
+  bool inside = false;
+  for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+    const double xi = polygon[i].first, yi = polygon[i].second;
+    const double xj = polygon[j].first, yj = polygon[j].second;
+    if (((yi > y) != (yj > y)) &&
+        (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+double pointSegmentDistance(double px, double py,
+                            double ax, double ay, double bx, double by)
+{
+  const double dx = bx - ax;
+  const double dy = by - ay;
+  const double len2 = dx * dx + dy * dy;
+  if (len2 <= 1e-12) { return std::hypot(px - ax, py - ay); }
+  double t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = std::max(0.0, std::min(1.0, t));
+  return std::hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+double pointPolygonDistance(double x, double y, const core::Footprint & polygon)
+{
+  double best = std::numeric_limits<double>::max();
+  for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+    best = std::min(best, pointSegmentDistance(
+      x, y, polygon[j].first, polygon[j].second,
+      polygon[i].first, polygon[i].second));
+  }
+  return best;
+}
+
 }  // namespace
 
 class RosiwitNavigationRos1Node
@@ -319,10 +356,10 @@ private:
     // 恢复只允许规划得到的倒车路径. 不再保留 primitive 后退/旋转后备.
     pnh_.param<double>("recovery_back_distance", recovery_back_distance_, 0.60);
     pnh_.param<double>("recovery_timeout", recovery_timeout_, 8.0);
-    // 规划反向路径失败时的最后手段: 低速盲退一小段再重试.
-    pnh_.param<bool>("recovery_blind_backoff_enabled", recovery_blind_backoff_enabled_, true);
-    pnh_.param<double>("recovery_blind_backoff_speed", recovery_blind_backoff_speed_, 0.10);
-    pnh_.param<double>("recovery_blind_backoff_time", recovery_blind_backoff_time_, 1.5);
+    // 恢复规划: 当前 footprint 压住的栅格视为 free, 否则反向 escape
+    // 会在起点直接报 Start in obstacle. 正常规划不使用这个副本.
+    pnh_.param<bool>("recovery_clear_start_footprint", recovery_clear_start_footprint_, true);
+    pnh_.param<double>("recovery_start_clear_margin", recovery_start_clear_margin_, 0.05);
 
     // 孤立激光点滤波: 只保留与相邻扫描点足够近的点.
     pnh_.param<bool>("laser_filter_enabled", laser_filter_enabled_, true);
@@ -2419,6 +2456,97 @@ private:
     recovery_started_ = ros::Time(0);
   }
 
+  // Recovery-only costmap: deep-copy the global planner costmap and mark all
+  // cells under the current robot footprint as free.  The robot is physically
+  // standing there already; if the static map still marks those cells as
+  // occupied, a reverse escape path cannot even get a valid start.  Both
+  // Costmap::data and the shared grid copy must be cleared because Hybrid A*
+  // uses data for cell checks and grid for footprint-corner checks.
+  core::Costmap buildRecoveryCostmap()
+  {
+    core::Costmap cm = planner_costmap_;
+    if (!recovery_clear_start_footprint_ || cm.data.empty() ||
+        cm.width == 0 || cm.height == 0 || cm.resolution <= 0.0) {
+      return cm;
+    }
+    if (cm.grid) {
+      cm.grid = std::make_shared<core::CostmapGrid>(*cm.grid);
+    }
+
+    const core::Pose2D pose = toCorePose(current_pose_);
+    const double c = std::cos(pose.theta);
+    const double s = std::sin(pose.theta);
+    const double margin = std::max(0.0, recovery_start_clear_margin_);
+    const double res = cm.resolution;
+
+    auto clear_cell = [&](int ix, int iy) {
+      if (ix < 0 || iy < 0 ||
+          ix >= static_cast<int>(cm.width) || iy >= static_cast<int>(cm.height)) {
+        return;
+      }
+      const size_t idx = static_cast<size_t>(iy) * cm.width + ix;
+      if (idx < cm.data.size()) { cm.data[idx] = 0; }
+      if (cm.grid && idx < cm.grid->data.size()) { cm.grid->data[idx] = 0; }
+    };
+
+    if (configured_footprint_.size() >= 3) {
+      double min_x = std::numeric_limits<double>::max();
+      double max_x = std::numeric_limits<double>::lowest();
+      double min_y = std::numeric_limits<double>::max();
+      double max_y = std::numeric_limits<double>::lowest();
+      for (const auto & v : configured_footprint_) {
+        const double wx = pose.x + c * v.first - s * v.second;
+        const double wy = pose.y + s * v.first + c * v.second;
+        min_x = std::min(min_x, wx);
+        max_x = std::max(max_x, wx);
+        min_y = std::min(min_y, wy);
+        max_y = std::max(max_y, wy);
+      }
+      const int x0 = static_cast<int>(std::floor(
+        (min_x - margin - cm.origin_x) / res));
+      const int x1 = static_cast<int>(std::ceil(
+        (max_x + margin - cm.origin_x) / res));
+      const int y0 = static_cast<int>(std::floor(
+        (min_y - margin - cm.origin_y) / res));
+      const int y1 = static_cast<int>(std::ceil(
+        (max_y + margin - cm.origin_y) / res));
+      for (int iy = y0; iy <= y1; ++iy) {
+        for (int ix = x0; ix <= x1; ++ix) {
+          const double wx = cm.origin_x + (ix + 0.5) * res;
+          const double wy = cm.origin_y + (iy + 0.5) * res;
+          const double dx = wx - pose.x;
+          const double dy = wy - pose.y;
+          const double lx = c * dx + s * dy;
+          const double ly = -s * dx + c * dy;
+          if (pointInPolygon(lx, ly, configured_footprint_) ||
+              pointPolygonDistance(lx, ly, configured_footprint_) <= margin) {
+            clear_cell(ix, iy);
+          }
+        }
+      }
+    } else {
+      const double radius = std::max(0.0, robot_radius_) + margin;
+      const int x0 = static_cast<int>(std::floor(
+        (pose.x - radius - cm.origin_x) / res));
+      const int x1 = static_cast<int>(std::ceil(
+        (pose.x + radius - cm.origin_x) / res));
+      const int y0 = static_cast<int>(std::floor(
+        (pose.y - radius - cm.origin_y) / res));
+      const int y1 = static_cast<int>(std::ceil(
+        (pose.y + radius - cm.origin_y) / res));
+      for (int iy = y0; iy <= y1; ++iy) {
+        for (int ix = x0; ix <= x1; ++ix) {
+          const double wx = cm.origin_x + (ix + 0.5) * res;
+          const double wy = cm.origin_y + (iy + 0.5) * res;
+          if (std::hypot(wx - pose.x, wy - pose.y) <= radius) {
+            clear_cell(ix, iy);
+          }
+        }
+      }
+    }
+    return cm;
+  }
+
   bool startRecovery()
   {
     if (!recovery_enabled_ || recovery_attempts_ >= recovery_max_attempts_) {
@@ -2465,7 +2593,8 @@ private:
       targets.push_back(behind(back * 0.85, side));   // 反向弧线绕左
       targets.push_back(behind(back * 0.85, -side));  // 反向弧线绕右
 
-      recovery_planner_->setCostmap(planner_costmap_);
+      const core::Costmap recovery_costmap = buildRecoveryCostmap();
+      recovery_planner_->setCostmap(recovery_costmap);
       for (size_t i = 0; i < targets.size(); ++i) {
         const auto result = recovery_planner_->plan(pose, targets[i]);
         if (!result.is_ok()) {
@@ -2486,19 +2615,8 @@ private:
                  current_path_.poses.size());
         return true;
       }
-      ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed");
-    }
-    if (recovery_blind_backoff_enabled_) {
-      recovery_core_path_.points.clear();
-      current_path_.poses.clear();
-      controller_strategy_->reset();
-      recovery_stage_ = RecoveryStage::BLIND_BACKOFF;
-      recovery_started_ = ros::Time::now();
-      ROS_WARN("[rosiwit_navigation_ros1] recovery %d/%d: start in obstacle, "
-               "blind backoff %.2f m/s for %.1fs",
-               recovery_attempts_, recovery_max_attempts_,
-               recovery_blind_backoff_speed_, recovery_blind_backoff_time_);
-      return true;
+      ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed; "
+                "refusing blind backoff, task will fail");
     }
     return false;
   }
@@ -2551,20 +2669,6 @@ private:
       return;
     }
     const core::Pose2D pose = toCorePose(current_pose_);
-
-    if (recovery_stage_ == RecoveryStage::BLIND_BACKOFF) {
-      if (recovery_blind_backoff_time_ > 0.0 &&
-          (now - recovery_started_).toSec() >= recovery_blind_backoff_time_) {
-        finishRecovery();
-        return;
-      }
-      geometry_msgs::Twist cmd;
-      cmd.linear.x = -std::max(0.02, recovery_blind_backoff_speed_);
-      publishCommand(applySafety(cmd));
-      recordActionTraveled();
-      if (action_active_) publishActionOutputs();
-      return;
-    }
 
     if (recovery_stage_ == RecoveryStage::FOLLOW) {
       if (!controller_strategy_ || current_path_.poses.empty()) {
@@ -3053,7 +3157,7 @@ private:
   bool action_active_ = false;
 
   // 恢复只使用规划器产生的反向路径 (Hybrid A*, reverse-only).
-  enum class RecoveryStage { NONE, FOLLOW, BLIND_BACKOFF };
+  enum class RecoveryStage { NONE, FOLLOW };
   RecoveryStage recovery_stage_ = RecoveryStage::NONE;
   std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
   std::unique_ptr<core::IPlannerStrategy> coverage_planner_;
@@ -3063,9 +3167,8 @@ private:
   int recovery_attempts_ = 0;
   double recovery_back_distance_ = 0.60;
   double recovery_timeout_ = 8.0;
-  bool recovery_blind_backoff_enabled_ = true;
-  double recovery_blind_backoff_speed_ = 0.10;
-  double recovery_blind_backoff_time_ = 1.5;
+  bool recovery_clear_start_footprint_ = true;
+  double recovery_start_clear_margin_ = 0.05;
   bool laser_filter_enabled_ = true;
   double laser_filter_radius_ = 0.15;
   int laser_filter_min_neighbors_ = 1;
