@@ -201,3 +201,8 @@ laser_filter_window: 2
 recovery_clear_start_footprint: true
 recovery_start_clear_margin: 0.05
 recovery_start_relax_radius: 1.0
+
+# ---- 正常规划: 起点 footprint 去噪, 不做整段放宽 ----
+planning_clear_start_footprint: true
+planning_start_clear_margin: 0.05
+planning_start_relax_radius: 0.0

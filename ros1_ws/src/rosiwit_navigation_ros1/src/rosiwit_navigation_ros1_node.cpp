@@ -53,6 +53,7 @@
 #include "rosiwit_navigation/nav_core/action_task.hpp"
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 #include "rosiwit_navigation/nav_core/footprint.hpp"
+#include "path_smoother.hpp"
 #include "movebase_protocol.h"
 #include "movebase_interface.h"
 
@@ -361,6 +362,16 @@ private:
     pnh_.param<bool>("recovery_clear_start_footprint", recovery_clear_start_footprint_, true);
     pnh_.param<double>("recovery_start_clear_margin", recovery_start_clear_margin_, 0.05);
     pnh_.param<double>("recovery_start_relax_radius", recovery_start_relax_radius_, 1.0);
+    // Normal planning also ignores the cells already under the current
+    // footprint at the start; otherwise a robot parked in a narrow corridor
+    // fails with "Start in obstacle" forever.  This does NOT relax obstacles
+    // along the rest of the path.
+    pnh_.param<bool>("planning_clear_start_footprint", planning_clear_start_footprint_, true);
+    pnh_.param<double>("planning_start_clear_margin", planning_start_clear_margin_, 0.05);
+    // Start-only footprint relaxation for normal planning: a robot parked
+    // closer than its footprint to a mapped wall must still be able to plan
+    // out.  This does not relax the rest of the route.
+    pnh_.param<double>("planning_start_relax_radius", planning_start_relax_radius_, 0.0);
 
     // 孤立激光点滤波: 只保留与相邻扫描点足够近的点.
     pnh_.param<bool>("laser_filter_enabled", laser_filter_enabled_, true);
@@ -405,6 +416,7 @@ private:
       cfg.timeout = planner_timeout_;
       cfg.allow_reverse = planner_allow_reverse_;
       cfg.max_reverse_distance = planner_max_reverse_distance_;
+      cfg.start_relax_radius = planning_start_relax_radius_;
       planner_strategy_->initialize(cfg);
       planner_strategy_->setInflationRadius(inflation_radius_);
       planner_strategy_->setRobotRadius(robot_radius_);
@@ -431,6 +443,7 @@ private:
       acfg.timeout = planner_timeout_;
       acfg.allow_reverse = planner_allow_reverse_;
       acfg.max_reverse_distance = planner_max_reverse_distance_;
+      acfg.start_relax_radius = planning_start_relax_radius_;
       async_planner_->initialize(acfg);
       async_planner_->setInflationRadius(inflation_radius_);
       async_planner_->setRobotRadius(robot_radius_);
@@ -2328,7 +2341,10 @@ private:
     const core::Pose2D start = pending_has_start_override_
       ? pending_start_override_ : toCorePose(current_pose_);
     const core::Pose2D goal = toCorePose(pending_goal_);
-    async_planner_->setCostmap(planner_costmap_);
+    const core::Costmap planning_costmap = buildStartClearedCostmap(
+      start, planning_start_clear_margin_, planning_clear_start_footprint_);
+    last_planning_costmap_ = planning_costmap;
+    async_planner_->setCostmap(planning_costmap);
     active_plan_generation_ = plan_generation_;
     async_plan_future_ = std::async(std::launch::async, [this, start, goal]() {
       return async_planner_->plan(start, goal);
@@ -2417,18 +2433,49 @@ private:
 
   void applyPlanningResult(const core::Result<core::Path> & result, bool allow_initial_rotate)
   {
-    current_path_ = toRosPath(result.value(), pending_goal_.header.frame_id, ros::Time::now());
+    core::Path planned = result.value();
+    size_t reverse_points = 0;
+    for (const auto & p : planned.points) {
+      if (p.velocity_x < 0.0) { ++reverse_points; }
+    }
+    const bool first_reverse = planned.points.size() > 1 &&
+      planned.points[1].velocity_x < 0.0;
+
+    // Smooth positions for every path, then restore each point's heading and
+    // forward/reverse sign.  smoothPath() derives theta from travel direction,
+    // which is wrong for a reverse segment; the controller needs the original
+    // robot heading and velocity sign.
+    bool smoothed = false;
+    if (planned.points.size() >= 3) {
+      const core::Path raw = planned;
+      planners::SmootherConfig smoother;
+      smoother.max_iterations = 60;
+      smoother.alpha_start = 0.45;
+      smoother.alpha_end = 0.10;
+      smoother.max_cost_increase = 0;
+      core::Path candidate = planners::smoothPath(raw, planner_costmap_.grid, smoother);
+      if (candidate.points.size() == raw.points.size()) {
+        for (size_t i = 0; i < candidate.points.size(); ++i) {
+          candidate.points[i].pose.theta = raw.points[i].pose.theta;
+          candidate.points[i].velocity_x = raw.points[i].velocity_x;
+        }
+        planned = candidate;
+        smoothed = true;
+      }
+    }
+
+    current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
 
     // 直接把核心路径交给控制器, 不能用 toCorePath(ROS Path) 转一圈: ROS
     // Path 没有前进/倒车方向字段, 会把 Hybrid A* 的反向段丢成“前进”.
-    if (controller_strategy_) controller_strategy_->setPath(result.value());
+    if (controller_strategy_) controller_strategy_->setPath(planned);
     global_path_pub_.publish(current_path_);
 
     m_need_initial_rotate_ = false;
-    if (allow_initial_rotate && current_path_.poses.size() > 2) {
+    if (allow_initial_rotate && planned.points.size() > 2 && !first_reverse) {
       const double current_yaw = yawFromQuat(current_pose_.pose.orientation);
-      const double dx = current_path_.poses[1].pose.position.x - current_path_.poses[0].pose.position.x;
-      const double dy = current_path_.poses[1].pose.position.y - current_path_.poses[0].pose.position.y;
+      const double dx = planned.points[1].pose.x - planned.points[0].pose.x;
+      const double dy = planned.points[1].pose.y - planned.points[0].pose.y;
       const double path_yaw = std::atan2(dy, dx);
       if (std::abs(normalizeAngle(path_yaw - current_yaw)) > 0.35) {
         m_need_initial_rotate_ = true;
@@ -2439,27 +2486,29 @@ private:
     last_plan_time_ = ros::Time::now();
     is_navigating_ = true;
     is_paused_ = false;
-    ROS_INFO("[rosiwit_navigation_ros1] path planned with %zu points",
-             current_path_.poses.size());
+    ROS_INFO("[rosiwit_navigation_ros1] path planned with %zu points "
+             "(reverse=%zu smoothed=%d)", current_path_.poses.size(),
+             reverse_points, static_cast<int>(smoothed));
   }
 
   bool pathBlocked() const
   {
-    if (current_path_.poses.empty() || planner_costmap_.data.empty() ||
-        planner_costmap_.resolution <= 0.0) {
+    const core::Costmap & cm =
+      last_planning_costmap_.data.empty() ? planner_costmap_ : last_planning_costmap_;
+    if (current_path_.poses.empty() || cm.data.empty() || cm.resolution <= 0.0) {
       return false;
     }
-    const int width = static_cast<int>(planner_costmap_.width);
-    const int height = static_cast<int>(planner_costmap_.height);
+    const int width = static_cast<int>(cm.width);
+    const int height = static_cast<int>(cm.height);
     const size_t stride = std::max<size_t>(1, current_path_.poses.size() / 100);
     for (size_t i = 0; i < current_path_.poses.size(); i += stride) {
       const auto & p = current_path_.poses[i].pose.position;
       const int mx = static_cast<int>(std::floor(
-        (p.x - planner_costmap_.origin_x) / planner_costmap_.resolution));
+        (p.x - cm.origin_x) / cm.resolution));
       const int my = static_cast<int>(std::floor(
-        (p.y - planner_costmap_.origin_y) / planner_costmap_.resolution));
+        (p.y - cm.origin_y) / cm.resolution));
       if (mx < 0 || my < 0 || mx >= width || my >= height) { return true; }
-      if (planner_costmap_.data[static_cast<size_t>(my) * width + mx] >= 254) {
+      if (cm.data[static_cast<size_t>(my) * width + mx] >= 254) {
         return true;
       }
     }
@@ -2507,10 +2556,12 @@ private:
   // occupied, a reverse escape path cannot even get a valid start.  Both
   // Costmap::data and the shared grid copy must be cleared because Hybrid A*
   // uses data for cell checks and grid for footprint-corner checks.
-  core::Costmap buildRecoveryCostmap()
+  core::Costmap buildStartClearedCostmap(const core::Pose2D & pose,
+                                         double margin,
+                                         bool enabled)
   {
     core::Costmap cm = planner_costmap_;
-    if (!recovery_clear_start_footprint_ || cm.data.empty() ||
+    if (!enabled || cm.data.empty() ||
         cm.width == 0 || cm.height == 0 || cm.resolution <= 0.0) {
       return cm;
     }
@@ -2518,10 +2569,9 @@ private:
       cm.grid = std::make_shared<core::CostmapGrid>(*cm.grid);
     }
 
-    const core::Pose2D pose = toCorePose(current_pose_);
     const double c = std::cos(pose.theta);
     const double s = std::sin(pose.theta);
-    const double margin = std::max(0.0, recovery_start_clear_margin_);
+    margin = std::max(0.0, margin);
     const double res = cm.resolution;
 
     auto clear_cell = [&](int ix, int iy) {
@@ -2590,6 +2640,13 @@ private:
       }
     }
     return cm;
+  }
+
+  core::Costmap buildRecoveryCostmap()
+  {
+    return buildStartClearedCostmap(
+      toCorePose(current_pose_), recovery_start_clear_margin_,
+      recovery_clear_start_footprint_);
   }
 
   bool startRecovery()
@@ -3251,6 +3308,10 @@ private:
   bool recovery_clear_start_footprint_ = true;
   double recovery_start_clear_margin_ = 0.05;
   double recovery_start_relax_radius_ = 1.0;
+  bool planning_clear_start_footprint_ = true;
+  double planning_start_clear_margin_ = 0.05;
+  double planning_start_relax_radius_ = 0.0;
+  core::Costmap last_planning_costmap_;
   bool laser_filter_enabled_ = true;
   double laser_filter_radius_ = 0.15;
   int laser_filter_min_neighbors_ = 1;
