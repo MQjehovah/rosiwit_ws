@@ -160,6 +160,11 @@ core::VelocityCommand RppController::computeVelocityCommand(
   double v_ref = max_vx_;
   v_ref *= std::max(0.3, 1.0 - 1.2 * std::fabs(e_y));          // 横向误差调速
   v_ref *= std::max(0.3, std::cos(e_theta));                    // 航向误差调速
+  // 轨迹前馈 (若已参数化): 用同索引点的参考速度做上限, cusp/末段自动减速
+  if (traj_.valid && traj_.points.size() == path_.points.size()) {
+    const size_t ti = std::min(idx_, traj_.points.size() - 1);
+    v_ref = std::min(v_ref, std::max(0.05, std::fabs(traj_.points[ti].v)));
+  }
   const double reach = std::hypot(path_.points.back().pose.x - pose.x,
                                   path_.points.back().pose.y - pose.y);
   v_ref = std::min(v_ref, std::max(0.08, 0.9 * reach));         // 末段减速

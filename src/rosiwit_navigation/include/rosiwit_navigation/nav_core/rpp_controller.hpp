@@ -31,6 +31,7 @@ public:
   std::string getVersion() const override { return "1.0"; }
   void setObstacles(const core::ObstacleArray & /*obstacles*/) override {}
   void setLocalCostmap(const core::CostmapGrid & grid) override { costmap_ = grid; }
+  void setTrajectory(const core::TimedTrajectory & traj) override { traj_ = traj; }
   bool supportsMultiDirection() const override { return true; }
   bool supportsInPlaceRotation() const override { return true; }
 
@@ -54,6 +55,7 @@ private:
   double last_v_ = 0.0;
   double last_w_ = 0.0;
   int align_dir_ = 0;   // 旋转方向锁存 (±π 附近防左右摆)
+  core::TimedTrajectory traj_;   // 可选: 时间参数化轨迹 (v 前馈/末段减速)
 };
 
 }  // namespace controllers

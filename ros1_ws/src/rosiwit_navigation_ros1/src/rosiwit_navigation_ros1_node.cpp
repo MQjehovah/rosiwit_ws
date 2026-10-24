@@ -55,6 +55,7 @@
 #include "rosiwit_navigation/nav_core/footprint.hpp"
 #include <xzrobot_ros_dependency/SlamInfo.h>
 #include "path_smoother.hpp"
+#include "trajectory_parameterizer.hpp"
 #include "movebase_protocol.h"
 #include "movebase_interface.h"
 
@@ -2676,6 +2677,19 @@ private:
     // 直接把核心路径交给控制器, 不能用 toCorePath(ROS Path) 转一圈: ROS
     // Path 没有前进/倒车方向字段, 会把 Hybrid A* 的反向段丢成“前进”.
     if (controller_strategy_) controller_strategy_->setPath(planned);
+    // A2: 时间参数化 (cusp/旋转段/末段由轨迹接管; 控制器可选消费)
+    {
+      core::TrajectoryLimits limits;
+      limits.max_v = max_velocity_x_;
+      limits.max_accel = max_accel_x_;
+      limits.max_w = max_velocity_theta_;
+      limits.max_alpha = max_accel_theta_;
+      limits.max_lat_accel = 0.5;
+      const core::TimedTrajectory traj = planners::parameterizeTrajectory(planned, limits);
+      if (controller_strategy_ && traj.valid) {
+        controller_strategy_->setTrajectory(traj);
+      }
+    }
     global_path_pub_.publish(current_path_);
 
     m_need_initial_rotate_ = false;

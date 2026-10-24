@@ -4,6 +4,7 @@
 #include <string>
 #include <memory>
 #include "rosiwit_navigation/nav_core/types.hpp"
+#include "rosiwit_navigation/nav_core/trajectory.hpp"
 
 namespace rosiwit_navigation
 {
@@ -39,6 +40,8 @@ public:
   virtual bool supportsMultiDirection() const { return false; }
   // 是否能自己执行原地旋转段 (velocity_x=0). false 时由上层执行器代做.
   virtual bool supportsInPlaceRotation() const { return false; }
+  // 时间参数化轨迹 (可选消费): 默认忽略, RPP/MPPI 可实现前馈跟踪.
+  virtual void setTrajectory(const core::TimedTrajectory & /*trajectory*/) {}
   virtual std::string getDiagnostics() const { return {}; }
 };
 
