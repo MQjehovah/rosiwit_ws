@@ -677,6 +677,9 @@ private:
     controller_name_ = name;
     ROS_WARN("[rosiwit_navigation_ros1] controller -> %s (profile=%s)",
              controller_name_.c_str(), motion_profile_.c_str());
+    controller_strategy_->setVelocityLimit(max_velocity_x_, max_velocity_theta_);
+    // 能力变化可能改变规划器的双向策略 (例如 MPPI -> RPP 才允许倒车)
+    applyMotionProfile(motion_profile_);
     return true;
   }
 
@@ -687,7 +690,11 @@ private:
       return false;
     }
     motion_profile_ = profile;
-    const bool allow_reverse = (profile != "clean");
+    // 能力契约: 双向路径只有当控制器支持 cusp 跟踪时才允许规划.
+    // MPPI/DWA/pure_pursuit 不支持 -> 规划器只生成单向路径 + 原地旋转.
+    const bool ctrl_multi = controller_strategy_ &&
+                            controller_strategy_->supportsMultiDirection();
+    const bool allow_reverse = (profile != "clean") && ctrl_multi;
     // 规划器: clean 用纯前进 A*; free 用 Hybrid A* (允许倒车)
     const std::string planner = allow_reverse ? free_planner_ : clean_planner_;
     if (async_planner_ &&
@@ -721,8 +728,7 @@ private:
     if (initController(controller_name_, next_ctrl, allow_reverse)) {
       if (!current_path_.poses.empty()) { next_ctrl->setPath(toCorePath(current_path_)); }
       controller_strategy_ = std::move(next_ctrl);
-    }
-    ROS_WARN("[rosiwit_navigation_ros1] profile -> %s (allow_reverse=%d planner=%s)",
+    }    ROS_WARN("[rosiwit_navigation_ros1] profile -> %s (allow_reverse=%d planner=%s)",
              motion_profile_.c_str(), static_cast<int>(allow_reverse), planner_name_.c_str());
     return true;
   }
@@ -3348,8 +3354,9 @@ private:
     }
 
     auto cmd = computeVelocityCommand();
-    // 旋转段: 先原地转到位, 再交回 MPPI 跟踪前进段
-    {
+    // 旋转段: 先原地转到位, 再交回 MPPI 跟踪前进段 (控制器自带原地旋转能力时
+    // 由控制器自己执行)
+    if (!(controller_strategy_ && controller_strategy_->supportsInPlaceRotation())) {
       geometry_msgs::Twist rot_cmd;
       if (executeRotationSegment(toCorePose(current_pose_), rot_cmd)) {
         publishCommand(applySafety(rot_cmd));
