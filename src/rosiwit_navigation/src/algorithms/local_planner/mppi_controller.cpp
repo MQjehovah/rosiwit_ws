@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <cstdio>
+#include <iostream>
 #include <string>
 
 namespace rosiwit_navigation {
@@ -193,13 +194,20 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   // A Hybrid A* path may contain both forward and reverse segments.  Select
   // the direction of the upcoming segment rather than treating the whole path
   // as reverse just because one later segment is reverse.
-  bool local_reverse = reverse_mode_;
-  for (size_t k = idx_; k < std::min(path_.points.size(), idx_ + 6); ++k) {
+  // 近端 2 点 + 迟滞: 以前看后 6 点(0.08m 重采样后 0.48m), 跨过前进/倒车
+  // cusp 时每帧来回翻转 -> resetNominal -> 原地不动.
+  bool dir_known = false;
+  bool dir_reverse = false;
+  for (size_t k = idx_; k < std::min(path_.points.size(), idx_ + 3); ++k) {
     if (std::fabs(path_.points[k].velocity_x) > 0.1) {
-      local_reverse = path_.points[k].velocity_x < 0.0;
-      break;
+      const bool r = path_.points[k].velocity_x < 0.0;
+      if (!dir_known) { dir_known = true; dir_reverse = r; }
+      else if (r != dir_reverse) { dir_known = false; break; }   // 邻近段方向不一致
+      if (k >= idx_ + 1) break;
     }
   }
+  bool local_reverse = reverse_mode_;
+  if (dir_known) local_reverse = dir_reverse;
   if (local_reverse != reverse_mode_) {
     reverse_mode_ = local_reverse;
     last_output_v_ = 0.0;
@@ -221,7 +229,6 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   struct Sample {
     std::vector<Control> controls;
     double cost{0.0};
-    bool collided{false};
   };
   std::vector<Sample> sampled(static_cast<size_t>(samples_));
   double min_cost = std::numeric_limits<double>::max();
@@ -272,16 +279,15 @@ core::VelocityCommand MppiController::computeVelocityCommand(
         const auto& prev = path_.points[ni - 1].pose;
         ref_yaw = std::atan2(ref.y - prev.y, ref.x - prev.x);
       }
+      // 倒车段: 车头朝向与路径切线相反. 切线只表示"走的方向", 参考航向
+      // 要加 180°, 否则控制器先把车头转到前进方向再倒 -> 原地翻转卡死.
+      if (path_.points[ni].velocity_x < -0.1) ref_yaw = normAngle(ref_yaw + M_PI);
       const double heading_err = normAngle(p.theta - ref_yaw);
       cost += path_weight_ * lateral2 +
               heading_weight_ * heading_err * heading_err;
-
       const int cell = core::footprintCost(local_costmap_, p, footprint_samples_);
       if (cell >= 100) {
-        // 硬碰撞: 该样本直接作废, 不参与软max. 以前只是 +1000 代价,
-        // 当所有样本都贴墙时仍会被平均进来, 表现为"蹭墙/压实膨胀区".
-        sample.collided = true;
-        break;
+        cost += 1000.0;
       } else if (cell > 60) {
         // 蓝色膨胀区 1..99 是可通行的软代价. 0.9m 膨胀会让窄走廊
         // 几乎整片都是 40-60, 若每一格都重罚, 控制器的速度项会被
@@ -309,11 +315,8 @@ core::VelocityCommand MppiController::computeVelocityCommand(
 
   last_min_cost_ = std::min(min_cost, 1e12);
   double sum_w = 0.0;
-  int valid_samples = 0;
   std::vector<Control> weighted(static_cast<size_t>(horizon_), Control{});
   for (const auto& sample : sampled) {
-    if (sample.collided) continue;   // 硬碰撞样本不参与加权
-    ++valid_samples;
     const double weight = std::exp(-(sample.cost - min_cost) / lambda_);
     sum_w += weight;
     for (int t = 0; t < horizon_; ++t) {
@@ -321,16 +324,7 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       weighted[static_cast<size_t>(t)].w += weight * sample.controls[static_cast<size_t>(t)].w;
     }
   }
-  // 全部样本都撞: 说明当前位姿/路径已经贴死在障碍里, 停车而不是硬挤过去,
-  // 由上层(安全层/恢复)接管.
-  if (sum_w <= 0.0 || valid_samples == 0) {
-    last_collision_ratio_ = 1.0;
-    last_output_v_ = 0.0;
-    last_output_w_ = 0.0;
-    return {0.0, 0.0, 0.0};
-  }
-  last_collision_ratio_ =
-    1.0 - static_cast<double>(valid_samples) / static_cast<double>(sampled.size());
+  if (sum_w <= 0.0) return {0.0, 0.0, 0.0};
 
   for (int t = 0; t < horizon_; ++t) {
     nominal_[static_cast<size_t>(t)] = {

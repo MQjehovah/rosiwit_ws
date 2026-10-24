@@ -328,6 +328,9 @@ private:
     // 长方形车体的 footprint-aware 控制: 控制器按 footprint 采样点查 raw costmap.
     pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
+    // 负余量: 轮廓内缩后做碰撞检查. 0=严格按车体; 0.02 允许贴边 2cm,
+    // 是 0.75m 车身过 0.75m 通道的必要条件 (栅格离散本身占 ~0.1m).
+    pnh_.param<double>("footprint_shrink", footprint_shrink_, 0.0);
     pnh_.param<double>("path_resample_step", path_resample_step_, 0.08);
     configured_footprint_.clear();
     controller_footprint_.clear();  // 实际是否启用由 setupCore 按控制器能力决定
@@ -339,6 +342,11 @@ private:
     if (robot_footprint.empty()) robot_footprint = movebase_footprint;
     if (robot_footprint.empty()) robot_footprint = footprint;
     configured_footprint_ = toPolygon(robot_footprint);
+    if (footprint_shrink_ > 1e-6) {
+      configured_footprint_ = insetFootprint(configured_footprint_, footprint_shrink_);
+      ROS_INFO("[rosiwit_navigation_ros1] footprint inset %.3fm for collision checks "
+               "(窄道通过能力: 车身 + 2x栅格离散)", footprint_shrink_);
+    }
     if (footprint_aware_control_) {
       controller_footprint_ = configured_footprint_;
     }
@@ -412,6 +420,37 @@ private:
   }
 
   // ---- 核心策略 (来自算法核心, ROS 无关) ----
+  // 凸多边形内缩 (负余量): 让车体轮廓在碰撞检查时可以贴近/轻微贴边,
+  // 这是"0.75m 车身过 0.75m 通道"的前提 (0.05m 栅格离散本身就需要 ~0.1m
+  // 余量). 逆时针多边形, 内法向 = (-dy, dx).
+  static core::Footprint insetFootprint(const core::Footprint & poly, double d)
+  {
+    if (poly.size() < 3 || d <= 1e-6) return poly;
+    const size_t n = poly.size();
+    core::Footprint out;
+    out.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+      const auto & a = poly[(i + n - 1) % n];
+      const auto & b = poly[i];
+      const auto & c = poly[(i + 1) % n];
+      auto line = [&](const std::pair<double, double> & p,
+                      const std::pair<double, double> & q) {
+        double dx = q.first - p.first, dy = q.second - p.second;
+        double len = std::hypot(dx, dy);
+        if (len < 1e-9) len = 1e-9;
+        dx /= len; dy /= len;
+        return std::array<double, 4>{p.first - dy * d, p.second + dx * d, dx, dy};
+      };
+      const auto l1 = line(a, b);
+      const auto l2 = line(b, c);
+      const double denom = l1[2] * l2[3] - l1[3] * l2[2];
+      if (std::fabs(denom) < 1e-9) { out.push_back(b); continue; }
+      const double t = ((l2[0] - l1[0]) * l2[3] - (l2[1] - l1[1]) * l2[2]) / denom;
+      out.emplace_back(l1[0] + t * l1[2], l1[1] + t * l1[3]);
+    }
+    return out;
+  }
+
   void setupCore()
   {
     planner_strategy_ = nav_core::NavigationFactory::createPlanner(planner_name_);
@@ -3116,8 +3155,10 @@ private:
 
     // ---- movebase action: 状态/进度/到位/卡死全部交给算法层 ----
     if (task_active_) {
+      // 到点判定只依赖当前位姿/路径终点; 以前加了 !planning_active_ 门控,
+      // Hybrid A* 单次规划可达数秒, 期间到点也不停 -> 冲过目标点.
       const bool xy_reached =
-        !planning_active_ && !current_path_.poses.empty() && isGoalReached();
+        !current_path_.poses.empty() && isGoalReached();
       const double controller_progress =
         controller_strategy_ ? controller_strategy_->getProgress() : 0.0;
       const core::ActionTaskStatus task_status = action_task_.update(
@@ -3435,6 +3476,7 @@ private:
   bool rviz_goal_align_yaw_ = true;
   bool footprint_aware_control_ = false;
   double footprint_sample_spacing_ = 0.05;
+  double footprint_shrink_ = 0.0;   // 轮廓内缩(负余量), 窄道通过用
   double path_resample_step_ = 0.08;
   core::Footprint configured_footprint_;
   core::Footprint controller_footprint_;

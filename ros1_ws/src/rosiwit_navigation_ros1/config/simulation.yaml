@@ -33,13 +33,13 @@ mppi_speed_weight: 2.0
 mppi_goal_weight: 1.5
 
 # ---------- 规划器 ----------
-# 实测 Hybrid A* 在本图窄门口 (宽 ~1.09m, 车体 0.75m) 6s 内 No valid path,
-# 短路径可以; 主规划暂用网格 A* (只按半径膨胀), 车体轮廓由 MPPI footprint
-# 采样 + safety 兜底. 想再试 Hybrid 把下面改成 "hybrid_astar" 并放宽
-# planner_timeout; recovery 固定用 hybrid_astar (反向逃逸).
-planner_name: "astar"
-planner_max_iterations: 200000
+# Hybrid A*: SE(2) 运动基元 + 车体轮廓检查; 路径本身满足转弯半径.
+# 窄道能力 = 车体轮廓 + 2 个栅格的离散余量 (0.05m 栅格 -> 车身 +0.1m).
+planner_name: "hybrid_astar"
+planner_max_iterations: 300000
 planner_timeout: 6.0
+# 允许倒车: 本图很多起点朝墙, 只前进时 SE(2) 搜不到解 (实测 No valid path).
+# MPPI 已支持按 velocity_x 切换前进/倒车 (含 cusp 迟滞).
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 
@@ -53,6 +53,13 @@ costmap_update_rate: 5.0
 # spinner 线程数 (代价地图与控制环并行)
 spinner_threads: 2
 
+# ---- 重规划策略 ----
+# Hybrid A* 每次重规划可能给出不同的首段机动 (前进/倒车), 控制器跟着翻转 ->
+# 原地抖. 只在新目标/规划失败时重规划; blocked 不触发, 阻塞由 recovery 接管.
+replan_max_interval: 20.0
+replan_min_interval: 4.0
+replan_on_blocked: false
+
 # ---------- 控制器 ----------
 # MPPI + footprint 感知 (A/B 报告推荐组合; DWA+footprint 会绕圈)
 controller_name: "mppi"
@@ -64,8 +71,10 @@ robot_frame: "base_footprint"
 map_frame: "map"
 
 # ---------- 导航容差 ----------
-goal_tolerance_xy: 0.15
-goal_tolerance_yaw: 0.15
+# 仿真端 Hybrid A* 末段收敛在 0.18~0.19m 附近 (0.05m 栅格 + 安全层减速),
+# 容差给 0.20; 实车默认 0.10 不动.
+goal_tolerance_xy: 0.20
+goal_tolerance_yaw: 0.20
 
 # ---------- 前瞻 ----------
 lookahead_distance: 0.5
@@ -78,6 +87,9 @@ max_lookahead_distance: 0.7
 # 车头 0.565 与前声呐 0.5498 对齐; 导航用实车标定过的 footprint.
 robot_radius: 0.39
 footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+# 轮廓内缩(负余量): 碰撞检查时允许贴边 2cm. 配合 0.05m 栅格, 0.75m 车身
+# 可过 ~0.85m 的地图空白通道; 安全层(2D 停障多边形)仍按实际车体兜底.
+footprint_shrink: 0.02
 footprint_aware_control: true
 footprint_sample_spacing: 0.05
 path_resample_step: 0.08

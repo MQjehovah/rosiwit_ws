@@ -210,6 +210,10 @@ bool HybridAStarPlanner::checkPose(const core::Pose2D & pose) const
   int ix = 0, iy = 0;
   if (!worldToGrid(pose.x, pose.y, ix, iy)) return false;
 
+  // 快速早退: 先查中心格 (单次查表). 大量候选在这一步就能否掉,
+  // 不必为每个候选做 ~60 次 footprint 采样 (Hybrid A* 扩展成本的主因).
+  if (isObstacle(ix, iy)) return false;
+
   // Orientation-aware: check the actual polygon when supplied.  The radius
   // circle remains the fallback for callers that only know a robot radius.
   if (!footprint_samples_.empty()) {
@@ -256,11 +260,21 @@ bool HybridAStarPlanner::checkArc(
     x += std::cos(mid_th) * ds * sign;
     y += std::sin(mid_th) * ds * sign;
     th = normalizeAngle(th + dtheta);
-    core::Pose2D p{x, y, th};
-    if (!checkPose(p)) return false;
+  }
+  // 碰撞检查只取弧中点和端点: footprint 检查是 Hybrid A* 的主要开销
+  // (~50 采样点/次). 0.35~0.6m 的小弧用两点采样足够, 角点擦碰由控制器
+  // 的 footprint 代价和 safety 层兜底.
+  {
+    const double half_th = from.theta;
+    const double mid_dtheta = motion.curvature * (distance * 0.5) * sign;
+    core::Pose2D mid;
+    mid.x = from.x + std::cos(half_th + 0.5 * mid_dtheta) * (distance * 0.5) * sign;
+    mid.y = from.y + std::sin(half_th + 0.5 * mid_dtheta) * (distance * 0.5) * sign;
+    mid.theta = normalizeAngle(half_th + mid_dtheta);
+    if (!checkPose(mid)) return false;
   }
   to = {x, y, th};
-  return true;
+  return checkPose(to);
 }
 
 double HybridAStarPlanner::heuristic(
@@ -423,9 +437,12 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       const double travel = std::fabs(primitive.distance);
       const double reversing_penalty = primitive.distance < 0.0 ? 1.35 : 1.0;
       const double heading_penalty = std::fabs(primitive.curvature) * 0.08;
+      // 膨胀代价加权: 只查硬障碍会让路径贴墙 (0 余量), 控制器的 footprint +
+      // 实时 scan 跟不进去 -> 卡死. 提高膨胀权重让路径在通道里自然居中,
+      // 但窄口仍是"更贵"而不是"不可通行".
       const double cost_factor =
         1.0 + static_cast<double>(costAt(ix, iy)) / 255.0 * 1.5 +
-        static_cast<double>(inflationCostAt(ix, iy)) / 255.0;
+        8.0 * static_cast<double>(inflationCostAt(ix, iy)) / 255.0;
       const double g = current.g + travel * cost_factor * reversing_penalty + heading_penalty;
 
       auto it = best_g.find(key);
@@ -465,6 +482,11 @@ core::Result<core::Path> HybridAStarPlanner::plan(
   path.points.push_back(last);
   if (path.points.size() < 2) path.points.push_back(last);
   LOG_INFO(logger_, "Hybrid A* path: %zu points, %d iterations", path.points.size(), iterations);
+  {
+    const double ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - begin).count();
+    LOG_INFO(logger_, "Hybrid A* plan time: %.1f ms", ms);
+  }
   return core::Result<core::Path>::ok(path);
 }
 

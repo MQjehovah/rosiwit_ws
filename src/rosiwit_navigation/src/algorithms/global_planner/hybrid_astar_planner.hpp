@@ -108,7 +108,8 @@ private:
   int heading_bins_ = 72;
   core::Footprint footprint_;
   std::vector<std::pair<double, double>> footprint_samples_;
-  double footprint_sample_spacing_ = 0.05;
+  // 0.05 对 0.9m 车体 = ~60 采样点; Hybrid A* 每次扩展都要查, 改成 0.08 减 40%.
+  double footprint_sample_spacing_ = 0.08;
   std::vector<unsigned char> inflation_field_;
   // recovery-only: tolerate the current footprint overlapping the map so a
   // reverse escape path can be generated; normal planning keeps this at 0.
