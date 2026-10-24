@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<robot name="xz_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!--
+        Single entry point for the simulated robot description: the real robot
+        (xz_robot) with the GT shell and the real xzrobot.v3.urdf frame tree.
+
+        arg:
+          lidar_plugin  block (default) | velodyne
+
+        Keep this file ASCII-only (Python 2 URDF parsers under ASCII locale).
+    -->
+    <xacro:arg name="lidar_plugin" default="block"/>
+    <xacro:property name="lplug" value="$(arg lidar_plugin)"/>
+
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/gazebo/mbot_base.xacro"/>
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/lidar3d_gazebo.xacro"/>
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/imu_gazebo.xacro"/>
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/robots/gt_robot.xacro"/>
+
+    <xacro:gt_robot lidar_plugin="${lplug}"/>
+
+</robot>

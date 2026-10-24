@@ -44,6 +44,11 @@ target_compile_options(rosiwit_navigation_ros1_node PRIVATE -pipe -pthread)
 target_link_libraries(rosiwit_navigation_ros1_node
     ${catkin_LIBRARIES}
     rosiwit_navigation)                # 核心库 (规划器/控制器/路径平滑/任务状态机)
+# movebase_interface.h 直接 include 了 xzrobot_ros_dependency 生成的头文件
+# (action: NaviCmdActionAction.h). 没有下面这行时, 并行构建 (-j) 不保证
+# "先由 xzrobot_ros_dependency 生成头文件、再编译本节点", 干净构建会偶发
+# fatal error: xzrobot_ros_dependency/NaviCmdActionAction.h: No such file or directory
+add_dependencies(rosiwit_navigation_ros1_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 install(TARGETS rosiwit_navigation_ros1_node
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

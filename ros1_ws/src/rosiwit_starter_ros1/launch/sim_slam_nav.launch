@@ -1,0 +1,119 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    ROS1 仿真一键启动: Gazebo + SLAM + 导航
+
+      roslaunch rosiwit_starter_ros1 sim_slam_nav.launch
+      roslaunch rosiwit_starter_ros1 sim_slam_nav.launch gui:=false          # 无 Gazebo GUI (RViz 仍开)
+      roslaunch rosiwit_starter_ros1 sim_slam_nav.launch rviz:=false         # 无 RViz
+      roslaunch rosiwit_starter_ros1 sim_slam_nav.launch use_drive:=true     # 自动跑图建图
+      roslaunch rosiwit_starter_ros1 sim_slam_nav.launch world_name:=$(rospack find rosiwit_simulation_ros1)/world/large.world
+
+    组成:
+      rosiwit_simulation_ros1/simulator_gazebo.launch   Gazebo 世界 + 实机模型 (32 线 3D 雷达 + IMU + 差速插件)
+      rosiwit_slam_ros1/slam_simulation.launch          SLAM  (map->odom, /map, /lio_odom, /world_cloud)
+      rosiwit_navigation_ros1/navigation_simulation.launch  导航 (吃 /map + /lio_odom + /world_cloud)
+      rosiwit_simulation_ros1/sim_drive.py              可选: 建图用的自动运动脚本
+      rviz                                              可选: rviz/sim_slam_nav.rviz
+
+    发目标:
+      rostopic pub -1 /goal_pose geometry_msgs/PoseStamped \
+        '{header: {frame_id: map}, pose: {position: {x: 3.0, y: 0.0}, orientation: {w: 1.0}}}'
+      或在 RViz 里用 2D Nav Goal (话题 /move_base_simple/goal)。
+
+    说明:
+      * 三个节点同时启动。Gazebo 先发 /clock, SLAM/导航在收到数据前保持空闲,
+        不需要额外的定时器错开。
+      * 启动后等 /map 和 /lio_odom 稳定 (约 5s) 再发目标, 否则导航可能已经
+        接受目标但还没有可用的 costmap。
+      * SLAM 刚启动的几十毫秒内会报几次
+        `"odom" ... lookupTransform ... does not exist` —— 这是 Gazebo 还没
+        发出 odom->base_footprint 的正常启动瞬态, 出现 map->odom 后自动消失。
+      * use_drive 与手动 nav goal 不要同时用: 两者都往 /cmd_vel 发速度。
+  -->
+  <arg name="world_name" default="$(find rosiwit_simulation_ros1)/world/house.world"/>
+  <!-- MPPI/代价地图的 OpenMP 默认会吃满所有核, 限制到 2 线程, 避免和 Gazebo 抢 CPU -->
+  <env name="OMP_NUM_THREADS" value="2"/>
+  <arg name="gui" default="true"/>
+  <arg name="paused" default="false"/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="spawn_x" default="0.0"/>
+  <arg name="spawn_y" default="0.0"/>
+  <arg name="spawn_z" default="0.1"/>
+  <arg name="spawn_yaw" default="0.0"/>
+  <arg name="robot_name" default="mrobot"/>
+  <!-- 3D 雷达插件实现: velodyne (默认, 包内自带 .so) | block (melodic 自带) -->
+  <arg name="lidar_plugin" default="velodyne"/>
+
+  <!-- 仿真参数文件 (可在命令行覆盖) -->
+  <arg name="slam_config" default="$(find rosiwit_slam_ros1)/config/simulation.yaml"/>
+  <arg name="navigation_config" default="$(find rosiwit_navigation_ros1)/config/simulation.yaml"/>
+
+  <!-- 定位模式: 默认载入 docs/maps/map 的已有地图; load_map:=false 时纯建图。 -->
+  <arg name="load_map" default="true"/>
+  <arg name="map_yaml" default="$(optenv HOME)/rosiwit_ws/docs/maps/map/map.yaml"/>
+  <arg name="initial_x" default="0.0"/>
+  <arg name="initial_y" default="0.0"/>
+  <arg name="initial_yaw" default="0.0"/>
+
+  <!-- RViz: 固定 map 系, 显示 /map、/world_cloud、/global_path、/local_path、TF、车模;
+       2D Nav Goal 发 /move_base_simple/goal, 2D Pose Estimate 发 /initialpose。 -->
+  <arg name="rviz" default="true"/>
+  <arg name="rviz_config" default="$(find rosiwit_starter_ros1)/rviz/sim_slam_nav.rviz"/>
+
+  <!-- 可选: 自动运动 (建图用), figure8|circle|square|explore -->
+  <arg name="use_drive" default="false"/>
+  <arg name="drive_mode" default="figure8"/>
+  <arg name="drive_linear_speed" default="0.3"/>
+  <arg name="drive_angular_speed" default="0.5"/>
+  <arg name="drive_duration" default="120.0"/>
+
+  <!-- 1. Gazebo + 机器人描述 + spawn -->
+  <include file="$(find rosiwit_simulation_ros1)/launch/simulator_gazebo.launch">
+    <arg name="world_name" value="$(arg world_name)"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="paused" value="$(arg paused)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="spawn_x" value="$(arg spawn_x)"/>
+    <arg name="spawn_y" value="$(arg spawn_y)"/>
+    <arg name="spawn_z" value="$(arg spawn_z)"/>
+    <arg name="spawn_yaw" value="$(arg spawn_yaw)"/>
+    <arg name="robot_name" value="$(arg robot_name)"/>
+    <arg name="lidar_plugin" value="$(arg lidar_plugin)"/>
+  </include>
+
+  <!-- 2. SLAM: 建图模式, 发布 /map + /lio_odom + /world_cloud -->
+  <include file="$(find rosiwit_slam_ros1)/launch/slam_simulation.launch">
+    <arg name="config_file" value="$(arg slam_config)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="load_map" value="$(arg load_map)"/>
+    <arg name="map_yaml" value="$(arg map_yaml)"/>
+    <arg name="initial_x" value="$(arg initial_x)"/>
+    <arg name="initial_y" value="$(arg initial_y)"/>
+    <arg name="initial_yaw" value="$(arg initial_yaw)"/>
+  </include>
+
+  <!-- 3. 导航: 吃 /map + /lio_odom, 障碍走 /world_cloud 体素层 -->
+  <include file="$(find rosiwit_navigation_ros1)/launch/navigation_simulation.launch">
+    <arg name="config_file" value="$(arg navigation_config)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+  </include>
+
+  <!-- 4. 可选自动运动脚本 -->
+  <node if="$(arg use_drive)"
+        pkg="rosiwit_simulation_ros1" type="sim_drive.py"
+        name="sim_drive" output="screen">
+    <param name="mode" value="$(arg drive_mode)"/>
+    <param name="linear_speed" value="$(arg drive_linear_speed)"/>
+    <param name="angular_speed" value="$(arg drive_angular_speed)"/>
+    <param name="duration" value="$(arg drive_duration)"/>
+    <param name="use_sim_time" value="$(arg use_sim_time)"/>
+  </node>
+
+  <!-- 5. RViz -->
+  <node if="$(arg rviz)"
+        pkg="rviz" type="rviz" name="rviz"
+        args="-d $(arg rviz_config)" output="screen">
+    <param name="use_sim_time" value="$(arg use_sim_time)"/>
+  </node>
+</launch>

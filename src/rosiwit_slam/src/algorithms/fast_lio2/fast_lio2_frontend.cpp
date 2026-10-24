@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <Eigen/Geometry>
 
 namespace rosiwit_slam {
 
@@ -93,7 +94,12 @@ bool FastLio2Frontend::getKeyFrame(KeyFrame& out) {
     const auto& x = m_kf->x();
     if (m_has_last_kf) {
         double dt = (x.t_wi - m_last_kf_pose.trans).norm();
-        double drot = Sophus::SO3d(x.r_wi * m_last_kf_pose.rot.transpose()).log().norm();
+        // r_wi 经过多次 EKF 乘法更新后会累积 ~1e-8 的正交性误差,
+        // 而 Sophus::SO3d(Matrix3d) 的 ensure 容差是 1e-12, 会直接 abort
+        // (实机前倾 43 度的雷达外参下必现). 先转成归一化四元数再构造.
+        Eigen::Quaterniond dq(x.r_wi * m_last_kf_pose.rot.transpose());
+        dq.normalize();
+        double drot = Sophus::SO3d(dq).log().norm();
         if (dt < m_keyframe_trans_thresh && drot < m_keyframe_rot_thresh) {
             return false;
         }

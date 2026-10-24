@@ -3,6 +3,7 @@
 #include <cmath>
 #include <type_traits>
 #include <utility>
+#include <Eigen/Geometry>
 
 double State::gravity = 9.81;
 
@@ -101,6 +102,16 @@ M3D jacobianRightInverse(const V3D &inp)
     else
         return so3LeftJacobianInverse(inp).transpose();
 }
+
+// SO3 对数: 旋转矩阵经过大量乘法更新后会有 ~1e-8 的正交性漂移, 而
+// Sophus::SO3d(Matrix3d) 的 ensure 容差是 1e-12, 会直接 abort
+// (实机前倾 43 度雷达外参下必现). 先转成归一化四元数再构造.
+V3D so3LogSafe(const M3D &R)
+{
+    Eigen::Quaterniond q(R);
+    q.normalize();
+    return Sophus::SO3d(q).log();
+}
 } // namespace
 
 M3D Jr(const V3D &inp)
@@ -126,9 +137,9 @@ void State::operator+=(const V21D &delta)
 V21D State::operator-(const State &other) const
 {
     V21D delta = V21D::Zero();
-    delta.segment<3>(0) = Sophus::SO3d(other.r_wi.transpose() * r_wi).log();
+    delta.segment<3>(0) = so3LogSafe(other.r_wi.transpose() * r_wi);
     delta.segment<3>(3) = t_wi - other.t_wi;
-    delta.segment<3>(6) = Sophus::SO3d(other.r_il.transpose() * r_il).log();
+    delta.segment<3>(6) = so3LogSafe(other.r_il.transpose() * r_il);
     delta.segment<3>(9) = t_il - other.t_il;
     delta.segment<3>(12) = v - other.v;
     delta.segment<3>(15) = bg - other.bg;

@@ -9,6 +9,7 @@ install(DIRECTORY
   launch
   urdf
   world
+  plugins
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
 

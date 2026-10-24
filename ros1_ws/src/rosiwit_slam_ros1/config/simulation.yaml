@@ -10,7 +10,7 @@ global:
     backend: "ceres_pose_graph"
     loop_closure: "" # 探索阶段先关闭 ScanContext/ICP, 避免 TF 被回环线程拖停; 建图稳定后再开
     map_manager: "pcd_map_manager"
-    localization: "gicp_localization"
+    localization: "localization_pipeline"
 
   input:
     imu_topic: imu  # IMU话题
@@ -18,19 +18,21 @@ global:
     odom_topic: odom # 轮式里程计话题
     lidar_filter_num: 2 # 雷达点抽稀倍数
     lidar_min_range: 0.10 # 雷达最小有效距离(m)
-    lidar_max_range: 100.0 # 雷达最大有效距离(m)
-    scan_period_ms: 0.0 # 单帧扫描周期(ms)
+    lidar_max_range: 15.0 # 雷达最大有效距离(m); 室内 15m 足够, 30m 会把窗外噪声带进地图
+    scan_period_ms: 0.0 # 单帧扫描周期(ms); 0 = 不做去畸变 (仿真点云没有真实逐点时间戳,
+                       # 按方位角推导的顺序/相位和 Gazebo 插件对不上, 实测反而把旋转时的
+                       # 位置误差从 0.25m 放大到 0.5m). 实机 10Hz 点云带 timestamp, 不受影响.
     use_odom: false # 是否订阅并使用轮式odom
   frames:
-    lidar_frame: lidar_link  # 雷达frame
+    lidar_frame: lidar  # 雷达frame (与实机 xzrobot.v3.urdf 同名)
     imu_frame: imu_link # IMU frame
     body_frame: base_footprint # 车体frame
     world_frame: map # 世界frame
     map_frame: map # 地图frame
     odom_frame: odom # 里程计frame
   map:
-    voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
-    save_voxel: 0.3 # 地图/点云保存降采样体素(m)
+    voxel_resolution: 0.10 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图 (0.3 太稀, 栅格会断墙)
+    save_voxel: 0.10 # 地图/点云保存降采样体素(m)
   scan_context:
     num_rings: 20 # ScanContext环数
     num_sectors: 60 # ScanContext扇区数
@@ -40,7 +42,7 @@ global:
 mapping:
   frontend:
     gravity_align: true # 是否用重力方向初始化姿态
-    undistort_enable: false # 是否启用运动畸变补偿
+    undistort_enable: false # 逐点运动去畸变开关; 需要点云带逐点时间戳(如实机 vanjee), 仿真点云没有 -> 保持 false
     lidar_cov_inv: 1000.0 # 激光观测信息矩阵权重
     robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
     robust_scale: 0.5 # 鲁棒核尺度
@@ -50,7 +52,7 @@ mapping:
     persist_window: 20 # 动态点确认窗口帧数
     dynamic_residual_thresh: 1.0 # 动态点残差阈值
     local_map_size: 300          # 局部地图立方体边长(m)
-    detection_range: 60          # 雷达有效检测距离(m)
+    detection_range: 15          # 雷达有效检测距离(m)
     map_move_threshold: 1.5      # 局部地图滑动窗口阈值比例
     acc_noise: 0.01              # 加速度计白噪声
     gyro_noise: 0.01             # 陀螺白噪声
@@ -64,13 +66,16 @@ mapping:
     imu_lidar_translation: [0.0, 0.0, 0.0] # 初始IMU<-lidar平移(m)
     estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
     self_filter:
-      enabled: false # 仿真不启用机身过滤
-      x_min: -0.45
-      x_max: 0.75
-      y_min: -0.55
-      y_max: 0.55
-      z_min: 0.05
-      z_max: 1.40
+      enabled: true # 仿真启用机身过滤: 倾斜雷达会扫到自己的轮子/万向轮碰撞体
+      # base_link 系包围盒; 覆盖 gt 车体 (模型前移后 x -0.327..0.565, y +-0.359).
+      # z 上限抬到 0.80: 车身碰撞盒顶在 0.77, 倾斜 3D 雷达会扫到自己的车顶,
+      # 不滤掉会当成贴身的假障碍.
+      x_min: -0.36
+      x_max: 0.60
+      y_min: -0.40
+      y_max: 0.40
+      z_min: -0.30
+      z_max: 0.80
   map_manager:
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
@@ -88,7 +93,7 @@ mapping:
     dilate_radius: 0 # 障碍膨胀半径(格)
     close_radius: 1 # 形态学闭运算半径(格)
     min_component_cells: 1 # 去噪最小连通域格数
-    max_range: 50.0 # 射线有效距离(m),0=不限
+    max_range: 15.0 # 射线有效距离(m),0=不限
     ground_method: ransac # 地面提取方法 ransac|percentile
     ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
     post_pipeline: "denoise,close" # 2D后处理管道
@@ -97,16 +102,122 @@ mapping:
     realtime_close_radius: 1
     realtime_skeleton_width: 0
 localization:
-  # gicp_localization 没有 predictAt() 高频外推实现, 必须关闭高频输出,
-  # 否则定位模式只走 highRateCB 而返回 false -> /lio_odom 和 map->odom TF 都不发布.
-  output:
-    rate_hz: 0
+  # 可编排定位流水线 (localization_pipeline): 支持 /switch_map 注入的 MapData,
+  # 而简单的 gicp_localization 没有实现 setMapData, 载图后 has_map_ 仍为 false.
+  pipeline:
+    relocalizer: none         # 仿真/已知初始位姿: 不做 BBS 全局检索, 避免多假设跳变
+    motion_prior: imu
+    local_map: radius_submap
+    matcher: pp_icp
+    monitor: windowed
+    map_maintainer: none
+
+  matcher:
+    voxel_resolution: 0.3
+    max_iterations: 32
+    max_correspondence_dist: 2.0
+    transformation_epsilon: 0.000001
+    inlier_dist: 0.3
+    use_corr_decay: true
+    corr_dist_init: 4.0
+    corr_dist_min: 1.0
+    use_huber: true
+    huber_delta: 0.25
+    robust_kernel: cauchy
+    use_edge_feature: true
+    edge_line_ratio: 0.12
+    edge_valid_thr: 0.10
+    edge_min_extent: 0.20
+    edge_vertical_cos: 0.866
+    degeneracy_gate: true
+    degeneracy_eig_ratio: 0.001
+    min_correspondences: 20
+    dynamic_filter: true
+    dynamic_dist: 0.4
+
+  local_map:
+    voxel_resolution: 0.3
+    radius: 30.0
+    cell_size: 10.0
+    max_keyframes: 15
+    cache_move: 0.5
+
+  deskew:
+    enabled: true      # 去畸变开关; 点云没有逐点时间戳时核心会自动跳过并打印一次提示
+    max_gap: 0.30
+    min_angle_deg: 0.2
+
+  motion_prior:
+    max_dt: 0.2
+    max_vel: 10.0
+    use_odom: false
+    use_gravity: true
+    gravity: 9.81
+    gravity_gain: 0.05
+
   global:
-    icp_voxel_res: 0.5
+    min_score: 0.5
+    top_k: 5
+    retry_interval: 30
+    voxel_resolution: 0.3
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0
     icp_max_iter: 32
-    min_radius: 2.0  # 重定位候选最小半径(m)
+    bbs_z_min: -1.0
+    bbs_z_max: 1.0
+    bbs_theta_bins: 60
+    bbs_max_levels: 6
+    bbs_min_points_per_cell: 5.0
+    icp_voxel_res: 0.3
+    min_radius: 2.0
+
+  monitor:
+    enabled: true
+    credible_fitness: 0.75
+    lost_fitness: 0.5
+    localized_patience: 3
+    lost_patience: 100
+    window_length: 20
+    window_std_k: 2.0
+    max_trans_step: 1.0
+    max_yaw_step_deg: 20.0
+    nees_threshold: 50.0
+
+  accept:
+    mode: 1
+    min_coverage: 0.5
+    residual_margin: 0.10
+    consistent_frames: 2
+    mahalanobis_gate: true
+    mahalanobis_chi2: 16.81
+
+  planar:
+    mode: ground_plane
+    z: 0.0
+    sensor_height: 0.0
+    cell: 1.0
+    ground_band: 0.3
+    max_tilt_deg: 35.0
+
+  hypothesis:
+    max: 4
+    margin: 0.25
+    stale: 10
+    reseed_frames: 0
+
+  smoother:
+    enabled: false
+    lag_sec: 2.0
+    motion_trans_sigma: 0.05
+    motion_rot_sigma: 0.02
+
+  map_store: none
+
+  output:
+    rate_hz: 0   # ROS1 接口按需调用 predictAt; 置 0 关闭额外高频线程
+    filter_alpha: 0.5
+    filter_beta: 0.2
+    extrap_max_s: 0.3
 ros2:
   odom_tf_publisher: wheel  # odom->base TF发布方式
   map_publish_period: 1.0 # 地图发布周期(s)

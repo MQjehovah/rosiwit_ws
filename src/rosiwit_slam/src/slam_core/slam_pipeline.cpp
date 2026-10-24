@@ -214,6 +214,27 @@ bool SlamPipeline::init(const std::string& config_path) {
         return false;
     }
 
+    // 雷达 -> IMU 外参 (ROS1 层在 override YAML 顶层注入)。定位模式输出
+    // body_cloud/world_cloud 时必须先把扫描转到 IMU 系, 否则倾斜安装的雷达
+    // 会把点云/地图整体转歪 (实机 43 度倾斜安装就是这种情况)。
+    if (cfg["r_il"] && cfg["r_il"].IsSequence() && cfg["r_il"].size() == 9) {
+        Eigen::Matrix3d R;
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                R(r, c) = cfg["r_il"][r * 3 + c].as<double>();
+            }
+        }
+        Eigen::Vector3d t = Eigen::Vector3d::Zero();
+        if (cfg["t_il"] && cfg["t_il"].IsSequence() && cfg["t_il"].size() == 3) {
+            t << cfg["t_il"][0].as<double>(), cfg["t_il"][1].as<double>(),
+                 cfg["t_il"][2].as<double>();
+        }
+        m_lidar_to_imu.setIdentity();
+        m_lidar_to_imu.block<3, 3>(0, 0) = R.cast<float>();
+        m_lidar_to_imu.block<3, 1>(0, 3) = t.cast<float>();
+        m_lidar_to_imu_valid = true;
+    }
+
     const YAML::Node glob = cfg["global"];
     auto g = [&](const char* key) -> YAML::Node {
         if (glob && glob[key]) return glob[key];
@@ -480,13 +501,18 @@ void SlamPipeline::handleLocalization(const LidarFrame& f) {
         out.state = SlamState::RUNNING;
         out.has_new_pose = true;
         if (f.cloud && !f.cloud->empty()) {
+            CloudType::Ptr body_scan = f.cloud;
+            if (m_lidar_to_imu_valid) {
+                body_scan.reset(new CloudType());
+                pcl::transformPointCloud(*f.cloud, *body_scan, m_lidar_to_imu);
+            }
             CloudType::Ptr world_scan(new CloudType());
             Eigen::Affine3d T = Eigen::Affine3d::Identity();
             T.translate(out.pose.trans);
             T.rotate(out.pose.rot);
-            pcl::transformPointCloud(*f.cloud, *world_scan, T);
+            pcl::transformPointCloud(*body_scan, *world_scan, T);
             out.world_cloud = world_scan;
-            out.body_cloud = f.cloud;
+            out.body_cloud = body_scan;
         }
         emitOutput(out);
         return;
@@ -498,13 +524,18 @@ void SlamPipeline::handleLocalization(const LidarFrame& f) {
         loose.state = SlamState::LOST;
         loose.has_new_pose = true;
         if (f.cloud && !f.cloud->empty()) {
+            CloudType::Ptr body_scan = f.cloud;
+            if (m_lidar_to_imu_valid) {
+                body_scan.reset(new CloudType());
+                pcl::transformPointCloud(*f.cloud, *body_scan, m_lidar_to_imu);
+            }
             CloudType::Ptr world_scan(new CloudType());
             Eigen::Affine3d T = Eigen::Affine3d::Identity();
             T.translate(loose.pose.trans);
             T.rotate(loose.pose.rot);
-            pcl::transformPointCloud(*f.cloud, *world_scan, T);
+            pcl::transformPointCloud(*body_scan, *world_scan, T);
             loose.world_cloud = world_scan;
-            loose.body_cloud = f.cloud;
+            loose.body_cloud = body_scan;
         }
         emitOutput(loose);
     }

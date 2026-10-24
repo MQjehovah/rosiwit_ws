@@ -2,41 +2,58 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="lidar3d">
 
     <!--
-        3D LiDAR Gazebo plugin configuration (ROS1)
+        3D LiDAR Gazebo plugin configuration (ROS1).
         Simulates a Velodyne VLP-16 and publishes sensor_msgs/PointCloud2
         on /velodyne_points.
 
-        Uses velodyne_gazebo_plugins (ROS1 Melodic/Noetic), which is the
-        drop-in 3D ray plugin for ROS1. (Noetic also ships
-        libgazebo_ros_ray_sensor.so, but Melodic does not.)
-    -->
-    <xacro:macro name="lidar3d_gazebo" params="prefix:=lidar">
-        <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/lidar3d.xacro" />
-        <xacro:lidar3d prefix="${prefix}" />
+        Two plugin backends, selected by the xacro arg "lidar_plugin":
+          block    (default) libgazebo_ros_block_laser.so from gazebo_plugins.
+                   Works with a minimal melodic install, but publishes the
+                   legacy sensor_msgs/PointCloud, so pointcloud_relay converts
+                   /velodyne_points_raw into /velodyne_points (PointCloud2).
+          velodyne libgazebo_ros_velodyne_laser.so from
+                   velodyne_gazebo_plugins (apt: ros-melodic-velodyne-gazebo-plugins).
+                   Publishes PointCloud2 directly, closer to a real VLP-16.
 
-        <gazebo reference="${prefix}_link">
+        Both use the same <sensor type="ray"> and the same output topic/frame,
+        so SLAM and navigation do not need to care which one is active.
+
+        NOTE: keep this file ASCII-only. Python 2 tools (spawn_model,
+        joint_state_publisher) parse the expanded URDF as ASCII and fail on
+        non-ASCII bytes in comments.
+    -->
+    <xacro:macro name="lidar3d_gazebo" params="prefix:=lidar plugin:=block mount_x:=0 mount_y:=0 mount_z:=0.1955 mount_rpy:='0 0 0'">
+        <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/lidar3d.xacro" />
+        <xacro:lidar3d prefix="${prefix}" mount_x="${mount_x}" mount_y="${mount_y}" mount_z="${mount_z}" mount_rpy="${mount_rpy}" />
+
+        <gazebo reference="${prefix}">
             <sensor type="ray" name="velodyne_vlp16">
                 <pose>0 0 0 0 0 0</pose>
                 <visualize>false</visualize>
                 <update_rate>10</update_rate>
                 <ray>
+                    <!-- Aligned with the real 3D lidar on 192.168.21.166
+                         (/vanjee_points722): 32 lines, 360 deg, 10 Hz, vertical FOV
+                         -11.8 .. +50.7 deg in the lidar frame. The real mount is pitched
+                         43 deg + yawed 90 deg; with a 16-line +-15 deg sensor the tilted
+                         scan almost only sees the floor and FastLIO drifts. -->
                     <scan>
                         <horizontal>
-                            <samples>900</samples>
+                            <samples>240</samples>
                             <resolution>1</resolution>
                             <min_angle>-3.14159</min_angle>
                             <max_angle>3.14159</max_angle>
                         </horizontal>
                         <vertical>
-                            <samples>16</samples>
+                            <samples>32</samples>
                             <resolution>1</resolution>
-                            <min_angle>-0.2618</min_angle>
-                            <max_angle>0.2618</max_angle>
+                            <min_angle>-0.20595</min_angle>
+                            <max_angle>0.88487</max_angle>
                         </vertical>
                     </scan>
                     <range>
                         <min>0.10</min>
-                        <max>100.0</max>
+                        <max>30.0</max>
                         <resolution>0.01</resolution>
                     </range>
                     <noise>
@@ -45,14 +62,25 @@
                         <stddev>0.01</stddev>
                     </noise>
                 </ray>
-                <plugin name="gazebo_ros_laser_controller" filename="libgazebo_ros_velodyne_laser.so">
-                    <topicName>velodyne_points</topicName>
-                    <frameName>lidar_link</frameName>
-                    <organize_cloud>false</organize_cloud>
-                    <min_range>0.10</min_range>
-                    <max_range>100.0</max_range>
-                    <gaussianNoise>0.01</gaussianNoise>
-                </plugin>
+
+                <xacro:if value="${plugin == 'velodyne'}">
+                    <plugin name="gazebo_ros_laser_controller" filename="libgazebo_ros_velodyne_laser.so">
+                        <topicName>velodyne_points</topicName>
+                        <frameName>${prefix}</frameName>
+                        <organize_cloud>false</organize_cloud>
+                        <min_range>0.10</min_range>
+                        <max_range>100.0</max_range>
+                        <gaussianNoise>0.01</gaussianNoise>
+                    </plugin>
+                </xacro:if>
+                <xacro:unless value="${plugin == 'velodyne'}">
+                    <plugin name="gazebo_ros_block_laser" filename="libgazebo_ros_block_laser.so">
+                        <!-- legacy PointCloud -> relay -> PointCloud2 -->
+                        <topicName>velodyne_points_raw</topicName>
+                        <frameName>${prefix}</frameName>
+                        <gaussianNoise>0.01</gaussianNoise>
+                    </plugin>
+                </xacro:unless>
             </sensor>
         </gazebo>
     </xacro:macro>

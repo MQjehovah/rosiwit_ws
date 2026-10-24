@@ -1,0 +1,151 @@
+# ============================================================
+# rosiwit_navigation_ros1 仿真参数 (Gazebo + rosiwit_slam_ros1)
+#
+# 与 default.yaml / movebase_compat.yaml (实车) 分开, 避免仿真调参污染实车。
+# 仿真环境事实:
+#   * 车体: gt 实机模型 (模型 x -0.327..0.565, y +-0.359), 轮半径 0.0708, 轮距 0.467
+#   * 传感器: VLP-16 (/velodyne_points) + IMU (/imu), 没有 2D /scan
+#   * 定位: rosiwit_slam_ros1 的 /lio_odom (pose 已在 map 系) + dynamic map->odom
+#   * 障碍: SLAM 的 /world_cloud (world 系点云) -> 体素层, 不再依赖 /scan
+# 由 launch/navigation_simulation.launch 以私有命名空间加载。
+# ============================================================
+
+# ---------- 速度 / 加速度 (与实车 default.yaml 一致) ----------
+max_velocity_x: 0.4
+min_velocity_x: 0.0
+max_velocity_theta: 0.5
+
+max_accel_x: 0.5
+max_accel_theta: 0.2
+
+# ---------- MPPI 采样/代价参数 ----------
+mppi_horizon: 20
+mppi_samples: 160
+mppi_dt: 0.0
+mppi_lambda: 0.8
+mppi_sigma_v: 0.18
+mppi_sigma_w: 0.35
+mppi_path_weight: 2.0
+mppi_heading_weight: 0.4
+mppi_obstacle_weight: 0.03
+mppi_control_weight: 0.03
+mppi_speed_weight: 2.0
+mppi_goal_weight: 1.5
+
+# ---------- 规划器 ----------
+planner_name: "astar"
+planner_max_iterations: 200000
+planner_timeout: 2.0
+planner_allow_reverse: true
+planner_max_reverse_distance: 1.0
+
+# ---------- 频率 ----------
+controller_frequency: 10.0
+planner_frequency: 1.0
+# 局部代价地图更新频率 (原来固定 10Hz, 单线程下会饿死控制环)
+costmap_update_rate: 2.0
+# spinner 线程数 (代价地图与控制环并行)
+spinner_threads: 2
+
+# ---------- 控制器 ----------
+# MPPI + footprint 感知 (A/B 报告推荐组合; DWA+footprint 会绕圈)
+controller_name: "mppi"
+coverage_controller_name: "pure_pursuit"
+
+# ---------- 坐标系 ----------
+global_frame: "map"
+robot_frame: "base_footprint"
+map_frame: "map"
+
+# ---------- 导航容差 ----------
+goal_tolerance_xy: 0.15
+goal_tolerance_yaw: 0.15
+
+# ---------- 前瞻 ----------
+lookahead_distance: 0.5
+min_lookahead_distance: 0.25
+max_lookahead_distance: 0.7
+
+# ---------- 车体 / 规划安全距离 ----------
+# 与实车 default.yaml 一致: footprint x -0.25..0.55, y +-0.33 (前部斜切).
+# gt.dae 实测车体 x -0.327..0.565, y +-0.359, 模型已前移 0.119 对齐驱动轮轴,
+# 车头 0.565 与前声呐 0.5498 对齐; 导航用实车标定过的 footprint.
+robot_radius: 0.39
+footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+footprint_aware_control: true
+footprint_sample_spacing: 0.05
+path_resample_step: 0.08
+# g_max_safe 的等效膨胀半径 (实车 0.62)
+inflation_radius: 0.62
+
+# ---------- 话题 ----------
+# 用 SLAM 的 /lio_odom 而不是 Gazebo 的 /odom: nav 直接把 odom.pose 当作
+# 当前位姿使用, /odom 在 odom 系会漂, /lio_odom 已在 map 系。
+odom_topic: /lio_odom
+map_topic: /map
+scan_topic: /scan
+# 实机有 2D 雷达 (Vanjee 716N -> /scan, frame laser), 仿真同样发布 /scan
+require_scan: true
+rviz_goal_topic: "/move_base_simple/goal"
+rviz_goal_align_yaw: true
+
+# ---------- 3D 体素 / STVL 层 (仿真里的障碍来源) ----------
+voxel_enabled: true
+voxel_cloud_topic: "/world_cloud"
+voxel_resolution: 0.10
+voxel_max_points: 200000
+voxel_min_height: 0.15
+voxel_max_height: 1.60
+voxel_decay: 2.0
+voxel_inflation: 0.05
+# /world_cloud 是 SLAM 输出的实时点云, 断流说明前端/定位异常, 应当停车
+require_cloud: true
+cloud_timeout: 1.5
+
+# ---------- 安全层 ----------
+# /scan 点是安全层唯一输入 (applySafety -> laser_points_); 仿真 2D 雷达接入后
+# 与实机一致地启用, 停障/减速多边形直接沿用实车 default.yaml.
+safety_enabled: true
+safety_self_filter_radius: 0.25
+scan_self_filter_enabled: true
+scan_self_x_min: -0.45
+scan_self_x_max: 0.75
+scan_self_y_min: -0.55
+scan_self_y_max: 0.55
+safety_fail_safe_on_timeout: true
+safety_source_timeout: 0.5
+safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]
+safety_slowdown_polygon: [-0.55, -0.63, 0.85, -0.63, 0.85, 0.63, -0.55, 0.63]
+safety_slowdown_ratio: 0.5
+safety_approach_enabled: true
+safety_time_before_collision: 2.0
+# 车体外轮廓 (与实车 safety_footprint 相同), movebase 兼容层的 /robot_footprint 用它
+safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+
+# ---------- 动态障碍跟踪 ----------
+# 跟踪聚类吃 /scan 点 (tracker_points_ 来自 laser_points_); 仿真是静态场景, 保持关闭
+tracking_enabled: false
+tracking_horizon: 0.5
+tracking_cluster_distance: 0.35
+tracking_confirm_hits: 3
+tracking_max_radius: 1.2
+tracking_min_prediction_speed: 0.15
+
+# ---------- 统一恢复: 后退 -> 原地转向 -> 重试原任务 ----------
+recovery_enabled: true
+recovery_max_attempts: 2
+recovery_back_distance: 0.40
+recovery_timeout: 8.0
+
+# ---- 动态覆盖清洁 (navi_cmd=20) ----
+coverage_sweep_width: 0.4
+coverage_max_speed: 0.3
+coverage_resolution: 0.05
+coverage_replan_period: 10.0
+coverage_horizon: 2.5
+coverage_retry_timeout: 10.0
+coverage_complete_rate: 0.995
+coverage_blocked_inflation: 0.10
+coverage_plan_inflation: 0.0
+coverage_plan_robot_radius: 0.0
+coverage_report_path: ""

@@ -627,7 +627,8 @@ void SlamEngine::logInputStats() {
 }
 
 CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
-                                   int filter_num, double min_r, double max_r) {
+                                   int filter_num, double min_r, double max_r,
+                                   double scan_period_ms) {
     CloudType::Ptr cloud(new CloudType());
     filter_num = std::max(1, filter_num);
 
@@ -690,6 +691,21 @@ CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg
             ++vi;
         }
         (void)vi;
+    } else if (scan_period_ms > 1e-6) {
+        // 没有逐点时间戳 (仿真 Gazebo 插件就是这样): 按方位角线性映射到一帧周期。
+        // 机械式 360 度雷达一帧内匀速旋转, atan2(y,x) 就对应采样时刻。
+        // scan_period_ms = 0 即关闭该推导 (等价于不做去畸变)。
+        for (auto& p : cloud->points) {
+            const double az = std::atan2(static_cast<double>(p.y), static_cast<double>(p.x));
+            p.curvature = static_cast<float>((az + M_PI) / (2.0 * M_PI) * scan_period_ms);
+        }
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cout << "[slam_engine] no timestamp field: synthesized per-point time "
+                         "from azimuth (scan_period_ms=" << scan_period_ms << ")"
+                      << std::endl;
+        }
     }
 
     CloudType::Ptr out(new CloudType());
@@ -788,7 +804,8 @@ void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
     }
 
     LidarFrame f;
-    f.cloud = ros2Pcl(msg, cfg_.lidar_filter_num, cfg_.lidar_min_range, cfg_.lidar_max_range);
+    f.cloud = ros2Pcl(msg, cfg_.lidar_filter_num, cfg_.lidar_min_range, cfg_.lidar_max_range,
+                      cfg_.scan_period_ms);
     if (!f.cloud || f.cloud->empty()) return;
     applySelfFilter(f.cloud);
     if (f.cloud->empty()) return;

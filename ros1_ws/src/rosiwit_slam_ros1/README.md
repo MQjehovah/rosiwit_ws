@@ -50,6 +50,22 @@ roslaunch rosiwit_slam_ros1 rosiwit_slam.launch          # 只启动 SLAM 节点
 roslaunch rosiwit_slam_ros1 xz_3d_slam.launch model:=XZ-SW50   # 机器人整机 launch
 ```
 
+### 仿真（Gazebo）
+
+```bash
+# 只启动 SLAM（需 Gazebo 已在运行）
+roslaunch rosiwit_simulation_ros1 simulator_gazebo.launch
+roslaunch rosiwit_slam_ros1 slam_simulation.launch
+
+# Gazebo + SLAM + 导航 一键启动
+roslaunch rosiwit_starter_ros1 sim_slam_nav.launch
+```
+
+- 参数文件：`config/simulation.yaml`（核心参数）、`conf/sim_slam_conf.json`（选择 ROS1 输入话题）
+- 输入：`/velodyne_points` + `/imu`；输出：`/map`、`/lio_odom`、`/world_cloud`
+- TF：`map -> odom` 由本节点发布，`odom -> base_footprint` 由 Gazebo 差速插件发布
+- `use_sim_time` 默认 `true`，与 Gazebo `/clock` 对齐；脱离仿真跑 bag 时记得覆盖
+
 ### 载入已有地图（docs/maps/map）
 
 ```bash

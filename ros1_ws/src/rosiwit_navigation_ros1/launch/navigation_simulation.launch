@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    ROS1 导航仿真启动 (rosiwit_simulation_ros1 + rosiwit_slam_ros1)。
+
+    数据来源:
+      - 地图/定位: /map 与 /lio_odom (由 rosiwit_slam_ros1 发布, pose 已在 map 系)
+      - 障碍:      仿真车是 3D 雷达, 没有 /scan; 走 SLAM 的 /world_cloud 体素层
+                   (config/simulation.yaml 里 require_scan=false, voxel_enabled=true)
+      - 目标:      /goal_pose (原生接口) 或 RViz 的 /move_base_simple/goal
+
+    本文件只启动导航节点, 不拉起 Gazebo/SLAM。单独使用:
+      roslaunch rosiwit_simulation_ros1 simulator_gazebo.launch
+      roslaunch rosiwit_slam_ros1 slam_simulation.launch
+      roslaunch rosiwit_navigation_ros1 navigation_simulation.launch
+    一键仿真: roslaunch rosiwit_starter_ros1 sim_slam_nav.launch
+  -->
+  <arg name="config_file" default="$(find rosiwit_navigation_ros1)/config/simulation.yaml"/>
+  <arg name="node_name" default="rosiwit_navigation_ros1_node"/>
+  <!-- Gazebo 下必须为 true: 节点跟随 /clock 计时, 否则会误判 odom/scan 超时 -->
+  <arg name="use_sim_time" default="true"/>
+
+  <node pkg="rosiwit_navigation_ros1" type="rosiwit_navigation_ros1_node"
+        name="$(arg node_name)" output="screen">
+    <!-- 参数加载到节点私有命名空间 (~), 与 config/*.yaml 的键名一致 -->
+    <rosparam command="load" file="$(arg config_file)"/>
+    <param name="use_sim_time" value="$(arg use_sim_time)"/>
+  </node>
+</launch>

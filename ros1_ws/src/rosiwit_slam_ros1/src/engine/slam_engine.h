@@ -154,8 +154,10 @@ private:
     static double getSec(const ros::Time& t) { return t.toSec(); }
 
     /// 与重构前逐字一致: 抽稀 + 去 NaN + 距离裁剪
+    /// scan_period_ms > 0 且点云没有逐点 timestamp 字段时, 按方位角推导逐点时间 (去畸变用)
     static rosiwit_slam::CloudType::Ptr ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
-                                               int filter_num, double min_r, double max_r);
+                                               int filter_num, double min_r, double max_r,
+                                               double scan_period_ms = 0.0);
     /// 删除 base_link 机身盒内的点 (输入点云仍为雷达系, 用 base_lidar_ 变换).
     void applySelfFilter(rosiwit_slam::CloudType::Ptr& cloud);
 

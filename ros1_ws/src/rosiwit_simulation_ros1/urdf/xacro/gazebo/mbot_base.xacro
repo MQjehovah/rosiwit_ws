@@ -46,7 +46,7 @@
     </xacro:macro>
 
     <!-- Macro for robot wheel -->
-    <xacro:macro name="wheel" params="prefix reflect">
+    <xacro:macro name="wheel" params="prefix reflect show_visual:=1">
         <joint name="${prefix}_wheel_joint" type="continuous">
             <origin xyz="0 ${reflect*wheel_joint_y} ${-wheel_joint_z}" rpy="0 0 0"/>
             <parent link="base_link"/>
@@ -55,6 +55,7 @@
         </joint>
 
         <link name="${prefix}_wheel_link">
+            <xacro:if value="${int(show_visual) == 1}">
             <visual>
                 <origin xyz="0 0 0" rpy="${M_PI/2} 0 0" />
                 <geometry>
@@ -62,6 +63,7 @@
                 </geometry>
                 <material name="gray" />
             </visual>
+            </xacro:if>
             <collision>
                 <origin xyz="0 0 0" rpy="${M_PI/2} 0 0" />
                 <geometry>
@@ -89,7 +91,7 @@
     </xacro:macro>
 
     <!-- Macro for robot caster -->
-    <xacro:macro name="caster" params="prefix reflect">
+    <xacro:macro name="caster" params="prefix reflect show_visual:=1">
         <joint name="${prefix}_caster_joint" type="continuous">
             <origin xyz="${reflect*caster_joint_x} 0 ${-(base_length/2 + caster_radius)}" rpy="0 0 0"/>
             <parent link="base_link"/>
@@ -98,6 +100,7 @@
         </joint>
 
         <link name="${prefix}_caster_link">
+            <xacro:if value="${int(show_visual) == 1}">
             <visual>
                 <origin xyz="0 0 0" rpy="0 0 0"/>
                 <geometry>
@@ -105,6 +108,7 @@
                 </geometry>
                 <material name="black" />
             </visual>
+            </xacro:if>
             <collision>
                 <origin xyz="0 0 0" rpy="0 0 0"/>
                 <geometry>
@@ -119,14 +123,16 @@
         </gazebo>
     </xacro:macro>
 
-    <xacro:macro name="mbot_base">
+    <xacro:macro name="mbot_base" params="show_visual:=1 base_mesh:='' base_mesh_xyz:='0 0 0' base_mesh_rpy:='0 0 0' base_collision_box:='' base_collision_xyz:='0 0 0' base_collision_box2:='' base_collision_xyz2:='0 0 0'">
         <link name="base_footprint">
+            <xacro:if value="${int(show_visual) == 1}">
             <visual>
                 <origin xyz="0 0 0" rpy="0 0 0" />
                 <geometry>
                     <box size="0.001 0.001 0.001" />
                 </geometry>
             </visual>
+            </xacro:if>
         </link>
 
         <gazebo reference="base_footprint">
@@ -140,6 +146,7 @@
         </joint>
 
         <link name="base_link">
+            <xacro:if value="${int(show_visual) == 1}">
             <visual>
                 <origin xyz=" 0 0 0" rpy="0 0 0" />
                 <geometry>
@@ -147,11 +154,38 @@
                 </geometry>
                 <material name="yellow" />
             </visual>
+            </xacro:if>
+            <!-- 可选: 用外来整车网格替换默认圆柱外观 (实机模型) -->
+            <xacro:unless value="${base_mesh == ''}">
+                <visual>
+                    <origin xyz="${base_mesh_xyz}" rpy="${base_mesh_rpy}" />
+                    <geometry>
+                        <mesh filename="${base_mesh}" scale="1 1 1"/>
+                    </geometry>
+                </visual>
+            </xacro:unless>
             <collision>
-                <origin xyz=" 0 0 0" rpy="0 0 0" />
-                <geometry>
-                    <cylinder length="${base_length}" radius="${base_radius}"/>
-                </geometry>
+                <xacro:if value="${base_collision_box != ''}">
+                    <!-- box collision that matches the real chassis outline -->
+                    <origin xyz="${base_collision_xyz}" rpy="0 0 0" />
+                    <geometry>
+                        <box size="${base_collision_box}"/>
+                    </geometry>
+                </xacro:if>
+                <xacro:if value="${base_collision_box2 != ''}">
+                    <!-- second box: leave a gap at the 2D lidar plane so the
+                         ray sensor can see out of the chassis -->
+                    <origin xyz="${base_collision_xyz2}" rpy="0 0 0" />
+                    <geometry>
+                        <box size="${base_collision_box2}"/>
+                    </geometry>
+                </xacro:if>
+                <xacro:unless value="${base_collision_box != ''}">
+                    <origin xyz=" 0 0 0" rpy="0 0 0" />
+                    <geometry>
+                        <cylinder length="${base_length}" radius="${base_radius}"/>
+                    </geometry>
+                </xacro:unless>
             </collision>
             <xacro:cylinder_inertial_matrix  m="${base_mass}" r="${base_radius}" h="${base_length}" />
         </link>
@@ -160,11 +194,11 @@
             <material>Gazebo/Blue</material>
         </gazebo>
 
-        <xacro:wheel prefix="left"  reflect="1"/>
-        <xacro:wheel prefix="right" reflect="-1"/>
+        <xacro:wheel prefix="left"  reflect="1"  show_visual="${show_visual}"/>
+        <xacro:wheel prefix="right" reflect="-1" show_visual="${show_visual}"/>
 
-        <xacro:caster prefix="front" reflect="-1"/>
-        <xacro:caster prefix="back"  reflect="1"/>
+        <xacro:caster prefix="front" reflect="-1" show_visual="${show_visual}"/>
+        <xacro:caster prefix="back"  reflect="1"  show_visual="${show_visual}"/>
 
         <!-- controller (ROS1 gazebo_ros_diff_drive) -->
         <gazebo>

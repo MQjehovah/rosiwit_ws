@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 ROS1 robot motion helper for Gazebo mapping tests.
 
@@ -7,6 +7,7 @@ SLAM can cover more of the map. Mirrors the ROS2 scripts/sim_drive.py.
 """
 
 import math
+import time
 
 import rospy
 from geometry_msgs.msg import Twist
@@ -24,7 +25,9 @@ class Figure8Driver:
         self.duration = rospy.get_param('~duration', 60.0)
         self.rate = rospy.Rate(10.0)
 
-        self.start_time = rospy.Time.now()
+        # Wall clock: before /clock arrives sim time is 0 and then jumps to the
+        # world time (~460 s), so rospy.Time-based elapsed would exit instantly.
+        self.start_time = time.time()
         rospy.loginfo(
             'motion mode=%s linear=%.2f angular=%.2f duration=%.1fs',
             self.mode, self.linear_speed, self.angular_speed, self.duration)
@@ -64,7 +67,7 @@ class Figure8Driver:
 
     def run(self):
         while not rospy.is_shutdown():
-            elapsed = (rospy.Time.now() - self.start_time).to_sec()
+            elapsed = time.time() - self.start_time
             if elapsed > self.duration:
                 rospy.loginfo('motion finished, stopping robot')
                 self.cmd_vel_pub.publish(Twist())

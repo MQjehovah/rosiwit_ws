@@ -15,6 +15,7 @@
 #include "algorithms/fast_lio2/map_builder/imu_processor.h"
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
+#include <Eigen/Geometry>
 
 namespace rosiwit_slam {
 
@@ -351,7 +352,10 @@ bool PointLioFrontend::getKeyFrame(KeyFrame& out) {
     // 关键帧判断: 位移/旋转阈值
     if (m_has_last_kf) {
         double dt = (x.t_wi - m_last_kf_pose.trans).norm();
-        double drot = Sophus::SO3d(x.r_wi * m_last_kf_pose.rot.transpose()).log().norm();
+        // 同 fast_lio2: 旋转矩阵有数值漂移时不能直接喂 Sophus::SO3d(Matrix3d)
+        Eigen::Quaterniond dq(x.r_wi * m_last_kf_pose.rot.transpose());
+        dq.normalize();
+        double drot = Sophus::SO3d(dq).log().norm();
         if (dt < m_keyframe_trans_thresh && drot < m_keyframe_rot_thresh) {
             return false;
         }

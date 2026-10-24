@@ -85,6 +85,12 @@ private:
     GlobalLocalizeConfig m_global_cfg;
     MonitorConfig       m_monitor_cfg;
     AcceptConfig        m_accept_cfg;
+
+    // 雷达 -> IMU 外参 (ROS1 override YAML 顶层的 r_il/t_il)。
+    // 建图前端在内部做了这个变换, 定位路径没有; 实机雷达前倾 43 度时,
+    // 不改会把雷达系点云直接和 IMU/车体系的图做匹配, 永远收敛不了。
+    bool m_lidar_to_imu_valid = false;
+    Eigen::Matrix4f m_lidar_to_imu = Eigen::Matrix4f::Identity();
     MaintainerConfig    m_maintainer_cfg;
     PlanarConstraintConfig m_planar_cfg;
     std::string m_relocalizer_name = "none";

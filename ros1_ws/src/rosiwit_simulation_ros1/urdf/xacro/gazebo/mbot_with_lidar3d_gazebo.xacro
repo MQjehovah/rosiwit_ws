@@ -11,7 +11,13 @@
     <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/lidar3d_gazebo.xacro" />
     <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/imu_gazebo.xacro" />
 
-    <xacro:lidar3d_gazebo prefix="lidar"/>
+    <!-- lidar_plugin: block (default, gazebo_plugins built-in) | velodyne
+         velodyne needs ros-melodic-velodyne-gazebo-plugins for a more faithful
+         VLP-16 cloud; both publish on the same topic/frame.
+         Keep this file ASCII-only (Python 2 URDF parsers). -->
+    <xacro:arg name="lidar_plugin" default="block"/>
+
+    <xacro:lidar3d_gazebo prefix="lidar" plugin="$(arg lidar_plugin)"/>
     <xacro:imu prefix="imu"/>
 
     <xacro:mbot_base/>

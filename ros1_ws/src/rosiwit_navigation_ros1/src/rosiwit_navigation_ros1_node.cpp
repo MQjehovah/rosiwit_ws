@@ -608,6 +608,8 @@ private:
     goal_status_pub_ = nh_.advertise<std_msgs::String>(goal_status_topic_, 1, true);
     diagnostics_pub_ = nh_.advertise<std_msgs::String>(diagnostics_topic_, 1);
     tracked_obs_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(tracked_obstacles_topic_, 1);
+    // 车体轮廓: idle 也按 1Hz 发布, 供 RViz 调试 (与兼容层同话题, 数据一致)
+    footprint_pub_ = nh_.advertise<geometry_msgs::PolygonStamped>("robot_footprint", 1);
 
     odom_sub_ = nh_.subscribe(odom_topic_, 1, &RosiwitNavigationRos1Node::odomCallback, this);
     map_sub_ = nh_.subscribe(map_topic_, 1, &RosiwitNavigationRos1Node::mapCallback, this);
@@ -628,7 +630,8 @@ private:
       ros::Duration(1.0 / std::max(1.0, controller_frequency_)),
       &RosiwitNavigationRos1Node::controlLoop, this);
     local_costmap_timer_ = nh_.createTimer(
-      ros::Duration(0.1), &RosiwitNavigationRos1Node::publishLocalCostmap, this);
+      ros::Duration(1.0 / std::max(0.5, costmap_update_rate_)),
+      &RosiwitNavigationRos1Node::publishLocalCostmap, this);
     replanning_timer_ = nh_.createTimer(
       ros::Duration(1.0 / std::max(0.1, planner_frequency_)),
       &RosiwitNavigationRos1Node::replanningCheck, this);
@@ -1366,9 +1369,11 @@ private:
 
   void publishActionOutputs()
   {
-    if (!task_active_ || !action_interface_active_ || !mb_) { return; }
-    mb_->publishFeedback(actionFeedback());
+    if (!action_interface_active_ || !mb_) { return; }
+    // footprint 不依赖任务状态: 有订阅者就发, 方便 RViz 在 idle 时也能看到车体轮廓
     mb_->publishFootprints(current_pose_, current_velocity_, movebase_footprint_);
+    if (!task_active_) { return; }
+    mb_->publishFeedback(actionFeedback());
     mb_->publishTraveledPath(action_traveled_);
 
     // 参考点: 当前路径上前视 0.6m 的点 (没路径时用车头前方 0.6m 近似)
@@ -1930,8 +1935,29 @@ private:
     tracked_obs_pub_.publish(arr);
   }
 
-  void diagnosticsCallback(const ros::TimerEvent &)
+  void publishFootprintPolygon()
   {
+    if (!footprint_pub_ || movebase_footprint_.empty()) { return; }
+    geometry_msgs::PolygonStamped msg;
+    msg.header = current_pose_.header;
+    msg.header.stamp = ros::Time::now();
+    const double yaw = yawFromQuat(current_pose_.pose.orientation);
+    const double cy = std::cos(yaw);
+    const double sy = std::sin(yaw);
+    msg.polygon.points.reserve(movebase_footprint_.size());
+    for (const auto & p : movebase_footprint_) {
+      geometry_msgs::Point32 q;
+      q.x = static_cast<float>(current_pose_.pose.position.x + p.x * cy - p.y * sy);
+      q.y = static_cast<float>(current_pose_.pose.position.y + p.x * sy + p.y * cy);
+      q.z = 0.0f;
+      msg.polygon.points.push_back(q);
+    }
+    footprint_pub_.publish(msg);
+  }
+
+  void diagnosticsCallback(const ros::TimerEvent &)
+  {    // footprint 与任务状态无关: 1Hz 直发 (体积极小), RViz 在 idle 时也能看到车体轮廓
+    publishFootprintPolygon();
     if (!diagnostics_pub_) return;
     std::ostringstream os;
     os << "{\"state\":\"" << (is_navigating_ ? "NAVIGATING" : "IDLE")
@@ -3250,6 +3276,7 @@ private:
   ros::Publisher local_costmap_pub_;
   ros::Publisher goal_status_pub_;
   ros::Publisher diagnostics_pub_;
+  ros::Publisher footprint_pub_;   // /robot_footprint: idle 也发, RViz 调试用
   ros::Publisher tracked_obs_pub_;
   ros::ServiceServer nav_stop_srv_;
   std::string goal_status_ = "IDLE";
@@ -3362,6 +3389,13 @@ int main(int argc, char ** argv)
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~");
   RosiwitNavigationRos1Node node(nh, pnh);
-  ros::spin();
+  // 多线程 spinner: 控制环(10Hz) 不再被代价地图/规划回调饿死.
+  // 单线程时局部代价地图更新会把 controlLoop 挤到几赫兹, 表现为"走得慢".
+  int threads = 2;
+  pnh.param<int>("spinner_threads", threads, 2);
+  threads = std::max(1, std::min(8, threads));
+  ros::AsyncSpinner spinner(threads);
+  spinner.start();
+  ros::waitForShutdown();
   return 0;
 }

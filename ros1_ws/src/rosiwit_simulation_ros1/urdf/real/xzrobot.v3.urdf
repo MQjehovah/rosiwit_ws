@@ -1,0 +1,241 @@
+<robot name="xz_robot">
+    <material name="orange">
+        <color rgba="1.0 0.5 0.2 1" />
+    </material>
+    <material name="gray">
+        <color rgba="0.2 0.2 0.2 1" />
+    </material>
+    <link name="imu_link">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="0.06 0.04 0.02" />
+            </geometry>
+            <material name="orange" />
+        </visual>
+    </link>
+    <link name="laser">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.05" radius="0.03" />
+            </geometry>
+            <material name="gray" />
+        </visual>
+    </link>
+    <link name="lidar">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.05" radius="0.03" />
+            </geometry>
+            <material name="gray" />
+        </visual>
+    </link>
+    <link name="camera_01_link">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="0.01 0.01 0.01" />
+            </geometry>
+            <material name="orange" />
+        </visual>
+    </link>
+    <link name="camera_02_link">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="0.01 0.01 0.01" />
+            </geometry>
+            <material name="orange" />
+        </visual>
+    </link>
+    <link name="camera_03_link">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="0.01 0.01 0.01" />
+            </geometry>
+            <material name="orange" />
+        </visual>
+    </link>
+    <link name="camera_04_link">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="0.01 0.01 0.01" />
+            </geometry>
+            <material name="orange" />
+        </visual>
+    </link>
+    <link name="camera_05_link">
+        <visual>
+            <origin xyz="0 0 0" />
+            <geometry>
+                <box size="0.01 0.01 0.01" />
+            </geometry>
+            <material name="orange" />
+        </visual>
+    </link>
+    <link name="base_link" />
+    <link name="base_footprint" />
+    <joint name="imu_link_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="imu_link" />
+        <origin rpy="0 0 -0.0100549" xyz="0.519679 0.0210581 0.115" />
+    </joint>
+    <joint name="laser_link_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="laser" />
+        <origin rpy="0.0 0.0 0.0" xyz="0.47 0.0 0.115" />
+    </joint>
+    <joint name="lidar_link_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="lidar" />
+        <origin rpy="0.751982 -0.005692 1.570990" xyz="0.479598 -0.005550 0.898133" />
+    </joint>
+    <joint name="base_footprint_joint" type="fixed">
+        <parent link="base_footprint" />
+        <child link="base_link" />
+        <origin rpy="0 0 0" xyz="0.0 0.0 0.07" />
+    </joint>
+    <joint name="camera_link_1_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="camera_01_link" />
+        <origin rpy="0.0 0.0 0.0" xyz="0.525 0.0 0.712518" />
+    </joint>
+    <joint name="camera_link_2_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="camera_02_link" />
+        <origin rpy="0.006680 0.734587 -0.002321" xyz="0.469033 0.001569 0.565127" />
+    </joint>
+    <joint name="camera_link_3_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="camera_03_link" />
+        <origin rpy="-0.004155 0.617659 -3.135250" xyz="-0.194531 0.004512 0.496816" />
+    </joint>
+    <joint name="camera_link_4_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="camera_04_link" />
+        <origin rpy="-0.704850 0.775159 0.973411" xyz="-0.038425 0.258000 0.788883" />
+    </joint>
+    <joint name="camera_link_5_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="camera_05_link" />
+        <origin rpy="0.697206 0.778092 -0.978534" xyz="-0.002090 -0.286857 0.806491" />
+    </joint>
+    <link name="sonar_1">
+        <visual>
+            <origin rpy="0 1.57 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="sonar_1_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="sonar_1" />
+        <origin rpy="0 0 0.21956" xyz="0.5498 0.1546 0.2611" />
+    </joint>
+    <link name="sonar_2">
+        <visual>
+            <origin rpy="0 1.57 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="sonar_2_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="sonar_2" />
+        <origin rpy="0 0 -0.21956" xyz="0.5498 -0.1546 0.2611" />
+    </joint>
+    <link name="sonar_3">
+        <visual>
+            <origin rpy="0 1.57 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="sonar_3_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="sonar_3" />
+        <origin rpy="0 -0.10995 -1.57079" xyz="0.34268 -0.33265 0.2564" />
+    </joint>
+    <link name="sonar_4">
+        <visual>
+            <origin rpy="0 -1.57 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="sonar_4_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="sonar_4" />
+        <origin rpy="0 0 -3.05432" xyz="-0.15196 -0.15657 0.3263" />
+    </joint>
+    <link name="sonar_5">
+        <visual>
+            <origin rpy="0 -1.57 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="sonar_5_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="sonar_5" />
+        <origin rpy="0 0 3.05432" xyz="-0.15196 0.15657 0.3263" />
+    </joint>
+    <link name="sonar_6">
+        <visual>
+            <origin rpy="0 -1.57 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0" />
+            <geometry>
+                <cylinder length="0.03" radius="0.03" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="sonar_6_joint" type="fixed">
+        <parent link="base_link" />
+        <child link="sonar_6" />
+        <origin rpy="0 -0.10995 1.57079" xyz="0.34268 0.33265 0.2564" />
+    </joint>
+</robot>

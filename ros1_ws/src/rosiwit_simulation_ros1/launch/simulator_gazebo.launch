@@ -15,6 +15,9 @@
     <arg name="spawn_z" default="0.1"/>
     <arg name="spawn_yaw" default="0.0"/>
     <arg name="robot_name" default="mrobot"/>
+    <!-- 3D 雷达插件: block = gazebo_plugins 自带 (无需额外 apt 包);
+         velodyne = velodyne_gazebo_plugins (需 ros-melodic-velodyne-gazebo-plugins)。 -->
+    <arg name="lidar_plugin" default="velodyne"/>
 
     <!-- Gazebo media/model paths. ROS setup scripts do not source
          /usr/share/gazebo-<N>/setup.sh, so set a distro-appropriate default.
@@ -24,7 +27,7 @@
     <env name="GAZEBO_MODEL_PATH"
          value="$(find rosiwit_simulation_ros1)/models:$(optenv GAZEBO_MODEL_PATH /usr/share/gazebo-9/models)"/>
     <env name="GAZEBO_PLUGIN_PATH"
-         value="/opt/ros/$(env ROS_DISTRO)/lib:$(optenv GAZEBO_PLUGIN_PATH)"/>
+         value="$(find rosiwit_simulation_ros1)/plugins:/opt/ros/$(env ROS_DISTRO)/lib:$(optenv GAZEBO_PLUGIN_PATH)"/>
 
     <include file="$(find gazebo_ros)/launch/empty_world.launch">
         <arg name="world_name" value="$(arg world_name)"/>
@@ -35,7 +38,7 @@
     </include>
 
     <param name="robot_description"
-           command="$(find xacro)/xacro '$(find rosiwit_simulation_ros1)/urdf/xacro/gazebo/mbot_with_lidar3d_gazebo.xacro'"/>
+           command="$(find xacro)/xacro '$(find rosiwit_simulation_ros1)/urdf/xacro/gazebo/robot_gazebo.xacro' lidar_plugin:=$(arg lidar_plugin)"/>
 
     <node pkg="joint_state_publisher" type="joint_state_publisher"
           name="joint_state_publisher" output="screen"/>

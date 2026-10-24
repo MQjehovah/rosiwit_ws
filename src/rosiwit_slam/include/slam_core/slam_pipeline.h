@@ -152,6 +152,10 @@ private:
     std::atomic<PipelineMode> m_mode{PipelineMode::IDLE};
     std::atomic<bool> m_localization_map_loaded{false};
 
+    // 雷达 -> IMU 外参 (ROS1 override YAML 顶层 r_il/t_il);
+    // 定位模式输出点云前需要先把扫描转到 IMU 系。
+    bool m_lidar_to_imu_valid = false;
+    Eigen::Matrix4f m_lidar_to_imu = Eigen::Matrix4f::Identity();
     // 后端: 主线程与 worker 共享 backend/map_mgr; worker 自带队列与生命周期.
     std::shared_ptr<IBackend>      m_backend;
     std::shared_ptr<IMapManager>   m_map_mgr;

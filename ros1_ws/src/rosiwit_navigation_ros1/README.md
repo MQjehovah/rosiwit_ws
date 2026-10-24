@@ -61,6 +61,24 @@ roslaunch rosiwit_navigation_ros1 rosiwit_navigation.launch
 roslaunch rosiwit_navigation_ros1 movebase_compat.launch
 ```
 
+### 仿真（Gazebo）
+
+```bash
+# 需先有 Gazebo + rosiwit_slam_ros1（或直接用 starter 一键启动）
+roslaunch rosiwit_navigation_ros1 navigation_simulation.launch
+
+# 一键: Gazebo + SLAM + 导航
+roslaunch rosiwit_starter_ros1 sim_slam_nav.launch
+```
+
+`config/simulation.yaml` 与实车 `default.yaml` / `movebase_compat.yaml` 分离：
+
+- 位姿/里程计用 SLAM 的 `/lio_odom`（pose 已在 `map` 系），不用 Gazebo 的 `/odom`
+- 仿真车只有 3D 雷达、没有 `/scan`：`require_scan=false`，障碍走 `/world_cloud` 体素层
+  （`voxel_enabled=true`、`require_cloud=true`）
+- 依赖 `/scan` 的安全层与动态障碍跟踪在仿真里默认关闭，原因见配置注释
+- 目标入口仍是 `/goal_pose` 或 RViz 的 `/move_base_simple/goal`
+
 ## 测试
 
 ```bash

@@ -1,0 +1,182 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="xz_robot">
+
+    <!--
+        Real robot (xz_robot / GT) model for the ROS1 / Gazebo simulation.
+
+        Frame tree and sensor mounts are taken from the real robot's
+        /opt/xzrobot/configs/xzrobot.v3.urdf (a copy lives in urdf/real/):
+          base_footprint -> base_link   z = 0.07  (real)
+          lidar    xyz 0.479598 -0.005550 0.898133   rpy 0.751982 -0.005692 1.570990
+          imu_link xyz 0.519679  0.021058  0.115000  rpy 0 0 -0.0100549
+          laser    xyz 0.470000  0.000000  0.115000
+          camera_01..05_link, sonar_1..6  (same values as v3)
+        Our base_link sits 0.11 above base_footprint (mbot physics), 0.04 higher
+        than the real robot, so every real z below is shifted by -0.04 to keep
+        the same world height as the real robot.
+
+        Appearance: a single COLLADA mesh converted from gt.glb
+        (urdf/meshes/gt/gt.dae): Z-up, meters, ground at z=0, front at +X.
+        Kinematics, collision, diff-drive wheels and casters come from mbot_base
+        so the robot drives like a normal differential-drive base; wheel radius
+        and track come from the real driver_calib.yaml.
+
+        Keep this file ASCII-only: the expanded URDF is parsed by Python 2
+        tools (spawn_model / joint_state_publisher) under an ASCII locale.
+    -->
+    <xacro:macro name="gt_robot" params="lidar_plugin:=block">
+
+        <!-- real drive calibration: wheel radius 0.0708 m, track 0.467 m.
+             base_link 在 base_footprint 上方 0.11m; 轮心必须正好在 wheel_radius
+             高度 => wheel_joint_z = 0.11 - 0.0708 = 0.0392 (否则轮子比地面低,
+             车体被顶得倾斜). -->
+        <xacro:property name="wheel_radius" value="0.0708" scope="parent"/>
+        <xacro:property name="wheel_joint_y" value="0.2335" scope="parent"/>
+        <xacro:property name="wheel_joint_z" value="0.0392" scope="parent"/>
+
+        <!-- whole-body visual (single mesh, ground aligned, base_link 0.11 up).
+             The gt.glb origin is the chassis geometric centre, not the drive
+             axle: the mesh wheels sit at x=-0.119 while base_link (and the
+             physics wheel axle) is x=0, so the mesh is shifted +0.119. This
+             also lines the 0.565 front bumper up with the real front sonar at
+             0.5498. After the shift the body spans x -0.327..0.565, y +-0.359. -->
+        <xacro:mbot_base show_visual="0"
+                         base_mesh="package://rosiwit_simulation_ros1/urdf/meshes/gt/gt.dae"
+                         base_mesh_xyz="0.119 0 -0.11"
+                         base_mesh_rpy="0 0 0"
+                         base_collision_box="0.87 0.70 0.10"
+                         base_collision_xyz="0.119 0 -0.03"
+                         base_collision_box2="0.87 0.70 0.66"
+                         base_collision_xyz2="0.119 0 0.44"/>
+
+        <!-- 3D 雷达: 实机安装姿态 (xzrobot.v3.urdf lidar_link_joint)
+             roll 0.751982, pitch -0.005692, yaw 1.570990 -->
+        <xacro:lidar3d_gazebo prefix="lidar" plugin="${lidar_plugin}"
+                             mount_x="0.479598" mount_y="-0.005550" mount_z="0.858133"
+                             mount_rpy="0.751982 -0.005692 1.570990"/>
+
+        <!-- IMU: real position at the front, low -->
+        <xacro:imu prefix="imu"
+                   offset_x="0.519679" offset_y="0.021058" offset_z="0.075000"
+                   offset_rpy="0 0 -0.0100549"/>
+
+        <!-- static frames copied from xzrobot.v3.urdf -->
+
+        <!-- 2D lidar: Vanjee 716N, same as the real robot (/wj_716n -> /scan)
+             frame laser, +-2.18 rad (250 deg), 1000 beams, 0.1..30 m, 15 Hz.
+             Mount matches xzrobot.v3.urdf: (0.470, 0, 0.115) in real base_link,
+             -0.04 because our base_link is 4 cm higher. -->
+        <link name="laser"/>
+        <joint name="laser_link_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="laser"/>
+            <origin xyz="0.470000 0.000000 0.075000" rpy="0 0 0"/>
+        </joint>
+
+        <gazebo reference="laser">
+            <sensor type="ray" name="wj_716n">
+                <pose>0 0 0 0 0 0</pose>
+                <visualize>false</visualize>
+                <update_rate>15</update_rate>
+                <ray>
+                    <scan>
+                        <horizontal>
+                            <samples>1000</samples>
+                            <resolution>1</resolution>
+                            <min_angle>-2.18</min_angle>
+                            <max_angle>2.18</max_angle>
+                        </horizontal>
+                    </scan>
+                    <range>
+                        <min>0.10</min>
+                        <max>30.0</max>
+                        <resolution>0.01</resolution>
+                    </range>
+                </ray>
+                <plugin name="gazebo_ros_wj_716n" filename="libgazebo_ros_laser.so">
+                    <topicName>scan</topicName>
+                    <frameName>laser</frameName>
+                </plugin>
+            </sensor>
+        </gazebo>
+
+        <link name="camera_01_link"/>
+        <joint name="camera_link_1_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="camera_01_link"/>
+            <origin xyz="0.525000 0.000000 0.672518" rpy="0 0 0"/>
+        </joint>
+
+        <link name="camera_02_link"/>
+        <joint name="camera_link_2_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="camera_02_link"/>
+            <origin xyz="0.469033 0.001569 0.525127" rpy="0.006680 0.734587 -0.002321"/>
+        </joint>
+
+        <link name="camera_03_link"/>
+        <joint name="camera_link_3_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="camera_03_link"/>
+            <origin xyz="-0.194531 0.004512 0.456816" rpy="-0.004155 0.617659 -3.135250"/>
+        </joint>
+
+        <link name="camera_04_link"/>
+        <joint name="camera_link_4_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="camera_04_link"/>
+            <origin xyz="-0.038425 0.258000 0.748883" rpy="-0.704850 0.775159 0.973411"/>
+        </joint>
+
+        <link name="camera_05_link"/>
+        <joint name="camera_link_5_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="camera_05_link"/>
+            <origin xyz="-0.002090 -0.286857 0.766491" rpy="0.697206 0.778092 -0.978534"/>
+        </joint>
+
+        <link name="sonar_1"/>
+        <joint name="sonar_1_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="sonar_1"/>
+            <origin xyz="0.549800 0.154600 0.221100" rpy="0 0 0.219560"/>
+        </joint>
+
+        <link name="sonar_2"/>
+        <joint name="sonar_2_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="sonar_2"/>
+            <origin xyz="0.549800 -0.154600 0.221100" rpy="0 0 -0.219560"/>
+        </joint>
+
+        <link name="sonar_3"/>
+        <joint name="sonar_3_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="sonar_3"/>
+            <origin xyz="0.342680 -0.332650 0.216400" rpy="0 -0.109950 -1.570790"/>
+        </joint>
+
+        <link name="sonar_4"/>
+        <joint name="sonar_4_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="sonar_4"/>
+            <origin xyz="-0.151960 -0.156570 0.286300" rpy="0 0 -3.054320"/>
+        </joint>
+
+        <link name="sonar_5"/>
+        <joint name="sonar_5_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="sonar_5"/>
+            <origin xyz="-0.151960 0.156570 0.286300" rpy="0 0 3.054320"/>
+        </joint>
+
+        <link name="sonar_6"/>
+        <joint name="sonar_6_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="sonar_6"/>
+            <origin xyz="0.342680 0.332650 0.216400" rpy="0 -0.109950 1.570790"/>
+        </joint>
+
+    </xacro:macro>
+
+</robot>

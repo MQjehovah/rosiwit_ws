@@ -21,15 +21,25 @@ robot, aligned with `rosiwit_simulation_ros2`.
 
 ## 依赖
 
-- ROS1 Noetic
+- ROS1 Melodic
 - `gazebo_ros`, `gazebo_plugins`
 - `xacro`, `robot_state_publisher`, `joint_state_publisher`
+- 可选: `ros-melodic-velodyne-gazebo-plugins` (更真实的 VLP-16 点云)
+
+3D 雷达有两套插件实现，由 `lidar_plugin` 参数选择：
+
+| `lidar_plugin` | 插件 | 说明 |
+|---|---|---|
+| `block`（默认） | `libgazebo_ros_block_laser.so`（`gazebo_plugins` 自带） | 免装。发老的 `sensor_msgs/PointCloud`，由包内 `pointcloud_relay` 转成 `/velodyne_points`（`PointCloud2`） |
+| `velodyne` | `libgazebo_ros_velodyne_laser.so` | 需 `ros-melodic-velodyne-gazebo-plugins`；直接发 `PointCloud2`，点云更接近真机 |
+
+两种实现的话题与 frame 一致（`/velodyne_points`、`lidar`），下游无感。
 
 ## 编译
 
 ```bash
 cd ~/rosiwit_ws/ros1_ws
-source /opt/ros/noetic/setup.bash
+source /opt/ros/melodic/setup.bash
 catkin_make
 source devel/setup.bash
 ```
@@ -47,6 +57,12 @@ roslaunch rosiwit_simulation_ros1 simulator_gazebo.launch \
 
 # 无 GUI
 roslaunch rosiwit_simulation_ros1 simulator_gazebo.launch gui:=false
+
+# 已装 velodyne_gazebo_plugins 时用真实 VLP-16 插件
+roslaunch rosiwit_simulation_ros1 simulator_gazebo.launch lidar_plugin:=velodyne
+
+# 一键 Gazebo + SLAM + 导航
+roslaunch rosiwit_starter_ros1 sim_slam_nav.launch
 ```
 
 ## 话题

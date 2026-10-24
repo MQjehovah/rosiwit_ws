@@ -5,9 +5,10 @@
         3D LiDAR physical description (Velodyne VLP-16 form factor)
         Defines link/joint only, no Gazebo plugin (see lidar3d_gazebo.xacro)
     -->
-    <xacro:macro name="lidar3d" params="prefix:=lidar">
+    <xacro:macro name="lidar3d" params="prefix:=lidar mount_x:=0 mount_y:=0 mount_z:=0.1955 mount_rpy:='0 0 0'">
         <!-- VLP-16: radius=0.0516m, height=0.0717m -->
-        <link name="${prefix}_link">
+        <!-- The real robot names this link "lidar" (xzrobot.v3.urdf) -->
+        <link name="${prefix}">
             <inertial>
                 <mass value="0.83" />
                 <origin xyz="0 0 0" />
@@ -41,12 +42,12 @@
              But for visual clearance on top of the base + sensor stack: 0.1955
              (matches architecture spec) -->
         <joint name="${prefix}_joint" type="fixed">
-            <origin xyz="0 0 0.1955" rpy="0 0 0" />
+            <origin xyz="${mount_x} ${mount_y} ${mount_z}" rpy="${mount_rpy}" />
             <parent link="base_link"/>
-            <child link="${prefix}_link"/>
+            <child link="${prefix}"/>
         </joint>
 
-        <gazebo reference="${prefix}_link">
+        <gazebo reference="${prefix}">
             <material>Gazebo/Grey</material>
         </gazebo>
     </xacro:macro>

@@ -210,6 +210,7 @@ void Interface::publishFootprints(const geometry_msgs::PoseStamped & pose,
                                   const std::vector<geometry_msgs::Point> & footprint)
 {
   if (!enabled_ || footprint.empty()) { return; }
+  // 周期发布 (1Hz, 体积极小): 不依赖任务状态, RViz 在 idle 时也能看到车体轮廓.
 
   const double yaw = yawFromQuat(pose.pose.orientation);
   const double cy = std::cos(yaw);

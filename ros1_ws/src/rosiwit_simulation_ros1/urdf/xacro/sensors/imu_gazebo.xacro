@@ -1,10 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="imu">
 
-    <xacro:macro name="imu" params="prefix:=imu">
-        <xacro:property name="imu_offset_x" value="0" />
-        <xacro:property name="imu_offset_y" value="0" />
-        <xacro:property name="imu_offset_z" value="0.105" />
+    <xacro:macro name="imu" params="prefix:=imu offset_x:=0 offset_y:=0 offset_z:=0.105 offset_rpy:='0 0 0'">
 
         <link name="${prefix}_link">
             <inertial>
@@ -32,7 +29,7 @@
         </link>
 
         <joint name="imu_joint" type="fixed">
-            <origin xyz="${imu_offset_x} ${imu_offset_y} ${imu_offset_z}" rpy="0 0 0" />
+            <origin xyz="${offset_x} ${offset_y} ${offset_z}" rpy="${offset_rpy}" />
             <parent link="base_link"/>
             <child link="imu_link"/>
         </joint>

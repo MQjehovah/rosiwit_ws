@@ -43,6 +43,28 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     }
     YAML::Node loc = root["localization"];
 
+    // 雷达 -> IMU 外参: ROS1 层在 override YAML 顶层注入 r_il(9)/t_il(3)。
+    // 定位匹配前把扫描转到 IMU 系 (与建图前端一致); 没有则保持原样。
+    if (root["r_il"] && root["r_il"].IsSequence() && root["r_il"].size() == 9) {
+        Eigen::Matrix3d R;
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                R(r, c) = root["r_il"][r * 3 + c].as<double>();
+            }
+        }
+        Eigen::Vector3d t = Eigen::Vector3d::Zero();
+        if (root["t_il"] && root["t_il"].IsSequence() && root["t_il"].size() == 3) {
+            t << root["t_il"][0].as<double>(), root["t_il"][1].as<double>(),
+                 root["t_il"][2].as<double>();
+        }
+        m_lidar_to_imu.setIdentity();
+        m_lidar_to_imu.block<3, 3>(0, 0) = R.cast<float>();
+        m_lidar_to_imu.block<3, 1>(0, 3) = t.cast<float>();
+        m_lidar_to_imu_valid = true;
+        std::cout << "[LocPipeline] lidar->imu extrinsic t=[" << t.transpose()
+                  << "], scan will be transformed to IMU frame" << std::endl;
+    }
+
     YAML::Node pipe = loc["pipeline"];
     m_relocalizer_name = getv<std::string>(pipe, "relocalizer", m_relocalizer_name);
     m_prior_name       = getv<std::string>(pipe, "motion_prior", m_prior_name);
@@ -668,7 +690,15 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
         if (std::isfinite(p.curvature) && p.curvature > max_curv)
             max_curv = p.curvature;
     }
-    if (max_curv <= 1e-3) return f.cloud;
+    if (max_curv <= 1e-3) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cout << "[LocPipeline] no per-point time (curvature==0): "
+                         "deskew disabled automatically" << std::endl;
+        }
+        return f.cloud;
+    }
 
     Eigen::Quaterniond q0(start_pose.rot);
     Eigen::Quaterniond q1(end_pose.rot);
@@ -1070,6 +1100,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 掉到 0.4~0.7、inlier 比例骤降, 但 accepted 仍为 1. 这里按逐点时间戳和
     // 帧首/帧末位姿先补偿到帧末坐标系.
     CloudType::Ptr scan = deskewScan(f, guess);
+    // 扫描从雷达系转到 IMU 系 (定位路径不经过建图前端, 需要自己做这一步)
+    if (m_lidar_to_imu_valid && scan && !scan->empty()) {
+        CloudType::Ptr body(new CloudType);
+        pcl::transformPointCloud(*scan, *body, m_lidar_to_imu);
+        body->header = scan->header;
+        scan = body;
+    }
 
     MatchResult res;
     bool accepted = false;

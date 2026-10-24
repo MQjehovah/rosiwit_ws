@@ -3,6 +3,7 @@
 #include <fstream>
 #include <cmath>
 #include <pcl/io/pcd_io.h>
+#include <pcl/common/transforms.h>
 
 #ifndef YAML_CPP_DISABLED
 #include <yaml-cpp/yaml.h>
@@ -28,6 +29,26 @@ bool GicpLocalization::init(const std::string& config_path) {
 #ifndef YAML_CPP_DISABLED
     try {
         const YAML::Node config = YAML::LoadFile(config_path);
+        // 雷达 -> IMU 外参: ROS1 层注入在 override YAML 的顶层
+        if (config["r_il"] && config["r_il"].IsSequence() && config["r_il"].size() == 9) {
+            Eigen::Matrix3d R;
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    R(r, c) = config["r_il"][r * 3 + c].as<double>();
+                }
+            }
+            Eigen::Vector3d t = Eigen::Vector3d::Zero();
+            if (config["t_il"] && config["t_il"].IsSequence() && config["t_il"].size() == 3) {
+                t << config["t_il"][0].as<double>(), config["t_il"][1].as<double>(),
+                     config["t_il"][2].as<double>();
+            }
+            m_lidar_to_imu.setIdentity();
+            m_lidar_to_imu.block<3, 3>(0, 0) = R.cast<float>();
+            m_lidar_to_imu.block<3, 1>(0, 3) = t.cast<float>();
+            m_lidar_to_imu_valid = true;
+            std::cout << "[GicpLocalization] lidar->imu extrinsic t=[" << t.transpose()
+                      << "], scan will be transformed to IMU frame" << std::endl;
+        }
         // 标准层级: localization.gicp_localization；兼容旧的 localization.gicp 和根节点写法。
         const YAML::Node gicp = (config["localization"] && config["localization"]["gicp_localization"])
                                    ? config["localization"]["gicp_localization"]
@@ -187,6 +208,13 @@ void GicpLocalization::onLidar(const LidarFrame& f) {
     }
 
     CloudType::Ptr scan = downsampleCloud(f.cloud, voxel_resolution_);
+    // 雷达系 -> IMU 系 (与建图前端一致; 定位路径本来没做这一步)
+    if (m_lidar_to_imu_valid && scan && !scan->empty()) {
+        CloudType::Ptr body(new CloudType);
+        pcl::transformPointCloud(*scan, *body, m_lidar_to_imu);
+        body->header = scan->header;
+        scan = body;
+    }
     if (scan->empty()) {
         status_ = LOST;
         return;

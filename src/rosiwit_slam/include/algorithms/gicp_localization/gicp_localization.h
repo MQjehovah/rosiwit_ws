@@ -29,6 +29,10 @@ public:
     bool getPose(PoseStamped& out) override;
 
 private:
+    // 雷达 -> IMU 外参 (ROS1 override YAML 顶层 r_il/t_il). 定位路径不经过建图前端,
+    // 需要自己把扫描转到 IMU 系; 实机雷达前倾 43 度时不转就永远配不上。
+    bool m_lidar_to_imu_valid = false;
+    Eigen::Matrix4f m_lidar_to_imu = Eigen::Matrix4f::Identity();
     CloudType::Ptr downsampleCloud(const CloudType::Ptr& cloud, float resolution);
 
     pcl::GeneralizedIterativeClosestPoint<PointType, PointType> gicp_;
