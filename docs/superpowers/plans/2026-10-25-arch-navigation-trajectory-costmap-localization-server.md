@@ -3,11 +3,20 @@
 > **进度**：
 > - A1 轨迹类型 + 参数化器：✅ `cea5f11`（编译通过）
 > - A2 轨迹接入（setTrajectory + RPP 速度前馈）：✅ `41471c6`
->   - clean+mppi 3/3（MPPI 不消费轨迹，基线不变）
->   - clean+rpp 3/3（footprint 余量 0.350m）
-> - A3 删除节点"末段两段式精调"：⏳ 未做（需 A2 回归稳定后再删，删后必须重跑 3/3）
-> - B 分层代价地图：⏳ 未开始
+>   - clean+mppi 3/3；clean+rpp 3/3（footprint 余量 0.350m）
+> - A3 MPPI 消费轨迹（speed critic 用 v_ref）：✅ `ad36545`
+>   - clean+mppi 3/3（余量 0.250m）
+> - A3b 删节点"末段两段式精调"：⏳ **有前提**（见下）
+> - B 分层代价地图：⏳ 未开始（先 B1 包装，保证零行为变化）
 > - C LocalizationServer：⏳ 未开始
+>
+> ### A3b 的前提（重要）
+> 节点的末段精调不只做"减速逼近"，还负责**最终航向对齐**（要求
+> `|yaw - goal_yaw| < 0.2`）。轨迹目前只保证末段 v=0，没有"对齐目标航向"这一步。
+> 直接删末段精调会让 goal3 的最终 yaw 卡住。正确顺序：
+> 1. 给 `TimedPoint` 增加 `yaw_ref`（末点 = goal yaw），RPP/MPPI 在 s 接近终点时
+>    用 `yaw_ref` 做对齐（RPP 已有 ALIGN，MPPI 用 heading critic 的目标）；
+> 2. 再删节点末段精调，跑 clean×{mppi,rpp} 各 3/3。
 
 三个工作流，互相独立，按 A → B → C 顺序落地。**迁移期硬约束**：每一步都必须保持
 `clean + hybrid_astar + mppi` 三目标 3/3（回归脚本 route_test2.py），出问题立即用
