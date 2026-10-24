@@ -10,12 +10,12 @@
 # 由 launch/navigation_simulation.launch 以私有命名空间加载。
 # ============================================================
 
-# ---------- 速度 / 加速度 (与实车 default.yaml 一致) ----------
-max_velocity_x: 0.4
+# ---------- 速度 / 加速度 (实车 default.yaml max_velocity_x=0.8) ----------
+max_velocity_x: 0.6
 min_velocity_x: 0.0
 max_velocity_theta: 0.8
 
-max_accel_x: 0.5
+max_accel_x: 0.8
 max_accel_theta: 0.6
 
 # ---------- MPPI 采样/代价参数 ----------
@@ -138,7 +138,7 @@ safety_fail_safe_on_timeout: true
 safety_source_timeout: 0.5
 safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]
 safety_slowdown_polygon: [-0.45, -0.50, 0.72, -0.50, 0.72, 0.50, -0.45, 0.50]
-safety_slowdown_ratio: 0.7
+safety_slowdown_ratio: 0.85
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
 # 车体外轮廓 (与实车 safety_footprint 相同), movebase 兼容层的 /robot_footprint 用它
