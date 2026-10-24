@@ -130,11 +130,10 @@ core::VelocityCommand RppController::computeVelocityCommand(
       align_dir_ = 0;
       return {0.0, 0.0, 0.0};
     }
-    // 方向锁存: ±π 附近 err 符号翻转会让车左右来回摆
-    if (std::fabs(err) > 0.35 || align_dir_ == 0) {
-      align_dir_ = err > 0.0 ? 1 : -1;
-    }
-    const double w = align_dir_ * std::min(max_vw_, 2.0 * std::fabs(err));
+    // 方向只在旋转开始时锁存一次, 中途绝不反转 (否则过冲后 err 反号 -> 转回去)
+    if (align_dir_ == 0) align_dir_ = err > 0.0 ? 1 : -1;
+    const double w = align_dir_ * std::min(max_vw_,
+                                           std::max(0.15, 2.0 * std::fabs(err)));
     last_v_ = 0.0;
     last_w_ = w;
     return {0.0, 0.0, w};

@@ -3195,12 +3195,12 @@ private:
       rot_dir_ = 0;
       return false;
     }
-    // 方向锁存: err 在 ±π 附近符号会翻转 (等价角度), 不锁存就会左右来回摆.
-    if (std::fabs(err) > 0.35 || rot_dir_ == 0) {
-      rot_dir_ = err > 0.0 ? 1 : -1;
-    }
+    // 方向只在旋转开始时锁存一次, 中途绝不反转; 到位才释放.
+    if (rot_dir_ == 0) rot_dir_ = err > 0.0 ? 1 : -1;
     out.linear.x = 0.0;
-    out.angular.z = rot_dir_ * std::min(max_velocity_theta_, 2.0 * std::fabs(err));
+    // 最小角速度 0.15: 接近目标时 2*err 太小会被底盘死区吃掉, 表现为"转一下停"
+    out.angular.z = rot_dir_ * std::min(max_velocity_theta_,
+                                        std::max(0.15, 2.0 * std::fabs(err)));
     return true;
   }
 
@@ -3387,8 +3387,15 @@ private:
           } else {
             c.linear.x = std::min(max_velocity_x_, 0.9 * d);
           }
-          c.angular.z = std::max(-max_velocity_theta_,
-                                 std::min(max_velocity_theta_, 1.5 * head_err));
+          // 与旋转段执行器同一套锁存逻辑, 避免末段对位来回转
+          if (std::fabs(head_err) > 0.08) {
+            if (rot_dir_ == 0) rot_dir_ = head_err > 0.0 ? 1 : -1;
+            c.angular.z = rot_dir_ * std::min(max_velocity_theta_,
+                                              std::max(0.15, 2.0 * std::fabs(head_err)));
+          } else {
+            rot_dir_ = 0;
+            c.angular.z = 0.0;
+          }
         } else {
           c.linear.x = 0.0;     // 已到 xy 容差: 原地对末朝向
           const double yaw_err = normalizeAngle(gp.theta - cp.theta);
