@@ -3501,7 +3501,14 @@ private:
     const core::SafetyResult result = safety_monitor_.filter(toCoreVelocity(cmd), points);
     last_safety_state_ = result.state;
     last_safety_scale_ = result.scale;
-    return toRosTwist(result.command);
+    core::VelocityCommand out = result.command;
+    // 接近/减速档只降线速度, 角速度保持原值: 原地旋转不产生位移, 若把 w
+    // 也缩到 0.4x, 末段 120° 对位要转十几秒 (实测超过任务超时).
+    if (result.scale > 1e-3 && result.scale < 0.999 &&
+        std::fabs(cmd.angular.z) > 1e-3) {
+      out.angular_z = cmd.angular.z;
+    }
+    return toRosTwist(out);
   }
 
   void stopNavigation()
