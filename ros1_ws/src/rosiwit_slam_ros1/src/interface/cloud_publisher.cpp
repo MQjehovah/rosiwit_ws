@@ -27,9 +27,50 @@ using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
 
 namespace rosiwit_slam_ros1 {
-void Ros1SlamInterface::laserScanCB(const sensor_msgs::LaserScan::ConstPtr&) {
+void Ros1SlamInterface::laserScanCB(const sensor_msgs::LaserScan::ConstPtr& msg) {
     // 旧实现只用它做雷达频率统计 (legacy.cpp:209 -> laserScanCallBack)
     const ros::Time now = ros::Time::now();
+
+    // C2b: 同时缓存 base 系 2D 点, 供平面匹配约束使用 (只在定位模式下).
+    // 过滤与导航侧一致: 丢弃过近的自反射和过远的噪声.
+    if (planar_constraint_enabled_ && slam_mode_ == SlamMode::LOCALIZATION &&
+        msg && msg->ranges.size() >= 20) {
+        geometry_msgs::TransformStamped tf;
+        bool have_tf = !msg->header.frame_id.empty() &&
+                       msg->header.frame_id == "base_link";
+        if (!have_tf && tf_buffer_ && !msg->header.frame_id.empty()) {
+            try {
+                tf = tf_buffer_->lookupTransform("base_link", msg->header.frame_id,
+                                                 msg->header.stamp, ros::Duration(0.03));
+                have_tf = true;
+            } catch (const tf2::TransformException&) {
+                have_tf = false;
+            }
+        }
+        if (have_tf) {
+            // 注意: 2D 雷达是**倾斜安装**的, 取旋转的 rz/atan2 当 yaw 会把俯仰
+            // 混进航向 (实测造成 ~12° 误差). 必须用完整旋转做 3D 变换再投影 xy.
+            const auto & q = tf.transform.rotation;
+            const Eigen::Quaterniond rot(q.w, q.x, q.y, q.z);
+            const Eigen::Vector3d trans(tf.transform.translation.x,
+                                        tf.transform.translation.y,
+                                        tf.transform.translation.z);
+            std::vector<rosiwit_slam::PlanarPoint> pts;
+            pts.reserve(msg->ranges.size());
+            for (size_t i = 0; i < msg->ranges.size(); ++i) {
+                const float r = msg->ranges[i];
+                if (!std::isfinite(r) || r < 0.15f || r > 8.0f) { continue; }
+                const double a = msg->angle_min + msg->angle_increment * static_cast<double>(i);
+                const Eigen::Vector3d p_laser(r * std::cos(a), r * std::sin(a), 0.0);
+                const Eigen::Vector3d p = rot * p_laser + trans;
+                pts.push_back({p.x(), p.y()});
+            }
+            if (pts.size() >= 60) {
+                planar_pts_base_.swap(pts);
+                planar_pts_stamp_ = msg->header.stamp;
+            }
+        }
+    }
     if (scan_window_start_.isZero()) { scan_window_start_ = now; scan_count_ = 0; return; }
     ++scan_count_;
     const double dt = (now - scan_window_start_).toSec();

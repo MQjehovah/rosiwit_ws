@@ -128,6 +128,9 @@ void Ros1SlamInterface::initPub() {
     // LocalizationServer 契约: 一个话题带齐位姿/协方差/健康等级/匹配度/地图标识.
     localization_state_puber_ =
         nh_.advertise<xzrobot_ros_dependency::LocalizationState>("/localization/state", 10);
+    // C2b 2D 约束开关 (默认关; 打开前需先解决核心不接受外部位姿跳变的问题).
+    planar_constraint_enabled_ =
+        ros::param::param<bool>("~planar_constraint_enabled", planar_constraint_enabled_);
     scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
     warning_code_puber_ = nh_.advertise<std_msgs::String>("slam_warning_code", 10);
     point_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("origin_point", 10);

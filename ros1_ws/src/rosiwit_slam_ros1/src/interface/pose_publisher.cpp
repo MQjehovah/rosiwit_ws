@@ -41,6 +41,9 @@ void Ros1SlamInterface::publishCurrPose() {
     // 因此状态变化必须独立于 pose 输出立即上报。
     publishCoreStatusIfChanged();
 
+    // C2b: 2D 激光约束 (只在 DEGRADED/LOST 且曾定位成功过时介入, 内部自带节流).
+    planarConstraintStep();
+
     SlamOutput out;
     const bool have_out = engine_.latestOutput(out) && out.has_new_pose;
 
@@ -250,6 +253,10 @@ void Ros1SlamInterface::publishZeroPoseInfo() {
     // 切图后到定位成功之前一律 INIT: 位姿不可信, 消费端不得据此导航.
     publishLocalizationState(
         xzrobot_ros_dependency::LocalizationState::HEALTH_INIT, 0.0f);
+    // 新地图上还没定位成功过: 2D 纠偏不能用旧图的"曾经锁定"状态.
+    planar_ever_locked_ = false;
+    planar_field_.clear();
+    planar_pending_ = false;
 }
 
 void Ros1SlamInterface::publishLocationInfo() {
@@ -284,6 +291,7 @@ void Ros1SlamInterface::publishLocationInfo() {
             if (st == rosiwit_slam::ILocalization::LOCALIZED) {
                 matching_degree = static_cast<float>(engine_.getMatchingDegree());
                 core_ever_localized_ = true;
+                planar_ever_locked_ = true;
             }
 
             // LOST 边沿 -> 20003504。状态本身由核心给出，这里只负责告警边沿。
@@ -347,7 +355,6 @@ void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) 
     LocState msg;
     msg.header.stamp = ros::Time::now();
     msg.header.frame_id = kMapFrame;
-
     const Xz3dPose p = curr_pose_;
     const bool finite = std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.yaw) &&
                         std::isfinite(p.q.w());
@@ -359,19 +366,28 @@ void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) 
     msg.pose.pose.orientation.z = finite ? p.q.z() : 0.0;
     msg.pose.pose.orientation.w = finite ? p.q.w() : 1.0;
 
-    // C1: 不确定度是目前的质量分档值 (C2 会换成估计器协方差 + 退化方向膨胀).
+    // C1: 不确定度来自 2D 平面匹配 (C2) 或质量分档值.
     // 明确"不可用"时给大值, 避免消费端把 0 协方差当成"绝对准确".
     std::fill(msg.pose.covariance.begin(), msg.pose.covariance.end(), 0.0);
-    double sxy = loc_sigma_xy_;
-    double syaw = loc_sigma_yaw_;
-    if (health == LocState::HEALTH_DEGRADED) { sxy *= 3.0; syaw *= 3.0; }
-    if (health == LocState::HEALTH_LOST || health == LocState::HEALTH_INIT) {
-        sxy = 1.0e3;
-        syaw = 1.0e3;
+    const bool planar_fresh = !planar_cov_stamp_.isZero() &&
+        (ros::Time::now() - planar_cov_stamp_).toSec() < 1.0;
+    if (health == LocState::HEALTH_DEGRADED && planar_fresh) {
+        // 真实可观性: 退化方向的方差自然大, 交叉项按对角处理.
+        msg.pose.covariance[0] = planar_cov_xx_;
+        msg.pose.covariance[7] = planar_cov_yy_;
+        msg.pose.covariance[35] = planar_cov_yaw_;
+    } else {
+        double sxy = loc_sigma_xy_;
+        double syaw = loc_sigma_yaw_;
+        if (health == LocState::HEALTH_DEGRADED) { sxy *= 3.0; syaw *= 3.0; }
+        if (health == LocState::HEALTH_LOST || health == LocState::HEALTH_INIT) {
+            sxy = 1.0e3;
+            syaw = 1.0e3;
+        }
+        msg.pose.covariance[0] = sxy * sxy;
+        msg.pose.covariance[7] = sxy * sxy;
+        msg.pose.covariance[35] = syaw * syaw;
     }
-    msg.pose.covariance[0] = sxy * sxy;
-    msg.pose.covariance[7] = sxy * sxy;
-    msg.pose.covariance[35] = syaw * syaw;
 
     msg.health = health;
     msg.matching = health == LocState::HEALTH_LOST ? 0.0f : matching;
@@ -456,5 +472,160 @@ void Ros1SlamInterface::broadcastMapOdom() {
     last_map_odom_pub_ = now;
 }
 
+
+// ---------------------------------------------------------------- C2b: 2D 约束
+namespace {
+double planarNormAngle(double a) {
+    while (a > M_PI) a -= 2.0 * M_PI;
+    while (a < -M_PI) a += 2.0 * M_PI;
+    return a;
+}
+}  // namespace
+
+void Ros1SlamInterface::planarConstraintStep() {
+    if (!planar_constraint_enabled_) return;
+    if (slam_mode_ != SlamMode::LOCALIZATION) return;
+    // 只有"曾经真的定位成功过"才允许 2D 纠偏: 否则启动阶段位姿本来就是 0,
+    // 用 2D 匹配去"修"它可能把从未定位的机器人拉到别处.
+    if (!planar_ever_locked_ || !curr_pose_valid_) return;
+    const ros::Time now = ros::Time::now();
+    if (planar_pts_stamp_.isZero() ||
+        (now - planar_pts_stamp_).toSec() > 0.6) return;   // 激光不新鲜
+    if (static_cast<int>(planar_pts_base_.size()) < 60) return;
+
+    // 校验策略:
+    //   TRACKING 且匹配度足够 -> 低频 (1 Hz) 校验, 只在大偏差时纠偏
+    //   DEGRADED/LOST         -> 4 Hz 校验 + 更大搜索窗
+    const auto st = engine_.localizationStatus();
+    const bool healthy = (st == rosiwit_slam::ILocalization::LOCALIZED &&
+                          engine_.getMatchingDegree() >= loc_degrade_matching_);
+    const double min_period = healthy ? 1.0 : 0.25;
+    if (!planar_last_try_.isZero() &&
+        (now - planar_last_try_).toSec() < min_period) return;
+    planar_last_try_ = now;
+
+    if (realtime_grid_map_.data.empty() ||
+        realtime_grid_map_.info.width == 0 || realtime_grid_map_.info.height == 0) {
+        return;
+    }
+
+    // 地图几何变化时重建栅格 + 距离场 (一次性开销, 不是每帧).
+    const bool geom_changed =
+        planar_grid_.width != static_cast<int>(realtime_grid_map_.info.width) ||
+        planar_grid_.height != static_cast<int>(realtime_grid_map_.info.height) ||
+        std::fabs(planar_grid_.resolution - realtime_grid_map_.info.resolution) > 1e-9 ||
+        planar_grid_.data.size() != realtime_grid_map_.data.size();
+    if (geom_changed || planar_field_.empty()) {
+        planar_grid_.width = static_cast<int>(realtime_grid_map_.info.width);
+        planar_grid_.height = static_cast<int>(realtime_grid_map_.info.height);
+        planar_grid_.resolution = realtime_grid_map_.info.resolution;
+        planar_grid_.origin_x = realtime_grid_map_.info.origin.position.x;
+        planar_grid_.origin_y = realtime_grid_map_.info.origin.position.y;
+        planar_grid_.data = realtime_grid_map_.data;
+        planar_field_ = buildPlanarDistanceField(planar_grid_, 1.5);
+        planar_pending_ = false;
+        std::cout << "[planar] distance field built: " << planar_grid_.width << "x"
+                  << planar_grid_.height << " res=" << planar_grid_.resolution << std::endl;
+    }
+
+    PlanarMatcherConfig cfg;
+    const bool lost = (st == rosiwit_slam::ILocalization::LOST);
+    // LOST 时给更大的搜索窗 (等价于一次受约束的重定位);
+    // healthy 时窗口小一点, 只用来"校验 + 小修正".
+    cfg.search_xy = lost ? 1.20 : (healthy ? 0.45 : 0.60);
+    cfg.search_yaw = lost ? 0.40 : (healthy ? 0.15 : 0.30);
+    cfg.min_points = 80;
+    // 这台 2D 雷达是倾斜安装的: 远处光束打到地面/天花, 这类点天然不在地图墙上.
+    // 实测墙面点占比 ~0.64, 所以内点率门限按 0.50 设, 真伪靠残差/条件数/连续一致.
+    cfg.min_inlier_ratio = 0.50;
+    cfg.max_residual = 0.10;   // 地图是 0.05 栅格拼出来的墙面, 留出栅格量化余量
+
+    // 恢复搜索: 失败就放大窗口重试 (最多 3 轮, 覆盖 ~2m 内的错锁).
+    // 只在"最优解贴在边界"或"匹配无效"时放大: 拉到 0.6 -> 1.08 -> 1.94m.
+    PlanarMatchResult r;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        r = matchPlanarScan(planar_pts_base_, curr_pose_.x, curr_pose_.y, curr_pose_.yaw,
+                            planar_grid_, planar_field_, cfg);
+        if (r.valid) { break; }
+        if (attempt + 1 >= 3 || r.points < cfg.min_points) { break; }
+        cfg.search_xy *= 1.8;
+        cfg.search_yaw *= 1.5;
+        std::cout << "[planar] widening search to " << cfg.search_xy << " m (prev ratio="
+                  << r.inlier_ratio << " resid=" << r.mean_residual << ")" << std::endl;
+    }
+    if (!r.valid) {
+        planar_pending_ = false;
+        std::cout << "[planar] miss: pts=" << r.points << " inliers=" << r.inliers
+                  << " ratio=" << r.inlier_ratio << " resid=" << r.mean_residual
+                  << " (need ratio>=" << cfg.min_inlier_ratio
+                  << " resid<=" << cfg.max_residual << ")" << std::endl;
+        return;
+    }
+
+    // 有效匹配: 记录真实协方差 (DEGRADED 时写进 /localization/state).
+    planar_cov_stamp_ = now;
+    planar_cov_xx_ = r.cov_xx;
+    planar_cov_yy_ = r.cov_yy;
+    planar_cov_yaw_ = r.cov_yyaw;
+
+    const double dx = r.x - curr_pose_.x;
+    const double dy = r.y - curr_pose_.y;
+    const double dyaw = planarNormAngle(r.yaw - curr_pose_.yaw);
+    const bool big = std::hypot(dx, dy) > 0.15 || std::fabs(dyaw) > 0.12;
+    if (!big) { planar_pending_ = false; return; }
+    if (r.condition > 1.0e5) return;   // 退化 (长走廊): 不硬拉, 交给 3D 恢复
+
+    // 连续两次一致才执行: 单帧误匹配 (动态障碍/玻璃) 不能直接把位姿拉飞.
+    if (planar_pending_ && (now - planar_pending_stamp_).toSec() < 2.0 &&
+        std::hypot(r.x - planar_px_, r.y - planar_py_) < 0.08 &&
+        std::fabs(planarNormAngle(r.yaw - planar_pyaw_)) < 0.06) {
+        // 防周期: 同一处纠偏短时间内反复出现, 说明核心没有接受 (还在用旧位姿),
+        // 继续硬拉会变成死循环 —— 停下来等 3D 恢复或人工介入.
+        if (!last_planar_applied_.isZero() &&
+            (now - last_planar_applied_).toSec() < 5.0 &&
+            std::hypot(r.x - last_planar_x_, r.y - last_planar_y_) < 0.15) {
+            ++planar_apply_repeats_;
+            if (planar_apply_repeats_ > 3) {
+                planar_pending_ = false;
+                std::cout << "[planar] same correction repeated " << planar_apply_repeats_
+                          << "x -> stop (core not accepting, wait for 3D)" << std::endl;
+                return;
+            }
+        } else {
+            planar_apply_repeats_ = 0;
+        }
+        geometry_msgs::PoseWithCovarianceStamped fix;
+        fix.header.stamp = now;
+        fix.header.frame_id = kMapFrame;
+        fix.pose.pose.position.x = r.x;
+        fix.pose.pose.position.y = r.y;
+        fix.pose.pose.position.z = curr_pose_.z;
+        const double half = 0.5 * r.yaw;
+        fix.pose.pose.orientation.z = std::sin(half);
+        fix.pose.pose.orientation.w = std::cos(half);
+        // 走完整重定位路径: 只调 applyInitPose 不够 —— 车轮里程计监视器的参考
+        // 还停在旧位姿上, 核心下一帧就会把位姿推回去 (实测会变成反复纠偏).
+        xzrobot_ros_dependency::Relocation::Request req;
+        xzrobot_ros_dependency::Relocation::Response res;
+        req.map_name = curr_map_name_;
+        req.initial_pose = fix;
+        handleRelocation(req, res);
+        planar_pending_ = false;
+        last_planar_applied_ = now;
+        last_planar_x_ = r.x;
+        last_planar_y_ = r.y;
+        std::cout << "[planar] 2D constraint applied: dx=" << dx << " dy=" << dy
+                  << " dyaw=" << dyaw << " inlier=" << r.inlier_ratio
+                  << " resid=" << r.mean_residual << " cond=" << r.condition << std::endl;
+    } else {
+        planar_pending_ = true;
+        planar_px_ = r.x;
+        planar_py_ = r.y;
+        planar_pyaw_ = r.yaw;
+        planar_pending_stamp_ = now;
+        std::cout << "[planar] candidate: dx=" << dx << " dy=" << dy
+                  << " dyaw=" << dyaw << " (awaiting agreement)" << std::endl;
+    }
+}
 
 } // namespace rosiwit_slam_ros1

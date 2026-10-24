@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "slam_core/slam_types.h"
+#include "localization/planar_scan_matcher.hpp"
 #include "xzrobot_ros_dependency/CommonBoolService.h"
 #include "xzrobot_ros_dependency/CommonIntRequestService.h"
 #include "xzrobot_ros_dependency/Relocation.h"
@@ -154,6 +155,9 @@ private:
     void publishLocationInfo();      // legacy.cpp:1823-1897
     /// LocalizationServer 对外契约: /localization/state (位姿+协方差+健康等级).
     void publishLocalizationState(int8_t health, float matching);
+    /// C2b: 2D 激光约束. 只在 DEGRADED/LOST 且曾定位成功过时介入,
+    /// 连续两次匹配一致才纠偏 (防止单帧误匹配把位姿拉飞).
+    void planarConstraintStep();
     /// 切图/未定位阶段的零点位姿 slam/info (1 = INIT, 0,0,0)
     void publishZeroPoseInfo();
 
@@ -278,9 +282,33 @@ private:
     ros::Publisher slam_info_puber_;          // slam/info         SlamInfo     10
     ros::Publisher localization_state_puber_;  // /localization/state LocalizationState 10
     uint32_t relocalize_count_ = 0;            // 累计重定位次数 (契约字段)
-    double loc_sigma_xy_ = 0.05;               // C1 阶段的位姿不确定度 (C2 换成估计器协方差)
+    double loc_sigma_xy_ = 0.05;               // 兜底位姿不确定度 (无 2D 匹配时)
     double loc_sigma_yaw_ = 0.03;
     float loc_degrade_matching_ = 0.65f;       // 低于此匹配度进入 DEGRADED
+
+    // ---- C2b: 2D 激光平面约束 ----
+    std::vector<rosiwit_slam::PlanarPoint> planar_pts_base_;  // base 系 2D 点
+    ros::Time planar_pts_stamp_;
+    ros::Time planar_last_try_;
+    rosiwit_slam::PlanarGrid planar_grid_;
+    std::vector<float> planar_field_;
+    std::vector<int8_t> planar_grid_src_;      // 用于判断地图是否变化
+    // 最近一次有效 2D 匹配 (供 /localization/state 用真实协方差)
+    ros::Time planar_cov_stamp_;
+    double planar_cov_xx_ = 0.0, planar_cov_yy_ = 0.0, planar_cov_yaw_ = 0.0;
+    // 待确认的纠偏候选 (连续两帧一致才执行)
+    bool planar_pending_ = false;
+    double planar_px_ = 0.0, planar_py_ = 0.0, planar_pyaw_ = 0.0;
+    ros::Time planar_pending_stamp_;
+    // "本张地图上曾经定位成功过": 与 core_ever_localized_ 不同, 它不会被
+    // /relocation 清掉 —— 手动拉偏后正需要 2D 约束把位姿拉回来.
+    bool planar_ever_locked_ = false;
+    // C2b 默认关闭: 核心的 seed 门限/accept 机制目前不接受外部位姿跳变
+    // (apply 后下一帧被推回原处, 见计划文档 C2b 记录). 打开会变成反复纠偏.
+    bool planar_constraint_enabled_ = false;
+    ros::Time last_planar_applied_;
+    double last_planar_x_ = 0.0, last_planar_y_ = 0.0;
+    int planar_apply_repeats_ = 0;
     ros::Publisher scan_puber_;               // points_2d         PointCloud2  10 (永不发)
     ros::Publisher warning_code_puber_;       // slam_warning_code String       10 (T7)
     ros::Publisher point_puber_;              // origin_point      PointCloud2  10
