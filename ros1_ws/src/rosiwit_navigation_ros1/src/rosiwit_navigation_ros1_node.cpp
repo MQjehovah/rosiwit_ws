@@ -3166,6 +3166,8 @@ private:
 
   // 旋转段执行器: Hybrid A* 前进-only 模式用"原地旋转基元"掉头/对正, 路径点
   // 标记 velocity_x==0 且位置不变. MPPI 无法跟踪原地旋转, 这里显式执行.
+  // 旋转段执行器: Hybrid A* 前进-only 模式用"原地旋转基元"掉头/对正, 路径点
+  // 标记 velocity_x==0 且位置不变. MPPI 无法跟踪原地旋转, 这里显式执行.
   bool executeRotationSegment(const core::Pose2D & pose, geometry_msgs::Twist & out)
   {
     if (current_core_path_.points.size() < 2) return false;
@@ -3193,6 +3195,11 @@ private:
     out.linear.x = 0.0;
     out.angular.z = std::max(-max_velocity_theta_,
                              std::min(max_velocity_theta_, 1.5 * err));
+    static int rot_log = 0;
+    if (++rot_log % 20 == 0) {
+      ROS_INFO("[rosiwit_navigation_ros1] rotseg nearest=%zu end=%zu target=%.1fdeg err=%.1fdeg",
+               nearest, end, target * 57.2957795, err * 57.2957795);
+    }
     return true;
   }
 
@@ -3367,10 +3374,19 @@ private:
     if (!(controller_strategy_ && controller_strategy_->supportsInPlaceRotation())) {
       geometry_msgs::Twist rot_cmd;
       if (executeRotationSegment(toCorePose(current_pose_), rot_cmd)) {
+        rotation_active_ = true;
         publishCommand(applySafety(rot_cmd));
         recordActionTraveled();
         if (task_active_) { publishActionOutputs(); }
         return;
+      }
+      // 旋转刚结束: MPPI 的进度索引还停在旋转点(旋转时位置不变, 索引不前进),
+      // 重新播种整条路径让参考点推进到旋转段之后, 否则会停在半转姿态.
+      if (rotation_active_) {
+        rotation_active_ = false;
+        controller_strategy_->setPath(current_core_path_);
+        ROS_INFO("[rosiwit_navigation_ros1] rotation done -> controller re-seeded (%zu pts)",
+                 current_core_path_.points.size());
       }
     }
     const double health_scale = slamHealthScale();
@@ -3671,6 +3687,7 @@ private:
   std::string clean_planner_ = "hybrid_astar";
   // 当前主路径 (核心坐标系): 供旋转段执行器读取 velocity_x 标记
   core::Path current_core_path_;
+  bool rotation_active_ = false;
   ros::Time last_slam_info_stamp_;
   int last_slam_status_ = -1;
   double last_slam_matching_ = 1.0;
