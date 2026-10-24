@@ -3191,15 +3191,16 @@ private:
     if (end == nearest) return false;
     const double target = current_core_path_.points[end].pose.theta;
     const double err = normalizeAngle(target - pose.theta);
-    if (std::fabs(err) < std::max(0.05, movebase_rotate_tolerance_)) return false;
-    out.linear.x = 0.0;
-    out.angular.z = std::max(-max_velocity_theta_,
-                             std::min(max_velocity_theta_, 1.5 * err));
-    static int rot_log = 0;
-    if (++rot_log % 20 == 0) {
-      ROS_INFO("[rosiwit_navigation_ros1] rotseg nearest=%zu end=%zu target=%.1fdeg err=%.1fdeg",
-               nearest, end, target * 57.2957795, err * 57.2957795);
+    if (std::fabs(err) < std::max(0.05, movebase_rotate_tolerance_)) {
+      rot_dir_ = 0;
+      return false;
     }
+    // 方向锁存: err 在 ±π 附近符号会翻转 (等价角度), 不锁存就会左右来回摆.
+    if (std::fabs(err) > 0.35 || rot_dir_ == 0) {
+      rot_dir_ = err > 0.0 ? 1 : -1;
+    }
+    out.linear.x = 0.0;
+    out.angular.z = rot_dir_ * std::min(max_velocity_theta_, 2.0 * std::fabs(err));
     return true;
   }
 
@@ -3728,6 +3729,7 @@ private:
   // 当前主路径 (核心坐标系): 供旋转段执行器读取 velocity_x 标记
   core::Path current_core_path_;
   bool rotation_active_ = false;
+  int rot_dir_ = 0;   // 旋转方向锁存 (避免 ±π 附近左右摆)
   ros::Time last_slam_info_stamp_;
   int last_slam_status_ = -1;
   double last_slam_matching_ = 1.0;

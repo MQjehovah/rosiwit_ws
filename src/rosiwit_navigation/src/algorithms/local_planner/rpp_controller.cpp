@@ -127,9 +127,14 @@ core::VelocityCommand RppController::computeVelocityCommand(
     if (std::fabs(err) < 0.05) {
       idx_ = std::min(end + 1, path_.points.size() - 1);
       s_cur_ = s_[idx_];
+      align_dir_ = 0;
       return {0.0, 0.0, 0.0};
     }
-    const double w = std::max(-max_vw_, std::min(max_vw_, 1.5 * err));
+    // 方向锁存: ±π 附近 err 符号翻转会让车左右来回摆
+    if (std::fabs(err) > 0.35 || align_dir_ == 0) {
+      align_dir_ = err > 0.0 ? 1 : -1;
+    }
+    const double w = align_dir_ * std::min(max_vw_, 2.0 * std::fabs(err));
     last_v_ = 0.0;
     last_w_ = w;
     return {0.0, 0.0, w};

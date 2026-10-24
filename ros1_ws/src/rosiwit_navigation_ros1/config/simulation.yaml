@@ -13,10 +13,10 @@
 # ---------- 速度 / 加速度 (与实车 default.yaml 一致) ----------
 max_velocity_x: 0.4
 min_velocity_x: 0.0
-max_velocity_theta: 0.5
+max_velocity_theta: 0.8
 
 max_accel_x: 0.5
-max_accel_theta: 0.2
+max_accel_theta: 0.6
 
 # ---------- MPPI 采样/代价参数 ----------
 mppi_horizon: 20

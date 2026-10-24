@@ -53,6 +53,7 @@ private:
   double goal_tol_ = 0.2;
   double last_v_ = 0.0;
   double last_w_ = 0.0;
+  int align_dir_ = 0;   // 旋转方向锁存 (±π 附近防左右摆)
 };
 
 }  // namespace controllers
