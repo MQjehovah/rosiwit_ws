@@ -1,5 +1,14 @@
 # 导航/定位架构改造计划（2026-10-25）
 
+> **进度**：
+> - A1 轨迹类型 + 参数化器：✅ `cea5f11`（编译通过）
+> - A2 轨迹接入（setTrajectory + RPP 速度前馈）：✅ `41471c6`
+>   - clean+mppi 3/3（MPPI 不消费轨迹，基线不变）
+>   - clean+rpp 3/3（footprint 余量 0.350m）
+> - A3 删除节点"末段两段式精调"：⏳ 未做（需 A2 回归稳定后再删，删后必须重跑 3/3）
+> - B 分层代价地图：⏳ 未开始
+> - C LocalizationServer：⏳ 未开始
+
 三个工作流，互相独立，按 A → B → C 顺序落地。**迁移期硬约束**：每一步都必须保持
 `clean + hybrid_astar + mppi` 三目标 3/3（回归脚本 route_test2.py），出问题立即用
 feature flag 回退。
