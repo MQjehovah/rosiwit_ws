@@ -10,7 +10,25 @@
 >   实测确认：Hybrid 路径末点航向 = 目标航向（goal yaw），节点末段精调就是"最终
 >   航向对齐 + 微调"的执行体；轨迹末段只保证 v=0，不包含对齐逻辑。保留它比在
 >   两个控制器里各写一份对齐更简单可靠。**不做 A3b，直接进 B。**
-> - B 分层代价地图：⏳ 未开始（先 B1 包装，保证零行为变化）
+> - B 分层代价地图：✅ **B1+B2+B3 完成**
+>   - `nav_core/costmap_layer.hpp`  层接口 (LayerConfig / ICostmapLayer / inflatedCostmap)
+>   - `nav_core/layered_costmap.hpp` LayeredCostmap (层列表 + max 合成 + combinedOf 子集视图)
+>   - `nav_core/costmap_layers.hpp`  StaticLayer / PointsLayer / CirclesLayer /
+>     KeepoutLayer / SpeedLimitLayer
+>   - 两个视图全部改为分层合成, 行为与旧实现等价 (未配禁行区时):
+>     planner = static + keepout (自身 footprint 膨胀, 254 unknown 仍阻断且不产 halo)
+>     controller = static + scan + tracked + voxel + keepout (无膨胀, footprint 负责车体)
+>     safety = 原始激光点 (不下采样, 保持现状)
+>   - 新增功能: 禁行区 `/virtual_obstacles` (xzrobot_ros_dependency/VirtualObstacles,
+>     每个 form 是多边形) 与分区限速 `/speed_limit_zones` ("x,y,w,h,v;..." 或 yaml
+>     `speed_limit_zones`), 限速在 `publishCommand()` 唯一出口生效
+>   - 回归: clean+mppi 3/3 (余量 0.250m), clean+rpp 3/3 (余量 0.350m)
+>   - 功能验收: 限速 0.25 -> 区内 max|v|=0.251, 撤销后 0.643;
+>     禁行区盖住目标 -> costmap=100, planner "Goal in obstacle" 失败;
+>     撤销 -> costmap=0 且同目标 SUCCEEDED
+>   - **坑**: 层内部栅格必须用 `int16_t`. 用 `int8_t` 时 254 (unknown) 溢出成 -2,
+>     整个 unknown 语义失效且没有任何编译告警 (planner 仍能从 `grid->data` 兜底工作,
+>     所以表面上"不漏", 实际全部代价地图都是空的).
 > - C LocalizationServer：⏳ 未开始
 >
 > ### A3b 的前提（重要）

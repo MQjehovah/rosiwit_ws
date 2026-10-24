@@ -167,6 +167,15 @@ slam_info_timeout: 2.0
 slam_degrade_matching: 0.65
 slam_degrade_scale: 0.5
 
+# ---- 分层代价地图 (B) ----
+# 禁行区: 订阅 xzrobot_ros_dependency/VirtualObstacles (每个 form 是一个多边形),
+# 同时进入规划视图与控制视图, 立即触发重规划.
+keepout_enabled: true
+virtual_obstacles_topic: "/virtual_obstacles"
+keepout_frame: "map"
+# 分区限速 (静态配置; 运行时可用 /speed_limit_zones 覆盖, 格式 "x,y,w,h,v;...").
+speed_limit_zones: []
+
 # ---- 动态覆盖清洁 (navi_cmd=20) ----
 coverage_sweep_width: 0.4
 coverage_max_speed: 0.3

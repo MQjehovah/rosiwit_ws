@@ -50,10 +50,14 @@
 #include "rosiwit_navigation/nav_core/safety_monitor.hpp"
 #include "rosiwit_navigation/nav_core/obstacle_tracker.hpp"
 #include "rosiwit_navigation/nav_core/voxel_layer.hpp"
+#include "rosiwit_navigation/nav_core/costmap_layer.hpp"
+#include "rosiwit_navigation/nav_core/layered_costmap.hpp"
+#include "rosiwit_navigation/nav_core/costmap_layers.hpp"
 #include "rosiwit_navigation/nav_core/action_task.hpp"
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 #include "rosiwit_navigation/nav_core/footprint.hpp"
 #include <xzrobot_ros_dependency/SlamInfo.h>
+#include <xzrobot_ros_dependency/VirtualObstacles.h>
 #include "path_smoother.hpp"
 #include "trajectory_parameterizer.hpp"
 #include "movebase_protocol.h"
@@ -292,6 +296,47 @@ private:
     voxel_cfg.decay_time = voxel_decay_;
     voxel_cfg.inflation = voxel_inflation_;
     voxel_layer_.setConfig(voxel_cfg);
+
+    // ---- 分层代价地图 (B1): 同一个层集合, 不同视图 ----
+    pnh_.param<bool>("keepout_enabled", keepout_enabled_, true);
+    pnh_.param<std::string>("virtual_obstacles_topic", virtual_obstacles_topic_,
+                            "/virtual_obstacles");
+    pnh_.param<std::string>("keepout_frame", keepout_frame_, "map");
+    {
+      std::vector<std::string> specs;
+      pnh_.param<std::vector<std::string>>(
+        "speed_limit_zones", specs, std::vector<std::string>());
+      std::vector<core::SpeedLimitLayer::Zone> zones;
+      for (const auto & spec : specs) {
+        core::SpeedLimitLayer::Zone zone;
+        if (core::SpeedLimitLayer::parseRectZone(spec, zone, max_velocity_x_)) {
+          zones.push_back(zone);
+        } else {
+          ROS_WARN("[rosiwit_navigation_ros1] bad speed_limit_zones entry: %s",
+                   spec.c_str());
+        }
+      }
+      speed_limit_layer_.setZones(zones);
+      if (!zones.empty()) {
+        ROS_INFO("[rosiwit_navigation_ros1] speed limit zones: %zu", zones.size());
+      }
+    }
+    keepout_layer_ = std::make_shared<core::KeepoutLayer>();
+    keepout_layer_->setActive(keepout_enabled_);
+    planner_static_layer_ = std::make_shared<core::StaticLayer>(true);
+    local_static_layer_ = std::make_shared<core::StaticLayer>(false);
+    local_scan_layer_ = std::make_shared<core::PointsLayer>("scan", 0.0);
+    local_track_layer_ = std::make_shared<core::CirclesLayer>("tracked");
+    local_voxel_layer_ = std::make_shared<core::PointsLayer>("voxel", 0.0);
+    // 规划视图: 静态地图 + 禁行区 (规划器自己按 footprint 膨胀)
+    planner_layers_.addLayer(planner_static_layer_);
+    planner_layers_.addLayer(keepout_layer_);
+    // 控制视图: 静态 + 激光 + 跟踪 + 体素 + 禁行区, 不膨胀 (footprint 负责车体)
+    local_layers_.addLayer(local_static_layer_);
+    local_layers_.addLayer(local_scan_layer_);
+    local_layers_.addLayer(local_track_layer_);
+    local_layers_.addLayer(local_voxel_layer_);
+    local_layers_.addLayer(keepout_layer_);
 
     // ---- robot_movebase 兼容层 ----
     pnh_.param<bool>("movebase_compat_enabled", movebase_compat_enabled_, true);
@@ -772,6 +817,15 @@ private:
     odom_sub_ = nh_.subscribe(odom_topic_, 1, &RosiwitNavigationRos1Node::odomCallback, this);
     map_sub_ = nh_.subscribe(map_topic_, 1, &RosiwitNavigationRos1Node::mapCallback, this);
     scan_sub_ = nh_.subscribe(scan_topic_, 1, &RosiwitNavigationRos1Node::scanCallback, this);
+    // 禁行区 (App/遥控器画的虚拟墙): 多边形列表, 直接进入两个代价地图视图.
+    if (!virtual_obstacles_topic_.empty()) {
+      virtual_obstacles_sub_ = nh_.subscribe(
+        virtual_obstacles_topic_, 1,
+        &RosiwitNavigationRos1Node::virtualObstaclesCallback, this);
+    }
+    // 分区限速: "x,y,w,h,v;x,y,w,h,v" (空串=清空). 与 yaml 的 speed_limit_zones 同格式.
+    speed_limit_sub_ = nh_.subscribe(
+      "/speed_limit_zones", 1, &RosiwitNavigationRos1Node::speedLimitCallback, this);
     // 定位健康: LOST -> 停车; matching 低 -> 限速
     slam_info_sub_ = nh_.subscribe("/slam/info", 1,
                                    &RosiwitNavigationRos1Node::slamInfoCallback, this);
@@ -834,8 +888,76 @@ private:
              msg->info.resolution);
   }
 
-  void scanCallback(const sensor_msgs::LaserScan::ConstPtr & msg)
+  void virtualObstaclesCallback(
+    const xzrobot_ros_dependency::VirtualObstacles::ConstPtr & msg)
   {
+    if (!keepout_layer_) { return; }
+    // VirtualForm.form 是多边形顶点; 少于 3 点无法围成区域.
+    bool need_tf = !keepout_frame_.empty() && keepout_frame_ != map_frame_;
+    geometry_msgs::TransformStamped tf;
+    if (need_tf) {
+      try {
+        tf = tf_buffer_.lookupTransform(map_frame_, keepout_frame_, ros::Time(0),
+                                        ros::Duration(0.1));
+      } catch (tf2::TransformException & ex) {
+        ROS_WARN_THROTTLE(2.0,
+          "[rosiwit_navigation_ros1] keepout tf %s->%s failed: %s (ignore)",
+          keepout_frame_.c_str(), map_frame_.c_str(), ex.what());
+        return;
+      }
+    }
+    std::vector<std::vector<core::Point2D>> polygons;
+    polygons.reserve(msg->list.size());
+    for (const auto & form : msg->list) {
+      if (form.form.size() < 3) { continue; }
+      std::vector<core::Point2D> poly;
+      poly.reserve(form.form.size());
+      for (const auto & p : form.form) {
+        geometry_msgs::Point mp = p;
+        if (need_tf) {
+          geometry_msgs::PointStamped in, out;
+          in.point = p;
+          tf2::doTransform(in, out, tf);
+          mp = out.point;
+        }
+        poly.push_back({mp.x, mp.y});
+      }
+      polygons.push_back(std::move(poly));
+    }
+    keepout_layer_->setPolygons(polygons);
+    // 禁行区变化必须立刻重建规划视图, 否则最多等 1Hz 的常规刷新.
+    last_global_costmap_update_ = ros::Time(0);
+    updateCostmap();
+    ROS_INFO("[rosiwit_navigation_ros1] virtual obstacles -> %zu keepout polygons",
+             keepout_layer_->polygonCount());
+    if (keepout_layer_->polygonCount() > 0) {
+      // stamp 在 updateCostmap() 里执行; 这里读的是刚算完的结果.
+      ROS_INFO("[rosiwit_navigation_ros1] keepout marked %u cells (view %ux%u @ %.3f)",
+               keepout_layer_->lastMarkedCells(),
+               planner_layers_.config().width, planner_layers_.config().height,
+               planner_layers_.config().resolution);
+    }
+  }
+
+  void speedLimitCallback(const std_msgs::String::ConstPtr & msg)
+  {
+    std::vector<core::SpeedLimitLayer::Zone> zones;
+    std::stringstream ss(msg->data);
+    std::string item;
+    while (std::getline(ss, item, ';')) {
+      if (item.empty()) { continue; }
+      core::SpeedLimitLayer::Zone zone;
+      if (core::SpeedLimitLayer::parseRectZone(item, zone, max_velocity_x_)) {
+        zones.push_back(zone);
+      } else {
+        ROS_WARN("[rosiwit_navigation_ros1] bad speed limit zone: %s", item.c_str());
+      }
+    }
+    speed_limit_layer_.setZones(zones);
+    ROS_INFO("[rosiwit_navigation_ros1] speed limit zones -> %zu", zones.size());
+  }
+
+  void scanCallback(const sensor_msgs::LaserScan::ConstPtr & msg)  {
     geometry_msgs::TransformStamped tf;
     try {
       tf = tf_buffer_.lookupTransform(map_frame_, msg->header.frame_id,
@@ -1135,8 +1257,10 @@ private:
   //   语义: 成功与失败都 setSucceeded, 失败只体现在 tracking_path_result
   //         (照抄旧实现 src/RobotMovebaseNode.cpp: ExecuteCb()).
   // ==========================================================================
-  void publishCommand(const geometry_msgs::Twist & cmd)
+  void publishCommand(const geometry_msgs::Twist & cmd_in)
   {
+    // 分区限速在唯一出口处生效: 控制器/末段精调/恢复/兼容层都走这里.
+    const geometry_msgs::Twist cmd = applySpeedLimit(cmd_in);
     cmd_vel_pub_.publish(cmd);
     if (mb_) { mb_->publishCmdVel(cmd); }
   }
@@ -2136,6 +2260,8 @@ private:
        << ",\"tracks\":" << tracker_.tracked().size()
        << ",\"task_state\":\"" << navigationStateName() << "\""
        << ",\"voxels\":" << voxel_layer_.size()
+       << ",\"keepout\":" << (keepout_layer_ ? keepout_layer_->polygonCount() : 0)
+       << ",\"speed_zones\":" << speed_limit_layer_.size()
        << ",\"scan_pts\":" << laser_points_.size()
        << ",\"scan_cap\":" << laser_points_.capacity()
        << ",\"track_pts_cap\":" << tracker_points_.capacity()
@@ -2170,6 +2296,24 @@ private:
     const bool need_global = last_global_costmap_update_.isZero() ||
       (ros::Time::now() - last_global_costmap_update_).toSec() >= 1.0;
     if (planner_strategy_ && need_global) {
+      if (!planner_static_layer_ || !keepout_layer_) { return; }
+      // B1: 规划视图 = StaticLayer + KeepoutLayer.
+      // 未配置禁行区时输出与旧实现逐格相同 (0/254/255).
+      core::LayerConfig cfg;
+      cfg.width = w;
+      cfg.height = h;
+      cfg.resolution = res;
+      cfg.map_origin_x = ox;
+      cfg.map_origin_y = oy;
+      cfg.window_x = 0;
+      cfg.window_y = 0;
+      planner_static_layer_->setOccupancy(current_map_->data, w, h);
+      keepout_layer_->setActive(keepout_enabled_);
+      planner_layers_.configure(cfg, core::kCostFree);
+      planner_layers_.update(ros::Time::now().toSec());
+
+      const std::vector<int16_t> & semantic = planner_layers_.combined();
+
       auto grid = std::make_shared<core::CostmapGrid>();
       grid->info.width = w;
       grid->info.height = h;
@@ -2185,14 +2329,13 @@ private:
       cm.resolution = res;
       cm.origin_x = ox;
       cm.origin_y = oy;
-      cm.data.assign(current_map_->data.size(), 0);
-      for (size_t i = 0; i < current_map_->data.size(); ++i) {
-        // unknown 对规划仍是障碍(254), 但不参与膨胀; 真实占据才是 255.
-        // 若把 unknown 当 free, 规划会穿未知区域撞墙; 若把 unknown 当 255,
-        // 它会向外膨胀, 把已知 free 的走廊也封死.
-        cm.data[i] = (current_map_->data[i] >= 100)
-                         ? 255
-                         : (current_map_->data[i] < 0 ? 254 : 0);
+      cm.data.assign(semantic.size(), 0);
+      for (size_t i = 0; i < semantic.size(); ++i) {
+        // 层语义 100 -> planner 的 255 (lethal + 膨胀源); 254 保持 254.
+        const int8_t v = semantic[i];
+        cm.data[i] = (v == core::kCostUnknown)
+                         ? 254
+                         : (v >= core::kCostLethal ? 255 : 0);
       }
       // /scan 是实时传感器障碍层: 只进入 local costmap/controller/safety,
       // 不能直接写成 global planner 的 lethal。否则 15Hz 的瞬态点会被 A*
@@ -2204,27 +2347,9 @@ private:
       // 膨胀并发布供 RViz 可视化
       const int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
       const int safety_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
-      std::vector<float> dist(w * h, std::numeric_limits<float>::max());
-      std::queue<std::pair<int, int>> q;
-      for (unsigned int y = 0; y < h; ++y) {
-        for (unsigned int x = 0; x < w; ++x) {
-          // unknown=254 只为 planner 阻挡路径, 不形成膨胀 halo.
-          if (cm.data[y * w + x] >= 255) { dist[y * w + x] = 0.0f; q.push({x, y}); }
-        }
-      }
-      const int dx4[4] = {-1, 0, 1, 0};
-      const int dy4[4] = {0, -1, 0, 1};
-      while (!q.empty()) {
-        const std::pair<int, int> c = q.front(); q.pop();
-        const float cd = dist[c.second * w + c.first];
-        if (cd >= inflate_cells) { continue; }
-        for (int i = 0; i < 4; ++i) {
-          const int nx = c.first + dx4[i];
-          const int ny = c.second + dy4[i];
-          if (nx < 0 || nx >= static_cast<int>(w) || ny < 0 || ny >= static_cast<int>(h)) { continue; }
-          if (cd + 1 < dist[ny * w + nx]) { dist[ny * w + nx] = cd + 1; q.push({nx, ny}); }
-        }
-      }
+      const std::vector<int16_t> display =
+        core::inflatedCostmap(semantic, w, h, safety_cells, inflate_cells);
+
 
       nav_msgs::OccupancyGrid costmap_msg;
       costmap_msg.header.frame_id = map_frame_;
@@ -2236,19 +2361,10 @@ private:
       costmap_msg.info.origin.position.y = oy;
       costmap_msg.info.origin.orientation.w = 1.0;
       costmap_msg.data.resize(w * h);
-      const float inv = 1.0f / std::max(1, inflate_cells - safety_cells);
       for (size_t i = 0; i < w * h; ++i) {
         // 可视化区分 unknown(-1) 与真实障碍(100); planner_costmap_ 仍保留
         // 254 作为不可穿越栅格, 不会因为显示而放行未知区域.
-        if (cm.data[i] == 254) { costmap_msg.data[i] = -1; continue; }
-        if (cm.data[i] >= 255) { costmap_msg.data[i] = 100; continue; }
-        const float d = dist[i];
-        // 安全缓冲区只显示为高代价(99), 不是 lethal(100). A* 也把它当
-        // 高代价而非障碍; 否则 costmap 视觉上会把机器人周围画成黑墙.
-        if (d <= safety_cells) { costmap_msg.data[i] = 99; }
-        else if (d <= inflate_cells) {
-          costmap_msg.data[i] = static_cast<int8_t>((1.0f - (d - safety_cells) * inv) * 99);
-        } else { costmap_msg.data[i] = 0; }
+        costmap_msg.data[i] = (display[i] == core::kCostUnknown) ? -1 : static_cast<int8_t>(display[i]);
       }
       global_costmap_pub_.publish(costmap_msg);
       if (mb_) { mb_->publishPlanMap(costmap_msg); }
@@ -2360,6 +2476,8 @@ private:
   void publishLocalCostmap(const ros::TimerEvent &)
   {
     if (!current_map_) { return; }
+    if (!local_static_layer_ || !local_scan_layer_ || !local_track_layer_ ||
+        !local_voxel_layer_ || !keepout_layer_) { return; }
     const unsigned int w = current_map_->info.width;
     const unsigned int h = current_map_->info.height;
     const float res = current_map_->info.resolution;
@@ -2397,57 +2515,50 @@ private:
     local_costmap.info.origin.position.y = ry - (win_half + 0.5) * res;
     local_costmap.info.origin.orientation.w = 1.0;
 
-    // 窗口外默认致命; 融合静态地图 + 实时激光.
-    std::vector<int8_t> raw(lw * lw, 100);
-    for (int dy = -win_half; dy <= win_half; ++dy) {
-      for (int dx = -win_half; dx <= win_half; ++dx) {
-        const int mx = cx + dx;
-        const int my = cy + dy;
-        if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) { continue; }
-        const int gx = dx + win_half;
-        const int gy = dy + win_half;
-        const int8_t mv = current_map_->data[my * w + mx];
-        // unknown 保持 free; 只有真实占据格才是障碍.
-        raw[gy * lw + gx] = (mv >= 100) ? 100 : 0;
-      }
-    }
+    // B2: 控制视图 = Static(window) + Scan + Tracked + Voxel + Keepout, 不膨胀.
+    // 与规划视图共用同一批层, 只是窗口/子集/膨胀参数不同.
+    core::LayerConfig cfg;
+    cfg.width = static_cast<unsigned int>(lw);
+    cfg.height = static_cast<unsigned int>(lw);
+    cfg.resolution = res;
+    cfg.map_origin_x = ox;
+    cfg.map_origin_y = oy;
+    cfg.window_x = cx - win_half;
+    cfg.window_y = cy - win_half;
+
+    local_static_layer_->setOccupancy(current_map_->data, w, h);
     if (scan_fresh) {
-      for (const auto& pt : laser_points_) {
-        const int mx = static_cast<int>(std::floor((pt.x - ox) / res));
-        const int my = static_cast<int>(std::floor((pt.y - oy) / res));
-        const int dx = mx - cx;
-        const int dy = my - cy;
-        if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) continue;
-        raw[(dy + win_half) * lw + (dx + win_half)] = 100;
-      }
+      scan_layer_points_.clear();
+      scan_layer_points_.reserve(laser_points_.size());
+      for (const auto & p : laser_points_) { scan_layer_points_.push_back({p.x, p.y}); }
+      local_scan_layer_->setPoints(scan_layer_points_);
+    } else {
+      local_scan_layer_->clear();
     }
     if (tracking_enabled_) {
-      const auto predicted = tracker_.predicted(tracking_horizon_);
-      for (const auto & t : predicted) {
-        const int oxc = static_cast<int>(std::floor((t.x - ox) / res));
-        const int oyc = static_cast<int>(std::floor((t.y - oy) / res));
-        const int dx = oxc - cx;
-        const int dy = oyc - cy;
-        const int rr = std::max(1, static_cast<int>(std::ceil(t.radius / res)));
-        for (int yy = -rr; yy <= rr; ++yy)
-          for (int xx = -rr; xx <= rr; ++xx) {
-            if (xx * xx + yy * yy > rr * rr) continue;
-            const int gx = dx + xx + win_half;
-            const int gy = dy + yy + win_half;
-            if (gx >= 0 && gx < lw && gy >= 0 && gy < lw) raw[gy * lw + gx] = 100;
-          }
-      }
+      local_track_layer_->setCircles(tracker_.predicted(tracking_horizon_));
+    } else {
+      local_track_layer_->clear();
     }
-
     if (voxel_enabled_) {
-      const auto voxel_pts = voxel_layer_.occupancyPoints();
-      for (const auto & p : voxel_pts) {
-        const int mx = static_cast<int>(std::floor((p.x - ox) / res));
-        const int my = static_cast<int>(std::floor((p.y - oy) / res));
-        const int dx = mx - cx;
-        const int dy = my - cy;
-        if (dx < -win_half || dx > win_half || dy < -win_half || dy > win_half) continue;
-        raw[(dy + win_half) * lw + (dx + win_half)] = 100;
+      local_voxel_layer_->setPoints(voxel_layer_.occupancyPoints());
+    } else {
+      local_voxel_layer_->clear();
+    }
+    keepout_layer_->setActive(keepout_enabled_);
+
+    local_layers_.configure(cfg, core::kCostFree);
+    local_layers_.update(ros::Time::now().toSec());
+    std::vector<int16_t> raw = local_layers_.combined();
+
+    // 窗口内但在地图外的栅格: 旧实现视为致命 (不可穿越), 保持等价.
+    for (int y = 0; y < lw; ++y) {
+      const int my = cy - win_half + y;
+      for (int x = 0; x < lw; ++x) {
+        const int mx = cx - win_half + x;
+        if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) {
+          raw[static_cast<size_t>(y) * lw + x] = core::kCostLethal;
+        }
       }
     }
 
@@ -2464,37 +2575,14 @@ private:
       static_cast<int>(std::ceil(inflation_radius_ / res)),
       std::max(1, static_cast<int>(std::ceil(robot_radius_ / res))) + 1);
     const int l_safety = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
-    std::vector<float> ldist(lw * lw, std::numeric_limits<float>::max());
-    std::queue<std::pair<int, int>> lq;
-    for (int y = 0; y < lw; ++y) {
-      for (int x = 0; x < lw; ++x) {
-        if (raw[y * lw + x] >= 100) { ldist[y * lw + x] = 0.0f; lq.push({x, y}); }
-      }
-    }
-    const int ddx[4] = {-1, 0, 1, 0};
-    const int ddy[4] = {0, -1, 0, 1};
-    while (!lq.empty()) {
-      const std::pair<int, int> c = lq.front(); lq.pop();
-      const float cd = ldist[c.second * lw + c.first];
-      if (cd >= l_inflate) { continue; }
-      for (int i = 0; i < 4; ++i) {
-        const int nx = c.first + ddx[i];
-        const int ny = c.second + ddy[i];
-        if (nx < 0 || nx >= lw || ny < 0 || ny >= lw) { continue; }
-        if (cd + 1 < ldist[ny * lw + nx]) { ldist[ny * lw + nx] = cd + 1; lq.push({nx, ny}); }
-      }
-    }
+    const std::vector<int16_t> ldisplay =
+      core::inflatedCostmap(raw, static_cast<unsigned int>(lw),
+                            static_cast<unsigned int>(lw), l_safety, l_inflate);
 
-    const float linv = 1.0f / std::max(1, l_inflate - l_safety);
     local_costmap.data.resize(lw * lw);
     for (int i = 0; i < lw * lw; ++i) {
-      if (raw[i] >= 100) { local_costmap.data[i] = 100; continue; }
-      const float d = ldist[i];
       // 膨胀安全环显示为 99, 真实障碍 raw 仍是 100.
-      if (d <= l_safety) { local_costmap.data[i] = 99; }
-      else if (d <= l_inflate) {
-        local_costmap.data[i] = static_cast<int8_t>((1.0f - (d - l_safety) * linv) * 99);
-      } else { local_costmap.data[i] = 0; }
+      local_costmap.data[i] = static_cast<int8_t>(ldisplay[i]);
     }
     local_costmap_pub_.publish(local_costmap);
     if (mb_) { mb_->publishLocalMap(local_costmap); }
@@ -2511,7 +2599,7 @@ private:
       if (!controller_footprint_.empty()) {
         // footprint-aware: 控制器用未膨胀的实时障碍, 由 footprint 采样点负责
         // 车体形状; 不能再用 0.62m 圆形膨胀, 否则等于把车体算了两遍.
-        grid.data = raw;
+        grid.data.assign(raw.begin(), raw.end());
       } else {
         grid.data = local_costmap.data;
       }
@@ -3548,6 +3636,17 @@ private:
     return cmd_vel;
   }
 
+  geometry_msgs::Twist applySpeedLimit(const geometry_msgs::Twist & cmd)
+  {
+    if (speed_limit_layer_.size() == 0) { return cmd; }
+    const double limit = speed_limit_layer_.maxLinearAt(
+      current_pose_.pose.position.x, current_pose_.pose.position.y, max_velocity_x_);
+    if (limit >= max_velocity_x_ - 1e-6) { return cmd; }
+    geometry_msgs::Twist out = cmd;
+    out.linear.x = std::max(-limit, std::min(limit, out.linear.x));
+    return out;
+  }
+
   geometry_msgs::Twist applySafety(const geometry_msgs::Twist & cmd)
   {
     if (!safety_enabled_) return cmd;
@@ -3722,6 +3821,23 @@ private:
   std::vector<core::Point2D> tracker_points_;
   std::string last_safety_state_ = "PASS";
   double last_safety_scale_ = 1.0;
+
+  // ---- 分层代价地图 (B): 同一批层, planner/controller 两个视图 ----
+  bool keepout_enabled_ = true;
+  std::string virtual_obstacles_topic_ = "/virtual_obstacles";
+  std::string keepout_frame_ = "map";
+  std::shared_ptr<core::KeepoutLayer> keepout_layer_;
+  std::shared_ptr<core::StaticLayer> planner_static_layer_;
+  std::shared_ptr<core::StaticLayer> local_static_layer_;
+  std::shared_ptr<core::PointsLayer> local_scan_layer_;
+  std::shared_ptr<core::CirclesLayer> local_track_layer_;
+  std::shared_ptr<core::PointsLayer> local_voxel_layer_;
+  core::LayeredCostmap planner_layers_;
+  core::LayeredCostmap local_layers_;
+  std::vector<core::Point2D> scan_layer_points_;
+  core::SpeedLimitLayer speed_limit_layer_;
+  ros::Subscriber virtual_obstacles_sub_;
+  ros::Subscriber speed_limit_sub_;
 
   std::string global_frame_;
   std::string robot_frame_;
