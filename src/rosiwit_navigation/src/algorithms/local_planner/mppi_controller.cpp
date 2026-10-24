@@ -305,7 +305,16 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       cost += control_weight_ * (v * v + w * w);
       // 巡航目标就是配置的 max_velocity_x; 实际值由加速度、路径和
       // 障碍代价约束. 旧实现固定 75%, 导致把上限设成 1.0 也只能跑 ~0.75.
-      const double v_ref = reverse_mode_ ? -max_vx_ : max_vx_;
+      // 巡航目标: 有轨迹时用轨迹参考速度 (cusp/末段自动减速), 否则用 max_velocity_x
+      double v_ref = reverse_mode_ ? -max_vx_ : max_vx_;
+      if (traj_.valid && traj_.points.size() == path_.points.size()) {
+        const double tv = traj_.points[ni].v;
+        if (tv >= 0.0) {
+          v_ref = std::max(0.02, std::min(max_vx_, tv));
+        } else {
+          v_ref = -std::max(0.02, std::min(max_vx_, -tv));
+        }
+      }
       cost += speed_weight_ * (v - v_ref) * (v - v_ref) * dt_;
       cost += 0.02 * ((v - prev_v) * (v - prev_v) +
                       (w - prev_w) * (w - prev_w));

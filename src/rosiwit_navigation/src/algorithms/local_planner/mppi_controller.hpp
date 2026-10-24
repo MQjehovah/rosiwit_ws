@@ -23,6 +23,7 @@ public:
 
   bool initialize(const core::ControllerConfig& config) override;
   void setPath(const core::Path& path) override;
+  void setTrajectory(const core::TimedTrajectory& traj) override { traj_ = traj; }
   core::VelocityCommand computeVelocityCommand(
     const core::Pose2D& current_pose,
     const core::VelocityCommand& current_velocity) override;
@@ -52,6 +53,7 @@ private:
   core::Logger logger_;
   core::ControllerConfig cfg_;
   core::Path path_;
+  core::TimedTrajectory traj_;   // 可选: 时间参数化轨迹 (speed critic 目标)
   core::CostmapGrid local_costmap_;
   core::ObstacleArray obstacles_;
   core::Footprint footprint_;
