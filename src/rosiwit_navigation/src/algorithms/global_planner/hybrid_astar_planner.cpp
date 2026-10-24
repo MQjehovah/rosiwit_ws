@@ -48,15 +48,20 @@ void HybridAStarPlanner::buildPrimitives()
   const double curvatures[] = {-1.2, 0.0, 1.2};
   if (!config_.reverse_only) {
     for (double d : forward) {
-      for (double k : curvatures) primitives_.push_back({d, k});
+      for (double k : curvatures) primitives_.push_back({d, k, 0.0});
     }
   }
   if (config_.allow_reverse) {
     const double reverse = -std::min(
       std::fabs(0.35), config_.max_reverse_distance > 0.0
                            ? config_.max_reverse_distance : 0.35);
-    for (double k : curvatures) primitives_.push_back({reverse, k});
+    for (double k : curvatures) primitives_.push_back({reverse, k, 0.0});
   }
+  // 原地旋转基元 (distance=0): 前进-only 模式(清洁导航, 禁止倒车)下靠它
+  // 掉头/对正航向, 是"不需要倒车也能走出窄空间"的关键.
+  const double kTurn = M_PI / 6.0;   // 30° / 步
+  primitives_.push_back({0.0, 0.0, kTurn});
+  primitives_.push_back({0.0, 0.0, -kTurn});
 }
 
 void HybridAStarPlanner::setCostmap(const core::Costmap & costmap)
@@ -247,6 +252,15 @@ bool HybridAStarPlanner::checkArc(
 {
   const double sign = motion.distance >= 0.0 ? 1.0 : -1.0;
   const double distance = std::fabs(motion.distance);
+
+  // 原地旋转: 位置不变, 只转航向. 只做一次 footprint 检查.
+  if (distance < 1e-9) {
+    core::Pose2D p = from;
+    p.theta = normalizeAngle(from.theta + motion.dtheta);
+    if (!checkPose(p)) return false;
+    to = p;
+    return true;
+  }
   const int samples = std::max(2, static_cast<int>(std::ceil(distance / (resolution_ * 0.8))));
   const double ds = distance / samples;
 
@@ -311,6 +325,11 @@ core::Path HybridAStarPlanner::reconstruct(
     const Node & from = nodes[chain[k - 1]];
     const Node & to = nodes[chain[k]];
     const MotionPrimitive & m = to.motion;
+    if (std::fabs(m.distance) < 1e-9) {
+      // 原地旋转段: 位置不变, 朝向变化; velocity_x=0 供执行器识别
+      add_pose(from.x, from.y, normalizeAngle(from.theta + m.dtheta), 0.0);
+      continue;
+    }
     const double sign = m.distance >= 0.0 ? 1.0 : -1.0;
     const double distance = std::fabs(m.distance);
     const int samples = std::max(2, static_cast<int>(
@@ -434,9 +453,11 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       const int ith = headingIndex(next.theta);
       const int key = stateKey(ix, iy, ith);
 
-      const double travel = std::fabs(primitive.distance);
+      double travel = std::fabs(primitive.distance);
+      if (travel < 1e-9) travel = 0.08;   // 原地旋转的基础代价 (避免零代价循环)
       const double reversing_penalty = primitive.distance < 0.0 ? 1.35 : 1.0;
-      const double heading_penalty = std::fabs(primitive.curvature) * 0.08;
+      const double heading_penalty = std::fabs(primitive.curvature) * 0.08 +
+                                     std::fabs(primitive.dtheta) * 0.5;
       // 膨胀代价加权: 只查硬障碍会让路径贴墙 (0 余量), 控制器的 footprint +
       // 实时 scan 跟不进去 -> 卡死. 提高膨胀权重让路径在通道里自然居中,
       // 但窄口仍是"更贵"而不是"不可通行".

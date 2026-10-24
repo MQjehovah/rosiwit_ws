@@ -271,13 +271,19 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       const double dy = p.y - ref.y;
       const double lateral2 = dx * dx + dy * dy;
       // A* 未填路径点朝向; 用相邻点切线作为参考航向.
+      // 原地旋转点(位置不变, velocity_x=0)没有切线, 必须用路径自带朝向,
+      // 否则 atan2(0,0)=0 会把车往 0° 带, 和执行器的旋转目标打架.
       double ref_yaw = ref.theta;
       if (ni + 1 < path_.points.size()) {
         const auto& next = path_.points[ni + 1].pose;
-        ref_yaw = std::atan2(next.y - ref.y, next.x - ref.x);
+        const double ddx = next.x - ref.x;
+        const double ddy = next.y - ref.y;
+        if (std::hypot(ddx, ddy) > 1e-3) ref_yaw = std::atan2(ddy, ddx);
       } else if (ni > 0) {
         const auto& prev = path_.points[ni - 1].pose;
-        ref_yaw = std::atan2(ref.y - prev.y, ref.x - prev.x);
+        const double ddx = ref.x - prev.x;
+        const double ddy = ref.y - prev.y;
+        if (std::hypot(ddx, ddy) > 1e-3) ref_yaw = std::atan2(ddy, ddx);
       }
       // 倒车段: 车头朝向与路径切线相反. 切线只表示"走的方向", 参考航向
       // 要加 180°, 否则控制器先把车头转到前进方向再倒 -> 原地翻转卡死.

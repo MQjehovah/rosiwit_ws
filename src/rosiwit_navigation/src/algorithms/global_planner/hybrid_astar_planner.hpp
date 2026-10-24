@@ -55,6 +55,7 @@ private:
   {
     double distance = 0.0;   // 有符号，负值表示倒车
     double curvature = 0.0;  // 1/R，0 表示直线
+    double dtheta = 0.0;     // 原地旋转量(rad); distance==0 时生效
   };
   struct Node
   {

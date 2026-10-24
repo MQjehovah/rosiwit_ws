@@ -38,10 +38,10 @@ mppi_goal_weight: 1.5
 #   free : 自由导航, 允许前进/倒车灵活走位; 规划器=free_planner (Hybrid A*)
 # 运行时切换: rostopic pub /set_motion_profile std_msgs/String "data: 'free,mppi'"
 motion_profile: "clean"
-clean_planner: "astar"
+clean_planner: "hybrid_astar"   # 清洁也用 Hybrid A*, 但 allow_reverse=false (只能原地转)
 free_planner: "hybrid_astar"
 # 初始规划器 (启动后按 motion_profile 覆盖)
-planner_name: "astar"
+planner_name: "hybrid_astar"
 planner_max_iterations: 300000
 planner_timeout: 6.0
 planner_allow_reverse: true

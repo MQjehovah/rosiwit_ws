@@ -690,7 +690,8 @@ private:
     const bool allow_reverse = (profile != "clean");
     // 规划器: clean 用纯前进 A*; free 用 Hybrid A* (允许倒车)
     const std::string planner = allow_reverse ? free_planner_ : clean_planner_;
-    if (async_planner_ && planner != planner_name_) {
+    if (async_planner_ &&
+        (planner != planner_name_ || allow_reverse != planner_allow_reverse_)) {
       auto next = nav_core::NavigationFactory::createPlanner(planner);
       if (!next) {
         ROS_WARN("[rosiwit_navigation_ros1] planner '%s' not found", planner.c_str());
@@ -712,6 +713,7 @@ private:
         if (m_has_planner_costmap_) { next->setCostmap(planner_costmap_); }
         async_planner_ = std::move(next);
         planner_name_ = planner;
+        planner_allow_reverse_ = allow_reverse;
       }
     }
     // 控制器重建: allow_reverse 在 initialize 时固化
@@ -2655,6 +2657,7 @@ private:
     }
 
     current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
+    current_core_path_ = planned;   // 旋转段执行器读取 velocity_x==0 标记
 
     // 直接把核心路径交给控制器, 不能用 toCorePath(ROS Path) 转一圈: ROS
     // Path 没有前进/倒车方向字段, 会把 Hybrid A* 的反向段丢成“前进”.
@@ -3147,6 +3150,38 @@ private:
     return last_slam_matching_ < slam_degrade_matching_ ? slam_degrade_scale_ : 1.0;
   }
 
+  // 旋转段执行器: Hybrid A* 前进-only 模式用"原地旋转基元"掉头/对正, 路径点
+  // 标记 velocity_x==0 且位置不变. MPPI 无法跟踪原地旋转, 这里显式执行.
+  bool executeRotationSegment(const core::Pose2D & pose, geometry_msgs::Twist & out)
+  {
+    if (current_core_path_.points.size() < 2) return false;
+    size_t nearest = 0;
+    double best = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < current_core_path_.points.size(); ++i) {
+      const auto & q = current_core_path_.points[i].pose;
+      const double d = std::hypot(q.x - pose.x, q.y - pose.y);
+      if (d < best) { best = d; nearest = i; }
+    }
+    if (best > 0.25) return false;
+    if (std::fabs(current_core_path_.points[nearest].velocity_x) > 0.1) return false;
+    const auto & base = current_core_path_.points[nearest].pose;
+    size_t end = nearest;
+    while (end + 1 < current_core_path_.points.size()) {
+      const auto & q = current_core_path_.points[end + 1].pose;
+      if (std::hypot(q.x - base.x, q.y - base.y) > 0.03) break;
+      ++end;
+    }
+    // A* 路径点位置连续变化, end==nearest, 不会误判成旋转段
+    if (end == nearest) return false;
+    const double target = current_core_path_.points[end].pose.theta;
+    const double err = normalizeAngle(target - pose.theta);
+    if (std::fabs(err) < std::max(0.05, movebase_rotate_tolerance_)) return false;
+    out.linear.x = 0.0;
+    out.angular.z = std::max(-max_velocity_theta_,
+                             std::min(max_velocity_theta_, 1.5 * err));
+    return true;
+  }
+
   void controlLoop(const ros::TimerEvent &)
   {
     if (planning_active_) pollPlanning();
@@ -3313,6 +3348,16 @@ private:
     }
 
     auto cmd = computeVelocityCommand();
+    // 旋转段: 先原地转到位, 再交回 MPPI 跟踪前进段
+    {
+      geometry_msgs::Twist rot_cmd;
+      if (executeRotationSegment(toCorePose(current_pose_), rot_cmd)) {
+        publishCommand(applySafety(rot_cmd));
+        recordActionTraveled();
+        if (task_active_) { publishActionOutputs(); }
+        return;
+      }
+    }
     const double health_scale = slamHealthScale();
     if (health_scale < 1.0) {
       cmd.linear.x *= health_scale;
@@ -3413,6 +3458,7 @@ private:
     resetRecovery();
     is_navigating_ = false;
     is_paused_ = false;
+    current_core_path_.points.clear();
     last_motion_stamp_ = ros::Time();
     safety_stop_since_ = ros::Time();
     // 取消/结束导航时必须同时作废在途的异步规划, 否则 pollPlanning 会把这个
@@ -3605,7 +3651,9 @@ private:
   ros::Subscriber profile_sub_;      // /set_motion_profile: "clean|free[,controller]"
   std::string motion_profile_ = "clean";
   std::string free_planner_ = "hybrid_astar";
-  std::string clean_planner_ = "astar";
+  std::string clean_planner_ = "hybrid_astar";
+  // 当前主路径 (核心坐标系): 供旋转段执行器读取 velocity_x 标记
+  core::Path current_core_path_;
   ros::Time last_slam_info_stamp_;
   int last_slam_status_ = -1;
   double last_slam_matching_ = 1.0;
