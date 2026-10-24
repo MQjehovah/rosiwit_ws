@@ -255,6 +255,8 @@ struct AcceptConfig {
     // 误判成离群；这里给平移/旋转一个物理下限。
     double mahalanobis_trans_floor = 0.20;  // m
     double mahalanobis_rot_floor = 0.05;    // rad
+    // 协方差 floor 的参考对应点数: 少于该值时按比例放宽门限
+    int    mahalanobis_ref_points = 500;
     // 退化方向部分更新: 用 JtJ 特征分解把修正量按可观测度缩放.
     // 弱观测方向(eig < ratio_soft*eig_max)增益趋 0 => 只信先验, 不再让
     // "沿长墙滑动"这类退化解整体生效 (旋转时对应点集中在单面墙的典型失效).
@@ -304,6 +306,8 @@ struct MaintainerConfig {
     // ---- L13 位姿图维护 (可选) ----
     bool   pose_graph = false;       // true: 变化关键帧缓冲后用 GTSAM 位姿图平滑再写入
     int    pg_min_keyframes = 3;     // 触发一次位姿图优化的最少关键帧数
+    // 叠加层容量上限 (体素). 超过后整体重置并告警, 防止长期运行无界增长.
+    int    max_voxels = 400000;
 };
 
 } // namespace rosiwit_slam

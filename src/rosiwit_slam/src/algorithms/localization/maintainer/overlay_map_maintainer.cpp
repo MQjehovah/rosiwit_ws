@@ -45,6 +45,21 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
 }
 
 void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
+    // 容量上限: 叠加层长期运行会无限增长 (实体素/单点只增不减). 超过上限时
+    // 整体重置叠加层并告警 —— 底图不动, 叠加层只是"变化缓存", 重建代价可控,
+    // 比无界内存增长/OOM 安全. yaml: maintainer.max_voxels
+    if (m_cfg.max_voxels > 0 &&
+        static_cast<int>(m_voxel_seen.size()) >= m_cfg.max_voxels) {
+        m_cells.clear();
+        m_voxel_seen.clear();
+        m_pending_store.reset();
+        m_hits.clear();
+        m_overlay_count = 0;
+        m_frame = 0;
+        ++m_revision;
+        std::cerr << "[OverlayMapMaintainer] overlay reset: reached max_voxels="
+                  << m_cfg.max_voxels << std::endl;
+    }
     const int vx = static_cast<int>(std::floor(p.x() / m_voxel));
     const int vy = static_cast<int>(std::floor(p.y() / m_voxel));
     const int vz = static_cast<int>(std::floor(p.z() / m_voxel));

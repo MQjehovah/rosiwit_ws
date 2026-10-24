@@ -66,6 +66,13 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
                 realtime_grid_resolution_ =
                     cfg["mapping"]["grid"]["realtime_resolution"].as<double>();
             }
+            // 输出平滑 (alpha-beta): localization.output.filter_alpha/beta
+            if (cfg["localization"] && cfg["localization"]["output"]) {
+                const YAML::Node oc = cfg["localization"]["output"];
+                if (oc["filter_alpha"]) out_filter_alpha_ = oc["filter_alpha"].as<double>();
+                if (oc["filter_beta"]) out_filter_beta_ = oc["filter_beta"].as<double>();
+                if (oc["extrap_max_s"]) out_filter_extrap_s_ = oc["extrap_max_s"].as<double>();
+            }
         }
     } catch (const std::exception& e) {
         ROS_WARN_STREAM("[rosiwit_interface] realtime grid resolution parse failed: " << e.what());
@@ -113,6 +120,23 @@ RosiwitInterface::PreparedPose RosiwitInterface::preparePose(const SlamOutput& o
     }
 
     p.stamp = (p.pose.time > 0) ? ros::Time(p.pose.time) : ros::Time::now();
+
+    // 输出平滑: alpha-beta 因果滤波. 只影响发布的位姿/轨迹/TF, 不改核心状态.
+    if (out_filter_alpha_ > 1e-6) {
+        const double t = p.stamp.toSec();
+        if (!out_filter_.initialized()) {
+            out_filter_.configure(out_filter_alpha_, out_filter_beta_, out_filter_extrap_s_);
+            out_filter_.reset(p.pose);
+        } else if (p.new_pose) {
+            out_filter_.update(t, p.pose);
+        }
+        PoseStamped smoothed;
+        if (out_filter_.poseAt(t, smoothed)) {
+            smoothed.time = p.pose.time;
+            smoothed.vel = p.pose.vel;
+            p.pose = smoothed;
+        }
+    }
     return p;
 }
 
@@ -130,6 +154,30 @@ void RosiwitInterface::publishOdometry(const PreparedPose& p) {
     odom.pose.pose.orientation.y = q.y();
     odom.pose.pose.orientation.z = q.z();
     odom.pose.pose.orientation.w = q.w();
+    // 位姿协方差 (x,y,z,roll,pitch,yaw): 之前全零 = 对外宣称零不确定度,
+    // 下游 (nav/robot_localization) 无法据此降级. 按定位状态/匹配度给保守估计.
+    {
+        double sig_t = 0.30, sig_r = 0.15;   // 默认: 建图/LIO 里程计精度
+        if (engine_.pipelineMode() == "localization") {
+            const auto st = engine_.localizationStatus();
+            if (st == rosiwit_slam::ILocalization::LOST) {
+                sig_t = 1.0; sig_r = 0.5;
+            } else if (st == rosiwit_slam::ILocalization::INIT) {
+                sig_t = 0.3; sig_r = 0.15;
+            } else {
+                sig_t = 0.05; sig_r = 0.02;
+                const double m = engine_.getMatchingDegree();
+                if (m < 0.60) { sig_t = 0.40; sig_r = 0.20; }
+                else if (m < 0.75) { sig_t = 0.12; sig_r = 0.05; }
+            }
+        }
+        odom.pose.covariance[0]  = sig_t * sig_t;
+        odom.pose.covariance[7]  = sig_t * sig_t;
+        odom.pose.covariance[14] = 0.05 * 0.05;
+        odom.pose.covariance[21] = sig_r * sig_r;
+        odom.pose.covariance[28] = sig_r * sig_r;
+        odom.pose.covariance[35] = sig_r * sig_r;
+    }
     const Eigen::Vector3d vel_body = q.conjugate() * p.pose.vel;
     odom.twist.twist.linear.x = vel_body.x();
     odom.twist.twist.linear.y = vel_body.y();

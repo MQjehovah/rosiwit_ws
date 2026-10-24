@@ -211,9 +211,17 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   std::normal_distribution<double> noise_v(0.0, sigma_v_);
   std::normal_distribution<double> noise_w(0.0, sigma_w_);
 
+  // 近距离自适应采样幅度: 贴障碍时缩小噪声, 让采样集中在标称轨迹附近,
+  // 减少"靠运气穿过窄口/蹭墙"的样本; 空旷区保持原幅度以保证通过性.
+  const int margin_cost = core::footprintCost(local_costmap_, pose, footprint_samples_);
+  const double sigma_scale = margin_cost >= 85 ? 0.5 : (margin_cost >= 60 ? 0.75 : 1.0);
+  std::normal_distribution<double> noise_v_scaled(0.0, sigma_v_ * sigma_scale);
+  std::normal_distribution<double> noise_w_scaled(0.0, sigma_w_ * sigma_scale);
+
   struct Sample {
     std::vector<Control> controls;
     double cost{0.0};
+    bool collided{false};
   };
   std::vector<Sample> sampled(static_cast<size_t>(samples_));
   double min_cost = std::numeric_limits<double>::max();
@@ -239,8 +247,8 @@ core::VelocityCommand MppiController::computeVelocityCommand(
     double cost = 0.0;
 
     for (int t = 0; t < horizon_; ++t) {
-      double v = sample.controls[static_cast<size_t>(t)].v + noise_v(rng_);
-      double w = sample.controls[static_cast<size_t>(t)].w + noise_w(rng_);
+      double v = sample.controls[static_cast<size_t>(t)].v + noise_v_scaled(rng_);
+      double w = sample.controls[static_cast<size_t>(t)].w + noise_w_scaled(rng_);
       v = std::clamp(v, std::max(vmin, prev_v - max_ax_ * dt_),
                         std::min(vmax, prev_v + max_ax_ * dt_));
       w = std::clamp(w, prev_w - max_aw_ * dt_, prev_w + max_aw_ * dt_);
@@ -270,7 +278,10 @@ core::VelocityCommand MppiController::computeVelocityCommand(
 
       const int cell = core::footprintCost(local_costmap_, p, footprint_samples_);
       if (cell >= 100) {
-        cost += 1000.0;
+        // 硬碰撞: 该样本直接作废, 不参与软max. 以前只是 +1000 代价,
+        // 当所有样本都贴墙时仍会被平均进来, 表现为"蹭墙/压实膨胀区".
+        sample.collided = true;
+        break;
       } else if (cell > 60) {
         // 蓝色膨胀区 1..99 是可通行的软代价. 0.9m 膨胀会让窄走廊
         // 几乎整片都是 40-60, 若每一格都重罚, 控制器的速度项会被
@@ -298,8 +309,11 @@ core::VelocityCommand MppiController::computeVelocityCommand(
 
   last_min_cost_ = std::min(min_cost, 1e12);
   double sum_w = 0.0;
+  int valid_samples = 0;
   std::vector<Control> weighted(static_cast<size_t>(horizon_), Control{});
   for (const auto& sample : sampled) {
+    if (sample.collided) continue;   // 硬碰撞样本不参与加权
+    ++valid_samples;
     const double weight = std::exp(-(sample.cost - min_cost) / lambda_);
     sum_w += weight;
     for (int t = 0; t < horizon_; ++t) {
@@ -307,7 +321,16 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       weighted[static_cast<size_t>(t)].w += weight * sample.controls[static_cast<size_t>(t)].w;
     }
   }
-  if (sum_w <= 0.0) return {0.0, 0.0, 0.0};
+  // 全部样本都撞: 说明当前位姿/路径已经贴死在障碍里, 停车而不是硬挤过去,
+  // 由上层(安全层/恢复)接管.
+  if (sum_w <= 0.0 || valid_samples == 0) {
+    last_collision_ratio_ = 1.0;
+    last_output_v_ = 0.0;
+    last_output_w_ = 0.0;
+    return {0.0, 0.0, 0.0};
+  }
+  last_collision_ratio_ =
+    1.0 - static_cast<double>(valid_samples) / static_cast<double>(sampled.size());
 
   for (int t = 0; t < horizon_; ++t) {
     nominal_[static_cast<size_t>(t)] = {
@@ -323,7 +346,6 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   last_output_w_ = std::clamp(first.w, -max_vw_, max_vw_);
   last_nearest_idx_ = nearestPathIndex(pose);
   last_goal_error_ = pose.distanceTo(path_.points.back().pose);
-  last_collision_ratio_ = 0.0;
   last_mean_cost_ = 0.0;
   int best_k = 0;
   for (size_t k = 0; k < sampled.size(); ++k) {

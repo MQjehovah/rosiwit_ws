@@ -231,6 +231,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_accept_cfg.mahalanobis_chi2 = getv<double>(ac, "mahalanobis_chi2", m_accept_cfg.mahalanobis_chi2);
         m_accept_cfg.mahalanobis_trans_floor = getv<double>(ac, "mahalanobis_trans_floor", m_accept_cfg.mahalanobis_trans_floor);
         m_accept_cfg.mahalanobis_rot_floor = getv<double>(ac, "mahalanobis_rot_floor", m_accept_cfg.mahalanobis_rot_floor);
+        m_accept_cfg.mahalanobis_ref_points = getv<int>(ac, "mahalanobis_ref_points", m_accept_cfg.mahalanobis_ref_points);
         m_accept_cfg.degeneracy_partial_update = getv<bool>(ac, "degeneracy_partial_update", m_accept_cfg.degeneracy_partial_update);
         m_accept_cfg.degeneracy_ratio_soft = getv<double>(ac, "degeneracy_ratio_soft", m_accept_cfg.degeneracy_ratio_soft);
     }
@@ -252,6 +253,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.carve_stride     = getv<int>(mtc, "carve_stride", m_maintainer_cfg.carve_stride);
         m_maintainer_cfg.pose_graph       = getv<bool>(mtc, "pose_graph", m_maintainer_cfg.pose_graph);
         m_maintainer_cfg.pg_min_keyframes = getv<int>(mtc, "pg_min_keyframes", m_maintainer_cfg.pg_min_keyframes);
+        m_maintainer_cfg.max_voxels       = getv<int>(mtc, "max_voxels", m_maintainer_cfg.max_voxels);
     }
     auto plc = loc["planar"];
     if (plc) {
@@ -852,8 +854,19 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
         Eigen::Matrix<double, 6, 1> e;
         poseInnovation(res.pose, guess, e);
         Eigen::Matrix<double, 6, 6> C = res.cov;
-        const double rf = m_accept_cfg.mahalanobis_rot_floor * m_accept_cfg.mahalanobis_rot_floor;
-        const double tf = m_accept_cfg.mahalanobis_trans_floor * m_accept_cfg.mahalanobis_trans_floor;
+        // 对应点少时 GICP 的协方差被低估 (残差平方口径), 常数 floor 会把
+        // 0.04m 的正常修正判成离群 (实测旋转时连续 coast 28 帧). 这里按
+        // 对应点数放大 floor: n=ref 时系数 1, n 越小越宽松 (上限 6 倍方差).
+        double floor_scale = 1.0;
+        if (m_accept_cfg.mahalanobis_ref_points > 0 && res.correspondences > 0) {
+            floor_scale = std::min(6.0, std::max(1.0,
+                static_cast<double>(m_accept_cfg.mahalanobis_ref_points) /
+                static_cast<double>(res.correspondences)));
+        }
+        const double rf = m_accept_cfg.mahalanobis_rot_floor *
+                          m_accept_cfg.mahalanobis_rot_floor * floor_scale;
+        const double tf = m_accept_cfg.mahalanobis_trans_floor *
+                          m_accept_cfg.mahalanobis_trans_floor * floor_scale;
         for (int k = 0; k < 3; ++k) C(k, k) += rf;
         for (int k = 3; k < 6; ++k) C(k, k) += tf;
         Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(C);

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
@@ -82,6 +83,10 @@ bool PcdMapManager::init(const std::string& config_path) {
         } else if (mv("max_correction_rot_rad")) {
             const double v = mv("max_correction_rot_rad").as<double>();
             if (std::isfinite(v) && v > 0.0) m_max_correction_rot_rad = v;
+        }
+        if (mv("dynamic_min_views")) {
+            const int v = mv("dynamic_min_views").as<int>();
+            if (v > 0) dynamic_min_views_ = v;
         }
         std::cout << "[PcdMapManager] correction limits: trans=" << m_max_correction_trans_m
                   << "m rot=" << m_max_correction_rot_rad * 180.0 / M_PI << "deg" << std::endl;
@@ -165,6 +170,47 @@ bool PcdMapManager::saveMap(const std::string& name) {
     if (!global_map_ || global_map_->empty()) {
         std::cerr << "[PcdMapManager] Nothing to save" << std::endl;
         return false;
+    }
+
+    // 动态点剔除: 统计每个体素在多少帧观测里出现过, 只保留 >= dynamic_min_views 的.
+    // 单帧瞬态(行人/门/反光)在多帧统计里会被自然淘汰; 静态结构在多帧里重复出现.
+    if (dynamic_min_views_ > 1 && !observations_.empty()) {
+        const float leaf = static_cast<float>(std::max(0.10, save_voxel_ * 2.0));
+        std::unordered_map<int64_t, uint8_t> hits;
+        hits.reserve(static_cast<size_t>(global_map_->size()) * 2 + 1);
+        auto vkey = [&](float x, float y, float z) -> int64_t {
+            const int64_t ix = static_cast<int64_t>(std::floor(x / leaf)) & 0x1FFFFF;
+            const int64_t iy = static_cast<int64_t>(std::floor(y / leaf)) & 0x1FFFFF;
+            const int64_t iz = static_cast<int64_t>(std::floor(z / leaf)) & 0x1FFFFF;
+            return (ix << 42) | (iy << 21) | iz;
+        };
+        for (const auto& ob : observations_) {
+            if (!ob.cloud) continue;
+            for (const auto& p : ob.cloud->points) {
+                if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+                uint8_t& h = hits[vkey(p.x, p.y, p.z)];
+                if (h < 255) ++h;
+            }
+        }
+        CloudType::Ptr filtered(new CloudType());
+        filtered->reserve(global_map_->size());
+        size_t removed = 0;
+        for (const auto& p : global_map_->points) {
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+            const auto it = hits.find(vkey(p.x, p.y, p.z));
+            if (it != hits.end() && it->second >= dynamic_min_views_) {
+                filtered->push_back(p);
+            } else {
+                ++removed;
+            }
+        }
+        filtered->width = static_cast<uint32_t>(filtered->size());
+        filtered->height = 1;
+        filtered->is_dense = false;
+        global_map_ = filtered;
+        std::cout << "[PcdMapManager] dynamic filter: kept "
+                  << global_map_->size() << ", removed " << removed
+                  << " single-view points (min_views=" << dynamic_min_views_ << ")" << std::endl;
     }
 
     // 服务接口文档允许绝对路径; 之前无条件拼 map_dir_ 会把

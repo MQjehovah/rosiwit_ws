@@ -53,6 +53,7 @@
 #include "rosiwit_navigation/nav_core/action_task.hpp"
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 #include "rosiwit_navigation/nav_core/footprint.hpp"
+#include <xzrobot_ros_dependency/SlamInfo.h>
 #include "path_smoother.hpp"
 #include "movebase_protocol.h"
 #include "movebase_interface.h"
@@ -357,6 +358,12 @@ private:
     // 恢复只允许规划得到的倒车路径. 不再保留 primitive 后退/旋转后备.
     pnh_.param<double>("recovery_back_distance", recovery_back_distance_, 0.60);
     pnh_.param<double>("recovery_timeout", recovery_timeout_, 20.0);
+    // 运动看门狗 / 安全停障恢复 / 定位健康门控
+    pnh_.param<double>("nav_no_progress_timeout", no_progress_timeout_, 8.0);
+    pnh_.param<double>("nav_safety_stop_timeout", safety_stop_timeout_, 2.0);
+    pnh_.param<double>("slam_info_timeout", slam_info_timeout_, 2.0);
+    pnh_.param<double>("slam_degrade_matching", slam_degrade_matching_, 0.65);
+    pnh_.param<double>("slam_degrade_scale", slam_degrade_scale_, 0.5);
     // 恢复规划: 当前 footprint 压住的栅格视为 free, 否则反向 escape
     // 会在起点直接报 Start in obstacle. 正常规划不使用这个副本.
     pnh_.param<bool>("recovery_clear_start_footprint", recovery_clear_start_footprint_, true);
@@ -614,6 +621,9 @@ private:
     odom_sub_ = nh_.subscribe(odom_topic_, 1, &RosiwitNavigationRos1Node::odomCallback, this);
     map_sub_ = nh_.subscribe(map_topic_, 1, &RosiwitNavigationRos1Node::mapCallback, this);
     scan_sub_ = nh_.subscribe(scan_topic_, 1, &RosiwitNavigationRos1Node::scanCallback, this);
+    // 定位健康: LOST -> 停车; matching 低 -> 限速
+    slam_info_sub_ = nh_.subscribe("/slam/info", 1,
+                                   &RosiwitNavigationRos1Node::slamInfoCallback, this);
     if (voxel_enabled_ && !voxel_cloud_topic_.empty()) {
       voxel_sub_ = nh_.subscribe(voxel_cloud_topic_, 1,
                                  &RosiwitNavigationRos1Node::voxelCallback, this);
@@ -2400,6 +2410,8 @@ private:
       stopNavigation();
       current_path_.poses.clear();
       global_path_pub_.publish(current_path_);
+      last_motion_stamp_ = ros::Time::now();
+      safety_stop_since_ = ros::Time();
     } else {
       is_navigating_ = true;  // 重规划期间旧路径继续可用
     }
@@ -2688,6 +2700,53 @@ private:
       recovery_clear_start_footprint_);
   }
 
+  // ---- 反向逃逸规划 (在后台线程执行, 不阻塞控制环) ----
+  struct RecoveryPlanOutcome {
+    bool ok = false;
+    core::Path path;
+    size_t candidate = 0;
+    double target_distance = 0.0;
+    std::string error;
+  };
+
+  RecoveryPlanOutcome planReverseEscape(
+      const core::Pose2D & pose, const core::Costmap & costmap,
+      const std::vector<core::Pose2D> & targets,
+      const std::vector<std::pair<double, double>> & footprint_samples,
+      double planning_budget)
+  {
+    RecoveryPlanOutcome out;
+    recovery_planner_->setCostmap(costmap);
+    auto target_free = [&](const core::Pose2D & target) {
+      if (footprint_samples.empty() || !costmap.grid) { return true; }
+      return core::footprintCost(*costmap.grid, target, footprint_samples) < 100;
+    };
+    const ros::Time started = ros::Time::now();
+    for (size_t i = 0; i < targets.size(); ++i) {
+      if ((ros::Time::now() - started).toSec() > planning_budget) {
+        out.error = "planning budget exceeded";
+        ROS_WARN("[rosiwit_navigation_ros1] reverse escape planning budget %.1fs "
+                 "exceeded after %zu candidates", planning_budget, i);
+        break;
+      }
+      if (!target_free(targets[i])) { continue; }
+      const auto result = recovery_planner_->plan(pose, targets[i]);
+      if (!result.is_ok()) {
+        out.error = result.error_message();
+        ROS_WARN("[rosiwit_navigation_ros1] reverse escape candidate=%zu failed: %s",
+                 i + 1, result.error_message().c_str());
+        continue;
+      }
+      out.ok = true;
+      out.path = result.value();
+      out.candidate = i;
+      out.target_distance = std::hypot(targets[i].x - pose.x, targets[i].y - pose.y);
+      return out;
+    }
+    if (out.error.empty()) { out.error = "no valid escape target"; }
+    return out;
+  }
+
   bool startRecovery()
   {
     if (!recovery_enabled_ || coverage_active_ ||
@@ -2764,48 +2823,34 @@ private:
       targets.push_back(behind(back * 2.0, -wide));
 
       const core::Costmap recovery_costmap = buildRecoveryCostmap();
-      recovery_planner_->setCostmap(recovery_costmap);
       std::vector<std::pair<double, double>> footprint_samples;
       if (!configured_footprint_.empty()) {
         footprint_samples = core::sampleFootprint(
           configured_footprint_, std::max(0.02, footprint_sample_spacing_));
       }
-      auto target_free = [&](const core::Pose2D & target) {
-        if (footprint_samples.empty() || !recovery_costmap.grid) { return true; }
-        return core::footprintCost(*recovery_costmap.grid, target,
-                                   footprint_samples) < 100;
-      };
-      const ros::Time planning_started = ros::Time::now();
       const double planning_budget = recovery_timeout_ > 0.0
         ? std::min(6.0, recovery_timeout_ * 0.8) : 6.0;
-      for (size_t i = 0; i < targets.size(); ++i) {
-        if ((ros::Time::now() - planning_started).toSec() > planning_budget) {
-          ROS_WARN("[rosiwit_navigation_ros1] reverse escape planning budget %.1fs "
-                   "exceeded after %zu candidates", planning_budget, i);
-          break;
+      // 上一次恢复规划还没结束: 复用它, 不再开新线程 (否则 future 赋值会阻塞)
+      if (recovery_plan_future_.valid()) {
+        if (recovery_plan_future_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready) {
+          recovery_stage_ = RecoveryStage::PLANNING;
+          return true;
         }
-        if (!target_free(targets[i])) { continue; }
-        const auto result = recovery_planner_->plan(pose, targets[i]);
-        if (!result.is_ok()) {
-          ROS_WARN("[rosiwit_navigation_ros1] reverse escape candidate=%zu failed: %s",
-                   i + 1, result.error_message().c_str());
-          continue;
-        }
-        recovery_core_path_ = result.value();
-        current_path_ = toRosPath(recovery_core_path_, map_frame_, ros::Time::now());
-        recovery_controller_->setPath(recovery_core_path_);
-        recovery_stage_ = RecoveryStage::FOLLOW;
-        // 规划本身可能耗时; 超时只约束路径执行阶段.
-        recovery_started_ = ros::Time::now();
-        ROS_WARN("[rosiwit_navigation_ros1] recovery %d/%d: planned reverse escape "
-                 "candidate=%zu target_distance=%.2fm (%zu pts)",
-                 recovery_attempts_, recovery_max_attempts_, i + 1,
-                 std::hypot(targets[i].x - pose.x, targets[i].y - pose.y),
-                 current_path_.poses.size());
-        return true;
+        try { (void)recovery_plan_future_.get(); } catch (...) {}
       }
-      ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed; "
-                "refusing blind backoff, task will fail");
+      // 恢复规划放后台线程: 以前在 10Hz 控制定时器里同步跑, 单次最多阻塞
+      // 6s, 期间不发 cmd_vel, 底盘继续执行最后一条速度指令 (危险).
+      ++recovery_plan_gen_;
+      recovery_plan_future_ = std::async(std::launch::async,
+        [this, pose, recovery_costmap, targets, footprint_samples, planning_budget]() {
+          return planReverseEscape(pose, recovery_costmap, targets,
+                                   footprint_samples, planning_budget);
+        });
+      recovery_stage_ = RecoveryStage::PLANNING;
+      ROS_WARN("[rosiwit_navigation_ros1] recovery planning started in background "
+               "(%zu candidates)", targets.size());
+      return true;
     }
     return false;
   }
@@ -2838,6 +2883,37 @@ private:
   {
     if (recovery_stage_ == RecoveryStage::NONE) return;
     const ros::Time now = ros::Time::now();
+    if (recovery_stage_ == RecoveryStage::PLANNING) {
+      if (!recovery_plan_future_.valid()) { failRecovery(); return; }
+      if (recovery_plan_future_.wait_for(std::chrono::seconds(0)) !=
+          std::future_status::ready) {
+        // 规划中: 保持停车 (不是保持上一条速度), 控制环不被阻塞
+        publishCommand(applySafety(geometry_msgs::Twist()));
+        return;
+      }
+      RecoveryPlanOutcome out;
+      try { out = recovery_plan_future_.get(); }
+      catch (const std::exception & e) {
+        ROS_ERROR("[rosiwit_navigation_ros1] recovery planning exception: %s", e.what());
+      }
+      if (!out.ok) {
+        ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed (%s); "
+                  "task will fail", out.error.c_str());
+        failRecovery();
+        return;
+      }
+      recovery_core_path_ = out.path;
+      current_path_ = toRosPath(recovery_core_path_, map_frame_, ros::Time::now());
+      if (recovery_controller_) { recovery_controller_->setPath(recovery_core_path_); }
+      recovery_stage_ = RecoveryStage::FOLLOW;
+      // 规划耗时不算在执行超时里
+      recovery_started_ = now;
+      ROS_WARN("[rosiwit_navigation_ros1] recovery %d/%d: planned reverse escape "
+               "candidate=%zu target_distance=%.2fm (%zu pts)",
+               recovery_attempts_, recovery_max_attempts_, out.candidate + 1,
+               out.target_distance, current_path_.poses.size());
+      return;
+    }
     if (recovery_timeout_ > 0.0 &&
         (now - recovery_started_).toSec() > recovery_timeout_) {
       ROS_WARN("[rosiwit_navigation_ros1] recovery timeout");
@@ -2897,9 +2973,50 @@ private:
     return true;
   }
 
+  void updateMotionWatch(const ros::Time & now)
+  {
+    const auto & p = current_pose_.pose.position;
+    const double yaw = yawFromQuat(current_pose_.pose.orientation);
+    const double moved = std::hypot(p.x - last_motion_pose_.x, p.y - last_motion_pose_.y);
+    const double turned = std::fabs(normalizeAngle(yaw - last_motion_yaw_));
+    if (last_motion_stamp_.isZero() || moved > 0.03 || turned > 0.05) {
+      last_motion_pose_ = p;
+      last_motion_yaw_ = yaw;
+      last_motion_stamp_ = now;
+    }
+  }
+
+  void slamInfoCallback(const xzrobot_ros_dependency::SlamInfo::ConstPtr & msg)
+  {
+    last_slam_info_stamp_ = ros::Time::now();
+    last_slam_status_ = msg->location_status;
+    last_slam_matching_ = msg->matching_degree;
+  }
+
+  bool slamHealthLost() const
+  {
+    return !last_slam_info_stamp_.isZero() && last_slam_status_ == 2 &&
+           (ros::Time::now() - last_slam_info_stamp_).toSec() <= slam_info_timeout_;
+  }
+
+  double slamHealthScale() const
+  {
+    if (last_slam_info_stamp_.isZero() ||
+        (ros::Time::now() - last_slam_info_stamp_).toSec() > slam_info_timeout_) {
+      return 1.0;   // 没有健康信息时不额外限速 (兼容未接 SLAM 的部署)
+    }
+    return last_slam_matching_ < slam_degrade_matching_ ? slam_degrade_scale_ : 1.0;
+  }
+
   void controlLoop(const ros::TimerEvent &)
   {
     if (planning_active_) pollPlanning();
+    // 丢弃已完成但已过期的恢复规划结果 (resetRecovery 不销毁在途 future)
+    if (recovery_stage_ == RecoveryStage::NONE && recovery_plan_future_.valid() &&
+        recovery_plan_future_.wait_for(std::chrono::seconds(0)) ==
+            std::future_status::ready) {
+      try { (void)recovery_plan_future_.get(); } catch (...) {}
+    }
     if (!is_navigating_ || is_paused_) { return; }
     if (last_odom_stamp_.isZero() ||
         (ros::Time::now() - last_odom_stamp_).toSec() > 0.6) {
@@ -2922,6 +3039,18 @@ private:
       return;
     }
 
+    updateMotionWatch(ros::Time::now());
+    // 定位丢失: /lio_odom 会继续发最后有效位姿, 冻结位姿继续走等于盲开.
+    if (slamHealthLost()) {
+      if (task_active_) {
+        failTask(movebase::RESULT_POSE_ERROR, "FAILED_LOC_LOST");
+      } else {
+        setGoalStatus("FAILED_LOC_LOST");
+        stopNavigation();
+      }
+      return;
+    }
+
     {
       std::string status;
       int result_code = movebase::RESULT_PERCEPTION_TIMEOUT;
@@ -2930,6 +3059,45 @@ private:
           failTask(result_code, status);
         } else {
           setGoalStatus(status);
+          stopNavigation();
+        }
+        return;
+      }
+    }
+
+    // ---- 阻塞兜底: 安全层持续停住 / 有指令但底盘不动 -> 立即恢复 ----
+    if (recovery_stage_ == RecoveryStage::NONE && !coverage_active_) {
+      const ros::Time now = ros::Time::now();
+      const bool safety_stopped = safety_enabled_ && last_safety_scale_ <= 0.01;
+      if (safety_stopped) {
+        if (safety_stop_since_.isZero()) {
+          safety_stop_since_ = now;
+        } else if ((now - safety_stop_since_).toSec() > safety_stop_timeout_) {
+          safety_stop_since_ = ros::Time();
+          ROS_WARN("[rosiwit_navigation_ros1] safety stop %.1fs, start recovery",
+                   safety_stop_timeout_);
+          if (startRecovery()) { return; }
+          if (task_active_) {
+            failTask(movebase::RESULT_NO_PROGRESS, "FAILED_SAFETY_STOP");
+          } else {
+            setGoalStatus("FAILED_SAFETY_STOP");
+            stopNavigation();
+          }
+          return;
+        }
+      } else {
+        safety_stop_since_ = ros::Time();
+      }
+      if (!last_motion_stamp_.isZero() &&
+          (now - last_motion_stamp_).toSec() > no_progress_timeout_) {
+        last_motion_stamp_ = now;   // 防止重复触发
+        ROS_WARN("[rosiwit_navigation_ros1] no motion for %.1fs, start recovery",
+                 no_progress_timeout_);
+        if (startRecovery()) { return; }
+        if (task_active_) {
+          failTask(movebase::RESULT_NO_PROGRESS, "FAILED_NO_MOTION");
+        } else {
+          setGoalStatus("FAILED_NO_MOTION");
           stopNavigation();
         }
         return;
@@ -3003,7 +3171,13 @@ private:
       }
     }
 
-    publishCommand(applySafety(computeVelocityCommand()));
+    auto cmd = computeVelocityCommand();
+    const double health_scale = slamHealthScale();
+    if (health_scale < 1.0) {
+      cmd.linear.x *= health_scale;
+      cmd.angular.z *= health_scale;
+    }
+    publishCommand(applySafety(cmd));
     path_pub_.publish(current_path_);
     recordActionTraveled();
     if (task_active_) { publishActionOutputs(); }
@@ -3098,6 +3272,8 @@ private:
     resetRecovery();
     is_navigating_ = false;
     is_paused_ = false;
+    last_motion_stamp_ = ros::Time();
+    safety_stop_since_ = ros::Time();
     // 取消/结束导航时必须同时作废在途的异步规划, 否则 pollPlanning 会把这个
     // 结果 applyPlanningResult() 回来, 让已经停止的任务重新跑起来.
     if (planning_active_ || async_plan_future_.valid()) {
@@ -3269,6 +3445,27 @@ private:
   bool planning_active_ = false;
   uint64_t plan_generation_ = 0;
   uint64_t active_plan_generation_ = 0;
+
+  // 恢复规划在后台线程执行; 控制环只 poll, 不再被 plan() 阻塞
+  std::future<RecoveryPlanOutcome> recovery_plan_future_;
+  uint64_t recovery_plan_gen_ = 0;
+
+  // 运动看门狗: 指令有效但底盘不动 -> 快速判定阻塞 (替代 60s 位移看门狗)
+  ros::Time last_motion_stamp_;
+  geometry_msgs::Point last_motion_pose_;
+  double last_motion_yaw_ = 0.0;
+  double no_progress_timeout_ = 8.0;
+  ros::Time safety_stop_since_;
+  double safety_stop_timeout_ = 2.0;
+
+  // 定位健康 (/slam/info): 丢失 -> 停车, 匹配度低 -> 限速
+  ros::Subscriber slam_info_sub_;
+  ros::Time last_slam_info_stamp_;
+  int last_slam_status_ = -1;
+  double last_slam_matching_ = 1.0;
+  double slam_info_timeout_ = 2.0;
+  double slam_degrade_matching_ = 0.65;
+  double slam_degrade_scale_ = 0.5;
   bool pending_allow_initial_rotate_ = true;
   geometry_msgs::PoseStamped pending_goal_;
   core::Costmap planner_costmap_;
@@ -3334,7 +3531,7 @@ private:
   bool task_active_ = false;
 
   // 恢复只使用规划器产生的反向路径 (Hybrid A*, reverse-only).
-  enum class RecoveryStage { NONE, FOLLOW };
+  enum class RecoveryStage { NONE, PLANNING, FOLLOW };
   RecoveryStage recovery_stage_ = RecoveryStage::NONE;
   std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
   std::unique_ptr<core::IControllerStrategy> recovery_controller_;

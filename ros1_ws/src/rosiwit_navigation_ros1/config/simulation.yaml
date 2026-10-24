@@ -33,9 +33,13 @@ mppi_speed_weight: 2.0
 mppi_goal_weight: 1.5
 
 # ---------- 规划器 ----------
+# 实测 Hybrid A* 在本图窄门口 (宽 ~1.09m, 车体 0.75m) 6s 内 No valid path,
+# 短路径可以; 主规划暂用网格 A* (只按半径膨胀), 车体轮廓由 MPPI footprint
+# 采样 + safety 兜底. 想再试 Hybrid 把下面改成 "hybrid_astar" 并放宽
+# planner_timeout; recovery 固定用 hybrid_astar (反向逃逸).
 planner_name: "astar"
 planner_max_iterations: 200000
-planner_timeout: 2.0
+planner_timeout: 6.0
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 
@@ -138,6 +142,14 @@ recovery_enabled: true
 recovery_max_attempts: 2
 recovery_back_distance: 0.40
 recovery_timeout: 8.0
+# 运动看门狗: 指令有效但底盘不动 / 安全层持续停住 -> 立即恢复 (不再等 60s)
+nav_no_progress_timeout: 8.0
+nav_safety_stop_timeout: 2.0
+movebase_stuck_timeout: 10.0
+# 定位健康 (/slam/info): LOST 立即停车; matching 低于阈值时限速
+slam_info_timeout: 2.0
+slam_degrade_matching: 0.65
+slam_degrade_scale: 0.5
 
 # ---- 动态覆盖清洁 (navi_cmd=20) ----
 coverage_sweep_width: 0.4

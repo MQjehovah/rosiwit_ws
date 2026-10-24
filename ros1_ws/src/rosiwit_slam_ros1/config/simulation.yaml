@@ -8,7 +8,7 @@ global:
   modules:
     frontend: "fast_lio2_frontend"
     backend: "ceres_pose_graph"
-    loop_closure: "" # 探索阶段先关闭 ScanContext/ICP, 避免 TF 被回环线程拖停; 建图稳定后再开
+    loop_closure: "scan_context" # 回环: 建图时做 ScanContext 检索 + ICP 校验, 抑制长距离漂移
     map_manager: "pcd_map_manager"
     localization: "localization_pipeline"
 
@@ -79,6 +79,9 @@ mapping:
   map_manager:
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
+    # 保存地图时剔除"只在单帧出现"的点 (行人/门/反光等瞬态): 体素需在 >=N 帧
+    # 观测里出现. 1=关闭. (mapping 保存路径)
+    dynamic_min_views: 2
   backend:
     loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m)
     max_optimization_trans_m: 20 # 含新约束的单次优化最大平移修正
@@ -86,7 +89,7 @@ mapping:
   grid:
     generator: ray_casting  # 2D栅格生成策略
     resolution: 0.05 # 最终 2D 栅格/PGM 分辨率(m)
-    realtime_resolution: 0.3 # 实时 /map 分辨率(m)
+    realtime_resolution: 0.1 # 实时 /map 分辨率(m): 0.3 太粗, 建图模式下导航只能拿到 0.3m 栅格
     min_height: 0.1 # 地面以上障碍最低高度(m)
     max_height: 2.0 # 地面以上障碍最高高度(m)
     occupied_thresh: 1 # 每格最少点数判占据
@@ -194,6 +197,9 @@ localization:
     consistent_frames: 2
     mahalanobis_gate: true
     mahalanobis_chi2: 16.81
+    # 对应点少于该值时按比例放宽协方差 floor (旋转时对应点 600->190,
+    # 常数 floor 会把 0.04m 的正常修正误判成离群)
+    mahalanobis_ref_points: 500
     # 退化方向部分更新: 旋转时对应点集中在单面墙, 沿墙平移不可观测, ICP 会给出
     # 高分"沿墙滑动"解. 按 JtJ 可观测度缩放修正: 弱观测方向保留先验.
     degeneracy_partial_update: true
@@ -231,6 +237,8 @@ localization:
     radius: 60.0
     decay_frames: 0
     override_base: false
+    # 叠加层容量上限 (体素): 超过后整体重置并告警, 防止长期运行无界增长
+    max_voxels: 400000
 
   smoother:
     enabled: false
@@ -242,7 +250,9 @@ localization:
 
   output:
     rate_hz: 0   # ROS1 接口按需调用 predictAt; 置 0 关闭额外高频线程
-    filter_alpha: 0.5
+    # 位姿输出平滑 (alpha-beta 因果滤波): ROS1 之前没接, ROS2 有.
+    # 0=关闭; 0.6/0.2 约 20~40ms 滞后, 抑制匹配抖动又不拖控制.
+    filter_alpha: 0.6
     filter_beta: 0.2
     extrap_max_s: 0.3
 ros2:
