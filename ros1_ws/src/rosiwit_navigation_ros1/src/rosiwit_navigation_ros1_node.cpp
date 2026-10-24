@@ -2648,11 +2648,11 @@ private:
       planned.points[1].velocity_x < 0.0;
 
     // Smooth positions for every path, then restore each point's heading and
-    // forward/reverse sign.  smoothPath() derives theta from travel direction,
-    // which is wrong for a reverse segment; the controller needs the original
-    // robot heading and velocity sign.
+    // forward/reverse sign.  Hybrid A* 路径本身就是圆弧基元, 已经平滑; 再平滑
+    // 只会把路径拉进高代价膨胀区 (smoother 只看 raw grid 的 0/100, 看不到
+    // 膨胀代价), 表现为"旁边有空地却贴着代价区走".
     bool smoothed = false;
-    if (planned.points.size() >= 3) {
+    if (planned.points.size() >= 3 && planner_name_ != "hybrid_astar") {
       const core::Path raw = planned;
       planners::SmootherConfig smoother;
       smoother.max_iterations = 60;
