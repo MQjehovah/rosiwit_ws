@@ -170,6 +170,10 @@ private:
     pnh_.param<double>("robot_radius", robot_radius_, 0.21);
     pnh_.param<int>("planner_max_iterations", planner_max_iterations_, 200000);
     pnh_.param<double>("planner_timeout", planner_timeout_, 2.0);
+    // 运动 profile: clean(清洁导航, 禁止倒车) | free(自由导航, 允许倒车)
+    pnh_.param<std::string>("motion_profile", motion_profile_, "clean");
+    pnh_.param<std::string>("free_planner", free_planner_, "hybrid_astar");
+    pnh_.param<std::string>("clean_planner", clean_planner_, "astar");
     pnh_.param<bool>("planner_allow_reverse", planner_allow_reverse_, true);
     pnh_.param<double>("planner_max_reverse_distance", planner_max_reverse_distance_, 1.0);
     pnh_.param<double>("max_accel_x", max_accel_x_, 0.4);
@@ -548,33 +552,13 @@ private:
                rcc.lookahead_distance);
     }
 
-    controller_strategy_ = nav_core::NavigationFactory::createController(controller_name_);
-    auto set_mppi_params = [this](core::ControllerConfig & c) {
-      c.mppi_horizon = mppi_horizon_;
-      c.mppi_samples = mppi_samples_;
-      c.mppi_dt = mppi_dt_ > 0.0 ? mppi_dt_
-                                 : 1.0 / std::max(1.0, controller_frequency_);
-      c.mppi_lambda = mppi_lambda_;
-      c.mppi_sigma_v = mppi_sigma_v_;
-      c.mppi_sigma_w = mppi_sigma_w_;
-      c.mppi_path_weight = mppi_path_weight_;
-      c.mppi_heading_weight = mppi_heading_weight_;
-      c.mppi_obstacle_weight = mppi_obstacle_weight_;
-      c.mppi_control_weight = mppi_control_weight_;
-      c.mppi_speed_weight = mppi_speed_weight_;
-      c.mppi_goal_weight = mppi_goal_weight_;
-    };
-    // footprint-aware 只对真正实现了 footprint 代价的控制器生效;
-    // 否则必须保留局部 costmap 的圆形膨胀, 不能接未膨胀地图.
-    controller_footprint_.clear();
-    const bool dwa_controller = (controller_name_ == "dwa");
-    if (footprint_aware_control_ && controller_strategy_ && dwa_controller) {
+    controller_strategy_.reset();
+    if (!initController(controller_name_, controller_strategy_, true)) {
+      ROS_WARN("[rosiwit_navigation_ros1] controller '%s' not found", controller_name_.c_str());
+    }
+    if (footprint_aware_control_ && controller_name_ == "dwa") {
       ROS_WARN("[rosiwit_navigation_ros1] DWA + footprint 已知会绕圈, "
                "自动回退为圆形膨胀 (DWA 仍可用)");
-    }
-    if (footprint_aware_control_ && controller_strategy_ &&
-        controller_strategy_->supportsFootprint() && !dwa_controller) {
-      controller_footprint_ = configured_footprint_;
     }
     // 覆盖模式的 approach 用独立 A*: 正常 planner 可能是 Hybrid A* + footprint,
     // 它会把区域边缘的目标判成 Goal in obstacle.
@@ -610,7 +594,7 @@ private:
       ccfg.kinematics.max_velocity_x = max_velocity_x_;
       ccfg.kinematics.max_velocity_theta = max_velocity_theta_;
       ccfg.path_resample_step = path_resample_step_;
-      set_mppi_params(ccfg);
+      applyMppiParams(ccfg);
       coverage_controller_->initialize(ccfg);
     } else {
       ROS_WARN("[coverage] controller '%s' not found", cov_ctrl.c_str());
@@ -620,28 +604,139 @@ private:
              static_cast<int>(footprint_aware_control_),
              static_cast<int>(!controller_footprint_.empty()),
              controller_name_.c_str());
-    if (controller_strategy_) {
-      core::ControllerConfig cfg;
-      cfg.lookahead_distance = lookahead_distance_;
-      cfg.xy_goal_tolerance = goal_tolerance_xy_;
-      cfg.slow_down_distance = 1.5;
-      cfg.lookahead_gain = 1.0;
-      cfg.max_lookahead_distance = max_lookahead_distance_;
-      cfg.min_lookahead_distance = min_lookahead_distance_;
-      cfg.max_linear_velocity = max_velocity_x_;
-      cfg.max_angular_velocity = max_velocity_theta_;
-      cfg.max_accel_x = max_accel_x_;
-      cfg.max_accel_theta = max_accel_theta_;
-      cfg.kinematics.max_velocity_x = max_velocity_x_;
-      cfg.kinematics.max_velocity_theta = max_velocity_theta_;
-      cfg.footprint = controller_footprint_;
-      cfg.footprint_sample_spacing = footprint_sample_spacing_;
-      cfg.path_resample_step = path_resample_step_;
-      set_mppi_params(cfg);
-      controller_strategy_->initialize(cfg);
-    } else {
-      ROS_WARN("[rosiwit_navigation_ros1] controller '%s' not found", controller_name_.c_str());
+    // 按 profile 应用规划器/控制器的倒车策略 (启动即生效)
+    applyMotionProfile(motion_profile_);
+  }
+
+  // 控制器/规划器的统一装配 (启动与运行时切换共用)
+  void applyMppiParams(core::ControllerConfig & c)
+  {
+    c.mppi_horizon = mppi_horizon_;
+    c.mppi_samples = mppi_samples_;
+    c.mppi_dt = mppi_dt_ > 0.0 ? mppi_dt_ : 1.0 / std::max(1.0, controller_frequency_);
+    c.mppi_lambda = mppi_lambda_;
+    c.mppi_sigma_v = mppi_sigma_v_;
+    c.mppi_sigma_w = mppi_sigma_w_;
+    c.mppi_path_weight = mppi_path_weight_;
+    c.mppi_heading_weight = mppi_heading_weight_;
+    c.mppi_obstacle_weight = mppi_obstacle_weight_;
+    c.mppi_control_weight = mppi_control_weight_;
+    c.mppi_speed_weight = mppi_speed_weight_;
+    c.mppi_goal_weight = mppi_goal_weight_;
+  }
+
+  bool initController(const std::string & name,
+                      std::unique_ptr<core::IControllerStrategy> & out,
+                      bool allow_reverse)
+  {
+    out = nav_core::NavigationFactory::createController(name);
+    if (!out) return false;
+    // footprint-aware 只对真正实现了 footprint 代价的控制器生效.
+    controller_footprint_.clear();
+    if (footprint_aware_control_ && name != "dwa" && out->supportsFootprint()) {
+      controller_footprint_ = configured_footprint_;
     }
+    core::ControllerConfig cfg;
+    cfg.lookahead_distance = lookahead_distance_;
+    cfg.xy_goal_tolerance = goal_tolerance_xy_;
+    cfg.slow_down_distance = 1.5;
+    cfg.lookahead_gain = 1.0;
+    cfg.max_lookahead_distance = max_lookahead_distance_;
+    cfg.min_lookahead_distance = min_lookahead_distance_;
+    cfg.max_linear_velocity = max_velocity_x_;
+    cfg.max_angular_velocity = max_velocity_theta_;
+    cfg.max_accel_x = max_accel_x_;
+    cfg.max_accel_theta = max_accel_theta_;
+    cfg.kinematics.max_velocity_x = max_velocity_x_;
+    cfg.kinematics.max_velocity_theta = max_velocity_theta_;
+    cfg.footprint = controller_footprint_;
+    cfg.footprint_sample_spacing = footprint_sample_spacing_;
+    cfg.path_resample_step = path_resample_step_;
+    cfg.allow_reverse = allow_reverse;
+    applyMppiParams(cfg);
+    out->initialize(cfg);
+    out->setVelocityLimit(max_velocity_x_, max_velocity_theta_);
+    return true;
+  }
+
+  // ---- 运动 profile / 控制器运行时切换 ----
+  // clean: 后面挂清洁组件, 只允许前进 (倒车只在 recovery);
+  // free : 自由导航, 允许前进/倒车灵活走位.
+  bool switchController(const std::string & name)
+  {
+    if (name.empty()) return true;
+    if (name == controller_name_ && controller_strategy_) return true;
+    std::unique_ptr<core::IControllerStrategy> next;
+    if (!initController(name, next, motion_profile_ != "clean")) {
+      ROS_WARN("[rosiwit_navigation_ros1] unknown controller: %s", name.c_str());
+      return false;
+    }
+    if (!current_path_.poses.empty()) { next->setPath(toCorePath(current_path_)); }
+    next->setVelocityLimit(max_velocity_x_, max_velocity_theta_);
+    controller_strategy_ = std::move(next);
+    controller_name_ = name;
+    ROS_WARN("[rosiwit_navigation_ros1] controller -> %s (profile=%s)",
+             controller_name_.c_str(), motion_profile_.c_str());
+    return true;
+  }
+
+  bool applyMotionProfile(const std::string & profile)
+  {
+    if (profile != "free" && profile != "clean") {
+      ROS_WARN("[rosiwit_navigation_ros1] unknown profile: %s", profile.c_str());
+      return false;
+    }
+    motion_profile_ = profile;
+    const bool allow_reverse = (profile != "clean");
+    // 规划器: clean 用纯前进 A*; free 用 Hybrid A* (允许倒车)
+    const std::string planner = allow_reverse ? free_planner_ : clean_planner_;
+    if (async_planner_ && planner != planner_name_) {
+      auto next = nav_core::NavigationFactory::createPlanner(planner);
+      if (!next) {
+        ROS_WARN("[rosiwit_navigation_ros1] planner '%s' not found", planner.c_str());
+      } else {
+        core::PlannerConfig acfg;
+        acfg.name = planner;
+        acfg.resolution = 0.05;
+        acfg.max_iterations = planner_max_iterations_;
+        acfg.timeout = planner_timeout_;
+        acfg.allow_reverse = allow_reverse;
+        acfg.max_reverse_distance = planner_max_reverse_distance_;
+        acfg.start_relax_radius = planning_start_relax_radius_;
+        next->initialize(acfg);
+        next->setInflationRadius(inflation_radius_);
+        next->setRobotRadius(robot_radius_);
+        if (next->supportsFootprint() && !configured_footprint_.empty()) {
+          next->setRobotFootprint(configured_footprint_);
+        }
+        if (m_has_planner_costmap_) { next->setCostmap(planner_costmap_); }
+        async_planner_ = std::move(next);
+        planner_name_ = planner;
+      }
+    }
+    // 控制器重建: allow_reverse 在 initialize 时固化
+    std::unique_ptr<core::IControllerStrategy> next_ctrl;
+    if (initController(controller_name_, next_ctrl, allow_reverse)) {
+      if (!current_path_.poses.empty()) { next_ctrl->setPath(toCorePath(current_path_)); }
+      controller_strategy_ = std::move(next_ctrl);
+    }
+    ROS_WARN("[rosiwit_navigation_ros1] profile -> %s (allow_reverse=%d planner=%s)",
+             motion_profile_.c_str(), static_cast<int>(allow_reverse), planner_name_.c_str());
+    return true;
+  }
+
+  void profileCallback(const std_msgs::String::ConstPtr & msg)
+  {
+    // 格式: "clean" | "free" | "clean,mppi" | ",dwa" (逗号后为控制器名, 可省略)
+    std::string s = msg->data;
+    std::string profile = s, ctrl;
+    const auto comma = s.find(',');
+    if (comma != std::string::npos) {
+      profile = s.substr(0, comma);
+      ctrl = s.substr(comma + 1);
+    }
+    if (!profile.empty() && !applyMotionProfile(profile)) { return; }
+    if (!ctrl.empty()) { switchController(ctrl); }
   }
 
   void setupRos()
@@ -663,6 +758,9 @@ private:
     // 定位健康: LOST -> 停车; matching 低 -> 限速
     slam_info_sub_ = nh_.subscribe("/slam/info", 1,
                                    &RosiwitNavigationRos1Node::slamInfoCallback, this);
+    // 运行时切换运动 profile / 控制器: std_msgs/String "clean|free[,controller]"
+    profile_sub_ = nh_.subscribe("/set_motion_profile", 1,
+                                 &RosiwitNavigationRos1Node::profileCallback, this);
     if (voxel_enabled_ && !voxel_cloud_topic_.empty()) {
       voxel_sub_ = nh_.subscribe(voxel_cloud_topic_, 1,
                                  &RosiwitNavigationRos1Node::voxelCallback, this);
@@ -2015,6 +2113,8 @@ private:
        << "\",\"safety_scale\":" << last_safety_scale_
        << ",\"path_points\":" << current_path_.poses.size()
        << ",\"planner\":\"" << planner_name_ << "\""
+       << ",\"profile\":\"" << motion_profile_ << "\""
+       << ",\"controller\":\"" << controller_name_ << "\""
        << ",\"planner_footprint\":" << configured_footprint_.size()
        << ",\"tracks\":" << tracker_.tracked().size()
        << ",\"task_state\":\"" << navigationStateName() << "\""
@@ -3502,6 +3602,10 @@ private:
 
   // 定位健康 (/slam/info): 丢失 -> 停车, 匹配度低 -> 限速
   ros::Subscriber slam_info_sub_;
+  ros::Subscriber profile_sub_;      // /set_motion_profile: "clean|free[,controller]"
+  std::string motion_profile_ = "clean";
+  std::string free_planner_ = "hybrid_astar";
+  std::string clean_planner_ = "astar";
   ros::Time last_slam_info_stamp_;
   int last_slam_status_ = -1;
   double last_slam_matching_ = 1.0;

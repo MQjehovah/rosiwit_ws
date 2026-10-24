@@ -33,13 +33,17 @@ mppi_speed_weight: 2.0
 mppi_goal_weight: 1.5
 
 # ---------- 规划器 ----------
-# Hybrid A*: SE(2) 运动基元 + 车体轮廓检查; 路径本身满足转弯半径.
-# 窄道能力 = 车体轮廓 + 2 个栅格的离散余量 (0.05m 栅格 -> 车身 +0.1m).
-planner_name: "hybrid_astar"
+# 运动 profile 决定倒车策略:
+#   clean: 后置清洁组件, 只允许前进 (倒车只在 recovery); 规划器=clean_planner
+#   free : 自由导航, 允许前进/倒车灵活走位; 规划器=free_planner (Hybrid A*)
+# 运行时切换: rostopic pub /set_motion_profile std_msgs/String "data: 'free,mppi'"
+motion_profile: "clean"
+clean_planner: "astar"
+free_planner: "hybrid_astar"
+# 初始规划器 (启动后按 motion_profile 覆盖)
+planner_name: "astar"
 planner_max_iterations: 300000
 planner_timeout: 6.0
-# 允许倒车: 本图很多起点朝墙, 只前进时 SE(2) 搜不到解 (实测 No valid path).
-# MPPI 已支持按 velocity_x 切换前进/倒车 (含 cusp 迟滞).
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 
