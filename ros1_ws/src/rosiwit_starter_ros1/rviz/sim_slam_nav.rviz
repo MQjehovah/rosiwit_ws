@@ -6,7 +6,6 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
-        - /Local Path1
       Splitter Ratio: 0.5
     Tree Height: 616
   - Class: rviz/Selection
@@ -96,6 +95,13 @@ Visualization Manager:
       Use Timestamp: false
       Value: true
     - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
       Class: rviz/LaserScan
       Color: 255; 60; 60
       Color Transformer: FlatColor
@@ -109,7 +115,7 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.03
+      Size (m): 0.029999999329447746
       Style: Flat Squares
       Topic: /scan
       Unreliable: false
@@ -119,8 +125,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 30.642667770385742
-        Min Value: -1.2752227783203125
+        Max Value: 2.828554391860962
+        Min Value: -0.1946079134941101
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -175,7 +181,7 @@ Visualization Manager:
     - Alpha: 1
       Buffer Length: 1
       Class: rviz/Path
-      Color: 25; 255; 0
+      Color: 255; 0; 0
       Enabled: true
       Head Diameter: 0.20000000298023224
       Head Length: 0.15000000596046448
@@ -218,25 +224,21 @@ Visualization Manager:
       Topic: /local_path
       Unreliable: false
       Value: true
-
-    # 车体轮廓 (导航实际使用的 footprint), idle 时也会发布
     - Alpha: 1
       Class: rviz/Polygon
       Color: 255; 70; 70
       Enabled: true
-      Line Width: 0.03
       Name: Footprint
       Topic: /robot_footprint
+      Unreliable: false
       Value: true
-
-    # 按当前速度外推的预测轮廓
     - Alpha: 1
       Class: rviz/Polygon
       Color: 255; 190; 0
       Enabled: false
-      Line Width: 0.02
       Name: Prediction Footprint
       Topic: /prediction_robot_footprint
+      Unreliable: false
       Value: false
     - Angle Tolerance: 0.10000000149011612
       Class: rviz/Odometry
@@ -320,16 +322,16 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 12
+      Distance: 13.999765396118164
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0
-        Y: 0
-        Z: 0
+        X: -5.097967624664307
+        Y: -0.8222897052764893
+        Z: -0.23027640581130981
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
@@ -356,5 +358,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1400
-  X: 771
-  Y: 267
+  X: 2959
+  Y: 59

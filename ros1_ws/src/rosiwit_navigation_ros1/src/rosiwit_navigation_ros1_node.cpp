@@ -3204,6 +3204,44 @@ private:
     return true;
   }
 
+  // 局部路径: 只发布机器人前方 ~4m 的切片 (之前把整条全局路径发到
+  // /local_path, 而且旋转/恢复/末段分支提前 return 时不刷新 -> 话题冻结).
+  void publishLocalPathSlice()
+  {
+    if (current_core_path_.points.size() < 2) return;
+    const core::Pose2D cp = toCorePose(current_pose_);
+    size_t nearest = 0;
+    double best = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < current_core_path_.points.size(); ++i) {
+      const auto & q = current_core_path_.points[i].pose;
+      const double d = std::hypot(q.x - cp.x, q.y - cp.y);
+      if (d < best) { best = d; nearest = i; }
+    }
+    nav_msgs::Path out;
+    out.header.frame_id = map_frame_;
+    out.header.stamp = ros::Time::now();
+    double acc = 0.0;
+    geometry_msgs::Point prev;
+    for (size_t i = nearest; i < current_core_path_.points.size(); ++i) {
+      const auto & q = current_core_path_.points[i].pose;
+      if (i > nearest) {
+        acc += std::hypot(q.x - prev.x, q.y - prev.y);
+        if (acc > 4.0) { break; }
+      }
+      geometry_msgs::PoseStamped ps;
+      ps.header = out.header;
+      ps.pose.position.x = q.x;
+      ps.pose.position.y = q.y;
+      ps.pose.position.z = 0.0;
+      ps.pose.orientation.z = std::sin(q.theta * 0.5);
+      ps.pose.orientation.w = std::cos(q.theta * 0.5);
+      out.poses.push_back(ps);
+      prev.x = q.x;
+      prev.y = q.y;
+    }
+    if (!out.poses.empty()) { path_pub_.publish(out); }
+  }
+
   void controlLoop(const ros::TimerEvent &)
   {
     if (planning_active_) pollPlanning();
@@ -3236,6 +3274,7 @@ private:
     }
 
     updateMotionWatch(ros::Time::now());
+    publishLocalPathSlice();   // 每个控制周期都刷新局部路径切片
     // 定位丢失: /lio_odom 会继续发最后有效位姿, 冻结位姿继续走等于盲开.
     if (slamHealthLost()) {
       if (task_active_) {
@@ -3436,7 +3475,6 @@ private:
       cmd.angular.z *= health_scale;
     }
     publishCommand(applySafety(cmd));
-    path_pub_.publish(current_path_);
     recordActionTraveled();
     if (task_active_) { publishActionOutputs(); }
   }

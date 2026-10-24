@@ -86,6 +86,8 @@ private:
   unsigned char inflationCostAt(int ix, int iy) const;
   void buildInflationField();
   bool checkPose(const core::Pose2D & pose) const;
+  /// footprint 覆盖区的最大膨胀代价 (0..255), 供 g 代价使用
+  unsigned char footprintInflationCost(const core::Pose2D & pose) const;
   bool checkArc(const core::Pose2D & from, const MotionPrimitive & motion,
                 core::Pose2D & to) const;
   double heuristic(const core::Pose2D & a, const core::Pose2D & b) const;

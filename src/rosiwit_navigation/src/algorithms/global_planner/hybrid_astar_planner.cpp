@@ -209,6 +209,28 @@ unsigned char HybridAStarPlanner::costAt(int ix, int iy) const
   return costmap_data_[static_cast<size_t>(iy) * nx_ + ix];
 }
 
+// footprint 覆盖区域内的最大膨胀代价 (0..255): 让规划代价真正考虑车体轮廓.
+unsigned char HybridAStarPlanner::footprintInflationCost(const core::Pose2D & pose) const
+{
+  if (footprint_samples_.empty() || inflation_field_.empty()) {
+    int ix = 0, iy = 0;
+    if (!worldToGrid(pose.x, pose.y, ix, iy)) return 255;
+    return inflationCostAt(ix, iy);
+  }
+  const double c = std::cos(pose.theta);
+  const double s = std::sin(pose.theta);
+  unsigned char worst = 0;
+  for (const auto & lp : footprint_samples_) {
+    const double wx = pose.x + c * lp.first - s * lp.second;
+    const double wy = pose.y + s * lp.first + c * lp.second;
+    const int ix = static_cast<int>(std::floor((wx - origin_x_) / resolution_));
+    const int iy = static_cast<int>(std::floor((wy - origin_y_) / resolution_));
+    const unsigned char v = inflationCostAt(ix, iy);
+    if (v > worst) worst = v;
+  }
+  return worst;
+}
+
 bool HybridAStarPlanner::checkPose(const core::Pose2D & pose) const
 {
   if (!costmap_ || !costmap_->grid) return false;
@@ -461,9 +483,12 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       // 膨胀代价加权: 只查硬障碍会让路径贴墙 (0 余量), 控制器的 footprint +
       // 实时 scan 跟不进去 -> 卡死. 提高膨胀权重让路径在通道里自然居中,
       // 但窄口仍是"更贵"而不是"不可通行".
+      // 代价必须按 footprint 算, 不能只看中心格: 否则车体一半悬在代价区也和
+      // 居中一样便宜 (用户反馈"旁边有空地却贴着代价区走").
+      const double fp_infl = footprintInflationCost(next);
       const double cost_factor =
         1.0 + static_cast<double>(costAt(ix, iy)) / 255.0 * 1.5 +
-        8.0 * static_cast<double>(inflationCostAt(ix, iy)) / 255.0;
+        8.0 * fp_infl / 255.0;
       const double g = current.g + travel * cost_factor * reversing_penalty + heading_penalty;
 
       auto it = best_g.find(key);
