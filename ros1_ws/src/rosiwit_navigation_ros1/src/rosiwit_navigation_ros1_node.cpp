@@ -335,6 +335,9 @@ private:
     // 负余量: 轮廓内缩后做碰撞检查. 0=严格按车体; 0.02 允许贴边 2cm,
     // 是 0.75m 车身过 0.75m 通道的必要条件 (栅格离散本身占 ~0.1m).
     pnh_.param<double>("footprint_shrink", footprint_shrink_, 0.0);
+    // 规划余量: 规划器用"车体轮廓 + margin"生成路径, 保证控制器(车体轮廓 +
+    // 实时 scan)跟得上; 0.66m 车体 + 0.06m -> 0.78m 巷道仍可规划.
+    pnh_.param<double>("planner_footprint_margin", planner_footprint_margin_, 0.06);
     pnh_.param<double>("path_resample_step", path_resample_step_, 0.08);
     configured_footprint_.clear();
     controller_footprint_.clear();  // 实际是否启用由 setupCore 按控制器能力决定
@@ -351,6 +354,10 @@ private:
       ROS_INFO("[rosiwit_navigation_ros1] footprint inset %.3fm for collision checks "
                "(窄道通过能力: 车身 + 2x栅格离散)", footprint_shrink_);
     }
+    // 规划器用外扩轮廓: 路径离墙 >= planner_footprint_margin, 保证控制器
+    // (用车身轮廓 + 实时 scan) 能跟得上; 0.66m 车体 + 0.06m 余量 -> 0.78m
+    // 巷道仍可规划, 满足 0.8~0.85m 场景.
+    planner_footprint_ = insetFootprint(configured_footprint_, -planner_footprint_margin_);
     if (footprint_aware_control_) {
       controller_footprint_ = configured_footprint_;
     }
@@ -429,7 +436,8 @@ private:
   // 余量). 逆时针多边形, 内法向 = (-dy, dx).
   static core::Footprint insetFootprint(const core::Footprint & poly, double d)
   {
-    if (poly.size() < 3 || d <= 1e-6) return poly;
+    // d>0 内缩, d<0 外扩 (规划余量)
+    if (poly.size() < 3 || std::fabs(d) <= 1e-6) return poly;
     const size_t n = poly.size();
     core::Footprint out;
     out.reserve(n);
@@ -471,7 +479,7 @@ private:
       planner_strategy_->setInflationRadius(inflation_radius_);
       planner_strategy_->setRobotRadius(robot_radius_);
       if (planner_strategy_->supportsFootprint() && !configured_footprint_.empty()) {
-        planner_strategy_->setRobotFootprint(configured_footprint_);
+        planner_strategy_->setRobotFootprint(planner_footprint_);
         ROS_INFO("[rosiwit_navigation_ros1] planner '%s' footprint-aware (%zu pts)",
                  planner_name_.c_str(), configured_footprint_.size());
       } else {
@@ -498,7 +506,7 @@ private:
       async_planner_->setInflationRadius(inflation_radius_);
       async_planner_->setRobotRadius(robot_radius_);
       if (async_planner_->supportsFootprint() && !configured_footprint_.empty()) {
-        async_planner_->setRobotFootprint(configured_footprint_);
+        async_planner_->setRobotFootprint(planner_footprint_);
       }
     }
 
@@ -715,7 +723,7 @@ private:
         next->setInflationRadius(inflation_radius_);
         next->setRobotRadius(robot_radius_);
         if (next->supportsFootprint() && !configured_footprint_.empty()) {
-          next->setRobotFootprint(configured_footprint_);
+          next->setRobotFootprint(planner_footprint_);
         }
         if (m_has_planner_costmap_) { next->setCostmap(planner_costmap_); }
         async_planner_ = std::move(next);
@@ -3630,6 +3638,8 @@ private:
   bool footprint_aware_control_ = false;
   double footprint_sample_spacing_ = 0.05;
   double footprint_shrink_ = 0.0;   // 轮廓内缩(负余量), 窄道通过用
+  double planner_footprint_margin_ = 0.06;   // 规划器轮廓外扩(最小离墙余量)
+  core::Footprint planner_footprint_;        // 规划用轮廓 = 车体 + margin
   double path_resample_step_ = 0.08;
   core::Footprint configured_footprint_;
   core::Footprint controller_footprint_;
