@@ -3368,6 +3368,26 @@ private:
       }
     }
 
+    // 末段精调 (<0.6m): MPPI 低速小位移的采样分辨率不够 (sigma_v 0.18,
+    // horizon 2s), 末段对位会卡. 这里用确定性比例控制收尾, 对任何控制器都适用.
+    if (!coverage_active_ && recovery_stage_ == RecoveryStage::NONE &&
+        !goal_pose_.header.frame_id.empty()) {
+      const core::Pose2D gp = toCorePose(goal_pose_);
+      const core::Pose2D cp = toCorePose(current_pose_);
+      const double d = std::hypot(gp.x - cp.x, gp.y - cp.y);
+      if (d < 0.6 && d > 0.5 * goal_tolerance_xy_) {
+        const double ang = normalizeAngle(gp.theta - cp.theta);
+        geometry_msgs::Twist c;
+        c.linear.x = std::min(max_velocity_x_, 0.9 * d);
+        c.angular.z = std::max(-max_velocity_theta_,
+                               std::min(max_velocity_theta_, 1.5 * ang));
+        publishCommand(applySafety(c));
+        recordActionTraveled();
+        if (task_active_) { publishActionOutputs(); }
+        return;
+      }
+    }
+
     auto cmd = computeVelocityCommand();
     // 旋转段: 先原地转到位, 再交回 MPPI 跟踪前进段 (控制器自带原地旋转能力时
     // 由控制器自己执行)
