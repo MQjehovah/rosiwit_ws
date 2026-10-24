@@ -11,7 +11,7 @@
 # ============================================================
 
 # ---------- 速度 / 加速度 (实车 default.yaml max_velocity_x=0.8) ----------
-max_velocity_x: 0.6
+max_velocity_x: 0.8
 min_velocity_x: 0.0
 max_velocity_theta: 0.8
 
