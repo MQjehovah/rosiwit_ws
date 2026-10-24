@@ -16,8 +16,11 @@
     参数:
       - config/simulation.yaml     核心参数 (帧、话题、mapping/localization、栅格)
       - conf/sim_slam_conf.json    旧接口 JSON (只负责选择 ROS1 输入话题)
-      - map_yaml                   非空则启动后载入该地图并切定位模式:
-                                     roslaunch ... map_yaml:=$HOME/rosiwit_ws/docs/maps/map/map.yaml
+      - map                        地图路径; 空 = 建图模式, 非空 = 载图并切定位:
+                                      roslaunch ... map:=$HOME/rosiwit_ws/docs/maps/map/map.yaml
+                                    传目录时自动取目录下的 map.yaml; 传 map.pcd 或无扩展名
+                                    路径时同目录优先读 map.yaml
+      - initial_x/y/yaw            map 系初始位姿 (base_footprint, yaw 弧度)
   -->
   <arg name="slam_algorithm" default="fast_lio2_pipeline"/>
   <arg name="config_file" default="$(find rosiwit_slam_ros1)/config/simulation.yaml"/>
@@ -28,9 +31,8 @@
   <!-- Gazebo 下必须为 true: 节点跟随 /clock 计时, 否则 TF/数据时间戳与仿真脱节 -->
   <arg name="use_sim_time" default="true"/>
 
-  <!-- 已有地图: load_map=false 时保持建图; 否则载入 map_yaml 并切 localization -->
-  <arg name="load_map" default="true"/>
-  <arg name="map_yaml" default=""/>
+  <!-- map 为空 = 保持建图; 非空 = 载入该地图并切 localization -->
+  <arg name="map" default=""/>
   <arg name="initial_x" default="0.0"/>
   <arg name="initial_y" default="0.0"/>
   <arg name="initial_yaw" default="0.0"/>
@@ -45,11 +47,11 @@
     <param name="use_sim_time" value="$(arg use_sim_time)"/>
   </node>
 
-  <!-- 地图存在就载入并切定位模式; 不存在时只告警, 保持建图 -->
-  <node if="$(eval arg('load_map') and arg('map_yaml') != '')"
+  <!-- map 非空才启动: 载入地图并切定位; 文件不存在时只告警, 保持建图 -->
+  <node if="$(eval arg('map') != '')"
         pkg="rosiwit_slam_ros1" type="load_saved_map.py"
         name="load_saved_map" output="screen">
-    <param name="map_yaml" value="$(arg map_yaml)"/>
+    <param name="map" value="$(arg map)"/>
     <param name="initial_x" value="$(arg initial_x)"/>
     <param name="initial_y" value="$(arg initial_y)"/>
     <param name="initial_yaw" value="$(arg initial_yaw)"/>

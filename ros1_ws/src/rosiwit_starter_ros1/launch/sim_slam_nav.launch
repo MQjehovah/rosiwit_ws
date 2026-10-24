@@ -49,9 +49,8 @@
   <arg name="slam_config" default="$(find rosiwit_slam_ros1)/config/simulation.yaml"/>
   <arg name="navigation_config" default="$(find rosiwit_navigation_ros1)/config/simulation.yaml"/>
 
-  <!-- 定位模式: 默认载入 docs/maps/map 的已有地图; load_map:=false 时纯建图。 -->
-  <arg name="load_map" default="true"/>
-  <arg name="map_yaml" default="$(optenv HOME)/rosiwit_ws/docs/maps/map/map.yaml"/>
+  <!-- 定位模式: map 为空 = 纯建图; 非空 = 载入该地图 (优先目录下的 map.yaml)。 -->
+  <arg name="map" default=""/>
   <arg name="initial_x" default="0.0"/>
   <arg name="initial_y" default="0.0"/>
   <arg name="initial_yaw" default="0.0"/>
@@ -86,9 +85,7 @@
   <include file="$(find rosiwit_slam_ros1)/launch/slam_simulation.launch">
     <arg name="config_file" value="$(arg slam_config)"/>
     <arg name="use_sim_time" value="$(arg use_sim_time)"/>
-    <arg name="load_map" value="$(arg load_map)"/>
-    <arg name="map_yaml" value="$(arg map_yaml)"/>
-    <arg name="initial_x" value="$(arg initial_x)"/>
+    <arg name="map" value="$(arg map)"/>    <arg name="initial_x" value="$(arg initial_x)"/>
     <arg name="initial_y" value="$(arg initial_y)"/>
     <arg name="initial_yaw" value="$(arg initial_yaw)"/>
   </include>

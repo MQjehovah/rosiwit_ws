@@ -229,6 +229,10 @@ bool PpIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     // 协方差: JtJ 的伪逆 (奇异方向用大不确定度); 尺度按残差归一
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> esC(Hlast);
     const Eigen::Matrix<double, 6, 1> ce = esC.eigenvalues();
+    // 同一套特征分解供上层做退化方向部分更新
+    out.has_hessian = true;
+    out.hess_eigvals = ce;
+    out.hess_eigvecs = esC.eigenvectors();
     const double cmax = ce.maxCoeff();
     Eigen::Matrix<double, 6, 1> inv = Eigen::Matrix<double, 6, 1>::Zero();
     const double floor_e = std::max(1e-9, cmax * 1e-6);

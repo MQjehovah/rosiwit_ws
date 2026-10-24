@@ -231,6 +231,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_accept_cfg.mahalanobis_chi2 = getv<double>(ac, "mahalanobis_chi2", m_accept_cfg.mahalanobis_chi2);
         m_accept_cfg.mahalanobis_trans_floor = getv<double>(ac, "mahalanobis_trans_floor", m_accept_cfg.mahalanobis_trans_floor);
         m_accept_cfg.mahalanobis_rot_floor = getv<double>(ac, "mahalanobis_rot_floor", m_accept_cfg.mahalanobis_rot_floor);
+        m_accept_cfg.degeneracy_partial_update = getv<bool>(ac, "degeneracy_partial_update", m_accept_cfg.degeneracy_partial_update);
+        m_accept_cfg.degeneracy_ratio_soft = getv<double>(ac, "degeneracy_ratio_soft", m_accept_cfg.degeneracy_ratio_soft);
     }
     auto mtc = loc["maintainer"];
     if (mtc) {
@@ -856,7 +858,24 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
         for (int k = 3; k < 6; ++k) C(k, k) += tf;
         Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(C);
         const double d2 = e.dot(ldlt.solve(e));
-        if (std::isfinite(d2) && d2 > m_accept_cfg.mahalanobis_chi2) return reject("mahalanobis");
+        if (std::isfinite(d2) && d2 > m_accept_cfg.mahalanobis_chi2) {
+            // [MahalanobisProbe] 定位"点数少时好修正被误杀": 打印创新量与协方差
+            static int probe_n = 0;
+            if (++probe_n % 10 == 0) {
+                const double myaw = std::atan2(res.pose.rot(1, 0), res.pose.rot(0, 0));
+                const double gyaw = std::atan2(guess.rot(1, 0), guess.rot(0, 0));
+                std::cout << "[MahalanobisProbe] d2=" << d2
+                          << " match_yaw=" << myaw * 57.2957795
+                          << " guess_yaw=" << gyaw * 57.2957795
+                          << " match_xy=[" << res.pose.trans.x() << "," << res.pose.trans.y() << "]"
+                          << " guess_xy=[" << guess.trans.x() << "," << guess.trans.y() << "]"
+                          << " rot_innov_deg=[" << e(0) * 57.2957795 << ","
+                          << e(1) * 57.2957795 << "," << e(2) * 57.2957795 << "]"
+                          << " trans_innov_m=[" << e(3) << "," << e(4) << "," << e(5) << "]"
+                          << std::endl;
+            }
+            return reject("mahalanobis");
+        }
     }
     if (m_accept_cfg.mode == 0) {
         if (res.fitness >= m_accept_cfg.min_coverage) {
@@ -1095,6 +1114,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
         guess = m_prior->predict(f.end_time);
     }
+    // coast 重锚: matcher 连续失败后先验(尤其 IMU-only)每帧漂 0.1~0.3m,
+    // 漂出对应距离(2m)后 correspondences=0, 从此永久失配。连续失败超过
+    // m_coast_reanchor_frames 帧时, 匹配初值改用最后被接受的位姿, 给 ICP
+    // 一个未被漂移污染的起点; 匹配成功后 onMatch 会把先验拉回来。
+    if (m_have_last_accepted && m_coast_count >= m_coast_reanchor_frames) {
+        guess.trans = m_last_accepted.trans;
+        guess.rot = m_last_accepted.rot;
+        guess.time = f.end_time;
+    }
     // 定位路径原来直接用原始点云做 GICP；建图前端有 IMU 去畸变, 定位路径没有,
     // 转圈时一帧 100ms 内的旋转会让扫描在时间上被拉斜, 表现为 fitness 从 0.9
     // 掉到 0.4~0.7、inlier 比例骤降, 但 accepted 仍为 1. 这里按逐点时间戳和
@@ -1106,6 +1134,35 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         pcl::transformPointCloud(*scan, *body, m_lidar_to_imu);
         body->header = scan->header;
         scan = body;
+    }
+
+    // relocalizer=none 时 globalRelocWorker 对重定位请求不做任何事(直接丢弃),
+    // LOST 后没有任何恢复路径。这里在 tracking 线程里接上已有的
+    // tryBoundedRecovery(±1.5m/±10° 多起点重锁, 与后续 tracking 同线程故
+    // matcher 使用安全), 失败按 retry_interval 冷却后重试。
+    if (m_relocalizer_name == "none" && m_initialized.load() &&
+        m_status.load() == LOST) {
+        bool try_now = false;
+        {
+            std::lock_guard<std::mutex> lk(m_global_mu);
+            try_now = (m_global_cooldown == 0);
+        }
+        if (try_now && scan && !scan->empty()) {
+            const bool recovered = tryBoundedRecovery(scan);
+            {
+                std::lock_guard<std::mutex> lk(m_global_mu);
+                m_global_request = false;
+                m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
+            }
+            if (recovered) {
+                m_status = INIT;
+                m_healthy_streak = 0;
+                m_unhealthy_streak = 0;
+                m_initialized = true;
+                m_seed_pending = false;
+                m_hyp.reset(m_pose);
+            }
+        }
     }
 
     MatchResult res;
@@ -1187,6 +1244,50 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         reject_reason = ok ? "accepted" : "matcher_failed";
         accepted = ok && acceptMatch(res, scan, guess, &reject_reason);
         out_pose = accepted ? res.pose : guess;
+
+        // 退化方向部分更新 (B): 在 JtJ 特征基下按可观测度缩放修正量.
+        // 旋转时对应点集中在单面长墙, 沿墙平移方向几乎不可观测, ICP 仍会给出
+        // 一个高分的"沿墙滑动"解 (实测 0.5rad/s 转 20s 滑走 3m, fitness 0.9).
+        // 弱观测方向增益趋 0 => 保留先验; 良态方向增益≈1 => 正常采纳.
+        if (accepted && m_accept_cfg.degeneracy_partial_update && res.has_hessian) {
+            const Eigen::Matrix<double, 6, 1> lam = res.hess_eigvals;
+            const double lmax = lam.maxCoeff();
+            if (lmax > 1e-12) {
+                Eigen::Matrix<double, 6, 1> e;
+                const M3D dR = res.pose.rot * guess.rot.transpose();
+                Eigen::AngleAxisd aa(dR);
+                V3D axis = aa.axis();
+                if (!axis.allFinite()) axis = V3D::Zero();
+                e.head<3>() = axis * aa.angle();
+                e.tail<3>() = res.pose.trans - guess.trans;
+                const Eigen::Matrix<double, 6, 1> coeff = res.hess_eigvecs.transpose() * e;
+                Eigen::Matrix<double, 6, 1> gain;
+                for (int k = 0; k < 6; ++k) {
+                    const double r = std::max(0.0, lam(k)) / lmax;
+                    gain(k) = r / (r + m_accept_cfg.degeneracy_ratio_soft);
+                }
+                const Eigen::Matrix<double, 6, 1> e2 =
+                    res.hess_eigvecs * (gain.array() * coeff.array()).matrix();
+                Eigen::Matrix3d Rn = Eigen::Matrix3d::Identity();
+                const double ang = e2.head<3>().norm();
+                if (ang > 1e-12) {
+                    Rn = Eigen::AngleAxisd(ang, e2.head<3>() / ang).toRotationMatrix();
+                }
+                PoseStamped proj = res.pose;
+                proj.rot = Rn * guess.rot;
+                proj.trans = guess.trans + e2.tail<3>();
+                res.pose = proj;
+                out_pose = proj;
+                static int dprobe = 0;
+                if (++dprobe % 50 == 0) {
+                    std::cout << "[DegeneracyProbe] gain=[" << gain(0) << "," << gain(1) << ","
+                              << gain(2) << "," << gain(3) << "," << gain(4) << "," << gain(5)
+                              << "] eig_ratio_min=" << (lam.minCoeff() / lmax)
+                              << " corr_before=" << e.tail<3>().norm()
+                              << " corr_after=" << e2.tail<3>().norm() << std::endl;
+                }
+            }
+        }
     }
 
     // 初始位姿(seed)首帧校验：seed 错误时局部 GICP 可能在相似结构上得到
@@ -1205,6 +1306,28 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             FlightRecorder::instance().event("SEED_REJECT", os.str());
             m_last_match = res;
             m_last_match.pose = guess;
+        } else {
+            // 2026-10-24: 距离门限 —— 种子帧一帧漂 3m 也能拿 0.87 分被接受,
+            // 然后锁死在图外(实测约 30% 启动概率)。距种子超 1m/15° 按
+            // seed 失败处理, 不让 ICP 在种子帧"漂移过去"。
+            V3D dseed; double dyaw_seed = 0.0;
+            poseDelta(res.pose, guess, dseed, dyaw_seed);
+            const double seed_trans = dseed.norm();
+            const double seed_yaw_deg = std::fabs(dyaw_seed) * 57.2957795;
+            if (seed_trans > 1.0 || seed_yaw_deg > 15.0) {
+                seed_failed = true;
+                accepted = false;
+                out_pose = guess;
+                m_status = INIT;
+                std::ostringstream os;
+                os << "initial seed rejected: drifted " << seed_trans
+                   << "m/" << seed_yaw_deg << "deg from seed (fitness="
+                   << res.fitness << ") -> INIT";
+                diag::log('W', "LocPipeline", os.str());
+                FlightRecorder::instance().event("SEED_REJECT", os.str());
+                m_last_match = res;
+                m_last_match.pose = guess;
+            }
         }
     }
 

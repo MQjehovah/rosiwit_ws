@@ -42,8 +42,10 @@ planner_max_reverse_distance: 1.0
 # ---------- 频率 ----------
 controller_frequency: 10.0
 planner_frequency: 1.0
-# 局部代价地图更新频率 (原来固定 10Hz, 单线程下会饿死控制环)
-costmap_update_rate: 2.0
+# 局部代价地图更新频率: 提到实车 default.yaml 的 5.0 (2Hz 时 MPPI 的障碍
+# 最多滞后 0.5s, 0.4m/s 下就是 0.2m, 贴障碍表现为一顿一顿); scan 点标记
+# 已栅格化, 5Hz 负担得起.
+costmap_update_rate: 5.0
 # spinner 线程数 (代价地图与控制环并行)
 spinner_threads: 2
 

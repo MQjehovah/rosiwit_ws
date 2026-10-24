@@ -79,6 +79,11 @@ struct MatchResult {
     bool   degenerate = false;     // 是否检测到退化方向
     int    degenerate_dirs = 0;    // 被门控的退化方向数
     double smallest_eig_ratio = 1.0; // 最小/最大特征值比 (可观测性)
+    // JtJ 6x6 Hessian 的特征分解 (order: [rot(3), trans(3)]): 供上层做
+    // 退化方向的部分更新 (弱观测方向保留先验). 小配准器可能不填.
+    bool   has_hessian = false;
+    Eigen::Matrix<double, 6, 1> hess_eigvals = Eigen::Matrix<double, 6, 1>::Zero();
+    Eigen::Matrix<double, 6, 6> hess_eigvecs = Eigen::Matrix<double, 6, 6>::Identity();
     // 位姿协方差 (order: [rot(3), trans(3)]); 默认大不确定度
     Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Identity() * 1e3;
 };
@@ -250,6 +255,11 @@ struct AcceptConfig {
     // 误判成离群；这里给平移/旋转一个物理下限。
     double mahalanobis_trans_floor = 0.20;  // m
     double mahalanobis_rot_floor = 0.05;    // rad
+    // 退化方向部分更新: 用 JtJ 特征分解把修正量按可观测度缩放.
+    // 弱观测方向(eig < ratio_soft*eig_max)增益趋 0 => 只信先验, 不再让
+    // "沿长墙滑动"这类退化解整体生效 (旋转时对应点集中在单面墙的典型失效).
+    bool   degeneracy_partial_update = false;
+    double degeneracy_ratio_soft = 0.05;    // 软门限: 特征值比低于该值逐步忽略
 };
 
 // ==================== 地面/平面约束 ====================

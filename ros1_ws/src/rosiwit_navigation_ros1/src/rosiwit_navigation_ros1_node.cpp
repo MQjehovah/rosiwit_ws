@@ -2122,19 +2122,32 @@ private:
     const int local_y0 = std::max(0, cy - win_half);
     const int local_y1 = std::min(static_cast<int>(h) - 1, cy + win_half);
 
+    // /scan 点先一次性标记到全图栅格(3x3), 否则 isObstacleCell 每次查询都
+    // 全量扫描 ~1000 个点, 聚类 BFS 一次就是几十万次点遍历.
+    std::vector<char> scan_cells;
+    if (scan_fresh) {
+      scan_cells.assign(static_cast<size_t>(w) * h, 0);
+      for (const auto & pt : laser_points_) {
+        const int lx = static_cast<int>((pt.x - ox) / res);
+        const int ly = static_cast<int>((pt.y - oy) / res);
+        for (int oy2 = -1; oy2 <= 1; ++oy2) {
+          for (int ox2 = -1; ox2 <= 1; ++ox2) {
+            const int mx = lx + ox2;
+            const int my = ly + oy2;
+            if (mx < 0 || mx >= static_cast<int>(w) ||
+                my < 0 || my >= static_cast<int>(h)) { continue; }
+            scan_cells[static_cast<size_t>(my) * w + mx] = 1;
+          }
+        }
+      }
+    }
+
     auto isObstacleCell = [&](int mx, int my) -> bool {
       if (mx < local_x0 || mx > local_x1 || my < local_y0 || my > local_y1) {
         return false;
       }
       if (current_map_->data[my * w + mx] >= 100) { return true; }
-      if (scan_fresh) {
-        for (const auto & pt : laser_points_) {
-          const int lx = static_cast<int>((pt.x - ox) / res);
-          const int ly = static_cast<int>((pt.y - oy) / res);
-          if (std::abs(lx - mx) <= 1 && std::abs(ly - my) <= 1) { return true; }
-        }
-      }
-      return false;
+      return scan_fresh && scan_cells[my * w + mx] == 1;
     };
 
     for (int dy = -win_half; dy <= win_half; dy += step) {

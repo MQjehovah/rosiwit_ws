@@ -3,10 +3,14 @@
 """load_saved_map.py - 启动时载入已保存地图并切到定位模式。
 
 用法（一般由 slam_simulation.launch 传参）:
-  rosrun rosiwit_slam_ros1 load_saved_map.py _map_yaml:=/path/to/map.yaml
+  rosrun rosiwit_slam_ros1 load_saved_map.py _map:=/path/to/map.yaml
 
 参数:
-  ~map_yaml      地图 yaml 路径（必需；不存在则只告警，保持建图模式）
+  ~map           地图路径（必需；空/不存在则只告警，保持建图模式）
+                 支持三种写法, 都优先解析到 map.yaml:
+                   目录          -> <dir>/map.yaml
+                   map.yaml 路径 -> 原样使用
+                   map.pcd/无扩展名 -> 同目录优先 <dir>/map.yaml
   ~initial_x     map 系初始位姿 x（默认 0）
   ~initial_y     map 系初始位姿 y（默认 0）
   ~initial_yaw   map 系初始航向（rad，默认 0）
@@ -14,7 +18,7 @@
   ~keep_mapping  失败时不回退到建图（默认 false）
 
 行为:
-  1. 读 map.yaml 的 resolution / origin / negate / thresholds；
+  1. 解析地图路径并读 map.yaml 的 resolution / origin / negate / thresholds；
   2. 调 /switch_map（兼容接口）→ 发布 PGM、载入 .xzmap（或 pcd）并切 localization；
   3. 再补发一次 /initialpose，确保重定位从给定位姿开始；
   4. 失败则回退 /set_slam_mode -> mapping，避免卡在没有地图的定位模式。
@@ -29,6 +33,21 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from xzrobot_ros_dependency.srv import SwitchMap, SwitchMapRequest
 
 
+def _resolve_map_yaml(path):
+    """把 map 参数解析成 map.yaml 路径 (目录/ pcd / 无扩展名都优先 map.yaml)."""
+    p = os.path.expanduser(path)
+    if os.path.isdir(p):
+        return os.path.join(p, 'map.yaml')
+    low = p.lower()
+    if low.endswith('.yaml') or low.endswith('.yml'):
+        return p
+    # map.pcd / 其它名字: 同目录优先 map.yaml, 其次同名 + .yaml
+    sibling = os.path.join(os.path.dirname(p), 'map.yaml')
+    if os.path.isfile(sibling):
+        return sibling
+    return p + '.yaml'
+
+
 def _load_meta(path):
     try:
         with open(path, 'r') as f:
@@ -41,16 +60,20 @@ def _load_meta(path):
 def main():
     rospy.init_node('load_saved_map')
 
-    map_yaml = rospy.get_param('~map_yaml', '')
+    map_arg = rospy.get_param('~map', '')
+    if not map_arg:
+        # 兼容旧参数名
+        map_arg = rospy.get_param('~map_yaml', '')
     initial_x = float(rospy.get_param('~initial_x', 0.0))
     initial_y = float(rospy.get_param('~initial_y', 0.0))
     initial_yaw = float(rospy.get_param('~initial_yaw', 0.0))
     timeout = float(rospy.get_param('~timeout', 60.0))
     keep_mapping = bool(rospy.get_param('~keep_mapping', False))
 
+    map_yaml = _resolve_map_yaml(map_arg) if map_arg else ''
     if not map_yaml or not os.path.isfile(map_yaml):
-        rospy.logwarn('[load_saved_map] map yaml not found: "%s" -> keep mapping mode',
-                      map_yaml)
+        rospy.logwarn('[load_saved_map] map not found: "%s" (resolved "%s") -> keep mapping mode',
+                      map_arg, map_yaml)
         return
 
     meta = _load_meta(map_yaml)

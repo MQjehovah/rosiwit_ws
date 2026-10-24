@@ -110,7 +110,9 @@ localization:
     local_map: radius_submap
     matcher: pp_icp
     monitor: windowed
-    map_maintainer: none
+    # 场景变化兜底: 底图不重写, 变化沉淀为叠加层(<map>.overlay.pcd), 配准目标
+    # = 底图 + 叠加层。建图没覆盖/稀疏的区域在定位过程中被逐步补齐。
+    map_maintainer: overlay
 
   matcher:
     voxel_resolution: 0.3
@@ -150,7 +152,9 @@ localization:
   motion_prior:
     max_dt: 0.2
     max_vel: 10.0
-    use_odom: false
+    # 仿真轮式里程计无打滑: 匹配失败(coast)时平移用 /odom 推算, 先验不会
+    # 像 IMU-only 那样每帧漂 0.1~0.3m 漂出对应距离后永久失配
+    use_odom: true
     use_gravity: true
     gravity: 9.81
     gravity_gain: 0.05
@@ -190,6 +194,10 @@ localization:
     consistent_frames: 2
     mahalanobis_gate: true
     mahalanobis_chi2: 16.81
+    # 退化方向部分更新: 旋转时对应点集中在单面墙, 沿墙平移不可观测, ICP 会给出
+    # 高分"沿墙滑动"解. 按 JtJ 可观测度缩放修正: 弱观测方向保留先验.
+    degeneracy_partial_update: true
+    degeneracy_ratio_soft: 0.05
 
   planar:
     mode: ground_plane
@@ -204,6 +212,25 @@ localization:
     margin: 0.25
     stale: 10
     reseed_frames: 0
+
+  maintainer:
+    enabled: true
+    # fitness 低于该线判"环境与底图不一致", 连续 min_confirm 帧且移动超过
+    # min_keyframe_dist 后把扫描沉淀进叠加层。放在定位丢失线(lost_fitness 0.5)
+    # 附近: 0.8 级别的底图稀疏退化交给兜底策略(轮速先验/coast重锚/有界重锁),
+    # 只有真正"丢失级"的场景变化才动地图。
+    fitness_trigger: 0.5
+    min_confirm: 2
+    min_keyframe_dist: 1.0
+    # 只沉淀离底图 >0.3m 的新结构(避免位姿小误差造成"双层墙")
+    delta_min: 0.3
+    voxel: 0.3
+    persist_hits: 1
+    # 每 300 帧(约30s)把叠加层落盘一次, 防止进程被杀丢增量
+    autosave_frames: 300
+    radius: 60.0
+    decay_frames: 0
+    override_base: false
 
   smoother:
     enabled: false

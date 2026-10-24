@@ -183,6 +183,10 @@ private:
     // 过桥(coasting)计数
     int m_coast_count = 0;
 
+    // coast 重锚阈值: matcher 连续失败超过该帧数后, 匹配初值改用最后被接受
+    // 的位姿(m_last_accepted)而不是跟着漂的先验, 给 ICP 一个干净起点
+    int m_coast_reanchor_frames = 5;
+
     PlanarConstraint m_planar;   // 地面/平面约束 (第7层视觉约束, 可选)
 
     HypothesisManager m_hyp;     // 多假设跟踪 (aliasing)

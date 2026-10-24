@@ -128,6 +128,21 @@ PoseStamped ImuMotionPrior::predict(double t) {
         const double slip = std::fabs(m_odom_yaw_rate - m_gyro_yaw_rate);
         if (slip <= m_cfg.slip_yaw_thresh) {
             p.trans = m_offset.rot * m_odom.trans + m_offset.trans;  // 朝向仍用 IMU 积分
+        } else {
+            static int probe = 0;
+            if (++probe % 20 == 0) {
+                std::cout << "[PriorProbe] odom slip rejected: slip=" << slip
+                          << " odom_w=" << m_odom_yaw_rate << " gyro_w=" << m_gyro_yaw_rate
+                          << std::endl;
+            }
+        }
+    } else {
+        static int probe2 = 0;
+        if (++probe2 % 20 == 0) {
+            std::cout << "[PriorProbe] odom not used: use_odom=" << (m_cfg.use_odom ? 1 : 0)
+                      << " have_odom=" << (m_have_odom ? 1 : 0)
+                      << " have_offset=" << (m_have_offset ? 1 : 0)
+                      << std::endl;
         }
     }
     p.vel = m_vel_world;
