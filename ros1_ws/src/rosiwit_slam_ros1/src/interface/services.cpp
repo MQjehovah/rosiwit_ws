@@ -236,6 +236,8 @@ bool Ros1SlamInterface::handleRelocation(
     relocating_ = true;
     applyInitPose(req.initial_pose, false);
     relocating_ = false;
+    // 契约字段: 重定位次数单调递增, 消费端据此识别"位姿发生了跳变".
+    ++relocalize_count_;
     // [T11] 进入重定位 -> 清 latch (下次真的定位上之前报 1, 不报 0)
     last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
     core_ever_localized_ = false;

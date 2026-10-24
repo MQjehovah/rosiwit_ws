@@ -29,7 +29,28 @@
 >   - **坑**: 层内部栅格必须用 `int16_t`. 用 `int8_t` 时 254 (unknown) 溢出成 -2,
 >     整个 unknown 语义失效且没有任何编译告警 (planner 仍能从 `grid->data` 兜底工作,
 >     所以表面上"不漏", 实际全部代价地图都是空的).
-> - C LocalizationServer：⏳ 未开始
+> - C LocalizationServer：
+>   - **C1 + C3 完成**
+>     - `xzrobot_ros_dependency/LocalizationState.msg`：pose(含 6x6 协方差) + health
+>       (INIT/TRACKING/DEGRADED/LOST) + matching + map_id + map_valid + relocalize_count
+>     - SLAM 节点发布 `/localization/state`（10 Hz，与 `/slam/info` 同源同节奏）
+>     - 服务别名：`/localization/relocalize`、`/localization/set_initial_pose`、
+>       `/localization/switch_map`（复用既有 handler，relocalize_count 单调递增）
+>     - nav 改为消费 `/localization/state`（`loc_state:1` 表示已切到新契约），
+>       `/slam/info` 降级为迁移期 shim（一旦收到新契约就不再采信）
+>     - 验收：health=TRACKING matching=0.954 map_id=house_sim；
+>       拉偏 0.4m 后 relocalize -> count+1、health 经 INIT 回 TRACKING、
+>       位姿偏差 0.000/-0.001m；nav 3/3（余量 0.250m）
+>   - **C2 进行中**：2D `/scan` + 轮速从"开关"变成"带协方差的观测约束"
+>     - 计划落点：`planar_scan_matcher`（核心库，无 ROS 依赖）
+>       - 输入：base 系 2D 点 + 位姿初值 + 占据栅格；输出：修正位姿 + 信息矩阵
+>       - 多分辨率穷举（0.05m/2° -> 0.02m/0.7° -> 0.01m/0.3°），
+>         打分用地图距离变换的截断均值（抗外点）
+>       - 协方差由内点数 + 平均残差 + 量化步长推出；退化方向自然变大
+>     - 集成：TRACKING 不动；DEGRADED/LOST 时用 2D 匹配拉回（替代当前的
+>       纯靠 3D 的 bounded recovery），并把匹配协方差写进 `/localization/state`
+>     - 轮速：打滑判据从"硬门控丢弃"改成"膨胀 wheel 因子协方差"
+>     - 验收：拉偏 1m -> 2~3s 回到正确位置；原地 0.5rad/s x 20s 位置误差 <0.15m
 >
 > ### A3b 的前提（重要）
 > 节点的末段精调不只做"减速逼近"，还负责**最终航向对齐**（要求

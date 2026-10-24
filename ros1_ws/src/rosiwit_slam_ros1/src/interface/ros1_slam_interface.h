@@ -152,6 +152,8 @@ private:
     void publishHighRateLocalizationPose(bool info_published);
     void publishStaticMapFallback();
     void publishLocationInfo();      // legacy.cpp:1823-1897
+    /// LocalizationServer 对外契约: /localization/state (位姿+协方差+健康等级).
+    void publishLocalizationState(int8_t health, float matching);
     /// 切图/未定位阶段的零点位姿 slam/info (1 = INIT, 0,0,0)
     void publishZeroPoseInfo();
 
@@ -274,6 +276,11 @@ private:
     ros::Publisher path_puber_;               // mapping_path      Path         10
     ros::Publisher loop_constraint_puber_;    // loop_constraint   MarkerArray  10 (D2 不发)
     ros::Publisher slam_info_puber_;          // slam/info         SlamInfo     10
+    ros::Publisher localization_state_puber_;  // /localization/state LocalizationState 10
+    uint32_t relocalize_count_ = 0;            // 累计重定位次数 (契约字段)
+    double loc_sigma_xy_ = 0.05;               // C1 阶段的位姿不确定度 (C2 换成估计器协方差)
+    double loc_sigma_yaw_ = 0.03;
+    float loc_degrade_matching_ = 0.65f;       // 低于此匹配度进入 DEGRADED
     ros::Publisher scan_puber_;               // points_2d         PointCloud2  10 (永不发)
     ros::Publisher warning_code_puber_;       // slam_warning_code String       10 (T7)
     ros::Publisher point_puber_;              // origin_point      PointCloud2  10
@@ -315,7 +322,8 @@ private:
     // ---- [T8] service server + 换图状态 ----
     ros::ServiceServer srv_mode_switch_, srv_switch_map_, srv_relocation_, srv_stop_map_,
                        srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_,
-                       srv_dump_recorder_;
+                       srv_dump_recorder_,
+                       srv_loc_relocalize_, srv_loc_set_initial_pose_, srv_loc_switch_map_;
     std::string curr_map_path_;    // 旧 curr_map_path_
     std::atomic<uint64_t> map_switch_generation_{0};  // 最后一次切图请求胜出
     // ROS 层兼容：大图 xzmap 解析/关键帧重建在 aarch64 上可达 25s，

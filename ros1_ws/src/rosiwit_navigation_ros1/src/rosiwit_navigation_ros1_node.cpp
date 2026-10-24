@@ -57,6 +57,7 @@
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 #include "rosiwit_navigation/nav_core/footprint.hpp"
 #include <xzrobot_ros_dependency/SlamInfo.h>
+#include <xzrobot_ros_dependency/LocalizationState.h>
 #include <xzrobot_ros_dependency/VirtualObstacles.h>
 #include "path_smoother.hpp"
 #include "trajectory_parameterizer.hpp"
@@ -427,6 +428,8 @@ private:
     pnh_.param<double>("nav_no_progress_timeout", no_progress_timeout_, 8.0);
     pnh_.param<double>("nav_safety_stop_timeout", safety_stop_timeout_, 2.0);
     pnh_.param<double>("slam_info_timeout", slam_info_timeout_, 2.0);
+    pnh_.param<std::string>("localization_state_topic", localization_state_topic_,
+                            "/localization/state");
     pnh_.param<double>("slam_degrade_matching", slam_degrade_matching_, 0.65);
     pnh_.param<double>("slam_degrade_scale", slam_degrade_scale_, 0.5);
     // 恢复规划: 当前 footprint 压住的栅格视为 free, 否则反向 escape
@@ -829,6 +832,10 @@ private:
     // 定位健康: LOST -> 停车; matching 低 -> 限速
     slam_info_sub_ = nh_.subscribe("/slam/info", 1,
                                    &RosiwitNavigationRos1Node::slamInfoCallback, this);
+    // 新契约优先: 位姿/协方差/健康等级/匹配度/地图标识一次拿全.
+    localization_state_sub_ = nh_.subscribe(
+      localization_state_topic_, 1,
+      &RosiwitNavigationRos1Node::localizationStateCallback, this);
     // 运行时切换运动 profile / 控制器: std_msgs/String "clean|free[,controller]"
     profile_sub_ = nh_.subscribe("/set_motion_profile", 1,
                                  &RosiwitNavigationRos1Node::profileCallback, this);
@@ -2262,6 +2269,8 @@ private:
        << ",\"voxels\":" << voxel_layer_.size()
        << ",\"keepout\":" << (keepout_layer_ ? keepout_layer_->polygonCount() : 0)
        << ",\"speed_zones\":" << speed_limit_layer_.size()
+       << ",\"loc_health\":" << static_cast<int>(last_loc_health_)
+       << ",\"loc_state\":" << (has_localization_state_ ? 1 : 0)
        << ",\"scan_pts\":" << laser_points_.size()
        << ",\"scan_cap\":" << laser_points_.capacity()
        << ",\"track_pts_cap\":" << tracker_points_.capacity()
@@ -3246,9 +3255,35 @@ private:
 
   void slamInfoCallback(const xzrobot_ros_dependency::SlamInfo::ConstPtr & msg)
   {
+    // 迁移期 shim: 一旦收到过 /localization/state, 就完全以新契约为准,
+    // 避免两个来源打架 (旧话题还在发布给 App).
+    if (has_localization_state_) { return; }
     last_slam_info_stamp_ = ros::Time::now();
     last_slam_status_ = msg->location_status;
     last_slam_matching_ = msg->matching_degree;
+  }
+
+  void localizationStateCallback(
+    const xzrobot_ros_dependency::LocalizationState::ConstPtr & msg)
+  {
+    using LocState = xzrobot_ros_dependency::LocalizationState;
+    last_slam_info_stamp_ = ros::Time::now();
+    has_localization_state_ = true;
+    last_loc_health_ = msg->health;
+    last_map_id_ = msg->map_id;
+    switch (msg->health) {
+      case LocState::HEALTH_TRACKING:
+      case LocState::HEALTH_DEGRADED:
+        last_slam_status_ = 0;   // 仍在地图上; DEGRADED 由 matching 触发限速
+        break;
+      case LocState::HEALTH_INIT:
+        last_slam_status_ = 1;
+        break;
+      default:
+        last_slam_status_ = 2;   // LOST -> 停车
+        break;
+    }
+    last_slam_matching_ = msg->matching;
   }
 
   bool slamHealthLost() const
@@ -3895,8 +3930,13 @@ private:
   ros::Time safety_stop_since_;
   double safety_stop_timeout_ = 2.0;
 
-  // 定位健康 (/slam/info): 丢失 -> 停车, 匹配度低 -> 限速
+  // 定位健康: 丢失 -> 停车, 匹配度低 -> 限速
   ros::Subscriber slam_info_sub_;
+  ros::Subscriber localization_state_sub_;   // /localization/state (新契约, 优先)
+  std::string localization_state_topic_ = "/localization/state";
+  bool has_localization_state_ = false;
+  uint8_t last_loc_health_ = 0;
+  std::string last_map_id_;
   ros::Subscriber profile_sub_;      // /set_motion_profile: "clean|free[,controller]"
   std::string motion_profile_ = "clean";
   std::string free_planner_ = "hybrid_astar";

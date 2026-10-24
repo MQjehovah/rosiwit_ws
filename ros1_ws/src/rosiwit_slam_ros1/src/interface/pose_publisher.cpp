@@ -22,6 +22,7 @@
 #include "convert.h"
 #include "internal.h"
 #include "map_adapter.h"
+#include "xzrobot_ros_dependency/LocalizationState.h"
 
 using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
@@ -246,6 +247,9 @@ void Ros1SlamInterface::publishZeroPoseInfo() {
         buildSlamInfo(/*slam_state=*/1, /*location_status=*/1, curr_map_name_,
                       0.0, 0.0, 0.0,
                       static_cast<float>(realtime_grid_map_area_), 0.0f));
+    // 切图后到定位成功之前一律 INIT: 位姿不可信, 消费端不得据此导航.
+    publishLocalizationState(
+        xzrobot_ros_dependency::LocalizationState::HEALTH_INIT, 0.0f);
 }
 
 void Ros1SlamInterface::publishLocationInfo() {
@@ -314,6 +318,67 @@ void Ros1SlamInterface::publishLocationInfo() {
     slam_info_puber_.publish(
         buildSlamInfo(slam_state, location_status, curr_map_name_, p.x, p.y, p.yaw, map_area,
                       matching_degree));
+
+    // ---- LocalizationServer 契约: /localization/state ----
+    // 状态语义: INIT(不可信) -> TRACKING <-> DEGRADED(质量下降) -> LOST(必须停车).
+    using LocState = xzrobot_ros_dependency::LocalizationState;
+    int8_t health = LocState::HEALTH_LOST;
+    if (slam_mode_ == SlamMode::LOCALIZATION) {
+        if (location_status == 0) {          // LOCALIZED
+            health = (matching_degree >= loc_degrade_matching_)
+                         ? LocState::HEALTH_TRACKING
+                         : LocState::HEALTH_DEGRADED;
+        } else if (location_status == 1) {   // INIT / 重定位中
+            health = LocState::HEALTH_INIT;
+        } else {                             // LOST
+            health = LocState::HEALTH_LOST;
+        }
+    } else if (slam_mode_ == SlamMode::MAPPING) {
+        // 建图没有地图匹配度, 但有连续位姿; 对外按 TRACKING 处理.
+        health = LocState::HEALTH_TRACKING;
+    } else if (slam_mode_ == SlamMode::FREE) {
+        health = LocState::HEALTH_INIT;
+    }
+    publishLocalizationState(health, matching_degree);
+}
+
+void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) {
+    using LocState = xzrobot_ros_dependency::LocalizationState;
+    LocState msg;
+    msg.header.stamp = ros::Time::now();
+    msg.header.frame_id = kMapFrame;
+
+    const Xz3dPose p = curr_pose_;
+    const bool finite = std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.yaw) &&
+                        std::isfinite(p.q.w());
+    msg.pose.pose.position.x = finite ? p.x : 0.0;
+    msg.pose.pose.position.y = finite ? p.y : 0.0;
+    msg.pose.pose.position.z = finite ? p.z : 0.0;
+    msg.pose.pose.orientation.x = finite ? p.q.x() : 0.0;
+    msg.pose.pose.orientation.y = finite ? p.q.y() : 0.0;
+    msg.pose.pose.orientation.z = finite ? p.q.z() : 0.0;
+    msg.pose.pose.orientation.w = finite ? p.q.w() : 1.0;
+
+    // C1: 不确定度是目前的质量分档值 (C2 会换成估计器协方差 + 退化方向膨胀).
+    // 明确"不可用"时给大值, 避免消费端把 0 协方差当成"绝对准确".
+    std::fill(msg.pose.covariance.begin(), msg.pose.covariance.end(), 0.0);
+    double sxy = loc_sigma_xy_;
+    double syaw = loc_sigma_yaw_;
+    if (health == LocState::HEALTH_DEGRADED) { sxy *= 3.0; syaw *= 3.0; }
+    if (health == LocState::HEALTH_LOST || health == LocState::HEALTH_INIT) {
+        sxy = 1.0e3;
+        syaw = 1.0e3;
+    }
+    msg.pose.covariance[0] = sxy * sxy;
+    msg.pose.covariance[7] = sxy * sxy;
+    msg.pose.covariance[35] = syaw * syaw;
+
+    msg.health = health;
+    msg.matching = health == LocState::HEALTH_LOST ? 0.0f : matching;
+    msg.map_id = curr_map_name_;
+    msg.map_valid = !realtime_grid_map_.data.empty();
+    msg.relocalize_count = relocalize_count_;
+    localization_state_puber_.publish(msg);
 }
 
 // ---------------------------------------------------------------- [T7] 告警

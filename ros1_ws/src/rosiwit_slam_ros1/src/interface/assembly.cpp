@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include "ros1_slam_interface.h"
+#include "xzrobot_ros_dependency/LocalizationState.h"
 
 #include <algorithm>
 #include <chrono>
@@ -124,6 +125,9 @@ void Ros1SlamInterface::initPub() {
     path_puber_ = nh_.advertise<nav_msgs::Path>("mapping_path", 10);
     loop_constraint_puber_ = nh_.advertise<visualization_msgs::MarkerArray>("loop_constraint", 10);
     slam_info_puber_ = nh_.advertise<xzrobot_ros_dependency::SlamInfo>("slam/info", 10);
+    // LocalizationServer 契约: 一个话题带齐位姿/协方差/健康等级/匹配度/地图标识.
+    localization_state_puber_ =
+        nh_.advertise<xzrobot_ros_dependency::LocalizationState>("/localization/state", 10);
     scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
     warning_code_puber_ = nh_.advertise<std_msgs::String>("slam_warning_code", 10);
     point_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("origin_point", 10);
@@ -318,6 +322,18 @@ void Ros1SlamInterface::initServer() {
         &Ros1SlamInterface::handleStartTask, this);
     srv_expand_map_ = nh_.advertiseService("update_map_operation",
         &Ros1SlamInterface::handleExpandMap, this);
+
+    // ---- LocalizationServer 契约别名 ----
+    // 与旧服务同处理器, 只是换到 /localization/ 命名空间并给出统一语义:
+    //   relocalize       = 用给定初始位姿重定位 (Relocation)
+    //   set_initial_pose = 同上, map_name 可为空 (当前图)
+    //   switch_map       = 切图 (SwitchMap, 可带 initial_pose)
+    srv_loc_relocalize_ = nh_.advertiseService("/localization/relocalize",
+        &Ros1SlamInterface::handleRelocation, this);
+    srv_loc_set_initial_pose_ = nh_.advertiseService("/localization/set_initial_pose",
+        &Ros1SlamInterface::handleRelocation, this);
+    srv_loc_switch_map_ = nh_.advertiseService("/localization/switch_map",
+        &Ros1SlamInterface::handleSwitchMap, this);
 }
 
 } // namespace rosiwit_slam_ros1
