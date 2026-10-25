@@ -84,8 +84,13 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
             realtime_grid_resolution_ =
                 yc["mapping"]["grid"]["realtime_resolution"].as<double>();
         }
+        // C2b: 2D 平面约束开关 (localization.planar_constraint.enabled).
+        if (yc["localization"] && yc["localization"]["planar_constraint"]) {
+            const YAML::Node pc = yc["localization"]["planar_constraint"];
+            if (pc["enabled"]) planar_constraint_enabled_ = pc["enabled"].as<bool>();
+        }
     } catch (const std::exception& e) {
-        ROS_WARN_STREAM("[ros1_slam] realtime grid resolution parse failed: " << e.what());
+        ROS_WARN_STREAM("[ros1_slam] config parse failed: " << e.what());
     }
     realtime_grid_.setConfig(gcfg, gpost, gen);
     // **实时 /map 走核心的 generateGridMap 路径** (逐帧观测 + 地面处理), 与存 pgm 完全一致。
@@ -128,9 +133,8 @@ void Ros1SlamInterface::initPub() {
     // LocalizationServer 契约: 一个话题带齐位姿/协方差/健康等级/匹配度/地图标识.
     localization_state_puber_ =
         nh_.advertise<xzrobot_ros_dependency::LocalizationState>("/localization/state", 10);
-    // C2b 2D 约束开关 (默认关; 打开前需先解决核心不接受外部位姿跳变的问题).
-    planar_constraint_enabled_ =
-        ros::param::param<bool>("~planar_constraint_enabled", planar_constraint_enabled_);
+    // C2b 2D 约束开关: 由 simulation.yaml 的 localization.planar_constraint 控制.
+    // (不改变默认行为; 打开前需要 seed_max_drift 收紧, 否则核心会假定位.)
     scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
     warning_code_puber_ = nh_.advertise<std_msgs::String>("slam_warning_code", 10);
     point_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("origin_point", 10);

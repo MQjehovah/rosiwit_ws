@@ -56,25 +56,26 @@
 >         房间场景 0.15m/0.06rad 偏差 -> 误差 8mm/0mm，σ=(14,18,7)mm；
 >         长走廊沿墙偏 0.3m -> 横向 2.8cm 准确，σ_x=0.5m、σ_y=4mm、比值 126、
 >         条件数 1e9（退化方向被正确放大，而不是"假装精确"）
->     - C2b ⏳ **未打通（默认关闭）**：接线代码已就位但 `planar_constraint_enabled=false`
->       - 已完成：`/scan` 按**完整四元数**投影到 base_link（倾斜安装的雷达不能用
->         `2*atan2(z,w)` 取 yaw，会把俯仰混进航向，实测 ~12° 误差）；
->         距离场按地图几何变化重建并缓存；TRACKING 时 1Hz 校验、DEGRADED/LOST 时
->         4Hz + 更大窗口；无效就按 0.6→1.08→1.94m 逐级放大重试；
->         纠偏要连续两帧一致 + 条件数 <1e5 才执行；同一处纠偏重复 4 次即停止
->       - 实测结果：拉偏 1m 后 2D 匹配能稳定给出 dx=-0.87~-0.94（内点 0.64、
->         残差 0.026m、条件数 13）——**匹配本身是对的**
->       - 阻塞点：把该修正写回核心（`applyInitPose` / 完整 `/relocation` 路径都一样）
->         后，**下一帧位姿又被推回原处**，核心保持 INIT（matching=0），
->         于是变成反复纠偏（reloc count 涨到 21）
->       - 根因方向：`LocalizationPipeline::setInitPose` 只把命令入队并置 `m_status=INIT`，
->         真正生效要过 `m_seed_pending` 的 seed 门限（`seed_trans>1.0m` / `15°` 判失败）
->         与 accept 逻辑；当 3D 匹配在错误位姿上"看起来不错"时，seed 帧会被
->         拒/或 ICP 把位姿拉回旧锚点。需要在核心侧提供"强制 reseed / 外部约束
->         优先"的通路（例如 `setInitPose(pose, force)` 跳过相对旧锚点的门限，
->         或让 2D 匹配直接参与状态机的 accept 判定）
->       - 因此 `/localization/state` 的协方差当前仍是分档值；C2b 打开后才能用
->         2D 匹配的真实协方差（代码已就位，`planar_cov_*`）
+>     - C2b ✅ **已打通（`planar_constraint.enabled: true`）**
+>       - `/scan` 按**完整四元数**投影到 base_link（倾斜安装的雷达不能用
+>         `2*atan2(z,w)` 取 yaw，会把俯仰混进航向，实测 ~12° 误差）
+>       - 距离场按地图几何变化重建并缓存；TRACKING 时 1Hz 校验、DEGRADED/LOST 时
+>         4Hz + 更大窗口；无效就按 0.6→1.08→1.94m 逐级放大重试
+>       - 纠偏要连续两帧一致 + 条件数<1e5 才执行；同一处纠偏重复 4 次即停止
+>       - **为此修掉两个核心 bug**（不修则一定失败）：
+>         1. 注入位姿后没清 `m_last_accepted/m_coast_count/m_has_cached_target`
+>            → 逸出保护与 coast 重锚把位姿硬拉回旧锚点（表现为"注入了又被推回"）
+>         2. 注入位姿后 `acceptMatch` 的 Mahalanobis 门限每帧都拒（`d2≈18`，
+>            创新主要由 3D 匹配与 IMU 先验在 roll/pitch 上约 12° 的**固有**偏差构成）。
+>            被拒的帧不进 `onMatch` → 偏置永远学不回来 → 死锁在 INIT
+>            （`accepted=0, coast` 一路涨）。修法：注入后放行 5 帧
+>            （`m_maha_bypass_frames`），让先验偏置重新收敛
+>       - seed 门限做成可配 `global.seed_max_drift`（仿真 0.35m/8°）：
+>         1.0m 太松，ICP 能从种子滑 0.84m 并以 fitness 0.96 假锁定
+>       - 验收：拉偏 1m → **0.8~1.0s 恢复**，偏差 ≤0.08m，health 回 TRACKING
+>         （matcher 同时给出 dx=-0.94/内点 0.64/残差 0.026 的独立确认）
+>     - 剩余：轮速从"硬门控"改成"协方差膨胀"；2D 协方差已能写进
+>       `/localization/state`（DEGRADED 时）
 >
 > ### A3b 的前提（重要）
 > 节点的末段精调不只做"减速逼近"，还负责**最终航向对齐**（要求

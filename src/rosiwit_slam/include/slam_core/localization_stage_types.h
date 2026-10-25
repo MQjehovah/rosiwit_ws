@@ -186,6 +186,12 @@ struct GlobalLocalizeConfig {
     double icp_max_corr_dist = 2.0;
     double icp_fitness_thresh = 1.0;
     int    icp_max_iter = 32;
+    // seed 帧防漂门限: 种子帧的 ICP 结果相对种子位姿的允许漂移.
+    // 超过就判 seed 失败, 保持 INIT, 而不是"滑过去当成定位成功".
+    // (2026-10-25: 之前硬编码 1.0m/15°, 实测拉偏 1m 后 ICP 能滑 0.84m
+    //  并以 fitness 0.96 "锁定"在错位姿上 -> 假定位.)
+    double seed_max_drift = 1.0;       // m
+    double seed_max_yaw_deg = 15.0;    // deg
     // ScanContext
     int    sc_num_rings = 20;
     int    sc_num_sectors = 60;

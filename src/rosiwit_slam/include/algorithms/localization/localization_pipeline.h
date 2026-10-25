@@ -182,6 +182,9 @@ private:
 
     // 过桥(coasting)计数
     int m_coast_count = 0;
+    // 注入位姿后的 Mahalanobis 门限放行帧数: reset 运动先验会丢掉
+    // "3D 匹配 vs IMU 先验" 的固有 roll/pitch 偏置, 门限会每帧都拒且永远学不回来.
+    int m_maha_bypass_frames = 0;
 
     // coast 重锚阈值: matcher 连续失败超过该帧数后, 匹配初值改用最后被接受
     // 的位姿(m_last_accepted)而不是跟着漂的先验, 给 ICP 一个干净起点

@@ -348,6 +348,13 @@ void Ros1SlamInterface::publishLocationInfo() {
         health = LocState::HEALTH_INIT;
     }
     publishLocalizationState(health, matching_degree);
+    ROS_INFO_THROTTLE(2.0,
+        "[locstate] mode=%s st=%d matching=%.3f pos=(%.3f,%.3f,%.1fdeg) health=%d "
+        "relocating=%d planar=%d",
+        modeName(slam_mode_), static_cast<int>(engine_.localizationStatus()),
+        static_cast<double>(matching_degree), p.x, p.y, p.yaw * 57.2957795,
+        static_cast<int>(health), relocating_.load() ? 1 : 0,
+        planar_constraint_enabled_ ? 1 : 0);
 }
 
 void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) {

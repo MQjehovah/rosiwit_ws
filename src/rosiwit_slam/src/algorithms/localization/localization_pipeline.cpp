@@ -164,6 +164,10 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_global_cfg.top_k              = getv<int>(gc, "top_k", m_global_cfg.top_k);
         m_global_cfg.reloc_accept_score =
             getv<double>(gc, "reloc_accept_score", m_global_cfg.reloc_accept_score);
+        m_global_cfg.seed_max_drift =
+            getv<double>(gc, "seed_max_drift", m_global_cfg.seed_max_drift);
+        m_global_cfg.seed_max_yaw_deg =
+            getv<double>(gc, "seed_max_yaw_deg", m_global_cfg.seed_max_yaw_deg);
         m_ambiguity_margin = getv<double>(gc, "ambiguity_margin", m_ambiguity_margin);
         m_reseed_radius    = getv<double>(gc, "reseed_radius", m_reseed_radius);
         m_global_cfg.retry_interval     = getv<int>(gc, "retry_interval", m_global_cfg.retry_interval);
@@ -850,7 +854,13 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
     if (!res.converged) return reject("not_converged");
     // Mahalanobis 门控: 修正量相对匹配协方差异常大 -> 判离群, 不采信
     // (协方差加下限: 匹配协方差是估计自身不确定度, 极小时会误拒正常修正)
-    if (m_accept_cfg.mahalanobis_gate) {
+    if (m_maha_bypass_frames > 0) {
+        // 注入位姿 (重定位 / 2D 约束) 后放行几帧. 理由: reset 运动先验会丢掉
+        // "3D 匹配 vs IMU 先验" 的固有 roll/pitch 偏置 (~12°), 创新门限会因此
+        // 每帧都拒; 而拒绝的帧不会进入 onMatch, 偏置永远学不回来 -> 死锁在 INIT.
+        --m_maha_bypass_frames;
+        if (reject_reason) *reject_reason = "bypass_after_reseed";
+    } else if (m_accept_cfg.mahalanobis_gate) {
         Eigen::Matrix<double, 6, 1> e;
         poseInnovation(res.pose, guess, e);
         Eigen::Matrix<double, 6, 6> C = res.cov;
@@ -1084,11 +1094,26 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
         if (pending_init) {
             m_pose = pending_pose;
+            // 关键: 外部注入新位姿 (重定位 / 2D 约束) 后, 旧的"最近被接受位姿"
+            // 锚点已经无效. 不清掉它会导致位姿被硬拉回去:
+            //   1) 逸出保护在局部目标为空时 m_pose = m_last_accepted;
+            //   2) coast 重锚 (m_coast_count >= N) 把 guess 拉回 m_last_accepted.
+            // 实机复现: 拉偏 1m 后注入正确位姿, 下一帧又被推回旧锚点, 状态停在 INIT.
+            m_last_accepted = pending_pose;
+            m_have_last_accepted = false;
+            m_coast_count = 0;
+            m_has_cached_target = false;   // 旧缓存目标建在旧位姿附近
+            // 注入位姿后的门限放行 (见 acceptMatch): 让被 reset 掉的先验偏置重新学回来.
+            m_maha_bypass_frames = 5;
             {
                 std::lock_guard<std::mutex> prior_lk(m_prior_mu);
                 if (m_prior) m_prior->reset(pending_pose);
             }
-            if (m_monitor) m_monitor->reset();
+            // 不 reset 创新监视器: 它统计的是"传感器 vs 地图"的固有创新特性
+            // (含 3D 匹配与 IMU 在 roll/pitch 上约 12° 的固有偏差), 与位姿无关.
+            // 清空后窗口内样本不足 -> d2 超过卡方门限 -> acceptMatch 每帧都拒
+            // -> 无法累积 -> 状态永远停在 INIT (实测拉偏 1m 后 accepted=0 死锁).
+            // 只有在换图 (setMapData) 时才需要重置.
             m_healthy_streak = 0;
             m_unhealthy_streak = 0;
             m_corr_prev_valid = false;
@@ -1327,7 +1352,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             poseDelta(res.pose, guess, dseed, dyaw_seed);
             const double seed_trans = dseed.norm();
             const double seed_yaw_deg = std::fabs(dyaw_seed) * 57.2957795;
-            if (seed_trans > 1.0 || seed_yaw_deg > 15.0) {
+            if (seed_trans > m_global_cfg.seed_max_drift ||
+                seed_yaw_deg > m_global_cfg.seed_max_yaw_deg) {
                 seed_failed = true;
                 accepted = false;
                 out_pose = guess;
@@ -1556,6 +1582,25 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     FlightRecorder::instance().onStatusChange(true);
                 }
             }
+        }
+    }
+
+    // 状态机诊断 (1Hz): 定位状态卡在 INIT 时, 看这几个量就能定位是 seed 被拒、
+    // 匹配未接受、还是 fitness 不够.
+    {
+        static double s_last_log = -1.0;
+        if (f.end_time - s_last_log >= 1.0) {
+            s_last_log = f.end_time;
+            std::cout << "[StatusProbe] st=" << static_cast<int>(m_status.load())
+                      << " seed_failed=" << (seed_failed ? 1 : 0)
+                      << " accepted=" << (accepted ? 1 : 0)
+                      << " converged=" << (res.converged ? 1 : 0)
+                      << " fitness=" << res.fitness
+                      << " healthy=" << m_healthy_streak
+                      << " unhealthy=" << m_unhealthy_streak
+                      << " coast=" << m_coast_count
+                      << " have_last=" << (m_have_last_accepted ? 1 : 0)
+                      << " rejection=" << reject_reason << std::endl;
         }
     }
 }
