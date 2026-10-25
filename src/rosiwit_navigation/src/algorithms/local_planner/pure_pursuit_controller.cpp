@@ -36,12 +36,17 @@ bool PurePursuitController::initialize(const core::ControllerConfig& config)
     config_ = config;
     lookahead_distance_ = config.lookahead_distance;
     goal_tolerance_ = config.xy_goal_tolerance;
-    max_linear_velocity_ = config.kinematics.max_velocity_x;
-    max_angular_velocity_ = config.kinematics.max_velocity_theta;
+    // 用 max_linear_velocity (控制器自己的速度上限), 不要用 kinematics 里的
+    // 底盘极限: 覆盖模式给的是 coverage_max_speed=0.45, 而 kinematics 是
+    // 普通导航的 0.8 -> 以前覆盖实际按 0.8 跑, 行末必然冲过头.
+    max_linear_velocity_ = config.max_linear_velocity > 0.0
+        ? config.max_linear_velocity : config.kinematics.max_velocity_x;
+    max_angular_velocity_ = config.max_angular_velocity > 0.0
+        ? config.max_angular_velocity : config.kinematics.max_velocity_theta;
     initialized_ = true;
-    
-    LOG_INFO(logger_, "Pure Pursuit Controller initialized with lookahead=%.2f, tolerance=%.2f",
-                lookahead_distance_, goal_tolerance_);
+
+    LOG_INFO(logger_, "Pure Pursuit Controller initialized with lookahead=%.2f, tolerance=%.2f, vmax=%.2f",
+                lookahead_distance_, goal_tolerance_, max_linear_velocity_);
     return true;
 }
 
@@ -143,7 +148,7 @@ void PurePursuitController::setObstacles(const core::ObstacleArray& obstacles)
 
 // ========== 内部方法实现 ==========
 
-size_t PurePursuitController::findLookaheadPoint(const core::Pose2D& current_pose) const
+size_t PurePursuitController::findLookaheadPoint(const core::Pose2D& current_pose)
 {
     if (path_.empty()) return 0;
 
@@ -157,6 +162,9 @@ size_t PurePursuitController::findLookaheadPoint(const core::Pose2D& current_pos
             nearest_idx = i;
         }
     }
+    // 索引只前进不后退: 机器人偏离路径时 "最近点" 可能跳到身后, 允许回退
+    // 会让它在原地来回绕圈 (覆盖行段的轨迹就是一团乱线). 用历史进度当下限.
+    if (nearest_idx < current_waypoint_idx_) { nearest_idx = current_waypoint_idx_; }
 
     // 评估前方路径段的曲率: 取最近点前 3 个点的转角
     double path_curvature = 0.0;
@@ -184,11 +192,13 @@ size_t PurePursuitController::findLookaheadPoint(const core::Pose2D& current_pos
     for (size_t i = start_index; i < path_.size(); ++i) {
         double distance = current_pose.distanceTo(path_.points[i].pose);
         if (distance >= dynamic_lookahead) {
+            current_waypoint_idx_ = std::max(current_waypoint_idx_, i);
             return i;
         }
     }
 
     // 如果没有找到，返回最后一个点（目标）
+    current_waypoint_idx_ = path_.size() - 1;
     return path_.size() - 1;
 }
 
@@ -230,13 +240,31 @@ core::VelocityCommand PurePursuitController::purePursuitAlgorithm(
     if (std::abs(curvature) > 0.1) {
         linear_vel *= (1.0 / (1.0 + 2.0 * std::abs(curvature)));
     }
-    linear_vel = std::max(linear_vel, 0.10);
+    // 按航向误差减速: 大误差时先原地转, 不要"边转边蹭".
+    // 以前这里有一句 `linear_vel = max(linear_vel, 0.10)` —— 航向差再大也
+    // 保持 0.1m/s 前进, 于是行末/转角处一直往前蹭并绕圈 (覆盖轨迹成一团).
+    const double heading_err = std::fabs(std::atan2(local_y, local_x));
+    if (heading_err > 0.9) {
+        linear_vel = 0.0;
+    } else {
+        linear_vel *= std::max(0.15, std::cos(heading_err));
+    }
 
-    // 计算角速度
-    double angular_vel = curvature * linear_vel;
+    // 计算角速度. 注意: w 不能直接用 linear_vel 乘 —— 上面"航向差大就
+    // 停车原地转"会把 linear_vel 置 0, 那样 w 也变 0, 机器人就永远转不动.
+    // 原地转时用 max_linear_velocity_ 的一个保守基值.
+    const double w_base = (linear_vel > 1e-3)
+        ? linear_vel : std::min(0.25, max_linear_velocity_);
+    double angular_vel = curvature * w_base;
 
     // 限制角速度
     angular_vel = std::clamp(angular_vel, -max_angular_velocity_, max_angular_velocity_);
+
+    // 原地转时给一个最小转向速度, 避免曲率很小时"想转但转不动"
+    if (linear_vel < 1e-3 && std::fabs(angular_vel) > 1e-3) {
+        const double sign = angular_vel > 0.0 ? 1.0 : -1.0;
+        angular_vel = sign * std::max(0.15, std::fabs(angular_vel));
+    }
 
     return core::VelocityCommand(linear_vel, 0.0, angular_vel);
 }

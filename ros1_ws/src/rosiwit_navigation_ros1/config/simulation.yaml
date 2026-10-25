@@ -178,7 +178,7 @@ speed_limit_zones: []
 
 # ---- 动态覆盖清洁 (navi_cmd=20) ----
 coverage_sweep_width: 0.5
-coverage_max_speed: 0.45
+coverage_max_speed: 0.25
 coverage_resolution: 0.05
 coverage_replan_period: 10.0
 coverage_horizon: 6.0

@@ -68,7 +68,7 @@ private:
     bool goal_reached_;
     
     // 内部方法
-    size_t findLookaheadPoint(const core::Pose2D& current_pose) const;
+    size_t findLookaheadPoint(const core::Pose2D& current_pose);
     double calculateLookaheadDistance(double current_speed) const;
     core::VelocityCommand purePursuitAlgorithm(
         const core::Pose2D& current_pose,

@@ -1981,24 +1981,20 @@ private:
         const bool inside_now = coverage_grid_.contains(pose);
         const bool inside_next = coverage_grid_.contains(next);
         if (!inside_now) {
-          // 被超调带到界外: 只允许"朝区域内目标方向"移动 (否则会越走越远,
-          // 实测放任移动跑到 y=-2.2, 区域下边界 -0.3). 界外格子是 OUTSIDE,
-          // markDisk 会跳过, 不会把界外算成已清洁.
+          // 罕见情况: 被超调带到界外. 朝区域内目标"边转边走"(限速), 不要冻结.
+          // 界外格子是 OUTSIDE, markDisk 会跳过, 不会把界外算成已清洁.
           const double tx = coverage_target_.x - pose.x;
           const double ty = coverage_target_.y - pose.y;
-          const double to_target = std::atan2(ty, tx);
-          const double err = std::fabs(normalizeAngle(to_target - pose.theta));
-          if (err < 0.6 && std::hypot(tx, ty) > 0.05) {
-            const double v = std::min(0.12, std::fabs(cmd.linear.x));
-            cmd.linear.x = (cmd.linear.x >= 0.0) ? v : -v;
-          } else {
-            cmd.linear.x = 0.0;
-          }
+          const double err = normalizeAngle(std::atan2(ty, tx) - pose.theta);
+          cmd.linear.x = (std::fabs(err) < 0.6) ? 0.12 : 0.0;
+          cmd.angular.z = (err >= 0.0 ? 1.0 : -1.0) *
+            std::min(max_velocity_theta_, std::max(0.25, 1.5 * std::fabs(err)));
           coverage_state_ = "OUT_OF_AREA";
-        } else if (!inside_next) {
-          cmd.linear.x = 0.0;
-          coverage_state_ = "BOUNDARY";
         }
+        // 注意: 以前这里还有 "下一步出界就停 v" 的 BOUNDARY 分支 —— 它是死锁源:
+        // 机器人正好压在边界上、路径是直线 (w≈0) 时会被冻结在边界上.
+        // 现在改由几何保证不出界: 行线内缩 sweep/2 (0.25m) + 端点内缩 0.20m
+        // + coverage_max_speed 0.25 (刹车距离 ~0.06m).
       }
       publishCommand(cmd);
       path_pub_.publish(current_path_);
