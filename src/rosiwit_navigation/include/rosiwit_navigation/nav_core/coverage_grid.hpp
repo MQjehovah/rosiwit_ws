@@ -104,6 +104,8 @@ public:
   /// 把 pose 附近 radius 内的未覆盖格标成 BLOCKED (单行/单点走不到时用,
   /// 只放弃这一条带, 不是整块区域).
   void markBlockedAround(const Pose2D & pose, double radius);
+  /// 区域质心 (多边形顶点平均): 车体被超调带出区域时用它做回家目标.
+  Pose2D centroid() const;
   // 把 seed 所在的未覆盖连通块整体标成 BLOCKED (A* 规划失败时用).
   size_t markComponentBlocked(const Pose2D & seed);
 

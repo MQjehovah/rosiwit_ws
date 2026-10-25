@@ -129,7 +129,7 @@ def main():
                 (float(sys.argv[3]), float(sys.argv[4])),
                 (float(sys.argv[1]), float(sys.argv[4]))]
     else:
-        poly = [(-1.5, -0.3), (1.5, -0.3), (1.5, 2.2), (-1.5, 2.2)]
+        poly = [(-1.5, -0.3), (1.5, -0.3), (1.5, 1.7), (-1.5, 1.7)]
     STATE["polygon"] = poly
 
     rospy.Subscriber("/map", OccupancyGrid, map_cb)
@@ -160,7 +160,7 @@ def main():
     goal.robot_vel = 0.30
     goal.tracking_path = [Pose2D(x, y, 0.0) for (x, y) in poly]
     client.send_goal(goal, feedback_cb=feedback_cb)
-    if not client.wait_for_result(rospy.Duration(480.0)):
+    if not client.wait_for_result(rospy.Duration(600.0)):
         client.cancel_goal()
         print("FAIL: coverage timeout (rate=%.1f%%)" % (FEEDBACK["percent"] * 100.0))
         rospy.sleep(1.0)

@@ -513,6 +513,13 @@ bool CoverageGrid::nextCoverageSegment(const Pose2D & pose, double max_length,
   const int cols_hi = scan_vertical_ ? by1 : bx1;
   const int row_step = std::max(1, static_cast<int>(
     std::lround(config_.sweep_width / info_.resolution)));
+  // 行线不要贴着区域 bbox 边界: 贴边时机器人一路压线, 频繁触发"出界限速"
+  // (实测平均速度只有 0.107 m/s, 预期 0.45). 内缩半个清扫宽度, 外圈由
+  // sweep_width/2 的清扫盘覆盖, 不会漏.
+  const int row_margin = std::max(1, static_cast<int>(
+    std::lround(0.5 * config_.sweep_width / info_.resolution)));
+  const int r_lo = rows_lo + row_margin;
+  const int r_hi = rows_hi - row_margin;
 
   // ---- 3) 挑行: 有"可达且未覆盖"格子的行, 取离机器人最近的;
   //         优先长度够跟的 (>= 0.3m), 碎行只在没有别的选择时才用 ----
@@ -520,7 +527,7 @@ bool CoverageGrid::nextCoverageSegment(const Pose2D & pose, double max_length,
   int best_row = -1;
   double best_score = 0.0;
   bool best_long = false;
-  for (int r = rows_lo; r <= rows_hi; r += row_step) {
+  for (int r = r_lo; r <= r_hi; r += row_step) {
     int lo_c = -1;
     int hi_c = -1;
     for (int c = cols_lo; c <= cols_hi; ++c) {
@@ -710,6 +717,16 @@ size_t CoverageGrid::uncoveredCount() const
     if (cell == CoverageCell::UNCOVERED) { ++count; }
   }
   return count;
+}
+
+Pose2D CoverageGrid::centroid() const
+{
+  Pose2D c;
+  if (polygon_.empty()) { return c; }
+  for (const auto & p : polygon_) { c.x += p.x; c.y += p.y; }
+  c.x /= static_cast<double>(polygon_.size());
+  c.y /= static_cast<double>(polygon_.size());
+  return c;
 }
 
 void CoverageGrid::markBlockedAround(const Pose2D & pose, double radius)

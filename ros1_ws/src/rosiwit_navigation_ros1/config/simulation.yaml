@@ -67,7 +67,7 @@ replan_on_blocked: false
 # ---------- 控制器 ----------
 # MPPI + footprint 感知 (A/B 报告推荐组合; DWA+footprint 会绕圈)
 controller_name: "mppi"
-coverage_controller_name: "pure_pursuit"
+coverage_controller_name: "pure_pursuit"   # 行段是长直线; 实测 rpp 在覆盖行段会原地打转
 
 # ---------- 坐标系 ----------
 global_frame: "map"
@@ -177,11 +177,11 @@ keepout_frame: "map"
 speed_limit_zones: []
 
 # ---- 动态覆盖清洁 (navi_cmd=20) ----
-coverage_sweep_width: 0.4
-coverage_max_speed: 0.3
+coverage_sweep_width: 0.5
+coverage_max_speed: 0.45
 coverage_resolution: 0.05
 coverage_replan_period: 10.0
-coverage_horizon: 2.5
+coverage_horizon: 6.0
 coverage_retry_timeout: 10.0
 coverage_complete_rate: 0.995
 coverage_blocked_inflation: 0.10
