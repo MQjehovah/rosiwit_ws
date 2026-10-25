@@ -224,6 +224,43 @@ TEST(SafetyMonitor, SingleFrameNoiseDoesNotFlipState)
   EXPECT_FALSE(monitor.stopActive());
 }
 
+TEST(SafetyMonitor, RotationZoneCircleIgnoresDiagonalOverCover)
+{
+  // 实测回归: 矩形旋转区 (对角 0.97m) 会把 0.83m 外、车体扫掠只到 0.64m 的
+  // 物体判成障碍 -> 原地转被永久 STOP, 覆盖率卡死. 用扫掠圆后应放行.
+  auto cfg = MakeConfig();
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_radius_rotation = 0.74;   // 车体最远顶点 0.64 + 0.10
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  // 该点在矩形里 (x<=0.80, |y|<=0.55), 但距车心 0.80 > 0.74 (扫掠圆外);
+  // 且必须在车身排除盒 (x<=0.57, |y|<=0.35) 之外, 否则会被当自身点丢掉.
+  const std::vector<Point> diag{{0.64, -0.47}, {0.65, -0.46}, {0.63, -0.48}};
+  auto r = monitor.filter(VelocityCommand(0.0, 0.0, 0.8), diag);
+  EXPECT_EQ(r.state, "PASS");
+  EXPECT_DOUBLE_EQ(r.command.angular_z, 0.8);
+
+  // 换成"只有矩形"的配置: 同样三个点必须停 -> 证明这条回归是圆判据修掉的
+  monitor.reset();
+  cfg.stop_radius_rotation = 0.0;
+  monitor.configure(cfg);
+  auto r2 = monitor.filter(VelocityCommand(0.0, 0.0, 0.8), diag);
+  EXPECT_EQ(r2.state, "STOP");
+}
+
+TEST(SafetyMonitor, RotationCircleStillStopsRealObstacle)
+{
+  auto cfg = MakeConfig();
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_radius_rotation = 0.74;
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  // 0.61m 处的物体 (车身排除盒之外 x>0.57): 车体扫掠 (0.64) 会撞上 -> 必须停
+  const std::vector<Point> close{{0.60, 0.10}, {0.61, 0.08}, {0.59, 0.12}};
+  auto r = monitor.filter(VelocityCommand(0.0, 0.0, 0.5), close);
+  EXPECT_EQ(r.state, "STOP");
+}
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

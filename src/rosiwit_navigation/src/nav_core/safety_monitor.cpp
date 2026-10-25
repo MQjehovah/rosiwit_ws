@@ -148,9 +148,14 @@ SafetyResult SafetyMonitor::filter(
     stop_poly = &config_.stop_polygon_backward;
   }
 
+  const bool rotating = std::fabs(cmd.linear_x) < 0.05;
   int stop_count = 0;
-  if (config_.stop_radius > 0.0) {
-    const double r2 = config_.stop_radius * config_.stop_radius;
+  double stop_radius = config_.stop_radius;
+  if (rotating && config_.stop_radius_rotation > 0.0) {
+    stop_radius = config_.stop_radius_rotation;   // 原地转: 用扫掠圆
+  }
+  if (stop_radius > 0.0) {
+    const double r2 = stop_radius * stop_radius;
     for (const auto & p : pts) {
       if (p.first * p.first + p.second * p.second <= r2) ++stop_count;
     }

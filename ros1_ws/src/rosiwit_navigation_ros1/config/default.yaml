@@ -106,11 +106,16 @@ safety_stop_polygon: [0.55, -0.40, 0.95, -0.40, 0.95, 0.40, 0.55, 0.40]
 # 后退: 车尾后 0.35 ~ 0.75m
 safety_stop_polygon_backward: [-0.75, -0.40, -0.35, -0.40, -0.35, 0.40, -0.75, 0.40]
 # 原地旋转: 车体扫掠面 + 0.2m
+# 原地转用扫掠圆 (半径 = 车体最远顶点 0.64 + 余量); 0 = 用上面的矩形
+safety_rotation_radius_margin: 0.10
 safety_stop_polygon_rotation: [-0.50, -0.55, 0.80, -0.55, 0.80, 0.55, -0.50, 0.55]
 # 减速: 车头前 0 ~ 0.6m
 safety_slowdown_polygon: [0.55, -0.55, 1.15, -0.55, 1.15, 0.55, 0.55, 0.55]
 # 滞回 (20Hz 下 2/3 帧 = 100/150ms)
 safety_stop_trigger_frames: 2
+# 点数阈值: 0.8m 处 10cm 障碍约 20 个点, 稀疏伪回波只有 3~4 个
+safety_stop_max_points: 4
+safety_slowdown_max_points: 6
 safety_stop_release_frames: 3
 safety_slowdown_trigger_frames: 1
 safety_slowdown_release_frames: 2

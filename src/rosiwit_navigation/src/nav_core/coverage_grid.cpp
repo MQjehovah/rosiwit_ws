@@ -1309,6 +1309,19 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
       } else {
         appendTransit(st.first);
       }
+      // 行首朝向与进场方向差 > 80° 时必须显式"停-转": pure_pursuit 只跟位置,
+      // 180° 掉头它会一边前进一边画大弧, 直接跑出行区域 (实测冲出 0.6m 后
+      // 陷进家具区). 位置与前一点相同 = velocity_x=0 的旋转标记.
+      {
+        const double row_heading = std::atan2(st.second.y - st.first.y,
+                                              st.second.x - st.first.x);
+        if (std::fabs(std::remainder(row_heading - prev_heading, 2.0 * M_PI)) > 1.4) {
+          Pose2D turn = st.first;
+          turn.theta = row_heading;
+          route.push_back(turn);
+          prev_heading = row_heading;
+        }
+      }
       appendLine(st.first, st.second);
       prev = st.second;
       prev_heading = std::atan2(st.second.y - st.first.y, st.second.x - st.first.x);

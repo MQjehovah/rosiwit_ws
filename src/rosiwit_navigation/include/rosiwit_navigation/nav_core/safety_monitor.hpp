@@ -37,6 +37,10 @@ struct SafetyMonitorConfig
   // 留空表示回退到 stop_polygon.
   std::vector<std::pair<double, double>> stop_polygon_backward;
   std::vector<std::pair<double, double>> stop_polygon_rotation;
+  // 原地旋转用**圆**判据 (>0 时优先于 stop_polygon_rotation):
+  // 车体原地转扫过的是半径 = max|footprint 顶点| 的圆, 用矩形会在地角方向
+  // 多判 0.3~0.5m (实测把 0.83m 外、扫掠只到 0.64m 的物体判成障碍 -> 卡死).
+  double stop_radius_rotation = 0.0;
   // 滞回: 连续 N 帧满足才进入 / 释放 (nav2 的 trigger/release_consecutive_points).
   // 默认 1 保持旧行为; 生产配置应设 2/3, 避免单帧噪声让 stop/slow 来回跳.
   int stop_trigger_frames = 1;

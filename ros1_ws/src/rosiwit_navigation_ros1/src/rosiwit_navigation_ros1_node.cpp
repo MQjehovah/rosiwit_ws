@@ -248,6 +248,8 @@ private:
     pnh_.param<double>("safety_time_before_collision", safety_time_before_collision_, 2.0);
     // 滞回 (nav2 trigger/release_consecutive_points): 连续 N 帧才进入/释放,
     // 单帧噪声不会再让 stop/slow 来回跳.
+    // 原地转安全半径 = max|footprint 顶点| + 该余量. 0 = 退回矩形旋转区.
+    pnh_.param<double>("safety_rotation_radius_margin", safety_rotation_radius_margin_, 0.10);
     pnh_.param<int>("safety_stop_trigger_frames", safety_stop_trigger_frames_, 2);
     pnh_.param<int>("safety_stop_release_frames", safety_stop_release_frames_, 3);
     pnh_.param<int>("safety_slowdown_trigger_frames", safety_slowdown_trigger_frames_, 1);
@@ -396,6 +398,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     pnh_.param<double>("coverage_replan_period", coverage_replan_period_, 10.0);
     pnh_.param<double>("coverage_horizon", coverage_horizon_, 2.5);
     pnh_.param<double>("coverage_retry_timeout", coverage_retry_timeout_, 10.0);
+    // 旋转被安全层挡住多久开始后退脱困 / 退多快多久 / 最多几次
+    pnh_.param<double>("coverage_rot_blocked_timeout", cov_rot_blocked_timeout_, 1.2);
+    pnh_.param<double>("coverage_backoff_speed", cov_backoff_speed_, 0.12);
+    pnh_.param<double>("coverage_backoff_time", cov_backoff_time_, 0.7);
+    pnh_.param<double>("coverage_rot_hold_time", cov_rot_hold_time_, 0.25);
+    pnh_.param<int>("coverage_backoff_max", cov_backoff_max_, 2);
     pnh_.param<double>("coverage_complete_rate", coverage_complete_rate_, 0.99);
     pnh_.param<double>("coverage_blocked_inflation", coverage_blocked_inflation_, 0.10);
     pnh_.param<double>("coverage_plan_inflation", coverage_plan_inflation_, 0.0);
@@ -1458,6 +1466,16 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.time_before_collision = safety_time_before_collision_;
     cfg.simulation_time_step = 0.1;
     cfg.footprint = toPolygon(safety_footprint_poly_);
+    // 旋转区用扫掠圆: 半径 = 车体最远顶点 + 余量 (矩形会在对角方向多判 0.3m+)
+    if (safety_rotation_radius_margin_ > 0.0 && configured_footprint_.size() >= 3) {
+      double r = 0.0;
+      for (const auto & v : configured_footprint_) {
+        r = std::max(r, std::hypot(v.first, v.second));
+      }
+      cfg.stop_radius_rotation = r + safety_rotation_radius_margin_;
+      ROS_INFO("[safety] rotation zone = circle r=%.2f (swept %.2f + margin %.2f)",
+               cfg.stop_radius_rotation, r, safety_rotation_radius_margin_);
+    }
     cfg.stop_trigger_frames = safety_stop_trigger_frames_;
     cfg.stop_release_frames = safety_stop_release_frames_;
     cfg.slowdown_trigger_frames = safety_slowdown_trigger_frames_;
@@ -2180,6 +2198,26 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       return;
     }
 
+    // 行末"停一拍": 旋转点即使不需要转 (朝向已对齐), 也要先把速度收掉,
+    // 否则 pure_pursuit 会直接切向下一段的远点 -> 行末过冲 0.2~0.4m,
+    // 实测冲出覆盖区域后贴在障碍上, 旋转扫掠圆 (0.64m) 里就有东西 -> 卡死.
+    if (!cov_rot_hold_until_.isZero() && now < cov_rot_hold_until_) {
+      coverage_state_ = "ROT_HOLD";
+      publishCommand(geometry_msgs::Twist());
+      publishActionOutputs();
+      return;
+    }
+
+    // 脱困后退优先: 转不开时先沿车尾方向退一点 (仍在安全层管辖下)
+    if (!cov_backoff_until_.isZero() && now < cov_backoff_until_) {
+      geometry_msgs::Twist back;
+      back.linear.x = -std::fabs(cov_backoff_speed_);
+      coverage_state_ = "BACKOFF";
+      publishCommand(back);
+      publishActionOutputs();
+      return;
+    }
+
     if (current_path_.poses.size() >= 2) {
       // 旋转点优先: 显式停-转, 不要交给 pure_pursuit 抹成弧线
       double w_rot = 0.0;
@@ -2189,10 +2227,30 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         rot.angular.z = w_rot;
         coverage_state_ = "ROTATING";
         publishCommand(rot);
+        // 行末贴障碍时, 车体旋转扫掠圆 (0.64m) 可能真的转不开; 安全层会 STOP.
+        // 一直干等只会 "no progress -> 标 blocked -> 重规划" 死循环,
+        // 所以先沿原方向退一点再转 (nav2 的 BackUp-then-Spin 同理).
+        if (last_safety_state_ == "STOP" || last_safety_state_ == "STALE") {
+          if (cov_rot_blocked_since_.isZero()) { cov_rot_blocked_since_ = now; }
+          if (cov_backoff_count_ < cov_backoff_max_ &&
+              (now - cov_rot_blocked_since_).toSec() > cov_rot_blocked_timeout_) {
+            ROS_WARN("[coverage] 原地转被挡住 %.1fs -> 后退 %.2fs 脱困 (#%d)",
+                     (now - cov_rot_blocked_since_).toSec(), cov_backoff_time_,
+                     cov_backoff_count_ + 1);
+            cov_backoff_until_ = now + ros::Duration(cov_backoff_time_);
+            cov_rot_blocked_since_ = ros::Time(0);
+            cov_rot_engaged_ = false;      // 退完重新对正
+            cov_rot_dir_ = 0;
+            ++cov_backoff_count_;
+          }
+        } else {
+          cov_rot_blocked_since_ = ros::Time(0);
+        }
         publishActionOutputs();
         return;
       }
       cov_rot_dir_ = 0;
+      cov_rot_blocked_since_ = ros::Time(0);
 
       coverage_state_ = "COVERING";
       geometry_msgs::Twist cmd = coverageCommand();
@@ -2286,6 +2344,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     const double err = normalizeAngle(target - pose.theta);
     if (std::fabs(err) < 0.06) {
       cov_rot_done_ = end + 1;   // 已经对正, 这段不用转
+      cov_rot_hold_until_ = ros::Time::now() + ros::Duration(cov_rot_hold_time_);
       return false;
     }
     cov_rot_engaged_ = true;
@@ -2390,6 +2449,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cov_rot_engaged_ = false;
     cov_rot_done_ = 0;
     cov_rot_dir_ = 0;
+    cov_rot_blocked_since_ = ros::Time(0);
+    cov_backoff_until_ = ros::Time(0);
+    cov_backoff_count_ = 0;
+    cov_rot_hold_until_ = ros::Time(0);
     coverage_target_ = route.back();
     coverage_has_target_ = true;
     current_path_ = toRosPath(path, map_frame_, now);
@@ -4128,6 +4191,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     if (!safety_enabled_) return cmd;
     if (safety_fail_safe_on_timeout_ && !last_scan_stamp_.isZero() &&
         (ros::Time::now() - last_scan_stamp_).toSec() > safety_source_timeout_) {
+      ROS_WARN_THROTTLE(1.0, "[safety] STALE scan age=%.2fs (timeout %.2fs)",
+                        (ros::Time::now() - last_scan_stamp_).toSec(), safety_source_timeout_);
       last_safety_state_ = "STALE";
       last_safety_scale_ = 0.0;
       return geometry_msgs::Twist();
@@ -4147,6 +4212,37 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     }
 
     const core::SafetyResult result = safety_monitor_.filter(toCoreVelocity(cmd), points);
+    if (result.scale <= 0.0 && result.state == "STOP") {
+      // 诊断: 打印落入 STOP 区的前几个点 (base 系), 确认是自身回波还是真障碍
+      const std::vector<std::pair<double, double>> * zone = nullptr;
+      const auto & cfg = safety_monitor_.config();
+      if (std::fabs(cmd.linear.x) < 0.05 && !cfg.stop_polygon_rotation.empty()) {
+        zone = &cfg.stop_polygon_rotation;
+      } else if (cmd.linear.x < 0.0 && !cfg.stop_polygon_backward.empty()) {
+        zone = &cfg.stop_polygon_backward;
+      } else {
+        zone = &cfg.stop_polygon;
+      }
+      std::ostringstream os;
+      int n = 0;
+      for (const auto & pt : points) {
+        if (core::pointInPolygon(pt.first, pt.second, *zone)) {
+          // base 系 + 反算回 map 系, 判断是"刚性挂在车上"还是"换算偏移"
+          const double wx = current_pose_.pose.position.x + (cy * pt.first - sy * pt.second);
+          const double wy = current_pose_.pose.position.y + (sy * pt.first + cy * pt.second);
+          os << " b(" << pt.first << "," << pt.second << ") w(" << wx << "," << wy << ")";
+          if (++n >= 2) { break; }
+        }
+      }
+      ROS_WARN_THROTTLE(1.0, "[safety] STOP hits%s pose=(%.2f,%.2f,%.1fdeg) npts=%zu",
+                        os.str().c_str(), current_pose_.pose.position.x,
+                        current_pose_.pose.position.y, yaw * 180.0 / M_PI, points.size());
+    }
+    if (result.scale <= 0.0) {
+      ROS_WARN_THROTTLE(1.0, "[safety] %s: pts=%zu cmd(v=%.2f w=%.2f) -> zero",
+                        result.state.c_str(), points.size(),
+                        cmd.linear.x, cmd.angular.z);
+    }
     last_safety_state_ = result.state;
     last_safety_scale_ = result.scale;
     core::VelocityCommand out = result.command;
@@ -4275,8 +4371,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   std::vector<double> safety_footprint_poly_;
   std::vector<std::pair<double, double>> body_polygon_;   // 车身排除区 (只排除轮廓内)
   double safety_body_margin_ = 0.05;
-  int safety_stop_max_points_ = 2;
-  int safety_slowdown_max_points_ = 2;
+  double safety_rotation_radius_margin_ = 0.10;
+  int safety_stop_max_points_ = 4;   // nav2 collision_monitor 默认
+  int safety_slowdown_max_points_ = 6;
   int safety_stop_trigger_frames_ = 2;
   int safety_stop_release_frames_ = 3;
   int safety_slowdown_trigger_frames_ = 1;
@@ -4550,6 +4647,16 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   size_t cov_rot_idx_ = 0;
   double cov_rot_target_ = 0.0;
   size_t cov_rot_done_ = 0;   // 已处理到的旋转点下标 (按路径顺序单调推进)
+  // 旋转被挡 -> 后退脱困
+  ros::Time cov_rot_blocked_since_;
+  ros::Time cov_backoff_until_;
+  ros::Time cov_rot_hold_until_;
+  double cov_rot_hold_time_ = 0.25;
+  double cov_rot_blocked_timeout_ = 1.2;
+  double cov_backoff_speed_ = 0.12;
+  double cov_backoff_time_ = 0.7;
+  int cov_backoff_max_ = 2;
+  int cov_backoff_count_ = 0;
   core::Pose2D coverage_last_motion_pose_;
   ros::Time coverage_last_motion_time_;
   std::string coverage_state_ = "IDLE";
