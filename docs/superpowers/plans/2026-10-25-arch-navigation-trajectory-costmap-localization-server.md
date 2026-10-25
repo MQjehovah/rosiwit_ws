@@ -215,6 +215,25 @@
 > 可视化：`docs/artifacts/coverage_before_rowfix.png`（修前行线死循环）、
 > `coverage_after_rowfix.png`（95%）、`coverage_99p5_6m2.png`（6 m² / 99.5%）。
 >
+> ### 覆盖路线化（下一轮的唯一方向，已与用户确认）
+> **问题定性**：缺陷不在控制器，而在覆盖层的路径契约——每行重规划 + approach
+> 拼接，导致 nav2 那套"跟一条稳定路径"的跟踪律失效（实测照搬后只剩 22.6%、
+> 轨迹 162m）。参考实现摘录见 `docs/dev/nav2-rpp-reference.md`。
+>
+> **做法**（参考 `fields2cover` 的 SwathGenerator+Route、`opennav_coverage`
+> 的一次出 route）：
+> 1. `CoverageGrid::buildRoute(pose, max_length, std::vector<Pose2D>& route)`：
+>    一次生成**剩余全部路线**——headland 行线（现有 `row_margin`）+ `passable`
+>    裁剪 + 弓字形排序 + 行间连接点（标记 `velocity_x=0` 表示原地转）
+> 2. `coveragePlanTick` 改为：整条路线规划**一次**，只在整条路线末尾做
+>    approach 收缩；行间转向交给 `rotate_to_heading`；不再每行 replan
+> 3. 路线失效条件（新增障碍 / 偏离 > 0.8m / 走到末尾）才重建
+> 4. 然后重新启用 nav2 跟踪律（弧长前视 + 曲率限速 + approach 收缩 +
+>    `rotate_to_heading_min_angle=0.785`），参数取 nav2 默认量级
+>
+> **验收**：3×2 m 与 5×3 m 区域覆盖率 ≥99%，`render_coverage.py` 出的轨迹呈
+> 明显弓字形；`clean+hybrid_astar+mppi` 3/3 不回归（pure_pursuit 只用于覆盖）。
+>
 > ### A3b 的前提（重要）
 > 节点的末段精调不只做"减速逼近"，还负责**最终航向对齐**（要求
 > `|yaw - goal_yaw| < 0.2`）。轨迹目前只保证末段 v=0，没有"对齐目标航向"这一步。
