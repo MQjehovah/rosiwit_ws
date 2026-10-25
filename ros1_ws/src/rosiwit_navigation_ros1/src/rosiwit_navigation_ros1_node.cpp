@@ -1968,6 +1968,19 @@ private:
     }
 
     if (current_path_.poses.size() >= 2) {
+      // 旋转点优先: 显式停-转, 不要交给 pure_pursuit 抹成弧线
+      double w_rot = 0.0;
+      if (executeCoverageRotation(pose, w_rot)) {
+        geometry_msgs::Twist rot;
+        rot.linear.x = 0.0;
+        rot.angular.z = w_rot;
+        coverage_state_ = "ROTATING";
+        publishCommand(rot);
+        publishActionOutputs();
+        return;
+      }
+      cov_rot_dir_ = 0;
+
       coverage_state_ = "COVERING";
       geometry_msgs::Twist cmd = applySafety(coverageCommand());
       // 预测一步: 如果车体中心会跑出区域/撞进障碍, 停线速度 (保留转向).
@@ -2005,6 +2018,44 @@ private:
       publishCommand(applySafety(geometry_msgs::Twist()));
       publishActionOutputs();
     }
+  }
+
+  // 覆盖路线里的原地转点执行器.
+  //
+  // 为什么需要: pure_pursuit 只跟踪位置, 不认识"位置不变、朝向变化"的旋转点,
+  // 于是"停->转->走"被它抹成弧线 (实测轨迹里的小环). 差速轮可以原地转
+  // (R=0), 长方形车体的限制由安全层的 footprint 保证. 这里显式执行旋转:
+  // 到点 -> 停线速度 -> 按锁存方向转到位 -> 交回跟踪.
+  bool executeCoverageRotation(const core::Pose2D & pose, double & w_out)
+  {
+    if (coverage_path_core_.points.size() < 3) return false;
+    // 最近点
+    size_t nearest = 0;
+    double best = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < coverage_path_core_.points.size(); ++i) {
+      const auto & q = coverage_path_core_.points[i].pose;
+      const double d = std::hypot(q.x - pose.x, q.y - pose.y);
+      if (d < best) { best = d; nearest = i; }
+    }
+    if (best > 0.30) return false;   // 偏离路线太远, 交给控制器
+    if (std::fabs(coverage_path_core_.points[nearest].velocity_x) > 0.1) return false;
+
+    // 同一位置的连续点构成旋转段, 目标朝向取这一段最后一点
+    size_t end = nearest;
+    const auto & base = coverage_path_core_.points[nearest].pose;
+    while (end + 1 < coverage_path_core_.points.size()) {
+      const auto & q = coverage_path_core_.points[end + 1].pose;
+      if (std::hypot(q.x - base.x, q.y - base.y) > 0.03) break;
+      ++end;
+    }
+    const double target = coverage_path_core_.points[end].pose.theta;
+    const double err = normalizeAngle(target - pose.theta);
+    if (std::fabs(err) < 0.05) return false;   // 已对正, 交给跟踪
+
+    if (cov_rot_dir_ == 0) cov_rot_dir_ = err > 0.0 ? 1 : -1;
+    w_out = cov_rot_dir_ * std::min(max_velocity_theta_,
+                                    std::max(0.15, 2.0 * std::fabs(err)));
+    return true;
   }
 
   // 覆盖路线: 一次生成整条剩余路线 (boustrophedon), 不再"每行一次规划".
@@ -2095,6 +2146,7 @@ private:
 
     coverage_last_plan_ = now;
     coverage_route_ = route;
+    coverage_path_core_ = path;
     coverage_target_ = route.back();
     coverage_has_target_ = true;
     current_path_ = toRosPath(path, map_frame_, now);
@@ -4118,6 +4170,9 @@ private:
   ros::Time coverage_last_diag_;
   // 当前活动覆盖路线: 有它就不再周期重建 (每 10s 重建会让机器人反复重跑同一段)
   std::vector<core::Pose2D> coverage_route_;
+  // 覆盖路线 (core::Path, 带 velocity_x: 0=原地转 1=前进), 供旋转段执行器读取
+  core::Path coverage_path_core_;
+  int cov_rot_dir_ = 0;   // 覆盖旋转方向锁存 (避免 ±π 附近左右摆)
   core::Pose2D coverage_last_motion_pose_;
   ros::Time coverage_last_motion_time_;
   std::string coverage_state_ = "IDLE";
