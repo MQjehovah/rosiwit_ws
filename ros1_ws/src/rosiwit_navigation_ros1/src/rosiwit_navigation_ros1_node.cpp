@@ -372,6 +372,11 @@ private:
     pnh_.param<double>("coverage_blocked_inflation", coverage_blocked_inflation_, 0.10);
     pnh_.param<double>("coverage_plan_inflation", coverage_plan_inflation_, 0.0);
     pnh_.param<double>("coverage_plan_robot_radius", coverage_plan_robot_radius_, 0.0);
+    // 行间掉头: 0 = 原地转; 0.25 = 半圆弧 (R = 行距/2, 需要行端有 R 的转弯余量)
+    pnh_.param<double>("coverage_turn_radius", coverage_turn_radius_, 0.0);
+    // headland 环宽度: 0 = 不做; = sweep 时先绕边界一圈. 规则矩形区域行线本来
+    // 就能贴到边界, 开环只增加 8~10m 空跑; 边带漏的时候才开.
+    pnh_.param<double>("coverage_headland_width", coverage_headland_width_, 0.0);
     pnh_.param<std::string>("coverage_controller_name", coverage_controller_name_,
                             "pure_pursuit");
     pnh_.param<std::string>("coverage_report_path", coverage_report_path_, "");
@@ -1801,6 +1806,8 @@ private:
     }
 
     coverage_config_.sweep_width = coverage_sweep_width_;
+    coverage_config_.turn_radius = coverage_turn_radius_;
+    coverage_config_.headland_width = coverage_headland_width_;
     coverage_config_.obstacle_dilation = coverage_blocked_inflation_;
     // v1: 允许目标到区域边缘, 由下面的“预测位姿越界即停”守卫防止车体中心跑出.
     coverage_config_.center_inset = 0.0;
@@ -2028,33 +2035,59 @@ private:
   // 到点 -> 停线速度 -> 按锁存方向转到位 -> 交回跟踪.
   bool executeCoverageRotation(const core::Pose2D & pose, double & w_out)
   {
-    if (coverage_path_core_.points.size() < 3) return false;
-    // 最近点
-    size_t nearest = 0;
-    double best = std::numeric_limits<double>::max();
-    for (size_t i = 0; i < coverage_path_core_.points.size(); ++i) {
-      const auto & q = coverage_path_core_.points[i].pose;
-      const double d = std::hypot(q.x - pose.x, q.y - pose.y);
-      if (d < best) { best = d; nearest = i; }
+    const auto & pts = coverage_path_core_.points;
+    if (pts.size() < 3) return false;
+
+    // 已占用: 一直转到位才交回跟踪.
+    // 为什么必须锁存: 旋转执行器(按路径顺序找 0.30m 内的旋转点)和纯跟踪会**互相抢**.
+    // 纯跟踪在旋转点附近算出的 w 和这里方向常常相反 (实测 +0.2 与 -0.7 交替),
+    // 平均角速度≈0, 机器人在原地抖着不动, 覆盖率卡死. 锁存后旋转期间只有它发令.
+    if (cov_rot_engaged_) {
+      const double err = normalizeAngle(cov_rot_target_ - pose.theta);
+      if (std::fabs(err) < 0.06) {
+        cov_rot_engaged_ = false;
+        cov_rot_dir_ = 0;
+        cov_rot_done_ = cov_rot_idx_ + 1;
+        return false;
+      }
+      if (cov_rot_dir_ == 0) { cov_rot_dir_ = err > 0.0 ? 1 : -1; }
+      w_out = cov_rot_dir_ * std::min(max_velocity_theta_,
+                                      std::max(0.20, 2.0 * std::fabs(err)));
+      return true;
     }
-    if (best > 0.30) return false;   // 偏离路线太远, 交给控制器
-    if (std::fabs(coverage_path_core_.points[nearest].velocity_x) > 0.1) return false;
+
+    // 未占用: 按**路径顺序**取第一个够得着的旋转点 (不是全局最近点).
+    // 全局最近点会被后面某段转场/别的行端点劫持, 目标朝向在两个旋转点之间来回跳.
+    size_t nearest = pts.size();
+    for (size_t i = cov_rot_done_; i < pts.size(); ++i) {
+      if (std::fabs(pts[i].velocity_x) > 0.1) continue;
+      if (std::hypot(pts[i].pose.x - pose.x, pts[i].pose.y - pose.y) <= 0.30) {
+        nearest = i;
+        break;
+      }
+    }
+    if (nearest >= pts.size()) return false;
 
     // 同一位置的连续点构成旋转段, 目标朝向取这一段最后一点
     size_t end = nearest;
-    const auto & base = coverage_path_core_.points[nearest].pose;
-    while (end + 1 < coverage_path_core_.points.size()) {
-      const auto & q = coverage_path_core_.points[end + 1].pose;
+    const auto & base = pts[nearest].pose;
+    while (end + 1 < pts.size()) {
+      const auto & q = pts[end + 1].pose;
       if (std::hypot(q.x - base.x, q.y - base.y) > 0.03) break;
       ++end;
     }
-    const double target = coverage_path_core_.points[end].pose.theta;
+    const double target = pts[end].pose.theta;
     const double err = normalizeAngle(target - pose.theta);
-    if (std::fabs(err) < 0.05) return false;   // 已对正, 交给跟踪
-
-    if (cov_rot_dir_ == 0) cov_rot_dir_ = err > 0.0 ? 1 : -1;
+    if (std::fabs(err) < 0.06) {
+      cov_rot_done_ = end + 1;   // 已经对正, 这段不用转
+      return false;
+    }
+    cov_rot_engaged_ = true;
+    cov_rot_idx_ = end;
+    cov_rot_target_ = target;
+    cov_rot_dir_ = err > 0.0 ? 1 : -1;
     w_out = cov_rot_dir_ * std::min(max_velocity_theta_,
-                                    std::max(0.15, 2.0 * std::fabs(err)));
+                                    std::max(0.20, 2.0 * std::fabs(err)));
     return true;
   }
 
@@ -2074,26 +2107,10 @@ private:
     const core::Pose2D pose = toCorePose(current_pose_);
 
     std::vector<core::Pose2D> route;
-    const bool have_route = coverage_grid_.buildRoute(pose, route) && route.size() >= 2;
 
-    // 卡住兜底: 路线存续期内完全没有进展 -> 只把"前方那一条带"标 blocked,
-    // 下次重建时绕开它; 不要整块放弃.
-    if (have_route && (now - coverage_last_progress_).toSec() > coverage_retry_timeout_) {
-      const size_t ahead = std::min(route.size() - 1, static_cast<size_t>(20));
-      ROS_WARN("[coverage] no progress for %.1fs -> mark strip ahead (%.2f,%.2f) blocked",
-               (now - coverage_last_progress_).toSec(),
-               route[ahead].x, route[ahead].y);
-      coverage_grid_.markBlockedAround(route[ahead],
-                                       std::max(0.20, coverage_sweep_width_ * 0.5));
-      coverage_last_progress_ = now;
-      coverage_route_.clear();
-      current_path_.poses.clear();
-      coverage_controller_->reset();
-      return;
-    }
-
-    // 已有活动路线且机器人还在它附近 -> 不重建, 继续执行.
-    // 只有"走完""偏离 >0.8m""被标记 blocked"才重建.
+    // ---- 已有活动路线: 先决定"继续跟"还是"重建" ----
+    // 注意: 以前 buildRoute() 是每个 tick 都调一次再把结果丢掉 (一次要跑
+    // BFS+chamfer+单元分解, 几十 ms), 现在只在真正需要重建时才算.
     if (!coverage_route_.empty()) {
       double best = std::numeric_limits<double>::max();
       for (const auto & rp : coverage_route_) {
@@ -2101,9 +2118,26 @@ private:
       }
       const bool finished = coverage_route_.size() > 1 &&
         pose.distanceTo(coverage_route_.back()) < 0.15;
-      if (!finished && best <= 0.8) { return; }
+      if (!finished && best <= 0.8) {
+        // 路线还在, 但已经完全没进展 -> 只把"前方那一条带"标 blocked, 下次重建绕开它
+        if ((now - coverage_last_progress_).toSec() > coverage_retry_timeout_) {
+          const size_t ahead = std::min(coverage_route_.size() - 1, static_cast<size_t>(20));
+          ROS_WARN("[coverage] no progress for %.1fs -> mark strip ahead (%.2f,%.2f) blocked",
+                   (now - coverage_last_progress_).toSec(),
+                   coverage_route_[ahead].x, coverage_route_[ahead].y);
+          coverage_grid_.markBlockedAround(coverage_route_[ahead],
+                                           std::max(0.20, coverage_sweep_width_ * 0.5));
+          coverage_last_progress_ = now;
+          coverage_route_.clear();
+          current_path_.poses.clear();
+          coverage_controller_->reset();
+        }
+        return;
+      }
       coverage_route_.clear();
     }
+
+    const bool have_route = coverage_grid_.buildRoute(pose, route) && route.size() >= 2;
 
     if (!have_route) {
       coverage_last_plan_ = now;
@@ -2147,6 +2181,9 @@ private:
     coverage_last_plan_ = now;
     coverage_route_ = route;
     coverage_path_core_ = path;
+    cov_rot_engaged_ = false;
+    cov_rot_done_ = 0;
+    cov_rot_dir_ = 0;
     coverage_target_ = route.back();
     coverage_has_target_ = true;
     current_path_ = toRosPath(path, map_frame_, now);
@@ -4173,6 +4210,11 @@ private:
   // 覆盖路线 (core::Path, 带 velocity_x: 0=原地转 1=前进), 供旋转段执行器读取
   core::Path coverage_path_core_;
   int cov_rot_dir_ = 0;   // 覆盖旋转方向锁存 (避免 ±π 附近左右摆)
+  // 旋转执行器锁存: 触发后独占, 直到转到位 (否则和纯跟踪互相抢, 净角速度≈0)
+  bool cov_rot_engaged_ = false;
+  size_t cov_rot_idx_ = 0;
+  double cov_rot_target_ = 0.0;
+  size_t cov_rot_done_ = 0;   // 已处理到的旋转点下标 (按路径顺序单调推进)
   core::Pose2D coverage_last_motion_pose_;
   ros::Time coverage_last_motion_time_;
   std::string coverage_state_ = "IDLE";
@@ -4188,6 +4230,8 @@ private:
   double coverage_blocked_inflation_ = 0.10;
   double coverage_plan_inflation_ = 0.0;
   double coverage_plan_robot_radius_ = 0.0;
+  double coverage_turn_radius_ = 0.0;
+  double coverage_headland_width_ = 0.0;
   std::string coverage_controller_name_ = "pure_pursuit";
   std::string coverage_report_path_;
   movebase::Goal action_goal_;

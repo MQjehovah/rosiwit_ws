@@ -92,7 +92,7 @@ int main(int argc, char ** argv)
   if (argc < 4) {
     std::printf(
       "usage: %s map.pgm out.csv poly.txt [sweep=0.5] [half_width=0.31] "
-      "[turn_radius=0] [start_x] [start_y] [start_theta=0]\n", argv[0]);
+      "[turn_radius=0] [headland=0] [start_x] [start_y] [start_theta=0]\n", argv[0]);
     return 2;
   }
   Pgm map;
@@ -106,6 +106,7 @@ int main(int argc, char ** argv)
   const double sweep = (argc > 4) ? std::atof(argv[4]) : 0.5;
   const double half_width = (argc > 5) ? std::atof(argv[5]) : 0.31;
   const double turn_radius = (argc > 6) ? std::atof(argv[6]) : 0.0;
+  const double headland = (argc > 7) ? std::atof(argv[7]) : 0.0;
 
   core::CostmapGridInfo info;
   info.width = static_cast<unsigned int>(map.width);
@@ -120,6 +121,7 @@ int main(int argc, char ** argv)
   cfg.center_inset = 0.0;
   cfg.robot_inset = half_width;
   cfg.turn_radius = turn_radius;
+  cfg.headland_width = headland;
 
   core::CoverageGrid grid;
   if (!grid.initialize(info, polygon, cfg)) { std::cerr << "initialize failed\n"; return 1; }
@@ -127,13 +129,13 @@ int main(int argc, char ** argv)
 
   // 起点: 命令行优先, 否则区域质心 (若不在区内就取第一条边的内点)
   core::Pose2D start;
-  if (argc > 8) {
-    start.x = std::atof(argv[7]);
-    start.y = std::atof(argv[8]);
+  if (argc > 9) {
+    start.x = std::atof(argv[8]);
+    start.y = std::atof(argv[9]);
   } else {
     start = grid.centroid();
   }
-  start.theta = (argc > 9) ? std::atof(argv[9]) : 0.0;
+  start.theta = (argc > 10) ? std::atof(argv[10]) : 0.0;
   if (!grid.contains(start)) {
     const core::Pose2D c = grid.centroid();
     start.x = c.x;
@@ -167,8 +169,8 @@ int main(int argc, char ** argv)
     out << route[i].x << "," << route[i].y << "," << route[i].theta << "," << kind << "\n";
   }
   const auto st = grid.stats();
-  std::printf("route pts=%zu rot_pts=%zu len=%.2f m  turn_radius=%.2f\n",
-              route.size(), rot, len, turn_radius);
+  std::printf("route pts=%zu rot_pts=%zu len=%.2f m  turn_radius=%.2f headland=%.2f\n",
+              route.size(), rot, len, turn_radius, headland);
   std::printf("region: total=%.2f m2 obstacle=%.2f blocked=%.2f uncovered=%.2f\n",
               st.total * map.resolution * map.resolution,
               st.obstacle * map.resolution * map.resolution,

@@ -49,6 +49,11 @@ struct CoverageConfig
   // 代价是行端要留出 R 的转弯余量 (从两侧的行端内缩 R), 以及弧线会扫到
   // 行端外侧 R 的带状区域 (正是 headland 存在的理由).
   double turn_radius = 0.0;
+  // headland 环宽度 (m): 沿区域边界内缩 headland_width/2 走一圈, 覆盖边带.
+  // 0 = 不做 (旧行为). 一般设成 sweep_width 的整数倍 (1 圈 = sweep_width).
+  // 没有它时行线范围永远差最后半条扫宽: 5.55x2.85 房间顶部 0.34m 条带
+  // (1.67 m2, 10.5%) 一条行线都不经过.
+  double headland_width = 0.0;
 };
 
 struct CoverageStats

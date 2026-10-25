@@ -187,4 +187,8 @@ coverage_complete_rate: 0.995
 coverage_blocked_inflation: 0.10
 coverage_plan_inflation: 0.0
 coverage_plan_robot_radius: 0.0
+# 行间掉头: 0 = 原地转 90+横移+90; 0.25 = 半圆弧 (R = 行距/2, 行端需有 R 转弯余量)
+coverage_turn_radius: 0.0
+# headland 环: 0 = 不做 (行线本身贴到区域边界); = sweep 时先绕边界一圈
+coverage_headland_width: 0.0
 coverage_report_path: ""

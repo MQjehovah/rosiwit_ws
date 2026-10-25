@@ -704,21 +704,24 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
   int sy = 0;
   if (!bfsStartCell(pose, sx, sy)) { return false; }
 
+  const double res = std::max(1e-3, info_.resolution);
+  const int W = static_cast<int>(info_.width);
+  const int H = static_cast<int>(info_.height);
+
   // ---- 可达集合 (与 nextCoverageSegment 一致) ----
-  const size_t n = cells_.size();
-  std::vector<uint8_t> reach(n, 0);
-  const int ddx[4] = {-1, 0, 1, 0};
-  const int ddy[4] = {0, -1, 0, 1};
+  std::vector<uint8_t> reach(cells_.size(), 0);
   {
+    const int ddx[4] = {-1, 0, 1, 0};
+    const int ddy[4] = {0, -1, 0, 1};
     std::queue<std::pair<int, int>> queue;
     queue.push({sx, sy});
     reach[index(sx, sy)] = 1;
     while (!queue.empty()) {
-      const auto [cx, cy] = queue.front();
+      const std::pair<int, int> cur = queue.front();
       queue.pop();
       for (int i = 0; i < 4; ++i) {
-        const int nx = cx + ddx[i];
-        const int ny = cy + ddy[i];
+        const int nx = cur.first + ddx[i];
+        const int ny = cur.second + ddy[i];
         if (!cellInBounds(nx, ny)) { continue; }
         const int nidx = index(nx, ny);
         if (reach[nidx] != 0) { continue; }
@@ -729,115 +732,349 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
     }
   }
 
-  // ---- 区域 bbox + 行线 (headland 内缩) ----
-  int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
-  if (!worldToCell(polygon_[0].x, polygon_[0].y, bx0, by0)) { return false; }
-  bx1 = bx0;
-  by1 = by0;
+  // ---- 区域 bbox (clamp 到栅格) ----
+  double px0 = polygon_[0].x;
+  double px1 = polygon_[0].x;
+  double py0 = polygon_[0].y;
+  double py1 = polygon_[0].y;
   for (const auto & p : polygon_) {
-    int mx = 0, my = 0;
-    if (!worldToCell(p.x, p.y, mx, my)) { continue; }
-    bx0 = std::min(bx0, mx);
-    bx1 = std::max(bx1, mx);
-    by0 = std::min(by0, my);
-    by1 = std::max(by1, my);
+    px0 = std::min(px0, p.x);
+    px1 = std::max(px1, p.x);
+    py0 = std::min(py0, p.y);
+    py1 = std::max(py1, p.y);
   }
-  const int rows_lo = scan_vertical_ ? bx0 : by0;
-  const int rows_hi = scan_vertical_ ? bx1 : by1;
-  const int cols_lo = scan_vertical_ ? by0 : bx0;
-  const int cols_hi = scan_vertical_ ? by1 : bx1;
-  const int row_step = std::max(1, static_cast<int>(
-    std::lround(config_.sweep_width / info_.resolution)));
-  const int row_margin = std::max(1, static_cast<int>(
-    std::lround(0.5 * config_.sweep_width / info_.resolution)));
-  const int r_lo = rows_lo + row_margin;
-  const int r_hi = rows_hi - row_margin;
+  auto toCell = [&](double v, double origin) {
+    return static_cast<int>(std::floor((v - origin) / res));
+  };
+  const int bx0 = std::max(0, toCell(px0, info_.origin.position.x));
+  const int bx1 = std::min(W - 1, toCell(px1, info_.origin.position.x));
+  const int by0 = std::max(0, toCell(py0, info_.origin.position.y));
+  const int by1 = std::min(H - 1, toCell(py1, info_.origin.position.y));
+  if (bx1 <= bx0 || by1 <= by0) { return false; }
 
-  // 半圆掉头 (turn_radius>0) 需要行端留出转弯余量 R, 否则弧线会顶到边界/墙上.
-  // 差速轮原地转 (turn_radius==0) 不需要, 保持旧行为.
-  const int col_margin = (config_.turn_radius > 0.0)
-    ? std::max(0, static_cast<int>(std::lround(
-        config_.turn_radius / std::max(1e-6, info_.resolution))))
-    : 0;
-  const int c_lo = cols_lo + col_margin;
-  const int c_hi = cols_hi - col_margin;
-  if (c_hi < c_lo) { return false; }
+  // ---- 1) 距离场: 每格到"区域外"的距离 (米) ----
+  // headland 环与内部分界都靠它. 两遍 3-4 chamfer 近似欧氏距离.
+  const float kInf = 1e6f;
+  const float kDiag = 1.41421356f;
+  std::vector<float> dist(cells_.size(), kInf);
+  for (int y = by0; y <= by1; ++y) {
+    for (int x = bx0; x <= bx1; ++x) {
+      if (cells_[index(x, y)] == CoverageCell::OUTSIDE) { dist[index(x, y)] = 0.0f; }
+    }
+  }
+  for (int y = by0; y <= by1; ++y) {
+    for (int x = bx0; x <= bx1; ++x) {
+      float & v = dist[index(x, y)];
+      if (v <= 0.0f) { continue; }
+      float best = v;
+      if (x > bx0) { best = std::min(best, dist[index(x - 1, y)] + 1.0f); }
+      if (y > by0) { best = std::min(best, dist[index(x, y - 1)] + 1.0f); }
+      if (x > bx0 && y > by0) { best = std::min(best, dist[index(x - 1, y - 1)] + kDiag); }
+      if (x < bx1 && y > by0) { best = std::min(best, dist[index(x + 1, y - 1)] + kDiag); }
+      v = best;
+    }
+  }
+  for (int y = by1; y >= by0; --y) {
+    for (int x = bx1; x >= bx0; --x) {
+      float & v = dist[index(x, y)];
+      if (v <= 0.0f) { continue; }
+      float best = v;
+      if (x < bx1) { best = std::min(best, dist[index(x + 1, y)] + 1.0f); }
+      if (y < by1) { best = std::min(best, dist[index(x, y + 1)] + 1.0f); }
+      if (x < bx1 && y < by1) { best = std::min(best, dist[index(x + 1, y + 1)] + kDiag); }
+      if (x > bx0 && y < by1) { best = std::min(best, dist[index(x - 1, y + 1)] + kDiag); }
+      v = best;
+    }
+  }
+  for (int y = by0; y <= by1; ++y) {
+    for (int x = bx0; x <= bx1; ++x) {
+      dist[index(x, y)] *= static_cast<float>(res);
+    }
+  }
 
-  // ---- 每行取最长的一段"可达且可通行"区间 ----
-  struct Swath { int row; int lo; int hi; double dist; };
-  std::vector<Swath> swaths;
-  // 短行兜底: 若所有行段都短于 0.30m (区域边缘的小碎块), 至少取最长的那条,
-  // 否则 buildRoute 永远返回 false, 覆盖率会卡在 98% 一直等 (实测).
-  Swath fallback;
-  bool have_fallback = false;
-  for (int r = r_lo; r <= r_hi; r += row_step) {
-    int run_lo = -1;
-    int best_lo = -1;
-    int best_hi = -1;
-    int best_len = 0;
-    for (int c = c_lo; c <= c_hi; ++c) {
-      const int mx = scan_vertical_ ? r : c;
-      const int my = scan_vertical_ ? c : r;
-      const int idx = index(mx, my);
-      const bool ok = passable(mx, my, true) && reach[idx] != 0;
-      if (ok) {
-        if (run_lo < 0) { run_lo = c; }
-      }
-      if ((!ok || c == c_hi) && run_lo >= 0) {
-        const int run_hi = ok ? c : c - 1;
-        if (run_hi - run_lo > best_len) {
-          best_len = run_hi - run_lo;
-          best_lo = run_lo;
-          best_hi = run_hi;
+  // ---- 2) headland 环: 沿边界内缩 headland_width/2 走一圈 ----
+  // 与 fields2cover 的 generate_headland / path_coverage_ros2 的 border_drive 一致:
+  // 先绕边界一圈把边带扫掉, 内部再按行扫, 这样行线不用贴边, 边带不会被漏.
+  std::vector<std::vector<std::pair<int, int>>> ring_segs;
+  const double headland = std::max(0.0, config_.headland_width);
+  if (headland > 0.0) {
+    const double target = 0.5 * headland;
+    // 取"跨过 target 等值线"的那一层格子 (d>=target 且有一个 4 邻域 d<target).
+    // 直接用 |d-target| < res/2 会同时命中相邻两层 (栅格中心到边界是 0.225/0.275),
+    // 环变成两格厚, 贪心走位会在两格之间来回抖.
+    std::vector<std::pair<int, int>> cand;
+    cand.reserve(4096);
+    for (int y = by0; y <= by1; ++y) {
+      for (int x = bx0; x <= bx1; ++x) {
+        const int i = index(x, y);
+        if (dist[i] < target) { continue; }
+        bool crossing = (x <= bx0 || x >= bx1 || y <= by0 || y >= by1);
+        const int nbx[4] = {x - 1, x + 1, x, x};
+        const int nby[4] = {y, y, y - 1, y + 1};
+        for (int k = 0; k < 4 && !crossing; ++k) {
+          if (nbx[k] < bx0 || nbx[k] > bx1 || nby[k] < by0 || nby[k] > by1) {
+            crossing = true;
+            break;
+          }
+          if (dist[index(nbx[k], nby[k])] < target) { crossing = true; }
         }
-        run_lo = -1;
+        if (!crossing) { continue; }
+        if (!passable(x, y, true)) { continue; }
+        cand.push_back({x, y});
       }
     }
-    if (best_lo < 0) { continue; }
-    // 这一行还有没扫的格子吗
-    bool need = false;
-    for (int c = best_lo; c <= best_hi && !need; ++c) {
-      const int mx = scan_vertical_ ? r : c;
-      const int my = scan_vertical_ ? c : r;
-      if (cells_[index(mx, my)] == CoverageCell::UNCOVERED) { need = true; }
+    // 贪心最近邻走环 (步长 <= 0.15m): 遇到障碍/断口就另起一段.
+    std::vector<uint8_t> used(cand.size(), 0);
+    size_t remaining = cand.size();
+    while (remaining >= 8) {
+      size_t cur = cand.size();
+      double best = std::numeric_limits<double>::max();
+      const Pose2D ref = ring_segs.empty() ? pose :
+        cellToWorld(ring_segs.back().back().first, ring_segs.back().back().second);
+      for (size_t i = 0; i < cand.size(); ++i) {
+        if (used[i] != 0) { continue; }
+        const double d = ref.distanceTo(cellToWorld(cand[i].first, cand[i].second));
+        if (d < best) { best = d; cur = i; }
+      }
+      if (cur >= cand.size()) { break; }
+      used[cur] = 1;
+      --remaining;
+      ring_segs.push_back({cand[cur]});
+      while (true) {
+        size_t nb = cand.size();
+        double bd = 3.0 * res;
+        for (size_t j = 0; j < cand.size(); ++j) {
+          if (used[j] != 0) { continue; }
+          const double dx = static_cast<double>(cand[j].first - cand[cur].first);
+          const double dy = static_cast<double>(cand[j].second - cand[cur].second);
+          const double d = std::hypot(dx, dy) * res;
+          if (d < bd) { bd = d; nb = j; }
+        }
+        if (nb >= cand.size()) { break; }
+        used[nb] = 1;
+        --remaining;
+        ring_segs.back().push_back(cand[nb]);
+        cur = nb;
+      }
     }
-    if (!need) { continue; }
-    Swath s;
-    s.row = r;
-    s.lo = best_lo;
-    s.hi = best_hi;
-    const Pose2D a = cellToWorld(scan_vertical_ ? r : best_lo,
-                                 scan_vertical_ ? best_lo : r);
-    const Pose2D b = cellToWorld(scan_vertical_ ? r : best_hi,
-                                 scan_vertical_ ? best_hi : r);
-    // 排序用"到行线的垂距", 不是到行端点的距离. 用端点距离时, 一条 5m 长的行
-    // 的两个端点离机器人都很远, 会把它误判成"远行", 起点跑到区域另一头.
-    s.dist = scan_vertical_ ? std::fabs(pose.x - a.x) : std::fabs(pose.y - a.y);
-    if (best_len * info_.resolution >= 0.30) {
-      swaths.push_back(s);
-    } else if (!have_fallback || best_len > (fallback.hi - fallback.lo)) {
-      fallback = s;
-      have_fallback = true;
-    }
-  }
-  if (swaths.empty()) {
-    if (!have_fallback) { return false; }
-    swaths.push_back(fallback);   // 只剩碎行: 也走一趟, 否则永远结束不了
   }
 
-  // ---- 排序: **单调**扫, 从离机器人近的那一端开始 ----
-  // 以前是"从离机器人最近的行开始, 再按行序绕回另一端", 会产生横跨已扫行的
-  // 长距离回退 (3x2m 区域实测多走 1.5m: 0.46->0.96->1.46 再跳回 -0.04).
-  // 规则区域的正确顺序是: 由近到远单调推进, 奇偶行反向.
+  // ---- 3) 单元分解: x-monotone (Boustrophedon / Choset) ----
+  // 沿扫掠方向切片; 可通行区间 1:1 延续 -> 同一单元; 分叉/合并/端点台阶 -> 切单元.
+  // 每个单元内每条行线都是一整段, 这是"每行只取最长一段"那个 bug 的正解.
+  const bool slice_along_x = !scan_vertical_;
+  const int sweep_cells = std::max(1, static_cast<int>(std::lround(config_.sweep_width / res)));
+  const int s_lo = slice_along_x ? bx0 : by0;
+  const int s_hi = slice_along_x ? bx1 : by1;
+  const int a_lo = slice_along_x ? by0 : bx0;
+  const int a_hi = slice_along_x ? by1 : bx1;
+  auto cellOf = [&](int s, int a, int & mx, int & my) {
+    if (slice_along_x) {
+      mx = s;
+      my = a;
+    } else {
+      mx = a;
+      my = s;
+    }
+  };
+  const float interior_thresh = static_cast<float>(headland) - 0.5f * static_cast<float>(res);
+  auto interiorAt = [&](int s, int a) -> bool {
+    int mx = 0;
+    int my = 0;
+    cellOf(s, a, mx, my);
+    if (!cellInBounds(mx, my)) { return false; }
+    const int i = index(mx, my);
+    if (dist[i] < interior_thresh) { return false; }
+    return passable(mx, my, true) && reach[i] != 0;
+  };
+
+  struct Iv { int lo; int hi; };
+  struct DCell {
+    int s0 = 0;
+    std::vector<Iv> iv;   // 与切片 s0..s0+iv.size()-1 对齐
+  };
+  std::vector<DCell> cells;
+  std::vector<int> label(cells_.size(), -1);   // 每格属于哪个单元 (-1 = 不是内部)
   {
-    if (swaths.front().dist > swaths.back().dist) {
-      std::reverse(swaths.begin(), swaths.end());
+    std::vector<Iv> prev;
+    std::vector<int> prev_owner;
+    for (int s = s_lo; s <= s_hi; ++s) {
+      std::vector<Iv> cur;
+      int run = -1;
+      for (int a = a_lo; a <= a_hi; ++a) {
+        const bool ok = interiorAt(s, a);
+        if (ok && run < 0) { run = a; }
+        if (!ok && run >= 0) {
+          cur.push_back({run, a - 1});
+          run = -1;
+        }
+      }
+      if (run >= 0) { cur.push_back({run, a_hi}); }
+
+      std::vector<int> cur_owner(cur.size(), -1);
+      std::vector<int> cur_hits(cur.size(), 0);
+      std::vector<int> prev_hits(prev.size(), 0);
+      std::vector<int> pair_prev(cur.size(), -1);
+      for (size_t ci = 0; ci < cur.size(); ++ci) {
+        for (size_t pi = 0; pi < prev.size(); ++pi) {
+          if (cur[ci].lo <= prev[pi].hi && prev[pi].lo <= cur[ci].hi) {
+            ++cur_hits[ci];
+            ++prev_hits[pi];
+            pair_prev[ci] = static_cast<int>(pi);
+          }
+        }
+      }
+      for (size_t ci = 0; ci < cur.size(); ++ci) {
+        const int pi = pair_prev[ci];
+        bool cont = (cur_hits[ci] == 1 && pi >= 0 &&
+                     prev_hits[static_cast<size_t>(pi)] == 1 &&
+                     prev_owner[static_cast<size_t>(pi)] >= 0);
+        if (cont) {
+          // 凹角/台阶: 区间端点突然跳变 (>2 格) 说明边界在这里拐了个直角.
+          // 不切的话 L 形会被当成一个单元 (宽度从 3.25 突增到 5.55), 行长参差.
+          const Iv & pv = prev[static_cast<size_t>(pi)];
+          if (std::abs(cur[ci].lo - pv.lo) > 2 || std::abs(cur[ci].hi - pv.hi) > 2) {
+            cont = false;
+          }
+        }
+        int id = -1;
+        if (cont) {
+          id = prev_owner[static_cast<size_t>(pi)];
+          cells[static_cast<size_t>(id)].iv.push_back(cur[ci]);
+        } else {
+          DCell c;
+          c.s0 = s;
+          c.iv.push_back(cur[ci]);
+          cells.push_back(c);
+          id = static_cast<int>(cells.size()) - 1;
+        }
+        cur_owner[ci] = id;
+        for (int a = cur[ci].lo; a <= cur[ci].hi; ++a) {
+          int mx = 0;
+          int my = 0;
+          cellOf(s, a, mx, my);
+          label[index(mx, my)] = id;
+        }
+      }
+      prev = cur;
+      prev_owner = cur_owner;
     }
   }
-  std::vector<Swath> ordered = swaths;
 
-  // ---- 组装: 原地转点 + 直线连接 + 行段 ----
-  const double res = std::max(1e-3, info_.resolution);
+  // ---- 4) 每个单元按**自己的长边**生成 swath ----
+  // F2C 的 swath angle 目标是"行数最少", 对矩形单元就是沿长边走.
+  // 行线首条内缩 sweep/2, 末条贴边 (与上一条重叠 <= sweep/2, F2C allow_overlap).
+  struct Swath { int mx0; int my0; int mx1; int my1; };
+  std::vector<std::vector<Swath>> cell_swaths(cells.size());
+  for (size_t ci = 0; ci < cells.size(); ++ci) {
+    const int want = static_cast<int>(ci);
+    int x0 = W;
+    int x1 = -1;
+    int y0 = H;
+    int y1 = -1;
+    for (int y = by0; y <= by1; ++y) {
+      for (int x = bx0; x <= bx1; ++x) {
+        if (label[index(x, y)] != want) { continue; }
+        x0 = std::min(x0, x);
+        x1 = std::max(x1, x);
+        y0 = std::min(y0, y);
+        y1 = std::max(y1, y);
+      }
+    }
+    if (x1 < x0 || y1 < y0) { continue; }
+    const bool along_x = (x1 - x0) >= (y1 - y0);
+    // 车心留边: 行线/端点都要离区域边界留一点, 否则控制超调一步就出界
+    // (实测 4x3 区域行末冲到 x=2.62, 边界 2.0, 每次行末都 OUT_OF_AREA 卡住).
+    // 清扫盘半径 sweep/2 >= 留边, 所以留边不吃覆盖面积.
+    const int margin = std::max(0, static_cast<int>(std::lround(
+      std::min(0.5 * config_.sweep_width, 0.15) / res)));
+    auto narrow = [&](int lo, int hi) {
+      const int a = lo + margin;
+      const int b = hi - margin;
+      if (b - a < 2) {
+        const int mid = (lo + hi) / 2;
+        return std::make_pair(mid, mid);
+      }
+      return std::make_pair(a, b);
+    };
+    const auto row_range = narrow(along_x ? x0 : y0, along_x ? x1 : y1);
+    const auto lane_range = narrow(along_x ? y0 : x0, along_x ? y1 : x1);
+    const int row_lo = row_range.first;
+    const int row_hi = row_range.second;
+    const int lane_lo = lane_range.first;
+    const int lane_hi = lane_range.second;
+    const int lane_edge_hi = along_x ? y1 : x1;
+
+    std::vector<int> lanes;
+    // 第一条就直接放在"留边"上: 清扫盘半径 0.25 > 留边 0.15, 所以覆盖仍然到边界,
+    // 而车心不会贴边. (以前从 lane_lo + sweep/2 开始, 加上留边就双重内缩,
+    // 4x3 区域底部 0.15m 一条带扫不到, 覆盖率掉到 94.9%.)
+    for (int a = lane_lo; a <= lane_hi; a += sweep_cells) {
+      lanes.push_back(a);
+    }
+    // 收尾贴边: 上一条还没够到边界时补一条 (与上一条重叠 <= sweep/2, F2C allow_overlap)
+    if (lanes.empty() ||
+        (lanes.back() + sweep_cells / 2 < lane_edge_hi && lane_hi > lanes.back())) {
+      lanes.push_back(lane_hi);
+    }
+
+    std::vector<Swath> sws;
+    for (size_t li = 0; li < lanes.size(); ++li) {
+      const int a = lanes[li];
+      std::vector<Swath> lane_sws;
+      int run = -1;
+      for (int s = row_lo; s <= row_hi + 1; ++s) {
+        const bool ok = (s <= row_hi) &&
+          (label[index(along_x ? s : a, along_x ? a : s)] == want);
+        if (ok && run < 0) { run = s; }
+        if (!ok && run >= 0) {
+          Swath sw;
+          if (along_x) {
+            sw.mx0 = run; sw.my0 = a; sw.mx1 = s - 1; sw.my1 = a;
+          } else {
+            sw.mx0 = a; sw.my0 = run; sw.mx1 = a; sw.my1 = s - 1;
+          }
+          lane_sws.push_back(sw);
+          run = -1;
+        }
+      }
+      // 同一 lane 上可能有多段 (单元非凸): 先按蛇形定顺序, 再按蛇形定方向
+      const bool flip = (li % 2 == 1);
+      if (flip) { std::reverse(lane_sws.begin(), lane_sws.end()); }
+      for (auto sw : lane_sws) {
+        if (flip) {
+          std::swap(sw.mx0, sw.mx1);
+          std::swap(sw.my0, sw.my1);
+        }
+        // 还有没覆盖的格子才保留
+        bool need = false;
+        const int sx0 = std::min(sw.mx0, sw.mx1);
+        const int sx1 = std::max(sw.mx0, sw.mx1);
+        const int sy0 = std::min(sw.my0, sw.my1);
+        const int sy1 = std::max(sw.my0, sw.my1);
+        const int dx = (sx1 > sx0) ? 1 : 0;
+        const int dy = (sy1 > sy0) ? 1 : 0;
+        for (int x = sx0, y = sy0; x <= sx1 && y <= sy1 && !need; x += dx, y += dy) {
+          if (cells_[index(x, y)] == CoverageCell::UNCOVERED) { need = true; }
+        }
+        if (!need) { continue; }
+        sws.push_back(sw);
+      }
+    }
+    // 太碎的 swath (< 0.10m) 会让执行端原地抖, 单元里只剩碎段时才保留
+    std::vector<Swath> keep;
+    std::vector<Swath> tiny;
+    for (const auto & sw : sws) {
+      const double len = std::hypot(sw.mx1 - sw.mx0, sw.my1 - sw.my0) * res;
+      if (len >= 0.10) { keep.push_back(sw); } else { tiny.push_back(sw); }
+    }
+    if (keep.empty()) { keep = tiny; }
+    cell_swaths[ci] = keep;
+  }
+
+  // ---- 5) 组装: headland 环 -> 单元最近邻 -> 单元内蛇形 -> 圆弧/原地转连接 ----
+  Pose2D prev = pose;
+  double prev_heading = pose.theta;
   auto appendLine = [&](const Pose2D & from, const Pose2D & to) {
     const double len = std::hypot(to.x - from.x, to.y - from.y);
     const int steps = std::max(1, static_cast<int>(std::ceil(len / res)));
@@ -851,13 +1088,133 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
       route.push_back(p);
     }
   };
+  auto appendTurnAndLine = [&](const Pose2D & target) {
+    if (std::hypot(target.x - prev.x, target.y - prev.y) <= res) { return; }
+    const double bearing = std::atan2(target.y - prev.y, target.x - prev.x);
+    Pose2D turn = prev;
+    turn.theta = bearing;
+    route.push_back(turn);
+    appendLine(prev, target);
+    prev_heading = bearing;
+    prev = target;
+  };
 
-  Pose2D prev = pose;
-  double prev_heading = pose.theta;
+  // ---- 转场: 直线能走就直走, 不能走就用栅格 BFS + 视线捷径绕开障碍 ----
+  auto cellPassable = [&](int mx, int my) {
+    return cellInBounds(mx, my) && passable(mx, my, true);
+  };
+  auto lineClear = [&](const Pose2D & a, const Pose2D & b) {
+    const double len = std::hypot(b.x - a.x, b.y - a.y);
+    const int steps = std::max(1, static_cast<int>(std::ceil(len / (0.5 * res))));
+    for (int i = 0; i <= steps; ++i) {
+      const double t = static_cast<double>(i) / static_cast<double>(steps);
+      int mx = 0;
+      int my = 0;
+      if (!worldToCell(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), mx, my)) { return false; }
+      if (!cellPassable(mx, my)) { return false; }
+    }
+    return true;
+  };
+  auto gridPath = [&](const Pose2D & a, const Pose2D & b, std::vector<Pose2D> & out) {
+    int ax = 0;
+    int ay = 0;
+    int bx = 0;
+    int by = 0;
+    if (!worldToCell(a.x, a.y, ax, ay) || !worldToCell(b.x, b.y, bx, by)) { return false; }
+    if (!cellPassable(ax, ay) || !cellPassable(bx, by)) { return false; }
+    std::vector<int> parent(cells_.size(), -1);
+    std::queue<int> q;
+    const int start = index(ax, ay);
+    const int goal = index(bx, by);
+    parent[start] = start;
+    q.push(start);
+    bool found = (start == goal);
+    const int ddx[4] = {-1, 1, 0, 0};
+    const int ddy[4] = {0, 0, -1, 1};
+    while (!q.empty() && !found) {
+      const int cur = q.front();
+      q.pop();
+      const int cx = cur % W;
+      const int cy = cur / W;
+      for (int k = 0; k < 4; ++k) {
+        const int nx = cx + ddx[k];
+        const int ny = cy + ddy[k];
+        if (!cellInBounds(nx, ny)) { continue; }
+        const int ni = index(nx, ny);
+        if (parent[ni] >= 0) { continue; }
+        if (!passable(nx, ny, true)) { continue; }
+        parent[ni] = cur;
+        if (ni == goal) {
+          found = true;
+          break;
+        }
+        q.push(ni);
+      }
+    }
+    if (!found) { return false; }
+    std::vector<Pose2D> raw;
+    for (int c = goal; c != start; c = parent[c]) {
+      raw.push_back(cellToWorld(c % W, c / W));
+    }
+    raw.push_back(cellToWorld(ax, ay));
+    std::reverse(raw.begin(), raw.end());
+    // 视线捷径: 只保留能直连的转折点 (BFS 4-邻接的锯齿会被吃掉)
+    out.clear();
+    out.push_back(raw.front());
+    size_t i = 0;
+    while (i + 1 < raw.size()) {
+      size_t j = i + 1;
+      for (size_t k = raw.size() - 1; k > i + 1; --k) {
+        if (lineClear(raw[i], raw[k])) {
+          j = k;
+          break;
+        }
+      }
+      out.push_back(raw[j]);
+      i = j;
+    }
+    return out.size() >= 2;
+  };
+  auto appendTransit = [&](const Pose2D & target) {
+    if (std::hypot(target.x - prev.x, target.y - prev.y) <= res) { return; }
+    if (lineClear(prev, target)) {
+      appendTurnAndLine(target);
+      return;
+    }
+    std::vector<Pose2D> pts;
+    if (!gridPath(prev, target, pts)) {
+      appendTurnAndLine(target);
+      return;
+    }
+    // 起点原地对正, 其余折点直接走 (不插原地转标记, 否则每个折点都要停一下)
+    const Pose2D p1 = pts[1];
+    const double bearing = std::atan2(p1.y - prev.y, p1.x - prev.x);
+    Pose2D turn = prev;
+    turn.theta = bearing;
+    route.push_back(turn);
+    for (size_t i = 1; i < pts.size(); ++i) {
+      const Pose2D p = pts[i];
+      appendLine(prev, p);
+      prev_heading = std::atan2(p.y - prev.y, p.x - prev.x);
+      prev = p;
+    }
+  };
 
-  // 半圆掉头 (turn_radius>0): 用半径 R = |横向位移|/2 的圆弧, 从行末直接
-  // 接到下一行行首, 朝向转 180°. 直线段与圆弧相切, 控制器可以不停车跟踪.
-  // 只有"位移几乎垂直于行方向"时才用弧 (行被障碍截断/行长不同 -> 退回原地转).
+  for (const auto & seg : ring_segs) {
+    if (seg.size() < 2) { continue; }
+    const Pose2D r0 = cellToWorld(seg.front().first, seg.front().second);
+    appendTransit(r0);
+    Pose2D cur_p = r0;
+    for (size_t k = 1; k < seg.size(); ++k) {
+      Pose2D p = cellToWorld(seg[k].first, seg[k].second);
+      prev_heading = std::atan2(p.y - cur_p.y, p.x - cur_p.x);
+      p.theta = prev_heading;
+      route.push_back(p);
+      cur_p = p;
+    }
+    prev = cur_p;
+  }
+
   auto appendArcTurn = [&](const Pose2D & from_pose, const Pose2D & to_pose,
                            double h0) -> bool {
     const double r_max = config_.turn_radius;
@@ -876,6 +1233,15 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
     const double sweep = s * M_PI;
     const int steps = std::max(6, static_cast<int>(
       std::ceil(std::fabs(sweep) * R / res)));
+    // 弧线整段都必须在可通行区内, 否则说明行端没有转弯余量 (多边形贴墙),
+    // 退回"原地转 + 直线" —— 不能让车头扫到区域外.
+    for (int i = 0; i <= steps; ++i) {
+      const double a = a0 + sweep * (static_cast<double>(i) / steps);
+      int mx = 0;
+      int my = 0;
+      if (!worldToCell(cx + R * std::cos(a), cy + R * std::sin(a), mx, my)) { return false; }
+      if (!passable(mx, my, true)) { return false; }
+    }
     for (int i = 1; i <= steps; ++i) {
       const double t = static_cast<double>(i) / static_cast<double>(steps);
       const double a = a0 + sweep * t;
@@ -888,50 +1254,56 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
     return true;
   };
 
-  for (size_t k = 0; k < ordered.size(); ++k) {
-    const Swath & s = ordered[k];
-    const Pose2D a = cellToWorld(scan_vertical_ ? s.row : s.lo,
-                                 scan_vertical_ ? s.lo : s.row);
-    const Pose2D b = cellToWorld(scan_vertical_ ? s.row : s.hi,
-                                 scan_vertical_ ? s.hi : s.row);
-    // 方向: **永远从离上一段终点更近的那一端进** (第 0 行用机器人当前位置).
-    // 以前用 k%2 + 首行"离机器人近的一端"翻转, 两者会打架: 首行被翻成从右往左,
-    // 第 1 行仍按 k%2 从右端进 -> 有一行要从左端横穿整个区域回到右端 (实测
-    // 5.07m 的对角线 + 174° 原地转). 用"就近端点"既天然交替, 又能容忍
-    // 被障碍截短的行的长度不一致.
-    const Pose2D ref = (k == 0) ? pose : prev;
-    Pose2D from = a;
-    Pose2D to = b;
-    if (ref.distanceTo(b) < ref.distanceTo(a)) {
-      from = b;
-      to = a;
-    }
-
-
-    // 1) 行间连接: 优先半圆弧掉头, 不行再退回"原地转 + 直线"
-    bool arc_done = false;
-    if (k > 0) { arc_done = appendArcTurn(prev, from, prev_heading); }
-    if (arc_done) {
-      // 弧线终点与行首可能差一个格子 (~0.05m): 补一小段直线对齐
-      const Pose2D end = route.back();
-      if (std::hypot(from.x - end.x, from.y - end.y) > 0.5 * res) {
-        appendLine(end, from);
-      }
-    } else {
-      // 原地转到朝 from 的方向 (位置不变的点 = 旋转标记)
-      const double bearing = std::atan2(from.y - prev.y, from.x - prev.x);
-      Pose2D turn = prev;
-      turn.theta = bearing;
-      route.push_back(turn);
-      // 直线开到行首
-      if (std::hypot(from.x - prev.x, from.y - prev.y) > res) {
-        appendLine(prev, from);
+  std::vector<size_t> pending;
+  for (size_t i = 0; i < cell_swaths.size(); ++i) {
+    if (!cell_swaths[i].empty()) { pending.push_back(i); }
+  }
+  while (!pending.empty()) {
+    size_t pick = pending.size();
+    double best = std::numeric_limits<double>::max();
+    bool reversed = false;
+    for (size_t k = 0; k < pending.size(); ++k) {
+      const auto & sws = cell_swaths[pending[k]];
+      const double d_forward = prev.distanceTo(
+        cellToWorld(sws.front().mx0, sws.front().my0));
+      const double d_backward = prev.distanceTo(
+        cellToWorld(sws.back().mx1, sws.back().my1));
+      if (std::min(d_forward, d_backward) < best) {
+        best = std::min(d_forward, d_backward);
+        pick = k;
+        reversed = (d_backward < d_forward);
       }
     }
-    // 2) 走完这一行
-    appendLine(from, to);
-    prev = to;
-    prev_heading = std::atan2(to.y - from.y, to.x - from.x);
+    if (pick >= pending.size()) { break; }
+    const size_t cid = pending[pick];
+    pending.erase(pending.begin() + static_cast<long>(pick));
+
+    std::vector<std::pair<Pose2D, Pose2D>> strokes;
+    for (const auto & sw : cell_swaths[cid]) {
+      strokes.push_back(std::make_pair(cellToWorld(sw.mx0, sw.my0),
+                                       cellToWorld(sw.mx1, sw.my1)));
+    }
+    if (reversed) {
+      std::reverse(strokes.begin(), strokes.end());
+      for (auto & st : strokes) { std::swap(st.first, st.second); }
+    }
+    for (const auto & st : strokes) {
+      bool arc_done = false;
+      if (std::hypot(st.first.x - prev.x, st.first.y - prev.y) > 0.5 * res) {
+        arc_done = appendArcTurn(prev, st.first, prev_heading);
+      }
+      if (arc_done) {
+        const Pose2D end = route.back();
+        if (std::hypot(st.first.x - end.x, st.first.y - end.y) > 0.5 * res) {
+          appendLine(end, st.first);
+        }
+      } else {
+        appendTransit(st.first);
+      }
+      appendLine(st.first, st.second);
+      prev = st.second;
+      prev_heading = std::atan2(st.second.y - st.first.y, st.second.x - st.first.x);
+    }
   }
 
   // 末尾补一个"原地转点", 朝向保持 (让最后一段能被 isGoalReached 正确判到)
@@ -942,7 +1314,6 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
   }
   return route.size() >= 2;
 }
-
 bool CoverageGrid::hasUncoveredReachable(const Pose2D & pose, bool avoid_dynamic) const
 {
   return bfsReach(pose, avoid_dynamic, nullptr);
