@@ -23,6 +23,16 @@ public:
     V3D accBias() const { return m_acc_bias; }
     bool calibrated() const { return m_calibrated; }
 
+    /// ---- 轮速作为"带方差的观测"而非开关 ----
+    /// odom 平移权重 (0=完全不用, 1=完全采用). 由 yaw 角速度一致性 + 平移速度
+    /// 合理性连续决定; 取代原来的"超阈值整包丢弃 / 整段不用".
+    double odomWeight() const { return m_odom_weight; }
+    /// 先验的等效不确定度 (米/弧度), 供下游按方差加权 (例如写入定位协方差).
+    double transSigma() const { return m_trans_sigma; }
+    double yawSigma() const { return m_yaw_sigma; }
+    /// 当前样本被判为打滑 (诊断用)
+    bool odomSlip() const { return m_odom_slip; }
+
 private:
     MotionPriorConfig m_cfg;
     PoseStamped m_pose;
@@ -39,6 +49,12 @@ private:
     PoseStamped m_offset;          // map <- odom 偏移 (map_pose ∘ odom^{-1})
     bool m_have_odom = false;
     bool m_have_offset = false;
+    // 打滑软门控的输出 (见 predict)
+    double m_odom_weight = 0.0;
+    double m_trans_sigma = 1.0;
+    double m_yaw_sigma = 1.0;
+    bool m_odom_slip = false;
+    bool m_odom_speed_bad = false;
     // L11 零偏估计
     V3D m_gyro_bias = V3D::Zero();
     V3D m_acc_bias = V3D::Zero();

@@ -104,15 +104,20 @@ void ImuMotionPrior::onImu(const IMUSample& s) {
 }
 
 void ImuMotionPrior::onOdom(const PoseStamped& odom) {
+    m_odom_speed_bad = false;
     if (m_have_odom && odom.time > m_odom_time) {
         const double dt = odom.time - m_odom_time;
         if (dt > 1e-3) {
             const M3D dR = odom.rot * m_odom.rot.transpose();
             m_odom_yaw_rate = std::atan2(dR(1, 0), dR(0, 0)) / dt;
-            // 平移滑移门控: 轮子打滑/里程毛刺会给出物理上不可能的速度, 整包丢弃
-            // (只靠偏航一致性挡不住平移打滑: 直行打滑时 yaw_rate 两边都是 0)
+            // 平移滑移判据: 轮子打滑/里程毛刺会给出物理上不可能的速度.
+            // 以前直接 return 丢弃整包 —— 但这样 m_odom_time 不前进, 下一个样本
+            // 的 dt 被拉长, 角速度估计连带失真. 现在只打标记, 样本照常入账,
+            // 由 predict() 降权.
             const double v_odom = (odom.trans - m_odom.trans).norm() / dt;
-            if (m_cfg.max_odom_speed > 0 && v_odom > m_cfg.max_odom_speed) return;
+            if (m_cfg.max_odom_speed > 0 && v_odom > m_cfg.max_odom_speed) {
+                m_odom_speed_bad = true;
+            }
         }
     }
     m_odom = odom;
@@ -123,28 +128,40 @@ void ImuMotionPrior::onOdom(const PoseStamped& odom) {
 PoseStamped ImuMotionPrior::predict(double t) {
     PoseStamped p = m_pose;
     p.time = t;
+    // ---- 轮速 = 带方差的观测, 不是开关 ----
+    // 权重由两个打滑判据连续决定 (原来分别是"超阈值整段不用"和"超上限整包丢弃"):
+    //   1) |odom_w - gyro_w| / slip_yaw_thresh 的四次方衰减:
+    //      slip=0 -> 1.0, slip=阈值 -> 0.5, slip=2x阈值 -> 0.06
+    //   2) 平移速度超过物理上限 -> 再乘 0.1 (不丢弃, 保证 odom 时钟连续)
+    // 正常直行 slip≈0 -> 权重≈1, 与旧行为完全一致.
+    m_odom_weight = 0.0;
+    m_odom_slip = false;
     if (m_cfg.use_odom && m_have_odom && m_have_offset) {
-        // 打滑门控: odom 偏航角速度与 IMU 一致时才用 odom 平移
+        const double thresh = std::max(1e-3, m_cfg.slip_yaw_thresh);
         const double slip = std::fabs(m_odom_yaw_rate - m_gyro_yaw_rate);
-        if (slip <= m_cfg.slip_yaw_thresh) {
-            p.trans = m_offset.rot * m_odom.trans + m_offset.trans;  // 朝向仍用 IMU 积分
-        } else {
-            static int probe = 0;
-            if (++probe % 20 == 0) {
-                std::cout << "[PriorProbe] odom slip rejected: slip=" << slip
-                          << " odom_w=" << m_odom_yaw_rate << " gyro_w=" << m_gyro_yaw_rate
-                          << std::endl;
-            }
+        const double ratio = slip / thresh;
+        const double r2 = ratio * ratio;
+        double w = 1.0 / (1.0 + r2 * r2);
+        m_odom_slip = (slip > thresh);
+        if (m_odom_speed_bad) w *= 0.1;
+        m_odom_weight = std::max(0.0, std::min(1.0, w));
+
+        const V3D odom_mapped = m_offset.rot * m_odom.trans + m_offset.trans;
+        p.trans = (1.0 - m_odom_weight) * p.trans + m_odom_weight * odom_mapped;
+
+        static int probe = 0;
+        if (++probe % 50 == 0) {
+            std::cout << "[PriorProbe] odom weight=" << m_odom_weight
+                      << " slip=" << slip << " thresh=" << thresh
+                      << " speed_bad=" << (m_odom_speed_bad ? 1 : 0)
+                      << " sigma_xy=" << m_trans_sigma << std::endl;
         }
     } else {
-        static int probe2 = 0;
-        if (++probe2 % 20 == 0) {
-            std::cout << "[PriorProbe] odom not used: use_odom=" << (m_cfg.use_odom ? 1 : 0)
-                      << " have_odom=" << (m_have_odom ? 1 : 0)
-                      << " have_offset=" << (m_have_offset ? 1 : 0)
-                      << std::endl;
-        }
+        m_odom_weight = 0.0;
     }
+    // 等效不确定度: 权重越低越不确定 (同时给下游一个可用的方差).
+    m_trans_sigma = 0.02 + 0.60 * (1.0 - m_odom_weight);
+    m_yaw_sigma = 0.01 + 0.30 * (1.0 - m_odom_weight);
     p.vel = m_vel_world;
     return p;
 }

@@ -154,8 +154,8 @@ struct MotionPriorConfig {
     double max_dt = 0.2;             // IMU 积分最大间隔(s)
     double max_vel = 10.0;           // 常速外推速度上限(m/s)
     bool   use_odom = false;         // 融合轮式里程计(默认关: 洗地机打滑不可信)
-    double slip_yaw_thresh = 0.3;    // 打滑判据: |odom_yaw_rate - imu_yaw_rate| > 该值(rad/s) 则丢弃 odom
-    double max_odom_speed = 3.0;     // odom 平移速度物理上限(m/s), 超出 = 打滑/毛刺样本, 整包丢弃
+    double slip_yaw_thresh = 0.3;    // 打滑判据: |odom_yaw_rate - imu_yaw_rate| 与它比较, 决定 odom 平移的权重
+    double max_odom_speed = 3.0;     // odom 平移速度物理上限(m/s), 超出 = 打滑/毛刺样本, 降权
     // ---- imu_ekf 先验 (误差状态 EKF, 状态=[vx,vy] 体系速度) ----
     double ekf_q_v = 1.0;            // 过程噪声: 速度随机游走 (m/s)²/s
     double ekf_r_odom = 0.15;        // odom 速度观测噪声 (m/s)

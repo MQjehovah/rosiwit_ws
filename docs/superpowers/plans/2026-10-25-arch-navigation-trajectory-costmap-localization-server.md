@@ -74,8 +74,27 @@
 >         1.0m 太松，ICP 能从种子滑 0.84m 并以 fitness 0.96 假锁定
 >       - 验收：拉偏 1m → **0.8~1.0s 恢复**，偏差 ≤0.08m，health 回 TRACKING
 >         （matcher 同时给出 dx=-0.94/内点 0.64/残差 0.026 的独立确认）
->     - 剩余：轮速从"硬门控"改成"协方差膨胀"；2D 协方差已能写进
->       `/localization/state`（DEGRADED 时）
+>     - C2c ✅ **轮速从"硬门控"改成"带方差的观测"**
+>       - `ImuMotionPrior` 不再开关式丢弃 odom：
+>         * 原来 `onOdom` 在 `v_odom > max_odom_speed` 时 **return 丢弃整包**
+>           —— 连 `m_odom_time` 都不前进，下一个样本的 dt 被拉长、角速度估计连带失真
+>         * 原来 `predict` 在 `|odom_w - gyro_w| > slip_yaw_thresh` 时 **整段不用**
+>           （0/1 悬崖）
+>       - 现在：`w = 1/(1+(slip/thresh)^4)`（0→1.0，阈值→0.5，2×阈值→0.06），
+>         平移速度超上限再 ×0.1；样本始终入账（odom 时钟连续）
+>       - 位姿 = `(1-w)·先验 + w·odom_mapped`，朝向仍由 IMU 积分
+>       - 输出等效不确定度 `transSigma()/yawSigma()`（0.02..0.62 m / 0.01..0.31 rad），
+>         供下游按方差加权
+>       - 离线验证 `test/odom_soft_gate_check.cpp`（g++ 直编）：
+>         直行 w=1.000/σ=0.02（与旧行为一致）；slip=阈值 w=0.500（旧为 0）；
+>         2×阈值 w=0.059；毛刺 w=0.100 且 dt 仍为 0.020（时钟未被冻结），
+>         下一帧恢复 w=1.000
+>       - 回归：clean+mppi 3/3（余量 0.200）、clean+rpp 3/3（0.350）、
+>         禁行区/限速 PASS、拉偏 1m 恢复 0.8s/0.199m
+>     - 剩余（1 项）：把 `transSigma()/yawSigma()` 通过
+>       `ISlamAlgorithm → ILocalization → SlamEngine` 透出，在 DEGRADED 且没有
+>       新鲜 2D 匹配时替换 `/localization/state` 的分档协方差（当前只有 2D 匹配
+>       的协方差是真值，其余是分档值）
 >
 > ### A3b 的前提（重要）
 > 节点的末段精调不只做"减速逼近"，还负责**最终航向对齐**（要求
