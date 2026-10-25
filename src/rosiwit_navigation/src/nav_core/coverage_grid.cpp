@@ -864,6 +864,9 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
   // 每个单元内每条行线都是一整段, 这是"每行只取最长一段"那个 bug 的正解.
   const bool slice_along_x = !scan_vertical_;
   const int sweep_cells = std::max(1, static_cast<int>(std::lround(config_.sweep_width / res)));
+  const int doorway_cells = (config_.doorway_width > 0.0)
+    ? std::max(1, static_cast<int>(std::lround(config_.doorway_width / res)))
+    : 0;
   const int s_lo = slice_along_x ? bx0 : by0;
   const int s_hi = slice_along_x ? bx1 : by1;
   const int a_lo = slice_along_x ? by0 : bx0;
@@ -929,6 +932,12 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
         bool cont = (cur_hits[ci] == 1 && pi >= 0 &&
                      prev_hits[static_cast<size_t>(pi)] == 1 &&
                      prev_owner[static_cast<size_t>(pi)] >= 0);
+        // 门洞: 这一片可通行宽度只有 doorway 那么窄 -> 在此切单元.
+        // 该切片自己会成为一个小单元 (门洞本身仍会被覆盖), 两侧房间各自成单元.
+        if (cont && doorway_cells > 0 &&
+            (cur[ci].hi - cur[ci].lo) <= doorway_cells) {
+          cont = false;
+        }
         if (cont) {
           // 凹角/台阶: 区间端点突然跳变 (>2 格) 说明边界在这里拐了个直角.
           // 不切的话 L 形会被当成一个单元 (宽度从 3.25 突增到 5.55), 行长参差.

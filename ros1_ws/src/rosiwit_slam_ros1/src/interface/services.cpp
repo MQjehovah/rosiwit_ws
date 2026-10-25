@@ -215,12 +215,30 @@ bool Ros1SlamInterface::handleSwitchMap(
     const bool core_is_localization = (engine_.pipelineMode() == "localization");
     if (req.map_dir == curr_map_path_ && slam_mode_ == SlamMode::LOCALIZATION &&
         core_is_localization) {
-        applyInitPose(req.initial_pose, true);
-        res.success = true;
-        return true;
+        // 同名重存过 (重新建图覆盖了同目录) 必须重载, 否则 App 看到的还是内存里的旧图.
+        struct stat st {};
+        const std::string base = xzMapBase(req.map_dir);
+        double mtime = 0.0;
+        if (::stat((base + ".xzmap").c_str(), &st) == 0) {
+            mtime = static_cast<double>(st.st_mtime);
+        }
+        if (mtime <= 0.0 || mtime <= loaded_map_mtime_) {
+            applyInitPose(req.initial_pose, true);
+            res.success = true;
+            return true;
+        }
+        ROS_WARN_STREAM("[ros1_slam] /switch_map: 同名地图已更新 (mtime "
+                        << mtime << " > " << loaded_map_mtime_ << "), 强制重载");
+        curr_map_path_.clear();
     }
 
     // 换图：阶段一同步完成（服务立即返回），阶段二在后台加载 MapData。
+    {
+        struct stat st {};
+        const std::string base = xzMapBase(req.map_dir);
+        loaded_map_mtime_ = (::stat((base + ".xzmap").c_str(), &st) == 0)
+          ? static_cast<double>(st.st_mtime) : 0.0;
+    }
     MapSwitchContext ctx = beginMapSwitch(xzMapBase(req.map_dir), req);
     startMapLoadJob(ctx, req.initial_pose);
     res.success = ctx.detect_ok || ctx.pgm_ok;
@@ -266,10 +284,59 @@ bool Ros1SlamInterface::handleStopMap(
 
     // 旧: mapping_ptr_->saveMap(folderPath, "map") -> 等价于 saveMap("<dir>/map")
     const std::string base = xzMapBase(req.map_dir);
+
+    // ---- 保存前质量门限 ----
+    // 以前只要点云非空就写盘并返回 success=true, 空图/全 unknown/墙体断裂的图也会
+    // "保存成功", 下一次定位直接对不上. 这里先用同一条栅格生成路径体检.
+    {
+        rosiwit_slam::GridInfo gi;
+        if (!engine_.algo()->getRealtimeGrid(grid_resolution_, gi) || gi.data.empty()) {
+            res.success = false;
+            res.error = "MAP_QUALITY_NO_GRID";
+            ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: 栅格生成失败, 拒绝保存");
+            return true;
+        }
+        size_t free_n = 0;
+        size_t occ_n = 0;
+        size_t unk_n = 0;
+        for (const auto v : gi.data) {
+            if (v >= 50) { ++occ_n; }
+            else if (v >= 0) { ++free_n; }
+            else { ++unk_n; }
+        }
+        const double cell = std::max(1e-6, gi.resolution * gi.resolution);
+        const double free_area = static_cast<double>(free_n) * cell;
+        const double total = static_cast<double>(gi.data.size());
+        const double unknown_frac = total > 0.0 ? static_cast<double>(unk_n) / total : 1.0;
+        const double map_quality_free_min_m2 =
+          (ros::param::get("~map_quality_free_min_m2", map_quality_free_min_m2_))
+            ? map_quality_free_min_m2_ : map_quality_free_min_m2_;
+        const double map_quality_unknown_max =
+          (ros::param::get("~map_quality_unknown_max", map_quality_unknown_max_))
+            ? map_quality_unknown_max_ : map_quality_unknown_max_;
+        std::cout << "[ros1_slam] map quality: free=" << free_area << " m2 occupied="
+                  << static_cast<double>(occ_n) * cell << " m2 unknown="
+                  << (unknown_frac * 100.0) << "% (+" << gi.resolution << "m, "
+                  << gi.width << "x" << gi.height << ")" << std::endl;
+        if (free_area < map_quality_free_min_m2 || unknown_frac > map_quality_unknown_max) {
+            res.success = false;
+            res.error = "MAP_QUALITY_REJECTED";
+            ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: 地图质量不达标 (free="
+                             << free_area << " m2 < " << map_quality_free_min_m2
+                             << " 或 unknown=" << (unknown_frac * 100.0)
+                             << "% > " << (map_quality_unknown_max * 100.0)
+                             << "%), 拒绝保存");
+            return true;
+        }
+    }
+
     rosiwit_slam::MapData map_data;
     if (!engine_.algo()->exportMapData(map_data) ||
         !map_adapter::saveMapData(map_data, base)) {
+        res.success = false;
+        res.error = "MAP_SAVE_XZMAP_FAILED";
         ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: xzmap export failed: " << base);
+        return true;
     }
 
     // 同时补 map.pgm / map.yaml: 旧实现的地图目录里有这两个文件, 且旧
@@ -277,10 +344,25 @@ bool Ros1SlamInterface::handleStopMap(
     // "<base>.yaml" 的 resolution/origin/occupied_thresh。核心的 saveGridMap 写的正是
     // 这个格式 (grid_map_io.cpp:7-39: P5, 首行=最大 y; yaml 含 image/resolution/
     // origin/negate/occupied_thresh/free_thresh/mode)。
-    if (!engine_.algo()->saveGridMap(base + ".pgm", base + ".yaml", grid_resolution_)) {
-        // 与 saveMap 同理: 失败只报错, 不改 success (旧实现也没有这一步可对照)
+    // 先写临时文件再 rename: 掉电/进程被杀时不会留下"新 xzmap + 旧 pgm"的混合.
+    const std::string tmp_pgm = base + ".tmp.pgm";
+    const std::string tmp_yaml = base + ".tmp.yaml";
+    if (!engine_.algo()->saveGridMap(tmp_pgm, tmp_yaml, grid_resolution_)) {
+        res.success = false;
+        res.error = "MAP_SAVE_GRID_FAILED";
         ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: saveGridMap failed: " << base);
-    } else {
+        return true;
+    }
+    std::remove((base + ".pgm").c_str());
+    std::remove((base + ".yaml").c_str());
+    if (std::rename(tmp_pgm.c_str(), (base + ".pgm").c_str()) != 0 ||
+        std::rename(tmp_yaml.c_str(), (base + ".yaml").c_str()) != 0) {
+        res.success = false;
+        res.error = "MAP_SAVE_RENAME_FAILED";
+        ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: rename tmp map failed: " << base);
+        return true;
+    }
+    {
         std::cout << "[ros1_slam] saved grid map: " << base << ".pgm / " << base
                   << ".yaml (resolution=" << grid_resolution_ << ")" << std::endl;
         // 旧实现还会从同一张灰度图导出 <base>.jpg 与 <dir>/thumb.png (App 的缩略图)

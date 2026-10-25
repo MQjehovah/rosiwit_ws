@@ -245,6 +245,7 @@ core::Result<core::Path> AStarPlanner::plan(
         core::Path path;
         core::PathPoint pt;
         pt.pose = start;
+        pt.velocity_x = 1.0;   // 前进 (0 = 旋转段标记, 见 trajectory_parameterizer)
         path.points.push_back(pt);
         return core::Result<core::Path>::ok(path);
     }
@@ -462,7 +463,11 @@ void AStarPlanner::reconstructPath(const AStarNode& goal_node, core::Path& path)
         float world_x = origin_x + x * resolution;
         float world_y = origin_y + y * resolution;
         core::Pose2D pose(world_x, world_y, 0.0);
-        path_points.push_back(core::PathPoint(pose));
+        core::PathPoint pp(pose);
+        // A* 只有前进: 必须标 +1. 否则 trajectory_parameterizer 把
+        // |velocity_x|<0.1 当成旋转段, 整条轨迹速度全 0 (rpp 爬行/不动).
+        pp.velocity_x = 1.0;
+        path_points.push_back(pp);
     }
 
     path.points = path_points;

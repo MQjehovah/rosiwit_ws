@@ -8,6 +8,36 @@ namespace rosiwit_navigation
 namespace core
 {
 
+namespace
+{
+
+/// 滞回更新 (nav2 的 trigger/release_consecutive_points 等价物).
+bool updateHysteresis(
+  bool & active, int & trigger, int & release, bool hit,
+  int trigger_frames, int release_frames)
+{
+  const int tf = std::max(1, trigger_frames);
+  const int rf = std::max(1, release_frames);
+  if (active) {
+    if (hit) {
+      release = 0;
+    } else if (++release >= rf) {
+      active = false;
+      release = 0;
+    }
+  } else if (hit) {
+    if (++trigger >= tf) {
+      active = true;
+      trigger = 0;
+    }
+  } else {
+    trigger = 0;
+  }
+  return active;
+}
+
+}  // namespace
+
 bool pointInPolygon(
   double x, double y,
   const std::vector<std::pair<double, double>> & polygon)
@@ -39,8 +69,7 @@ int countPointsInPolygon(
   return count;
 }
 
-double approachScale(
-  const std::vector<std::pair<double, double>> & points,
+double approachScale(  const std::vector<std::pair<double, double>> & points,
   double vx, double vy, double wz,
   const std::vector<std::pair<double, double>> & footprint,
   double max_time, double time_step)
@@ -96,42 +125,68 @@ SafetyResult SafetyMonitor::filter(
     result.state = "DISABLED";
     return result;
   }
-  if (std::abs(cmd.linear_x) < 1e-9 && std::abs(cmd.lateral_y) < 1e-9 &&
-    std::abs(cmd.angular_z) < 1e-9)
-  {
-    result.state = "PASS";
-    return result;
+
+  // 1) 车身排除: 只丢掉车身轮廓内的点 (nav2 exclusion_zones.robot_body).
+  //    以前是在 node 里用一个大矩形过滤, 结果把安全区一起吞了.
+  const auto & body = config_.body_polygon;
+  std::vector<std::pair<double, double>> pts;
+  if (body.size() < 3) {
+    pts = points;
+  } else {
+    pts.reserve(points.size());
+    for (const auto & p : points) {
+      if (!pointInPolygon(p.first, p.second, body)) pts.push_back(p);
+    }
+  }
+
+  // 2) 按运动状态选 STOP 区 (nav2 的 VelocityPolygon):
+  //    原地旋转用旋转区 (车体扫掠面), 后退用后退区, 否则前进区.
+  const std::vector<std::pair<double, double>> * stop_poly = &config_.stop_polygon;
+  if (std::fabs(cmd.linear_x) < 0.05 && !config_.stop_polygon_rotation.empty()) {
+    stop_poly = &config_.stop_polygon_rotation;
+  } else if (cmd.linear_x < 0.0 && !config_.stop_polygon_backward.empty()) {
+    stop_poly = &config_.stop_polygon_backward;
   }
 
   int stop_count = 0;
   if (config_.stop_radius > 0.0) {
     const double r2 = config_.stop_radius * config_.stop_radius;
-    for (const auto & p : points) {
+    for (const auto & p : pts) {
       if (p.first * p.first + p.second * p.second <= r2) ++stop_count;
     }
   } else {
-    stop_count = countPointsInPolygon(points, config_.stop_polygon);
+    stop_count = countPointsInPolygon(pts, *stop_poly);
   }
-  if (stop_count > config_.stop_max_points) {
+
+  // 3) 滞回: 连续 trigger 帧才进入, 连续 release 帧才释放.
+  const bool stop_hit = stop_count > config_.stop_max_points;
+  const bool stop_now = updateHysteresis(
+    stop_active_, stop_trigger_, stop_release_, stop_hit,
+    config_.stop_trigger_frames, config_.stop_release_frames);
+  if (stop_now) {
     result.command = VelocityCommand{};
     result.scale = 0.0;
     result.state = "STOP";
     return result;
   }
 
+  // 4) SLOWDOWN 同样带滞回.
+  const bool slow_hit =
+    countPointsInPolygon(pts, config_.slowdown_polygon) > config_.slowdown_max_points;
+  const bool slow_now = updateHysteresis(
+    slowdown_active_, slow_trigger_, slow_release_, slow_hit,
+    config_.slowdown_trigger_frames, config_.slowdown_release_frames);
+
   double scale = 1.0;
   std::string state = "PASS";
-
-  if (countPointsInPolygon(points, config_.slowdown_polygon) >
-    config_.slowdown_max_points)
-  {
+  if (slow_now) {
     scale = std::min(scale, config_.slowdown_ratio);
     state = "SLOWDOWN";
   }
 
   if (config_.approach_enabled) {
     const double approach = approachScale(
-      points, cmd.linear_x, cmd.lateral_y, cmd.angular_z, config_.footprint,
+      pts, cmd.linear_x, cmd.lateral_y, cmd.angular_z, config_.footprint,
       config_.time_before_collision, config_.simulation_time_step);
     if (approach < scale) {
       scale = approach;

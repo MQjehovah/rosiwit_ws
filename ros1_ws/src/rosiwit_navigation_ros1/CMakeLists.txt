@@ -68,4 +68,21 @@ if(CATKIN_ENABLE_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/src)
         target_link_libraries(test_movebase_protocol rosiwit_navigation)
     endif()
+
+    # ---- 核心逻辑单测 (catkin 自带 gtest, 不需要系统 libgtest-dev) ----
+    # 这两个用例覆盖: 车身排除 / 前进-后退-旋转三套 STOP 区 / trigger-release 滞回 /
+    # 速度整形(加速度/deadband/超时回零).
+    set(CORE_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/test)
+    catkin_add_gtest(test_safety_monitor ${CORE_TEST_DIR}/test_safety_monitor.cpp)
+    if(TARGET test_safety_monitor)
+        target_include_directories(test_safety_monitor PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include)
+        target_link_libraries(test_safety_monitor rosiwit_navigation)
+    endif()
+    catkin_add_gtest(test_velocity_shaper ${CORE_TEST_DIR}/test_velocity_shaper.cpp)
+    if(TARGET test_velocity_shaper)
+        target_include_directories(test_velocity_shaper PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include)
+        target_link_libraries(test_velocity_shaper rosiwit_navigation)
+    endif()
 endif()

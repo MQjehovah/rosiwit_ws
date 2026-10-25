@@ -40,6 +40,12 @@ planner_frequency: 1.0
 # 规划器 / 控制器
 planner_name: "astar"
 controller_name: "dwa"
+# 运动 profile: clean=只前进 (倒车仅在恢复), free=允许倒车.
+# 注意: 这两个 planner 名必须写, 否则会退回代码默认 (clean_planner=astar),
+# 真机会静默从 hybrid_astar 变成 A*.
+motion_profile: "clean"
+clean_planner: "hybrid_astar"
+free_planner: "hybrid_astar"
 
 # 坐标系 (实车 robot_base_frame=base_footprint)
 global_frame: "map"
@@ -80,7 +86,7 @@ rviz_goal_align_yaw: true
 
 # 安全层 (Nav2 Collision Monitor 等价)
 safety_enabled: true
-safety_self_filter_radius: 0.25
+safety_self_filter_radius: 0.10
 # 与 3D 前端相同的车体自过滤 (base_footprint 系包围盒):
 scan_self_filter_enabled: true
 scan_self_x_min: -0.45
@@ -90,7 +96,32 @@ scan_self_y_max: 0.55
 safety_fail_safe_on_timeout: true
 safety_source_timeout: 0.5
 # 实车 footprint 外扩 stop_dist=0.12 / g_robot_safe_dist=0.30
-safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]
+# ---- 安全区 (nav2_collision_monitor 机制) ----
+# 车身内的点由 body_polygon 排除 (footprint 包围盒 + safety_body_margin),
+# 所以下面三个 STOP 区都从车体边缘之外开始. 以前用 "包围盒内不判定 + 大矩形自过滤"
+# 的组合, 结果 safety_stop_polygon 整个落在自过滤框里, STOP 永远进不去.
+safety_body_margin: 0.05
+# 前进: 车头前 0 ~ 0.4m
+safety_stop_polygon: [0.55, -0.40, 0.95, -0.40, 0.95, 0.40, 0.55, 0.40]
+# 后退: 车尾后 0.35 ~ 0.75m
+safety_stop_polygon_backward: [-0.75, -0.40, -0.35, -0.40, -0.35, 0.40, -0.75, 0.40]
+# 原地旋转: 车体扫掠面 + 0.2m
+safety_stop_polygon_rotation: [-0.50, -0.55, 0.80, -0.55, 0.80, 0.55, -0.50, 0.55]
+# 减速: 车头前 0 ~ 0.6m
+safety_slowdown_polygon: [0.55, -0.55, 1.15, -0.55, 1.15, 0.55, 0.55, 0.55]
+# 滞回 (20Hz 下 2/3 帧 = 100/150ms)
+safety_stop_trigger_frames: 2
+safety_stop_release_frames: 3
+safety_slowdown_trigger_frames: 1
+safety_slowdown_release_frames: 2
+
+# ---- 指令整形 / 死手 / 遥控仲裁 (nav2 velocity_smoother + twist_mux) ----
+velocity_timeout: 0.6          # 无指令超时后平滑回零 (0=关闭)
+deadband_velocity_v: 0.0
+deadband_velocity_w: 0.0
+teleop_topic: ""               # 例如 /cmd_vel_teleop; 空=关闭
+teleop_timeout: 0.5
+strict_config: false           # true: 配置自检失败直接退出
 safety_slowdown_polygon: [-0.55, -0.63, 0.85, -0.63, 0.85, 0.63, -0.55, 0.63]
 safety_slowdown_ratio: 0.5
 safety_approach_enabled: true

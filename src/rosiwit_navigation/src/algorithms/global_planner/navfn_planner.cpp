@@ -213,7 +213,9 @@ bool NavFnPlanner::findPath(
         float world_x = origin_x + current_x * resolution;
         float world_y = origin_y + current_y * resolution;
         core::Pose2D pose(world_x, world_y, 0.0);
-        path_points.push_back(core::PathPoint(pose));
+        core::PathPoint pp(pose);
+        pp.velocity_x = 1.0;   // 前进 (0 = 旋转段标记, 见 trajectory_parameterizer)
+        path_points.push_back(pp);
 
         // 找到势场最小值方向
         float min_potential = potential_[current_y * nx_ + current_x];

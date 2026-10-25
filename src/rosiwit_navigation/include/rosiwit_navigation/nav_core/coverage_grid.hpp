@@ -54,6 +54,10 @@ struct CoverageConfig
   // 没有它时行线范围永远差最后半条扫宽: 5.55x2.85 房间顶部 0.34m 条带
   // (1.67 m2, 10.5%) 一条行线都不经过.
   double headland_width = 0.0;
+  // 门洞宽度阈值 (m): 某个切片上的可通行宽度 <= 该值时, 强制在单元分解处切开.
+  // 0 = 关闭. 整屋覆盖时设为 2*robot_inset+0.1 (0.72m), 让门洞成为独立单元,
+  // 房间之间按单元贪心排序, 不再一条长行线横跨两个房间.
+  double doorway_width = 0.0;
 };
 
 struct CoverageStats

@@ -25,6 +25,24 @@ struct SafetyMonitorConfig
   double time_before_collision = 2.0;
   double simulation_time_step = 0.1;
   std::vector<std::pair<double, double>> footprint;
+
+  // ---- 以下照 nav2_collision_monitor 的机制补齐 ----
+  // 车身轮廓 (base 系): 落在里面的点视为机器人自身, 不参与任何判定.
+  // 对应 nav2 的 exclusion_zones.robot_body. 以前用“大矩形自过滤”会连安全区一起吞掉.
+  std::vector<std::pair<double, double>> body_polygon;
+  // 按运动状态切换的 STOP 区 (nav2 的 VelocityPolygon):
+  //   原地旋转 (|vx| < 0.05) -> stop_polygon_rotation
+  //   后退   (vx < 0)         -> stop_polygon_backward
+  //   其它                    -> stop_polygon
+  // 留空表示回退到 stop_polygon.
+  std::vector<std::pair<double, double>> stop_polygon_backward;
+  std::vector<std::pair<double, double>> stop_polygon_rotation;
+  // 滞回: 连续 N 帧满足才进入 / 释放 (nav2 的 trigger/release_consecutive_points).
+  // 默认 1 保持旧行为; 生产配置应设 2/3, 避免单帧噪声让 stop/slow 来回跳.
+  int stop_trigger_frames = 1;
+  int stop_release_frames = 1;
+  int slowdown_trigger_frames = 1;
+  int slowdown_release_frames = 1;
 };
 
 struct SafetyResult
@@ -35,13 +53,31 @@ struct SafetyResult
 };
 
 /// ROS-independent collision monitor, equivalent to Nav2 Collision Monitor's
-/// STOP / SLOWDOWN / APPROACH behaviour.
+/// STOP / SLOWDOWN / APPROACH behaviour. 额外带车身排除与 trigger/release 滞回.
 class SafetyMonitor
 {
 public:
-  void configure(const SafetyMonitorConfig & config) { config_ = config; }
+  void configure(const SafetyMonitorConfig & config)
+  {
+    config_ = config;
+    reset();
+  }
 
   const SafetyMonitorConfig & config() const { return config_; }
+
+  /// 清空滞回状态 (切换任务/切图/恢复后调用).
+  void reset() const
+  {
+    stop_active_ = false;
+    stop_trigger_ = 0;
+    stop_release_ = 0;
+    slowdown_active_ = false;
+    slow_trigger_ = 0;
+    slow_release_ = 0;
+  }
+
+  bool stopActive() const { return stop_active_; }
+  bool slowdownActive() const { return slowdown_active_; }
 
   SafetyResult filter(
     const VelocityCommand & cmd,
@@ -49,6 +85,13 @@ public:
 
 private:
   SafetyMonitorConfig config_;
+  // 滞回状态 (filter 是 const, 状态用 mutable: 与 nav2 的 monitor 一样是"有记忆的过滤器")
+  mutable bool stop_active_ = false;
+  mutable int stop_trigger_ = 0;
+  mutable int stop_release_ = 0;
+  mutable bool slowdown_active_ = false;
+  mutable int slow_trigger_ = 0;
+  mutable int slow_release_ = 0;
 };
 
 bool pointInPolygon(

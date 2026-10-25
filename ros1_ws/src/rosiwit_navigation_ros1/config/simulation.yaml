@@ -128,7 +128,7 @@ cloud_timeout: 1.5
 # /scan 点是安全层唯一输入 (applySafety -> laser_points_); 仿真 2D 雷达接入后
 # 与实机一致地启用, 停障/减速多边形直接沿用实车 default.yaml.
 safety_enabled: true
-safety_self_filter_radius: 0.25
+safety_self_filter_radius: 0.10
 scan_self_filter_enabled: true
 scan_self_x_min: -0.45
 scan_self_x_max: 0.75
@@ -136,9 +136,32 @@ scan_self_y_min: -0.55
 scan_self_y_max: 0.55
 safety_fail_safe_on_timeout: true
 safety_source_timeout: 0.5
-safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]
-safety_slowdown_polygon: [-0.45, -0.50, 0.72, -0.50, 0.72, 0.50, -0.45, 0.50]
-safety_slowdown_ratio: 0.85
+# ---- 安全区 (nav2_collision_monitor 机制) ----
+# 车身内的点由 body_polygon 排除 (footprint 包围盒 + safety_body_margin),
+# 所以下面三个 STOP 区都从车体边缘之外开始. 以前用 "包围盒内不判定 + 大矩形自过滤"
+# 的组合, 结果 safety_stop_polygon 整个落在自过滤框里, STOP 永远进不去.
+safety_body_margin: 0.05
+# 前进: 车头前 0 ~ 0.4m
+safety_stop_polygon: [0.55, -0.40, 0.95, -0.40, 0.95, 0.40, 0.55, 0.40]
+# 后退: 车尾后 0.35 ~ 0.75m
+safety_stop_polygon_backward: [-0.75, -0.40, -0.35, -0.40, -0.35, 0.40, -0.75, 0.40]
+# 原地旋转: 车体扫掠面 + 0.2m
+safety_stop_polygon_rotation: [-0.50, -0.55, 0.80, -0.55, 0.80, 0.55, -0.50, 0.55]
+# 减速: 车头前 0 ~ 0.6m
+safety_slowdown_polygon: [0.55, -0.55, 1.15, -0.55, 1.15, 0.55, 0.55, 0.55]
+# 滞回 (20Hz 下 2/3 帧 = 100/150ms)
+safety_stop_trigger_frames: 2
+safety_stop_release_frames: 3
+safety_slowdown_trigger_frames: 1
+safety_slowdown_release_frames: 2
+
+# ---- 指令整形 / 死手 / 遥控仲裁 (nav2 velocity_smoother + twist_mux) ----
+velocity_timeout: 0.6          # 无指令超时后平滑回零 (0=关闭)
+deadband_velocity_v: 0.0
+deadband_velocity_w: 0.0
+teleop_topic: ""               # 例如 /cmd_vel_teleop; 空=关闭
+teleop_timeout: 0.5
+strict_config: false           # true: 配置自检失败直接退出
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
 # 车体外轮廓 (与实车 safety_footprint 相同), movebase 兼容层的 /robot_footprint 用它
@@ -191,4 +214,6 @@ coverage_plan_robot_radius: 0.0
 coverage_turn_radius: 0.0
 # headland 环: 0 = 不做 (行线本身贴到区域边界); = sweep 时先绕边界一圈
 coverage_headland_width: 0.0
+# 门洞切分阈值 (0=关). 实测无收益, 整屋覆盖如出现跨房间来回跑再开 0.72
+coverage_doorway_width: 0.0
 coverage_report_path: ""

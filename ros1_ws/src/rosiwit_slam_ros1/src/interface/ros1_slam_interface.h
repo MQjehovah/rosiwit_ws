@@ -352,7 +352,12 @@ private:
                        srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_,
                        srv_dump_recorder_,
                        srv_loc_relocalize_, srv_loc_set_initial_pose_, srv_loc_switch_map_;
-    std::string curr_map_path_;    // 旧 curr_map_path_
+    std::string curr_map_path_;
+    // 同名地图重存检测: 记录加载时的 mtime
+    double loaded_map_mtime_ = 0.0;
+    // 保存前质量门限
+    double map_quality_free_min_m2_ = 1.0;
+    double map_quality_unknown_max_ = 0.60;    // 旧 curr_map_path_
     std::atomic<uint64_t> map_switch_generation_{0};  // 最后一次切图请求胜出
     // ROS 层兼容：大图 xzmap 解析/关键帧重建在 aarch64 上可达 25s，
     // 不能让 /switch_map 服务线程被拖到 App 超时。PGM 先同步发布，
