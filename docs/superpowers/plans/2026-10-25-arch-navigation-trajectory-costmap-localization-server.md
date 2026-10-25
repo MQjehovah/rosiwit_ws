@@ -202,6 +202,29 @@
 >   `pure_pursuit` 的 `w ∝ v`，v 清零时转向也归零，机器人贴着边界转不动。
 > - 另外 coverage 速度只有 ~0.107 m/s（配置 0.45），慢 4 倍，原因未查。
 >
+> ### 覆盖路线化（已实现，97.1% / 弓字形）
+> 按 `fields2cover`(SwathGenerator+Route) / `opennav_coverage`(一次出 route) 的
+> 架构落地：
+> 1. **`CoverageGrid::buildRoute(pose, route)`** —— 一次生成剩余全部路线：
+>    行线（bbox + `sweep_width` 步长 + headland 内缩 `sweep/2`）→ 每行取最长
+>    可达可通行段（`passable && reach`）→ 只保留还有 UNCOVERED 的行 →
+>    弓字形排序（从离机器人最近的行开始，奇偶行反向）→ 逐段串成
+>    `原地转点(位置不变) + 直线到行首 + 行段`
+> 2. **`coveragePlanTick`** 改为：整条路线规划**一次**（不再每行一次、不再用
+>    A* 拼 approach）；`velocity_x=0` 标记原地转点（位置与前一点相同）
+> 3. **活动路线缓存**：`coverage_route_` 非空且机器人仍在 0.8 m 内、且没走到
+>    路线终点时**不重建**（之前每 10 s 周期重建 → 机器人反复重跑同一段，
+>    轨迹 162 m）
+> 4. **短行兜底**：所有行段都短于 0.30 m 时取最长的一条（否则 buildRoute 永远
+>    false，覆盖率卡在 98% 空转）；无解时 `markUnreachable` + `finishCoverage`，
+>    不再 `WAITING_OBSTACLE` 空转
+>
+> 实测（3×2 m，sweep 0.5，speed 0.25）：**97.1%（5.83/6.00 m²），
+> `done: rate=0.971` blocked=0.18 m²，轨迹 27.5 m**，图上能看到 4 行平行
+> 往返 + 端点掉头的弓字形（`docs/artifacts/coverage_boustrophedon_97.png`）。
+> 仍未到 100%：左上/左中还有 0.18 m²（区域边缘 + 一个左端小环），
+> 下一步是把行端点的 headland 与 `xy_goal_tolerance` 对齐、以及消除左端小环。
+>
 > **下一步（按优先级）**：
 > 1. 覆盖用独立的"行段执行器"：到行末前按 `v²/2a` 提前减速、原地转向下一行，
 >    不把行末交给 pure_pursuit 的渐近跟踪；顺带解决 `w ∝ v` 的转向死锁

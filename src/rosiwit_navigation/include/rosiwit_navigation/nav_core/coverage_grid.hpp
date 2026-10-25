@@ -106,6 +106,14 @@ public:
   void markBlockedAround(const Pose2D & pose, double radius);
   /// 区域质心 (多边形顶点平均): 车体被超调带出区域时用它做回家目标.
   Pose2D centroid() const;
+
+  /// 一次生成**剩余全部覆盖路线** (boustrophedon):
+  ///   headland 行线 -> passable 裁剪 -> 行间连接 -> 原地转点
+  /// 点序即执行序; **位置与前一点相同的点表示"原地转到该点朝向"** (velocity_x=0).
+  /// 对齐 fields2cover 的 SwathGenerator + Route / opennav_coverage 的
+  /// "一次出完整 route, 再交给控制器" 架构.
+  /// 返回 false = 没有剩余需要扫的行段.
+  bool buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) const;
   // 把 seed 所在的未覆盖连通块整体标成 BLOCKED (A* 规划失败时用).
   size_t markComponentBlocked(const Pose2D & seed);
 

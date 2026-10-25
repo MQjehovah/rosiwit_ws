@@ -688,6 +688,197 @@ bool CoverageGrid::nextCoverageSegment(const Pose2D & pose, double max_length,
   return segment.size() >= 2;
 }
 
+
+// ============================================================
+// 一次生成剩余整条覆盖路线 (boustrophedon)
+//   参考 fields2cover: SwathGenerator (headland 内缩的平行行) + Route (排序/连接)
+//   参考 opennav_coverage: 一次出完整 route, 再交给控制器跟踪
+// 点序即执行序; 位置与前一点相同的点 = "在该点原地转到该点朝向".
+// ============================================================
+bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) const
+{
+  route.clear();
+  if (!ready_ || polygon_.size() < 3) { return false; }
+
+  int sx = 0;
+  int sy = 0;
+  if (!bfsStartCell(pose, sx, sy)) { return false; }
+
+  // ---- 可达集合 (与 nextCoverageSegment 一致) ----
+  const size_t n = cells_.size();
+  std::vector<uint8_t> reach(n, 0);
+  const int ddx[4] = {-1, 0, 1, 0};
+  const int ddy[4] = {0, -1, 0, 1};
+  {
+    std::queue<std::pair<int, int>> queue;
+    queue.push({sx, sy});
+    reach[index(sx, sy)] = 1;
+    while (!queue.empty()) {
+      const auto [cx, cy] = queue.front();
+      queue.pop();
+      for (int i = 0; i < 4; ++i) {
+        const int nx = cx + ddx[i];
+        const int ny = cy + ddy[i];
+        if (!cellInBounds(nx, ny)) { continue; }
+        const int nidx = index(nx, ny);
+        if (reach[nidx] != 0) { continue; }
+        if (!passable(nx, ny, true)) { continue; }
+        reach[nidx] = 1;
+        queue.push({nx, ny});
+      }
+    }
+  }
+
+  // ---- 区域 bbox + 行线 (headland 内缩) ----
+  int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+  if (!worldToCell(polygon_[0].x, polygon_[0].y, bx0, by0)) { return false; }
+  bx1 = bx0;
+  by1 = by0;
+  for (const auto & p : polygon_) {
+    int mx = 0, my = 0;
+    if (!worldToCell(p.x, p.y, mx, my)) { continue; }
+    bx0 = std::min(bx0, mx);
+    bx1 = std::max(bx1, mx);
+    by0 = std::min(by0, my);
+    by1 = std::max(by1, my);
+  }
+  const int rows_lo = scan_vertical_ ? bx0 : by0;
+  const int rows_hi = scan_vertical_ ? bx1 : by1;
+  const int cols_lo = scan_vertical_ ? by0 : bx0;
+  const int cols_hi = scan_vertical_ ? by1 : bx1;
+  const int row_step = std::max(1, static_cast<int>(
+    std::lround(config_.sweep_width / info_.resolution)));
+  const int row_margin = std::max(1, static_cast<int>(
+    std::lround(0.5 * config_.sweep_width / info_.resolution)));
+  const int r_lo = rows_lo + row_margin;
+  const int r_hi = rows_hi - row_margin;
+
+  // ---- 每行取最长的一段"可达且可通行"区间 ----
+  struct Swath { int row; int lo; int hi; double dist; };
+  std::vector<Swath> swaths;
+  // 短行兜底: 若所有行段都短于 0.30m (区域边缘的小碎块), 至少取最长的那条,
+  // 否则 buildRoute 永远返回 false, 覆盖率会卡在 98% 一直等 (实测).
+  Swath fallback;
+  bool have_fallback = false;
+  for (int r = r_lo; r <= r_hi; r += row_step) {
+    int run_lo = -1;
+    int best_lo = -1;
+    int best_hi = -1;
+    int best_len = 0;
+    for (int c = cols_lo; c <= cols_hi; ++c) {
+      const int mx = scan_vertical_ ? r : c;
+      const int my = scan_vertical_ ? c : r;
+      const int idx = index(mx, my);
+      const bool ok = passable(mx, my, true) && reach[idx] != 0;
+      if (ok) {
+        if (run_lo < 0) { run_lo = c; }
+      }
+      if ((!ok || c == cols_hi) && run_lo >= 0) {
+        const int run_hi = ok ? c : c - 1;
+        if (run_hi - run_lo > best_len) {
+          best_len = run_hi - run_lo;
+          best_lo = run_lo;
+          best_hi = run_hi;
+        }
+        run_lo = -1;
+      }
+    }
+    if (best_lo < 0) { continue; }
+    // 这一行还有没扫的格子吗
+    bool need = false;
+    for (int c = best_lo; c <= best_hi && !need; ++c) {
+      const int mx = scan_vertical_ ? r : c;
+      const int my = scan_vertical_ ? c : r;
+      if (cells_[index(mx, my)] == CoverageCell::UNCOVERED) { need = true; }
+    }
+    if (!need) { continue; }
+    Swath s;
+    s.row = r;
+    s.lo = best_lo;
+    s.hi = best_hi;
+    const Pose2D a = cellToWorld(scan_vertical_ ? r : best_lo,
+                                 scan_vertical_ ? best_lo : r);
+    const Pose2D b = cellToWorld(scan_vertical_ ? r : best_hi,
+                                 scan_vertical_ ? best_hi : r);
+    s.dist = std::min(pose.distanceTo(a), pose.distanceTo(b));
+    if (best_len * info_.resolution >= 0.30) {
+      swaths.push_back(s);
+    } else if (!have_fallback || best_len > (fallback.hi - fallback.lo)) {
+      fallback = s;
+      have_fallback = true;
+    }
+  }
+  if (swaths.empty()) {
+    if (!have_fallback) { return false; }
+    swaths.push_back(fallback);   // 只剩碎行: 也走一趟, 否则永远结束不了
+  }
+
+  // ---- 排序: 从离机器人最近的那一行开始, 之后按行序, 奇偶行反向 (boustrophedon) ----
+  size_t start = 0;
+  for (size_t i = 1; i < swaths.size(); ++i) {
+    if (swaths[i].dist < swaths[start].dist) { start = i; }
+  }
+  std::vector<Swath> ordered;
+  ordered.reserve(swaths.size());
+  for (size_t k = 0; k < swaths.size(); ++k) {
+    ordered.push_back(swaths[(start + k) % swaths.size()]);
+  }
+
+  // ---- 组装: 原地转点 + 直线连接 + 行段 ----
+  const double res = std::max(1e-3, info_.resolution);
+  auto appendLine = [&](const Pose2D & from, const Pose2D & to) {
+    const double len = std::hypot(to.x - from.x, to.y - from.y);
+    const int steps = std::max(1, static_cast<int>(std::ceil(len / res)));
+    const double theta = std::atan2(to.y - from.y, to.x - from.x);
+    for (int i = 1; i <= steps; ++i) {
+      const double t = static_cast<double>(i) / static_cast<double>(steps);
+      Pose2D p;
+      p.x = from.x + t * (to.x - from.x);
+      p.y = from.y + t * (to.y - from.y);
+      p.theta = theta;
+      route.push_back(p);
+    }
+  };
+
+  Pose2D prev = pose;
+  bool first = true;
+  for (size_t k = 0; k < ordered.size(); ++k) {
+    const Swath & s = ordered[k];
+    const Pose2D a = cellToWorld(scan_vertical_ ? s.row : s.lo,
+                                 scan_vertical_ ? s.lo : s.row);
+    const Pose2D b = cellToWorld(scan_vertical_ ? s.row : s.hi,
+                                 scan_vertical_ ? s.hi : s.row);
+    const bool forward = (k % 2 == 0);
+    Pose2D from = forward ? a : b;
+    Pose2D to = forward ? b : a;
+    if (first && pose.distanceTo(b) < pose.distanceTo(a)) {
+      std::swap(from, to);
+    }
+    first = false;
+
+    // 1) 原地转到朝 from 的方向 (位置不变的点 = 旋转标记)
+    const double bearing = std::atan2(from.y - prev.y, from.x - prev.x);
+    Pose2D turn = prev;
+    turn.theta = bearing;
+    route.push_back(turn);
+    // 2) 直线开到行首
+    if (std::hypot(from.x - prev.x, from.y - prev.y) > res) {
+      appendLine(prev, from);
+    }
+    // 3) 走完这一行
+    appendLine(from, to);
+    prev = to;
+  }
+
+  // 末尾补一个"原地转点", 朝向保持 (让最后一段能被 isGoalReached 正确判到)
+  if (!route.empty()) {
+    Pose2D end = prev;
+    end.theta = route.back().theta;
+    route.push_back(end);
+  }
+  return route.size() >= 2;
+}
+
 bool CoverageGrid::hasUncoveredReachable(const Pose2D & pose, bool avoid_dynamic) const
 {
   return bfsReach(pose, avoid_dynamic, nullptr);
