@@ -3,6 +3,8 @@
 // ============================================================================
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 
+#include <iostream>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -293,8 +295,10 @@ bool CoverageGrid::bfsStartCell(const Pose2D & pose, int & mx, int & my) const
 {
   if (!worldToCell(pose.x, pose.y, mx, my)) { return false; }
   if (passable(mx, my, false)) { return true; }
-  // 起点在障碍/边界上时, 在 1m 内找最近的可通行格.
-  const int radius = std::max(1, static_cast<int>(std::ceil(1.0 / info_.resolution)));
+  // 起点在障碍/边界上时, 在附近找最近的可通行格.
+  // 半径 2.5m: 车体偶尔冲出区域边界 (控制超调) 时还能把清扫拉回来,
+  // 以前 1m 会直接判定"无路可走" -> 整个覆盖任务提前结束.
+  const int radius = std::max(1, static_cast<int>(std::ceil(2.5 / info_.resolution)));
   double best = std::numeric_limits<double>::max();
   int best_x = -1;
   int best_y = -1;
@@ -319,7 +323,19 @@ bool CoverageGrid::bfsReach(const Pose2D & pose, bool avoid_dynamic,
   if (!ready_) { return false; }
   int sx = 0;
   int sy = 0;
-  if (!bfsStartCell(pose, sx, sy)) { return false; }
+  if (!bfsStartCell(pose, sx, sy)) {
+    int wx = 0;
+    int wy = 0;
+    const bool in_map = worldToCell(pose.x, pose.y, wx, wy);
+    std::cout << "[CovGrid] bfsStartCell failed: pose=(" << pose.x << ","
+              << pose.y << ") in_map=" << (in_map ? 1 : 0);
+    if (in_map) {
+      std::cout << " cell=(" << wx << "," << wy << ") state="
+                << static_cast<int>(cells_[index(wx, wy)]);
+    }
+    std::cout << std::endl;
+    return false;
+  }
   const size_t n = cells_.size();
   std::vector<uint8_t> seen(n, 0);
   std::queue<std::pair<int, int>> queue;
@@ -437,65 +453,184 @@ bool CoverageGrid::farthestUncovered(const Pose2D & pose, Pose2D & target,
   return true;
 }
 
+// 按固定行距生成平行行 (boustrophedon), 在机器人可达集合里挑离它最近、
+// 且长度够跟的一行; 端点按 passable 裁剪.
+//
+// 旧实现是"从最近的未覆盖格做 BFS 找种子再沿轴扩展": 在区域边缘会啃出
+// 只有 3 个点的碎行 (row=(1.49,0.66)->(1.39,0.66)), approach 又判
+// Goal in obstacle, 于是同一位置反复重试 -> 覆盖率卡在 10~30%.
 bool CoverageGrid::nextCoverageSegment(const Pose2D & pose, double max_length,
                                        std::vector<Pose2D> & segment) const
 {
   segment.clear();
-  if (!ready_) { return false; }
-  // 最近未覆盖格作为种子
+  if (!ready_ || polygon_.size() < 3) { return false; }
+
   int sx = 0;
   int sy = 0;
   if (!bfsStartCell(pose, sx, sy)) { return false; }
-  std::vector<uint8_t> seen(cells_.size(), 0);
-  std::queue<std::pair<int, int>> queue;
-  queue.push({sx, sy});
-  seen[index(sx, sy)] = 1;
-  int seed_x = -1;
-  int seed_y = -1;
-  const int dx[4] = {-1, 0, 1, 0};
-  const int dy[4] = {0, -1, 0, 1};
-  while (!queue.empty()) {
-    const auto [cx, cy] = queue.front();
-    queue.pop();
-    if (cells_[index(cx, cy)] == CoverageCell::UNCOVERED) {
-      seed_x = cx; seed_y = cy; break;
-    }
-    for (int i = 0; i < 4; ++i) {
-      const int nx = cx + dx[i];
-      const int ny = cy + dy[i];
-      if (!cellInBounds(nx, ny)) { continue; }
-      const int nidx = index(nx, ny);
-      if (seen[nidx] != 0) { continue; }
-      if (!passable(nx, ny, true)) { continue; }
-      seen[nidx] = 1;
-      queue.push({nx, ny});
+
+  // ---- 1) 机器人可达格集合: 只在可达集合里选行, 避免"可行但到不了" ----
+  const size_t n = cells_.size();
+  std::vector<uint8_t> reach(n, 0);
+  const int ddx[4] = {-1, 0, 1, 0};
+  const int ddy[4] = {0, -1, 0, 1};
+  {
+    std::queue<std::pair<int, int>> queue;
+    queue.push({sx, sy});
+    reach[index(sx, sy)] = 1;
+    while (!queue.empty()) {
+      const auto [cx, cy] = queue.front();
+      queue.pop();
+      for (int i = 0; i < 4; ++i) {
+        const int nx = cx + ddx[i];
+        const int ny = cy + ddy[i];
+        if (!cellInBounds(nx, ny)) { continue; }
+        const int nidx = index(nx, ny);
+        if (reach[nidx] != 0) { continue; }
+        if (!passable(nx, ny, true)) { continue; }
+        reach[nidx] = 1;
+        queue.push({nx, ny});
+      }
     }
   }
-  if (seed_x < 0) { return false; }
 
-  int lo = 0;
-  int hi = 0;
-  if (scan_vertical_) {
-    lo = seed_y; hi = seed_y;
-    while (lo - 1 >= 0 && passable(seed_x, lo - 1, true)) { --lo; }
-    while (hi + 1 < static_cast<int>(info_.height) && passable(seed_x, hi + 1, true)) { ++hi; }
-  } else {
-    lo = seed_x; hi = seed_x;
-    while (lo - 1 >= 0 && passable(lo - 1, seed_y, true)) { --lo; }
-    while (hi + 1 < static_cast<int>(info_.width) && passable(hi + 1, seed_y, true)) { ++hi; }
+  // ---- 2) 区域 bbox ----
+  int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+  if (!worldToCell(polygon_[0].x, polygon_[0].y, bx0, by0)) { return false; }
+  bx1 = bx0;
+  by1 = by0;
+  for (const auto & p : polygon_) {
+    int mx = 0, my = 0;
+    if (!worldToCell(p.x, p.y, mx, my)) { continue; }
+    bx0 = std::min(bx0, mx);
+    bx1 = std::max(bx1, mx);
+    by0 = std::min(by0, my);
+    by1 = std::max(by1, my);
+  }
+  const int rows_lo = scan_vertical_ ? bx0 : by0;
+  const int rows_hi = scan_vertical_ ? bx1 : by1;
+  const int cols_lo = scan_vertical_ ? by0 : bx0;
+  const int cols_hi = scan_vertical_ ? by1 : bx1;
+  const int row_step = std::max(1, static_cast<int>(
+    std::lround(config_.sweep_width / info_.resolution)));
+
+  // ---- 3) 挑行: 有"可达且未覆盖"格子的行, 取离机器人最近的;
+  //         优先长度够跟的 (>= 0.3m), 碎行只在没有别的选择时才用 ----
+  const double kMinUsableLen = 0.30;
+  int best_row = -1;
+  double best_score = 0.0;
+  bool best_long = false;
+  for (int r = rows_lo; r <= rows_hi; r += row_step) {
+    int lo_c = -1;
+    int hi_c = -1;
+    for (int c = cols_lo; c <= cols_hi; ++c) {
+      const int mx = scan_vertical_ ? r : c;
+      const int my = scan_vertical_ ? c : r;
+      const int idx = index(mx, my);
+      if (cells_[idx] == CoverageCell::UNCOVERED && reach[idx] != 0) {
+        if (lo_c < 0) { lo_c = c; }
+        hi_c = c;
+      }
+    }
+    if (lo_c < 0) { continue; }
+    const double len = (hi_c - lo_c) * info_.resolution;
+    const bool usable = (len >= kMinUsableLen);
+    if (best_row >= 0 && best_long && !usable) { continue; }   // 已有的更好
+    const double row_world = scan_vertical_
+      ? cellToWorld(r, 0).x : cellToWorld(0, r).y;
+    const double dist = std::fabs((scan_vertical_ ? pose.x : pose.y) - row_world);
+    if (best_row < 0 || (usable && !best_long) ||
+        (usable == best_long && dist < best_score)) {
+      best_row = r;
+      best_score = dist;
+      best_long = usable;
+    }
+  }
+  // 兜底: 固定行线之间可能残留条带 (行距 0.4m, 清扫盘刚好相切, 边缘会有
+  // 几格漏掉 — 实测剩 0.23 m2 / 3%). 这时退回到"最近的可达未覆盖格"临时
+  // 定一行, 保证整体能收尾, 而不是留下一条缝隙直到超时.
+  if (best_row < 0) {
+    int seed_x = -1;
+    int seed_y = -1;
+    double best_d2 = std::numeric_limits<double>::max();
+    for (int my = by0; my <= by1; ++my) {
+      for (int mx = bx0; mx <= bx1; ++mx) {
+        const int idx = index(mx, my);
+        if (cells_[idx] != CoverageCell::UNCOVERED || reach[idx] == 0) { continue; }
+        const double ddx = mx - sx;
+        const double ddy = my - sy;
+        const double d2 = ddx * ddx + ddy * ddy;
+        if (d2 < best_d2) { best_d2 = d2; seed_x = mx; seed_y = my; }
+      }
+    }
+    if (seed_x >= 0) {
+      best_row = scan_vertical_ ? seed_x : seed_y;
+    }
   }
 
-  const double start_x = scan_vertical_ ? seed_x : lo;
-  const double start_y = scan_vertical_ ? lo : seed_y;
-  const double end_x = scan_vertical_ ? seed_x : hi;
-  const double end_y = scan_vertical_ ? hi : seed_y;
-  const Pose2D a = cellToWorld(static_cast<int>(start_x), static_cast<int>(start_y));
-  const Pose2D b = cellToWorld(static_cast<int>(end_x), static_cast<int>(end_y));
+  if (best_row < 0) {
+    // 诊断: 为什么没有可选的行 (可达集合被什么截断)
+    size_t reach_n = 0;
+    size_t unc_reach = 0;
+    for (size_t i = 0; i < n; ++i) {
+      if (reach[i] != 0) {
+        ++reach_n;
+        if (cells_[i] == CoverageCell::UNCOVERED) { ++unc_reach; }
+      }
+    }
+    std::cout << "[CovGrid] no row: reach=" << reach_n
+              << " uncovered_reachable=" << unc_reach
+              << " dynamic=" << dynamicCount()
+              << " rows=" << rows_lo << ".." << rows_hi
+              << " step=" << row_step
+              << " start=(" << sx << "," << sy << ")"
+              << " state=" << static_cast<int>(cells_[index(sx, sy)]) << std::endl;
+    return false;
+  }
+
+  // ---- 4) 该行上覆盖 [最左, 最右] 的未覆盖可达格, 端点按 passable 外扩 ----
+  int lo = -1;
+  int hi = -1;
+  for (int c = cols_lo; c <= cols_hi; ++c) {
+    const int mx = scan_vertical_ ? best_row : c;
+    const int my = scan_vertical_ ? c : best_row;
+    const int idx = index(mx, my);
+    if (cells_[idx] == CoverageCell::UNCOVERED && reach[idx] != 0) {
+      if (lo < 0) { lo = c; }
+      hi = c;
+    }
+  }
+  if (lo < 0) { return false; }
+
+  // 外扩到清扫半径内 (让清扫盘盖住端点格), 但只能在 passable 上
+  const int grow = std::max(0, static_cast<int>(
+    std::lround(config_.sweep_width * 0.5 / info_.resolution)) - 1);
+  for (int k = 1; k <= grow; ++k) {
+    const int c = lo - k;
+    if (c < cols_lo) { break; }
+    const int mx = scan_vertical_ ? best_row : c;
+    const int my = scan_vertical_ ? c : best_row;
+    if (!passable(mx, my, true)) { break; }
+    lo = c;
+  }
+  for (int k = 1; k <= grow; ++k) {
+    const int c = hi + k;
+    if (c > cols_hi) { break; }
+    const int mx = scan_vertical_ ? best_row : c;
+    const int my = scan_vertical_ ? c : best_row;
+    if (!passable(mx, my, true)) { break; }
+    hi = c;
+  }
+
+  const Pose2D a = cellToWorld(scan_vertical_ ? best_row : lo,
+                               scan_vertical_ ? lo : best_row);
+  const Pose2D b = cellToWorld(scan_vertical_ ? best_row : hi,
+                               scan_vertical_ ? hi : best_row);
   const bool near_a = pose.distanceTo(a) <= pose.distanceTo(b);
   Pose2D from = near_a ? a : b;
   Pose2D to = near_a ? b : a;
 
-  // 如果机器人已经在这一行上, 从它的投影直接往远端扫, 不要先退回到行端.
+  // 已经在这一行上时, 从投影点直接往远端扫, 不要先退回行端
   const double perp = scan_vertical_ ? std::fabs(pose.x - a.x) : std::fabs(pose.y - a.y);
   if (perp <= config_.sweep_width * 0.6) {
     const double lo_w = scan_vertical_ ? std::min(a.y, b.y) : std::min(a.x, b.x);
@@ -534,7 +669,6 @@ bool CoverageGrid::nextCoverageSegment(const Pose2D & pose, double max_length,
     traveled += prev.distanceTo(p);
     prev = p;
     if (traveled > limit) {
-      // 线性插值到 max_length 处
       const double over = traveled - limit;
       const double seg = std::max(1e-6, prev.distanceTo(segment.back()));
       p.x -= (p.x - segment.back().x) * (over / std::max(seg, 1e-6));
@@ -581,7 +715,9 @@ size_t CoverageGrid::uncoveredCount() const
 void CoverageGrid::markBlockedAround(const Pose2D & pose, double radius)
 {
   if (!ready_ || radius <= 0.0) { return; }
-  markDisk(pose.x, pose.y, radius, CoverageCell::BLOCKED, false, false);
+  // only_uncovered=true: 不能把已覆盖格改成 BLOCKED, 否则统计里的 covered
+  // 会往下掉 (实测 89.8% -> 89.0%).
+  markDisk(pose.x, pose.y, radius, CoverageCell::BLOCKED, true, false);
 }
 
 void CoverageGrid::markUnreachable(const Pose2D & pose)

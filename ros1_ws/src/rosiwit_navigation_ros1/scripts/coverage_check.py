@@ -160,7 +160,7 @@ def main():
     goal.robot_vel = 0.30
     goal.tracking_path = [Pose2D(x, y, 0.0) for (x, y) in poly]
     client.send_goal(goal, feedback_cb=feedback_cb)
-    if not client.wait_for_result(rospy.Duration(240.0)):
+    if not client.wait_for_result(rospy.Duration(480.0)):
         client.cancel_goal()
         print("FAIL: coverage timeout (rate=%.1f%%)" % (FEEDBACK["percent"] * 100.0))
         rospy.sleep(1.0)

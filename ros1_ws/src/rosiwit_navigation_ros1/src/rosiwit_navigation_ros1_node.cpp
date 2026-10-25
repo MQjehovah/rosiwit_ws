@@ -1820,6 +1820,14 @@ private:
       return;
     }
     coverage_grid_.updateStaticObstacles(current_map_->data);
+    {
+      const auto st0 = coverage_grid_.stats();
+      const double r0 = current_map_->info.resolution;
+      ROS_INFO("[coverage] grid stats: total=%.2f m2 uncovered=%.2f obstacle=%.2f "
+               "unknown=%.2f outside=%.2f blocked=%.2f",
+               st0.total * r0 * r0, st0.uncovered * r0 * r0, st0.obstacle * r0 * r0,
+               st0.unknown * r0 * r0, st0.outside * r0 * r0, st0.blocked * r0 * r0);
+    }
     const core::Pose2D pose = toCorePose(current_pose_);
     if (!coverage_grid_.contains(pose)) {
       ROS_ERROR("[coverage] 起点 (%.2f, %.2f) 不在区域内或落在障碍上",
@@ -1894,6 +1902,17 @@ private:
       coverage_last_progress_ = now;
       coverage_last_progress_pose_ = pose;
     }
+    if (coverage_last_diag_.isZero() || (now - coverage_last_diag_).toSec() >= 2.0) {
+      // 诊断: dynamic_cells 若长期 >0, 说明跟踪器把静态环境当成了动态目标,
+      // 而 markDisk(skip_dynamic=true) 会跳过这些格子 -> 扫过也不算覆盖.
+      const auto r = current_map_->info.resolution;
+      ROS_INFO("[coverage] diag: covered=%.2f/%.2f m2 rate=%.1f%% dynamic=%zu "
+               "state=%s pose=(%.2f,%.2f)",
+               stats.covered * r * r, stats.total * r * r,
+               stats.coverageRate() * 100.0, coverage_grid_.dynamicCount(),
+               coverage_state_.c_str(), pose.x, pose.y);
+      coverage_last_diag_ = now;
+    }
     if (pose.distanceTo(coverage_last_motion_pose_) > 0.1) {
       coverage_last_motion_pose_ = pose;
       coverage_last_motion_time_ = now;
@@ -1951,12 +1970,32 @@ private:
       coverage_state_ = "COVERING";
       geometry_msgs::Twist cmd = applySafety(coverageCommand());
       // 预测一步: 如果车体中心会跑出区域/撞进障碍, 停线速度 (保留转向).
-      if (coverage_grid_.contains(pose)) {
-        const double dt = 0.1;
+      // 预测时域 0.1s 太短 (0.3m/s 只有 3cm), 控制超调后车体早已出界;
+      // 而且原来只在 `contains(pose)` 成立时才守 —— 一旦出界就完全不守了
+      // (实测跑到 x=2.53, 区域边界 1.5, 然后在区域外原地死等).
+      {
+        const double dt = 0.6;
         core::Pose2D next(pose.x + cmd.linear.x * std::cos(pose.theta) * dt,
                           pose.y + cmd.linear.x * std::sin(pose.theta) * dt,
                           pose.theta + cmd.angular.z * dt);
-        if (!coverage_grid_.contains(next)) {
+        const bool inside_now = coverage_grid_.contains(pose);
+        const bool inside_next = coverage_grid_.contains(next);
+        if (!inside_now) {
+          // 被超调带到界外: 只允许"朝区域内目标方向"移动 (否则会越走越远,
+          // 实测放任移动跑到 y=-2.2, 区域下边界 -0.3). 界外格子是 OUTSIDE,
+          // markDisk 会跳过, 不会把界外算成已清洁.
+          const double tx = coverage_target_.x - pose.x;
+          const double ty = coverage_target_.y - pose.y;
+          const double to_target = std::atan2(ty, tx);
+          const double err = std::fabs(normalizeAngle(to_target - pose.theta));
+          if (err < 0.6 && std::hypot(tx, ty) > 0.05) {
+            const double v = std::min(0.12, std::fabs(cmd.linear.x));
+            cmd.linear.x = (cmd.linear.x >= 0.0) ? v : -v;
+          } else {
+            cmd.linear.x = 0.0;
+          }
+          coverage_state_ = "OUT_OF_AREA";
+        } else if (!inside_next) {
           cmd.linear.x = 0.0;
           coverage_state_ = "BOUNDARY";
         }
@@ -1987,6 +2026,15 @@ private:
           // 只把"从当前位置确实到不了"的格子标成 blocked, 可达的先保留.
           // 以前直接 markAllUncoveredBlocked(), 一次把整块区域清空, 报表里
           // blocked 面积失真 (实测 6.49/7.5 m² 全变 blocked).
+          {
+            const auto st1 = coverage_grid_.stats();
+            const double r1 = current_map_->info.resolution;
+            ROS_WARN("[coverage] no segment: uncovered=%.2f obstacle=%.2f "
+                     "unknown=%.2f blocked=%.2f total=%.2f (m2)",
+                     st1.uncovered * r1 * r1, st1.obstacle * r1 * r1,
+                     st1.unknown * r1 * r1, st1.blocked * r1 * r1,
+                     st1.total * r1 * r1);
+          }
           coverage_grid_.markUnreachable(pose);
           if (coverage_grid_.hasAnyUncovered() &&
               coverage_grid_.hasUncoveredReachable(pose, true)) {
@@ -2014,7 +2062,7 @@ private:
     // 这里把两端沿行方向内缩一点: 端点落回可通行栅格, 而 sweep_width/2 的
     // 清扫半径本来就能覆盖这 0.15m.
     if (segment.size() >= 2) {
-      const double inset = std::max(0.15, coverage_blocked_inflation_);
+      const double inset = std::max(0.20, coverage_blocked_inflation_);
       const double len = std::hypot(segment.back().x - segment.front().x,
                                     segment.back().y - segment.front().y);
       if (len > 3.0 * inset) {
@@ -4125,6 +4173,7 @@ private:
   bool coverage_has_target_ = false;
   core::Pose2D coverage_target_;
   core::Pose2D coverage_last_progress_pose_;
+  ros::Time coverage_last_diag_;
   core::Pose2D coverage_last_motion_pose_;
   ros::Time coverage_last_motion_time_;
   std::string coverage_state_ = "IDLE";
