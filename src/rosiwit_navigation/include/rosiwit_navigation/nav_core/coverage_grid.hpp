@@ -39,6 +39,9 @@ struct CoverageConfig
   // 车体中心相对区域边界的内缩量. 设成 sweep_width/2 时, 清扫边缘由
   // 工具宽度覆盖, 车体中心不必贴到边界, 避免控制超调跑出区域.
   double center_inset = 0.0;
+  // 车体中心相对**静态障碍**的内缩量 (= 车体半宽). 0 = 关闭 (旧行为).
+  // 不开时行会落到贴着墙、车体根本站不下的格子 -> 同一行反复规划直到超时.
+  double robot_inset = 0.0;
 };
 
 struct CoverageStats
@@ -98,6 +101,9 @@ public:
   void markUnreachable(const Pose2D & pose);
   // 动态障碍超时: 把所有剩余未覆盖标成 BLOCKED.
   void markAllUncoveredBlocked();
+  /// 把 pose 附近 radius 内的未覆盖格标成 BLOCKED (单行/单点走不到时用,
+  /// 只放弃这一条带, 不是整块区域).
+  void markBlockedAround(const Pose2D & pose, double radius);
   // 把 seed 所在的未覆盖连通块整体标成 BLOCKED (A* 规划失败时用).
   size_t markComponentBlocked(const Pose2D & seed);
 
@@ -136,6 +142,8 @@ private:
   std::vector<CoverageCell> cells_;
   std::vector<uint8_t> dynamic_;
   std::vector<uint8_t> inset_;
+  /// 静态障碍的车体半径 halo: !=0 表示"车体中心不能到这里" (但清扫宽度可覆盖).
+  std::vector<uint8_t> halo_;
   std::vector<Pose2D> polygon_;
   bool ready_ = false;
   bool scan_vertical_ = false;  // true: 沿 y 扫; false: 沿 x 扫

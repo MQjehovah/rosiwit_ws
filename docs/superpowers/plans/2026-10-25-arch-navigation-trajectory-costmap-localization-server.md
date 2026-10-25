@@ -143,6 +143,32 @@
 > - 回归脚本：`scripts/coverage_check.py`（可用参数指定多边形）与
 >   `scripts/recovery_check.py`。
 >
+> ### 覆盖完成率的继续修复（第二轮）
+> 用可视化定位（`docs/artifacts/coverage_before_rowfix.png`：区域上方整片橙色
+> = 被一次性标记 blocked）后修了三处：
+> 1. **行缺少"离墙车体半径"校验**：新增 `CoverageConfig::robot_inset`
+>    （= footprint 半宽 0.31m）+ `halo_` 距离场；`passable()` 同时要求
+>    `inset_`(区域边界) 和 `halo_`(障碍半径) 都为 0。之前行会选到 y=-0.29
+>    这种车体站不下的位置，同一行无限重试。
+> 2. **单行卡死只放弃这一条带**：同一行(0.1m 量化)反复选中且 `covered` 不增
+>    超 `coverage_retry_timeout_` -> `markBlockedAround(该行, sweep_width/2)`
+>    后继续下一行（`CoverageGrid::markBlockedAround` 新增）。
+> 3. **全局放弃不再清空整块**：原来是 `markAllUncoveredBlocked()`（一次把
+>    6.49/7.5 m² 全标 blocked，报表失真）；现在用 `markUnreachable(pose)`
+>    只标真正到不了的格子，可达的继续。
+> - 效果：行不再无限重试、blocked 面积是真实值；但**完成率仍不达标**——
+>   剩下的问题是行选择本身：BFS 逐格找种子会在区域边缘"啃"出 3 点长的碎行
+>   （`row=(1.49,0.66)->(1.39,0.66)`），approach 又判 `Goal in obstacle`。
+>   下一步应改成**固定行距扫描**（按 `sweep_width` 生成平行行，端点用
+>   `passable` 裁剪），而不是从最近的未覆盖格 BFS 起行。
+> - 可视化工具（纯 python，不依赖 numpy/matplotlib）：
+>   `scripts/render_coverage.py`（地图+覆盖状态+轨迹）、
+>   `scripts/render_route.py`（地图+轨迹按速度着色+目标圈）。
+>   产物示例：`docs/artifacts/coverage_before_rowfix.png`、
+>   `docs/artifacts/route_clean_mppi.png`。
+> - 定位拉偏回归也固化：`scripts/localization_kidnap_check.py`
+>   （实测 0.8s / 0.131m 恢复，health 回 TRACKING，accepted=1 coast=0）。
+>
 > ### A3b 的前提（重要）
 > 节点的末段精调不只做"减速逼近"，还负责**最终航向对齐**（要求
 > `|yaw - goal_yaw| < 0.2`）。轨迹目前只保证末段 v=0，没有"对齐目标航向"这一步。

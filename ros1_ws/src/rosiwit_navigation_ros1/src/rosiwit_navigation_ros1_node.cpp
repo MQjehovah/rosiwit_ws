@@ -1804,6 +1804,17 @@ private:
     coverage_config_.obstacle_dilation = coverage_blocked_inflation_;
     // v1: 允许目标到区域边缘, 由下面的“预测位姿越界即停”守卫防止车体中心跑出.
     coverage_config_.center_inset = 0.0;
+    // 但**离墙**必须有车体半径的内缩: 否则行会贴着墙选, 车体站不下,
+    // 同一行被反复规划直到超时 (实测卡在 y=-0.29 那一行, 覆盖率 13%).
+    {
+      double half_width = 0.0;
+      for (const auto & p : configured_footprint_) {
+        half_width = std::max(half_width, std::fabs(p.second));
+      }
+      if (half_width <= 0.01) { half_width = robot_radius_ * 0.85; }
+      coverage_config_.robot_inset = half_width;
+      ROS_INFO("[coverage] robot_inset=%.2f m (footprint half-width)", half_width);
+    }
     if (!coverage_grid_.initialize(info, action_cmd_.polygon, coverage_config_)) {
       failTask(movebase::RESULT_POSE_ERROR, "FAILED_COVERAGE_AREA");
       return;
@@ -1973,8 +1984,20 @@ private:
       coverage_last_plan_ = now;
       if (coverage_grid_.hasAnyUncovered()) {
         if ((now - coverage_last_progress_).toSec() > coverage_retry_timeout_) {
-          coverage_grid_.markAllUncoveredBlocked();
-          finishCoverage();
+          // 只把"从当前位置确实到不了"的格子标成 blocked, 可达的先保留.
+          // 以前直接 markAllUncoveredBlocked(), 一次把整块区域清空, 报表里
+          // blocked 面积失真 (实测 6.49/7.5 m² 全变 blocked).
+          coverage_grid_.markUnreachable(pose);
+          if (coverage_grid_.hasAnyUncovered() &&
+              coverage_grid_.hasUncoveredReachable(pose, true)) {
+            // 还有能到的未覆盖格 (刚才只是这一帧没找到行): 继续尝试
+            coverage_state_ = "WAITING_OBSTACLE";
+            current_path_.poses.clear();
+            coverage_controller_->reset();
+            coverage_last_progress_ = now;
+          } else {
+            finishCoverage();
+          }
         } else {
           coverage_state_ = "WAITING_OBSTACLE";
           current_path_.poses.clear();
@@ -1985,9 +2008,6 @@ private:
       }
       return;
     }
-    coverage_target_ = segment.back();
-    coverage_has_target_ = true;
-
     // 行端点贴着多边形边界时, A* 会把 approach 目标判成 Goal in obstacle
     // (边界/膨胀带), 然后退回 "direct row" —— 路径从 0.8m 外的边界开始跟,
     // 控制器跟不好, 同一行会被反复规划 (实测 3 次) 最后只到 60~80%.
@@ -2006,6 +2026,34 @@ private:
         segment.back().y -= uy * inset;
       }
     }
+
+    // 同一行反复被选中、覆盖量却不增 -> 这一条带确实到不了:
+    // 只把它标成 blocked 换下一行, 不要整块放弃 (以前会一直重试到全局超时).
+    {
+      const int kx = static_cast<int>(std::lround(segment.back().x * 10.0));
+      const int ky = static_cast<int>(std::lround(segment.back().y * 10.0));
+      const size_t covered_now = coverage_grid_.stats().covered;
+      const bool same_row = (kx == coverage_row_key_x_ && ky == coverage_row_key_y_);
+      if (!same_row || covered_now > coverage_row_covered_) {
+        coverage_row_key_x_ = kx;
+        coverage_row_key_y_ = ky;
+        coverage_row_covered_ = covered_now;
+        coverage_row_since_ = now;
+      } else if (!coverage_row_since_.isZero() &&
+                 (now - coverage_row_since_).toSec() > coverage_retry_timeout_) {
+        ROS_WARN("[coverage] row (%.2f,%.2f) no progress for %.1fs -> mark this "
+                 "strip blocked, continue", segment.back().x, segment.back().y,
+                 (now - coverage_row_since_).toSec());
+        coverage_grid_.markBlockedAround(segment.back(),
+                                         std::max(0.20, coverage_sweep_width_ * 0.5));
+        coverage_row_since_ = ros::Time();
+        coverage_last_progress_ = now;   // 不算"整块没进展", 避免全局放弃
+        return;
+      }
+    }
+
+    coverage_target_ = segment.back();
+    coverage_has_target_ = true;
 
     core::Path path;
     if (pose.distanceTo(segment.front()) > 0.8) {
@@ -4066,6 +4114,11 @@ private:
   core::CoverageConfig coverage_config_;
   ros::Time coverage_last_plan_;
   ros::Time coverage_last_progress_;
+  // 单行卡死检测: 同一行(0.1m 量化)反复选中且覆盖量不增 -> 只放弃这一条带
+  int coverage_row_key_x_ = 0;
+  int coverage_row_key_y_ = 0;
+  size_t coverage_row_covered_ = 0;
+  ros::Time coverage_row_since_;
   ros::Time coverage_last_status_;
   ros::Time coverage_last_dynamic_;
   size_t coverage_last_covered_count_ = 0;

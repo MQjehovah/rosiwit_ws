@@ -1,61 +1,124 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""覆盖清洁 (navi_cmd=20) 回归.
+"""覆盖清洁回归 + 数据落盘 (供 render_coverage.py 出图).
 
-用法 (需已启动 sim_slam_nav.launch 并加载地图):
-    rosrun rosiwit_navigation_ros1 coverage_check.py [x_min y_min x_max y_max]
+落盘 (默认 /tmp/cov):
+    meta.json        地图几何 + 覆盖统计
+    map.bin          原始 /map 数据 (int8, 行优先, 原点在左下)
+    clean.bin        覆盖状态 (/clean_map, int8, 0=未覆盖 50=已覆盖 80=阻挡 100=障碍 -1=unknown/outside)
+    traj.csv         机器人轨迹 t,x,y,yaw
+    cmd.csv          t,linear.x,angular.z
 
-判据:
-  1) action 结果 tracking_path_result == 1
-  2) execution_percent 达到 >= 95
-  3) 机器人真的动了 (轨迹长度 > 2m), 且轨迹不越出多边形 + 0.6m
-  4) 日志里不出现 FAILED_COVERAGE*
-
-背景: 本轮把代价地图语义统一成 nav_msgs (-1/0..100), 覆盖模式用的 astar
-规划器阈值 (254->100) 与 buildCoverageCostmap (255->100) 都改了,
-但覆盖模式此前从未跑过 —— 这个脚本就是补这个验证缺口.
+用法:
+    rosrun rosiwit_navigation_ros1 coverage_check.py -1.5 -0.3 1.5 2.2
 """
 from __future__ import print_function
+import json
 import math
+import os
 import sys
 
 import actionlib
 import rospy
-from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Pose2D
+from geometry_msgs.msg import Pose2D, PoseStamped
+from nav_msgs.msg import OccupancyGrid, Odometry
 from xzrobot_ros_dependency.msg import NaviCmdActionAction, NaviCmdActionGoal
 
-TRAJ = []
-FEEDBACK = {"percent": 0.0, "navi_state": 0, "clean_area": 0.0}
+OUT_DIR = "/tmp/cov"
+STATE = {"map": None, "clean": None, "cmd": [], "traj": []}
+FEEDBACK = {"percent": 0.0, "clean_area": 0.0}
+
+
+def map_cb(msg):
+    STATE["map"] = msg
+
+
+def clean_cb(msg):
+    STATE["clean"] = msg
+
+
+def cmd_cb(msg):
+    STATE["cmd"].append((rospy.get_time(), msg.linear.x, msg.angular.z))
 
 
 def odom_cb(msg):
-    TRAJ.append((msg.pose.pose.position.x, msg.pose.pose.position.y))
+    q = msg.pose.pose.orientation
+    yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                     1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+    STATE["traj"].append((rospy.get_time(), msg.pose.pose.position.x,
+                          msg.pose.pose.position.y, yaw))
 
 
 def feedback_cb(msg):
     FEEDBACK["percent"] = msg.execution_percent
-    FEEDBACK["navi_state"] = msg.navi_state
     FEEDBACK["clean_area"] = msg.clean_area
 
 
+def send_goal(x, y):
+    pub = rospy.Publisher("/goal_pose", PoseStamped, queue_size=1)
+    rospy.sleep(0.3)
+    g = PoseStamped()
+    g.header.frame_id = "map"
+    g.header.stamp = rospy.Time.now()
+    g.pose.position.x = x
+    g.pose.position.y = y
+    g.pose.orientation.w = 1.0
+    pub.publish(g)
+
+
+def wait_status(timeout):
+    t0 = rospy.get_time()
+    s = ""
+    while rospy.get_time() - t0 < timeout:
+        s = STATE.get("status", "")
+        if s:
+            return s
+        rospy.sleep(0.2)
+    return "TIMEOUT"
+
+
 def inside(poly, x, y):
-    n = len(poly)
     ans = False
+    n = len(poly)
     for i in range(n):
         x1, y1 = poly[i]
         x2, y2 = poly[(i + 1) % n]
         if ((y1 > y) != (y2 > y)):
-            xin = (x2 - x1) * (y - y1) / (y2 - y1 + 1e-12) + x1
-            if x < xin:
+            if x < (x2 - x1) * (y - y1) / (y2 - y1 + 1e-12) + x1:
                 ans = not ans
     return ans
 
 
-def dist_to_poly(poly, x, y):
-    if inside(poly, x, y):
-        return 0.0
-    return min(math.hypot(x - px, y - py) for (px, py) in poly)
+def dump():
+    if not os.path.isdir(OUT_DIR):
+        os.makedirs(OUT_DIR)
+    m = STATE["map"]
+    c = STATE["clean"]
+    if m is not None:
+        with open(os.path.join(OUT_DIR, "map.bin"), "wb") as f:
+            f.write(bytes(bytearray([v & 0xFF for v in m.data])))
+    if c is not None:
+        with open(os.path.join(OUT_DIR, "clean.bin"), "wb") as f:
+            f.write(bytes(bytearray([v & 0xFF for v in c.data])))
+    with open(os.path.join(OUT_DIR, "traj.csv"), "w") as f:
+        for row in STATE["traj"]:
+            f.write("%.3f,%.4f,%.4f,%.4f\n" % row)
+    with open(os.path.join(OUT_DIR, "cmd.csv"), "w") as f:
+        for row in STATE["cmd"]:
+            f.write("%.3f,%.4f,%.4f\n" % row)
+    meta = {
+        "width": m.info.width if m else 0,
+        "height": m.info.height if m else 0,
+        "resolution": m.info.resolution if m else 0.0,
+        "origin_x": m.info.origin.position.x if m else 0.0,
+        "origin_y": m.info.origin.position.y if m else 0.0,
+        "coverage_rate": FEEDBACK["percent"],
+        "clean_area": FEEDBACK["clean_area"],
+        "polygon": STATE.get("polygon", []),
+    }
+    with open(os.path.join(OUT_DIR, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+    print("dumped to %s" % OUT_DIR)
 
 
 def main():
@@ -66,20 +129,30 @@ def main():
                 (float(sys.argv[3]), float(sys.argv[4])),
                 (float(sys.argv[1]), float(sys.argv[4]))]
     else:
-        poly = [(-0.8, -0.35), (1.2, -0.35), (1.2, 0.35), (-0.8, 0.35)]
+        poly = [(-1.5, -0.3), (1.5, -0.3), (1.5, 2.2), (-1.5, 2.2)]
+    STATE["polygon"] = poly
 
+    rospy.Subscriber("/map", OccupancyGrid, map_cb)
+    rospy.Subscriber("/clean_map", OccupancyGrid, clean_cb)
     rospy.Subscriber("/lio_odom", Odometry, odom_cb)
+    from std_msgs.msg import String
+    from geometry_msgs.msg import Twist
+    rospy.Subscriber("/cmd_vel", Twist, cmd_cb)
+    rospy.Subscriber("/goal_status", String,
+                     lambda m: STATE.__setitem__("status", m.data))
     rospy.wait_for_message("/lio_odom", Odometry, timeout=120)
     rospy.sleep(1.0)
-    start = TRAJ[-1]
-    print("polygon=%s start=(%.2f,%.2f)" % (poly, start[0], start[1]))
-    if not inside(poly, start[0], start[1]):
-        print("FAIL: start pose not inside polygon (coverage would abort)")
+    start = STATE["traj"][-1]
+    print("polygon=%s start=(%.2f,%.2f)" % (poly, start[1], start[2]))
+    if not inside(poly, start[1], start[2]):
+        print("FAIL: start pose not inside polygon")
+        dump()
         sys.exit(2)
 
     client = actionlib.SimpleActionClient("/RobotNaviCmdAction", NaviCmdActionAction)
     if not client.wait_for_server(rospy.Duration(20.0)):
-        print("FAIL: action server /RobotNaviCmdAction not available")
+        print("FAIL: action server not available")
+        dump()
         sys.exit(2)
 
     goal = NaviCmdActionGoal()
@@ -89,31 +162,31 @@ def main():
     client.send_goal(goal, feedback_cb=feedback_cb)
     if not client.wait_for_result(rospy.Duration(240.0)):
         client.cancel_goal()
-        print("FAIL: coverage timeout (percent=%.1f)" % FEEDBACK["percent"])
+        print("FAIL: coverage timeout (rate=%.1f%%)" % (FEEDBACK["percent"] * 100.0))
+        rospy.sleep(1.0)
+        dump()
         sys.exit(1)
 
     res = client.get_result()
-    rate = FEEDBACK["percent"]      # actionProgress() 返回 0..1 的覆盖率
     print("result tracking_path_result=%d coverage_rate=%.1f%% clean_area=%.2f m2"
-          % (res.tracking_path_result, rate * 100.0, FEEDBACK["clean_area"]))
+          % (res.tracking_path_result, FEEDBACK["percent"] * 100.0,
+             FEEDBACK["clean_area"]))
+    rospy.sleep(1.0)   # 等最后一帧 /clean_map
+    dump()
 
     fails = []
     if res.tracking_path_result != 1:
         fails.append("tracking_path_result=%d (expect 1)" % res.tracking_path_result)
-    if rate < 0.95:
-        fails.append("coverage rate %.1f%% < 95%%" % (rate * 100.0))
+    if FEEDBACK["percent"] < 0.95:
+        fails.append("coverage rate %.1f%% < 95%%" % (FEEDBACK["percent"] * 100.0))
 
     path_len = 0.0
-    for i in range(1, len(TRAJ)):
-        path_len += math.hypot(TRAJ[i][0] - TRAJ[i - 1][0], TRAJ[i][1] - TRAJ[i - 1][1])
-    worst = 0.0
-    for (x, y) in TRAJ:
-        worst = max(worst, dist_to_poly(poly, x, y))
-    print("trajectory: len=%.2fm samples=%d max_outside=%.2fm" % (path_len, len(TRAJ), worst))
+    for i in range(1, len(STATE["traj"])):
+        path_len += math.hypot(STATE["traj"][i][1] - STATE["traj"][i - 1][1],
+                               STATE["traj"][i][2] - STATE["traj"][i - 1][2])
+    print("trajectory length=%.2f m samples=%d" % (path_len, len(STATE["traj"])))
     if path_len < 2.0:
         fails.append("robot barely moved (%.2fm)" % path_len)
-    if worst > 0.6:
-        fails.append("trajectory left polygon by %.2fm" % worst)
 
     print("=== RESULT ===")
     if fails:

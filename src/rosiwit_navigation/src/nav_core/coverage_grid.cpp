@@ -183,6 +183,46 @@ void CoverageGrid::updateStaticObstacles(const std::vector<int8_t> & map_data)
       }
     }
   }
+  // 静态障碍的车体半径 halo: 车体中心不能进到这里 (但清扫宽度能盖到).
+  // 不做这一步, 行会贴着墙选, 车根本站不下 -> 同一行反复规划到超时.
+  if (config_.robot_inset > 0.0) {
+    halo_.assign(cells_.size(), 0);
+    const int hcells = std::max(1, static_cast<int>(
+      std::ceil(config_.robot_inset / info_.resolution)));
+    std::vector<int> dist(cells_.size(), -1);
+    std::queue<std::pair<int, int>> queue;
+    for (unsigned int my = 0; my < info_.height; ++my) {
+      for (unsigned int mx = 0; mx < info_.width; ++mx) {
+        const int idx = index(static_cast<int>(mx), static_cast<int>(my));
+        if (cells_[idx] == CoverageCell::OBSTACLE) {
+          dist[idx] = 0;
+          queue.push({static_cast<int>(mx), static_cast<int>(my)});
+        }
+      }
+    }
+    const int dx[4] = {-1, 0, 1, 0};
+    const int dy[4] = {0, -1, 0, 1};
+    while (!queue.empty()) {
+      const auto [cx, cy] = queue.front();
+      queue.pop();
+      const int d = dist[index(cx, cy)];
+      if (d >= hcells) { continue; }
+      for (int i = 0; i < 4; ++i) {
+        const int nx = cx + dx[i];
+        const int ny = cy + dy[i];
+        if (!cellInBounds(nx, ny)) { continue; }
+        const int nidx = index(nx, ny);
+        if (dist[nidx] >= 0) { continue; }
+        dist[nidx] = d + 1;
+        queue.push({nx, ny});
+      }
+    }
+    for (size_t i = 0; i < cells_.size(); ++i) {
+      if (cells_[i] != CoverageCell::OUTSIDE && dist[i] > 0 && dist[i] <= hcells) {
+        halo_[i] = 1;
+      }
+    }
+  }
 }
 
 void CoverageGrid::updateDynamicObstacles(const std::vector<Pose2D> & points)
@@ -243,6 +283,7 @@ bool CoverageGrid::passable(int mx, int my, bool avoid_dynamic) const
   if (!cellInBounds(mx, my)) { return false; }
   const int idx = index(mx, my);
   if (inset_[idx] != 0) { return false; }
+  if (!halo_.empty() && halo_[idx] != 0) { return false; }   // 车体半径内不进
   if (avoid_dynamic && dynamic_[idx] != 0) { return false; }
   const CoverageCell cell = cells_[idx];
   return cell == CoverageCell::UNCOVERED || cell == CoverageCell::COVERED;
@@ -535,6 +576,12 @@ size_t CoverageGrid::uncoveredCount() const
     if (cell == CoverageCell::UNCOVERED) { ++count; }
   }
   return count;
+}
+
+void CoverageGrid::markBlockedAround(const Pose2D & pose, double radius)
+{
+  if (!ready_ || radius <= 0.0) { return; }
+  markDisk(pose.x, pose.y, radius, CoverageCell::BLOCKED, false, false);
 }
 
 void CoverageGrid::markUnreachable(const Pose2D & pose)
