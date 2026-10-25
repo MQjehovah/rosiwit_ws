@@ -82,12 +82,12 @@ private:
   int headingIndex(double theta) const;
   int stateKey(int ix, int iy, int itheta) const;
   bool isObstacle(int ix, int iy) const;
-  unsigned char costAt(int ix, int iy) const;
-  unsigned char inflationCostAt(int ix, int iy) const;
+  int8_t costAt(int ix, int iy) const;
+  int8_t inflationCostAt(int ix, int iy) const;
   void buildInflationField();
   bool checkPose(const core::Pose2D & pose) const;
   /// footprint 覆盖区的最大膨胀代价 (0..255), 供 g 代价使用
-  unsigned char footprintInflationCost(const core::Pose2D & pose) const;
+  int8_t footprintInflationCost(const core::Pose2D & pose) const;
   bool checkArc(const core::Pose2D & from, const MotionPrimitive & motion,
                 core::Pose2D & to) const;
   double heuristic(const core::Pose2D & a, const core::Pose2D & b) const;
@@ -98,7 +98,7 @@ private:
   core::Logger logger_;
   core::PlannerConfig config_;
   std::shared_ptr<core::Costmap> costmap_;
-  std::vector<unsigned char> costmap_data_;
+  std::vector<int8_t> costmap_data_;
   unsigned int nx_ = 0;
   unsigned int ny_ = 0;
   double resolution_ = 0.05;
@@ -113,7 +113,7 @@ private:
   std::vector<std::pair<double, double>> footprint_samples_;
   // 0.05 对 0.9m 车体 = ~60 采样点; Hybrid A* 每次扩展都要查, 改成 0.08 减 40%.
   double footprint_sample_spacing_ = 0.08;
-  std::vector<unsigned char> inflation_field_;
+  std::vector<int8_t> inflation_field_;
   // recovery-only: tolerate the current footprint overlapping the map so a
   // reverse escape path can be generated; normal planning keeps this at 0.
   core::Pose2D start_pose_;

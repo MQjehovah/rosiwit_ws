@@ -49,19 +49,15 @@ void NavFnPlanner::setCostmap(const core::Costmap& costmap)
     nx_ = costmap_->grid->info.width;
     ny_ = costmap_->grid->info.height;
 
-    // 与 A* 一致: 优先使用 nav 层转换后的 0..255 代价;
-    // 直接复制 OccupancyGrid 的 0..100 会绕过 254 障碍阈值.
+    // 全链路统一语义 (nav_msgs/OccupancyGrid): -1 unknown / 0..99 代价 / 100 lethal.
+    // 不做换算: 层、Costmap、消息、planner 内部数组是同一套数值.
     costmap_data_.assign(static_cast<size_t>(nx_) * ny_, 0);
-    if (costmap_->data.size() == costmap_data_.size()) {
-        for (size_t i = 0; i < costmap_data_.size(); ++i) {
+    const bool use_data = costmap_->data.size() == costmap_data_.size();
+    for (size_t i = 0; i < costmap_data_.size(); ++i) {
+        if (use_data) {
             costmap_data_[i] = costmap_->data[i];
-        }
-    } else {
-        for (size_t i = 0; i < costmap_->grid->data.size() && i < costmap_data_.size(); ++i) {
-            const int8_t v = costmap_->grid->data[i];
-            if (v < 0) costmap_data_[i] = 254;
-            else if (v >= 100) costmap_data_[i] = 255;
-            else costmap_data_[i] = static_cast<unsigned char>(v * 255 / 100);
+        } else if (i < costmap_->grid->data.size()) {
+            costmap_data_[i] = costmap_->grid->data[i];
         }
     }
 
@@ -155,7 +151,7 @@ bool NavFnPlanner::computePotential(const core::Pose2D& goal)
 
     if (goal_x < 0 || goal_x >= static_cast<int>(nx_) ||
         goal_y < 0 || goal_y >= static_cast<int>(ny_) ||
-        getCost(static_cast<unsigned int>(goal_x), static_cast<unsigned int>(goal_y)) >= 254) {
+        !isPassable(static_cast<unsigned int>(goal_x), static_cast<unsigned int>(goal_y))) {
         return false;
     }
     potential_[goal_y * nx_ + goal_x] = 0.0f;
@@ -180,7 +176,8 @@ bool NavFnPlanner::computePotential(const core::Pose2D& goal)
 
             if (nx >= 0 && nx < static_cast<int>(nx_) &&
                 ny >= 0 && ny < static_cast<int>(ny_)) {
-                if (potential_[ny * nx_ + nx] < 0 && getCost(nx, ny) < 254) {
+                if (potential_[ny * nx_ + nx] < 0 &&
+                    isPassable(static_cast<unsigned int>(nx), static_cast<unsigned int>(ny))) {
                     potential_[ny * nx_ + nx] = current_potential +
                         (i < 4 ? 1.0f : 1.414f);  // 直线vs对角线
                     wavefront.push({nx, ny});
@@ -259,12 +256,18 @@ bool NavFnPlanner::findPath(
     return false;
 }
 
-unsigned char NavFnPlanner::getCost(unsigned int x, unsigned int y)
+int8_t NavFnPlanner::getCost(unsigned int x, unsigned int y)
 {
     if (x >= nx_ || y >= ny_) {
-        return 255;  // 未知区域视为障碍
+        return -1;   // 界外 = 不可通行
     }
     return costmap_data_[y * nx_ + x];
+}
+
+bool NavFnPlanner::isPassable(unsigned int x, unsigned int y)
+{
+    const int8_t c = getCost(x, y);
+    return c >= 0 && c < 100;   // -1 unknown 与 100 lethal 都不可通行
 }
 
 }  // namespace planners

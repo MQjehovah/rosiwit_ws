@@ -147,7 +147,8 @@ struct Costmap
   double resolution;
   double origin_x;
   double origin_y;
-  std::vector<unsigned char> data;
+  // 与 nav_msgs/OccupancyGrid 同一套语义: -1 unknown, 0..100.
+  std::vector<int8_t> data;
 };
 
 struct Obstacle

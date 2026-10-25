@@ -26,9 +26,14 @@
 >   - 功能验收: 限速 0.25 -> 区内 max|v|=0.251, 撤销后 0.643;
 >     禁行区盖住目标 -> costmap=100, planner "Goal in obstacle" 失败;
 >     撤销 -> costmap=0 且同目标 SUCCEEDED
->   - **坑**: 层内部栅格必须用 `int16_t`. 用 `int8_t` 时 254 (unknown) 溢出成 -2,
->     整个 unknown 语义失效且没有任何编译告警 (planner 仍能从 `grid->data` 兜底工作,
->     所以表面上"不漏", 实际全部代价地图都是空的).
+>   - **取值约定（全链路一套，不做任何转换）**：`nav_msgs/OccupancyGrid` 语义
+>     `-1` unknown / `0` free / `1..98` 膨胀梯度 / `99` inscribed / `100` lethal。
+>     层栅格、`CostmapGrid`、`core::Costmap`、发布消息、planner 内部
+>     `costmap_data_` 都是这一套；不再有 254/255 的私有刻度。
+>   - **坑**：以前 `core::Costmap` 用 `unsigned char` + 254/255 私有约定，而
+>     `CostmapGrid`/消息是 `int8_t` + -1/0..100，中间靠转换桥接；层内又一度用
+>     `int16_t` 绕过 254 溢出。现在统一为 8 位 `-1/0..100`，`int8_t` 足够：
+>     199/254 那种"大数值"在 `int8_t` 里存不下，本身就是语义没对齐的信号。
 > - C LocalizationServer：
 >   - **C1 + C3 完成**
 >     - `xzrobot_ros_dependency/LocalizationState.msg`：pose(含 6x6 协方差) + health

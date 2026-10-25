@@ -2061,7 +2061,7 @@ private:
     for (size_t i = 0; i < encoded.size(); ++i) {
       if (encoded[i] >= 100) {
         grid->data[i] = 100;
-        costmap.data[i] = 255;
+        costmap.data[i] = 100;
       }
     }
     // 允许 A* 从当前格起步 (起点可能落在 center_inset 带里).
@@ -2321,7 +2321,7 @@ private:
       planner_layers_.configure(cfg, core::kCostFree);
       planner_layers_.update(ros::Time::now().toSec());
 
-      const std::vector<int16_t> & semantic = planner_layers_.combined();
+      const std::vector<int8_t> & semantic = planner_layers_.combined();
 
       auto grid = std::make_shared<core::CostmapGrid>();
       grid->info.width = w;
@@ -2340,11 +2340,8 @@ private:
       cm.origin_y = oy;
       cm.data.assign(semantic.size(), 0);
       for (size_t i = 0; i < semantic.size(); ++i) {
-        // 层语义 100 -> planner 的 255 (lethal + 膨胀源); 254 保持 254.
-        const int8_t v = semantic[i];
-        cm.data[i] = (v == core::kCostUnknown)
-                         ? 254
-                         : (v >= core::kCostLethal ? 255 : 0);
+        // 层与 Costmap 同一套语义 (-1/0..100), 直接复制.
+        cm.data[i] = semantic[i];
       }
       // /scan 是实时传感器障碍层: 只进入 local costmap/controller/safety,
       // 不能直接写成 global planner 的 lethal。否则 15Hz 的瞬态点会被 A*
@@ -2356,7 +2353,7 @@ private:
       // 膨胀并发布供 RViz 可视化
       const int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
       const int safety_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
-      const std::vector<int16_t> display =
+      const std::vector<int8_t> display =
         core::inflatedCostmap(semantic, w, h, safety_cells, inflate_cells);
 
 
@@ -2371,9 +2368,8 @@ private:
       costmap_msg.info.origin.orientation.w = 1.0;
       costmap_msg.data.resize(w * h);
       for (size_t i = 0; i < w * h; ++i) {
-        // 可视化区分 unknown(-1) 与真实障碍(100); planner_costmap_ 仍保留
-        // 254 作为不可穿越栅格, 不会因为显示而放行未知区域.
-        costmap_msg.data[i] = (display[i] == core::kCostUnknown) ? -1 : static_cast<int8_t>(display[i]);
+        // 层/膨胀输出已经是 nav_msgs 约定 (-1 unknown, 0..100), 直接发布.
+        costmap_msg.data[i] = display[i];
       }
       global_costmap_pub_.publish(costmap_msg);
       if (mb_) { mb_->publishPlanMap(costmap_msg); }
@@ -2558,7 +2554,7 @@ private:
 
     local_layers_.configure(cfg, core::kCostFree);
     local_layers_.update(ros::Time::now().toSec());
-    std::vector<int16_t> raw = local_layers_.combined();
+    std::vector<int8_t> raw = local_layers_.combined();
 
     // 窗口内但在地图外的栅格: 旧实现视为致命 (不可穿越), 保持等价.
     for (int y = 0; y < lw; ++y) {
@@ -2584,14 +2580,14 @@ private:
       static_cast<int>(std::ceil(inflation_radius_ / res)),
       std::max(1, static_cast<int>(std::ceil(robot_radius_ / res))) + 1);
     const int l_safety = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
-    const std::vector<int16_t> ldisplay =
+    const std::vector<int8_t> ldisplay =
       core::inflatedCostmap(raw, static_cast<unsigned int>(lw),
                             static_cast<unsigned int>(lw), l_safety, l_inflate);
 
     local_costmap.data.resize(lw * lw);
     for (int i = 0; i < lw * lw; ++i) {
       // 膨胀安全环显示为 99, 真实障碍 raw 仍是 100.
-      local_costmap.data[i] = static_cast<int8_t>(ldisplay[i]);
+      local_costmap.data[i] = ldisplay[i];
     }
     local_costmap_pub_.publish(local_costmap);
     if (mb_) { mb_->publishLocalMap(local_costmap); }
@@ -2826,7 +2822,8 @@ private:
       const int my = static_cast<int>(std::floor(
         (p.y - cm.origin_y) / cm.resolution));
       if (mx < 0 || my < 0 || mx >= width || my >= height) { return true; }
-      if (cm.data[static_cast<size_t>(my) * width + mx] >= 254) {
+      if (cm.data[static_cast<size_t>(my) * width + mx] < 0 ||
+          cm.data[static_cast<size_t>(my) * width + mx] >= 100) {
         return true;
       }
     }

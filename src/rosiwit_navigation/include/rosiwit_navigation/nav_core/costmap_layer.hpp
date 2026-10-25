@@ -7,11 +7,15 @@
 //   controller : static + scan + tracked + voxel + keepout (不膨胀, 由 footprint 负责)
 //   safety     : 直接用原始激光点 (不下采样到栅格)
 //
-// 栅格取值约定 (与既有 planner 兼容, 不要改):
-//   0        自由
-//   1..99    膨胀代价 (仅供可视化/控制器; planner 自己重算)
-//   100      lethal (障碍源, 参与膨胀)
-//   254      unknown (阻断搜索, 不作为膨胀源) —— 只在 planner 视图出现
+// 栅格取值 (严格按 nav_msgs/OccupancyGrid 约定, 8 位有符号):
+//   -1        unknown: 阻断规划, 但不作为膨胀源
+//    0        free
+//    1..98    膨胀代价梯度
+//    99       inscribed (安全环, 与历史可视化一致)
+//   100       lethal / occupied (膨胀源)
+//
+// 这样层内部、CostmapGrid、core::Costmap、OccupancyGrid、planner 内部数组
+// 全部是同一套数值, 任何位置都不需要转换.
 // ============================================================
 #ifndef ROSIWIT_NAVIGATION__NAV_CORE_COSTMAP_LAYER_HPP_
 #define ROSIWIT_NAVIGATION__NAV_CORE_COSTMAP_LAYER_HPP_
@@ -25,9 +29,10 @@ namespace rosiwit_navigation
 namespace core
 {
 
-constexpr int16_t kCostFree = 0;
-constexpr int16_t kCostLethal = 100;
-constexpr int16_t kCostUnknown = 254;
+constexpr int8_t kCostUnknown = -1;
+constexpr int8_t kCostFree = 0;
+constexpr int8_t kCostInscribed = 99;
+constexpr int8_t kCostLethal = 100;
 
 /// 一个视图的几何: 整图原点/分辨率 + 视图窗口在整图中的偏移.
 struct LayerConfig
@@ -60,9 +65,9 @@ public:
   /// 采样频率由外层决定; 层内部可自行节流. now 为 ROS 秒.
   virtual void update(double now) { (void)now; }
 
-  /// 把本层障碍写入 grid (只升不降, max 合成). 越界/无数据直接跳过.
-  /// 几何由调用方显式传入: 同一个层可以被多个视图共用而不串味.
-  virtual void stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const = 0;
+  /// 把本层障碍写入 grid. 几何由调用方显式传入:
+  /// 同一个层可以被多个视图共用而不串味.
+  virtual void stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const = 0;
 
   const LayerConfig & config() const { return cfg_; }
 
@@ -73,11 +78,10 @@ protected:
   LayerConfig cfg_;
 };
 
-/// 4 邻域距离变换 + 梯度代价, 与历史实现逐格一致.
-/// raw 中的 kCostLethal 为膨胀源; kCostUnknown 原样保留且不产生 halo.
-/// 输出: 0 / 1..99 / 100 / 254.
-std::vector<int16_t> inflatedCostmap(
-  const std::vector<int16_t> & raw,
+/// 4 邻域距离变换 + 梯度代价, 取值仍是 -1/0..100 (与层一致).
+/// raw 中的 kCostLethal(100) 为膨胀源; kCostUnknown(-1) 原样保留且不产生 halo.
+std::vector<int8_t> inflatedCostmap(
+  const std::vector<int8_t> & raw,
   unsigned int width, unsigned int height,
   int inscribed_cells, int inflate_cells);
 

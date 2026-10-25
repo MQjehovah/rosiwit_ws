@@ -23,7 +23,7 @@ class LayeredCostmap
 public:
   /// default_value: 视图初始值. 窗口超出地图时保持该值 (局部视图用
   /// kCostLethal, 保证窗口外不可穿越; 规划视图用 kCostFree).
-  void configure(const LayerConfig & cfg, int16_t default_value = kCostFree);
+  void configure(const LayerConfig & cfg, int8_t default_value = kCostFree);
 
   bool addLayer(const std::shared_ptr<ICostmapLayer> & layer);
   void clearLayers();
@@ -33,10 +33,10 @@ public:
   void update(double now);
 
   /// 全部层合成 (max).
-  const std::vector<int16_t> & combined() const { return master_; }
+  const std::vector<int8_t> & combined() const { return master_; }
 
   /// 指定层子集合成 (不改动 master_).
-  std::vector<int16_t> combinedOf(const std::vector<std::string> & names) const;
+  std::vector<int8_t> combinedOf(const std::vector<std::string> & names) const;
 
   const LayerConfig & config() const { return cfg_; }
   std::vector<std::string> layerNames() const;
@@ -45,9 +45,9 @@ private:
   void resetMaster();
 
   LayerConfig cfg_;
-  int16_t default_value_ = kCostFree;
+  int8_t default_value_ = kCostFree;
   std::vector<std::shared_ptr<ICostmapLayer>> layers_;
-  std::vector<int16_t> master_;
+  std::vector<int8_t> master_;
 };
 
 }  // namespace core

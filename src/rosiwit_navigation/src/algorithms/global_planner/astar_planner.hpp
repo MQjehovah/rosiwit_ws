@@ -83,9 +83,9 @@ struct AStarNode
 namespace AStarConstants {
     constexpr double kStraightCost = 1.0;                    // 直线移动代价
     constexpr double kDiagonalCost = 1.414;                  // 对角线移动代价 (√2)
-    constexpr unsigned char kObstacleThreshold = 254;        // 障碍物判定阈值
+    constexpr int8_t kObstacleThreshold = 100;               // 障碍物判定阈值 (nav_msgs 语义)
     constexpr double kCostFactorScale = 8.0;                 // 梯度代价缩放，越大路径越倾向远离障碍物
-    constexpr unsigned char kMaxCost = 255;                  // 最大代价值
+    constexpr int8_t kMaxCost = 100;                         // 最大代价值 (nav_msgs 语义)
     constexpr int kDefaultMaxIterations = 50000;             // 默认最大迭代次数（50K 确保大网格<2s）
     constexpr double kDefaultTimeoutSeconds = 2.0;           // 默认规划超时（秒）
     constexpr double kDefaultGridResolution = 0.05;          // 默认栅格分辨率（米）
@@ -124,7 +124,7 @@ public:
         double timeout_seconds = 2.0;
         double heuristic_weight = 1.0;
         bool use_diagonal_moves = true;
-        int obstacle_cost_threshold = 254;
+        int obstacle_cost_threshold = 100;   // nav_msgs 语义
     };
 
     AStarPlanner();
@@ -182,7 +182,7 @@ private:
     core::PlannerConfig config_;
     Config simple_config_;
     std::shared_ptr<core::Costmap> costmap_;
-    std::vector<unsigned char> costmap_data_;
+    std::vector<int8_t> costmap_data_;
     unsigned int nx_, ny_;
     bool planning_active_;
 
@@ -206,7 +206,7 @@ private:
     double heuristic(int x1, int y1, int x2, int y2) const;
     bool isValid(int x, int y) const;
     bool isObstacle(int x, int y) const;
-    unsigned char getCost(int x, int y) const;
+    int8_t getCost(int x, int y) const;
     void reconstructPath(const AStarNode& goal_node, core::Path& path);
     void clearSearchData();
 };

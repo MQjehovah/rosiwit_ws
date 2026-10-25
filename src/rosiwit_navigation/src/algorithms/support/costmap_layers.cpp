@@ -15,9 +15,9 @@ namespace core
 
 namespace
 {
-inline bool isLethal(int16_t v) { return v >= kCostLethal && v < kCostUnknown; }
+inline bool isLethal(int8_t v) { return v >= kCostLethal; }
 
-inline void raise(std::vector<int16_t> & grid, size_t idx, int16_t value)
+inline void raise(std::vector<int8_t> & grid, size_t idx, int8_t value)
 {
   if (idx < grid.size() && grid[idx] < value) { grid[idx] = value; }
 }
@@ -32,7 +32,7 @@ void StaticLayer::setOccupancy(const std::vector<int8_t> & data,
   src_height_ = height;
 }
 
-void StaticLayer::stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const
+void StaticLayer::stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const
 {
   if (!cfg.valid() || data_.empty()) { return; }
   for (unsigned int y = 0; y < cfg.height; ++y) {
@@ -42,19 +42,21 @@ void StaticLayer::stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) co
       const int mx = cfg.window_x + static_cast<int>(x);
       if (mx < 0 || mx >= static_cast<int>(src_width_)) { continue; }
       const int8_t v = data_[static_cast<size_t>(my) * src_width_ + mx];
-      int16_t out = kCostFree;
+      // unknown 保持 -1, 不做"更高代价"合成: 否则会被视图默认值 0 吃掉.
+      int8_t out = kCostFree;
       if (v >= 100) {
         out = kCostLethal;
       } else if (v < 0) {
         out = unknown_as_blocked_ ? kCostUnknown : kCostFree;
       }
-      raise(grid, static_cast<size_t>(y) * cfg.width + x, out);
+      // 静态层是"底图", 对窗口内每个格子都是赋值 (不是 max).
+      grid[static_cast<size_t>(y) * cfg.width + x] = out;
     }
   }
 }
 
 // ---------------- PointsLayer ----------------
-void PointsLayer::stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const
+void PointsLayer::stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const
 {
   if (!cfg.valid()) { return; }
   const int r = (radius_ > 0.0)
@@ -80,7 +82,7 @@ void PointsLayer::stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) co
 }
 
 // ---------------- CirclesLayer ----------------
-void CirclesLayer::stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const
+void CirclesLayer::stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const
 {
   if (!cfg.valid()) { return; }
   for (const auto & c : circles_) {
@@ -135,7 +137,7 @@ bool KeepoutLayer::contains(double wx, double wy) const
   return false;
 }
 
-void KeepoutLayer::stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const
+void KeepoutLayer::stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const
 {
   last_marked_ = 0;
   if (!active_ || polygons_.empty() || !cfg.valid()) { return; }
@@ -207,13 +209,13 @@ bool SpeedLimitLayer::parseRectZone(const std::string & spec, Zone & zone, doubl
 }
 
 // ---------------- 膨胀 ----------------
-std::vector<int16_t> inflatedCostmap(
-  const std::vector<int16_t> & raw,
+std::vector<int8_t> inflatedCostmap(
+  const std::vector<int8_t> & raw,
   unsigned int width, unsigned int height,
   int inscribed_cells, int inflate_cells)
 {
   const size_t n = static_cast<size_t>(width) * height;
-  std::vector<int16_t> out(n, kCostFree);
+  std::vector<int8_t> out(n, kCostFree);
   if (n == 0 || raw.size() != n) { return out; }
 
   inflate_cells = std::max(1, inflate_cells);
@@ -258,7 +260,7 @@ std::vector<int16_t> inflatedCostmap(
     if (d <= static_cast<float>(inscribed_cells)) {
       out[i] = 99;
     } else if (d <= static_cast<float>(inflate_cells)) {
-      out[i] = static_cast<int16_t>((1.0f - (d - inscribed_cells) * inv) * 99.0f);
+      out[i] = static_cast<int8_t>((1.0f - (d - inscribed_cells) * inv) * 99.0f);
     } else {
       out[i] = kCostFree;
     }

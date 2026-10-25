@@ -18,7 +18,7 @@ bool ICostmapLayer::worldToIndex(const LayerConfig & cfg, double wx, double wy,
          gy >= 0 && gy < static_cast<int>(cfg.height);
 }
 
-void LayeredCostmap::configure(const LayerConfig & cfg, int16_t default_value)
+void LayeredCostmap::configure(const LayerConfig & cfg, int8_t default_value)
 {
   cfg_ = cfg;
   default_value_ = default_value;
@@ -70,9 +70,9 @@ void LayeredCostmap::update(double now)
   }
 }
 
-std::vector<int16_t> LayeredCostmap::combinedOf(const std::vector<std::string> & names) const
+std::vector<int8_t> LayeredCostmap::combinedOf(const std::vector<std::string> & names) const
 {
-  std::vector<int16_t> out(static_cast<size_t>(cfg_.width) * cfg_.height, default_value_);
+  std::vector<int8_t> out(static_cast<size_t>(cfg_.width) * cfg_.height, default_value_);
   for (const auto & layer : layers_) {
     bool wanted = false;
     for (const auto & n : names) {

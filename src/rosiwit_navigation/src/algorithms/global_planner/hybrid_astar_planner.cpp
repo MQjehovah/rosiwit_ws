@@ -1,4 +1,5 @@
 #include "hybrid_astar_planner.hpp"
+#include "rosiwit_navigation/nav_core/costmap_layer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,7 +13,7 @@ namespace planners
 {
 namespace
 {
-constexpr double kObstacleThreshold = 250.0;  // 254 未知 / 255 致命
+constexpr double kObstacleThreshold = 100.0;  // nav_msgs 语义: >=100 不可通行
 constexpr double kPi = 3.14159265358979323846;
 
 double normalizeAngle(double a)
@@ -78,16 +79,14 @@ void HybridAStarPlanner::setCostmap(const core::Costmap & costmap)
   origin_y_ = costmap_->grid->info.origin.position.y;
 
   costmap_data_.assign(static_cast<size_t>(nx_) * ny_, 0);
-  if (costmap_->data.size() == costmap_data_.size()) {
-    for (size_t i = 0; i < costmap_data_.size(); ++i) {
-      costmap_data_[i] = static_cast<unsigned char>(costmap_->data[i]);
-    }
-  } else {
-    for (size_t i = 0; i < costmap_->grid->data.size() && i < costmap_data_.size(); ++i) {
-      const int8_t v = costmap_->grid->data[i];
-      if (v < 0) costmap_data_[i] = 254;
-      else if (v >= 100) costmap_data_[i] = 255;
-      else costmap_data_[i] = static_cast<unsigned char>(v * 255 / 100);
+  // 全链路统一语义 (nav_msgs/OccupancyGrid): -1 unknown / 0..99 代价 / 100 lethal.
+  // 不做换算: 层、Costmap、消息、planner 内部数组是同一套数值.
+  const bool use_data = costmap_->data.size() == costmap_data_.size();
+  for (size_t i = 0; i < costmap_data_.size(); ++i) {
+    if (use_data) {
+      costmap_data_[i] = costmap_->data[i];
+    } else if (i < costmap_->grid->data.size()) {
+      costmap_data_[i] = costmap_->grid->data[i];
     }
   }
 
@@ -125,9 +124,8 @@ void HybridAStarPlanner::buildInflationField()
   for (int y = 0; y < static_cast<int>(ny_); ++y) {
     for (int x = 0; x < static_cast<int>(nx_); ++x) {
       const size_t idx = static_cast<size_t>(y) * nx_ + x;
-      // Unknown (254) is a blocked boundary, not a physical obstacle;
-      // only real occupied cells define the soft clearance field.
-      if (costmap_data_[idx] >= 255) {
+      // unknown(-1) 是"阻断边界", 不是实体障碍; 只有真实占据(100)产生膨胀场.
+      if (costmap_data_[idx] >= core::kCostLethal) {
         dist[idx] = 0.0f;
         q.push({x, y});
       }
@@ -156,12 +154,12 @@ void HybridAStarPlanner::buildInflationField()
     if (dist[i] >= radius_cells) continue;
     const double ratio = 1.0 - static_cast<double>(dist[i]) /
                                static_cast<double>(radius_cells);
-    inflation_field_[i] = static_cast<unsigned char>(
-      std::max(0.0, std::min(255.0, ratio * 90.0)));
+    inflation_field_[i] = static_cast<int8_t>(
+      std::max(0.0, std::min(100.0, ratio * 100.0)));
   }
 }
 
-unsigned char HybridAStarPlanner::inflationCostAt(int ix, int iy) const
+int8_t HybridAStarPlanner::inflationCostAt(int ix, int iy) const
 {
   if (ix < 0 || iy < 0 || ix >= static_cast<int>(nx_) ||
       iy >= static_cast<int>(ny_) ||
@@ -197,35 +195,36 @@ bool HybridAStarPlanner::isObstacle(int ix, int iy) const
   if (ix < 0 || iy < 0 || ix >= static_cast<int>(nx_) || iy >= static_cast<int>(ny_)) {
     return true;
   }
-  return costAt(ix, iy) >= kObstacleThreshold;
+  const int8_t c = costAt(ix, iy);
+  return c < 0 || c >= kObstacleThreshold;   // -1 unknown: 阻断但不膨胀
 }
 
-unsigned char HybridAStarPlanner::costAt(int ix, int iy) const
+int8_t HybridAStarPlanner::costAt(int ix, int iy) const
 {
   if (ix < 0 || iy < 0 || ix >= static_cast<int>(nx_) || iy >= static_cast<int>(ny_) ||
       costmap_data_.empty()) {
-    return 254;
+    return -1;   // 界外 = 不可通行
   }
   return costmap_data_[static_cast<size_t>(iy) * nx_ + ix];
 }
 
-// footprint 覆盖区域内的最大膨胀代价 (0..255): 让规划代价真正考虑车体轮廓.
-unsigned char HybridAStarPlanner::footprintInflationCost(const core::Pose2D & pose) const
+// footprint 覆盖区域内的最大膨胀代价 (0..100): 让规划代价真正考虑车体轮廓.
+int8_t HybridAStarPlanner::footprintInflationCost(const core::Pose2D & pose) const
 {
   if (footprint_samples_.empty() || inflation_field_.empty()) {
     int ix = 0, iy = 0;
-    if (!worldToGrid(pose.x, pose.y, ix, iy)) return 255;
+    if (!worldToGrid(pose.x, pose.y, ix, iy)) return 100;
     return inflationCostAt(ix, iy);
   }
   const double c = std::cos(pose.theta);
   const double s = std::sin(pose.theta);
-  unsigned char worst = 0;
+  int8_t worst = 0;
   for (const auto & lp : footprint_samples_) {
     const double wx = pose.x + c * lp.first - s * lp.second;
     const double wy = pose.y + s * lp.first + c * lp.second;
     const int ix = static_cast<int>(std::floor((wx - origin_x_) / resolution_));
     const int iy = static_cast<int>(std::floor((wy - origin_y_) / resolution_));
-    const unsigned char v = inflationCostAt(ix, iy);
+    const int8_t v = inflationCostAt(ix, iy);
     if (v > worst) worst = v;
   }
   return worst;
@@ -486,9 +485,11 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       // 代价必须按 footprint 算, 不能只看中心格: 否则车体一半悬在代价区也和
       // 居中一样便宜 (用户反馈"旁边有空地却贴着代价区走").
       const double fp_infl = footprintInflationCost(next);
+      // 全部 0..100 刻度: costAt/100 与 fp_infl/100 都是 0..1 的归一化代价.
+      // 膨胀权重 2.82 = 旧 8.0*(90/255), 保持已验证的贴边行为不变.
       const double cost_factor =
-        1.0 + static_cast<double>(costAt(ix, iy)) / 255.0 * 1.5 +
-        8.0 * fp_infl / 255.0;
+        1.0 + static_cast<double>(std::max<int8_t>(0, costAt(ix, iy))) / 100.0 * 1.5 +
+        2.82 * fp_infl / 100.0;
       const double g = current.g + travel * cost_factor * reversing_penalty + heading_penalty;
 
       auto it = best_g.find(key);

@@ -36,7 +36,7 @@ public:
   std::string name() const override { return "static"; }
   void setOccupancy(const std::vector<int8_t> & data, unsigned int width, unsigned int height);
   void setUnknownAsBlocked(bool v) { unknown_as_blocked_ = v; }
-  void stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const override;
+  void stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const override;
 
 private:
   std::vector<int8_t> data_;
@@ -59,7 +59,7 @@ public:
   void setRadius(double r) { radius_ = r; }
   size_t size() const { return points_.size(); }
 
-  void stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const override;
+  void stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const override;
 
 private:
   std::string name_;
@@ -78,7 +78,7 @@ public:
   void clear() { circles_.clear(); }
   size_t size() const { return circles_.size(); }
 
-  void stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const override;
+  void stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const override;
 
 private:
   std::string name_;
@@ -101,7 +101,7 @@ public:
   /// 世界点是否落在任一禁行区内.
   bool contains(double wx, double wy) const;
 
-  void stamp(const LayerConfig & cfg, std::vector<int16_t> & grid) const override;
+  void stamp(const LayerConfig & cfg, std::vector<int8_t> & grid) const override;
 
   /// 上一次 stamp 实际标记的栅格数 (诊断用; 0 说明多边形没落在当前视图里).
   unsigned int lastMarkedCells() const { return last_marked_; }

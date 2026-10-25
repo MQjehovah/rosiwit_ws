@@ -49,7 +49,7 @@ private:
     core::Logger logger_;
     core::PlannerConfig config_;
     std::shared_ptr<core::Costmap> costmap_;
-    std::vector<unsigned char> costmap_data_;
+    std::vector<int8_t> costmap_data_;
     unsigned int nx_, ny_;
     bool planning_active_;
     
@@ -61,7 +61,8 @@ private:
     bool computePotential(const core::Pose2D& goal);
     bool findPath(const core::Pose2D& start, const core::Pose2D& goal, core::Path& path);
     void addWavefrontPoint(unsigned int x, unsigned int y);
-    unsigned char getCost(unsigned int x, unsigned int y);
+    int8_t getCost(unsigned int x, unsigned int y);
+    bool isPassable(unsigned int x, unsigned int y);
 };
 
 }  // namespace planners

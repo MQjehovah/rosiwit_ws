@@ -5,6 +5,7 @@
 
 #include "astar_planner.hpp"
 #include "path_smoother.hpp"
+#include "rosiwit_navigation/nav_core/costmap_layer.hpp"
 #include "rosiwit_navigation/nav_core/exceptions.hpp"
 
 #include <algorithm>
@@ -64,24 +65,15 @@ void AStarPlanner::setCostmap(const core::Costmap& costmap)
     nx_ = costmap_->grid->info.width;
     ny_ = costmap_->grid->info.height;
 
-    // 复制代价数据。优先使用调用方已转换好的 Costmap::data (nav 层会把 unknown
-    // 映射为 free)，否则再按 OccupancyGrid 约定转换。-1 是未知区域，规划器不能
-    // 把它当致命障碍，否则探索目标(前沿)永远无法规划。
     costmap_data_.resize(nx_ * ny_);
-    if (costmap_->data.size() == costmap_data_.size()) {
-        for (size_t i = 0; i < costmap_data_.size(); ++i) {
+    // 全链路统一语义 (nav_msgs/OccupancyGrid): -1 unknown / 0..99 代价 / 100 lethal.
+    // 不做换算: 层、Costmap、消息、planner 内部数组是同一套数值.
+    const bool use_data = costmap_->data.size() == costmap_data_.size();
+    for (size_t i = 0; i < costmap_data_.size(); ++i) {
+        if (use_data) {
             costmap_data_[i] = costmap_->data[i];
-        }
-    } else {
-        for (size_t i = 0; i < costmap_->grid->data.size() && i < costmap_data_.size(); ++i) {
-            int8_t v = costmap_->grid->data[i];
-            if (v < 0) {
-                costmap_data_[i] = 254;               // unknown: blocked, not inflated
-            } else if (v >= 100) {
-                costmap_data_[i] = 255;               // occupied → lethal + inflation
-            } else {
-                costmap_data_[i] = static_cast<unsigned char>(v * 255 / 100);  // scale
-            }
+        } else if (i < costmap_->grid->data.size()) {
+            costmap_data_[i] = costmap_->grid->data[i];
         }
     }
 
@@ -127,9 +119,9 @@ void AStarPlanner::inflateCostmap()
 
     for (unsigned int y = 0; y < ny_; ++y) {
         for (unsigned int x = 0; x < nx_; ++x) {
-            // 只从真实占据格膨胀. unknown(254) 只阻断搜索, 不作为膨胀源,
+            // 只从真实占据格膨胀. unknown(-1) 只阻断搜索, 不作为膨胀源,
             // 否则紧邻未知区域的前沿目标会被膨胀成不可达.
-            if (costmap_data_[y * nx_ + x] >= 255) {
+            if (costmap_data_[y * nx_ + x] >= core::kCostLethal) {
                 dist[y * nx_ + x] = 0.0f;
                 q.push({x, y});
             }
@@ -161,24 +153,24 @@ void AStarPlanner::inflateCostmap()
     }
 
     // 根据距离设置膨胀代价
-    const unsigned char lethal = AStarConstants::kObstacleThreshold;
+    const int8_t lethal = AStarConstants::kObstacleThreshold;
     const float inv_radius = 1.0f / std::max(1, radius_cells - safety_cells);
 
     for (size_t i = 0; i < nx_ * ny_; ++i) {
-        if (costmap_data_[i] >= lethal) continue;
+        if (costmap_data_[i] < 0 || costmap_data_[i] >= lethal) continue;
 
         float d = dist[i];
         if (d <= safety_cells) {
-            // 安全缓冲区不能写成 lethal(254): 机器人在窄走廊/墙边起步时
+            // 安全缓冲区不能写成 lethal(100): 机器人在窄走廊/墙边起步时
             // 自身就落在安全区内, 会被误判成 Start in obstacle.
-            // 保持高代价(253)让 A* 可以离开, 真实墙仍是 255.
+            // 保持高代价(99)让 A* 可以离开, 真实墙仍是 100.
             costmap_data_[i] = std::max(costmap_data_[i],
-                static_cast<unsigned char>(lethal - 1));
+                static_cast<int8_t>(lethal - 1));
         } else if (d <= radius_cells) {
             // 膨胀区 → 梯度代价（靠近障碍物越高）
             float ratio = 1.0f - (d - safety_cells) * inv_radius;
             costmap_data_[i] = std::max(costmap_data_[i],
-                static_cast<unsigned char>(ratio * (lethal - 1)));
+                static_cast<int8_t>(ratio * (lethal - 1)));
         }
     }
 
@@ -231,8 +223,8 @@ core::Result<core::Path> AStarPlanner::plan(
     if (isObstacle(start_x, start_y)) {
         planning_active_ = false;
         LOG_ERROR(logger_,
-            "Start in obstacle: start=(%d,%d) cost=%u world=(%.2f,%.2f)",
-            start_x, start_y, static_cast<unsigned>(getCost(start_x, start_y)),
+            "Start in obstacle: start=(%d,%d) cost=%d world=(%.2f,%.2f)",
+            start_x, start_y, static_cast<int>(getCost(start_x, start_y)),
             start.x, start.y);
         return core::Result<core::Path>::error(
             core::ErrorCode::START_IN_OBSTACLE, "Start in obstacle");
@@ -240,8 +232,8 @@ core::Result<core::Path> AStarPlanner::plan(
     if (isObstacle(goal_x, goal_y)) {
         planning_active_ = false;
         LOG_ERROR(logger_,
-            "Goal in obstacle: goal=(%d,%d) cost=%u world=(%.2f,%.2f)",
-            goal_x, goal_y, static_cast<unsigned>(getCost(goal_x, goal_y)),
+            "Goal in obstacle: goal=(%d,%d) cost=%d world=(%.2f,%.2f)",
+            goal_x, goal_y, static_cast<int>(getCost(goal_x, goal_y)),
             goal.x, goal.y);
         return core::Result<core::Path>::error(
             core::ErrorCode::GOAL_IN_OBSTACLE, "Goal in obstacle");
@@ -334,7 +326,7 @@ core::Result<core::Path> AStarPlanner::plan(
 
             // 计算代价
             double move_cost = (i < 4) ? AStarConstants::kStraightCost : AStarConstants::kDiagonalCost;
-            // 注意: getCost/kMaxCost 都是整型, 先转 double, 否则 1..253 的
+            // 注意: getCost/kMaxCost 都是整型, 先转 double, 否则 1..99 的
             // 蓝色代价会因整数除法全部变成 0, A* 实际完全不看膨胀代价.
             double cost_factor = 1.0 +
                 static_cast<double>(getCost(nx, ny)) /
@@ -430,13 +422,14 @@ bool AStarPlanner::isValid(int x, int y) const
 
 bool AStarPlanner::isObstacle(int x, int y) const
 {
-    return getCost(x, y) >= AStarConstants::kObstacleThreshold;
+    const int8_t c = getCost(x, y);
+    return c < 0 || c >= AStarConstants::kObstacleThreshold;
 }
 
-unsigned char AStarPlanner::getCost(int x, int y) const
+int8_t AStarPlanner::getCost(int x, int y) const
 {
     if (!isValid(x, y)) {
-        return 255;
+        return -1;   // 界外 = 不可通行
     }
     return costmap_data_[y * nx_ + x];
 }
