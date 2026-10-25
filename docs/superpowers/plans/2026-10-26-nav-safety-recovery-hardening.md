@@ -258,3 +258,24 @@ hit base(0.62,-0.55)  world(-0.57,-0.98)   -> 距车心 0.83 m，位于地图自
 - `applySafety` 用 `current_pose_` + yaw 把 map 系点转到 base 系，而 `scanCallback` 用 TF。
   两者若有固定偏移（map→odom 或时间戳差），会把点整体搬移。建议加一条自检：同一帧用
   TF 算的 base 点 vs `applySafety` 算的，误差应 < 5 cm，超了打 WARN。
+
+
+### 问题 3：旋转区判据漏了 ω，导致"蠕行/停住"也被套用旋转圆（真死锁）
+
+修完扫掠圆后仍然卡在行末（19%，`state=COVERING`、`pose=(-1.28,0.81)` 十秒不动），
+诊断日志出现 `STOP hits` **为空**但 `stop_active_=true`：
+
+- 我的选区判据写成了 `|vx| < 0.05 → 用旋转圆`；
+- 而覆盖在行末蠕行时 `vx≈0`，ω 也≈0 → 被当成"旋转"，套用 0.74 m 的圆 →
+  把 0.9 m 外、任何方向的物体都算进安全区 → STOP 锁存 → 车再也动不了；
+- 诊断里按"前进区"打印命中点自然是空的（两边选的区不同）。
+
+nav2 `VelocityPolygon` 的语义是 **`|v| < 0.05 且 |ω| > 阈值`** 才算 rotation，
+另外还有独立的 `stopped` 区。修正为：
+
+```cpp
+const bool rotating = std::fabs(cmd.linear_x) < 0.05 && std::fabs(cmd.angular_z) > 0.05;
+```
+
+停住/蠕行时回退到前进区（更宽松，符合"没在转就不需要旋转保护区"）。
+新增单测：同一个侧后方 0.70 m 的点，`(0,0,0)` 时 PASS、`(0,0,0.6)` 时 STOP。

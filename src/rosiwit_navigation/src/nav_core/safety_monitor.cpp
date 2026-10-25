@@ -148,7 +148,11 @@ SafetyResult SafetyMonitor::filter(
     stop_poly = &config_.stop_polygon_backward;
   }
 
-  const bool rotating = std::fabs(cmd.linear_x) < 0.05;
+  // nav2 VelocityPolygon 的语义: rotation 区只在"真的在转"时生效
+  // (|v| 小 **且** |w| 明显). 只看 |v| 会在"蠕行/停住"时也套用旋转圆,
+  // 把 0.74m 内任何方向的物体都当障碍 -> 车在行末再也动不了 (实测卡死).
+  const bool rotating = std::fabs(cmd.linear_x) < 0.05 &&
+                        std::fabs(cmd.angular_z) > 0.05;
   int stop_count = 0;
   double stop_radius = config_.stop_radius;
   if (rotating && config_.stop_radius_rotation > 0.0) {

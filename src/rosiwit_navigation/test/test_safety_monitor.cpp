@@ -248,6 +248,25 @@ TEST(SafetyMonitor, RotationZoneCircleIgnoresDiagonalOverCover)
   EXPECT_EQ(r2.state, "STOP");
 }
 
+TEST(SafetyMonitor, StoppedCommandUsesForwardZoneNotRotationCircle)
+{
+  // 回归: v~0 且 w~0 (蠕行/停住) 时必须用前进区, 不能套旋转圆.
+  // 否则 0.74m 内任何方向的物体都会把车按住, 行末再也动不了.
+  auto cfg = MakeConfig();
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_radius_rotation = 0.74;
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  // 侧后方 0.70m 的点: 在旋转圆内, 但不在前进区
+  const std::vector<Point> behind_side{{0.20, -0.68}, {0.22, -0.67}, {0.18, -0.69}};
+  auto r = monitor.filter(VelocityCommand(0.0, 0.0, 0.0), behind_side);
+  EXPECT_EQ(r.state, "PASS");
+  // 同一个点, 真的在转 (w=0.6) -> 必须停
+  monitor.reset();
+  auto r2 = monitor.filter(VelocityCommand(0.0, 0.0, 0.6), behind_side);
+  EXPECT_EQ(r2.state, "STOP");
+}
+
 TEST(SafetyMonitor, RotationCircleStillStopsRealObstacle)
 {
   auto cfg = MakeConfig();
