@@ -820,4 +820,9 @@ double SlamPipeline::getMatchingDegree() const {
     return m_localization ? m_localization->confidence() : 0.0;
 }
 
+bool SlamPipeline::priorUncertainty(double& xy_sigma, double& yaw_sigma) const {
+    if (!m_localization) return false;
+    return m_localization->priorUncertainty(xy_sigma, yaw_sigma);
+}
+
 } // namespace rosiwit_slam

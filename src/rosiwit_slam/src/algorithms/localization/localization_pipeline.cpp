@@ -1609,6 +1609,17 @@ ILocalization::Status LocalizationPipeline::getStatus() {
     return m_status.load();
 }
 
+bool LocalizationPipeline::priorUncertainty(double& xy_sigma, double& yaw_sigma) const {
+    std::lock_guard<std::mutex> lk(m_prior_mu);
+    if (!m_prior) return false;
+    const double ts = m_prior->priorTransSigma();
+    const double ys = m_prior->priorYawSigma();
+    if (!(ts > 0.0) || !(ys > 0.0)) return false;   // 实现未提供
+    xy_sigma = ts;
+    yaw_sigma = ys;
+    return true;
+}
+
 bool LocalizationPipeline::getPose(PoseStamped& out) {
     std::lock_guard<std::mutex> lk(m_snapshot_mu);
     // 从未初始化/从未匹配则返回 false. 否则 ROS 层会把 setMapData 后残留的
@@ -1620,8 +1631,7 @@ bool LocalizationPipeline::getPose(PoseStamped& out) {
     return true;
 }
 
-bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) {
-    std::lock_guard<std::mutex> lk(m_snapshot_mu);
+bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) {    std::lock_guard<std::mutex> lk(m_snapshot_mu);
     // LOST/未初始化必须返回 false：ROS 层的 LostMonitor 用它判断“当前是否可信”。
     // getPose() 在定位成功后 LOST 仍可返回最后有效位姿，供界面保持最后位置显示。
     if (!m_snapshot_valid || m_status.load() == LOST) return false;

@@ -348,13 +348,16 @@ void Ros1SlamInterface::publishLocationInfo() {
         health = LocState::HEALTH_INIT;
     }
     publishLocalizationState(health, matching_degree);
+    double prior_xy = 0.0, prior_yaw = 0.0;
+    const bool has_prior = engine_.priorUncertainty(prior_xy, prior_yaw);
     ROS_INFO_THROTTLE(2.0,
         "[locstate] mode=%s st=%d matching=%.3f pos=(%.3f,%.3f,%.1fdeg) health=%d "
-        "relocating=%d planar=%d",
+        "relocating=%d planar=%d prior=(%s%.3f,%.3f)",
         modeName(slam_mode_), static_cast<int>(engine_.localizationStatus()),
         static_cast<double>(matching_degree), p.x, p.y, p.yaw * 57.2957795,
         static_cast<int>(health), relocating_.load() ? 1 : 0,
-        planar_constraint_enabled_ ? 1 : 0);
+        planar_constraint_enabled_ ? 1 : 0, has_prior ? "" : "n/a ",
+        has_prior ? prior_xy : 0.0, has_prior ? prior_yaw : 0.0);
 }
 
 void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) {
@@ -386,6 +389,13 @@ void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) 
     } else {
         double sxy = loc_sigma_xy_;
         double syaw = loc_sigma_yaw_;
+        // 估计器给的运动先验不确定度 (打滑时为 odom 降权后膨胀的值).
+        // 与分档值取大: 先验越不确定, 对外协方差越保守.
+        double prior_xy = 0.0, prior_yaw = 0.0;
+        if (engine_.priorUncertainty(prior_xy, prior_yaw)) {
+            sxy = std::max(sxy, prior_xy);
+            syaw = std::max(syaw, prior_yaw);
+        }
         if (health == LocState::HEALTH_DEGRADED) { sxy *= 3.0; syaw *= 3.0; }
         if (health == LocState::HEALTH_LOST || health == LocState::HEALTH_INIT) {
             sxy = 1.0e3;

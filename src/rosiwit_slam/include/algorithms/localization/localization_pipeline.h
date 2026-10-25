@@ -41,6 +41,8 @@ public:
     Status getStatus() override;
     bool getPose(PoseStamped& out) override;
     bool getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
+    /// 先验不确定度 (米/弧度): 由运动先验的打滑权重推出.
+    bool priorUncertainty(double& xy_sigma, double& yaw_sigma) const override;
     bool predictAt(double t, PoseStamped& out) override;
     void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
 

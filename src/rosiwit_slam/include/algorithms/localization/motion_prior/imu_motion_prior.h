@@ -30,6 +30,8 @@ public:
     /// 先验的等效不确定度 (米/弧度), 供下游按方差加权 (例如写入定位协方差).
     double transSigma() const { return m_trans_sigma; }
     double yawSigma() const { return m_yaw_sigma; }
+    double priorTransSigma() const override { return m_trans_sigma; }
+    double priorYawSigma() const override { return m_yaw_sigma; }
     /// 当前样本被判为打滑 (诊断用)
     bool odomSlip() const { return m_odom_slip; }
 

@@ -35,6 +35,12 @@ public:
     /// 默认空实现: 不支持全局检索的实现忽略即可。
     virtual void requestRelocalization() {}
 
+    /// 运动先验的等效不确定度 (米/弧度). false = 实现未提供.
+    /// 供上层把"估计器的不确定度"写进对外契约, 而不是用按状态分档的启发值.
+    virtual bool priorUncertainty(double& /*xy_sigma*/, double& /*yaw_sigma*/) const {
+        return false;
+    }
+
     /// 位姿 + 协方差 (order: [rot(3), trans(3)]), 供下游(Nav2 等)使用.
     /// 默认实现忽略协方差, 返回 getPose.
     virtual bool getPoseWithCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& /*cov*/) {

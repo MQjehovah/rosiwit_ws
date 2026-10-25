@@ -110,6 +110,8 @@ public:
     bool getHighRatePose(double t, PoseStamped& out) override;
     bool getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) override;
     double getMatchingDegree() const override;    void onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) override;
+    /// 运动先验的等效不确定度 (米/弧度)
+    bool priorUncertainty(double& xy_sigma, double& yaw_sigma) const override;
 
     PipelineMode getMode() const { return m_mode.load(); }
     void setMode(PipelineMode mode);

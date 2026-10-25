@@ -31,6 +31,11 @@ public:
     virtual void onMatch(const PoseStamped& pose) = 0;
 
     virtual void configure(const MotionPriorConfig& /*cfg*/) {}
+
+    /// 先验的等效不确定度 (米 / 弧度). <0 表示不可用 (实现未提供).
+    /// 下游按方差加权, 而不是"用/不用"地二选一.
+    virtual double priorTransSigma() const { return -1.0; }
+    virtual double priorYawSigma() const { return -1.0; }
 };
 
 } // namespace rosiwit_slam

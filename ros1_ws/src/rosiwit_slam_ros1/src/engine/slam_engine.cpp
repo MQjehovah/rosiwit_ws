@@ -1045,6 +1045,10 @@ rosiwit_slam::ILocalization::Status SlamEngine::localizationStatus() const {
     return algo_raw_ ? algo_raw_->localizationStatus() : rosiwit_slam::ILocalization::LOST;
 }
 
+bool SlamEngine::priorUncertainty(double& xy_sigma, double& yaw_sigma) const {
+    return algo_raw_ ? algo_raw_->priorUncertainty(xy_sigma, yaw_sigma) : false;
+}
+
 void SlamEngine::addTickHook(std::function<void()> hook) {
     if (hook) tick_hooks_.push_back(std::move(hook));
 }

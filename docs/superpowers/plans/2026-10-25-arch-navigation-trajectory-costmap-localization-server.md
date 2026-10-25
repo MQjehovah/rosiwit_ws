@@ -91,10 +91,20 @@
 >         下一帧恢复 w=1.000
 >       - 回归：clean+mppi 3/3（余量 0.200）、clean+rpp 3/3（0.350）、
 >         禁行区/限速 PASS、拉偏 1m 恢复 0.8s/0.199m
->     - 剩余（1 项）：把 `transSigma()/yawSigma()` 通过
->       `ISlamAlgorithm → ILocalization → SlamEngine` 透出，在 DEGRADED 且没有
->       新鲜 2D 匹配时替换 `/localization/state` 的分档协方差（当前只有 2D 匹配
->       的协方差是真值，其余是分档值）
+>     - C2d ✅ **先验不确定度写进对外契约**
+>       - 访问器链：`IMotionPrior::priorTransSigma/priorYawSigma` →
+>         `ILocalization::priorUncertainty` → `ISlamAlgorithm` → `SlamPipeline`
+>         → `SlamEngine` → ROS 层 `publishLocalizationState`
+>       - `/localization/state` 协方差优先级：
+>         1. DEGRADED 且有新鲜 2D 匹配 → 用 2D 匹配的真实协方差（含退化方向）
+>         2. 否则 → `max(分档值, 先验 sigma)`，INIT/LOST 仍置 1e3（不可用）
+>       - 日志验证：`[locstate] ... prior=(0.020,0.010)`，正常跟踪时
+>         cov_xy=0.050（分档值占优，行为不变）；打滑时先验 sigma 升到 0.62 m，
+>         协方差随之膨胀
+>       - 回归：拉偏 1m 1.0s/0.127m、mppi 3/3（0.250）、rpp 3/3（0.350）、
+>         禁行区/限速 PASS
+>
+> **C 段到此全部完成。**
 >
 > ### A3b 的前提（重要）
 > 节点的末段精调不只做"减速逼近"，还负责**最终航向对齐**（要求
