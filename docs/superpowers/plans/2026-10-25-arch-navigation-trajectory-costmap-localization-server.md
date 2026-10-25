@@ -115,6 +115,34 @@
 >
 > **C 段到此全部完成。**
 >
+> ### 本轮补充验证（语义统一后的回归缺口）
+> | 项 | 结果 |
+> |---|---|
+> | 恢复流程（反向逃逸） | ✅ 目标盖在禁行区 -> `recovery 1/2 planned reverse escape (11 pts)` -> 实际倒车 `cmd_v=-0.15`（4 帧）-> 清除后同一目标 SUCCEEDED |
+> | 覆盖清洁（navi_cmd=20） | ⚠️ **能跑通但完成率不达标**（详见下） |
+>
+> **覆盖清洁的既有问题（与代价地图语义无关）**：
+> - 现象：`tracking_path_result=1`、行能规划、面积能累计（0.84~1.14 m²），
+>   但覆盖率只到 30~80%，最后 `markAllUncoveredBlocked` 收尾；日志显示
+>   **同一行被反复规划**（`row=(1.04,-0.34)->(-0.61,-0.34)` 连续 3~7 次，
+>   每次间隔 3~4 s）
+> - 成因 1（已修）：`updateDynamicObstacles()` 原来喂的是**全部激光点**，
+>   等于把静态墙标成动态障碍；而 `markDisk()` 用 `skip_dynamic=true` 记录覆盖，
+>   导致靠墙格子永远标记不成"已覆盖"。现在只喂 `tracker_.tracked(true)`
+>   的真实动态目标。
+> - 成因 2（已缓解）：行端点贴着多边形边界时，approach 目标会被 A* 判成
+>   `Goal in obstacle`，于是退回 "direct row"（从 0.8m 外的边界开始跟）。
+>   现在把行两端沿行方向内缩 0.15m（sweep_width/2 的清扫半径本来能盖住）。
+> - 成因 3（**未修**）：行端点的**可达性**没有用 coverage grid 的 `passable`
+>   来校验。区域比可通行走廊宽时（如走廊净宽 0.85m、机器半宽 0.33m，中心只能
+>   在 ±0.1m 内），行会落到走不到的格子上 → 永远规划同一行 → 直到全局重试超时。
+>   下一步：行选择按 `passable` 过滤 + 单行超时只 `markUnreachable(该行)` 而不是
+>   整块放弃（core 已有 `markUnreachable` 接口）。
+> - 另：原 `[coverage] done` 日志打印的 `covered` 是另一个变量（恒为 0），
+>   已改成 `stats.covered * res²`。
+> - 回归脚本：`scripts/coverage_check.py`（可用参数指定多边形）与
+>   `scripts/recovery_check.py`。
+>
 > ### A3b 的前提（重要）
 > 节点的末段精调不只做"减速逼近"，还负责**最终航向对齐**（要求
 > `|yaw - goal_yaw| < 0.2`）。轨迹目前只保证末段 v=0，没有"对齐目标航向"这一步。

@@ -1860,13 +1860,15 @@ private:
 
     if (coverage_last_dynamic_.isZero() ||
         (now - coverage_last_dynamic_).toSec() >= 0.2) {
+      // 只把**真正在动的目标**当动态障碍. 以前这里喂的是全部激光点, 等于把
+      // 静态墙也标成 dynamic_; 而 markDisk() 用 skip_dynamic=true 记录覆盖,
+      // 于是靠墙的格子永远标记不成 "已覆盖" -> 同一行反复规划, 最后到
+      // 81% 就放弃 (2026-10-25 实测: 同一行被规划 3 次).
       std::vector<core::Pose2D> dynamic_points;
-      dynamic_points.reserve(laser_points_.size());
-      for (const auto & p : laser_points_) {
-        if (std::hypot(p.x - pose.x, p.y - pose.y) < safety_self_filter_radius_) {
-          continue;  // 过滤自身点
+      if (tracking_enabled_) {
+        for (const auto & t : tracker_.tracked(true)) {
+          dynamic_points.emplace_back(t.x, t.y, 0.0);
         }
-        dynamic_points.emplace_back(p.x, p.y, 0.0);
       }
       coverage_grid_.updateDynamicObstacles(dynamic_points);
       coverage_last_dynamic_ = now;
@@ -1985,6 +1987,25 @@ private:
     }
     coverage_target_ = segment.back();
     coverage_has_target_ = true;
+
+    // 行端点贴着多边形边界时, A* 会把 approach 目标判成 Goal in obstacle
+    // (边界/膨胀带), 然后退回 "direct row" —— 路径从 0.8m 外的边界开始跟,
+    // 控制器跟不好, 同一行会被反复规划 (实测 3 次) 最后只到 60~80%.
+    // 这里把两端沿行方向内缩一点: 端点落回可通行栅格, 而 sweep_width/2 的
+    // 清扫半径本来就能覆盖这 0.15m.
+    if (segment.size() >= 2) {
+      const double inset = std::max(0.15, coverage_blocked_inflation_);
+      const double len = std::hypot(segment.back().x - segment.front().x,
+                                    segment.back().y - segment.front().y);
+      if (len > 3.0 * inset) {
+        const double ux = (segment.back().x - segment.front().x) / len;
+        const double uy = (segment.back().y - segment.front().y) / len;
+        segment.front().x += ux * inset;
+        segment.front().y += uy * inset;
+        segment.back().x -= ux * inset;
+        segment.back().y -= uy * inset;
+      }
+    }
 
     core::Path path;
     if (pose.distanceTo(segment.front()) > 0.8) {
@@ -2165,10 +2186,11 @@ private:
     if (coverage_controller_) { coverage_controller_->reset(); }
     setGoalStatus("SUCCEEDED");
     finishTask(movebase::RESULT_SUCCESS);
+    const double res = current_map_ ? current_map_->info.resolution : 0.05;
     ROS_INFO("[coverage] done: rate=%.3f covered=%.2f m2 blocked=%.2f m2",
-             stats.coverageRate(), last_clean_area_,
-             stats.blocked * current_map_->info.resolution *
-             current_map_->info.resolution);
+             stats.coverageRate(),
+             static_cast<double>(stats.covered) * res * res,
+             static_cast<double>(stats.blocked) * res * res);
   }
 
   void stopCoverageInternal()
