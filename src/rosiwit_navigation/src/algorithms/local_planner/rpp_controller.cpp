@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <iostream>
 
 namespace rosiwit_navigation
 {
@@ -172,6 +173,20 @@ core::VelocityCommand RppController::computeVelocityCommand(
   const double v_des = dir * v_ref;
   const double v = std::max(last_v_ - max_ax_ * 0.1,
                             std::min(last_v_ + max_ax_ * 0.1, v_des));
+  {
+    // [RPPProbe] 倒车段为什么不倒车: 打印方向标记/索引/航向误差/速度
+    static int probe_n = 0;
+    if (++probe_n % 50 == 0) {   // 10Hz 控制下约 0.2Hz
+      std::cout << "[RPPProbe] pts=" << path_.points.size()
+                << " idx=" << idx_ << " dir=" << dir
+                << " vx=" << path_.points[idx_].velocity_x
+                << " e_theta_deg=" << e_theta * 57.2957795
+                << " e_y=" << e_y
+                << " v_ref=" << v_ref << " v=" << v
+                << " pose_yaw_deg=" << pose.theta * 57.2957795
+                << " ref_yaw_deg=" << heading_ref * 57.2957795 << std::endl;
+    }
+  }
   const double w_ff = (L > 1e-3) ? 2.0 * v * std::sin(e_theta) / L : 0.0;
   const double w_des = std::max(-max_vw_, std::min(max_vw_, w_ff + 0.8 * e_y * v));
   const double w = std::max(last_w_ - max_aw_ * 0.1,

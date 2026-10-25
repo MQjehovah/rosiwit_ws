@@ -6,6 +6,15 @@
 >   - clean+mppi 3/3；clean+rpp 3/3（footprint 余量 0.350m）
 > - A3 MPPI 消费轨迹（speed critic 用 v_ref）：✅ `ad36545`
 >   - clean+mppi 3/3（余量 0.250m）
+> - A4 `free,rpp` 多方向（含倒车段）回归：✅
+>   - 之前从未验证过；这次实测通过：路径 `reverse=27`，RPP 输出
+>     `dir=-1 vx=-1 v=-0.66`，14 帧倒车，三腿全部到达
+>   - 脚本固化到 `ros1_ws/src/rosiwit_navigation_ros1/scripts/free_rpp_check.py`
+>   - **边界**：末段 0.6m 以内由节点 precision-approach 接管（只前进），
+>     所以"距离 <0.6m 的倒车目标"会掉头前进，不是 bug；测试目标必须 >0.6m
+>   - 顺带发现：`RppController::setPath` 在切换控制器时用的是
+>     `toCorePath(ROS Path)`（丢方向字段），只影响"运行中切控制器且已有路径"的
+>     瞬间；新规划会立刻用核心路径覆盖，因此实测无影响
 > - A3b 删节点"末段两段式精调"：**取消（不需要）**
 >   实测确认：Hybrid 路径末点航向 = 目标航向（goal yaw），节点末段精调就是"最终
 >   航向对齐 + 微调"的执行体；轨迹末段只保证 v=0，不包含对齐逻辑。保留它比在
