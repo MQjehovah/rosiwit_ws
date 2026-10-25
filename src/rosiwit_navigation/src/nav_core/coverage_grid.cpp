@@ -753,6 +753,16 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
   const int r_lo = rows_lo + row_margin;
   const int r_hi = rows_hi - row_margin;
 
+  // 半圆掉头 (turn_radius>0) 需要行端留出转弯余量 R, 否则弧线会顶到边界/墙上.
+  // 差速轮原地转 (turn_radius==0) 不需要, 保持旧行为.
+  const int col_margin = (config_.turn_radius > 0.0)
+    ? std::max(0, static_cast<int>(std::lround(
+        config_.turn_radius / std::max(1e-6, info_.resolution))))
+    : 0;
+  const int c_lo = cols_lo + col_margin;
+  const int c_hi = cols_hi - col_margin;
+  if (c_hi < c_lo) { return false; }
+
   // ---- 每行取最长的一段"可达且可通行"区间 ----
   struct Swath { int row; int lo; int hi; double dist; };
   std::vector<Swath> swaths;
@@ -765,7 +775,7 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
     int best_lo = -1;
     int best_hi = -1;
     int best_len = 0;
-    for (int c = cols_lo; c <= cols_hi; ++c) {
+    for (int c = c_lo; c <= c_hi; ++c) {
       const int mx = scan_vertical_ ? r : c;
       const int my = scan_vertical_ ? c : r;
       const int idx = index(mx, my);
@@ -773,7 +783,7 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
       if (ok) {
         if (run_lo < 0) { run_lo = c; }
       }
-      if ((!ok || c == cols_hi) && run_lo >= 0) {
+      if ((!ok || c == c_hi) && run_lo >= 0) {
         const int run_hi = ok ? c : c - 1;
         if (run_hi - run_lo > best_len) {
           best_len = run_hi - run_lo;
@@ -800,7 +810,9 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
                                  scan_vertical_ ? best_lo : r);
     const Pose2D b = cellToWorld(scan_vertical_ ? r : best_hi,
                                  scan_vertical_ ? best_hi : r);
-    s.dist = std::min(pose.distanceTo(a), pose.distanceTo(b));
+    // 排序用"到行线的垂距", 不是到行端点的距离. 用端点距离时, 一条 5m 长的行
+    // 的两个端点离机器人都很远, 会把它误判成"远行", 起点跑到区域另一头.
+    s.dist = scan_vertical_ ? std::fabs(pose.x - a.x) : std::fabs(pose.y - a.y);
     if (best_len * info_.resolution >= 0.30) {
       swaths.push_back(s);
     } else if (!have_fallback || best_len > (fallback.hi - fallback.lo)) {
@@ -813,16 +825,16 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
     swaths.push_back(fallback);   // 只剩碎行: 也走一趟, 否则永远结束不了
   }
 
-  // ---- 排序: 从离机器人最近的那一行开始, 之后按行序, 奇偶行反向 (boustrophedon) ----
-  size_t start = 0;
-  for (size_t i = 1; i < swaths.size(); ++i) {
-    if (swaths[i].dist < swaths[start].dist) { start = i; }
+  // ---- 排序: **单调**扫, 从离机器人近的那一端开始 ----
+  // 以前是"从离机器人最近的行开始, 再按行序绕回另一端", 会产生横跨已扫行的
+  // 长距离回退 (3x2m 区域实测多走 1.5m: 0.46->0.96->1.46 再跳回 -0.04).
+  // 规则区域的正确顺序是: 由近到远单调推进, 奇偶行反向.
+  {
+    if (swaths.front().dist > swaths.back().dist) {
+      std::reverse(swaths.begin(), swaths.end());
+    }
   }
-  std::vector<Swath> ordered;
-  ordered.reserve(swaths.size());
-  for (size_t k = 0; k < swaths.size(); ++k) {
-    ordered.push_back(swaths[(start + k) % swaths.size()]);
-  }
+  std::vector<Swath> ordered = swaths;
 
   // ---- 组装: 原地转点 + 直线连接 + 行段 ----
   const double res = std::max(1e-3, info_.resolution);
@@ -841,33 +853,85 @@ bool CoverageGrid::buildRoute(const Pose2D & pose, std::vector<Pose2D> & route) 
   };
 
   Pose2D prev = pose;
-  bool first = true;
+  double prev_heading = pose.theta;
+
+  // 半圆掉头 (turn_radius>0): 用半径 R = |横向位移|/2 的圆弧, 从行末直接
+  // 接到下一行行首, 朝向转 180°. 直线段与圆弧相切, 控制器可以不停车跟踪.
+  // 只有"位移几乎垂直于行方向"时才用弧 (行被障碍截断/行长不同 -> 退回原地转).
+  auto appendArcTurn = [&](const Pose2D & from_pose, const Pose2D & to_pose,
+                           double h0) -> bool {
+    const double r_max = config_.turn_radius;
+    if (!(r_max > 0.0)) { return false; }
+    const double dx = to_pose.x - from_pose.x;
+    const double dy = to_pose.y - from_pose.y;
+    const double along = dx * std::cos(h0) + dy * std::sin(h0);
+    const double lat = -dx * std::sin(h0) + dy * std::cos(h0);   // 左正
+    if (std::fabs(along) > 0.30) { return false; }
+    const double R = 0.5 * std::fabs(lat);
+    if (R < 0.10 || R > r_max + 1e-6) { return false; }
+    const double s = (lat > 0.0) ? 1.0 : -1.0;   // +1 左转(逆时针) / -1 右转
+    const double cx = from_pose.x + s * (-std::sin(h0)) * R;
+    const double cy = from_pose.y + s * (std::cos(h0)) * R;
+    const double a0 = std::atan2(from_pose.y - cy, from_pose.x - cx);
+    const double sweep = s * M_PI;
+    const int steps = std::max(6, static_cast<int>(
+      std::ceil(std::fabs(sweep) * R / res)));
+    for (int i = 1; i <= steps; ++i) {
+      const double t = static_cast<double>(i) / static_cast<double>(steps);
+      const double a = a0 + sweep * t;
+      Pose2D p;
+      p.x = cx + R * std::cos(a);
+      p.y = cy + R * std::sin(a);
+      p.theta = std::remainder(a + s * (M_PI / 2.0), 2.0 * M_PI);
+      route.push_back(p);
+    }
+    return true;
+  };
+
   for (size_t k = 0; k < ordered.size(); ++k) {
     const Swath & s = ordered[k];
     const Pose2D a = cellToWorld(scan_vertical_ ? s.row : s.lo,
                                  scan_vertical_ ? s.lo : s.row);
     const Pose2D b = cellToWorld(scan_vertical_ ? s.row : s.hi,
                                  scan_vertical_ ? s.hi : s.row);
-    const bool forward = (k % 2 == 0);
-    Pose2D from = forward ? a : b;
-    Pose2D to = forward ? b : a;
-    if (first && pose.distanceTo(b) < pose.distanceTo(a)) {
-      std::swap(from, to);
+    // 方向: **永远从离上一段终点更近的那一端进** (第 0 行用机器人当前位置).
+    // 以前用 k%2 + 首行"离机器人近的一端"翻转, 两者会打架: 首行被翻成从右往左,
+    // 第 1 行仍按 k%2 从右端进 -> 有一行要从左端横穿整个区域回到右端 (实测
+    // 5.07m 的对角线 + 174° 原地转). 用"就近端点"既天然交替, 又能容忍
+    // 被障碍截短的行的长度不一致.
+    const Pose2D ref = (k == 0) ? pose : prev;
+    Pose2D from = a;
+    Pose2D to = b;
+    if (ref.distanceTo(b) < ref.distanceTo(a)) {
+      from = b;
+      to = a;
     }
-    first = false;
 
-    // 1) 原地转到朝 from 的方向 (位置不变的点 = 旋转标记)
-    const double bearing = std::atan2(from.y - prev.y, from.x - prev.x);
-    Pose2D turn = prev;
-    turn.theta = bearing;
-    route.push_back(turn);
-    // 2) 直线开到行首
-    if (std::hypot(from.x - prev.x, from.y - prev.y) > res) {
-      appendLine(prev, from);
+
+    // 1) 行间连接: 优先半圆弧掉头, 不行再退回"原地转 + 直线"
+    bool arc_done = false;
+    if (k > 0) { arc_done = appendArcTurn(prev, from, prev_heading); }
+    if (arc_done) {
+      // 弧线终点与行首可能差一个格子 (~0.05m): 补一小段直线对齐
+      const Pose2D end = route.back();
+      if (std::hypot(from.x - end.x, from.y - end.y) > 0.5 * res) {
+        appendLine(end, from);
+      }
+    } else {
+      // 原地转到朝 from 的方向 (位置不变的点 = 旋转标记)
+      const double bearing = std::atan2(from.y - prev.y, from.x - prev.x);
+      Pose2D turn = prev;
+      turn.theta = bearing;
+      route.push_back(turn);
+      // 直线开到行首
+      if (std::hypot(from.x - prev.x, from.y - prev.y) > res) {
+        appendLine(prev, from);
+      }
     }
-    // 3) 走完这一行
+    // 2) 走完这一行
     appendLine(from, to);
     prev = to;
+    prev_heading = std::atan2(to.y - from.y, to.x - from.x);
   }
 
   // 末尾补一个"原地转点", 朝向保持 (让最后一段能被 isGoalReached 正确判到)

@@ -400,6 +400,64 @@ TF:      map -> odom（唯一发布者）
 
 ---
 
+## 覆盖路径规划（地图上的规划结果 + 三个结构性问题）
+
+离线工具（不跑仿真/控制）：
+- `src/rosiwit_navigation/tools/coverage_route_dump.cpp`：读 PGM + 多边形 → `CoverageGrid::buildRoute` → CSV
+  （新增：任意凹/凸多边形文件、`turn_radius`、起点可指定）
+- `plan_coverage.py`（临时脚本）：按"车心 + sweep/2 圆盘"离线算规划路线的覆盖率
+- `render_route_plan.py`：把路线画在地图上（蓝=直行行段，橙=圆弧，红圈=原地转，绿=进场）
+
+### 转弯方式：半圆弧 vs 原地转（实测，离线）
+
+| 区域 | 方式 | 路径 | 原地转次数 | 规划覆盖率 |
+|---|---|---|---|---|
+| 5.55×2.85 m 真实房间（`reg_roomA`） | 原地转 90°+横移+90° | 32.36 m | 5 | 89.5% |
+| 同上 | 半圆弧 R=0.25 | **31.04 m** | **1** | 89.1% |
+| 3×2 m | 原地转 | 14.93 m | 4 | 100% |
+| 3×2 m | 半圆弧 | 15.56 m | 2 | 98.8% |
+
+- 半圆半径由几何唯一确定：`R = 行距/2 = sweep/2 = 0.25 m`，弧长 `πR = 0.785 m`。
+- 角速度上限决定转弯速度：`ω = v/R ≤ 0.8` → 转弯段 `v ≤ 0.20 m/s`。
+- 单次掉头耗时：圆弧 `πR/v = 3.9 s`；原地转 `2×90°/0.8 = 3.9 s` + 横移 `0.45/0.25 = 1.8 s ≈ 5.7 s`，
+  且原地转有两次零速尖点（控制器要停车再起步）。
+- 圆弧必须吃行端外侧 R 的余量（进 headland），因此圆弧版两侧各内缩 R，这正是 roomA 覆盖率
+  比原地转低 0.4% 的原因 —— **圆弧要配 headland 环**才不吃亏。
+- 用法：`CoverageConfig::turn_radius = 0`（默认，行为不变）/ `0.25`（半圆弧）。仿真 yaml 尚未接线。
+
+### 顺带修掉的规划 bug（这就是"路径很丑"的根因）
+
+1. **行方向与交替逻辑打架**：第 0 行按"离机器人近的端点"翻转了方向，第 1 行仍按 `k%2` 从另一端进 →
+   每两行就要横穿整个区域一次（roomA 实测 `5.07 m` 对角线 + `174°` 原地转）。
+   改为**永远从离上一段终点最近的端点进**（第 0 行用机器人位置），天然交替且能容忍行长不一致。
+2. **排序用"到行端点的距离"**：5 m 长的行两个端点都远，会被误判成"远行"，起点跑到区域另一头。
+   改为**到行线的垂距**（`|pose.y - row_y|`）。
+
+### 地图上暴露的三个结构性问题（当前实现的天花板）
+
+| 问题 | 现象（离线规划覆盖率） | 正确做法 |
+|---|---|---|
+| **没有 headland 环** | roomA 89.5%：顶部 0.34 m 条带（1.67 m²）一条行线都不经过 | fields2cover 的 headland swath / opennav 的 perimeter pass：先沿边界内缩 `sweep/2` 走一圈，再走内部行线 |
+| **每行只取最长的一段** | 有家具的房间只有 **49.9%**：障碍另一侧的整块被丢掉（一行被切成两段，只留长的那段） | 行级 swath splitting：一行的每个 `passable` run 都成段，再按蛇形串起来；或直接做单元分解 |
+| **bbox 扫描遇到凹区域** | L 形 92.1%：长短行交替（8.35 m 臂 + 2.55 m 房间），行间来回跳 | boustrophedon 单元分解：沿障碍/凹角把区域切成若干矩形单元，每个单元按自己长边扫，单元间用最近端点连 |
+
+结论：**圆弧是对的**（同样覆盖、路径更短、少 4 次原地转、无零速尖点），但要把覆盖率做上去，
+必须按"headland 环 → 单元分解 → 行段切分"三步补齐，圆弧只是行间连接的一种。
+
+复现：
+```bash
+# 规划 (离线, 不需要 ROS/sim)
+g++ -O2 -std=c++17 -I include -I src -I /usr/include/eigen3 \
+    tools/coverage_route_dump.cpp src/nav_core/coverage_grid.cpp -o /tmp/covdump
+/tmp/covdump docs/maps/house_sim/map.pgm /tmp/r.csv /tmp/reg_roomA.txt 0.5 0.31 0.25
+python3 plan_coverage.py /tmp/r.csv /tmp/reg_roomA.txt 0.5 0.31
+```
+
+证据：`docs/artifacts/plan_map_roomA_{rot,arc}.png`、`plan_map_roomA_{rot,arc}_cov.png`、
+`plan_map_L_arc[_cov].png`、`plan_map_clutter_arc[_cov].png`、`plan_3x2_{rot,arc}.png`。
+
+---
+
 ## 排期建议
 
 | 步骤 | 预估 | 产出 | 回滚 |
