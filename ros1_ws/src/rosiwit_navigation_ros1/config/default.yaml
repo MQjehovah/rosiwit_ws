@@ -64,8 +64,13 @@ min_lookahead_distance: 0.3
 max_lookahead_distance: 0.9
 
 # 规划安全距离 (m)
-# robot_radius = 实车 g_min_safe (硬禁区); inflation_radius = g_max_safe 的等效膨胀.
-# 实车 footprint x[-0.25,0.55] y[-0.33,0.33] 由 safety_footprint 表达.
+# 注意: robot_radius 只是**栅格 A* / 无轮廓时的圆模型兜底**, 不是车体几何:
+#   内切圆 0.250 (原点到各边最小) / 外接圆 0.585 (原点到顶点最大) / 半宽 0.330
+#   旧的 0.39 是 xz 平台 g_min_safe(硬禁区) 常数, 落在两者之间 —— 既让
+#   0.8m 门洞只剩 0.02m 余量, 又对车头(前伸 0.55)不够保守.
+#   真实约束由 footprint + Hybrid A* / 控制器 footprint 检查保证;
+#   这里取半宽 0.33, 让 A* 兜底时能过 0.8m 门洞 (单边真实余量 0.07m).
+# inflation_radius = g_max_safe 的等效膨胀.
 robot_radius: 0.33
 # 规划器/控制器共用车体轮廓; Hybrid A* 使用它, A* 只使用 robot_radius.
 footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]

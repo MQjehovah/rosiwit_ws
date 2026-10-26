@@ -446,6 +446,34 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
     // 车身排除区 = 真实 footprint 的包围盒外扩 safety_body_margin.
     // 只排除轮廓内的点, 车外近处障碍全部保留 -> STOP 区才可能被触发.
+    // 车体圆模型自检: 内切(原点->边最小) / 外接(原点->顶点最大) / 半宽.
+    // robot_radius 只是 A* 兜底用的圆模型, 与真实轮廓差太多会分别导致
+    // "走廊被判死" 或 "车头方向不够保守".
+    {
+      double inscribed = 1e9;
+      double circum = 0.0;
+      double half_w = 0.0;
+      for (size_t i = 0; i < configured_footprint_.size(); ++i) {
+        const auto & a = configured_footprint_[i];
+        const auto & b = configured_footprint_[(i + 1) % configured_footprint_.size()];
+        const double ex = b.first - a.first;
+        const double ey = b.second - a.second;
+        const double l2 = ex * ex + ey * ey;
+        double tp = l2 > 1e-12 ? -(a.first * ex + a.second * ey) / l2 : 0.0;
+        tp = std::max(0.0, std::min(1.0, tp));
+        inscribed = std::min(inscribed, std::hypot(a.first + tp * ex, a.second + tp * ey));
+        circum = std::max(circum, std::hypot(a.first, a.second));
+        half_w = std::max(half_w, std::fabs(a.second));
+      }
+      ROS_INFO("[nav] footprint 圆模型: 内切 %.3f / 外接 %.3f / 半宽 %.3f m; "
+               "robot_radius=%.3f (A* 兜底用)", inscribed, circum, half_w, robot_radius_);
+      if (robot_radius_ + 1e-6 < inscribed) {
+        ROS_WARN("[nav] robot_radius < 内切圆: 圆模型会在车体投影内放行, 依赖 footprint 检查兜底");
+      } else if (robot_radius_ > half_w + 0.05) {
+        ROS_WARN("[nav] robot_radius(%.3f) 明显大于车体半宽(%.3f): 0.8m 级门洞可能被 A* 判死",
+                 robot_radius_, half_w);
+      }
+    }
     buildBodyPolygon();
     configureSafetyLayer();
     {

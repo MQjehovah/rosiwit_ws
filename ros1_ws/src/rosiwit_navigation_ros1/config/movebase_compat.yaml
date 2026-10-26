@@ -97,6 +97,10 @@ min_lookahead_distance: 0.3
 max_lookahead_distance: 0.9
 
 # ---- 规划安全距离 (实车 g_min_safe=0.39 / g_max_safe 等效 0.62) ----
+# 注意: robot_radius 只是**栅格 A* / 无轮廓时的圆模型兜底**, 不是车体几何:
+#   内切圆 0.250 (原点到各边最小) / 外接圆 0.585 (原点到顶点最大) / 半宽 0.330;
+#   旧的 0.39 是 xz 平台 g_min_safe 常数, 落在两者之间 —— 0.8m 门洞只剩 0.02m 余量.
+#   真实约束由 footprint + Hybrid A* / 控制器 footprint 检查保证.
 robot_radius: 0.33
 # 规划器/控制器共用车体轮廓 (x,y,...), 与 safety_footprint 同一组实车点.
 # Hybrid A* 使用此 footprint; A* 只使用 robot_radius 圆形模型.
