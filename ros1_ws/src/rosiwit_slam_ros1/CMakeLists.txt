@@ -57,6 +57,12 @@ endif()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam
                  ${CMAKE_CURRENT_BINARY_DIR}/rosiwit_slam_core)
 
+# ==================== 通用并发基础层 (ROS 无关, 源码共享) ====================
+#   Channel / CancelToken / Thread / PeriodicThread / ThreadPool / SnapshotSlot
+#   约定: 业务层不创建线程, 只声明 lane 与任务; 详见 src/rosiwit_common/README.md
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_common
+                 ${CMAKE_CURRENT_BINARY_DIR}/rosiwit_common)
+
 # ==================== 接口层静态库 (便于 gtest 直接链接) ====================
 set(ROSIWIT_ROS1_LIB_SOURCES
     src/config/config.cpp
@@ -107,6 +113,14 @@ install(TARGETS map_cleanup RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION
 
 # ==================== 测试 ====================
 if(CATKIN_ENABLE_TESTING)
+    # ---- rosiwit_common 基础层单测 ----
+    set(COMMON_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_common/test)
+    foreach(ctest_name test_channel test_executor test_thread test_snapshot)
+        catkin_add_gtest(${ctest_name} ${COMMON_TEST_DIR}/${ctest_name}.cpp)
+        if(TARGET ${ctest_name})
+            target_link_libraries(${ctest_name} rosiwit_common)
+        endif()
+    endforeach()
     catkin_add_gtest(test_config test/test_config.cpp)
     if(TARGET test_config)
         target_link_libraries(test_config rosiwit_slam_ros1_lib)

@@ -308,3 +308,205 @@ stateDiagram-v2
 | 2D 平面匹配 | `.../localization/planar_scan_matcher.cpp` |
 | 地图 IO | `src/interface/io/{xzmap_writer,xzmap_reader,map_adapter}.cpp`, `.../grid_map/grid_map_io.cpp` |
 | 核心单测（含未注册的 886 行） | `test/*.cpp` |
+
+
+---
+
+# 10. 目标架构（重构目标，2026-10-26 定）
+
+## 10.1 分层与所有权（修正版：执行资源不下沉到算法里）
+
+**关键纠正**：`WorkerPool` 是**基础设施**，不是算法组件。算法**不创建、不拥有、也不知道**线程池；
+它只表达"这件事要异步做、可取消"，由组装根注入执行器并决定策略。
+
+```
+L0 基础设施 (ROS-free，谁都不依赖)
+   TaskScheduler(pool) · CancelToken · Channel<T>(有界队列) · Clock
+        ▲ 被注入（窄接口）
+L1 算法域 (ROS-free)
+   SlamAlgorithm = FrontEnd + BackEnd + MapStore + GridBuilder + RelocBuilder
+        ▲ 门面调用（线程安全）
+L2 ROS 适配
+   SlamRosInterface : topic/service/TF 序列化，只读快照
+L3 组装根
+   SlamRosNode / main : 创建并注入 L0→L1→L2，负责生命周期与关停顺序
+```
+
+| 对象 | 属于 | 谁创建 | 谁拥有 | 知道线程吗 |
+|---|---|---|---|---|
+| `TaskScheduler` | L0 基础设施 | **组装根** | 组装根（生命周期最长） | 是（它就是） |
+| `Channel<T>` | L0 基础设施 | 需要的一方（域内） | 使用它的域对象 | 是（队列） |
+| `FrontEnd` / `BackEnd` | L1 域 | `SlamAlgorithm` | `SlamAlgorithm` | 是（**自带专线程**） |
+| `MapStore` / `GridBuilder` / `RelocBuilder` | L1 域 | `SlamAlgorithm` | `SlamAlgorithm` | **否**：只持有 `IJobRunner*` |
+| `SlamRosInterface` | L2 适配 | 组装根 | 组装根 | 否 |
+
+### 注入的窄接口（不是直接把 pool 丢进去）
+
+```cpp
+// L0: 只暴露"提交可取消任务 + 完成回调"，不暴露线程数/队列/Stop 细节
+class IJobRunner {
+public:
+  using JobId = uint64_t;
+  virtual ~IJobRunner() = default;
+  // 返回 kInvalidJobId = 拒绝（池满/正在停机），调用方负责降级
+  virtual JobId submit(std::string name, JobClass cls,
+                       std::function<void(CancelToken)> job,
+                       std::function<void(JobResult)> done) = 0;
+  virtual bool cancel(JobId id) = 0;
+};
+
+enum class JobClass {
+  kIoWriter,   // 存图/写 xzmap+pgm —— **全局串行**（保证地图文件不并发写）
+  kIoReader,   // 载图/预览 PGM   —— 串行
+  kCpuBurst,   // 实时栅格、质量体检、缩略图 —— 可并行
+  kFeatureBuild // fpfh/scan_context 建库 —— 独占 1 槽，低优先级
+};
+```
+
+`JobClass` 放在 L0：**并发策略属于执行资源，不属于算法**。域代码只声明"这是写盘/读盘/CPU 突发"，
+由 `TaskScheduler` 决定几条 lane、能不能并行、要不要限流。域代码里不出现 `std::thread`、
+`std::mutex` 保护池、`std::async`。
+
+### 什么用专线程、什么进池
+
+| 判据 | 归属 | 例子 |
+|---|---|---|
+| 单消费者 + 严格有序 + 有可变状态 + 延迟敏感 | **专线程（域自带）** | FrontEnd（帧序）、BackEnd（关键帧序、地图版本） |
+| 相互独立 + 幂等 + 可取消 + 阻塞 IO/CPU 突发 | **TaskScheduler** | 存图、载图、实时栅格、建库、体检、飞行记录落盘 |
+
+FrontEnd/BackEnd 的线程由 `SlamAlgorithm` 创建（它们就是"顺序执行器"，等价于 `Channel` + 单线程 loop），
+但**不做池化调度**——池化会让帧序/关键帧序失效。
+
+## 10.2 线程与队列（按上表重新画）
+
+```mermaid
+flowchart TB
+  subgraph L3["L3 组装根 SlamRosNode"]
+    ROOT["创建 TaskScheduler → 注入 SlamAlgorithm → 注入 SlamRosInterface<br/>关停顺序: 停接收 → 域线程 → 池"]
+  end
+  subgraph L2["L2 ROS 适配 SlamRosInterface"]
+    CB["imu/lidar/odom 回调 · 17 服务 · TF · 20Hz 发布"]
+  end
+  subgraph L1["L1 算法域 SlamAlgorithm"]
+    FQ[["FrameQueue<br/>lidar 丢旧保新 · imu 保序 · odom 只留最新"]]
+    FE["FrontEnd 专线程<br/>预处理 → 运动先验 → 匹配/LIO → Snapshot"]
+    KQ[["KeyframeQueue"]]
+    BE["BackEnd 专线程<br/>Ceres · 回环 · 地图版本（双缓冲）"]
+    MS["MapStore / GridBuilder / RelocBuilder<br/>只持有 IJobRunner*"]
+  end
+  subgraph L0["L0 基础设施 TaskScheduler"]
+    LANE1["IO-writer lane ×1（串行）"]
+    LANE2["IO-reader lane ×1（串行）"]
+    LANE3["CPU lane ×1~2"]
+    LANE4["feature lane ×1（低优先级）"]
+  end
+
+  CB -->|只校验+入队| FQ
+  FQ --> FE
+  FE -->|关键帧| KQ
+  KQ --> BE
+  FE -->|Snapshot| CB
+  BE -->|MapVersion| FE
+  MS -->|submit(JobClass)| LANE1
+  MS --> LANE2
+  MS --> LANE3
+  MS --> LANE4
+  LANE1 -->|done(callback)| FE
+  ROOT -.->|构造注入| L0
+  ROOT -.->|持有| L1
+  ROOT -.->|持有| L2
+```
+
+### 队列策略（不变）
+
+| 队列 | 容量 | 满时 | 诊断计数 |
+|---|---|---|---|
+| lidar | 2 | 丢旧保新 | `lidar_dropped` |
+| imu | 512 | 丢旧保序 | `imu_dropped` |
+| odom | 1（latest-only） | 覆盖 | `odom_overwritten` |
+| keyframe | 32 | 前端最多等 20 ms，再满合并 | `kf_merged` |
+| 池任务 | 每 lane 16 | `submit` 返回 kInvalidJobId（调用方降级/重试） | `task_rejected` |
+
+## 10.3 数据与状态流
+
+- **Snapshot 无锁读**：FrontEnd 用 `std::shared_ptr<const Snapshot>` + `atomic_store` 发布；
+  ROS 线程 `atomic_load`，零锁零拷贝（点云共享指针）。
+- **MapVersion 双缓冲**：BackEnd 优化后生成 `shared_ptr<const MapData>`+`version`；
+  FrontEnd 在**下一帧开头**换图，绝不在匹配中途换。
+- **任务结果回投**：job 的 `done(JobResult)` 在池线程执行，只允许写"待应用队列"（域内的
+  `Channel<JobResult>`），由 FrontEnd 在帧边界应用 —— 池线程碰不到匹配状态。
+
+## 10.4 生命周期与关停
+
+```mermaid
+stateDiagram-v2
+  [*] --> INIT
+  INIT --> FRONTEND_READY: 载图/建图初始化成功
+  FRONTEND_READY --> RUNNING: 第一帧通过
+  RUNNING --> DEGRADED: 匹配质量下降/退化
+  DEGRADED --> RUNNING: 恢复
+  RUNNING --> LOST: 连续失败超阈值
+  DEGRADED --> LOST
+  LOST --> RUNNING: 重定位/有界恢复成功
+  RUNNING --> STOPPING: shutdown / 切模式
+  STOPPING --> [*]
+```
+
+关停顺序（必须固定）：
+1. `stopping_ = true`：服务返回 BUSY，回调不再入队
+2. close 域队列 → `join(FrontEnd)` → `join(BackEnd)`
+3. **执行器最后关**：取消在途 job → drain → `TaskScheduler::shutdown()`
+4. 释放 MapStore / TF
+
+顺序的理由：域线程可能还会 `submit`（例如 LOST 时落飞行记录），所以池必须比域活得久。
+
+## 10.5 迁移路线（按新分层）
+
+| 步 | 动作 | 风险 | 验收 |
+|---|---|---|---|
+| **M0a ✅** | 落 L0：`src/rosiwit_common/`（`Channel<T>` / `CancelToken` / `Thread` / `PeriodicThread` / `IExecutor`+`ThreadPool` / `SnapshotSlot`），ROS 无关、零依赖 | 低 | **已完成**：40 个单测（丢旧/丢新计数、串行 lane 并发数恒为 1、优先级、取消排队/在途、drain/drop 关停、RAII join、周期无漂移、快照无撕裂） |
+| **M0b** | 落 L3 骨架：`SlamRosNode` 组装、注入；`SlamAlgorithm` 内部建 FrameQueue+FrontEnd，**FrontEnd 先直接调现有 onImu/onLidar** | 低 | 仿真行为等价（位姿/话题一致） |
+| M1 | 删 50 Hz `processCB`，`tryPopAndProcess` 进 FrontEnd | 中 | 建图不掉帧 |
+| M2 | BackEnd 独立 + KeyframeQueue + MapVersion 双缓冲 | 中 | 前端帧间隔 p99 不变 |
+| M3 | MapStore/Grid/Reloc 改走 `IJobRunner`（带 JobClass 与取消） | 中 | 切图 25 s 期间照常出位姿；存图不卡 `/map` |
+| M4 | 状态单源 + Snapshot `jump_reason` | 中 | nav 能感知切图/重定位跳变 |
+| M5 | 压测/杀进程/4 h soak | 低 | 见验收脚本 |
+
+## 10.6 决策（默认值，可否决）
+
+1. lidar 满 → **丢旧保新**
+2. BackEnd 触发 → **≥1 关键帧 且 距上次 ≥1 s**
+3. lane 数 → IO-writer 1 / IO-reader 1 / CPU 2 / feature 1（共 5 个执行槽，但 writer/reader 各独占 1）
+4. 切图/存图 → **与建图并行**（切图先在帧边界让 FrontEnd 停一拍），不独占
+
+
+## 10.7 M0a 落地记录（2026-10-26）
+
+新建 `src/rosiwit_common/`（ROS 无关、无第三方依赖，可独立 `cmake && ctest`）：
+
+| 文件 | 作用 | 关键语义 |
+|---|---|---|
+| `channel.hpp` | 有界 MPMC 队列 | `kBlock / kDropOldest / kDropNewest`；`close()` 唤醒所有等待者；计数（pushed/popped/dropped/rejected/peak） |
+| `cancel.hpp` | 协作式取消 | `CancelToken` 只置位不杀线程；`throw_if_cancelled()` |
+| `thread.hpp/.cpp` | RAII 线程 | **析构 = requestStop + join，永不 detach**；OS 线程名（pthread_setname_np）；异常不扩散 |
+| `periodic.hpp/.cpp` | 定周期线程 | `sleep_until(next += period)` 无漂移；落后超一周则重新对齐（计数 overruns） |
+| `executor.hpp` | 执行器接口 | `submit(lane, opts, job, done)` / `cancel` / `shutdown(drain)` / `stats`；`LaneSpec{name, threads, capacity, overflow}` |
+| `thread_pool.hpp/.cpp` | lane 化线程池 | `threads=1` 即串行执行器；优先级（同优先级 FIFO）；取消排队任务会回调 `done(false)` |
+| `snapshot.hpp` | 不可变快照槽 | `shared_ptr<const T>` atomic 发布/读取 + 单调 `version` |
+
+**没有业务概念**：lane 名字、线程数、满时策略全部由使用方用 `LaneSpec` 声明，
+以后 SLAM 侧就是 `{disk_write,1,kReject} {disk_read,1,kReject} {cpu,2,kReject} {feature,1,kReject}`，
+nav 侧可以声明自己的 lane —— 同一层，不共享业务语义。
+
+**测试**（catkin gtest，已注册在 `rosiwit_slam_ros1`）：
+```
+test_channel    10   丢旧/丢新/close 唤醒/pop_for 超时/kBlock
+test_executor   16   串行 lane 并发峰值恒 1/多线程并行/满则拒/取消排队(不执行且 done(false))/
+                     取消在途(token 可见)/drain 跑完/drop 取消/优先级
+test_thread     10   RAII join/requestStop 退出/异常不杀进程/周期速率/停得及时
+test_snapshot    4   发布→读取/version 单调/并发读者无撕裂
+```
+`catkin_test_results: 246 tests, 0 failures`（含 slam 原有 206）。
+
+**下一步 M0b**：`SlamRosNode` 组装根 + 注入；`SlamAlgorithm` 内部建 `Channel<Frame>` + `Thread(FrontEnd)`，
+FrontEnd 先直接调现有 `onImu/onLidar`（行为等价），再逐步替换。
