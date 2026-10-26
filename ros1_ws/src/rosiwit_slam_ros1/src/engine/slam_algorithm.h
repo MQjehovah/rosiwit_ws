@@ -83,6 +83,11 @@ public:
     const std::string& bodyFrame() const { return cfg_.body_frame; }
     const std::string& imuTopic() const { return cfg_.imu_topic; }
     const std::string& lidarTopic() const { return cfg_.lidar_topic; }
+    /// 位姿跳变序号 (单调递增). **单源**: 每次 applyInitPose 成功 (切图/重定位/
+    /// 手动初始位姿) 都 +1; 消费端 (nav) 据此知道"计划里的位姿已经作废"。
+    /// 取代接口层自己维护的 relocalize_count_。
+    uint32_t poseJumpSeq() const { return pose_jump_seq_.load(); }
+
     /// 可选输入是否启用 (由核心 YAML 决定); 订阅由 SlamRosNode 负责
     bool useVo() const { return vo_enabled_; }
     bool useAbsolute() const { return absolute_enabled_; }
@@ -229,6 +234,7 @@ private:
     rosiwit_slam::SlamBase* base_ = nullptr;
     bool ok_ = false;
     bool online_calib_enabled_ = true;
+    std::atomic<uint32_t> pose_jump_seq_{0};
     bool vo_enabled_ = false;
     bool absolute_enabled_ = false;
     mutable std::mutex calib_mutex_;

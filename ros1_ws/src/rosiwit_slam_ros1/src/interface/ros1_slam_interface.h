@@ -281,7 +281,6 @@ private:
     ros::Publisher loop_constraint_puber_;    // loop_constraint   MarkerArray  10 (D2 不发)
     ros::Publisher slam_info_puber_;          // slam/info         SlamInfo     10
     ros::Publisher localization_state_puber_;  // /localization/state LocalizationState 10
-    uint32_t relocalize_count_ = 0;            // 累计重定位次数 (契约字段)
     double loc_sigma_xy_ = 0.05;               // 兜底位姿不确定度 (无 2D 匹配时)
     double loc_sigma_yaw_ = 0.03;
     float loc_degrade_matching_ = 0.65f;       // 低于此匹配度进入 DEGRADED

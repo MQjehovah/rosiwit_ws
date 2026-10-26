@@ -410,7 +410,7 @@ void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) 
     msg.matching = health == LocState::HEALTH_LOST ? 0.0f : matching;
     msg.map_id = curr_map_name_;
     msg.map_valid = !realtime_grid_map_.data.empty();
-    msg.relocalize_count = relocalize_count_;
+    msg.relocalize_count = engine_.poseJumpSeq();   // 单源: SlamAlgorithm 的跳变序号
     localization_state_puber_.publish(msg);
 }
 

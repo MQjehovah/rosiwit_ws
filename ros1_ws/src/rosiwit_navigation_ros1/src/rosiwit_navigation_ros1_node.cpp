@@ -3830,6 +3830,22 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     const xzrobot_ros_dependency::LocalizationState::ConstPtr & msg)
   {
     using LocState = xzrobot_ros_dependency::LocalizationState;
+    // 位姿跳变检测 (契约: relocalize_count 变化 / map_id 变化 => 位姿坐标系跳了).
+    // 必须在更新缓存的同一拍完成: 跳变后旧计划/旧跟踪状态立即作废。
+    const bool map_changed = has_reloc_baseline_ && !msg->map_id.empty() &&
+      msg->map_id != last_map_id_;
+    const bool jumped = has_reloc_baseline_ &&
+      msg->relocalize_count != last_relocalize_count_;
+    if (map_changed || jumped) {
+      // 只登记: 本节点用 AsyncSpinner(2), 回调和控制环可能并发。
+      // 计划/控制器状态只在控制环里改, 避免两条线程同时动 current_core_path_。
+      pending_jump_seq_.store(msg->relocalize_count);
+      pending_jump_reason_.store(map_changed ? 1 : 0);
+      pose_jump_pending_.store(true);
+    }
+    last_relocalize_count_ = msg->relocalize_count;
+    has_reloc_baseline_ = true;
+
     last_slam_info_stamp_ = ros::Time::now();
     has_localization_state_ = true;
     last_loc_health_ = msg->health;
@@ -3847,6 +3863,31 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         break;
     }
     last_slam_matching_ = msg->matching;
+  }
+
+  /// 位姿跳变 (切图/重定位/手动初始位姿): 旧计划在新坐标系下已经没有意义。
+  /// 只作废"计划与跟踪状态", 不清目标 —— 目标是地图坐标, 跳变后仍然有效。
+  void onPoseJump(uint32_t seq, const std::string & why)
+  {
+    ROS_WARN("[nav] pose jump (%s, seq=%u): invalidate plan, stop and replan",
+             why.c_str(), seq);
+    // 1) 作废在途异步规划: 否则旧坐标系下的结果会被 applyPlanningResult 装回来
+    if (planning_active_ || async_plan_future_.valid()) {
+      planning_active_ = false;
+      ++plan_generation_;
+      if (async_planner_) { async_planner_->cancel(); }
+    }
+    // 2) 清计划/跟踪状态, 控制器从当前位姿重新起算 (避免旧 crosstrack 积分)
+    current_core_path_.points.clear();
+    current_path_.poses.clear();
+    if (controller_strategy_) { controller_strategy_->reset(); }
+    resetRecovery();
+    // 3) 先停车: 不能让跳变前一拍算出的指令继续推机器人
+    geometry_msgs::Twist stop_cmd;
+    publishCommand(stop_cmd);
+    // 4) 下一拍立刻重规划 (replanningCheck 看 since_plan)
+    last_plan_time_ = ros::Time();
+    last_pose_jump_ = ros::Time::now();
   }
 
   bool slamHealthLost() const
@@ -3944,6 +3985,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
   void controlLoop(const ros::TimerEvent &)
   {
+    if (pose_jump_pending_.exchange(false)) {
+      onPoseJump(pending_jump_seq_.load(),
+                 pending_jump_reason_.load() == 1 ? std::string("map_switched")
+                                                 : std::string("relocalized"));
+    }
     if (planning_active_) pollPlanning();
     // 丢弃已完成但已过期的恢复规划结果 (resetRecovery 不销毁在途 future)
     if (recovery_stage_ == RecoveryStage::NONE && recovery_plan_future_.valid() &&
@@ -4568,6 +4614,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   bool has_localization_state_ = false;
   uint8_t last_loc_health_ = 0;
   std::string last_map_id_;
+  uint32_t last_relocalize_count_ = 0;   // 契约字段, 变化 = 位姿跳变
+  std::atomic<bool> pose_jump_pending_{false};   // 回调登记, 控制环消费
+  std::atomic<uint32_t> pending_jump_seq_{0};
+  std::atomic<int> pending_jump_reason_{0};      // 0=重定位 1=切图
+  bool has_reloc_baseline_ = false;      // 首帧不算跳变
+  ros::Time last_pose_jump_;             // 最近一次跳变时刻 (诊断用)
   ros::Subscriber profile_sub_;      // /set_motion_profile: "clean|free[,controller]"
   std::string motion_profile_ = "clean";
   std::string free_planner_ = "hybrid_astar";

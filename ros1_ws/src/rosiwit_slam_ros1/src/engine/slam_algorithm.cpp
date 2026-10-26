@@ -844,6 +844,8 @@ void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped
                                bool zero_if_insane, bool force_z_zero) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return;
+    // 任何一次"设初始位姿"都意味着对外位姿会跳变 (切图/重定位/手动), 单源计数 +1
+    ++pose_jump_seq_;
     double x = in.pose.pose.position.x;
     double y = in.pose.pose.position.y;
     double z = in.pose.pose.position.z;
