@@ -192,6 +192,7 @@ private:
     std::vector<uint8_t> closed_list_;                 // 关闭列表（O(1)数组访问，缓存友好）
     std::vector<int> closed_indices_;                  // 已关闭节点索引（用于快速重置）
     bool use_weighted_heuristic_;                      // 大网格时启用加权启发式
+    double heuristic_weight_ = 1.0;                    // 加权 A* 倍率 (膨胀大时防退化)
     double inflation_radius_ = 0.5;                    // 障碍物膨胀半径（米）
     double robot_radius_ = 0.21;                        // 机器人半径（米）
 

@@ -73,8 +73,10 @@ controller_name: "mppi"
 motion_profile: "clean"
 clean_planner: "hybrid_astar"
 free_planner: "hybrid_astar"
+# 加权 A* 倍率: 膨胀代价大时防搜索退化 (窄通道实测 12.8s->3.4s)
+planner_heuristic_weight: 2.0
 planner_max_iterations: 200000
-planner_timeout: 2.0
+planner_timeout: 1.0   # hybrid 主规划 1s 预算, 超时立刻回落 A* (窄门洞)
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 
@@ -95,7 +97,7 @@ min_lookahead_distance: 0.3
 max_lookahead_distance: 0.9
 
 # ---- 规划安全距离 (实车 g_min_safe=0.39 / g_max_safe 等效 0.62) ----
-robot_radius: 0.39
+robot_radius: 0.33
 # 规划器/控制器共用车体轮廓 (x,y,...), 与 safety_footprint 同一组实车点.
 # Hybrid A* 使用此 footprint; A* 只使用 robot_radius 圆形模型.
 footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]

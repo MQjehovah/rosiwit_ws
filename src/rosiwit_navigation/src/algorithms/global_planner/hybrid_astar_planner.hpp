@@ -108,6 +108,8 @@ private:
   double inflation_radius_ = 0.5;
   double step_length_ = 0.35;
   double max_curvature_ = 1.5;
+  double heuristic_weight_ = 1.0;
+  std::vector<std::pair<double, double>> coarse_footprint_samples_;
   int heading_bins_ = 72;
   core::Footprint footprint_;
   std::vector<std::pair<double, double>> footprint_samples_;

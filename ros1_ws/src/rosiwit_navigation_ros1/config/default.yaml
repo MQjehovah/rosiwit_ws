@@ -28,8 +28,10 @@ mppi_control_weight: 0.03
 mppi_speed_weight: 2.0
 mppi_goal_weight: 1.5
 
+# 加权 A* 倍率: 膨胀代价大时防搜索退化 (窄通道实测 12.8s->3.4s)
+planner_heuristic_weight: 2.0
 planner_max_iterations: 200000
-planner_timeout: 2.0
+planner_timeout: 1.0   # hybrid 主规划 1s 预算, 超时立刻回落 A* (窄门洞)
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 
@@ -64,7 +66,7 @@ max_lookahead_distance: 0.9
 # 规划安全距离 (m)
 # robot_radius = 实车 g_min_safe (硬禁区); inflation_radius = g_max_safe 的等效膨胀.
 # 实车 footprint x[-0.25,0.55] y[-0.33,0.33] 由 safety_footprint 表达.
-robot_radius: 0.39
+robot_radius: 0.33
 # 规划器/控制器共用车体轮廓; Hybrid A* 使用它, A* 只使用 robot_radius.
 footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 # 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.

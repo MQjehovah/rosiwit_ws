@@ -342,7 +342,7 @@ core::Result<core::Path> AStarPlanner::plan(
                 neighbor.y = ny;
                 neighbor.g_cost = new_g_cost;
                 neighbor.h_cost = heuristic(nx, ny, goal_x, goal_y);
-                neighbor.f_cost = neighbor.g_cost + neighbor.h_cost;
+                neighbor.f_cost = neighbor.g_cost + heuristic_weight_ * neighbor.h_cost;
                 neighbor.parent_x = current.x;
                 neighbor.parent_y = current.y;
 

@@ -72,6 +72,10 @@ struct PlannerConfig
   bool reverse_only = false;
   /// Recovery-only start clearance (m); normal planning should leave 0.
   double start_relax_radius = 0.0;
+  /// 加权 A* 的启发式倍率. 1.0 = 最优; >1 更贪心(次优但快很多).
+  /// 膨胀代价会把 g 抬高 3~4 倍, 而欧氏启发式不变 -> h/g 失衡, A* 退化成
+  /// Dijkstra: 实测 0.8m 门洞 8m 行程从 0.4ms 涨到 12.8s (节点超时 -> "规划失败").
+  double heuristic_weight = 1.0;
 };
 
 struct KinematicsLimits

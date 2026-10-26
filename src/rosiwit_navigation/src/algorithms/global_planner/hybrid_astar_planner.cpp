@@ -33,6 +33,7 @@ HybridAStarPlanner::HybridAStarPlanner()
 bool HybridAStarPlanner::initialize(const core::PlannerConfig & config)
 {
   config_ = config;
+  heuristic_weight_ = std::max(1.0, config_.heuristic_weight);
   if (!config_.name.empty()) planner_name_ = config_.name;
   if (config_.resolution > 0.0) resolution_ = config_.resolution;
   buildPrimitives();
@@ -107,8 +108,13 @@ void HybridAStarPlanner::setRobotFootprint(const core::Footprint & footprint)
 {
   footprint_ = footprint;
   footprint_samples_ = core::sampleFootprint(footprint_, footprint_sample_spacing_);
-  LOG_INFO(logger_, "Robot footprint: %zu vertices, %zu samples",
-           footprint_.size(), footprint_samples_.size());
+  coarse_footprint_samples_ = core::sampleFootprint(
+    footprint_, std::max(0.20, footprint_sample_spacing_));
+  // 注: 曾尝试用"内切圆半径"做 O(1) 快速接受, 但内切半径 (0.25) 远小于
+  // 真实轮廓 (0.86), 会把 0.70m 门洞误判为可通行 -> 已放弃. 现在搜索期用
+  // 粗采样 (0.20m), 精确性由最终路径复核保证.
+  LOG_INFO(logger_, "Robot footprint: %zu vertices, %zu samples (search uses %zu)",
+           footprint_.size(), footprint_samples_.size(), coarse_footprint_samples_.size());
 }
 
 void HybridAStarPlanner::buildInflationField()
@@ -243,7 +249,10 @@ bool HybridAStarPlanner::checkPose(const core::Pose2D & pose) const
   // Orientation-aware: check the actual polygon when supplied.  The radius
   // circle remains the fallback for callers that only know a robot radius.
   if (!footprint_samples_.empty()) {
-    if (core::footprintCost(*costmap_->grid, pose, footprint_samples_) < 100)
+    // 搜索期用粗采样: 43 点/pose x 8 基元 是 Hybrid A* 的主要开销
+    // (0.8m 门洞实测 4s). 粗采样 0.20m 仍有 ~15 点, 墙体必然被跨到;
+    // 最后一段由调用方用细采样复核, 不会放过窄门.
+    if (core::footprintCost(*costmap_->grid, pose, coarse_footprint_samples_) < 100)
       return true;
     // Recovery-only start clearance: the robot is already standing inside the
     // occupied cells (stale map / charger / self-projection).  Ignore both the
@@ -487,9 +496,12 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       const double fp_infl = footprintInflationCost(next);
       // 全部 0..100 刻度: costAt/100 与 fp_infl/100 都是 0..1 的归一化代价.
       // 膨胀权重 2.82 = 旧 8.0*(90/255), 保持已验证的贴边行为不变.
+      // 膨胀代价封顶 60: 通道里 footprint 长期压在 80~100 的代价上, 不封顶会让
+      // 每一小步都乘 3.8, 整片代价面被抹平 -> A* 退化成 Dijkstra (实测 12.8s).
+      const double infl_capped = std::min<double>(60.0, static_cast<double>(fp_infl));
       const double cost_factor =
         1.0 + static_cast<double>(std::max<int8_t>(0, costAt(ix, iy))) / 100.0 * 1.5 +
-        2.82 * fp_infl / 100.0;
+        2.82 * infl_capped / 100.0;
       const double g = current.g + travel * cost_factor * reversing_penalty + heading_penalty;
 
       auto it = best_g.find(key);
@@ -501,7 +513,7 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       node.y = next.y;
       node.theta = next.theta;
       node.g = g;
-      node.f = g + heuristic(next, goal);
+      node.f = g + heuristic_weight_ * heuristic(next, goal);
       node.parent = item.index;
       node.ix = ix;
       node.iy = iy;

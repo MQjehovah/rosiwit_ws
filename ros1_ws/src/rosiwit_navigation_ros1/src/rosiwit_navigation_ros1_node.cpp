@@ -835,6 +835,24 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         }
         if (m_has_planner_costmap_) { next->setCostmap(planner_costmap_); }
         async_planner_ = std::move(next);
+        // 窄通道回落: 非 grid 规划器配一个 A* 备用 (栅格 A* 穿窄门是 ms 级)
+        if (planner != "astar" && planner != "navfn") {
+          auto fb = nav_core::NavigationFactory::createPlanner("astar");
+          if (fb) {
+            core::PlannerConfig fcfg;
+            fcfg.name = "astar";
+            fcfg.resolution = 0.05;
+            fcfg.max_iterations = planner_max_iterations_;
+            fcfg.timeout = planner_timeout_;
+            fcfg.allow_reverse = false;
+            fcfg.heuristic_weight = planner_heuristic_weight_;
+            fb->initialize(fcfg);
+            fb->setRobotRadius(robot_radius_);
+            fb->setInflationRadius(inflation_radius_);
+            fallback_planner_ = std::move(fb);
+            ROS_INFO("[plan] fallback planner ready: astar (for narrow passages)");
+          }
+        }
         planner_name_ = planner;
         planner_allow_reverse_ = allow_reverse;
       }
@@ -3061,9 +3079,22 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       start, planning_start_clear_margin_, planning_clear_start_footprint_);
     last_planning_costmap_ = planning_costmap;
     async_planner_->setCostmap(planning_costmap);
+    if (fallback_planner_) {
+      fallback_planner_->setCostmap(planning_costmap);
+      if (!configured_footprint_.empty()) {
+        fallback_planner_->setRobotFootprint(planner_footprint_);
+      }
+    }
     active_plan_generation_ = plan_generation_;
     async_plan_future_ = std::async(std::launch::async, [this, start, goal]() {
-      return async_planner_->plan(start, goal);
+      auto primary = async_planner_->plan(start, goal);
+      if (primary.is_ok() || !fallback_planner_) { return primary; }
+      // 窄通道/窄门洞: hybrid A* 的搜索代价爆炸 (实测 0.8m 门洞 3.4s > 2s 超时),
+      // 直接回落网格 A* + 平滑 —— 差速轮可以原地转, 平滑后的栅格路径可跟.
+      ROS_WARN("[plan] %s failed (%s), fallback to %s",
+               planner_name_.c_str(), primary.error_message().c_str(),
+               fallback_planner_->getName().c_str());
+      return fallback_planner_->plan(start, goal);
     });
   }
 
@@ -4343,6 +4374,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   double inflation_radius_ = 0.5;
   double robot_radius_ = 0.21;
   int planner_max_iterations_ = 200000;
+  double planner_heuristic_weight_ = 2.0;
   double planner_timeout_ = 2.0;
   bool planner_allow_reverse_ = true;
   double planner_max_reverse_distance_ = 1.0;
@@ -4482,6 +4514,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
   std::unique_ptr<core::IPlannerStrategy> planner_strategy_;
   std::unique_ptr<core::IPlannerStrategy> async_planner_;
+  // 窄通道回落: hybrid A* 超时/失败时用栅格 A* (见 launchPlan)
+  std::unique_ptr<core::IPlannerStrategy> fallback_planner_;
   std::future<core::Result<core::Path>> async_plan_future_;
   bool planning_active_ = false;
   uint64_t plan_generation_ = 0;
