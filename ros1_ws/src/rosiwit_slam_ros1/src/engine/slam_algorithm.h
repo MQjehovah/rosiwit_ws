@@ -83,8 +83,9 @@ public:
     const std::string& bodyFrame() const { return cfg_.body_frame; }
     const std::string& imuTopic() const { return cfg_.imu_topic; }
     const std::string& lidarTopic() const { return cfg_.lidar_topic; }
-    /// 位姿跳变序号 (单调递增). **单源**: 每次 applyInitPose 成功 (切图/重定位/
-    /// 手动初始位姿) 都 +1; 消费端 (nav) 据此知道"计划里的位姿已经作废"。
+    /// 位姿跳变序号 (单调递增). **单源**: applyInitPose(count_as_jump=true) 时 +1,
+    /// 即切图 / /relocation 服务 / /initialpose; 内部 2D 小纠偏不计数。
+    /// 消费端 (nav) 据此知道"计划里的位姿已经作废"。
     /// 取代接口层自己维护的 relocalize_count_。
     uint32_t poseJumpSeq() const { return pose_jump_seq_.load(); }
 
@@ -108,8 +109,15 @@ public:
     ///       ③ 车身(base_link) -> 雷达 的安装变换换算 ④ setInitPose。
     /// zero_if_insane / force_z_zero 是旧实现里**两类调用方**的差异, 作为参数保留,
     /// 但换算逻辑只有这一份。
+    ///
+    /// count_as_jump: 是否把这次设位姿算成"对外位姿跳变"(poseJumpSeq +1)。
+    ///   * true  —— 切图、/relocation 服务、/initialpose、手动重定位: 坐标系真的跳了,
+    ///     消费端(nav)必须作废计划;
+    ///   * false —— **内部小纠偏** (2D 平面约束把位姿拉回十几厘米): 位姿连续,
+    ///     计划仍然有效, 不能算跳变, 否则 nav 会在窄通道里反复清计划/停车。
     void applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
-                       bool zero_if_insane, bool force_z_zero = false);
+                       bool zero_if_insane, bool force_z_zero = false,
+                       bool count_as_jump = true);
     /// 按需触发一次全局重定位 (转发到核心的定位流水线)
     void requestRelocalization();
     /// 飞行记录仪手动落盘; 返回文件路径(空=无数据) —— /slam/dump_recorder 服务用
@@ -136,6 +144,10 @@ public:
     /// 注册 50Hz tick (在排空核心输出之后按注册顺序调用)。两套接口各挂一个:
     /// 这样"排空 + 发布"仍发生在同一个回调里, 时序与重构前的 processCB 完全一致。
     void addTickHook(std::function<void()> hook);
+    /// 摘掉所有 tick 钩子。**接口层析构必须先调**, 否则 tick 线程会调进已销毁对象。
+    void clearTickHooks();
+    /// 摘掉输入侧钩子 (input_seen / raw_lidar)。同样必须在接口层析构时调用。
+    void clearInputHooks();
     /// 每次核心产出时调用。**在核心自己的线程上执行**, 跨线程用要自己同步。
     void setOutputHook(std::function<void(const rosiwit_slam::SlamOutput&)> hook);
     /// [T6] 每收到一帧输入就调用 (`is_lidar=true` 表示雷达帧)。

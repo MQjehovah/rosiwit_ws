@@ -21,10 +21,21 @@ namespace rosiwit_slam_ros1 {
 class SlamRos1Interface {
 public:
     SlamRos1Interface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine)
-        : interface_(new Ros1SlamInterface(nh, pnh, engine)),
+        : engine_(engine),
+          interface_(new Ros1SlamInterface(nh, pnh, engine)),
           outputs_(new RosiwitInterface(nh, pnh, engine, /*suppress_conflicts=*/true)) {}
 
+    ~SlamRos1Interface() {
+        // **必须先摘钩子再销毁发布者**: tick 线程(50Hz) 会调 RosiwitInterface::onTick,
+        // FrontEnd 线程会调 input_seen/raw_lidar 钩子, 实时栅格线程会调回本对象。
+        // 若等成员析构完才摘, 中间的每一拍都是 use-after-free。
+        engine_.clearTickHooks();
+        engine_.clearInputHooks();
+        interface_->stopBackgroundWork();   // 停 RealtimeGrid worker (它会调回本对象)
+    }
+
 private:
+    SlamAlgorithm& engine_;
     std::unique_ptr<Ros1SlamInterface> interface_;
     std::unique_ptr<RosiwitInterface> outputs_;
 };

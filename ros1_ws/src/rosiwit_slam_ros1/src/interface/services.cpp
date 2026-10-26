@@ -65,12 +65,13 @@ bool Ros1SlamInterface::callSwitchMapPro(xzrobot_ros_dependency::SwitchMap::Requ
 
 // ---------------------------------------------------------------- [T8] 8 个 server
 void Ros1SlamInterface::applyInitPose(
-    const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane) {
+    const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane,
+    bool count_as_jump) {
     // **不在这里重复实现**: /switch_map、/relocation 与 /initialpose 共用
     // SlamAlgorithm::applyInitPose() —— insane 归零、z 归零、车身->雷达安装变换换算、setInitPose
     // 全部只有一份。这里只保留本路径的差异: z 强制归零。
     if (!engine_.algo()) return;
-    engine_.applyInitPose(in, zero_if_insane, /*force_z_zero=*/true);
+    engine_.applyInitPose(in, zero_if_insane, /*force_z_zero=*/true, count_as_jump);
 }
 
 bool Ros1SlamInterface::handleModeSwitch(
@@ -265,11 +266,17 @@ bool Ros1SlamInterface::handleSwitchMap(
 bool Ros1SlamInterface::handleRelocation(
     xzrobot_ros_dependency::Relocation::Request& req,
     xzrobot_ros_dependency::Relocation::Response& res) {
+    return applyRelocation(req, res, /*count_as_jump=*/true);
+}
+
+bool Ros1SlamInterface::applyRelocation(
+    xzrobot_ros_dependency::Relocation::Request& req,
+    xzrobot_ros_dependency::Relocation::Response& res, bool count_as_jump) {
     // 旧 relocate (legacy.cpp:2394-2418): relocating_ 置真又立刻置假;
     // setInitPose 的 **z 强制 0**; success 恒 true。
     // 注意这里**没有** |x|,|y| > 1e4 归零 —— 那只在 /switch_map 里。
     relocating_ = true;
-    applyInitPose(req.initial_pose, false);
+    applyInitPose(req.initial_pose, false, count_as_jump);
     relocating_ = false;
     // 契约字段 relocalize_count 由 SlamAlgorithm::poseJumpSeq() 单源提供
     // (applyInitPose 里 +1), 这里不再自己计数。

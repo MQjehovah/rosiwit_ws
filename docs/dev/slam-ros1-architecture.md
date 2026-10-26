@@ -638,15 +638,38 @@ BackendWorker: 4 次合并优化
 * `saveMapData(data, path, wait_ms=2000)`：`try_lock_for`，等不到就返回 false，
   上层报 `MAP_SAVE_*` 失败，而不是把 App 的服务调用挂死两分钟。
 
-另外 M0b 之后 `/map` 与位姿发布都已经在 Tick / RealtimeGrid 线程上，
-所以"存图期间 /map 卡住、位姿掉频"这类问题在结构上消失了（不再依赖服务线程是否被占）。
+**注意（review 纠正，2026-10-26）**：此前这句写得过满。事实是——
+
+| 输出 | 实际线程 |
+|---|---|
+| `/lio_odom`、`/lio_path`、`body_cloud`、`world_cloud` | `slam_tick`（50 Hz 线程）→ 不受主线程影响 |
+| `/curr_localization_pose`、`/slam/info`、`/localization/state`、**TF map→odom** | `localization_pose_timer_`（**100 Hz ros::Timer，仍在 ROS 主线程**） |
+| `/map`、`/slam_warning_code` | `realtime_grid_map_timer_` / `warning_code_timer_`（主线程） |
+| 老话题（`scan_f_map`/`curr_scan_point`/`global_map`…） | `point_cloud_mapping_timer_`（主线程） |
+
+所以 `/stop_map_operation`、`/save_map`、`/load_map` 这类同步重活仍会把
+**TF 与健康话题**按住数秒（`/lio_odom` 不受影响）。这是 §10.15 里的 C3，未修。
 
 ## 10.12 M4 落地记录：位姿跳变单源 + nav 消费
 
 **单源**：`SlamAlgorithm::poseJumpSeq()`（`atomic<uint32_t>`），
-在 `applyInitPose()` 里 +1 —— 覆盖 `/switch_map`（后台载图完成）、`/relocation`、
-`/initialpose` 三条路径；接口层不再自己维护 `relocalize_count_`，
+在 `applyInitPose(count_as_jump=true)` 里 +1 —— 覆盖 `/switch_map`（后台载图完成）、
+`/relocation`、`/initialpose` 三条路径；接口层不再自己维护 `relocalize_count_`，
 直接把它发到契约字段 `LocalizationState.relocalize_count`。
+
+**必须区分"真跳变"与"内部小纠偏"**（2026-10-26 修正）：2D 平面约束每纠一次
+（`[planar] 2D constraint applied`）也走 `applyInitPose`，但它只是把位姿拉回
+十几厘米，位姿是连续的。实测把它算成跳变会让 nav 在窄通道口清计划/停车：
+
+```
+[planar] 2D constraint applied: dx=0 dy=0.168 dyaw=-0.015 ...
+[nav] pose jump (relocalized, seq=3): invalidate plan, stop and replan
+```
+
+所以 `applyInitPose` 增加 `count_as_jump` 参数，planar 路径传 false
+（`applyRelocation(req, res, /*count_as_jump=*/false)`）。
+修后同一条路线：整轮只有启动阶段的 2 次跳变（切图 + 外部 initialpose），
+导航过程中 0 次。
 
 **消费**：nav 的 `localizationStateCallback` 比对 `relocalize_count` 与 `map_id`，
 变化即 `onPoseJump()`：
@@ -713,3 +736,68 @@ SLAM 侧改造已完成并验证，但回归里暴露了三个 nav 问题（都�
    该分支会从控制环里直接调 `publishLocalCostmap`）。
    方向：给"计划/代价地图/恢复"三块状态各加一把锁（或把 spinner 收回 1 线程并
    用独立线程跑代价地图），顺序是先加锁再谈性能。
+
+
+## 10.15 架构/线程模型 review 结论（2026-10-26）
+
+用独立 reviewer 对 `125bd8c..21fff1a` 做只读审查，结论已逐条核对代码/日志。
+下面只列**结论与状态**，过程证据见各条。
+
+### 线程清单（运行期实测枚举）
+
+| # | 名称 | 创建处 | 触发 | 停止 |
+|---|---|---|---|---|
+| 1 | ROS 主线程 | `main.cpp` `ros::spin()` | 话题/服务回调 + **5 个 ros::Timer** | SIGINT |
+| 2 | `slam_fe` | `slam_algorithm.cpp:551` | 每帧（无定时器） | close 队列 + join |
+| 3 | `slam_tick` | `slam_algorithm.cpp:554` | 20 ms | requestStop + join |
+| 4 | `slam_be` | `slam_pipeline.cpp:47` | 队列 push | requestStop + **abandon** |
+| 5 | `slam_be_loop` | `slam_pipeline.cpp:49` | 队列 push | 同上 |
+| 6 | `slam_loc` | `slam_pipeline.cpp:325` | 队列 push（容量 2，丢旧） | requestStop + join |
+| 7 | loc 全局重定位 | `localization_pipeline.cpp:377` | cv | dtor join |
+| 8 | loc 建库 | `localization_pipeline.cpp:497/589` | cv | dtor join |
+| 9 | `rt_grid` | `realtime_grid.cpp:125` | 1 Hz | stop + join |
+| 10-13 | pool `disk_write/disk_read/cpu×2/feature` | `slam_ros_node.cpp:34-39` | 提交 | pool.shutdown(drain) |
+| 14-15 | tf2 listener ×2 | `slam_algorithm.cpp:207` / `assembly.cpp:50` | ROS 内部 | dtor |
+
+**5 个 ros::Timer（全部在主线程）**：`point_cloud_mapping_timer_`(0.1 s)、
+`localization_pose_timer_`(**0.01 s**，发 `/curr_localization_pose`、`/slam/info`、
+`/localization/state`、**TF map→odom**)、`realtime_grid_map_timer_`(1 Hz)、
+`warning_code_timer_`(1 Hz)、`map_timer_`(2 s)。
+
+### 本轮已修（本次重构引入的缺陷）
+
+| 编号 | 问题 | 修法 |
+|---|---|---|
+| **C1** | `iface_.reset()` 早于 `algo_.shutdown()`；`tick_hooks_`/`input_seen_hook_`/`raw_lidar_hook_` 无摘除 API → tick 线程在窗口内调进已销毁接口（发布者/告警码表）→ use-after-free | 新增 `clearTickHooks()/clearInputHooks()`；`SlamRos1Interface` 析构先摘钩子再停 `RealtimeGrid`；`~SlamRosNode` 改为 **先停算法线程 → 拆接口 → 关池** |
+| **I9** | 2D 平面约束纠偏被计成"位姿跳变"，nav 在执行中清计划/停车（实测窄通道必挂） | `applyInitPose(..., count_as_jump)`；planar 路径传 false。修后导航中 0 次误跳变 |
+
+### 待修（review 确认，按优先级）
+
+| 编号 | 严重度 | 问题 | 建议 |
+|---|---|---|---|
+| **C2** | Critical | 池任务直接 `engine_.algo()->loadLocalizationMapData()/setPipelineMode()`，**绕开 `core_mu_`**；与 `/slam/mode_switch` 的 `resetCore()`（会 `m_localization.reset()`）竞争 → check-then-use 空指针/悬垂 | 关掉 `algo()` 逃生口，改 `SlamAlgorithm::loadLocalizationMapData()/setCoreMode()` 内部持锁 + `core_generation_` 过期丢弃 |
+| **C3** | Critical | 存图/载图/缩略图/充电桩检测全在 **ROS 主线程**（`/stop_map_operation` 里 `getRealtimeGrid` 秒级 + `saveGridMap` + `mapIoMutex` 最多等 2 s）→ TF/健康话题冻结；池的 4 条 lane 只有 1 条在用 | 存图 → `disk_write`，质量栅格 → `cpu`；`publishCurrPose+sendTransform` 从 100 Hz timer 挪到 `slam_tick` |
+| I1 | Important | `core_mu_` 同时罩住 FE 热循环（PCL 转换+FAST-LIO）与主线程 `onOdomMsg`(50 Hz)/`applyInitPose`/`resetCore` → FE 帧时间变成主线程抖动 | `/odom` 改走队列；`core_mu_` 只保护"核心指针/重建" |
+| I2 | Important | `applyInitPose` 持 `core_mu_` 做**阻塞 TF 查询**（最多 3 s） | 取锁前先解析 base 外参 |
+| I3 | Important | `base_imu_/base_lidar_/tf_buffer_/mount_last_try_` 无锁；`slam_tick` 每 20 ms 调 `computeBaseFrames` 与主线程并发 → Eigen 撕裂/`shared_ptr` 竞争 | `once_flag` 或 `SnapshotSlot<RigidTransform>` |
+| I4 | Important | 切图在途计数绑在**任务体**上，任务被丢弃/取消时不会减 → 析构可能永久等待；等待无超时；任务不检查 CancelToken | 改用 `submit` 的 `DoneFn`；`wait_for(30s)`；任务内检查取消 |
+| I5 | Important | `mapIoMutex` 只护 `.xzmap`，`.pgm/.yaml/.jpg` 写入与 PGM 读取在锁外 → 仍可能读到半个 PGM | 整段存图持锁，载图的 PGM 也持锁 |
+| I6 | Important | `abandon()` 把"detach 线程"问题推到进程退出：Ceres 线程可能在 main 返回后仍跑 | 退出前有界 `waitForIdle(2s)` |
+| I7 | Important | `~Ros1SlamInterface` 先毁发布者再 join `rt_grid`（`GridSource` lambda 调回本对象） | 已随 C1 修（析构首行 `stopBackgroundWork()`） |
+| I8 | Important | `SnapshotSlot` 的零拷贝没被用上：唯一消费者仍 `latest(gi)` 整份拷贝 | 发布侧直接用 `shared_ptr<const GridInfo>` |
+| I10 | Important | 池 4 条 lane 只有 `disk_read` 在用 | 随 C3 接线，或删掉装饰性 lane |
+| I11 | Important | 输入丢弃不可观测：计数在 `push` 前自增，`rejected_closed` 从不打印；后端队列丢弃无统计 | 计数改到 push 成功后；按秒打印 delta |
+
+Minor（记录备查）：`start()` 在 `shutdown()` 之后是"静默死亡"（`Channel` 无 reopen）；
+`input_imu_done_/lidar_done_` 已成死变量；`BackendWorker::push(OPTIMIZE)` 实际占一个队列槽
+（与注释"不占队列"不符，满队列时可能挤掉一个真关键帧）；`logInputStats` 的静态变量命名误导；
+`ros1_slam_interface.h:325`、`assembly.cpp:283` 的注释已过期；`mapCB` 与 `rt_grid` 在
+revision 变化时都会重建栅格。
+
+### 测试覆盖（reviewer 结论）
+
+已覆盖：`rosiwit_common` 四个单测（drop/close/clear、串行 lane、取消、drain、abandon、周期无漂移、快照无撕裂）、
+`test_realtime_grid`。
+**未覆盖**：主线程/发布线程归属（把 `onTick` 挪回 spinner 不会有任何测试失败）、
+关停顺序与钩子生命周期（C1/I7 只能靠人工 SIGINT）、`start()/shutdown()` 幂等与重启、
+切图在途等待与拒绝路径、后端/定位队列背压与丢弃可观测性。

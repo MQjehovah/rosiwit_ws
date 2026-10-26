@@ -626,7 +626,9 @@ void Ros1SlamInterface::planarConstraintStep() {
         xzrobot_ros_dependency::Relocation::Response res;
         req.map_name = curr_map_name_;
         req.initial_pose = fix;
-        handleRelocation(req, res);
+        // 2D 平面约束是"把位姿拉回十几厘米"的连续纠偏, 不是重定位:
+        // 不能让它冒充实位姿跳变, 否则 nav 会在执行中反复清计划/停车 (实测窄通道必挂).
+        applyRelocation(req, res, /*count_as_jump=*/false);
         planar_pending_ = false;
         last_planar_applied_ = now;
         last_planar_x_ = r.x;

@@ -841,11 +841,12 @@ std::string SlamAlgorithm::dumpFlightRecorder(const std::string& reason) {
 }
 
 void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
-                               bool zero_if_insane, bool force_z_zero) {
+                               bool zero_if_insane, bool force_z_zero,
+                               bool count_as_jump) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return;
-    // 任何一次"设初始位姿"都意味着对外位姿会跳变 (切图/重定位/手动), 单源计数 +1
-    ++pose_jump_seq_;
+    // 只有"坐标系真的换了"才计数; 内部 2D 小纠偏 (0.1~0.3m) 不算跳变
+    if (count_as_jump) { ++pose_jump_seq_; }
     double x = in.pose.pose.position.x;
     double y = in.pose.pose.position.y;
     double z = in.pose.pose.position.z;
@@ -1049,6 +1050,15 @@ rosiwit_slam::ILocalization::Status SlamAlgorithm::localizationStatus() const {
 
 bool SlamAlgorithm::priorUncertainty(double& xy_sigma, double& yaw_sigma) const {
     return algo_raw_ ? algo_raw_->priorUncertainty(xy_sigma, yaw_sigma) : false;
+}
+
+void SlamAlgorithm::clearTickHooks() {
+    tick_hooks_.clear();
+}
+
+void SlamAlgorithm::clearInputHooks() {
+    input_seen_hook_ = nullptr;
+    raw_lidar_hook_ = nullptr;
 }
 
 void SlamAlgorithm::addTickHook(std::function<void()> hook) {

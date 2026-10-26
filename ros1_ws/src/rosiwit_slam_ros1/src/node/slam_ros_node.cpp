@@ -80,14 +80,15 @@ SlamRosNode::SlamRosNode(ros::NodeHandle & nh, ros::NodeHandle & pnh)
 
 SlamRosNode::~SlamRosNode()
 {
-  // 关停顺序 (固定):
-  //   1. 停 ROS 侧发布定时器 (接口析构) —— 否则它会继续读快照
-  //   2. 停算法线程 (FrontEnd 先, 再 Tick)
-  //   3. 最后关执行器 (算法关停时可能还要投递任务, 例如飞行记录落盘)
-  iface_.reset();
+  // 关停顺序 (固定, 每一步都不能换):
+  //   1. 停算法线程 (FrontEnd -> Tick): 它们是"会调进接口"的一方, 必须最先停;
+  //      SlamRos1Interface 的析构还会再摘一次钩子做双保险。
+  //   2. 拆接口 (发布者/服务/定时器) —— tick 停了以后不会再有钩子读快照。
+  //      接口析构内部会等切图任务在途计数归零, 那些任务只碰 engine_, 此时仍然安全。
+  //   3. 最后关执行器: 算法/接口关停时仍可能投递任务 (如飞行记录落盘)。
   algo_.shutdown();
+  iface_.reset();
   pool_.shutdown(true);
-  ros::spinOnce();   // 把在途回调排掉, 避免析构后仍有回调引用
 }
 
 }  // namespace rosiwit_slam_ros1

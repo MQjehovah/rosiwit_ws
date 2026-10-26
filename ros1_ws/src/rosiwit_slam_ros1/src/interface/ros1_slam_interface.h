@@ -123,6 +123,11 @@ public:
     /// 旧的 "重定位进行中" 标志 (legacy.cpp:1843-1853 由 isRelocalization() 驱动)
     bool relocating() const { return relocating_; }
 
+public:
+    /// 接口层析构前主动停掉后台线程: 实时栅格的 worker 会回调进本对象,
+    /// 必须比发布者/成员更早停, 否则就是 use-after-free。
+    void stopBackgroundWork() { realtime_grid_.stop(); }
+
 private:
     void initPub();        // legacy.cpp:273-300
     void initTimerPub();   // legacy.cpp:247-271
@@ -194,6 +199,11 @@ private:
                          xzrobot_ros_dependency::SwitchMap::Response& res);
     bool handleRelocation(xzrobot_ros_dependency::Relocation::Request& req,
                           xzrobot_ros_dependency::Relocation::Response& res);
+    /// 内部入口: count_as_jump=false 供 2D 平面约束纠偏使用
+    /// (位姿连续, 不算重定位; 否则 nav 会把常规纠偏当跳变, 反复清计划/停车)
+    bool applyRelocation(xzrobot_ros_dependency::Relocation::Request& req,
+                         xzrobot_ros_dependency::Relocation::Response& res,
+                         bool count_as_jump);
     bool handleStopMap(xzrobot_ros_dependency::StopMapOperation::Request& req,
                        xzrobot_ros_dependency::StopMapOperation::Response& res);
     bool handleGlobalLocalization(std_srvs::Empty::Request& req, std_srvs::Empty::Response& res);
@@ -208,7 +218,9 @@ private:
 
     /// 把 initial_pose 转成核心的 PoseStamped 并 setInitPose。    /// `zero_if_insane`: /switch_map 才有的 "|x| 或 |y| > 1e4 则全零" 逻辑
     /// (legacy.cpp 里只有换图那条路有; /relocation 没有)。两条路都 **z 强制 0**。
-    void applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane);
+    /// count_as_jump=false 供内部 2D 平面约束纠偏使用 (位姿连续, 不算跳变)
+    void applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
+                       bool zero_if_insane, bool count_as_jump = true);
 
     /// 重建核心 + 同步清掉**本层**的缓存。
     /// 只重建核心是不够的: 我们的 RealtimeGrid 与 /map 的常驻对象/面积都还留着上一轮,
