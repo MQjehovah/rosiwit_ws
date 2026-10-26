@@ -586,3 +586,99 @@ M2 做法：
    （`shared_ptr<const GridInfo>`），发布侧零拷贝、读取侧拿到一致快照。
 4. **验收**：前端帧间隔 p99 不退化；`/map` 发布期间 `/lio_odom` 频率不掉；
    切图 25 s 期间照常出位姿；后端优化不阻塞 FE。
+
+
+## 10.10 M2 落地记录（2026-10-26）
+
+core 已经引入基础层（`src/rosiwit_slam/CMakeLists.txt` 用 `if(NOT TARGET rosiwit_common)` 守卫，
+ROS1/ROS2 两个接口包内联构建时都不会重复定义目标）。
+
+**BackendWorker**（`slam_pipeline.{h,cpp}`）
+
+| 之前 | 现在 |
+|---|---|
+| `std::thread m_thread` + `mutex/cv/deque m_queue`（500，满丢最旧） | `Channel<BackendItem>{500, kDropOldest}` + `Thread("slam_be")` |
+| `std::thread m_loop_thread` + `mutex/cv/deque m_loop_queue`（200） | `Channel<KeyFrame>{200, kDropOldest}` + `Thread("slam_be_loop")` |
+| `bool m_stop` + `cv` 唤醒 | `CancelToken`（`pop_for(10ms)` 超时只是为了看取消位） |
+| `bool m_optimize_requested` + cv | `atomic<bool>` + 一条"唤醒项"；队列排空时才真正跑优化 |
+| `stopAsync()` = 置标志 + `detach()` | `requestStop()` + **`abandon()`**（新增 API），语义不变：不阻塞服务线程 |
+
+`abandon()` 的约束写进了 `thread.hpp`：线程体只能碰 shared_ptr 保活的独立状态。
+BackendWorker 的 body 捕获 `shared_ptr self`，所以放弃后 worker 仍然活着，不会 use-after-free；
+`stopAsync()` 在 abandon 之后把 `Thread` 对象 reset 掉，断开 `Thread -> body -> self -> Thread` 的环。
+
+**定位 worker**（同文件）
+
+`m_loc_buf`（`deque`，手工"满 2 丢旧"）+ `m_loc_worker` → `Channel<LidarFrame>{2, kDropOldest}` +
+`Thread("slam_loc")`；`stopLocalizationWorker()` = requestStop + join + clear。
+帧到就被唤醒（`pop_for` 只是让模式切换/停止及时可见），不引入额外延迟。
+
+**RealtimeGrid**（`interface/realtime_grid.{h,cpp}`）
+
+| 之前 | 现在 |
+|---|---|
+| `std::thread` + `wait_for(1/hz)` | `PeriodicThread`（`sleep_until(next += period)`，无漂移） |
+| `mutex + GridInfo m_latest_`（读者整份拷贝，持锁） | `SnapshotSlot<GridInfo>`（`shared_ptr<const>`，读者零锁）+ `latestPtr()` |
+
+**验收（建图模式，`sim_slam_nav.launch` 不带 map，3 个目标）**
+
+```
+lio_odom 89.7 Hz      /map 1.0 Hz
+GOAL 1/2/3: SUCCEEDED (3/3)
+BackendWorker: 4 次合并优化
+输入队列: peak=5, dropped_oldest=0
+```
+
+## 10.11 M3 落地记录：地图读写的互斥
+
+载图（切图后台任务，大图 25 s）与存图（服务线程）会碰同一个目录。
+`map_adapter` 增加进程内 `timed_mutex`：
+
+* `loadMapData`：**阻塞**取锁（读到一半绝不能被写打断）；
+* `saveMapData(data, path, wait_ms=2000)`：`try_lock_for`，等不到就返回 false，
+  上层报 `MAP_SAVE_*` 失败，而不是把 App 的服务调用挂死两分钟。
+
+另外 M0b 之后 `/map` 与位姿发布都已经在 Tick / RealtimeGrid 线程上，
+所以"存图期间 /map 卡住、位姿掉频"这类问题在结构上消失了（不再依赖服务线程是否被占）。
+
+## 10.12 M4 落地记录：位姿跳变单源 + nav 消费
+
+**单源**：`SlamAlgorithm::poseJumpSeq()`（`atomic<uint32_t>`），
+在 `applyInitPose()` 里 +1 —— 覆盖 `/switch_map`（后台载图完成）、`/relocation`、
+`/initialpose` 三条路径；接口层不再自己维护 `relocalize_count_`，
+直接把它发到契约字段 `LocalizationState.relocalize_count`。
+
+**消费**：nav 的 `localizationStateCallback` 比对 `relocalize_count` 与 `map_id`，
+变化即 `onPoseJump()`：
+
+1. 作废在途异步规划（`plan_generation_++` + `async_planner_->cancel()`）；
+2. 清 `current_core_path_` / `current_path_`，控制器 `reset()`，`resetRecovery()`；
+3. 发一条零速，别让跳变前一拍算出的指令继续推车；
+4. `last_plan_time_` 清零 → 下一拍 `replanningCheck` 立刻重规划。
+
+目标不清：目标是地图坐标，跳变后仍然有效。
+
+**验收（仿真，导航途中注入 /initialpose，偏移 0.25 m / 15°）**
+
+```
+[nav] pose jump (relocalized, seq=1): invalidate plan, stop and replan
+[nav] pose jump (relocalized, seq=2): ...
+[nav] pose jump (relocalized, seq=3): ...   <- 注入的这一帧
+result after jump: SUCCEEDED
+/localization/state: map_id="house_sim", relocalize_count=3
+```
+
+## 10.13 M5 落地记录：关停与稳定性
+
+`SIGINT` 关停（导航 + 注入跳变之后立刻停）：
+
+```
+slam node exit after SIGINT: 0.5 s
+still alive: 0
+日志中 terminate called / uncaught / Segmentation / pure virtual: 无
+进程 RSS: 203028 kB (运行中) -> 203744 kB (结束前)
+```
+
+关停顺序在这里被真正走了一遍：接口析构等切图任务在途计数归零 → 算法 close 队列并 join
+FrontEnd/Tick → 池 drain → 进程退出。若关停顺序写错（池先关、或算法先析构），
+10.8 里的 "在途 job 捕获 this" 会立刻变成 use-after-free，这个用例会直接崩。
