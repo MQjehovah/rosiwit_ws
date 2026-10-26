@@ -136,6 +136,18 @@ public:
 
   size_t capacity() const { return capacity_; }
 
+  /// 丢弃队列里所有元素 (返回丢弃数量)。不改变 closed 状态。
+  /// 用途: 模式切换/重建时把"上一轮残留的帧"清掉, 免得新实例处理旧数据。
+  size_t clear()
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    const size_t n = q_.size();
+    q_.clear();
+    stats_.dropped_oldest += n;
+    not_full_.notify_all();
+    return n;
+  }
+
   ChannelStats stats() const
   {
     std::lock_guard<std::mutex> lk(mu_);

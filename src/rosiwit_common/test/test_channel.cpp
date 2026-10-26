@@ -75,6 +75,20 @@ TEST(Channel, BlockPolicyWaitsForSpace)
   EXPECT_EQ(ch.pop().value(), 2);
 }
 
+TEST(Channel, ClearDropsQueuedItems)
+{
+  Channel<int> ch(4);
+  EXPECT_TRUE(ch.push(1));
+  EXPECT_TRUE(ch.push(2));
+  EXPECT_EQ(ch.clear(), 2u);
+  EXPECT_EQ(ch.size(), 0u);
+  EXPECT_FALSE(ch.pop_for(std::chrono::milliseconds(5)).has_value());
+  // 清空后还能继续用
+  EXPECT_TRUE(ch.push(3));
+  EXPECT_EQ(ch.pop().value(), 3);
+}
+
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

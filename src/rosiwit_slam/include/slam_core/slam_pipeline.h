@@ -136,15 +136,15 @@ public:
 private:
     void pushBackendTask(BackendTask task, const KeyFrame& kf = KeyFrame{});
     void handleLocalization(const LidarFrame& f);
-    void localizationWorker();
+    void localizationWorker(rosiwit_common::CancelToken token);
+    /// 停止定位 worker (join) 并丢弃残留帧; 幂等
+    void stopLocalizationWorker();
 
     // 定位模式重处理队列: sensor callback 只入队, 独立 worker 消费.
     // 全局重定位/GICP 可能持续数秒，绝不能占用 ROS spinner 或 50Hz 泵。
-    std::mutex m_loc_mu;
-    std::condition_variable m_loc_cv;
-    std::deque<LidarFrame> m_loc_buf;
-    std::thread m_loc_worker;
-    bool m_loc_stop = false;
+    // 容量 2 + 丢最旧: GICP 跟不上时宁可处理最新帧 (旧帧对跟踪没用)。
+    rosiwit_common::Channel<LidarFrame> m_loc_buf{2, rosiwit_common::OverflowPolicy::kDropOldest};
+    std::unique_ptr<rosiwit_common::Thread> m_loc_worker;
 
     // 核心只保存通用 PCD/PGM 等；xzmap 导出由 ROS1 适配层完成。
 

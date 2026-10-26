@@ -151,12 +151,17 @@ void BackendWorker::optimizeAndPublishAnchor() {
 
 SlamPipeline::~SlamPipeline() {
     if (m_backend_worker) m_backend_worker->stopAsync();
-    {
-        std::lock_guard<std::mutex> lk(m_loc_mu);
-        m_loc_stop = true;
+    stopLocalizationWorker();
+}
+
+void SlamPipeline::stopLocalizationWorker() {
+    // 定位 worker 只处理帧, 不持有本对象之外的状态, 可以 join (最多等一个处理窗口)
+    if (m_loc_worker) {
+        m_loc_worker->requestStop();
+        m_loc_worker->join();
+        m_loc_worker.reset();
     }
-    m_loc_cv.notify_all();
-    if (m_loc_worker.joinable()) m_loc_worker.join();
+    m_loc_buf.clear();
 }
 
 bool SlamPipeline::init(const std::string& config_path) {
@@ -315,21 +320,19 @@ bool SlamPipeline::init(const std::string& config_path) {
             loadMapForLocalization(map_name, init);
         }
     }
-    {
-        std::lock_guard<std::mutex> lk(m_loc_mu);
-        m_loc_stop = false;
+    if (!m_loc_worker) {
+        m_loc_buf.clear();   // 重建后不吃上一轮的残留帧
+        m_loc_worker.reset(new rosiwit_common::Thread(
+            "slam_loc", [this](rosiwit_common::CancelToken token) { localizationWorker(token); }));
     }
-    if (!m_loc_worker.joinable()) m_loc_worker = std::thread([this] { localizationWorker(); });
     return true;
 }
 
 void SlamPipeline::setMode(PipelineMode mode) {
     m_mode = mode;
     if (mode != PipelineMode::LOCALIZATION) {
-        std::lock_guard<std::mutex> lk(m_loc_mu);
         m_loc_buf.clear();
     }
-    m_loc_cv.notify_all();
 }
 
 void SlamPipeline::onVisualOdometry(double time, const PoseStamped& vo_pose) {
@@ -405,36 +408,24 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
     if (mode == PipelineMode::LOCALIZATION) {
         // 只入队: GICP/重定位不能占用 sensor callback, 否则 IMU 会在 DDS/队列里
         // 积压, 匹配结束后再被积分一遍, 造成重复积分/过冲.
-        {
-            std::lock_guard<std::mutex> lk(m_loc_mu);
-            if (m_loc_buf.size() >= 2) m_loc_buf.pop_front();
-            m_loc_buf.push_back(f);
-        }
-        m_loc_cv.notify_one();
+        m_loc_buf.push(std::move(f));   // 满时丢最旧 (Channel 内计数)
         return;
     }
     SlamBase::onLidar(f);
 }
 
-void SlamPipeline::localizationWorker() {
-    while (true) {
-        LidarFrame f;
-        {
-            std::unique_lock<std::mutex> lk(m_loc_mu);
-            m_loc_cv.wait(lk, [this] {
-                return m_loc_stop || (m_mode.load() == PipelineMode::LOCALIZATION &&
-                                      !m_loc_buf.empty());
-            });
-            if (m_loc_stop) break;
-            if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) {
-                m_loc_buf.clear();
-                continue;
-            }
-            f = std::move(m_loc_buf.front());
-            m_loc_buf.pop_front();
+void SlamPipeline::localizationWorker(rosiwit_common::CancelToken token) {
+    while (!token.cancelled()) {
+        // 有帧立即被唤醒; 超时只用来及时看到"模式变了/要停了"
+        auto f = m_loc_buf.pop_for(std::chrono::milliseconds(50));
+        if (!f.has_value()) {
+            if (m_loc_buf.closed()) break;
+            if (m_mode.load() != PipelineMode::LOCALIZATION) m_loc_buf.clear();
+            continue;
         }
+        if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) continue;
         // 重定位/GICP 在 worker 线程执行，ROS spinner 仍能处理服务、TF、slam/info。
-        handleLocalization(f);
+        handleLocalization(*f);
     }
 }
 
@@ -657,12 +648,7 @@ bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
     // 我们是单核心实例, 只能显式重建内部模块达到同样效果。
     //
     // 0) 停定位 worker，避免 reset 模块时 worker 仍持有 m_localization。
-    {
-        std::lock_guard<std::mutex> lk(m_loc_mu);
-        m_loc_stop = true;
-    }
-    m_loc_cv.notify_all();
-    if (m_loc_worker.joinable()) m_loc_worker.join();
+    stopLocalizationWorker();
     //
     // 1) 停后端 worker: stopAsync() 只置停止并 detach, 不 join (后端可能正卡在 optimize).
     //    worker 只持有自己的 shared_ptr<IBackend/IMapManager/AnchorState>, 不会访问本对象,

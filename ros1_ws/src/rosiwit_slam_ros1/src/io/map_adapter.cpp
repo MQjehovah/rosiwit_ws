@@ -5,8 +5,10 @@
 #include <pcl/io/pcd_io.h>
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 
 #include "algorithms/map_store/voxel_map_store.h"
 #include "xzmap_reader.h"
@@ -24,6 +26,13 @@ std::string mapBase(const std::string& path) {
     }
     if (p.back() == '/') p += "map";
     return p;
+}
+
+/// 地图文件读写互斥锁: 同一个进程内 load/save 串行化。
+/// 用 timed_mutex 是因为存图在服务线程上, 不能无限等待 25s 的载图。
+std::timed_mutex& mapIoMutex() {
+    static std::timed_mutex mu;
+    return mu;
 }
 
 }  // namespace
@@ -60,6 +69,7 @@ bool loadPcdMapData(const std::string& pcd_path, const std::string& base,
 }
 
 bool loadMapData(const std::string& path, rosiwit_slam::MapData& out) {
+    std::lock_guard<std::timed_mutex> io_lk(mapIoMutex());
     const std::string base = mapBase(path);
 
     // Direct PCD (e.g. /load_map with docs/maps/map/map.pcd).
@@ -120,7 +130,14 @@ bool loadMapData(const std::string& path, rosiwit_slam::MapData& out) {
     return true;
 }
 
-bool saveMapData(const rosiwit_slam::MapData& data, const std::string& path) {
+bool saveMapData(const rosiwit_slam::MapData& data, const std::string& path, int wait_ms) {
+    // 载图正在跑时不要动同一个目录; 等不到就报忙 (上层转 MAP_SAVE_BUSY)
+    std::unique_lock<std::timed_mutex> io_lk(mapIoMutex(), std::defer_lock);
+    if (!io_lk.try_lock_for(std::chrono::milliseconds(wait_ms))) {
+        std::cerr << "[map_adapter] saveMapData: map io busy (load in progress), giving up: "
+                  << path << std::endl;
+        return false;
+    }
     const std::string base = mapBase(path);
     std::vector<rosiwit_slam::io::XzMapKeyframe> kfs;
     kfs.reserve(data.keyframes.size());
