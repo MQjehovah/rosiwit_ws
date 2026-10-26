@@ -110,18 +110,22 @@ void HybridAStarPlanner::setRobotFootprint(const core::Footprint & footprint)
   footprint_samples_ = core::sampleFootprint(footprint_, footprint_sample_spacing_);
   coarse_footprint_samples_ = core::sampleFootprint(
     footprint_, std::max(0.20, footprint_sample_spacing_));
-  // 注: 曾尝试用"内切圆半径"做 O(1) 快速接受, 但内切半径 (0.25) 远小于
-  // 真实轮廓 (0.86), 会把 0.70m 门洞误判为可通行 -> 已放弃. 现在搜索期用
-  // 粗采样 (0.20m), 精确性由最终路径复核保证.
-  LOG_INFO(logger_, "Robot footprint: %zu vertices, %zu samples (search uses %zu)",
-           footprint_.size(), footprint_samples_.size(), coarse_footprint_samples_.size());
+  // 外接圆 = 原点到最远顶点. 中心离障碍 >= 它 => **任何朝向**都无碰撞,
+  // 可以跳过 footprint 采样 (保守充分, 与内切圆相反: 内切只能用来判"必然碰撞").
+  circumscribed_radius_ = 0.0;
+  for (const auto & v : footprint_) {
+    circumscribed_radius_ = std::max(circumscribed_radius_, std::hypot(v.first, v.second));
+  }
+  LOG_INFO(logger_, "Robot footprint: %zu vertices, %zu samples (search %zu), circumscribed r=%.3f",
+             footprint_.size(), footprint_samples_.size(), coarse_footprint_samples_.size(), circumscribed_radius_);
 }
 
 void HybridAStarPlanner::buildInflationField()
 {
   const size_t n = static_cast<size_t>(nx_) * ny_;
   inflation_field_.assign(n, 0);
-  if (inflation_radius_ <= 0.0 || n == 0 || costmap_data_.size() != n) return;
+  obstacle_dist_m_.assign(n, 1e3f);
+  if (n == 0 || costmap_data_.size() != n) return;
 
   const int radius_cells = std::max(1, static_cast<int>(
     std::ceil(inflation_radius_ / std::max(1e-6, resolution_))));
@@ -156,6 +160,13 @@ void HybridAStarPlanner::buildInflationField()
       }
     }
   }
+  for (size_t i = 0; i < n; ++i) {
+    if (dist[i] < 1e6f) {
+      obstacle_dist_m_[i] = dist[i] * static_cast<float>(resolution_);
+    }
+  }
+  if (inflation_radius_ <= 0.0) return;   // 只建距离场 (外接圆快速接受用)
+
   for (size_t i = 0; i < n; ++i) {
     if (dist[i] >= radius_cells) continue;
     const double ratio = 1.0 - static_cast<double>(dist[i]) /
@@ -245,6 +256,18 @@ bool HybridAStarPlanner::checkPose(const core::Pose2D & pose) const
   // 快速早退: 先查中心格 (单次查表). 大量候选在这一步就能否掉,
   // 不必为每个候选做 ~60 次 footprint 采样 (Hybrid A* 扩展成本的主因).
   if (isObstacle(ix, iy)) return false;
+
+  // 外接圆快速接受 (保守充分): 中心到最近 lethal >= 外接圆半径 (0.585) 时,
+  // 车体**任何朝向**都不可能碰 -> O(1) 放行, 省掉一次 footprint 采样.
+  // 开阔区(绝大多数扩展)都命中; 走廊/门口(余量 0.40 < 0.585) 不命中,
+  // 继续走精确采样, 所以不会放宽窄道判据.
+  if (circumscribed_radius_ > 0.0 && !obstacle_dist_m_.empty()) {
+    const size_t didx = static_cast<size_t>(iy) * nx_ + ix;
+    if (didx < obstacle_dist_m_.size() &&
+        obstacle_dist_m_[didx] >= static_cast<float>(circumscribed_radius_)) {
+      return true;
+    }
+  }
 
   // Orientation-aware: check the actual polygon when supplied.  The radius
   // circle remains the fallback for callers that only know a robot radius.

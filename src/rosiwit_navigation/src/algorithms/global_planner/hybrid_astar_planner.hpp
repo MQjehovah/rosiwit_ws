@@ -110,6 +110,8 @@ private:
   double max_curvature_ = 1.5;
   double heuristic_weight_ = 1.0;
   std::vector<std::pair<double, double>> coarse_footprint_samples_;
+  std::vector<float> obstacle_dist_m_;   // 到最近 lethal 的距离(米)
+  double circumscribed_radius_ = 0.0;    // 外接圆: 快速接受用
   int heading_bins_ = 72;
   core::Footprint footprint_;
   std::vector<std::pair<double, double>> footprint_samples_;
