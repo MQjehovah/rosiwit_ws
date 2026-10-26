@@ -39,6 +39,15 @@ public:
   /// 等待线程结束 (幂等)。requestStop 之后调用; 析构里会自动调。
   void join();
 
+  /// 放弃等待: 置取消位后 detach, 析构/join 不再阻塞。
+  /// **使用条件(缺一不可)**:
+  ///   1. 线程体只访问由 shared_ptr 保活的独立状态 —— 里面**不能**有
+  ///      "可能先于本线程析构的 owner 的 this";
+  ///   2. 调用方是在不能阻塞的线程上 (ROS 服务回调 / 关停路径)。
+  /// 典型场景: 后端 worker 正卡在一次 optimize 里, 关停时不能把服务线程挂死。
+  /// 默认析构仍然 join; 这个方法只是显式放弃, 不会静默发生。
+  void abandon();
+
   bool joinable() const { return thread_.joinable(); }
   bool stopRequested() const { return source_.cancelled(); }
   const std::string & name() const { return name_; }

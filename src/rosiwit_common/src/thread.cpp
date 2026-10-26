@@ -59,4 +59,10 @@ void Thread::join()
   if (thread_.joinable()) { thread_.join(); }
 }
 
+void Thread::abandon()
+{
+  requestStop();
+  if (thread_.joinable()) { thread_.detach(); }
+}
+
 }  // namespace rosiwit_common

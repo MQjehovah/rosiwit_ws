@@ -6,6 +6,9 @@
 #include <condition_variable>
 #include <queue>
 #include <deque>
+#include <memory>
+#include "rosiwit_common/channel.hpp"
+#include "rosiwit_common/thread.hpp"
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_base.h"
 #include "slam_core/i_frontend.h"
@@ -35,7 +38,12 @@ struct AnchorState {
 };
 
 /// 自包含的后端线程. 只持有 shared_ptr<IBackend/IMapManager/AnchorState>,
-/// 不引用 SlamPipeline 的成员; reset/析构用 stopAsync() 分离线程即可, 不会 use-after-free.
+/// 不引用 SlamPipeline 的成员; reset/析构用 stopAsync() 放弃线程即可, 不会 use-after-free.
+///
+/// 线程与队列都用 rosiwit_common 的基础层:
+///   * 主队列 / 回环队列 = 有界 Channel (满时丢最旧, 与历史行为一致)
+///   * 两条线程 = Thread (body 捕获 shared_ptr self, 保证放弃后状态仍活)
+///   * OPTIMIZE 不占队列: 原子标志 + 一条 "唤醒项", 队列空时才真正跑优化
 class BackendWorker : public std::enable_shared_from_this<BackendWorker> {
 public:
     BackendWorker(std::shared_ptr<IBackend> backend,
@@ -48,8 +56,8 @@ public:
     void stopAsync();
 
 private:
-    void run();
-    void runLoop();
+    void run(rosiwit_common::CancelToken token);
+    void runLoop(rosiwit_common::CancelToken token);
     void requestOptimize();
 
     void optimizeAndPublishAnchor();
@@ -59,23 +67,17 @@ private:
     std::shared_ptr<ILoopClosure> m_loop;
     std::shared_ptr<AnchorState> m_anchor;
 
-    std::thread m_thread;
-    std::mutex m_mu;
-    std::condition_variable m_cv;
-    std::deque<BackendItem> m_queue;
-    bool m_stop = false;
+    std::unique_ptr<rosiwit_common::Thread> m_thread;
+    rosiwit_common::Channel<BackendItem> m_queue{500, rosiwit_common::OverflowPolicy::kDropOldest};
 
     // 回环检测单独线程: ScanContext + GICP 很重, 绝不能和 ADD_KF/MAP_SUBMAP
     // 共用同一个 worker, 否则一次 top-K ICP 会把后端队列堵满并丢关键帧.
-    std::thread m_loop_thread;
-    std::mutex m_loop_mu;
-    std::condition_variable m_loop_cv;
-    std::deque<KeyFrame> m_loop_queue;
+    std::unique_ptr<rosiwit_common::Thread> m_loop_thread;
+    rosiwit_common::Channel<KeyFrame> m_loop_queue{200, rosiwit_common::OverflowPolicy::kDropOldest};
     int m_loop_lc_keyframes = 0;
-    bool m_loop_stop = false;
     // OPTIMIZE 不占队列: 合并成 pending 标志, 等主队列排空后必跑一次,
     // 避免"后端优化被 queue full 静默吞掉".
-    bool m_optimize_requested = false;
+    std::atomic<bool> m_optimize_requested{false};
 };
 
 class SlamPipeline : public SlamBase {

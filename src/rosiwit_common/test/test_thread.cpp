@@ -71,6 +71,36 @@ TEST(PeriodicThread, StopIsPrompt)
   EXPECT_LT(ms, 100);              // 不能等到下一个周期才退
 }
 
+TEST(Thread, AbandonDoesNotBlockDestructor)
+{
+  // 线程体只碰 shared_ptr 保活的状态 (没有 owner 的 this), 因此可以安全 abandon
+  struct State { std::atomic<bool> ran{false}; std::atomic<bool> exited{false}; };
+  auto st = std::make_shared<State>();
+  const auto t0 = std::chrono::steady_clock::now();
+  {
+    Thread t("abandon", [st](CancelToken token) {
+      st->ran = true;
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (!token.cancelled() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      st->exited = true;
+    });
+    while (!st->ran.load()) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    t.abandon();          // 不 join
+  }                        // 析构不能等线程跑满 5s
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now() - t0).count();
+  EXPECT_LT(ms, 1000);
+  // 取消位已置: 线程应该在毫秒级内自己退出
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!st->exited.load() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_TRUE(st->exited.load());
+}
+
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

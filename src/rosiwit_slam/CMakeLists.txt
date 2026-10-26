@@ -45,6 +45,13 @@ find_package(octomap QUIET)
 find_package(yaml-cpp QUIET)
 find_package(OpenMP QUIET)
 
+# ---- 通用并发基础层 (Channel / Thread / ThreadPool / Snapshot), ROS 无关 ----
+#   与 ROS 包内联复用时由外层先 add_subdirectory, 这里用 TARGET 守卫避免重复定义。
+if(NOT TARGET rosiwit_common)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../rosiwit_common
+                     ${CMAKE_CURRENT_BINARY_DIR}/rosiwit_common)
+endif()
+
 # ---- 源文件 ----
 file(GLOB_RECURSE CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 if(NOT octomap_FOUND)
@@ -62,7 +69,7 @@ target_include_directories(rosiwit_slam PUBLIC
     ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
 target_compile_definitions(rosiwit_slam PUBLIC EIGEN_MPL2_ONLY)
 target_compile_options(rosiwit_slam PRIVATE -pipe -pthread)
-target_link_libraries(rosiwit_slam PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBS})
+target_link_libraries(rosiwit_slam PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBS} rosiwit_common)
 
 if(Sophus_FOUND)
     target_compile_definitions(rosiwit_slam PRIVATE SOPHUS_USE_BASIC_LOGGING)

@@ -40,59 +40,98 @@ BackendWorker::BackendWorker(std::shared_ptr<IBackend> backend,
       m_anchor(std::move(anchor)) {}
 
 void BackendWorker::start() {
-    if (m_thread.joinable()) return;
+    if (m_thread) return;
+    // body 捕获 self: 线程被放弃 (detach) 后, worker 状态仍由 shared_ptr 保活,
+    // 不会出现"对象已析构、线程还在用 this"。
     auto self = shared_from_this();
-    m_thread = std::thread([self] { self->run(); });
-    m_loop_thread = std::thread([self] { self->runLoop(); });
+    m_thread.reset(new rosiwit_common::Thread("slam_be",
+        [self](rosiwit_common::CancelToken token) { self->run(token); }));
+    m_loop_thread.reset(new rosiwit_common::Thread("slam_be_loop",
+        [self](rosiwit_common::CancelToken token) { self->runLoop(token); }));
 }
 
 void BackendWorker::push(BackendTask task, const KeyFrame& kf) {
     // 回环检测走独立队列/线程, 不进入主后端队列.
     if (task == BackendTask::LOOP_CLOSURE) {
-        std::lock_guard<std::mutex> lk(m_loop_mu);
-        if (m_loop_stop) return;
-        constexpr size_t kMaxLoopQueue = 200;
-        if (m_loop_queue.size() >= kMaxLoopQueue) m_loop_queue.pop_front();
-        m_loop_queue.push_back(kf);
-        m_loop_cv.notify_one();
+        m_loop_queue.push(kf);   // 满时丢最旧 (Channel 内计数)
         return;
     }
-    {
-        std::lock_guard<std::mutex> lk(m_mu);
-        if (m_stop) return;
-        // OPTIMIZE 合并成一个 pending 标志, 不占队列, 也不会被 queue full 丢掉.
-        if (task == BackendTask::OPTIMIZE) {
-            m_optimize_requested = true;
-            m_cv.notify_one();
-            return;
-        }
-        constexpr size_t kMaxQueue = 500;
-        if (m_queue.size() >= kMaxQueue) {
-            // 回环任务已独立队列; 主队列只保留 ADD_KF/MAP_SUBMAP.
-            m_queue.pop_front();
-            std::cerr << "[BackendWorker] queue full; dropped oldest task" << std::endl;
-        }
-        m_queue.push_back({task, kf});
+    // OPTIMIZE 合并成一个 pending 标志; 只在从"未置位"变"置位"时投一条唤醒项,
+    // 唤醒项本身不占语义 (worker 见到它只是继续循环, 队列空时再看标志).
+    if (task == BackendTask::OPTIMIZE) {
+        if (m_optimize_requested.exchange(true)) return;
+        m_queue.push(BackendItem{BackendTask::OPTIMIZE, KeyFrame{}});
+        return;
     }
-    m_cv.notify_one();
+    m_queue.push(BackendItem{task, kf});   // 满时丢最旧, 与历史行为一致
 }
 
 void BackendWorker::stopAsync() {
-    {
-        std::lock_guard<std::mutex> lk(m_mu);
-        m_stop = true;
-    }
-    {
-        std::lock_guard<std::mutex> lk(m_loop_mu);
-        m_loop_stop = true;
-        m_loop_queue.clear();
-    }
-    m_cv.notify_all();
-    m_loop_cv.notify_all();
     // 不 join: 后端可能正卡在一次 optimize() 里, join 会把调用线程(ROS 服务线程)挂死。
-    // worker 只持有自己的 shared 状态, 线程结束后自然释放。
-    if (m_thread.joinable()) m_thread.detach();
-    if (m_loop_thread.joinable()) m_loop_thread.detach();
+    // abandon 会置取消位后 detach; 线程体只碰 shared 状态 (body 捕获了 self),
+    // 所以这里可以安全地立刻返回。
+    for (auto* th : {&m_thread, &m_loop_thread}) {
+        if (*th) {
+            (*th)->requestStop();
+            (*th)->abandon();
+            th->reset();     // 断开 "Thread -> body -> self -> Thread" 环
+        }
+    }
+    m_queue.close();
+    m_loop_queue.close();
+}
+
+void BackendWorker::run(rosiwit_common::CancelToken token) {
+    while (!token.cancelled()) {
+        auto item = m_queue.pop_for(std::chrono::milliseconds(10));
+        if (item.has_value()) {
+            if (item->task == BackendTask::ADD_KF && m_backend) {
+                m_backend->addKeyFrame(item->kf);
+            } else if (item->task == BackendTask::MAP_SUBMAP && m_map_mgr) {
+                m_map_mgr->addSubMap(item->kf);
+            } else if (item->task == BackendTask::OPTIMIZE) {
+                m_optimize_requested.store(true);
+            }
+            continue;   // 有新任务先消费, 保证 ADD_KF/MAP_SUBMAP 不因一次长时间优化而积压
+        }
+        if (m_queue.closed()) break;
+        // 队列已空 (pop 超时): 这是唯一执行合并优化的地方
+        if (m_optimize_requested.exchange(false)) {
+            std::cout << "[BackendWorker] optimize (coalesced request)" << std::endl;
+            optimizeAndPublishAnchor();
+        }
+    }
+}
+
+void BackendWorker::requestOptimize() { push(BackendTask::OPTIMIZE); }
+
+void BackendWorker::runLoop(rosiwit_common::CancelToken token) {
+    while (!token.cancelled()) {
+        auto kf = m_loop_queue.pop_for(std::chrono::milliseconds(50));
+        if (!kf.has_value()) {
+            if (m_loop_queue.closed()) break;
+            continue;
+        }
+        if (!m_loop) continue;
+
+        // ScanContext + local-submap GICP 只在这个线程里跑.
+        m_loop->addKeyFrame(*kf);
+        if (++m_loop_lc_keyframes % 30 != 0) continue;
+
+        PoseStamped rel_pose;
+        double cov = 0.0;
+        std::string matched_id;
+        if (!m_loop->detect(rel_pose, cov, matched_id) || !m_backend) continue;
+
+        Constraint c;
+        c.from_kf = matched_id;
+        c.to_kf = kf->id;
+        c.relative_pose = rel_pose;
+        c.cov = cov;
+        m_backend->addConstraints({c});
+        // 只请求优化, 由主 backend worker 串行执行 Ceres/map rebuild.
+        requestOptimize();
+    }
 }
 
 void BackendWorker::optimizeAndPublishAnchor() {
@@ -107,92 +146,6 @@ void BackendWorker::optimizeAndPublishAnchor() {
                 m_anchor->have = true;
             }
         }
-    }
-}
-
-void BackendWorker::run() {
-    while (true) {
-        BackendItem item;
-        bool have_item = false;
-        {
-            std::unique_lock<std::mutex> lk(m_mu);
-            m_cv.wait(lk, [this] {
-                return m_stop || m_optimize_requested || !m_queue.empty();
-            });
-            if (m_stop) break;
-            if (!m_queue.empty()) {
-                item = std::move(m_queue.front());
-                m_queue.pop_front();
-                have_item = true;
-            }
-        }
-        if (have_item) {
-            if (item.task == BackendTask::ADD_KF && m_backend) {
-                m_backend->addKeyFrame(item.kf);
-            }
-            if (item.task == BackendTask::MAP_SUBMAP && m_map_mgr) {
-                m_map_mgr->addSubMap(item.kf);
-            }
-        }
-
-        // 队列排空后执行合并的优化请求. 若新任务已经到达则先继续消费,
-        // 保证 ADD_KF/MAP_SUBMAP 不因一次长时间 Ceres 优化而积压。
-        bool optimize_now = false;
-        {
-            std::lock_guard<std::mutex> lk(m_mu);
-            if (m_optimize_requested && m_queue.empty()) {
-                m_optimize_requested = false;
-                optimize_now = true;
-            }
-        }
-        if (optimize_now) {
-            std::cout << "[BackendWorker] optimize (coalesced request)" << std::endl;
-            optimizeAndPublishAnchor();
-        }
-    }
-}
-
-void BackendWorker::requestOptimize() {
-    {
-        std::lock_guard<std::mutex> lk(m_mu);
-        if (m_stop) return;
-        m_optimize_requested = true;
-    }
-    m_cv.notify_one();
-}
-
-void BackendWorker::runLoop() {
-    while (true) {
-        KeyFrame kf;
-        {
-            std::unique_lock<std::mutex> lk(m_loop_mu);
-            m_loop_cv.wait(lk, [this] {
-                return m_loop_stop || !m_loop_queue.empty();
-            });
-            if (m_loop_stop) break;
-            if (m_loop_queue.empty()) continue;
-            kf = std::move(m_loop_queue.front());
-            m_loop_queue.pop_front();
-        }
-        if (!m_loop) continue;
-
-        // ScanContext + local-submap GICP 只在这个线程里跑.
-        m_loop->addKeyFrame(kf);
-        if (++m_loop_lc_keyframes % 30 != 0) continue;
-
-        PoseStamped rel_pose;
-        double cov = 0.0;
-        std::string matched_id;
-        if (!m_loop->detect(rel_pose, cov, matched_id) || !m_backend) continue;
-
-        Constraint c;
-        c.from_kf = matched_id;
-        c.to_kf = kf.id;
-        c.relative_pose = rel_pose;
-        c.cov = cov;
-        m_backend->addConstraints({c});
-        // 只请求优化, 由主 backend worker 串行执行 Ceres/map rebuild.
-        requestOptimize();
     }
 }
 
