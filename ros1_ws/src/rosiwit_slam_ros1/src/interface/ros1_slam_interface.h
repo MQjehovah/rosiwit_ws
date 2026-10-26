@@ -1,14 +1,14 @@
 // ============================================================================
 // 旧 xz_3d_slam 接口的**发布侧** (计划 T5 / 设计文档 §5.2/§5.3)
 //
-// 只做"旧接口对外长什么样", 算法全部由 SlamEngine 里的核心提供。
+// 只做"旧接口对外长什么样", 算法全部由 SlamAlgorithm 里的核心提供。
 // 14 个话题的注册与发布条件逐条照抄 legacy.cpp:273-300 (initPub) 与
 // 333-1110 (startPub / publishCurrScan / publishMappingPath / publishPointMap /
 // publishRealtimeGridMap) 与 1112-1211 (publishCurrPose) 与 1823-1897
 // (publishLocationInfo)。行号以 E:\workspace_slam\3d_slam 那份为准。
 //
 // 发布侧 / 订阅侧(T6) / 告警码(T7) / 服务(T8) / TF(T9) / 丢失上报(T11) 均已实现;
-// 全部算法由 SlamEngine 里的核心提供, 本类只负责复刻旧接口的对外形状与状态粘合。
+// 全部算法由 SlamAlgorithm 里的核心提供, 本类只负责复刻旧接口的对外形状与状态粘合。
 // ============================================================================
 #pragma once
 
@@ -27,7 +27,7 @@
 #include <visualization_msgs/MarkerArray.h>
 
 #include <atomic>
-#include <future>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -57,7 +57,7 @@
 #include "config.h"
 #include "lost_monitor.h"  // OdomConsistencyMonitor (LostMonitor 本身已不参与状态判定)
 #include "realtime_grid.h"
-#include "slam_engine.h"
+#include "slam_algorithm.h"
 
 namespace rosiwit_slam_ros1 {
 
@@ -73,7 +73,7 @@ struct Xz3dPose {
 
 class Ros1SlamInterface {
 public:
-    Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine);
+    Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine);
     ~Ros1SlamInterface();
 
     // ---- [T6] 订阅侧往这里喂数据 ----
@@ -222,7 +222,7 @@ private:
     void broadcastMapOdom(); // 定位 LOST 时冻结最后有效 map->odom 并持续广播
 
     ros::NodeHandle nh_, pnh_;
-    SlamEngine& engine_;
+    SlamAlgorithm& engine_;
     const Xz3dConfig& cfg_;        // engine_.xzConfig()
     const bool debug_publish_;       // 旧 debug_publish_ 开关
     const bool is_debug_;
@@ -362,10 +362,16 @@ private:
     // ROS 层兼容：大图 xzmap 解析/关键帧重建在 aarch64 上可达 25s，
     // 不能让 /switch_map 服务线程被拖到 App 超时。PGM 先同步发布，
     // 完整定位地图在后台串行加载。
-    std::mutex map_switch_mtx_;
-    std::mutex map_switch_jobs_mtx_;
-    std::vector<std::future<void>> map_switch_jobs_;
+    // 完整定位地图加载投到执行器的 "disk_read" lane (threads=1, 天然串行),
+    // 不再自己 std::async —— 线程由组装根持有。
+    // 在途计数用于析构等待: 任务体捕获了 this, 绝不能析构后还在跑。
+    std::mutex map_load_mtx_;
+    std::condition_variable map_load_cv_;
+    int map_load_inflight_ = 0;
     std::atomic<bool> map_switch_busy_{false};
+
+    /// 切图任务收尾 (在途计数--, 归零时唤醒析构)。任务体与提交失败路径都要调。
+    void finishMapLoadJob();
 
     // ---- [T9] TF ----
     // 旧实现: listener_ = new tf2_ros::TransformListener(tfBuffer_) (legacy.cpp:94)。
@@ -376,7 +382,7 @@ private:
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     /// 核心估计 IMU body; 对外位姿在 ROS1 层由 base_link <- IMU 转出.
-    /// 本函数只刷新 scan_ground_z_ (由 SlamEngine::computeBaseFrames 提供).
+    /// 本函数只刷新 scan_ground_z_ (由 SlamAlgorithm::computeBaseFrames 提供).
     void computeLidarToBase();
     /// 地面在地图系里的 z。地图系原点=起始 IMU -> 地面 ≈ -IMU 安装高度。
     /// 发布 scan_f_map / curr_scan_point 时用它做 z 参考, 保证与栅格 0.1~2.0m(相对地面)同带。

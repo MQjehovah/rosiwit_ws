@@ -1,30 +1,24 @@
 // ============================================================================
 // rosiwit_slam_ros1 节点入口
 //
-// 一个进程、一个算法核心实例、一个对外接口:
-//   SlamRos1Interface = 老 xz_3d_slam 兼容接口(基线) + 不冲突的新输出
+// 只做三件事: ros::init -> 构造 SlamRosNode(组装根) -> ros::spin()。
+// 组装根内部持有 SlamAlgorithm(算法) 与 SlamRos1Interface(ROS 适配);
+// 主线程就是 ROS 线程, 只跑 topic/service 回调。
 // ============================================================================
 #include <ros/ros.h>
 
-#include <memory>
-
-#include "slam_engine.h"
-#include "facade.h"
+#include "node/slam_ros_node.h"
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "rosiwit_slam_ros1");
     ros::NodeHandle nh;
     ros::NodeHandle pnh("~");
 
-    rosiwit_slam_ros1::SlamEngine engine(nh, pnh);
-    if (!engine.ok()) {
+    rosiwit_slam_ros1::SlamRosNode node(nh, pnh);
+    if (!node.ok()) {
         return 0;
     }
-
-    // 唯一对外接口: 老接口优先, 新输出只保留不冲突项.
-    rosiwit_slam_ros1::SlamRos1Interface iface(nh, pnh, engine);
-
-    ROS_INFO("[rosiwit_slam_ros1] node up (single interface)");
+    ROS_INFO("[rosiwit_slam_ros1] node up (SlamRosNode / SlamAlgorithm / SlamRos1Interface)");
     ros::spin();
     return 0;
 }

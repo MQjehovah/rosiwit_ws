@@ -67,7 +67,7 @@ bool Ros1SlamInterface::callSwitchMapPro(xzrobot_ros_dependency::SwitchMap::Requ
 void Ros1SlamInterface::applyInitPose(
     const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane) {
     // **不在这里重复实现**: /switch_map、/relocation 与 /initialpose 共用
-    // SlamEngine::applyInitPose() —— insane 归零、z 归零、车身->雷达安装变换换算、setInitPose
+    // SlamAlgorithm::applyInitPose() —— insane 归零、z 归零、车身->雷达安装变换换算、setInitPose
     // 全部只有一份。这里只保留本路径的差异: z 强制归零。
     if (!engine_.algo()) return;
     engine_.applyInitPose(in, zero_if_insane, /*force_z_zero=*/true);
@@ -157,30 +157,39 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
     return ctx;
 }
 
+void Ros1SlamInterface::finishMapLoadJob() {
+    std::lock_guard<std::mutex> lk(map_load_mtx_);
+    if (map_load_inflight_ > 0) --map_load_inflight_;
+    if (map_load_inflight_ == 0) map_load_cv_.notify_all();
+}
+
 void Ros1SlamInterface::startMapLoadJob(
     const MapSwitchContext& ctx,
     const geometry_msgs::PoseWithCovarianceStamped& init_pose) {
-    std::lock_guard<std::mutex> jobs_lk(map_switch_jobs_mtx_);
-    // 回收已完成 job，避免连续切图时 future 列表无限增长。
-    for (auto it = map_switch_jobs_.begin(); it != map_switch_jobs_.end();) {
-        if (it->valid() &&
-            it->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            try { it->get(); } catch (...) {}
-            it = map_switch_jobs_.erase(it);
-        } else {
-            ++it;
-        }
+    // 大图解析在 aarch64 上可达 25s, 不能拖住 /switch_map 服务线程;
+    // 投到执行器的 "disk_read" lane: threads=1 => 串行, 天然替代原来的
+    // map_switch_mtx_ + future 列表; generation 保证只有最后一次请求生效。
+    {
+        std::lock_guard<std::mutex> lk(map_load_mtx_);
+        ++map_load_inflight_;   // 必须在提交前自增, 否则析构可能漏等
     }
 
-    map_switch_jobs_.push_back(std::async(std::launch::async,
-        [this, base = ctx.base, init_pose, switch_gen = ctx.generation]() {
-            std::lock_guard<std::mutex> lk(map_switch_mtx_);
+    const std::string base = ctx.base;
+    const uint64_t gen = ctx.generation;
+    const bool accepted = engine_.runOnLane("disk_read", "switch_map_load",
+        [this, base, init_pose, gen](rosiwit_common::CancelToken) {
+            // 无论走哪条返回路径都要收尾
+            struct InflightGuard {
+                Ros1SlamInterface* self;
+                ~InflightGuard() { self->finishMapLoadJob(); }
+            } guard{this};
+
             map_switch_busy_.store(true);
             rosiwit_slam::MapData map_data;
             const bool loaded = map_adapter::loadMapData(base, map_data) &&
                                 engine_.algo() &&
                                 engine_.algo()->loadLocalizationMapData(map_data);
-            if (switch_gen != map_switch_generation_.load()) {
+            if (gen != map_switch_generation_.load()) {
                 std::cout << "[ros1_slam] /switch_map: discard stale map load: "
                           << base << std::endl;
                 map_switch_busy_.store(false);
@@ -199,7 +208,15 @@ void Ros1SlamInterface::startMapLoadJob(
             map_switch_busy_.store(false);
             std::cout << "[ros1_slam] /switch_map background localization map ready: "
                       << base << std::endl;
-        }));
+        });
+
+    if (!accepted) {
+        // 池满/已关停: 保持"切图中"标志不留悬, 明确报错
+        finishMapLoadJob();
+        map_switch_busy_.store(false);
+        ROS_ERROR_STREAM("[ros1_slam] /switch_map: rejected by executor (lane busy): "
+                         << base);
+    }
 }
 
 bool Ros1SlamInterface::handleSwitchMap(

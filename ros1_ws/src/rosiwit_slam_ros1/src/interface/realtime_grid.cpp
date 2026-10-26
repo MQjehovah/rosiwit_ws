@@ -116,65 +116,49 @@ void RealtimeGrid::setGridSource(GridSource s) {
 }
 
 void RealtimeGrid::start(double hz) {
-    std::lock_guard<std::mutex> lk(m_mtx_);
-    if (!m_stop_) return;  // 已经在跑
-    m_hz_ = (hz > 0.0) ? hz : 1.0;
-    m_stop_ = false;
-    m_thread_ = std::thread(&RealtimeGrid::run, this);
+    if (m_thread_) return;   // 已经在跑
+    const double rate = (hz > 0.0) ? hz : 1.0;
+    const auto period = std::chrono::microseconds(
+        static_cast<int64_t>(1e6 / rate));
+    // PeriodicThread: sleep_until(next += period), 单次重算超时不会累积漂移
+    m_thread_.reset(new rosiwit_common::PeriodicThread(
+        "rt_grid", period, [this] { runOnce(); }));
 }
 
 void RealtimeGrid::stop() {
-    {
-        std::lock_guard<std::mutex> lk(m_mtx_);
-        m_stop_ = true;
-    }
-    m_cv_.notify_all();
-    if (m_thread_.joinable()) m_thread_.join();
+    if (!m_thread_) return;
+    m_thread_->requestStop();
+    m_thread_->join();
+    m_thread_.reset();
 }
 
 bool RealtimeGrid::latest(rosiwit_slam::GridInfo& out) const {
-    std::lock_guard<std::mutex> lk(m_out_mtx_);
-    if (!m_has_) return false;
-    out = m_latest_;
+    const auto snap = m_slot_.load();
+    if (!snap) return false;
+    out = *snap;
     return true;
 }
 
 void RealtimeGrid::clear() {
-    std::lock_guard<std::mutex> lk(m_out_mtx_);
-    m_latest_ = rosiwit_slam::GridInfo();
-    m_has_ = false;
+    m_slot_.publish(nullptr);   // 等价于"从没算出过"
 }
 
-void RealtimeGrid::run() {
-    std::unique_lock<std::mutex> lk(m_mtx_);
-    while (!m_stop_) {
-        // 快照配置后放开锁: 重算是 O(点数), 不能占着锁, 否则 setConfig/stop 会被卡住
-        const GridSource gsrc = m_grid_source_;
-        const rosiwit_slam::GridMapConfig cfg = m_cfg_;
-        const rosiwit_slam::GridPostConfig post = m_post_;
-        const std::string gen = m_generator_;
-        const double hz = m_hz_;
-        lk.unlock();
-
-        if (gsrc) {
-            try {
-                rosiwit_slam::GridInfo info;
-                // 直接取核心生成好的栅格 (与存 pgm 同一条路径, 有逐帧地面处理)
-                const bool ok = gsrc(info);
-                if (ok) {
-                    std::lock_guard<std::mutex> out_lk(m_out_mtx_);
-                    m_latest_ = std::move(info);
-                    m_has_ = true;
-                }
-            } catch (const std::exception& e) {
-                ROS_WARN_STREAM_THROTTLE(5.0, "[realtime_grid] build failed: " << e.what());
-            }
+void RealtimeGrid::runOnce() {
+    // 快照配置后放开锁: 重算是 O(点数), 不能占着锁, 否则 setConfig/stop 会被卡住
+    GridSource gsrc;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx_);
+        gsrc = m_grid_source_;
+    }
+    if (!gsrc) return;
+    try {
+        rosiwit_slam::GridInfo info;
+        // 直接取核心生成好的栅格 (与存 pgm 同一条路径, 有逐帧地面处理)
+        if (gsrc(info)) {
+            m_slot_.publish(std::make_shared<const rosiwit_slam::GridInfo>(std::move(info)));
         }
-
-        lk.lock();
-        if (m_stop_) break;
-        m_cv_.wait_for(lk, std::chrono::duration<double>(1.0 / hz),
-                       [this] { return m_stop_; });
+    } catch (const std::exception& e) {
+        ROS_WARN_STREAM_THROTTLE(5.0, "[realtime_grid] build failed: " << e.what());
     }
 }
 

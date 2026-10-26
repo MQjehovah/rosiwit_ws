@@ -35,14 +35,14 @@
 #include "rosiwit_slam_ros1/SaveMap.h"
 #include "rosiwit_slam_ros1/SetSlamMode.h"
 
-#include "slam_engine.h"
+#include "slam_algorithm.h"
 #include "slam_core/pose_filter.h"
 
 namespace rosiwit_slam_ros1 {
 
 class RosiwitInterface {
 public:
-    RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine,
+    RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine,
                      bool suppress_conflicts = false);
 
 private:
@@ -77,7 +77,7 @@ private:
                        rosiwit_slam_ros1::SetSlamMode::Response& res);
 
     ros::NodeHandle nh_, pnh_;
-    SlamEngine& engine_;
+    SlamAlgorithm& engine_;
     const bool suppress_conflicts_;   // 冲突输出抑制开关
 
     ros::Publisher odom_pub_, odom_nav_pub_, path_pub_, body_cloud_pub_, world_cloud_pub_,

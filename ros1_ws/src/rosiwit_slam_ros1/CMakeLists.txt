@@ -60,8 +60,12 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam
 # ==================== 通用并发基础层 (ROS 无关, 源码共享) ====================
 #   Channel / CancelToken / Thread / PeriodicThread / ThreadPool / SnapshotSlot
 #   约定: 业务层不创建线程, 只声明 lane 与任务; 详见 src/rosiwit_common/README.md
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_common
-                 ${CMAKE_CURRENT_BINARY_DIR}/rosiwit_common)
+#   核心库已经 link rosiwit_common, 它会在自己的构建树里 add_subdirectory 一次;
+#   这里用 TARGET 守卫, 保证两种构建顺序都不会重复定义同名目标。
+if(NOT TARGET rosiwit_common)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_common
+                     ${CMAKE_CURRENT_BINARY_DIR}/rosiwit_common)
+endif()
 
 # ==================== 接口层静态库 (便于 gtest 直接链接) ====================
 set(ROSIWIT_ROS1_LIB_SOURCES
@@ -69,7 +73,8 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     src/interface/realtime_grid.cpp
     src/interface/internal.cpp
     src/monitor/lost_monitor.cpp
-    src/engine/slam_engine.cpp
+    src/engine/slam_algorithm.cpp
+    src/node/slam_ros_node.cpp
     src/interface/outputs.cpp
     src/interface/convert.cpp
     src/interface/assembly.cpp
@@ -87,7 +92,7 @@ target_include_directories(rosiwit_slam_ros1_lib PUBLIC
     src src/config src/engine src/interface src/monitor src/io
     ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 target_compile_options(rosiwit_slam_ros1_lib PRIVATE -pipe -pthread)
-target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam ${OpenCV_LIBS})
+target_link_libraries(rosiwit_slam_ros1_lib PUBLIC ${catkin_LIBRARIES} rosiwit_slam rosiwit_common ${OpenCV_LIBS})
 add_dependencies(rosiwit_slam_ros1_lib ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 install(TARGETS rosiwit_slam_ros1_lib
     ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

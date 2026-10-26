@@ -1,5 +1,5 @@
 // ============================================================================
-// SlamEngine —— 算法核心的唯一持有者 (计划 T4)
+// SlamAlgorithm —— 算法核心的唯一持有者 (计划 T4)
 //
 // 本类里的内容是从原 `rosiwit_slam_ros1_node.cpp` **原样搬出来**的:
 //   核心 YAML 装载 -> SlamFactory::create -> init -> 输入订阅 -> 输出快照 -> 50Hz 泵
@@ -38,6 +38,11 @@
 #include "slam_core/online_calibrator.h"
 #include "slam_core/calibration_controller.h"
 
+#include "rosiwit_common/channel.hpp"
+#include "rosiwit_common/executor.hpp"
+#include "rosiwit_common/periodic.hpp"
+#include "rosiwit_common/thread.hpp"
+
 #include "config.h"
 
 namespace rosiwit_slam_ros1 {
@@ -49,13 +54,21 @@ namespace rosiwit_slam_ros1 {
 Xz3dConfPaths defaultXz3dPaths();
 Xz3dConfPaths defaultXz3dPaths(ros::NodeHandle& pnh);
 
-class SlamEngine {
+class SlamAlgorithm {
 public:
-    SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh);
-    ~SlamEngine();
+    /// executor: 由组装根注入的通用执行器 (可为 nullptr——只做同步后台任务)。
+    /// 约定: 本类不创建线程池, 只用注入的执行器; 自带的两条线程是
+    ///       FrontEnd(帧序) 与 Tick(50Hz 发布), 属于"顺序执行器"。
+    SlamAlgorithm(ros::NodeHandle& nh, ros::NodeHandle& pnh,
+                  rosiwit_common::IExecutor* executor = nullptr);
 
-    SlamEngine(const SlamEngine&) = delete;
-    SlamEngine& operator=(const SlamEngine&) = delete;
+    /// 启停 (由组装根控制): start() 起 FrontEnd+Tick 线程, shutdown() 逆序关停。
+    void start();
+    void shutdown();
+    ~SlamAlgorithm();
+
+    SlamAlgorithm(const SlamAlgorithm&) = delete;
+    SlamAlgorithm& operator=(const SlamAlgorithm&) = delete;
 
     /// init 成功才为 true。为 false 时 core 可能为 nullptr, 调用方不应再建接口层。
     bool ok() const { return ok_; }
@@ -70,6 +83,11 @@ public:
     const std::string& bodyFrame() const { return cfg_.body_frame; }
     const std::string& imuTopic() const { return cfg_.imu_topic; }
     const std::string& lidarTopic() const { return cfg_.lidar_topic; }
+    /// 可选输入是否启用 (由核心 YAML 决定); 订阅由 SlamRosNode 负责
+    bool useVo() const { return vo_enabled_; }
+    bool useAbsolute() const { return absolute_enabled_; }
+    const std::string& voTopic() const { return cfg_.vo_topic; }
+    const std::string& absoluteTopic() const { return cfg_.absolute_topic; }
 
     // ---- 输出/地图 快照 (线程安全) ----
     /// 有输出就拷到 out 返回 true。**不过滤** has_new_pose —— 调用方自己看
@@ -128,10 +146,23 @@ public:
     void setRawLidarHook(std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> hook);
 
     // ---- 输入 (公开给测试/其它接口复用) ----
+    // ---- 输入入口: 由 SlamRosNode 订阅后转发 (本类不再自己 subscribe) ----
+    // 只做入队: 真正的处理在 FrontEnd 线程 (frontendLoop -> processImu/processLidar),
+    // 这样 ROS spinner 上不再做 PCL 转换与核心计算。
     void onImuMsg(const sensor_msgs::Imu::ConstPtr& msg);
     void onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg);
     void onOdomMsg(const nav_msgs::Odometry::ConstPtr& msg);
     void onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg);
+    void onVoMsg(const nav_msgs::Odometry::ConstPtr& msg) { voCB(msg); }
+    void onAbsoluteMsg(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
+    { absoluteCB(msg); }
+
+    /// 把任务投到注入的执行器 (lane 由使用方声明, 例如 "disk_read").
+    /// 返回 false = 被拒绝 (池满/已关停/无执行器)。
+    bool runOnLane(const std::string& lane, std::string name,
+                   std::function<void(rosiwit_common::CancelToken)> job);
+
+    rosiwit_common::IExecutor* executor() const { return executor_; }
 
 private:
     struct Cfg {
@@ -163,13 +194,16 @@ private:
     /// 删除 base_link 机身盒内的点 (输入点云仍为雷达系, 用 base_lidar_ 变换).
     void applySelfFilter(rosiwit_slam::CloudType::Ptr& cloud);
 
-    void imuCB(const sensor_msgs::Imu::ConstPtr& msg);
-    void lidarCB(const sensor_msgs::PointCloud2::ConstPtr& msg);
-    void initialPoseCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg);
     void voCB(const nav_msgs::Odometry::ConstPtr& msg);
     void absoluteCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg);
     void onOutput(const rosiwit_slam::SlamOutput& out);
-    void processCB(const ros::TimerEvent&);
+    /// 真正的帧处理 (只在 FrontEnd 线程上跑)
+    void processImu(const sensor_msgs::Imu::ConstPtr& msg);
+    void processLidar(const sensor_msgs::PointCloud2::ConstPtr& msg);
+    /// FrontEnd: 唯一消费帧的线程 (替代原 50Hz processCB + input_worker)
+    void frontendLoop(rosiwit_common::CancelToken token);
+    /// 50Hz tick: 只跑接口挂的发布钩子 (原 processCB 的 tick_hooks 部分)
+    void tickLoop();
 
     // 传感器输入队列: ROS 回调只入队, 重处理在独立线程串行执行。
     // 这样 Lidar 的 PCL 转换和核心 onLidar 不再阻塞 spinner/timer。
@@ -179,10 +213,9 @@ private:
         sensor_msgs::Imu::ConstPtr imu;
         sensor_msgs::PointCloud2::ConstPtr lidar;
     };
-    static constexpr size_t kMaxInputQueue = 4096;
+    // 有界输入队列: 满时丢最旧 (过期帧对定位/建图没用), 计数在 Channel 里。
+    static constexpr size_t kInputCapacity = 512;
     void enqueueInput(InputItem item);
-    void inputWorkerLoop();
-    void stopInputWorker();
     void logInputStats();
 
     ros::NodeHandle nh_, pnh_;
@@ -196,6 +229,8 @@ private:
     rosiwit_slam::SlamBase* base_ = nullptr;
     bool ok_ = false;
     bool online_calib_enabled_ = true;
+    bool vo_enabled_ = false;
+    bool absolute_enabled_ = false;
     mutable std::mutex calib_mutex_;
     rosiwit_slam::OnlineTimeCalibrator online_time_calib_;
     rosiwit_slam::YawExtrinsicCalibrator yaw_calib_;
@@ -205,19 +240,15 @@ private:
     double last_imu_stamp_ = -1.0;
     bool have_imu_yaw_ = false;
 
-    ros::Subscriber imu_sub_, lidar_sub_, init_pose_sub_, vo_sub_, absolute_sub_;
-    ros::Timer process_timer_;
+    rosiwit_common::IExecutor* executor_ = nullptr;
 
-    std::mutex core_mu_;                 // 保护 algo_ 的输入与重建, 避免 reset 与 worker 并发
-    std::deque<InputItem> input_queue_;
-    std::mutex input_queue_mu_;
-    std::condition_variable input_queue_cv_;
-    std::thread input_worker_;
-    bool input_stop_ = false;
+    std::mutex core_mu_;                 // 保护 algo_ 的输入与重建 (reset vs FE)
+    rosiwit_common::Channel<InputItem> input_{kInputCapacity,
+      rosiwit_common::OverflowPolicy::kDropOldest};
+    std::unique_ptr<rosiwit_common::Thread> frontend_;
+    std::unique_ptr<rosiwit_common::PeriodicThread> tick_;
     std::atomic<uint64_t> input_imu_in_{0};
     std::atomic<uint64_t> input_lidar_in_{0};
-    std::atomic<uint64_t> input_imu_dropped_{0};
-    std::atomic<uint64_t> input_lidar_dropped_{0};
     std::atomic<uint64_t> input_imu_done_{0};
     std::atomic<uint64_t> input_lidar_done_{0};
 

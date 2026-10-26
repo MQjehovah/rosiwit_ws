@@ -510,3 +510,79 @@ test_snapshot    4   发布→读取/version 单调/并发读者无撕裂
 
 **下一步 M0b**：`SlamRosNode` 组装根 + 注入；`SlamAlgorithm` 内部建 `Channel<Frame>` + `Thread(FrontEnd)`，
 FrontEnd 先直接调现有 `onImu/onLidar`（行为等价），再逐步替换。
+
+
+## 10.8 M0b / M1 / Pass C 落地记录（2026-10-26）
+
+### 结构
+
+```
+ros::spin (主线程)                      ← topic/service 回调, 只做入队/取快照
+   └─ SlamRosNode                       ← 组装根 (只做三件事: 建执行资源 / 按序注入 / 管关停)
+        ├─ rosiwit_common::ThreadPool   ← lane: disk_write 1, disk_read 1, cpu N, feature 1
+        ├─ SlamAlgorithm                ← 算法实例 (ROS-free 核心的宿主)
+        │    ├─ Thread        "slam_fe"    ← FrontEnd: 唯一消费帧 (IMU/LiDAR)
+        │    └─ PeriodicThread "slam_tick" ← 50 Hz: 只跑接口挂的发布钩子
+        └─ SlamRos1Interface            ← ROS 适配 (话题/服务/TF), 通过 addTickHook 挂到 tick
+```
+
+* `SlamEngine` → `SlamAlgorithm`（文件 `slam_algorithm.{h,cpp}`）：名字对齐"算法实例"，
+  ROS 薄壳只做转发。
+* **订阅只有一处**：`SlamRosNode` 订阅 imu/lidar/initialpose/vo/absolute，
+  回调 `SlamAlgorithm::onImuMsg/onLidarMsg` **只入队**（`Channel<InputItem>`, 容量 512, 丢旧保新），
+  真正的处理是 `processImu/processLidar`，只在 FrontEnd 线程上跑。
+  （踩过的坑：一度把订阅指向处理函数 `onImuMsg`，结果 FrontEnd 线程空转、算法退回 ROS spinner 上跑。）
+* `SlamAlgorithm::start()/shutdown()` 由组装根调用；接口层的 `addTickHook()` 必须在 `start()` 之前
+  （所以构造顺序是 pool → algo → iface，再 `algo.start()`）。
+* 关停顺序固定：`iface_` 析构（停发布定时器）→ `algo_.shutdown()`（close 队列 + join FE + join tick）
+  → `pool_.shutdown(true)`。**池最后关**：算法关停时仍可能投递任务（如 LOST 时的飞行记录落盘）。
+
+### 线程数变化
+
+| 之前 | 现在 |
+|---|---|
+| `input_worker_`（手搓 deque+mutex+cv） | `Thread("slam_fe")` + `Channel<InputItem>` |
+| `ros::Timer(0.02)` 的 `processCB`（排空核心 + 跑 tick 钩子） | tick 钩子 → `PeriodicThread("slam_tick")`；核心排空 → FrontEnd 每处理完一帧 `tryPopAndProcess()` |
+| `std::async(launch::async)` 后台切图 + `vector<future>` 回收 | `runOnLane("disk_read", ...)`；`disk_read` lane `threads=1` 天然串行，替代 `map_switch_mtx_` |
+
+### Pass C：切图改投执行器
+
+`Ros1SlamInterface::startMapLoadJob` 从 `std::async` 改为 `engine_.runOnLane("disk_read", "switch_map_load", job)`：
+
+* 串行性由 lane 保证（`threads=1`），不再需要 `map_switch_mtx_` 与 future 列表；
+* `map_switch_generation_` 守卫保留：只有最后一次切图请求会把结果应用下去，过期任务读完即丢弃；
+* 任务体捕获 `this`（接口对象），因此新增**在途计数 + 条件变量**：析构时等待在途 job 归零，
+  避免"接口已析构、job 还在跑"（执行器由组装根持有，关停晚于接口析构）；
+* 提交被拒（池满/已关停）时显式清 `map_switch_busy_` 并报错，不会留下永久"切图中"。
+
+### 验收
+
+* `catkin_make` 0 error；`catkin_test_results: 246 tests, 0 failures`。
+* 仿真 3 目标回归（`route_run2.sh`）：见下方"验收基线"。
+
+
+## 10.9 M2 计划（后端线程与地图快照）
+
+现状盘点（M0b 之后仍自建线程的地方）：
+
+| 位置 | 现状 | 问题 |
+|---|---|---|
+| `rosiwit_slam/core: BackendWorker` | 2 条 `std::thread`（主队列 + 回环队列）+ 手搓 deque/mutex/cv；`stopAsync()` 用 **detach** | detach 唯一安全的原因是 lambda 捕获了 `shared_ptr self`；队列/唤醒语义重复实现 |
+| `interface: RealtimeGrid` | 1 条 `std::thread` + `wait_for(1/hz)` + 结果加锁拷贝 | 无漂移调度靠 sleep；发布侧每次拷一份栅格（几十万 cell） |
+| `LogClosureWorker`(core) / 局部 `std::thread` | 同上 | 待统一 |
+
+M2 做法：
+
+1. **core 引入基础层**：`add_subdirectory(../rosiwit_common)`（`if(NOT TARGET rosiwit_common)` 守卫，
+   避免 ROS1/ROS2 包重复添加），`target_link_libraries(rosiwit_slam PUBLIC rosiwit_common)`。
+2. **BackendWorker**：
+   * 主队列 → `Channel<BackendItem>{500, kDropOldest}`（与现有"满则丢最旧"一致）；
+   * 回环队列 → `Channel<KeyFrame>{200, kDropOldest}`；
+   * 两条线程 → `rosiwit_common::Thread`，body 捕获 `shared_ptr self`（保证 detach 后状态仍活）；
+   * OPTIMIZE 仍合并：`std::atomic<bool> optimize_requested_` + `pop_for(20ms)`，队列空且置位时优化；
+   * `stopAsync()` → `requestStop()` + `abandon()`：**不阻塞服务线程**，语义与今天一致，
+     但 `abandon()` 是显式 API（默认析构仍 join），并把使用条件写进 `thread.hpp`。
+3. **RealtimeGrid**：`std::thread` → `PeriodicThread`；`latest()` 的整份拷贝 → `SnapshotSlot<GridInfo>`
+   （`shared_ptr<const GridInfo>`），发布侧零拷贝、读取侧拿到一致快照。
+4. **验收**：前端帧间隔 p99 不退化；`/map` 发布期间 `/lio_odom` 频率不掉；
+   切图 25 s 期间照常出位姿；后端优化不阻塞 FE。

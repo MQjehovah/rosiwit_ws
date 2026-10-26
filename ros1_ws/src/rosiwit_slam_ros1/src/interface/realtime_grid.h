@@ -13,11 +13,13 @@
 #pragma once
 
 #include <chrono>
-#include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
+
+#include "rosiwit_common/periodic.hpp"
+#include "rosiwit_common/snapshot.hpp"
 
 #include "algorithms/grid_map/grid_map_postprocess.h" // GridPostConfig / applyGridPostProcess
 #include "slam_core/i_grid_map_generator.h"           // GridMapConfig
@@ -57,26 +59,24 @@ public:
 
     /// 有结果就拷到 out 并返回 true; 从没算出过返回 false
     bool latest(rosiwit_slam::GridInfo& out) const;
+    /// 零拷贝读取: 拿到一份不可变快照 (发布侧不再整份复制给每个读者)
+    std::shared_ptr<const rosiwit_slam::GridInfo> latestPtr() const { return m_slot_.load(); }
 
     /// 丢掉缓存的最新栅格 (核心重建/重新进建图时调用) —— 否则会一直发上一轮那张。
     void clear();
 
 private:
-    void run();
+    /// 一轮: 快照配置 -> 重算 -> 发布不可变快照 (由 PeriodicThread 按周期调用)
+    void runOnce();
 
-    mutable std::mutex m_mtx_;
-    std::condition_variable m_cv_;
-    bool m_stop_ = true;
-    double m_hz_ = 1.0;
+    mutable std::mutex m_mtx_;          // 保护配置与 source (只在 set*/快照时短暂持有)
     GridSource m_grid_source_;
     rosiwit_slam::GridMapConfig m_cfg_;
     rosiwit_slam::GridPostConfig m_post_;
     std::string m_generator_ = "height_projection";
-    std::thread m_thread_;
 
-    mutable std::mutex m_out_mtx_;
-    rosiwit_slam::GridInfo m_latest_;
-    bool m_has_ = false;
+    std::unique_ptr<rosiwit_common::PeriodicThread> m_thread_;
+    rosiwit_common::SnapshotSlot<rosiwit_slam::GridInfo> m_slot_;   // 发布侧无锁
 };
 
 } // namespace rosiwit_slam_ros1

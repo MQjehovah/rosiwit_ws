@@ -14,13 +14,13 @@
 
 #include "ros1_slam_interface.h"
 #include "outputs.h"
-#include "slam_engine.h"
+#include "slam_algorithm.h"
 
 namespace rosiwit_slam_ros1 {
 
 class SlamRos1Interface {
 public:
-    SlamRos1Interface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine)
+    SlamRos1Interface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine)
         : interface_(new Ros1SlamInterface(nh, pnh, engine)),
           outputs_(new RosiwitInterface(nh, pnh, engine, /*suppress_conflicts=*/true)) {}
 

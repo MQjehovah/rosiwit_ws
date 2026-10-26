@@ -18,7 +18,7 @@ using namespace rosiwit_slam;
 
 namespace rosiwit_slam_ros1 {
 
-RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamEngine& engine,
+RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine,
                                    bool suppress_conflicts)
     : nh_(nh), pnh_(pnh), engine_(engine),
       suppress_conflicts_(suppress_conflicts) {

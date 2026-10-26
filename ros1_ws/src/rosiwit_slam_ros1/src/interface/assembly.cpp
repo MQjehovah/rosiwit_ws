@@ -1,6 +1,6 @@
 // ============================================================================
 // Ros1SlamInterface 装配层：构造、发布器/订阅器/服务注册、模式机、定时器。
-// 行为契约仍以旧 xz_3d_slam 接口为准；算法全部委托 SlamEngine。
+// 行为契约仍以旧 xz_3d_slam 接口为准；算法全部委托 SlamAlgorithm。
 // ============================================================================
 
 #include "ros1_slam_interface.h"
@@ -29,7 +29,7 @@ using namespace rosiwit_slam_ros1::interface_internal;
 
 namespace rosiwit_slam_ros1 {
 Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
-                                                 SlamEngine& engine)
+                                                 SlamAlgorithm& engine)
     : nh_(nh), pnh_(pnh), engine_(engine),
       cfg_(engine.xzConfig()),
       debug_publish_(engine.xzConfig().debug_publish),
@@ -110,11 +110,14 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
 
 Ros1SlamInterface::~Ros1SlamInterface() {
     // 后台切图任务若还在解析地图，等它结束；避免析构后访问 engine/this。
-    std::lock_guard<std::mutex> lk(map_switch_jobs_mtx_);
-    for (auto& job : map_switch_jobs_) {
-        if (!job.valid()) continue;
-        try { job.get(); } catch (...) {}
+    // 任务跑在执行器的 "disk_read" lane 上，必须在此处同步等待 (执行器由
+    // 组装根持有, 关停顺序晚于本对象析构)。
+    std::unique_lock<std::mutex> lk(map_load_mtx_);
+    if (map_load_inflight_ > 0) {
+        ROS_INFO("[ros1_slam] waiting for %d in-flight map load job(s) to finish",
+                 map_load_inflight_);
     }
+    map_load_cv_.wait(lk, [this] { return map_load_inflight_ == 0; });
 }
 
 void Ros1SlamInterface::initPub() {
@@ -277,7 +280,7 @@ void Ros1SlamInterface::setInputSeen(bool imu, bool laser) {
 
 void Ros1SlamInterface::initSub() {
     // 旧 startSub (legacy.cpp:193-215) 一共 7 个订阅:
-    //   imu + lidar (由 laser_type 分两个分支选话题)  -> 已在 SlamEngine 里按 laser_type 复刻
+    //   imu + lidar (由 laser_type 分两个分支选话题)  -> 已在 SlamAlgorithm 里按 laser_type 复刻
     //   initialpose                                  -> 引擎已经订阅 (行为一致), 不重复
     //   scan / odom / lift/state / lift_type         -> 这里补上
     // 所以可观测的订阅集合与旧实现一致, 只是前 3 个的句柄在引擎里。
@@ -299,7 +302,7 @@ void Ros1SlamInterface::initSub() {
         onRawInputCloud(c, t);
     });
     std::cout << "[ros1_slam] subscribed: scan, odom, lift/state, lift_type "
-              << "(imu/lidar/initialpose 由 SlamEngine 订阅)" << std::endl;
+              << "(imu/lidar/initialpose 由 SlamAlgorithm 订阅)" << std::endl;
 }
 void Ros1SlamInterface::initClients() {
     tag_detect_client_ =

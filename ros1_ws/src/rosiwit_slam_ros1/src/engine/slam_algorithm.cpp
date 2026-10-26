@@ -1,8 +1,8 @@
 // ============================================================================
-// SlamEngine 实现 —— 全部从原 rosiwit_slam_ros1_node.cpp 搬移。
+// SlamAlgorithm 实现 —— 全部从原 rosiwit_slam_ros1_node.cpp 搬移。
 // 输入话题由机器人现有 sensor_config 决定，其余行为保持不变。
 // ============================================================================
-#include "slam_engine.h"
+#include "slam_algorithm.h"
 
 #include <ros/package.h>
 
@@ -40,7 +40,7 @@ Xz3dConfPaths defaultXz3dPathsImpl(ros::NodeHandle* pnh) {
     // 两种情形都与旧实现对得上。
     const std::string pkg = ros::package::getPath("rosiwit_slam_ros1");
     if (pkg.empty()) {
-        ROS_WARN("[slam_engine] ros::package::getPath('rosiwit_slam_ros1') failed; "
+        ROS_WARN("[slam_algo] ros::package::getPath('rosiwit_slam_ros1') failed; "
                  "legacy conf falls back to built-in defaults");
     }
     // Simulation / alternate sensor rigs can point at their own legacy JSON.
@@ -58,7 +58,7 @@ Xz3dConfPaths defaultXz3dPathsImpl(ros::NodeHandle* pnh) {
         std::ifstream probe(old_conf);
         p.proj_conf_json = probe.good() ? old_conf : (pkg + "/conf/slam_conf.json");
     }
-    std::cout << "[slam_engine] legacy main conf source: " << p.proj_conf_json << std::endl;
+    std::cout << "[slam_algo] legacy main conf source: " << p.proj_conf_json << std::endl;
     // 旧实现只有一个主配置来源。T1 的 Xz3dConfig 留了 proj(优先)/pkg(兜底) 两级,
     // 这里让二者指向同一份文件。见计划 §5.6。
     p.pkg_conf_json = p.proj_conf_json;
@@ -91,7 +91,7 @@ std::string writeXz3dOverrideYaml(const std::string& base_yaml,
     std::ifstream in(base_yaml);
     std::ofstream out(out_path, std::ios::trunc);
     if (!out.good()) {
-        ROS_ERROR_STREAM("[slam_engine] cannot write override yaml: " << out_path);
+        ROS_ERROR_STREAM("[slam_algo] cannot write override yaml: " << out_path);
         return base_yaml;   // 写不出来就退回基底, 至少不把 core 指向不存在的文件
     }
     if (in.good()) {
@@ -153,7 +153,7 @@ std::string writeXz3dOverrideYaml(const std::string& base_yaml,
 
 } // namespace  <-- 临时收起匿名 namespace: 成员函数必须定义在 rosiwit_slam_ros1 里
 
-bool SlamEngine::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
+bool SlamAlgorithm::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
                                        std::string& source) {
     // 帧名可配; 默认都是 lidar —— 本机点云与 IMU 由同一个万集 SDK 节点发布, frame_id 相同
     std::string lidar_frame = "lidar", imu_frame = "lidar";
@@ -188,12 +188,12 @@ bool SlamEngine::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
             ros::Duration(0.05).sleep();
         }
     }
-    ROS_WARN_STREAM("[slam_engine] TF '" << imu_frame << "' <- '" << lidar_frame
+    ROS_WARN_STREAM("[slam_algo] TF '" << imu_frame << "' <- '" << lidar_frame
                     << "' unavailable within 3s; keeping r_il/t_il from the core yaml");
     return false;
 }
 
-bool SlamEngine::computeBaseFrames(bool blocking) {
+bool SlamAlgorithm::computeBaseFrames(bool blocking) {
     // 行业标准: 算法估计 IMU body; ROS1 接口层负责 base_link <-> IMU 的输出/输入换算.
     // base_lidar 只给 BBS 的车体系投影用 (输入仍是原始 lidar 点云).
     if (base_imu_.valid) return true;   // 输出/初始位姿只需要 base_link <- imu
@@ -224,7 +224,7 @@ bool SlamEngine::computeBaseFrames(bool blocking) {
             const Eigen::Vector3d rpy = out.R.eulerAngles(2, 1, 0);
             char b[320];
             std::snprintf(b, sizeof(b),
-                          "[slam_engine] %s mount from TF ('%s' <- '%s'): rpy(deg)=[%.2f %.2f %.2f] xyz=[%.3f %.3f %.3f]",
+                          "[slam_algo] %s mount from TF ('%s' <- '%s'): rpy(deg)=[%.2f %.2f %.2f] xyz=[%.3f %.3f %.3f]",
                           tag, target.c_str(), source.c_str(),
                           rpy.z() * 180 / M_PI, rpy.y() * 180 / M_PI, rpy.x() * 180 / M_PI,
                           out.t.x(), out.t.y(), out.t.z());
@@ -263,12 +263,12 @@ bool SlamEngine::computeBaseFrames(bool blocking) {
         if (i + 1 < attempts) ros::Duration(0.05).sleep();
     }
     if (!base_imu_.valid) {
-        ROS_WARN_STREAM("[slam_engine] TF base_link <- imu unavailable; retry in 2s");
+        ROS_WARN_STREAM("[slam_algo] TF base_link <- imu unavailable; retry in 2s");
     }
     return base_imu_.valid;
 }
 
-bool SlamEngine::imuFromChild(const std::string& child_frame, RigidTransform& out) {
+bool SlamAlgorithm::imuFromChild(const std::string& child_frame, RigidTransform& out) {
     // 核心 body 是 IMU: T_world_imu = T_world_child * T_child_imu.
     if (child_frame.empty() || child_frame == mount_imu_frame_) {
         out.set(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
@@ -298,7 +298,7 @@ bool SlamEngine::imuFromChild(const std::string& child_frame, RigidTransform& ou
         child_to_imu_[child_frame] = out;
         return true;
     } catch (const tf2::TransformException&) {
-        ROS_WARN_STREAM_THROTTLE(2.0, "[slam_engine] TF imu <- " << child_frame
+        ROS_WARN_STREAM_THROTTLE(2.0, "[slam_algo] TF imu <- " << child_frame
                                  << " unavailable; drop this measurement");
         return false;
     }
@@ -331,7 +331,7 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
         if (rnode) r_il = YAML::Dump(rnode);
         if (tnode) t_il = YAML::Dump(tnode);
     } catch (const std::exception& e) {
-        ROS_WARN_STREAM("[slam_engine] compat diagnostics: cannot read base yaml (" << e.what() << ")");
+        ROS_WARN_STREAM("[slam_algo] compat diagnostics: cannot read base yaml (" << e.what() << ")");
     }
     std::cout << "[compat] core yaml = " << injected_yaml << std::endl;
     std::cout << "[compat] effective acc_scale=" << acc_scale << " r_il=" << r_il
@@ -348,7 +348,9 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
 
 } // namespace
 
-SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
+SlamAlgorithm::SlamAlgorithm(ros::NodeHandle& nh, ros::NodeHandle& pnh,
+                             rosiwit_common::IExecutor* executor)
+    : nh_(nh), pnh_(pnh), executor_(executor) {
     pnh_.param<bool>("online_calibration", online_calib_enabled_, true);
     bool calib_apply = false;
     pnh_.param<bool>("online_calibration_apply", calib_apply, false);
@@ -456,7 +458,7 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
             if (!xz_cfg_.imu_sub_name.empty())   cfg_.imu_topic   = xz_cfg_.imu_sub_name;
             if (!xz_cfg_.laser_sub_name.empty()) cfg_.lidar_topic = xz_cfg_.laser_sub_name;
         }
-        std::cout << "[slam_engine] sensor laser_type='" << lt << "' -> input topics: imu="
+        std::cout << "[slam_algo] sensor laser_type='" << lt << "' -> input topics: imu="
                   << cfg_.imu_topic << " lidar=" << cfg_.lidar_topic << std::endl;
 
         // ---- M8: 给核心注入 map_directory: "/" 的 override YAML ----
@@ -467,7 +469,7 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
             base.find("core_extrinsic.yaml") != std::string::npos) {
             base = ros::package::getPath("rosiwit_slam_ros1") + "/config/default.yaml";
             if (config_path_.empty()) {
-                ROS_WARN_STREAM("[slam_engine] ROS1 输入: ~config_file 未设置, 核心 YAML 回落到 "
+                ROS_WARN_STREAM("[slam_algo] ROS1 输入: ~config_file 未设置, 核心 YAML 回落到 "
                                 << base);
             }
         }
@@ -523,17 +525,11 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     if (!algo_->init(config_path_)) { ROS_FATAL("init failed"); ros::shutdown(); return; }
     algo_->setOutputCallback([this](const SlamOutput& o) { onOutput(o); });
 
-    // ---- 订阅 ----
-    imu_sub_  = nh_.subscribe(cfg_.imu_topic, 1000, &SlamEngine::imuCB, this);
-    lidar_sub_ = nh_.subscribe(cfg_.lidar_topic, 100, &SlamEngine::lidarCB, this);
-    init_pose_sub_ = nh_.subscribe("/initialpose", 10, &SlamEngine::initialPoseCB, this);
-    // 轮式里程计由 Ros1SlamInterface 统一订阅并喂核心，避免同一份 /odom 被注入两次。
+    // 输入订阅由 SlamRosNode 统一负责 (本类只暴露 onXxxMsg), 避免"一个进程两处订阅"。
+    // 轮式里程计由 Ros1SlamInterface 统一订阅并喂核心, 避免同一份 /odom 注入两次。
     (void)odom_enabled;
-    if (vo_enabled) vo_sub_ = nh_.subscribe(cfg_.vo_topic, 100, &SlamEngine::voCB, this);
-    if (absolute_enabled) absolute_sub_ = nh_.subscribe(cfg_.absolute_topic, 100, &SlamEngine::absoluteCB, this);
-
-    // ---- 泵 (0.02s = 50Hz): 排空核心输出 + 跑各接口挂的 tick ----
-    process_timer_ = nh_.createTimer(ros::Duration(0.02), &SlamEngine::processCB, this);
+    vo_enabled_ = vo_enabled;
+    absolute_enabled_ = absolute_enabled;
 
     ok_ = true;
     ROS_INFO("rosiwit_slam_ros1 ready: algo=%s imu=%s lidar=%s",
@@ -541,92 +537,106 @@ SlamEngine::SlamEngine(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh
     // 必须能被读到: 用 std::cout + endl 而不是 ROS_INFO —— roslaunch 把 stdout 重定向到
     // 管道时是块缓冲的, ROS_INFO 要等缓冲满才落盘, 实测在 `roslaunch ... | head` 里看不到。
     // (约定: 所有"上机器人后要核对"的启动日志都用 std::cout << ... << std::endl)
-    std::cout << "[slam_engine] config=" << (config_path_.empty() ? "(none)" : config_path_)
+    std::cout << "[slam_algo] config=" << (config_path_.empty() ? "(none)" : config_path_)
               << " imu=" << cfg_.imu_topic
               << " lidar=" << cfg_.lidar_topic << std::endl;
-    input_worker_ = std::thread(&SlamEngine::inputWorkerLoop, this);
 }
 
-SlamEngine::~SlamEngine() { stopInputWorker(); }
+SlamAlgorithm::~SlamAlgorithm() { shutdown(); }
 
-void SlamEngine::enqueueInput(InputItem item) {
-    bool dropped = false;
-    InputKind dropped_kind = InputKind::IMU;
-    {
-        std::lock_guard<std::mutex> lk(input_queue_mu_);
-        if (input_stop_) return;
-        // 队列满时丢最旧的一帧并显式告警: 宁可丢输入, 也不能让 ROS 回调无限增长.
-        if (input_queue_.size() >= kMaxInputQueue) {
-            dropped = true;
-            dropped_kind = input_queue_.front().kind;
-            input_queue_.pop_front();
-            if (dropped_kind == InputKind::IMU) ++input_imu_dropped_;
-            else ++input_lidar_dropped_;
-        }
-        if (item.kind == InputKind::IMU) ++input_imu_in_;
-        else ++input_lidar_in_;
-        input_queue_.push_back(std::move(item));
-    }
-    if (dropped) {
-        ROS_WARN_THROTTLE(1.0, "[slam_engine] input queue full, drop oldest %s",
-                          dropped_kind == InputKind::IMU ? "IMU" : "LiDAR");
-    }
-    input_queue_cv_.notify_one();
+void SlamAlgorithm::start()
+{
+    if (!ok_ || frontend_) { return; }
+    // FrontEnd: 唯一消费帧的线程 (替代原 50Hz processCB 里的 tryPopAndProcess)
+    frontend_.reset(new rosiwit_common::Thread("slam_fe",
+        [this](rosiwit_common::CancelToken token) { frontendLoop(token); }));
+    // Tick: 只跑接口挂的发布钩子, 50Hz (原 processCB 的后半段)
+    tick_.reset(new rosiwit_common::PeriodicThread("slam_tick",
+        std::chrono::milliseconds(20), [this] { tickLoop(); }));
+    ROS_INFO("[slam_algo] started: frontend thread + 50Hz tick%s",
+             executor_ ? " (+ injected executor)" : "");
 }
 
-void SlamEngine::inputWorkerLoop() {
-    while (true) {
-        InputItem item;
-        {
-            std::unique_lock<std::mutex> lk(input_queue_mu_);
-            input_queue_cv_.wait(lk, [this] {
-                return input_stop_ || !input_queue_.empty();
-            });
-            if (input_stop_) break;
-            item = std::move(input_queue_.front());
-            input_queue_.pop_front();
+void SlamAlgorithm::shutdown()
+{
+    // 顺序: 停止接收 -> 唤醒并等 FrontEnd -> 停 tick。
+    // 注意 executor 由组装根关闭, 这里不能碰 (LOST 时还要投递飞行记录)。
+    input_.close();
+    if (frontend_) { frontend_->requestStop(); frontend_->join(); frontend_.reset(); }
+    if (tick_) { tick_->requestStop(); tick_->join(); tick_.reset(); }
+}
+
+void SlamAlgorithm::frontendLoop(rosiwit_common::CancelToken token)
+{
+    while (!token.cancelled()) {
+        auto item = input_.pop_for(std::chrono::milliseconds(10));
+        if (!item.has_value()) {
+            if (input_.closed()) { break; }
+            continue;
         }
-        if (item.kind == InputKind::IMU) {
-            ++input_imu_done_;
-            onImuMsg(item.imu);
+        if (item->kind == InputKind::IMU) {
+            processImu(item->imu);
         } else {
-            ++input_lidar_done_;
-            onLidarMsg(item.lidar);
+            processLidar(item->lidar);
+        }
+        // 建图前端: 有活就推进 (原来在 50Hz 定时器里做的事, 现在跟着帧走)
+        {
+            std::lock_guard<std::mutex> lk(core_mu_);
+            if (base_) { while (base_->tryPopAndProcess()) {} }
         }
         logInputStats();
     }
 }
 
-void SlamEngine::stopInputWorker() {
-    {
-        std::lock_guard<std::mutex> lk(input_queue_mu_);
-        input_stop_ = true;
-        input_queue_.clear();
-    }
-    input_queue_cv_.notify_all();
-    if (input_worker_.joinable()) input_worker_.join();
+void SlamAlgorithm::tickLoop()
+{
+    for (auto & h : tick_hooks_) { if (h) { h(); } }
 }
 
-void SlamEngine::logInputStats() {
-    const uint64_t done = input_imu_done_.load() + input_lidar_done_.load();
+bool SlamAlgorithm::runOnLane(
+    const std::string& lane, std::string name,
+    std::function<void(rosiwit_common::CancelToken)> job)
+{
+    if (!executor_) {
+        ROS_WARN("[slam_algo] runOnLane('%s'): no executor injected", lane.c_str());
+        return false;
+    }
+    rosiwit_common::JobOptions opt;
+    opt.name = name;
+    const rosiwit_common::JobId id =
+        executor_->submit(lane, std::move(opt), std::move(job),
+                          rosiwit_common::DoneFn());
+    if (id == rosiwit_common::kInvalidJobId) {
+        const auto st = executor_->stats();
+        ROS_WARN("[slam_algo] runOnLane('%s', '%s') rejected: lane missing/full/stopping "
+                 "(queued=%zu rejected=%lu)",
+                 lane.c_str(), name.c_str(), st.queued,
+                 static_cast<unsigned long>(st.rejected));
+        return false;
+    }
+    return true;
+}
+
+void SlamAlgorithm::enqueueInput(InputItem item) {
+    // 有界队列 + 丢旧保新; 拒绝(已关停)时直接返回。
+    if (item.kind == InputKind::IMU) { ++input_imu_in_; } else { ++input_lidar_in_; }
+    input_.push(std::move(item));
+}
+
+void SlamAlgorithm::logInputStats() {
+    const uint64_t done = input_imu_in_.load() + input_lidar_in_.load();
     static uint64_t last_log_done = 0;
     if (done - last_log_done < 1000) return;
     last_log_done = done;
-    size_t q = 0;
-    {
-        std::lock_guard<std::mutex> lk(input_queue_mu_);
-        q = input_queue_.size();
-    }
-    ROS_INFO("[slam_engine] input queue: imu in/drop/done=%lu/%lu/%lu, lidar in/drop/done=%lu/%lu/%lu, pending=%zu",
+    const auto st = input_.stats();
+    ROS_INFO("[slam_algo] input: imu in=%lu, lidar in=%lu, dropped_oldest=%lu, "
+             "pending=%zu, peak=%zu",
              static_cast<unsigned long>(input_imu_in_.load()),
-             static_cast<unsigned long>(input_imu_dropped_.load()),
-             static_cast<unsigned long>(input_imu_done_.load()),
              static_cast<unsigned long>(input_lidar_in_.load()),
-             static_cast<unsigned long>(input_lidar_dropped_.load()),
-             static_cast<unsigned long>(input_lidar_done_.load()), q);
+             static_cast<unsigned long>(st.dropped_oldest), input_.size(), st.peak);
 }
 
-CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
+CloudType::Ptr SlamAlgorithm::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
                                    int filter_num, double min_r, double max_r,
                                    double scan_period_ms) {
     CloudType::Ptr cloud(new CloudType());
@@ -702,7 +712,7 @@ CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg
         static bool warned = false;
         if (!warned) {
             warned = true;
-            std::cout << "[slam_engine] no timestamp field: synthesized per-point time "
+            std::cout << "[slam_algo] no timestamp field: synthesized per-point time "
                          "from azimuth (scan_period_ms=" << scan_period_ms << ")"
                       << std::endl;
         }
@@ -727,7 +737,7 @@ CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg
     {
         static int once = 0;
         if (once++ == 0 && !out->empty()) {
-            std::cout << "[slam_engine] point-time check: src=" << msg->width << "x" << msg->height
+            std::cout << "[slam_algo] point-time check: src=" << msg->width << "x" << msg->height
                       << " kept=" << out->size()
                       << " has_timestamp_field=" << (has_pt_time ? 1 : 0)
                       << " curvature_ms=[" << curv_min << " .. " << curv_max << "]" << std::endl;
@@ -736,7 +746,7 @@ CloudType::Ptr SlamEngine::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg
     return out;
 }
 
-void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
+void SlamAlgorithm::processImu(const sensor_msgs::Imu::ConstPtr& msg) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (online_calib_enabled_) {
         std::lock_guard<std::mutex> lk(calib_mutex_);
@@ -757,13 +767,13 @@ void SlamEngine::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
     if (algo_) algo_->onImu(s);
 }
 
-void SlamEngine::applySelfFilter(CloudType::Ptr& cloud) {
+void SlamAlgorithm::applySelfFilter(CloudType::Ptr& cloud) {
     if (!cfg_.self_filter_enabled || !cloud || cloud->empty()) return;
     const RigidTransform& base_lidar = baseLidar();
     if (!base_lidar.valid) {
         static bool warned = false;
         if (!warned) {
-            ROS_WARN("[slam_engine] self_filter enabled but base_link <- lidar TF is invalid; skip");
+            ROS_WARN("[slam_algo] self_filter enabled but base_link <- lidar TF is invalid; skip");
             warned = true;
         }
         return;
@@ -787,12 +797,12 @@ void SlamEngine::applySelfFilter(CloudType::Ptr& cloud) {
 
     static int log_i = 0;
     if (++log_i % 100 == 0) {
-        std::cout << "[slam_engine] self_filter removed " << removed << "/"
+        std::cout << "[slam_algo] self_filter removed " << removed << "/"
                   << (removed + cloud->size()) << " points" << std::endl;
     }
 }
 
-void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
+void SlamAlgorithm::processLidar(const sensor_msgs::PointCloud2::ConstPtr& msg) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_) return;
 
@@ -816,21 +826,21 @@ void SlamEngine::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
     algo_->onLidar(f);
 }
 
-void SlamEngine::onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
+void SlamAlgorithm::onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
     if (!algo_raw_ || algo_raw_->getPipelineMode() != "localization") return;
     // 与 /switch_map、/relocation 共用同一份实现 (换算只写一次)
     applyInitPose(*msg, /*zero_if_insane=*/false, /*force_z_zero=*/false);
 }
 
-void SlamEngine::requestRelocalization() {
+void SlamAlgorithm::requestRelocalization() {
     if (algo_raw_) algo_raw_->requestRelocalization();
 }
 
-std::string SlamEngine::dumpFlightRecorder(const std::string& reason) {
+std::string SlamAlgorithm::dumpFlightRecorder(const std::string& reason) {
     return diag::FlightRecorder::instance().dump(reason);
 }
 
-void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
+void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& in,
                                bool zero_if_insane, bool force_z_zero) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return;
@@ -847,7 +857,7 @@ void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& i
     // 不能做 base_link -> IMU 换算（否则会从 yaw=90° 开始，正好偏离地图零点 90°）。
     const bool default_map_pose = (q.norm() < 0.5);
     if (default_map_pose) {
-        std::cout << "[slam_engine] no initial pose -> core map/IMU identity 0,0,0"
+        std::cout << "[slam_algo] no initial pose -> core map/IMU identity 0,0,0"
                   << std::endl;
         x = 0.0;
         y = 0.0;
@@ -872,17 +882,17 @@ void SlamEngine::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped& i
         const double yaw_a = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
         char b[256];
         std::snprintf(b, sizeof(b),
-                      "[slam_engine] init pose converted base->imu: yaw_before=%.1fdeg yaw_after=%.1fdeg",
+                      "[slam_algo] init pose converted base->imu: yaw_before=%.1fdeg yaw_after=%.1fdeg",
                       yaw_b, yaw_a);
         std::cout << b << std::endl;
     } else {
         if (force_z_zero) p.trans.z() = 0.0;
-        ROS_WARN_STREAM("[slam_engine] base_link <- imu unavailable; init pose left in base frame");
+        ROS_WARN_STREAM("[slam_algo] base_link <- imu unavailable; init pose left in base frame");
     }
     algo_raw_->setInitPose(p);
 }
 
-void SlamEngine::onOdomMsg(const nav_msgs::Odometry::ConstPtr& msg) {
+void SlamAlgorithm::onOdomMsg(const nav_msgs::Odometry::ConstPtr& msg) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_) return;
     PoseStamped p;
@@ -896,17 +906,14 @@ void SlamEngine::onOdomMsg(const nav_msgs::Odometry::ConstPtr& msg) {
     algo_->onOdom(composeRight(p, imu_child));
 }
 
-void SlamEngine::imuCB(const sensor_msgs::Imu::ConstPtr& msg) {
+void SlamAlgorithm::onImuMsg(const sensor_msgs::Imu::ConstPtr& msg) {
     enqueueInput(InputItem{InputKind::IMU, msg, nullptr});
 }
-void SlamEngine::lidarCB(const sensor_msgs::PointCloud2::ConstPtr& msg) {
+void SlamAlgorithm::onLidarMsg(const sensor_msgs::PointCloud2::ConstPtr& msg) {
     enqueueInput(InputItem{InputKind::LIDAR, nullptr, msg});
 }
-void SlamEngine::initialPoseCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
-    onInitialPoseMsg(msg);
-}
 
-void SlamEngine::voCB(const nav_msgs::Odometry::ConstPtr& msg) {
+void SlamAlgorithm::voCB(const nav_msgs::Odometry::ConstPtr& msg) {
     if (!algo_) return;
     PoseStamped p;
     p.time = getSec(msg->header.stamp);
@@ -919,7 +926,7 @@ void SlamEngine::voCB(const nav_msgs::Odometry::ConstPtr& msg) {
     algo_->onVisualOdometry(p.time, composeRight(p, imu_child));
 }
 
-void SlamEngine::absoluteCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
+void SlamAlgorithm::absoluteCB(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
     if (!algo_) return;
     PoseStamped p;
     p.time = getSec(msg->header.stamp);
@@ -938,7 +945,7 @@ void SlamEngine::absoluteCB(const geometry_msgs::PoseWithCovarianceStamped::Cons
     algo_->onAbsolute(p, cov);
 }
 
-void SlamEngine::onOutput(const SlamOutput& out) {
+void SlamAlgorithm::onOutput(const SlamOutput& out) {
     if (online_calib_enabled_ && out.has_new_pose && out.pose.time > 0.0) {
         const Eigen::Quaterniond q(out.pose.rot);
         const double yaw = std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
@@ -957,53 +964,46 @@ void SlamEngine::onOutput(const SlamOutput& out) {
     if (output_hook_) output_hook_(out);
 }
 
-void SlamEngine::processCB(const ros::TimerEvent&) {
-    if (base_) {
-        while (base_->tryPopAndProcess()) {}
-        // 定位模式的 LiDAR 由 SlamPipeline 内部 worker 处理，避免重定位阻塞 spinner。
-    }
-    for (auto& h : tick_hooks_) if (h) h();
-}
 
-bool SlamEngine::latestOutput(SlamOutput& out) const {
+bool SlamAlgorithm::latestOutput(SlamOutput& out) const {
     std::lock_guard<std::mutex> lk(out_mutex_);
     if (!have_output_) return false;
     out = latest_;
     return true;
 }
 
-void SlamEngine::clearLatestOutput() {
+void SlamAlgorithm::clearLatestOutput() {
     std::lock_guard<std::mutex> lk(out_mutex_);
     latest_ = SlamOutput();
     have_output_ = false;
 }
 
-bool SlamEngine::getGlobalMap(PointVec& out) const {
+bool SlamAlgorithm::getGlobalMap(PointVec& out) const {
     if (!algo_raw_) return false;
     return algo_raw_->getGlobalMap(out);
 }
 
-bool SlamEngine::getGridInfo(GridInfo& out) const {
+bool SlamAlgorithm::getGridInfo(GridInfo& out) const {
     if (!algo_raw_) return false;
     out = algo_raw_->getGridInfo();
     return true;
 }
 
-bool SlamEngine::getRealtimeGrid(double resolution, GridInfo& out) {
+bool SlamAlgorithm::getRealtimeGrid(double resolution, GridInfo& out) {
     if (!algo_raw_) return false;
     return algo_raw_->getRealtimeGrid(resolution, out);
 }
 
-bool SlamEngine::getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const {
+bool SlamAlgorithm::getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const {
     if (!algo_raw_) return false;
     return algo_raw_->getPoseCov(out, cov);
 }
 
-double SlamEngine::getMatchingDegree() const {
+double SlamAlgorithm::getMatchingDegree() const {
     return algo_raw_ ? algo_raw_->getMatchingDegree() : 0.0;
 }
 
-bool SlamEngine::resetCore() {
+bool SlamAlgorithm::resetCore() {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return false;
     // 先复位 latch/快照类状态, 免得重建后还带着上一轮的位姿
@@ -1014,11 +1014,11 @@ bool SlamEngine::resetCore() {
     }
     // 旧实现切模式时会删掉建图/定位实例; 我们重建核心模块达到同样效果。
     const bool ok = algo_raw_->resetForNewMapping(config_path_);
-    std::cout << "[slam_engine] resetCore -> " << (ok ? "ok" : "unsupported/failed") << std::endl;
+    std::cout << "[slam_algo] resetCore -> " << (ok ? "ok" : "unsupported/failed") << std::endl;
     return ok;
 }
 
-rosiwit_slam::CalibrationDecision SlamEngine::updateCalibration() {
+rosiwit_slam::CalibrationDecision SlamAlgorithm::updateCalibration() {
     std::lock_guard<std::mutex> lk(calib_mutex_);
     const auto t = online_time_calib_.estimate();
     const auto y = yaw_calib_.estimate();
@@ -1027,41 +1027,41 @@ rosiwit_slam::CalibrationDecision SlamEngine::updateCalibration() {
     return d;
 }
 
-rosiwit_slam::TimeCalibrationResult SlamEngine::onlineTimeCalibration() const {
+rosiwit_slam::TimeCalibrationResult SlamAlgorithm::onlineTimeCalibration() const {
     std::lock_guard<std::mutex> lk(calib_mutex_);
     return online_time_calib_.estimate();
 }
 
-rosiwit_slam::YawCalibrationResult SlamEngine::onlineYawCalibration() const {
+rosiwit_slam::YawCalibrationResult SlamAlgorithm::onlineYawCalibration() const {
     std::lock_guard<std::mutex> lk(calib_mutex_);
     return yaw_calib_.estimate();
 }
 
-std::string SlamEngine::pipelineMode() const {
+std::string SlamAlgorithm::pipelineMode() const {
     return algo_raw_ ? algo_raw_->getPipelineMode() : std::string();
 }
 
-rosiwit_slam::ILocalization::Status SlamEngine::localizationStatus() const {
+rosiwit_slam::ILocalization::Status SlamAlgorithm::localizationStatus() const {
     return algo_raw_ ? algo_raw_->localizationStatus() : rosiwit_slam::ILocalization::LOST;
 }
 
-bool SlamEngine::priorUncertainty(double& xy_sigma, double& yaw_sigma) const {
+bool SlamAlgorithm::priorUncertainty(double& xy_sigma, double& yaw_sigma) const {
     return algo_raw_ ? algo_raw_->priorUncertainty(xy_sigma, yaw_sigma) : false;
 }
 
-void SlamEngine::addTickHook(std::function<void()> hook) {
+void SlamAlgorithm::addTickHook(std::function<void()> hook) {
     if (hook) tick_hooks_.push_back(std::move(hook));
 }
 
-void SlamEngine::setOutputHook(std::function<void(const SlamOutput&)> hook) {
+void SlamAlgorithm::setOutputHook(std::function<void(const SlamOutput&)> hook) {
     output_hook_ = std::move(hook);
 }
 
-void SlamEngine::setInputSeenHook(std::function<void(bool)> hook) {
+void SlamAlgorithm::setInputSeenHook(std::function<void(bool)> hook) {
     input_seen_hook_ = std::move(hook);
 }
 
-void SlamEngine::setRawLidarHook(
+void SlamAlgorithm::setRawLidarHook(
     std::function<void(const CloudType&, const ros::Time&)> hook) {
     raw_lidar_hook_ = std::move(hook);
 }
