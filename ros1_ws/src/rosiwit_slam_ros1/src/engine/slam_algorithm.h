@@ -4,8 +4,8 @@
 // 本类里的内容是从原 `rosiwit_slam_ros1_node.cpp` **原样搬出来**的:
 //   核心 YAML 装载 -> SlamFactory::create -> init -> 输入订阅 -> 输出快照 -> 50Hz 泵
 //
-// 一个进程、一个核心实例、一个 ROS1 对外接口；输入话题由机器人现有
-// sensor_config(见 Xz3dConfig) 决定，避免与底盘现有驱动/launch 配置脱节。
+// 一个进程、一个核心实例、一个 ROS1 对外接口；**所有配置只来自一份 YAML**
+// (不再读 legacy 的 slam_conf.json / sensor_config.json)。
 // ============================================================================
 #pragma once
 
@@ -45,16 +45,8 @@
 #include "rosiwit_common/snapshot.hpp"
 #include "rosiwit_common/thread.hpp"
 
-#include "config.h"
 
 namespace rosiwit_slam_ros1 {
-
-/// 旧 3d_slam 的四个配置来源在**本包**里的等价路径。
-/// 旧实现用的是编译期宏 PROJECT_PATH (xz_3d_slam/CMakeLists.txt:24/26):
-/// 装机后 = /opt/ros/melodic/share/xz_3d_slam, 开发时 = 源码目录。
-/// ros::package::getPath 恰好两种情况都能给出正确目录, 所以用它等价替换。
-Xz3dConfPaths defaultXz3dPaths();
-Xz3dConfPaths defaultXz3dPaths(ros::NodeHandle& pnh);
 
 class SlamAlgorithm {
 public:
@@ -78,7 +70,6 @@ public:
     rosiwit_slam::SlamBase* base() const { return base_; }
 
     const std::string& configPath() const { return config_path_; }
-    const Xz3dConfig& xzConfig() const { return xz_cfg_; }
 
     // ---- 帧名 / 话题名 ----
     const std::string& worldFrame() const { return cfg_.world_frame; }
@@ -90,6 +81,14 @@ public:
     /// 消费端 (nav) 据此知道"计划里的位姿已经作废"。
     /// 取代接口层自己维护的 relocalize_count_。
     uint32_t poseJumpSeq() const { return pose_jump_seq_.load(); }
+
+    // 这些原本来自 legacy JSON, 现在统一来自同一份 YAML
+    double rtGridPublishHz() const { return cfg_.rt_grid_map_publish_hz; }
+    int publishHz() const { return cfg_.publish_hz; }
+    const std::string& slamInitType() const { return cfg_.slam_init_type; }
+    bool debugPublish() const { return cfg_.debug_publish; }
+    bool isDebug() const { return cfg_.is_debug; }
+    bool useTf() const { return cfg_.use_tf; }
 
     /// 可选输入是否启用 (由核心 YAML 决定); 订阅由 SlamRosNode 负责
     bool useVo() const { return vo_enabled_; }
@@ -260,6 +259,13 @@ private:
         int lidar_filter_num = 3;
         double lidar_min_range = 0.5, lidar_max_range = 100.0;
         // 机身自过滤: 在 base_link 下按包围盒删除机体自身回波.
+        // ---- 以下原本在 legacy JSON, 现在只从 YAML 读 ----
+        double rt_grid_map_publish_hz = 1.0;    // mapping.rt_grid_map_publish_hz
+        int publish_hz = 20;                    // mapping.publish_hz (仅日志)
+        std::string slam_init_type = "mapping"; // global.pipeline_mode
+        bool debug_publish = false;             // global.debug_publish
+        bool is_debug = false;                  // global.is_debug
+        bool use_tf = true;                     // frames.use_tf
         bool self_filter_enabled = false;
         double self_x_min = -0.45, self_x_max = 0.75;
         double self_y_min = -0.55, self_y_max = 0.55;
@@ -308,8 +314,6 @@ private:
     Cfg cfg_;
 
     std::string config_path_;
-    Xz3dConfig xz_cfg_;
-
     std::unique_ptr<rosiwit_slam::ISlamAlgorithm> algo_;
     rosiwit_slam::ISlamAlgorithm* algo_raw_ = nullptr;
     rosiwit_slam::SlamBase* base_ = nullptr;

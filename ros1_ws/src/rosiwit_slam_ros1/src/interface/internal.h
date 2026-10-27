@@ -26,6 +26,10 @@ inline const char* modeName(SlamMode m) {
     }
 }
 
+/// 地图目录 -> `<base>` (剥掉 map.yaml/.pgm/.xzmap/.pcd/.jpg 后缀再拼 "/map")。
+/// 兼容层服务 (/switch_map、/stop_map_operation ...) 都走这里。
+std::string xzMapBase(const std::string& map_dir);
+
 /// 从我们刚写出的 `<base>.pgm` 生成 `<base>.jpg` 与 `<dir>/thumb.png`。
 /// 实现放在 internal.cpp，避免把 OpenCV/fstream 带给所有 interface 翻译单元。
 void writeMapThumbnails(const std::string& base);

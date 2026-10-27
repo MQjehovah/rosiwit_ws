@@ -69,7 +69,6 @@ endif()
 
 # ==================== 接口层静态库 (便于 gtest 直接链接) ====================
 set(ROSIWIT_ROS1_LIB_SOURCES
-    src/config/config.cpp
     src/interface/realtime_grid.cpp
     src/interface/planar_constraint.cpp
     src/interface/mode_state.cpp
@@ -134,13 +133,6 @@ if(CATKIN_ENABLE_TESTING)
             target_link_libraries(${ctest_name} rosiwit_common)
         endif()
     endforeach()
-    catkin_add_gtest(test_config test/test_config.cpp)
-    if(TARGET test_config)
-        target_link_libraries(test_config rosiwit_slam_ros1_lib)
-        # fixture 路径以宏传入, 不依赖测试进程的 CWD
-        target_compile_definitions(test_config PRIVATE
-            LEGACY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures")
-    endif()
 
     catkin_add_gtest(test_realtime_grid test/test_realtime_grid.cpp)
     if(TARGET test_realtime_grid)

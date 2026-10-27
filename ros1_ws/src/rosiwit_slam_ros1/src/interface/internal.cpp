@@ -13,6 +13,31 @@
 namespace rosiwit_slam_ros1 {
 namespace interface_internal {
 
+std::string xzMapBase(const std::string& map_dir) {
+    std::string p = map_dir;
+    // 1) 去掉结尾的 '/'
+    while (p.size() > 1 && p.back() == '/') p.pop_back();
+
+    // 2) **实机实测: UI 传进来的 map_dir 是文件路径**(如 ".../map.yaml"), 不是目录!
+    //    旧实现是 `request.map_dir.substr(0, 32) + "map"` (legacy.cpp:2298) ——
+    //    "/opt/xzrobot/maps/<13 位数字 id>/" 正好 32 字符, 所以那个 truncate 恰好把
+    //    "/map.yaml" 切掉、留下目录再拼 "map"。这里**泛化**成"识别并剥掉地图文件后缀",
+    //    对任意目录名长度都对 (也因此不必像旧实现那样截断路径)。
+    static const char* kSuffixes[] = {"/map.yaml", "/map.pgm", "/map.xzmap",
+                                      "/map.pcd",  "/map.jpg", "/map"};
+    for (const char* s : kSuffixes) {
+        const size_t n = std::string(s).size();
+        if (p.size() >= n && p.compare(p.size() - n, n, s) == 0) {
+            p.erase(p.size() - n);
+            while (p.size() > 1 && p.back() == '/') p.pop_back();
+            break;
+        }
+    }
+
+    if (p.empty() || p == "/") return "/map";  // 根目录 "/" (或空串) -> /map, 避免拼成 "//map"
+    return p + "/map";
+}
+
 /// 从我们刚写出的 `<base>.pgm` 生成 `<base>.jpg` 与 `<dir>/thumb.png`。
 /// 照抄旧实现 (multilayer_grid_map.cpp:284-288): jpg 与 pgm 是**同一张图**,
 /// thumb 是它的 0.2 倍缩放 (App 用来显示地图缩略图)。

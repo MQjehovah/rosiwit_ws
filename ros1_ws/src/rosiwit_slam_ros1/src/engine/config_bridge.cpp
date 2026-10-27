@@ -37,48 +37,7 @@ namespace rosiwit_slam_ros1 {
 
 using namespace rosiwit_slam;
 
-namespace {
-Xz3dConfPaths defaultXz3dPathsImpl(ros::NodeHandle* pnh) {
-    Xz3dConfPaths p;
-    // 旧实现 (xz_3d_slam/CMakeLists.txt:24/26):
-    //   install 分支  PROJECT_PATH = /opt/ros/melodic/share/xz_3d_slam
-    //   其余分支      PROJECT_PATH = ${PROJECT_SOURCE_DIR}
-    // 主配置恒为 PROJECT_PATH "/conf/slam_conf.json"。
-    // ros::package::getPath 在 devel/overlay 下给源码目录、在 install 下给安装目录,
-    // 两种情形都与旧实现对得上。
-    const std::string pkg = ros::package::getPath("rosiwit_slam_ros1");
-    if (pkg.empty()) {
-        ROS_WARN("[slam_algo] ros::package::getPath('rosiwit_slam_ros1') failed; "
-                 "legacy conf falls back to built-in defaults");
-    }
-    // Simulation / alternate sensor rigs can point at their own legacy JSON.
-    std::string legacy_override;
-    if (pnh) pnh->param<std::string>("legacy_conf_file", legacy_override, "");
-    if (!legacy_override.empty()) {
-        p.proj_conf_json = legacy_override;
-    } else {
-        // **优先读老包的那份**: 旧实现的主配置 = 编译期 PROJECT_PATH/conf/slam_conf.json,
-        // 装机后就是 /opt/ros/melodic/share/xz_3d_slam/conf/slam_conf.json —— 那才是这台机器
-        // 真正生效的配置 (运维可能改过, 且与我们随包的那份并不一致: 实测老包那份没有
-        // laser_params 子树、x_new/z_new 也不同)。读不到才退回我们自己 conf/ 里的副本。
-        const std::string old_pkg = "/opt/ros/melodic/share/xz_3d_slam";
-        const std::string old_conf = old_pkg + "/conf/slam_conf.json";
-        std::ifstream probe(old_conf);
-        p.proj_conf_json = probe.good() ? old_conf : (pkg + "/conf/slam_conf.json");
-    }
-    std::cout << "[slam_algo] legacy main conf source: " << p.proj_conf_json << std::endl;
-    // 旧实现只有一个主配置来源。T1 的 Xz3dConfig 留了 proj(优先)/pkg(兜底) 两级,
-    // 这里让二者指向同一份文件。见计划 §5.6。
-    p.pkg_conf_json = p.proj_conf_json;
-    p.opt_sensor_json = "/opt/xzrobot/configs/sensor_config.json";
-    p.opt_slam_json = "/opt/xzrobot/configs/3d_slam/slam_conf.json";
-    return p;
-}
-}  // namespace
 
-Xz3dConfPaths defaultXz3dPaths() { return defaultXz3dPathsImpl(nullptr); }
-
-Xz3dConfPaths defaultXz3dPaths(ros::NodeHandle& pnh) { return defaultXz3dPathsImpl(&pnh); }
 
 namespace {
 
@@ -168,8 +127,7 @@ namespace {  // 重新打开匿名 namespace, 供下面的 printCompatDiagnostic
 /// D7 / §5.10 B / 待办项 C 要的可诊断性: 把核心**实际生效**的外参与 acc_scale 打出来,
 /// 因为"完全没位姿"最常见的两个原因就是加速度单位(acc_scale)与雷达-IMU 外参(r_il/t_il)。
 /// 用 std::cout + endl (ROS_INFO 在 roslaunch 下是块缓冲的, 看不到)。
-void printCompatDiagnostics(const std::string& base_yaml, const std::string& injected_yaml,
-                            const Xz3dConfig& lc) {
+void printCompatDiagnostics(const std::string& base_yaml, const std::string& injected_yaml) {
     double acc_scale = 1.0;                  // 核心默认 (fast_lio2/map_builder/commons.h:47)
     std::string r_il = "(缺省)", t_il = "(缺省)";
     try {
@@ -195,10 +153,7 @@ void printCompatDiagnostics(const std::string& base_yaml, const std::string& inj
     std::cout << "[compat] core yaml = " << injected_yaml << std::endl;
     std::cout << "[compat] effective acc_scale=" << acc_scale << " r_il=" << r_il
               << " t_il=" << t_il << std::endl;
-    std::cout << "[compat] ignored legacy keys: roll_new=" << lc.roll_new
-              << " pitch_new=" << lc.pitch_new << " yaw_new=" << lc.yaw_new
-              << " imu_in_car_frame_yaw_livox=" << lc.imu_in_car_frame_yaw_livox
-              << " (M13: 外参/单位按核心 YAML, 不采纳旧实现的 9.81 与安装角)" << std::endl;
+
     if (std::fabs(acc_scale - 1.0) < 1e-12) {
         std::cout << "[compat] INFO acc_scale=1.0（本车万集 IMU 实测为 m/s^2；"
                      "若换用 g 单位传感器需改为 9.81）" << std::endl;
@@ -258,6 +213,16 @@ void SlamAlgorithm::loadInputConfig(bool& vo_enabled, bool& odom_enabled,
                 cfg_.body_frame  = gf("body_frame").as<std::string>(cfg_.body_frame);
                 cfg_.world_frame = gf("world_frame").as<std::string>(cfg_.world_frame);
                 cfg_.scan_period_ms = gi("scan_period_ms").as<float>(cfg_.scan_period_ms);
+                // 原本在 legacy JSON 的项: 现在只认 YAML (不再兼容旧键名)
+                cfg_.rt_grid_map_publish_hz =
+                    gi("rt_grid_map_publish_hz").as<double>(cfg_.rt_grid_map_publish_hz);
+                cfg_.publish_hz = gi("publish_hz").as<int>(cfg_.publish_hz);
+                if (glob && glob["debug_publish"]) cfg_.debug_publish = glob["debug_publish"].as<bool>();
+                if (glob && glob["is_debug"])      cfg_.is_debug = glob["is_debug"].as<bool>();
+                if (glob && glob["pipeline_mode"]) {
+                    cfg_.slam_init_type = glob["pipeline_mode"].as<std::string>(cfg_.slam_init_type);
+                }
+                if (frames && frames["use_tf"]) cfg_.use_tf = frames["use_tf"].as<bool>();
                 cfg_.lidar_filter_num = gi("lidar_filter_num").as<int>(cfg_.lidar_filter_num);
                 cfg_.lidar_min_range = gi("lidar_min_range").as<double>(cfg_.lidar_min_range);
                 cfg_.lidar_max_range = gi("lidar_max_range").as<double>(cfg_.lidar_max_range);
@@ -298,30 +263,10 @@ void SlamAlgorithm::loadInputConfig(bool& vo_enabled, bool& odom_enabled,
 }
 
 void SlamAlgorithm::prepareCoreConfig() {
-    // ---- ROS1 输入: 沿用机器人现有 sensor_config 决定输入话题; 外参/单位仍取核心 YAML ----
+    // ---- 外参 (TF) 与给核心的 override YAML ----
+    // 输入话题、自过滤、debug/TF 开关都来自同一份 YAML (见 loadInputConfig);
+    // 不再读 legacy 的 slam_conf.json / sensor_config.json。
     {
-        std::string model;
-        nh_.param<std::string>("/machine/model", model, "");
-        xz_cfg_ = Xz3dConfig::load(defaultXz3dPaths(pnh_), model);
-        // 旧实现 startSub (legacy.cpp:200-207) 选输入话题靠的是 **laser_type**,
-        // 不是 imu_sub_name/laser_sub_name:
-        //   mid360 / new_mid360 -> "livox/imu" + "livox/lidar"
-        //   其它                -> <imu_sub_name> + <laser_sub_name>
-        // 这一步很关键: 发行 conf 的顶层 laser_sub_name 是 "vanjee_points722",
-        // 但对 mid360 机型旧实现**根本不看它** —— 照 laser_sub_name 订阅会在真机上收不到数据。
-        // (D4: livox/lidar 在我们这边是 sensor_msgs/PointCloud2, 不是 livox 的 CustomMsg。)
-        const std::string& lt = xz_cfg_.laser_type;
-        if (lt == "mid360" || lt == "new_mid360") {
-            cfg_.imu_topic = "livox/imu";
-            cfg_.lidar_topic = "livox/lidar";
-        } else {
-            // 空值时保留核心 YAML 里的名字 (不应发生, 但别把订阅名清成空串)
-            if (!xz_cfg_.imu_sub_name.empty())   cfg_.imu_topic   = xz_cfg_.imu_sub_name;
-            if (!xz_cfg_.laser_sub_name.empty()) cfg_.lidar_topic = xz_cfg_.laser_sub_name;
-        }
-        std::cout << "[slam_algo] sensor laser_type='" << lt << "' -> input topics: imu="
-                  << cfg_.imu_topic << " lidar=" << cfg_.lidar_topic << std::endl;
-
         // ---- M8: 给核心注入 map_directory: "/" 的 override YAML ----
         std::string base = config_path_;
         // 某些现场 launch 会把 config_file 留在上一轮生成的 override 上; 不能把它当基底,
@@ -377,7 +322,7 @@ void SlamAlgorithm::prepareCoreConfig() {
                           r_il(0,0), r_il(0,1), r_il(0,2), r_il(1,0), r_il(1,1), r_il(1,2),
                           r_il(2,0), r_il(2,1), r_il(2,2), t_il.x(), t_il.y(), t_il.z());
             std::cout << eb << std::endl;
-        }        printCompatDiagnostics(base, config_path_, xz_cfg_);
+        }        printCompatDiagnostics(base, config_path_);
     }
 }
 

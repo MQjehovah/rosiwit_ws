@@ -32,10 +32,9 @@ namespace rosiwit_slam_ros1 {
 Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
                                                  SlamAlgorithm& engine)
     : nh_(nh), pnh_(pnh), engine_(engine),
-      cfg_(engine.xzConfig()),
-      debug_publish_(engine.xzConfig().debug_publish),
-      is_debug_(engine.xzConfig().is_debug),
-      use_tf_(engine.xzConfig().use_tf) {
+      debug_publish_(engine.debugPublish()),
+      is_debug_(engine.isDebug()),
+      use_tf_(engine.useTf()) {
     initPub();
     loadWarningCodeTable();   // 告警码表 (M6: 从本包 share 读, 不读 /opt)
     initTimerPub();
@@ -60,7 +59,7 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     }
 
     // 旧实现: 构造里按 slam_init_type_ 定初始 slam_mode_ (legacy.cpp:57-83)
-    const std::string& init = cfg_.slam_init_type;
+    const std::string init = engine_.slamInitType();
     SlamMode m = SlamMode::FREE;
     if (init == "mapping")           m = SlamMode::MAPPING;
     else if (init == "localization") m = SlamMode::LOCALIZATION;
@@ -103,8 +102,8 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
         return engine_.getRealtimeGrid(realtime_grid_resolution_, out);
     });
     // 重算频率与发布频率一致 (旧实现是"发布前若变了就重算")
-    realtime_grid_.start(static_cast<double>(cfg_.rt_grid_map_publish_hz > 0
-                                                 ? cfg_.rt_grid_map_publish_hz
+    realtime_grid_.start(static_cast<double>(engine_.rtGridPublishHz() > 0
+                                                 ? engine_.rtGridPublishHz()
                                                  : 1));
 }
 
@@ -160,13 +159,13 @@ void Ros1SlamInterface::initPub() {
 void Ros1SlamInterface::initTimerPub() {
     // legacy.cpp:254-255: 先按 publish_hz_ 算, 紧接着**硬编码覆盖成 0.1** —— publish_hz 无效 (M2)
     const double pub_time_gap = 0.1;
-    double rt_hz = static_cast<double>(cfg_.rt_grid_map_publish_hz);
+    double rt_hz = static_cast<double>(engine_.rtGridPublishHz());
     if (!(rt_hz > 0.0)) rt_hz = 1.0;
     const double rt_gap = 1.0 / rt_hz;
 
     std::cout << "[ros1_slam] timers: pub=" << pub_time_gap << "s, pose=tick(20ms), rt_grid="
-              << rt_gap << "s (rt_grid_map_publish_hz=" << cfg_.rt_grid_map_publish_hz
-              << ", publish_hz=" << cfg_.publish_hz << " 无效-硬编码 0.1)" << std::endl;
+              << rt_gap << "s (rt_grid_map_publish_hz=" << engine_.rtGridPublishHz()
+              << ", publish_hz=" << engine_.publishHz() << " 无效-硬编码 0.1)" << std::endl;
 
     point_cloud_mapping_timer_ = nh_.createTimer(
         ros::Duration(pub_time_gap), &Ros1SlamInterface::timerPublishLocalCloudAndSubmap, this);

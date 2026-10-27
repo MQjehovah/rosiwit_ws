@@ -54,7 +54,6 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
-#include "config.h"
 #include "lost_monitor.h"  // OdomConsistencyMonitor (LostMonitor 本身已不参与状态判定)
 #include "realtime_grid.h"
 #include "slam_algorithm.h"
@@ -241,7 +240,6 @@ private:
 
     ros::NodeHandle nh_, pnh_;
     SlamAlgorithm& engine_;
-    const Xz3dConfig& cfg_;        // engine_.xzConfig()
     const bool debug_publish_;       // 旧 debug_publish_ 开关
     const bool is_debug_;
     const bool use_tf_;
