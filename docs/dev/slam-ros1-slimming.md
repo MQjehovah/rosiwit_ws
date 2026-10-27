@@ -1,94 +1,99 @@
-# ROS1 接口层瘦身（S1/S2/S3，2026-10-27）
+# ROS1 接口层：按"内聚"重组（2026-10-27/28）
 
-> 背景：ROS1 层 7038 行 / 33 文件，是核心（18756 行）的 37%，一个"薄接口包"不该这么重。
-> 本次按三条做：S1 按职责拆文件、S2 去掉与老接口重复的输出、S3 删掉配置镜像。
+> 原则（本轮确定）：**行数不是问题，一个文件只做一件事。**
+> 允许单文件很大（`services.cpp` 538 行就是 17 个服务处理器，一个职责），
+> 但不允许一个文件里混两件互不相干的事，也不允许靠"跨文件共享隐式状态"耦合。
 
-## 结论先说
+## 1. 现在的分层：每个文件一句话
 
-| 指标 | 改前 | 改后 |
+### engine/ —— 算法实例这一侧
+
+| 文件 | 行数 | 这一件事 |
 |---|---|---|
-| `slam_algorithm.cpp`（最大单文件） | **1314 行** | **322 行**（拆成 6 个文件，最大 417） |
-| `outputs.cpp` | 440 行 | **287 行** |
-| `realtime_grid.cpp` | ~200 行（含 26 处配置镜像） | **75 行** |
-| ROS1 包总行数 | 7038 | 6993 |
-| 发布者（新接口一侧） | 9 个话题 | **5 个**（去掉 4 个重复项） |
-| 重复/死代码 | — | 删掉 ~350 行（配置镜像 90、快照机器 90、TF 抑制死代码 40、重复发布 60+） |
+| `slam_algorithm.cpp` | 322 | 把一个 ROS-free 核心"跑起来"并管住它的三条线程 |
+| `config_bridge.cpp` | 378 | ROS 参数 / legacy JSON / 核心 YAML → 注入给核心的 override YAML |
+| `mount_frames.cpp` | 221 | 雷达/IMU/车体之间的外参（legacy r_il/t_il + base_link←imu/lidar 快照） |
+| `cloud_utils.cpp` | 179 | 点云转换与机身自过滤（纯数据，无状态机） |
+| `input_pipeline.cpp` | 172 | 传感器输入的串行处理链 + 每秒输入统计 |
+| `core_gateway.cpp` | 277 | **与核心的唯一边界**：锁语义 + lane 投递 + 只读访问 |
 
-总量几乎没变——因为 S1 给每个新文件加了 30 行公共头。**真正的收益是内聚和"删掉的东西"**：
-最大文件从 1314 → 417，重复输出与死代码消失。
+### interface/ —— 兼容层这一侧
 
-## S1：`slam_algorithm.cpp` 按职责拆成 6 个文件
-
-| 文件 | 行数 | 职责 |
+| 文件 | 行数 | 这一件事 |
 |---|---|---|
-| `engine/slam_algorithm.cpp` | 322 | 生命周期、三条线程（FE/tick/pub）、输出快照、初始位姿 |
-| `engine/config_bridge.cpp` | 417 | legacy JSON/YAML 读取、override YAML 生成、外参推导、兼容诊断 |
-| `engine/core_gateway.cpp` | 277 | 与核心的边界：持锁包装、lane 投递、只读访问 |
-| `engine/mount_frames.cpp` | 180 | base_link ← imu/lidar 的 TF 解析与快照 |
-| `engine/cloud_utils.cpp` | 179 | PointCloud2 → PCL、机身自过滤 |
-| `engine/input_pipeline.cpp` | 172 | 入队、统计、IMU/LiDAR/odom/vo/absolute 处理 |
+| `services.cpp` | 538 | 17 个 ROS 服务的处理（大，但内聚） |
+| `pose_publisher.cpp` | 503 | 兼容层的位姿 / 健康 / TF 发布 |
+| `outputs.cpp` | 287 | 兼容层之外的补充输出（`/lio_odom`、`/world_cloud`） |
+| `assembly.cpp` | 263 | 纯接线：构造 + 注册发布者/订阅者/服务/定时器 |
+| `planar_constraint.cpp` | 191 | 2D 平面约束**算法**（只产出修正量） |
+| `cloud_publisher.cpp` | 187 | 点云 / 栅格输出 |
+| `mode_state.cpp` | 141 | 接口层模式状态机 + 切模式重建核心 |
+| `subscribers.cpp` | 122 | 兼容层自己订阅的输入回调（底盘/升降/原始点云） |
+| `realtime_grid.cpp` | 75 | 建图模式实时栅格的工作线程（单一定周期任务） |
 
-构造函数从 194 行降到 12 行，只保留"按顺序装配"：
+其余（`config/config.cpp`、`io/*`、`monitor/*`、`node/*`）本来就是单一职责，未动。
 
-```cpp
-initCalibrationConfig();
-bool vo = false, odom = false, abs = false;
-loadInputConfig(vo, odom, abs);
-prepareCoreConfig();
-algo_ = SlamFactory::create(algo_name);
-...
+## 2. 本轮按"内聚"做的四处修正
+
+拆大文件只是表象，真正判定标准是"这个文件能不能用一句话说清、改它的时候会不会牵动别的事"。
+
+### 2.1 `computeXz3dExtrinsic` 归位到 `mount_frames.cpp`
+
+上一轮拆分时我把它放在了 `config_bridge.cpp`，但它是**从 TF 推外参**，
+属于"安装关系"而不是"配置装配"。`config_bridge` 只保留"调用它并把结果写进 YAML"。
+
+### 2.2 `planarConstraintStep`（148 行）独立成 `planar_constraint.cpp`
+
+它原来住在 `pose_publisher.cpp` 里 —— 但它是**算法**（栅格相关求修正量），
+不是发布。放在发布文件里的后果是：调算法会牵动发布链路的编译和心智负担。
+现在发布文件只剩"这一帧在哪里、可不可信"，算法改动不影响发布。
+
+### 2.3 `assembly.cpp` 拆出 `mode_state.cpp`
+
+`assembly` 原本混了两件事：启动时跑一次的**接线**（initPub/initSub/initServer…）
+和运行期随时调用的**模式状态机**（核心模式同步、切模式重建核心、定位 latch 复位、
+地面高度）。后者是业务规则，改动频率与接线完全不同 → 独立成文件。
+
+### 2.4 `cloud_publisher.cpp` 拆出 `subscribers.cpp`
+
+原来是"输入回调（底盘里程计/升降/原始点云）+ 输出发布"混在一起。
+输入侧改动不该影响发布 → `subscribers.cpp` 只管回调，`cloud_publisher.cpp` 只管输出。
+
+### 每个文件头部都写明"不在这里做什么"
+
+例如 `slam_algorithm.cpp` 的头注释：
+
+```
+// 不在这里做的事: 配置装配 (config_bridge)、外参解析 (mount_frames)、
+// 点云转换 (cloud_utils)、与核心的持锁边界 (core_gateway)。
 ```
 
-**纯搬移，行为不变**：250 个单测全绿，定位模式跑通。
+这是防止后续改动"顺手放进来"的最低成本手段。
 
-## S2：去掉与老接口重复的输出
+## 3. 顺带删掉的重复与死代码（上一轮）
 
-契约澄清：**老接口（xz_3d_slam 兼容层）就是机器实际在跑的接口**，新接口只是补充。
-所以"语义重复"的新输出全部删除：
+* **重复输出**（老接口已有）：`/odom`、`/map`、`/cloud_map`、`/grid_map` 删除，
+  连带删掉为它们服务的 cpu-lane 快照机器、`publishTransform` + 静态 TF（一直在
+  `suppress_conflicts` 保护下的死代码）。
+* **配置镜像**：`RealtimeGrid` 逐字段照抄核心 grid 配置的 26 个字段（`setConfig()` 写入后
+  从未被读）整块删除；`assembly.cpp` 只保留本层自己的三个参数。
 
-| 删除的话题 | 老接口里的对应项 | 说明 |
-|---|---|---|
-| `/odom` | 底盘 `/odom` | 本来就 `!suppress_conflicts` 才发，实际从不发 |
-| `/map` | 兼容层 `/map`（1 Hz 实时栅格） | 重复发布，实际被抑制 |
-| `/cloud_map` | `global_map`（latched 点云图） | 同一份全局点云 |
-| `/grid_map` | `global_grid_map` | 同一份全局栅格 |
+## 4. 验证
 
-连带删掉：
-* 为 `cloud_map`/`grid_map` 服务的"cpu lane 快照机器"（90 行）——这两个话题没了，它就没有消费者；
-* `publishTransform()` + `static_tf_` 静态 TF 块 + `tf_broadcaster_`（40 行）——这些本来就在
-  `suppress_conflicts` 保护下永不执行，而 TF 树由兼容层独占。
+```
+catkin_make: 0 error
+catkin_test_results: 250 tests, 0 failures
+定位模式 3 目标: 3/3 SUCCEEDED (matching 0.934)
+rosnode info /rosiwit_slam: /odom /cloud_map /grid_map 已消失; /map 只剩兼容层一份
+无 process has died / 段错误
+```
 
-保留（不与老接口重复，且有人消费）：
+## 5. 还没做（需要契约信息）
 
-| 话题 | 消费者 |
-|---|---|
-| `/lio_odom` | 导航（`odom_topic`） |
-| `/world_cloud` | 导航（体素障碍层） |
-| `/body_cloud`、`/lio_path`、`/slam_calibration` | 仓库内暂无消费者；不是老接口的重复项，先留（见"待确认"） |
-
-## S3：删掉配置镜像（26 个字段）
-
-`RealtimeGrid` 里曾把核心的 grid 配置**逐字段照抄**一遍（设计文档叫"镜像配置 D15"），
-核心改默认值这边就得同步。检查后发现：**这份配置从来没被读过**——`setConfig()` 写入后，
-`runOnce()` 只用 `m_grid_source_`（真正算图的是核心的 `generateGridMap`）。
-
-于是整块删除：`loadGridConfigFromYaml()`（90 行、26 个 `gv("…")` 字段）+ `setConfig()` +
-3 个成员。`assembly.cpp` 里只保留"本层自己的"三个参数（存图分辨率、实时图分辨率、平面约束开关）。
-
-## 验证
-
-* `catkin_make` 0 error；`catkin_test_results`：**250 tests, 0 failures**。
-* 定位模式 3 目标：目标 1/2 SUCCEEDED（目标 3 在窄通道口偶发 `FAILED_SAFETY_STOP`，
-  与本次改动无关——SLAM 侧只删了没人用的输出）。
-* 节点发布话题表里 `/odom` `/map` `/cloud_map` `/grid_map` 已不再出现。
-* 无 `process has died` / 段错误。
-
-## 待确认（需要 App/现场信息）
-
-1. `/body_cloud`、`/lio_path`、`/slam_calibration`：仓库内没有消费者。如果 App 也不用，
-   可以再删 3 个发布者（约 60 行）。
-2. `services.cpp`（538 行 / 17 个服务）：`/merge_map`、`/save_grid_map`、`/set_slam_mode`
-   与老接口的 `/stop_map_operation`、`/switch_map`、`/slam_mode_switch` 功能重叠，
-   需要确认 App 到底调哪一套。
-3. `pose_publisher.cpp`（660 行）仍是最大单文件，全部是老接口位姿/TF/健康话题的逐字复刻。
-   可以按话题族拆成 3 个文件（位姿 / TF / 健康），纯搬移、零行为风险。
+1. `/body_cloud`、`/lio_path`、`/slam_calibration`：仓库内**无消费者**。不是老接口的
+   重复项，先留；确认 App 也不用后可以再删 3 个发布者。
+2. `services.cpp` 的 17 个服务里，`/merge_map`、`/save_grid_map`、`/set_slam_mode`
+   与老接口的 `/stop_map_operation`、`/switch_map`、`/slam_mode_switch` 功能重叠。
+   需要确认 App 到底调哪一套，再决定删哪套。
+3. `config/config.cpp`（271 行，legacy JSON + 环境适配）与 `engine/config_bridge.cpp`
+   的边界可以再讨论：前者"读 legacy 配置"，后者"把它变成核心配置"，目前是合理的两件事。

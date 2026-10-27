@@ -1,8 +1,10 @@
 // ============================================================================
-// Ros1SlamInterface 服务与初始位姿：/switch_map、/relocation、模式切换、
-// 地图保存/停止/任务等服务处理器。
+// services.cpp — 兼容层的服务处理
+//
+// 单一职责: 17 个 ROS 服务的入参校验、状态迁移与结果填写
+// (/switch_map /relocation /stop_map_operation /slam_mode_switch ...),
+// 以及它们需要的"重活投递"(切图/存图走 lane, 见 core_gateway.cpp)。
 // ============================================================================
-
 #include "ros1_slam_interface.h"
 
 #include <algorithm>

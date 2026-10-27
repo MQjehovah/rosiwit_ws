@@ -1,6 +1,10 @@
 // ============================================================================
-// RosiwitInterface 实现 —— 逐字搬自原 rosiwit_slam_ros1_node.cpp 的
-// 发布器 / 服务 / TF 部分, 仅抑制兼容接口已经负责的冲突输出。
+// outputs.cpp — 兼容接口之外的补充输出
+//
+// 单一职责: 只发兼容层没有、且有人消费的输出:
+//   /lio_odom (导航) 、/world_cloud (导航体素层);
+//   /body_cloud、/lio_path、/slam_calibration 暂无消费者, 保留。
+// 与兼容层重复的话题 (odom/map/cloud_map/grid_map) 已删除。
 // ============================================================================
 #include "outputs.h"
 #include "map_adapter.h"

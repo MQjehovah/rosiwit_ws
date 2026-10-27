@@ -1,6 +1,12 @@
 // ============================================================================
-// SlamAlgorithm 实现 —— 全部从原 rosiwit_slam_ros1_node.cpp 搬移。
-// 输入话题由机器人现有 sensor_config 决定，其余行为保持不变。
+// slam_algorithm.cpp — 算法实例的生命周期
+//
+// 只负责一件事: 把一个 ROS-free 的核心算法"跑起来"并管住它的线程。
+//   * 构造/析构、start()/shutdown() (FrontEnd + 50Hz tick + 50Hz publish);
+//   * 输入入队后的处理链入口 (processImu/processLidar 见 input_pipeline.cpp);
+//   * 核心输出的快照 (onOutput/latestOutput) 与 initial pose 落地。
+// 不在这里做的事: 配置装配 (config_bridge)、外参解析 (mount_frames)、
+// 点云转换 (cloud_utils)、与核心的持锁边界 (core_gateway)。
 // ============================================================================
 #include "slam_algorithm.h"
 

@@ -1,5 +1,11 @@
 // ============================================================================
-// 配置装配 (legacy JSON/YAML 读取、override YAML 生成、外参推导、兼容诊断) — SlamAlgorithm 的一个职责切片 (S1 拆分, 行为不变)
+// config_bridge.cpp — 把 legacy 配置变成核心能吃的配置
+//
+// 单一职责: ROS 参数 / legacy JSON / 核心 YAML → 一份注入给核心的 override YAML。
+//   * initCalibrationConfig(): 在线标定参数
+//   * loadInputConfig(): 输入话题、自过滤、可选输入开关
+//   * prepareCoreConfig(): legacy sensor_config → 输入话题 → 外参 → 写 override YAML → 兼容诊断
+// 外参本身怎么从 TF 算出来, 在 mount_frames.cpp; 这里只调用。
 // ============================================================================
 #include "slam_algorithm.h"
 
@@ -156,45 +162,6 @@ std::string writeXz3dOverrideYaml(const std::string& base_yaml,
 
 } // namespace  <-- 临时收起匿名 namespace: 成员函数必须定义在 rosiwit_slam_ros1 里
 
-bool SlamAlgorithm::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
-                                       std::string& source) {
-    // 帧名可配; 默认都是 lidar —— 本机点云与 IMU 由同一个万集 SDK 节点发布, frame_id 相同
-    std::string lidar_frame = "lidar", imu_frame = "lidar";
-    pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
-    pnh_.param<std::string>("imu_frame", imu_frame, imu_frame);
-
-    if (lidar_frame == imu_frame) {
-        // **同一个 frame 就是同一个坐标系** -> 恒等变换。
-        // 雷达内置 IMU 正是这种情形 (frame_id 都是 lidar), 此时任何旋转都是错的。
-        R = Eigen::Matrix3d::Identity();
-        t = Eigen::Vector3d::Zero();
-        source = std::string("identity (lidar_frame == imu_frame == '") + lidar_frame + "')";
-        return true;
-    }
-
-    // 独立 IMU: 从 TF 取 T_(imu <- lidar)。启动时 /tf_static 可能还没到, 等最多 3 秒。
-    if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
-    if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-    for (int i = 0; i < 30; ++i) {
-        try {
-            const geometry_msgs::TransformStamped tf =
-                tf_buffer_->lookupTransform(imu_frame, lidar_frame, ros::Time(0), ros::Duration(0.1));
-            Eigen::Quaterniond q(tf.transform.rotation.w, tf.transform.rotation.x,
-                                 tf.transform.rotation.y, tf.transform.rotation.z);
-            q.normalize();
-            R = q.toRotationMatrix();
-            t = Eigen::Vector3d(tf.transform.translation.x, tf.transform.translation.y,
-                                tf.transform.translation.z);
-            source = "TF lookupTransform('" + imu_frame + "' <- '" + lidar_frame + "')";
-            return true;
-        } catch (const tf2::TransformException&) {
-            ros::Duration(0.05).sleep();
-        }
-    }
-    ROS_WARN_STREAM("[slam_algo] TF '" << imu_frame << "' <- '" << lidar_frame
-                    << "' unavailable within 3s; keeping r_il/t_il from the core yaml");
-    return false;
-}
 
 namespace {  // 重新打开匿名 namespace, 供下面的 printCompatDiagnostics 使用
 

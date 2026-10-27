@@ -71,6 +71,9 @@ endif()
 set(ROSIWIT_ROS1_LIB_SOURCES
     src/config/config.cpp
     src/interface/realtime_grid.cpp
+    src/interface/planar_constraint.cpp
+    src/interface/mode_state.cpp
+    src/interface/subscribers.cpp
     src/interface/internal.cpp
     src/monitor/lost_monitor.cpp
     src/engine/slam_algorithm.cpp
