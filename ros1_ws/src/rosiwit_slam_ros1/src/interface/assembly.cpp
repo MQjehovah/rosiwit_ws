@@ -117,7 +117,21 @@ Ros1SlamInterface::~Ros1SlamInterface() {
         ROS_INFO("[ros1_slam] waiting for %d in-flight map load job(s) to finish",
                  map_load_inflight_);
     }
-    map_load_cv_.wait(lk, [this] { return map_load_inflight_ == 0; });
+    // 在途计数已挪到 DoneFn, 一定会归零; 这里仍给上限并周期告警, 避免
+    // 文件系统卡死时进程永远退不掉。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    while (map_load_inflight_ > 0) {
+        if (map_load_cv_.wait_for(lk, std::chrono::seconds(5)) == std::cv_status::no_timeout) {
+            continue;
+        }
+        if (std::chrono::steady_clock::now() > deadline) {
+            ROS_FATAL("[ros1_slam] map load still in flight after 120s, giving up wait "
+                      "(inflight=%d)", map_load_inflight_);
+            break;
+        }
+        ROS_WARN("[ros1_slam] still waiting for %d in-flight map load job(s)",
+                 map_load_inflight_);
+    }
 }
 
 void Ros1SlamInterface::initPub() {

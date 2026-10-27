@@ -221,6 +221,11 @@ public:
     /// 返回 false = 被拒绝 (池满/已关停/无执行器)。
     bool runOnLane(const std::string& lane, std::string name,
                    std::function<void(rosiwit_common::CancelToken)> job);
+    /// 同上, 但带完成回调。**done 一定被调用一次** —— 执行完 / 被取消 / 被丢队列
+    /// 都会回调, 所以"在途计数"必须挂在这里, 不能写在任务体里 (I4)。
+    bool runOnLaneWithDone(const std::string& lane, std::string name,
+                           std::function<void(rosiwit_common::CancelToken)> job,
+                           std::function<void(bool ok)> done);
 
     rosiwit_common::IExecutor* executor() const { return executor_; }
 

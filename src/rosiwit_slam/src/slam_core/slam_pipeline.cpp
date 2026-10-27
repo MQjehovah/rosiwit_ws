@@ -44,10 +44,26 @@ void BackendWorker::start() {
     // body 捕获 self: 线程被放弃 (detach) 后, worker 状态仍由 shared_ptr 保活,
     // 不会出现"对象已析构、线程还在用 this"。
     auto self = shared_from_this();
+    // 存活计数: stopAsync() 是 abandon 语义, 进程退出前要靠它做有界等待 (I6)
+    auto inflight = &m_inflight;
     m_thread.reset(new rosiwit_common::Thread("slam_be",
-        [self](rosiwit_common::CancelToken token) { self->run(token); }));
+        [self, inflight](rosiwit_common::CancelToken token) {
+            ++(*inflight);
+            struct Dec {
+                std::atomic<int>* p;
+                ~Dec() { --(*p); }
+            } dec{inflight};
+            self->run(token);
+        }));
     m_loop_thread.reset(new rosiwit_common::Thread("slam_be_loop",
-        [self](rosiwit_common::CancelToken token) { self->runLoop(token); }));
+        [self, inflight](rosiwit_common::CancelToken token) {
+            ++(*inflight);
+            struct Dec {
+                std::atomic<int>* p;
+                ~Dec() { --(*p); }
+            } dec{inflight};
+            self->runLoop(token);
+        }));
 }
 
 void BackendWorker::push(BackendTask task, const KeyFrame& kf) {
@@ -152,6 +168,30 @@ void BackendWorker::optimizeAndPublishAnchor() {
 SlamPipeline::~SlamPipeline() {
     if (m_backend_worker) m_backend_worker->stopAsync();
     stopLocalizationWorker();
+}
+
+bool SlamPipeline::waitForBackgroundIdle(int timeout_ms) {
+    const std::shared_ptr<BackendWorker> worker = m_backend_worker;
+    if (!worker) return true;
+    // 顺序很重要: 先**叫停** (stopAsync 置取消位 + abandon, 不阻塞调用方),
+    // 再在有限时间里等线程真的退出。以前只等不停 —— 线程在正常干活, 必然等满超时。
+    worker->stopAsync();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto deadline = t0 + std::chrono::milliseconds(timeout_ms);
+    while (worker->inflight() > 0) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            std::cerr << "[SlamPipeline] backend still running after " << timeout_ms
+                      << "ms (inflight=" << worker->inflight() << "), continue exit"
+                      << std::endl;
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    std::cout << "[SlamPipeline] backend idle after " << ms << " ms (clean exit)" << std::endl;
+    return true;
 }
 
 void SlamPipeline::stopLocalizationWorker() {

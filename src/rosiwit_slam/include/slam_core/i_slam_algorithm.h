@@ -81,6 +81,12 @@ public:
     /// 旧 xz_3d_slam 每次进建图都会 DELETE_PTR(mapping_ptr_) 重建实例; 我们是单核心实例,
     /// 只能用显式重建达到同样效果。默认不支持。
     virtual bool resetForNewMapping(const std::string& /*config_path*/) { return false; }
+    /// 有界等待后台线程退出 (进程退出前调用)。
+    /// 后端的线程是"放弃(detach)"语义 —— 只持有 shared 状态, 对象析构安全, 但进程
+    /// 退出时它们可能还在跑 (例如卡在一次 Ceres 优化里)。退出前给一个上限等一等,
+    /// 避免在 libc/PCL/Ceres 静态对象析构时还有线程在用它们。
+    virtual bool waitForBackgroundIdle(int /*timeout_ms*/) { return true; }
+
     /// 绝对约束输入 (地图系位姿 + 协方差; 默认忽略)
     virtual void onAbsolute(const PoseStamped& /*pose*/, const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
 };

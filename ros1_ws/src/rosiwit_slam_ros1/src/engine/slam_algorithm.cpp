@@ -607,6 +607,9 @@ void SlamAlgorithm::shutdown()
     if (frontend_) { frontend_->requestStop(); frontend_->join(); frontend_.reset(); }
     if (tick_) { tick_->requestStop(); tick_->join(); tick_.reset(); }
     if (publish_) { publish_->requestStop(); publish_->join(); publish_.reset(); }
+    // 后端的线程是 abandon 语义 (可能卡在 Ceres 里), 退出前给它一个有界窗口,
+    // 免得进程在静态对象析构时还有线程在跑 (I6)。
+    if (algo_raw_) { algo_raw_->waitForBackgroundIdle(2000); }
 }
 
 void SlamAlgorithm::frontendLoop(rosiwit_common::CancelToken token)
@@ -660,6 +663,34 @@ bool SlamAlgorithm::runOnLane(
                  "(queued=%zu rejected=%lu)",
                  lane.c_str(), name.c_str(), st.queued,
                  static_cast<unsigned long>(st.rejected));
+        return false;
+    }
+    return true;
+}
+
+bool SlamAlgorithm::runOnLaneWithDone(
+    const std::string& lane, std::string name,
+    std::function<void(rosiwit_common::CancelToken)> job,
+    std::function<void(bool ok)> done)
+{
+    if (!executor_) {
+        ROS_WARN("[slam_algo] runOnLaneWithDone('%s'): no executor injected", lane.c_str());
+        if (done) done(false);
+        return false;
+    }
+    rosiwit_common::JobOptions opt;
+    opt.name = name;
+    const rosiwit_common::JobId id = executor_->submit(
+        lane, std::move(opt), std::move(job),
+        [done = std::move(done)](rosiwit_common::JobId, bool ok) {
+            if (done) done(ok);
+        });
+    if (id == rosiwit_common::kInvalidJobId) {
+        const auto st = executor_->stats();
+        ROS_WARN("[slam_algo] runOnLaneWithDone('%s','%s') rejected (queued=%zu rejected=%lu)",
+                 lane.c_str(), name.c_str(), st.queued,
+                 static_cast<unsigned long>(st.rejected));
+        if (done) done(false);
         return false;
     }
     return true;

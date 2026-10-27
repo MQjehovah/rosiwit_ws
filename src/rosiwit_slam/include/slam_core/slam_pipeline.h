@@ -52,6 +52,8 @@ public:
                   std::shared_ptr<AnchorState> anchor);
     void start();
     void push(BackendTask task, const KeyFrame& kf = KeyFrame{});
+    /// 仍存活的后台线程数 (abandon 之后用它做有界等待)
+    int inflight() const { return m_inflight.load(); }
     /// 置停止并 detach; 正在执行的 optimize 会自然结束, 不阻塞调用线程.
     void stopAsync();
 
@@ -78,6 +80,7 @@ private:
     // OPTIMIZE 不占队列: 合并成 pending 标志, 等主队列排空后必跑一次,
     // 避免"后端优化被 queue full 静默吞掉".
     std::atomic<bool> m_optimize_requested{false};
+    std::atomic<int> m_inflight{0};     // 两条线程的存活计数 (abandon 后仍可观测)
 };
 
 class SlamPipeline : public SlamBase {
@@ -165,6 +168,9 @@ private:
     std::shared_ptr<IMapManager>   m_map_mgr;
     std::shared_ptr<AnchorState>   m_anchor;
     std::shared_ptr<BackendWorker> m_backend_worker;
+    /// 后端两条线程的存活计数 (abandon 之后仍可能 >0)
+    std::atomic<int> m_backend_inflight{0};
+    bool waitForBackgroundIdle(int timeout_ms) override;
 };
 
 } // namespace rosiwit_slam

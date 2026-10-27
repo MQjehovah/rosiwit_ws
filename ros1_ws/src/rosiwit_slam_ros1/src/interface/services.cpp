@@ -176,19 +176,22 @@ void Ros1SlamInterface::startMapLoadJob(
 
     const std::string base = ctx.base;
     const uint64_t gen = ctx.generation;
-    const bool accepted = engine_.runOnLane("disk_read", "switch_map_load",
-        [this, base, init_pose, gen](rosiwit_common::CancelToken) {
-            // 无论走哪条返回路径都要收尾
-            struct InflightGuard {
-                Ros1SlamInterface* self;
-                ~InflightGuard() { self->finishMapLoadJob(); }
-            } guard{this};
-
+    // 在途计数挂在 DoneFn 上: 任务被执行 / 被取消 / 被丢队列三种情况都会回调,
+    // 所以析构的等待一定能结束 (I4)。任务体里不再自己收尾。
+    const bool accepted = engine_.runOnLaneWithDone("disk_read", "switch_map_load",
+        [this, base, init_pose, gen](rosiwit_common::CancelToken token) {
             map_switch_busy_.store(true);
             rosiwit_slam::MapData map_data;
             // 解析 25s 期间核心可能被模式切换重建: 抓解析前的 generation, 装载时校验
             const uint64_t core_gen = engine_.coreGeneration();
             const bool parsed = map_adapter::loadMapData(base, map_data);
+            if (token.cancelled()) {
+                std::cout << "[ros1_slam] /switch_map: load cancelled after parse: "
+                          << base << std::endl;
+                map_switch_busy_.store(false);
+                relocating_ = false;
+                return;
+            }
             const bool loaded = parsed && engine_.loadLocalizationMapData(map_data, core_gen);
             if (gen != map_switch_generation_.load()) {
                 std::cout << "[ros1_slam] /switch_map: discard stale map load: "
@@ -209,12 +212,17 @@ void Ros1SlamInterface::startMapLoadJob(
             map_switch_busy_.store(false);
             std::cout << "[ros1_slam] /switch_map background localization map ready: "
                       << base << std::endl;
+        },
+        [this](bool ok) {
+            if (!ok) {
+                // 被取消/丢弃/异常: 别把"切图中"和"重定位中"标志留下来
+                map_switch_busy_.store(false);
+                relocating_ = false;
+            }
+            finishMapLoadJob();
         });
 
     if (!accepted) {
-        // 池满/已关停: 保持"切图中"标志不留悬, 明确报错
-        finishMapLoadJob();
-        map_switch_busy_.store(false);
         ROS_ERROR_STREAM("[ros1_slam] /switch_map: rejected by executor (lane busy): "
                          << base);
     }

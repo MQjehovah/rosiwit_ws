@@ -227,20 +227,25 @@ void Ros1SlamInterface::publishMappingPath() {
 }
 
 void Ros1SlamInterface::publishRealtimeGridMap() {
-    GridInfo gi;
-    if (realtime_grid_.latest(gi)) {
-        nav_msgs::OccupancyGrid msg = toRosGrid(gi, kMapFrame);
+    // latestPtr(): 无锁拿不可变快照, 不再整份拷一份 GridInfo (I8)。
+    // (OccupancyGrid 仍要各有一份 —— ROS 消息自己持有 data 缓冲, 这是协议决定的。)
+    const auto snap = realtime_grid_.latestPtr();
+    if (snap) {
+        nav_msgs::OccupancyGrid msg = toRosGrid(*snap, kMapFrame);
         realtime_grid_map_area_ =
-            static_cast<double>(gi.width) * gi.height * gi.resolution * gi.resolution;
+            static_cast<double>(snap->width) * snap->height * snap->resolution * snap->resolution;
         // legacy.cpp:1749 把建图面积塞进 origin.position.z
         msg.info.origin.position.z = realtime_grid_map_area_ * 0.00001;
-        std::cout << "[ros1_slam] realtime grid updated: " << gi.width << "x" << gi.height
-                  << " res=" << gi.resolution << " area=" << realtime_grid_map_area_ << std::endl;
-        setStaticMap(std::move(msg));
+        std::cout << "[ros1_slam] realtime grid updated: " << snap->width << "x"
+                  << snap->height << " res=" << snap->resolution
+                  << " area=" << realtime_grid_map_area_ << std::endl;
+        setStaticMap(msg);                 // tick 线程也要读 (slam/info、兜底重发)
+        realtime_grid_map_puber_.publish(msg);
+        return;
     }
-    // 无更新也照发上一张 (legacy.cpp:909 无条件 publish); 发布用快照, 避免与 tick 线程抢
-    nav_msgs::OccupancyGrid snap = staticMapSnapshot();
-    realtime_grid_map_puber_.publish(snap);
+    // 无更新也照发上一张 (legacy.cpp:909 无条件 publish); 取快照, 避免与 tick 线程抢
+    nav_msgs::OccupancyGrid cur = staticMapSnapshot();
+    realtime_grid_map_puber_.publish(cur);
 }
 
 void Ros1SlamInterface::publishPointMap() {

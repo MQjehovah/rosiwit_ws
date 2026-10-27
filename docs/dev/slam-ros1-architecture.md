@@ -780,11 +780,11 @@ SLAM 侧改造已完成并验证，但回归里暴露了三个 nav 问题（都�
 | I1 | Important | `core_mu_` 同时罩住 FE 热循环（PCL 转换+FAST-LIO）与主线程 `onOdomMsg`(50 Hz)/`applyInitPose`/`resetCore` → FE 帧时间变成主线程抖动 | `/odom` 改走队列；`core_mu_` 只保护"核心指针/重建" |
 | I2 | Important | `applyInitPose` 持 `core_mu_` 做**阻塞 TF 查询**（最多 3 s） | 取锁前先解析 base 外参 |
 | I3 ✅ | Important | ~~`base_imu_/base_lidar_` 无锁竞争~~ | **已修**：`SnapshotSlot<RigidTransform>` + `mount_mu_`；非阻塞调用拿到锁就直接用旧快照 |
-| I4 | Important | 切图在途计数绑在**任务体**上，任务被丢弃/取消时不会减 → 析构可能永久等待；等待无超时；任务不检查 CancelToken | 改用 `submit` 的 `DoneFn`；`wait_for(30s)`；任务内检查取消 |
+| I4 ✅ | Important | ~~在途计数绑在任务体上~~ | **已修**：计数挪到 `DoneFn`（执行/取消/丢弃都会回调）+ 析构 120 s 上限 + 任务检查 `CancelToken`（见 §10.16.1） |
 | I5 ◐ | Important | `mapIoMutex` 只护 `.xzmap` | **写侧已修**：`MapIoGuard` 包住整段写盘；**读侧仍在外**（PGM 读取） |
-| I6 | Important | `abandon()` 把"detach 线程"问题推到进程退出：Ceres 线程可能在 main 返回后仍跑 | 退出前有界 `waitForIdle(2s)` |
+| I6 ✅ | Important | ~~abandon 的线程可能在进程退出时仍在跑~~ | **已修**：新增 `waitForBackgroundIdle(2s)` = **先 stopAsync 再有界等待**；实测 backend idle 0-10 ms（见 §10.16.1） |
 | I7 | Important | `~Ros1SlamInterface` 先毁发布者再 join `rt_grid`（`GridSource` lambda 调回本对象） | 已随 C1 修（析构首行 `stopBackgroundWork()`） |
-| I8 | Important | `SnapshotSlot` 的零拷贝没被用上：唯一消费者仍 `latest(gi)` 整份拷贝 | 发布侧直接用 `shared_ptr<const GridInfo>` |
+| I8 ◐ | Important | ~~`SnapshotSlot` 零拷贝没被用上~~ | **已修（GridInfo 侧）**：`latestPtr()` 无锁读，少一份整拷贝；`OccupancyGrid` 的拷贝是 ROS 协议决定的，去不掉 |
 | I10 | Important | 池 4 条 lane 只有 `disk_read` 在用 | 随 C3 接线，或删掉装饰性 lane |
 | I11 | Important | 输入丢弃不可观测：计数在 `push` 前自增，`rejected_closed` 从不打印；后端队列丢弃无统计 | 计数改到 push 成功后；按秒打印 delta |
 
@@ -901,3 +901,55 @@ stop_map_operation: 2.10s success=True
 | I10 | `cpu` / `feature` 两条 lane 仍然空转；`/map` 2 s 的 `mapCB`（getGlobalMap+栅格）仍在主线程 |
 | I11 | 输入/后端队列的丢弃仍不可观测 |
 | — | nav：目标 3 窄通道、`HEALTH_INIT` 仍按"可继续行驶"处理、nav 无锁（§10.14） |
+
+
+### 10.16.1 I4 / I6 / I8（2026-10-27 续）
+
+**I4 切图在途计数改用 `DoneFn`**
+
+旧实现把 `map_load_inflight_--` 写在**任务体**的 RAII 里。任务被执行才会减；
+一旦被 `kDropOldest` 丢弃或被 `shutdown(false)` 取消，任务体不跑 → 计数永远不为零 →
+接口析构的等待永不返回。现在：
+
+* 新增 `SlamAlgorithm::runOnLaneWithDone(lane, name, job, done)`；
+  `done` 由执行器在**执行完 / 取消 / 丢队列**三种情况下各回调一次
+  （提交被拒时由包装层补一次 `done(false)`）；
+* 计数、`map_switch_busy_`、`relocating_` 的收尾全在 `DoneFn` 里；
+* 任务体在解析完地图后检查 `token.cancelled()`，被取消就不再往核心装；
+* 析构等待改为 120 s 上限 + 每 5 s 告警一次（文件系统卡死时进程仍能退）。
+
+**I6 退出前有界等待后端线程**
+
+`BackendWorker` 的两条线程是 `abandon()` 语义（不 join，只持有 shared 状态）。
+它们会在进程退出后继续跑，可能在 libc/PCL/Ceres 静态对象析构时用到这些对象。
+
+`SlamPipeline::waitForBackgroundIdle(timeout_ms)`：
+
+1. 先 `stopAsync()`（置取消位 + abandon，不阻塞调用方）；
+2. 再轮询 `m_inflight`（线程体的 RAII 计数）直到为 0 或超时。
+
+> 第一版写反了：只轮询不叫停，线程正在正常干活，必然等满 2 s 超时
+> （日志 `backend still running after 2000ms (inflight=2)`），进程仍带着线程退出。
+> 改正后：`backend idle after 0~10 ms (clean exit)`。
+
+**I8 栅格快照零拷贝**
+
+`publishRealtimeGridMap()` 改用 `realtime_grid_.latestPtr()`（无锁拿
+`shared_ptr<const GridInfo>`），不再每次拷一份 `GridInfo`；有更新时只构建一次
+`OccupancyGrid` 并同时写静态图缓存 + 发布，省掉原来"先缓存再快照再发布"的两次拷贝。
+`OccupancyGrid::data` 由 ROS 消息自己持有，这一份拷贝无法避免（协议决定）。
+
+**验收（同一批次）**
+
+```
+退出:  定位模式(启动即切图) SIGINT -> 0.5 s 退出, alive=0, 无崩溃
+       建图模式(跑 25s, 后端有优化) SIGINT -> 0.8 s 退出, alive=0, 无崩溃
+       [SlamPipeline] backend idle after 10 ms (clean exit)
+       (改前: 4.4 s / 4.6 s, 且日志是 "still running after 2000ms (inflight=2)")
+定位:  /lio_odom 95.89 Hz, 目标 1/2 SUCCEEDED, 导航中 0 次误跳变
+存图:  2.01 s success=True, 期间 /slam/info max gap 0.300 s, 产物齐全
+单测:  catkin_test_results 250 tests, 0 failures
+```
+
+**仍未修**：`I10`（`cpu`/`feature` lane 空转、`mapCB` 在主线程）、`I11`（丢弃不可观测）、
+`I5` 读侧（载图的 PGM 读取仍在锁外）、以及 nav 的三个问题（§10.14）。
