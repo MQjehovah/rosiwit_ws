@@ -105,12 +105,16 @@ Ros1SlamInterface::PoseTickResult Ros1SlamInterface::publishLocalizationPose(
         return PoseTickResult::DropTick;
     }
 
-    curr_pose_.x = out.pose.trans.x();
-    curr_pose_.y = out.pose.trans.y();
-    curr_pose_.z = out.pose.trans.z();
-    curr_pose_.yaw = yaw;
-    curr_pose_.q = Eigen::Quaterniond(out.pose.rot);
-    curr_pose_.q.normalize();
+    {
+        // tick 线程写; 存图服务等其它线程通过 currentPoseSnapshot() 读
+        std::lock_guard<std::mutex> lk(pose_mu_);
+        curr_pose_.x = out.pose.trans.x();
+        curr_pose_.y = out.pose.trans.y();
+        curr_pose_.z = out.pose.trans.z();
+        curr_pose_.yaw = yaw;
+        curr_pose_.q = Eigen::Quaterniond(out.pose.rot);
+        curr_pose_.q.normalize();
+    }
 
     geometry_msgs::PoseStamped ps;
     ps.header.frame_id = kMapFrame;
@@ -233,10 +237,13 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
 }
 
 void Ros1SlamInterface::publishStaticMapFallback() {
-    if (!static_map_valid_ || realtime_grid_map_.data.empty()) return;
+    if (!static_map_valid_) return;
     const ros::Time now = ros::Time::now();
     if (!last_static_map_pub_.isZero() && (now - last_static_map_pub_).toSec() < 1.0) return;
-    realtime_grid_map_puber_.publish(realtime_grid_map_);
+    // 拷贝快照: 这张图由主线程的 1Hz timer / beginMapSwitch 更新, 这里在 tick 线程读
+    nav_msgs::OccupancyGrid snap = staticMapSnapshot();
+    if (snap.data.empty()) return;
+    realtime_grid_map_puber_.publish(snap);
     last_static_map_pub_ = now;
 }
 
@@ -244,10 +251,13 @@ void Ros1SlamInterface::publishZeroPoseInfo() {
     // 切图后旧图的 map->odom 不能再沿用，先回到 identity，定位成功后再更新。
     have_map_odom_ = false;
     last_map_odom_pub_ = ros::Time();
-    curr_pose_ = Xz3dPose();
+    {
+        std::lock_guard<std::mutex> lk(pose_mu_);
+        curr_pose_ = Xz3dPose();
+    }
     last_location_info_pub_ = ros::Time::now();
     slam_info_puber_.publish(
-        buildSlamInfo(/*slam_state=*/1, /*location_status=*/1, curr_map_name_,
+        buildSlamInfo(/*slam_state=*/1, /*location_status=*/1, mapName(),
                       0.0, 0.0, 0.0,
                       static_cast<float>(realtime_grid_map_area_), 0.0f));
     // 切图后到定位成功之前一律 INIT: 位姿不可信, 消费端不得据此导航.
@@ -408,8 +418,8 @@ void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) 
 
     msg.health = health;
     msg.matching = health == LocState::HEALTH_LOST ? 0.0f : matching;
-    msg.map_id = curr_map_name_;
-    msg.map_valid = !realtime_grid_map_.data.empty();
+    msg.map_id = mapName();
+    msg.map_valid = hasStaticMap();
     msg.relocalize_count = engine_.poseJumpSeq();   // 单源: SlamAlgorithm 的跳变序号
     localization_state_puber_.publish(msg);
 }
@@ -521,15 +531,16 @@ void Ros1SlamInterface::planarConstraintStep() {
         (now - planar_last_try_).toSec() < min_period) return;
     planar_last_try_ = now;
 
-    if (realtime_grid_map_.data.empty() ||
-        realtime_grid_map_.info.width == 0 || realtime_grid_map_.info.height == 0) {
+    const nav_msgs::OccupancyGrid map_snap = staticMapSnapshot();
+    if (map_snap.data.empty() ||
+        map_snap.info.width == 0 || map_snap.info.height == 0) {
         return;
     }
 
     // 地图几何变化时重建栅格 + 距离场 (一次性开销, 不是每帧).
     const bool geom_changed =
-        planar_grid_.width != static_cast<int>(realtime_grid_map_.info.width) ||
-        planar_grid_.height != static_cast<int>(realtime_grid_map_.info.height) ||
+        planar_grid_.width != static_cast<int>(map_snap.info.width) ||
+        planar_grid_.height != static_cast<int>(map_snap.info.height) ||
         std::fabs(planar_grid_.resolution - realtime_grid_map_.info.resolution) > 1e-9 ||
         planar_grid_.data.size() != realtime_grid_map_.data.size();
     if (geom_changed || planar_field_.empty()) {

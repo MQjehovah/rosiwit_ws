@@ -775,13 +775,13 @@ SLAM 侧改造已完成并验证，但回归里暴露了三个 nav 问题（都�
 
 | 编号 | 严重度 | 问题 | 建议 |
 |---|---|---|---|
-| **C2** | Critical | 池任务直接 `engine_.algo()->loadLocalizationMapData()/setPipelineMode()`，**绕开 `core_mu_`**；与 `/slam/mode_switch` 的 `resetCore()`（会 `m_localization.reset()`）竞争 → check-then-use 空指针/悬垂 | 关掉 `algo()` 逃生口，改 `SlamAlgorithm::loadLocalizationMapData()/setCoreMode()` 内部持锁 + `core_generation_` 过期丢弃 |
-| **C3** | Critical | 存图/载图/缩略图/充电桩检测全在 **ROS 主线程**（`/stop_map_operation` 里 `getRealtimeGrid` 秒级 + `saveGridMap` + `mapIoMutex` 最多等 2 s）→ TF/健康话题冻结；池的 4 条 lane 只有 1 条在用 | 存图 → `disk_write`，质量栅格 → `cpu`；`publishCurrPose+sendTransform` 从 100 Hz timer 挪到 `slam_tick` |
+| **C2 ✅** | Critical | ~~池任务绕开 `core_mu_` 直接动核心~~ | **已修**：`core_excl_mu_` + `core_generation_` + 持锁包装（见 §10.16） |
+| **C3 ✅** | Critical | ~~存图/载图/发布全在主线程~~ | **已修**：发布搬到 `slam_pub` 线程；存图/载图走 lane（见 §10.16）。验收：存图 2.1 s 期间 `/slam/info` max gap 0.321 s（节流常态 0.30 s） |
 | I1 | Important | `core_mu_` 同时罩住 FE 热循环（PCL 转换+FAST-LIO）与主线程 `onOdomMsg`(50 Hz)/`applyInitPose`/`resetCore` → FE 帧时间变成主线程抖动 | `/odom` 改走队列；`core_mu_` 只保护"核心指针/重建" |
 | I2 | Important | `applyInitPose` 持 `core_mu_` 做**阻塞 TF 查询**（最多 3 s） | 取锁前先解析 base 外参 |
-| I3 | Important | `base_imu_/base_lidar_/tf_buffer_/mount_last_try_` 无锁；`slam_tick` 每 20 ms 调 `computeBaseFrames` 与主线程并发 → Eigen 撕裂/`shared_ptr` 竞争 | `once_flag` 或 `SnapshotSlot<RigidTransform>` |
+| I3 ✅ | Important | ~~`base_imu_/base_lidar_` 无锁竞争~~ | **已修**：`SnapshotSlot<RigidTransform>` + `mount_mu_`；非阻塞调用拿到锁就直接用旧快照 |
 | I4 | Important | 切图在途计数绑在**任务体**上，任务被丢弃/取消时不会减 → 析构可能永久等待；等待无超时；任务不检查 CancelToken | 改用 `submit` 的 `DoneFn`；`wait_for(30s)`；任务内检查取消 |
-| I5 | Important | `mapIoMutex` 只护 `.xzmap`，`.pgm/.yaml/.jpg` 写入与 PGM 读取在锁外 → 仍可能读到半个 PGM | 整段存图持锁，载图的 PGM 也持锁 |
+| I5 ◐ | Important | `mapIoMutex` 只护 `.xzmap` | **写侧已修**：`MapIoGuard` 包住整段写盘；**读侧仍在外**（PGM 读取） |
 | I6 | Important | `abandon()` 把"detach 线程"问题推到进程退出：Ceres 线程可能在 main 返回后仍跑 | 退出前有界 `waitForIdle(2s)` |
 | I7 | Important | `~Ros1SlamInterface` 先毁发布者再 join `rt_grid`（`GridSource` lambda 调回本对象） | 已随 C1 修（析构首行 `stopBackgroundWork()`） |
 | I8 | Important | `SnapshotSlot` 的零拷贝没被用上：唯一消费者仍 `latest(gi)` 整份拷贝 | 发布侧直接用 `shared_ptr<const GridInfo>` |
@@ -801,3 +801,103 @@ revision 变化时都会重建栅格。
 **未覆盖**：主线程/发布线程归属（把 `onTick` 挪回 spinner 不会有任何测试失败）、
 关停顺序与钩子生命周期（C1/I7 只能靠人工 SIGINT）、`start()/shutdown()` 幂等与重启、
 切图在途等待与拒绝路径、后端/定位队列背压与丢弃可观测性。
+
+
+## 10.16 C2 / C3 落地记录（2026-10-27）
+
+### 锁层次（只有这一个方向，反向即死锁）
+
+```
+core_excl_mu_ (std::timed_mutex)   ← 结构操作: 重建核心 / 装载定位地图 / 改模式 /
+   └─ core_mu_ (std::mutex)           导出整图 / 读整图栅格 / 存 pgm / loadMap
+        └─ (核心内部锁: m_state_mu / m_global_mu / PcdMapManager::m_mutex_ …)
+```
+
+* `core_mu_`：输入热路径（FE 的 `onImu/onLidar`、`applyInitPose`、`onOdom`）与指针读取。
+* `core_excl_mu_`：**会替换核心内部对象**的慢操作。等锁有超时策略：
+  * 装载地图（在 lane 上）：阻塞等；
+  * `setPipelineMode` / `resetCore`（在 ROS 回调线程）：`try_lock` / 200 ms，
+    拿不到就明确失败并告警——绝不把 spinner 挂住。
+* `core_generation_`：`resetCore()` 成功 +1。装载地图的流程是"先解析 25 s，再装"，
+  用**解析前**抓的 generation 去装，期间核心被重建过就丢弃（`discard map load`）。
+* `algo()` 裸指针自此只用于只读/诊断；`services.cpp` / `outputs.cpp` / `assembly.cpp`
+  里所有结构调用都换成 `loadLocalizationMapData / setCorePipelineMode / cancelCoreMapLoad /
+  exportCoreMapData / getCoreGridMap / saveCoreGridMap / setCoreGridMapGenerator / loadCoreMap`。
+
+### 发布线程（C3b）
+
+原先 `/curr_localization_pose`、`/slam/info`、`/localization/state`、**TF map→odom**
+全在 `localization_pose_timer_`（100 Hz `ros::Timer`，跑在 ROS 主线程）。存图/切图/服务
+一占住主线程，这些就停发。
+
+现在：新增 `slam_pub` 线程（`PeriodicThread`，50 Hz），接口通过
+`engine_.addPublishHook(...)` 挂 `publishCurrPose()`；`localization_pose_timer_` 删除。
+
+> 踩坑记录：第一版把 `publishCurrPose` 挂在**已有的** `slam_tick` 线程上（与 `/lio_odom`
+> 共用），结果 `/lio_odom` 从 ~96 Hz 掉到 **67 Hz**（线程饱和）。拆成独立 `slam_pub`
+> 后回到 **88 Hz**。教训：发布钩子的成本差异很大，不能默认塞进同一个 tick。
+
+跨线程共享字段的处理（主线程写 / 发布线程读）：
+
+| 字段 | 处理 |
+|---|---|
+| `slam_mode_` | `std::atomic<SlamMode>` |
+| `static_map_valid_` / `curr_pose_valid_` | `std::atomic<bool>` |
+| `last_odom_x_/y_/t_` | `std::atomic<double>`（`/odom` 回调在主线程写） |
+| `realtime_grid_map_area_` | `std::atomic<double>` |
+| `scan_ground_z_` | `std::atomic<double>` |
+| `curr_map_name_` | `mapName()` / `setMapName()` + `map_name_mu_` |
+| `curr_pose_` | 写加 `pose_mu_`；服务侧用 `currentPoseSnapshot()` |
+| `realtime_grid_map_` | `staticMapSnapshot()` / `setStaticMap()` / `clearStaticMap()` + `static_map_mu_` |
+| `base_imu_` / `base_lidar_` | `SnapshotSlot<RigidTransform>`（I3），解析由 `mount_mu_` 串行 |
+
+### 地图读写走执行器（C3a）
+
+| 服务 | lane | 说明 |
+|---|---|---|
+| `/stop_map_operation` | `disk_write` | 质量体检 + 导出整图 + xzmap + pgm/yaml + 缩略图 + 充电桩检测 |
+| `/save_map` | `disk_write` | 导出 + 写盘 |
+| `/save_grid_map` | `disk_write` | 换生成器 + 存 pgm/yaml |
+| `/load_map` | `disk_read` | 解析 + 装配 |
+| `/switch_map` | `disk_read` | （M0b 起） |
+
+统一用新增的 `SlamAlgorithm::runOnLaneAndWait(lane, name, job, timeout)`：投递 + 用
+`DoneFn` 的 promise 等结果（任务被取消/丢弃也会唤醒等待方，不会永久挂住）。
+写盘段再加 `map_adapter::MapIoGuard` 包住整段（xzmap + pgm/yaml + 缩略图），
+与载图互斥——之前只有 `saveMapData` 内部那把锁，重命名/缩略图/PGM 读取都在锁外（I5 主体）。
+
+### 验收（仿真）
+
+**定位模式，导航 3 目标**
+
+```
+/lio_odom 87.95 Hz (拆分发布线程前 67.3 Hz; C3 之前 ~96-107 Hz)
+GOAL 1/2 SUCCEEDED；GOAL 3 仍在窄通道口 FAILED_SAFETY_STOP（遗留 nav 问题）
+pose jump: 仅启动阶段 3 次 (map_switched + relocalized×2)，导航过程中 0 次
+无 process has died / terminate / segfault
+```
+
+**建图模式，存图 2.10 s 期间的发布连续性**
+
+```
+baseline:   /slam/info 36 条 / 4s (10Hz 节流),  max gap 0.300 s
+during save: /slam/info  9 条 / 2.1s,           max gap 0.321 s   <- 没有冻结
+stop_map_operation: 2.10s success=True
+产物: map.xzmap / map.pgm / map.yaml / map.pcd / map.jpg 齐全
+```
+
+（`/slam/info` 是 10 Hz 节流，0.30 s 间隔就是常态；C3 之前同样的存图会把主线程按住
+2 秒，`/slam/info` 会整段消失。TF 广播在仿真里**无法验证**：本 sim 没有 `odom` 帧，
+`sendTransform()` 的 `lookupTransform("base_footprint","odom")` 一直失败（改前也如此），
+但它与 `/slam/info` 走同一个发布线程，后者的连续性可以作为间接证据。）
+
+### 仍未修（本轮范围外）
+
+| 编号 | 说明 |
+|---|---|
+| I4 | 切图在途计数仍写在任务体里（未改用 `DoneFn`）；等待无超时退化为 180 s |
+| I6 | `BackendWorker::abandon()` 的遗留线程在进程退出前没有有界 join |
+| I8 | `SnapshotSlot` 的零拷贝仍未被消费者使用（`/map` 还是整份拷贝） |
+| I10 | `cpu` / `feature` 两条 lane 仍然空转；`/map` 2 s 的 `mapCB`（getGlobalMap+栅格）仍在主线程 |
+| I11 | 输入/后端队列的丢弃仍不可观测 |
+| — | nav：目标 3 窄通道、`HEALTH_INIT` 仍按"可继续行驶"处理、nav 无锁（§10.14） |

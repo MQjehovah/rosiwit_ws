@@ -30,8 +30,9 @@ std::string mapBase(const std::string& path) {
 
 /// 地图文件读写互斥锁: 同一个进程内 load/save 串行化。
 /// 用 timed_mutex 是因为存图在服务线程上, 不能无限等待 25s 的载图。
-std::timed_mutex& mapIoMutex() {
-    static std::timed_mutex mu;
+// 递归锁: 外层 MapIoGuard 包住整段写盘, 内层 load/save 还会再锁一次
+std::recursive_timed_mutex& mapIoMutex() {
+    static std::recursive_timed_mutex mu;
     return mu;
 }
 
@@ -69,7 +70,7 @@ bool loadPcdMapData(const std::string& pcd_path, const std::string& base,
 }
 
 bool loadMapData(const std::string& path, rosiwit_slam::MapData& out) {
-    std::lock_guard<std::timed_mutex> io_lk(mapIoMutex());
+    std::lock_guard<std::recursive_timed_mutex> io_lk(mapIoMutex());
     const std::string base = mapBase(path);
 
     // Direct PCD (e.g. /load_map with docs/maps/map/map.pcd).
@@ -132,7 +133,7 @@ bool loadMapData(const std::string& path, rosiwit_slam::MapData& out) {
 
 bool saveMapData(const rosiwit_slam::MapData& data, const std::string& path, int wait_ms) {
     // 载图正在跑时不要动同一个目录; 等不到就报忙 (上层转 MAP_SAVE_BUSY)
-    std::unique_lock<std::timed_mutex> io_lk(mapIoMutex(), std::defer_lock);
+    std::unique_lock<std::recursive_timed_mutex> io_lk(mapIoMutex(), std::defer_lock);
     if (!io_lk.try_lock_for(std::chrono::milliseconds(wait_ms))) {
         std::cerr << "[map_adapter] saveMapData: map io busy (load in progress), giving up: "
                   << path << std::endl;
@@ -183,6 +184,18 @@ bool saveMapData(const rosiwit_slam::MapData& data, const std::string& path, int
     std::cout << "[map_adapter] saved " << kfs.size() << " kfs -> "
               << base << ".xzmap" << std::endl;
     return true;
+}
+
+MapIoGuard::MapIoGuard(int wait_ms) {
+    locked_ = mapIoMutex().try_lock_for(std::chrono::milliseconds(wait_ms));
+    if (!locked_) {
+        std::cerr << "[map_adapter] map io busy (load/save in progress), gave up after "
+                  << wait_ms << "ms" << std::endl;
+    }
+}
+
+MapIoGuard::~MapIoGuard() {
+    if (locked_) mapIoMutex().unlock();
 }
 
 }  // namespace map_adapter

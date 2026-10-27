@@ -18,6 +18,7 @@
 #include <sensor_msgs/PointCloud2.h>
 
 #include <atomic>
+#include <mutex>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -41,6 +42,7 @@
 #include "rosiwit_common/channel.hpp"
 #include "rosiwit_common/executor.hpp"
 #include "rosiwit_common/periodic.hpp"
+#include "rosiwit_common/snapshot.hpp"
 #include "rosiwit_common/thread.hpp"
 
 #include "config.h"
@@ -120,6 +122,41 @@ public:
                        bool count_as_jump = true);
     /// 按需触发一次全局重定位 (转发到核心的定位流水线)
     void requestRelocalization();
+
+    // ==================== 核心结构操作 (线程安全入口) ====================
+    // 为什么需要这一层: 接口层以前直接拿 algo() 裸指针调"会替换核心内部对象"的操作
+    // (重建模块、装载定位地图、改流水线模式、导出/读整图), 而重建发生在 ROS 回调线程,
+    // 装载发生在 disk_read lane —— 两条线程撞上就是 check-then-use / 悬垂指针。
+    //
+    // 锁序 (只有这一个方向, 违反就是死锁): core_excl_mu_ -> core_mu_
+    //   core_mu_       : 输入热路径 (FE 的 onImu/onLidar/applyInitPose) 与指针读取
+    //   core_excl_mu_  : 结构操作 (重建 / 装载地图 / 改模式 / 导出整图), 可能持续数秒
+    //
+    // generation: 每次 resetCore 成功 +1。装载地图这种"先解析 25s 再安装"的操作,
+    // 必须拿解析前抓的 generation 来装, 期间被重建过就丢弃, 不能把旧图灌进新核心。
+
+    uint64_t coreGeneration() const { return core_generation_.load(std::memory_order_acquire); }
+
+    /// 装载定位地图 (替换核心的定位地图)。expect_generation 不匹配 -> 丢弃并返回 false。
+    /// 会等 core_excl_mu_ (可能被同一时刻的重建/导出占住)。
+    bool loadLocalizationMapData(const rosiwit_slam::MapData& data, uint64_t expect_generation);
+
+    /// 改核心流水线模式。wait_ms=0 表示"拿不到就失败" (ROS 回调线程用, 不能挂住 spinner)。
+    bool setCorePipelineMode(const std::string& mode, int wait_ms = 0);
+
+    /// 取消正在进行的地图装配 (核心内部原子标志, 不加结构锁 —— 它就是为了打断装载)
+    void cancelCoreMapLoad();
+
+    /// 导出整图 / 读实时栅格 / 存栅格 / 换栅格生成器: 都会碰核心内部对象,
+    /// 统一走 core_excl_mu_, 避免与 resetCore 竞争。
+    bool exportCoreMapData(rosiwit_slam::MapData& out);
+    bool getCoreGridMap(double resolution, rosiwit_slam::GridInfo& out);
+    bool saveCoreGridMap(const std::string& pgm, const std::string& yaml, double resolution);
+    bool setCoreGridMapGenerator(const std::string& name);
+    /// 从磁盘装载地图 (PCD/xzmap), /update_map_operation 用
+    bool loadCoreMap(const std::string& path);
+    /// 多会话地图融合 (会重建栅格, 秒级)
+    bool appendCoreMap(const std::string& path);
     /// 飞行记录仪手动落盘; 返回文件路径(空=无数据) —— /slam/dump_recorder 服务用
     std::string dumpFlightRecorder(const std::string& reason);
     bool getGridInfo(rosiwit_slam::GridInfo& out) const;
@@ -146,6 +183,12 @@ public:
     void addTickHook(std::function<void()> hook);
     /// 摘掉所有 tick 钩子。**接口层析构必须先调**, 否则 tick 线程会调进已销毁对象。
     void clearTickHooks();
+
+    /// 发布钩子: 跑在**独立的发布线程** (50Hz), 与 tick 互不拖累。
+    /// 用途: 老契约的位姿/TF/slam/info (每个 tick 都做很多小发布)。
+    /// 放在 tick 里会把 /lio_odom 拖到 67Hz (实测), 所以单独一条线程。
+    void addPublishHook(std::function<void()> hook);
+    void clearPublishHooks();
     /// 摘掉输入侧钩子 (input_seen / raw_lidar)。同样必须在接口层析构时调用。
     void clearInputHooks();
     /// 每次核心产出时调用。**在核心自己的线程上执行**, 跨线程用要自己同步。
@@ -181,6 +224,14 @@ public:
 
     rosiwit_common::IExecutor* executor() const { return executor_; }
 
+    /// 投到 lane 并**等待完成** (给"服务必须同步返回结果"的重活用):
+    /// 存图/载图/导出整图。返回 true = 任务执行完成且 job 内部成功。
+    /// 只在 ROS 服务回调里用; 位姿/TF 发布在 tick 线程, 等待期间照常。
+    /// 超时返回 false (任务可能仍在跑, 结果被丢弃)。
+    bool runOnLaneAndWait(const std::string& lane, std::string name,
+                          std::function<void(rosiwit_common::CancelToken)> job,
+                          int timeout_ms = 180000);
+
 private:
     struct Cfg {
         std::string imu_topic = "/imu";
@@ -208,7 +259,9 @@ private:
     static rosiwit_slam::CloudType::Ptr ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
                                                int filter_num, double min_r, double max_r,
                                                double scan_period_ms = 0.0);
-    /// 删除 base_link 机身盒内的点 (输入点云仍为雷达系, 用 base_lidar_ 变换).
+    /// 真正干活的那一半 (调用方必须已持 mount_mu_)
+    bool computeBaseFramesLocked(bool blocking);
+    /// 删除 base_link 机身盒内的点 (输入点云仍为雷达系, 用 base_lidar 变换).
     void applySelfFilter(rosiwit_slam::CloudType::Ptr& cloud);
 
     void voCB(const nav_msgs::Odometry::ConstPtr& msg);
@@ -219,8 +272,10 @@ private:
     void processLidar(const sensor_msgs::PointCloud2::ConstPtr& msg);
     /// FrontEnd: 唯一消费帧的线程 (替代原 50Hz processCB + input_worker)
     void frontendLoop(rosiwit_common::CancelToken token);
-    /// 50Hz tick: 只跑接口挂的发布钩子 (原 processCB 的 tick_hooks 部分)
+    /// 50Hz tick: 新接口的精简输出
     void tickLoop();
+    /// 50Hz 发布线程: 老契约 (位姿/TF/健康话题)
+    void publishLoop();
 
     // 传感器输入队列: ROS 回调只入队, 重处理在独立线程串行执行。
     // 这样 Lidar 的 PCL 转换和核心 onLidar 不再阻塞 spinner/timer。
@@ -260,11 +315,14 @@ private:
 
     rosiwit_common::IExecutor* executor_ = nullptr;
 
-    std::mutex core_mu_;                 // 保护 algo_ 的输入与重建 (reset vs FE)
+    std::mutex core_mu_;                 // 输入热路径 + 指针读取 (与 FE 串行)
+    std::timed_mutex core_excl_mu_;      // 结构操作 (重建/装载/改模式/导出), 可等有超时
+    std::atomic<uint64_t> core_generation_{0};   // 每次 resetCore 成功 +1
     rosiwit_common::Channel<InputItem> input_{kInputCapacity,
       rosiwit_common::OverflowPolicy::kDropOldest};
     std::unique_ptr<rosiwit_common::Thread> frontend_;
     std::unique_ptr<rosiwit_common::PeriodicThread> tick_;
+    std::unique_ptr<rosiwit_common::PeriodicThread> publish_;
     std::atomic<uint64_t> input_imu_in_{0};
     std::atomic<uint64_t> input_lidar_in_{0};
     std::atomic<uint64_t> input_imu_done_{0};
@@ -275,6 +333,7 @@ private:
     bool have_output_ = false;
 
     std::vector<std::function<void()>> tick_hooks_;
+    std::vector<std::function<void()>> publish_hooks_;
     std::function<void(const rosiwit_slam::SlamOutput&)> output_hook_;
     std::function<void(bool)> input_seen_hook_;
     std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> raw_lidar_hook_;
@@ -291,14 +350,26 @@ public:
     /// 行业标准: 算法估计 IMU body; ROS1 接口层负责 base_link 的输入/输出换算.
     /// blocking=true: 启动路径最多等 ~3s; false: 周期回调只试一次(2s 节流).
     bool computeBaseFrames(bool blocking = false);
-    const RigidTransform& baseImu() const { return base_imu_; }
-    const RigidTransform& baseLidar() const { return base_lidar_; }
+    /// base_link <- imu / base_link <- lidar 的外参**快照**。
+    /// 快照由 computeBaseFrames() 解析完成后发布, 读侧无锁 (tick/FE/服务线程都可能读)。
+    RigidTransform baseImu() const {
+        const auto p = base_imu_slot_.load();
+        return p ? *p : RigidTransform();
+    }
+    RigidTransform baseLidar() const {
+        const auto p = base_lidar_slot_.load();
+        return p ? *p : RigidTransform();
+    }
+    bool hasBaseImu() const { return base_imu_slot_.has_value(); }
     /// 把 odom/VO 的 child frame 换到核心 IMU body; 静态外参查询一次后缓存.
     bool imuFromChild(const std::string& child_frame, RigidTransform& out);
 
 private:
-    RigidTransform base_imu_;      // T_base_link_imu
-    RigidTransform base_lidar_;    // T_base_link_lidar (BBS 投影用)
+    // 解析结果只通过快照槽对外提供; 解析过程本身由 mount_mu_ 串行
+    rosiwit_common::SnapshotSlot<RigidTransform> base_imu_slot_;    // T_base_link_imu
+    rosiwit_common::SnapshotSlot<RigidTransform> base_lidar_slot_;  // T_base_link_lidar
+    std::timed_mutex mount_mu_;            // 保护 tf_buffer_/tf_listener_/mount_*_frame/child_to_imu_
+    mutable std::mutex child_mu_;          // child_to_imu_ 缓存
     std::map<std::string, RigidTransform> child_to_imu_;   // T_imu_child
     ros::Time mount_last_try_;     // 上次尝试查询安装变换的时刻 (2s 节流)
     std::string mount_lidar_frame_ = "lidar";

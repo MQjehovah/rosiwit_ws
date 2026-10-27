@@ -109,10 +109,9 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
     ctx.base = base;
 
     // 1. 停用旧定位：核心 idle + 丢弃旧输出，之后任何残留输出都不能进入界面。
-    if (engine_.algo()) {
-        engine_.algo()->cancelMapLoad();
-        engine_.algo()->setPipelineMode("idle");
-    }
+    // 结构操作一律走 SlamAlgorithm 的持锁入口 (不能直接拿 algo() 裸指针)
+    engine_.cancelCoreMapLoad();
+    engine_.setCorePipelineMode("idle");
     engine_.clearLatestOutput();
 
     ctx.generation = ++map_switch_generation_;
@@ -136,11 +135,11 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
                   << " unknown=" << std::count(static_grid.data.begin(), static_grid.data.end(), -1)
                   << std::endl;
     }
-    static_map_valid_ = ctx.pgm_ok;
+    static_map_valid_.store(ctx.pgm_ok);
 
     // 3. 切图默认显示地图零点，清掉上一张图的位姿/高频状态。
     curr_pose_ = Xz3dPose();
-    curr_pose_valid_ = false;
+    curr_pose_valid_.store(false);
     last_new_pose_ros_ = ros::Time();
     last_high_rate_pub_ = ros::Time();
     last_high_rate_tf_ = ros::Time();
@@ -148,7 +147,7 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
 
     slam_mode_ = SlamMode::LOCALIZATION;
     curr_map_path_ = req.map_dir;
-    curr_map_name_ = req.map_name;
+    setMapName(req.map_name);
     last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
     core_ever_localized_ = false;
     odom_mon_.reset();
@@ -187,9 +186,10 @@ void Ros1SlamInterface::startMapLoadJob(
 
             map_switch_busy_.store(true);
             rosiwit_slam::MapData map_data;
-            const bool loaded = map_adapter::loadMapData(base, map_data) &&
-                                engine_.algo() &&
-                                engine_.algo()->loadLocalizationMapData(map_data);
+            // 解析 25s 期间核心可能被模式切换重建: 抓解析前的 generation, 装载时校验
+            const uint64_t core_gen = engine_.coreGeneration();
+            const bool parsed = map_adapter::loadMapData(base, map_data);
+            const bool loaded = parsed && engine_.loadLocalizationMapData(map_data, core_gen);
             if (gen != map_switch_generation_.load()) {
                 std::cout << "[ros1_slam] /switch_map: discard stale map load: "
                           << base << std::endl;
@@ -203,7 +203,7 @@ void Ros1SlamInterface::startMapLoadJob(
                 map_switch_busy_.store(false);
                 return;
             }
-            engine_.algo()->setPipelineMode("localization");
+            engine_.setCorePipelineMode("localization", /*wait_ms=*/1000);
             applyInitPose(init_pose, true);
             relocating_ = false;
             map_switch_busy_.store(false);
@@ -292,6 +292,28 @@ bool Ros1SlamInterface::applyRelocation(
 bool Ros1SlamInterface::handleStopMap(
     xzrobot_ros_dependency::StopMapOperation::Request& req,
     xzrobot_ros_dependency::StopMapOperation::Response& res) {
+    // 存图 = 导出整图 + 写 xzmap + 生成 pgm/yaml + 缩略图 + 充电桩检测 (秒级)。
+    // 全部丢到 disk_write lane 上做, 服务在这里等结果 —— 主线程不被 CPU/IO 占住,
+    // 而位姿/TF 已经由 slam_tick 发布, 所以等待期间对外输出照常。
+    bool do_ok = true;
+    const bool ran = engine_.runOnLaneAndWait(
+        "disk_write", "stop_map",
+        [this, &req, &res, &do_ok](rosiwit_common::CancelToken) { do_ok = doStopMap(req, res); },
+        /*timeout_ms=*/180000);
+    if (!ran) {
+        // 池拒绝/超时: 任务可能还在跑, 结果丢不掉就明确报错
+        res.success = false;
+        if (res.error.empty()) res.error = "MAP_SAVE_EXECUTOR_FAILED";
+        ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: map save job failed/timeout: "
+                         << req.map_dir);
+        return true;
+    }
+    return do_ok;   // 与旧实现一致: mkdir 失败返回 false, 其余失败用 res.error 表达
+}
+
+bool Ros1SlamInterface::doStopMap(
+    xzrobot_ros_dependency::StopMapOperation::Request& req,
+    xzrobot_ros_dependency::StopMapOperation::Response& res) {
     // 旧 stopMap (legacy.cpp:2419-2516)
     const std::string folder = req.map_dir;
     struct stat st;
@@ -314,7 +336,7 @@ bool Ros1SlamInterface::handleStopMap(
     // "保存成功", 下一次定位直接对不上. 这里先用同一条栅格生成路径体检.
     {
         rosiwit_slam::GridInfo gi;
-        if (!engine_.algo()->getRealtimeGrid(grid_resolution_, gi) || gi.data.empty()) {
+        if (!engine_.getCoreGridMap(grid_resolution_, gi) || gi.data.empty()) {
             res.success = false;
             res.error = "MAP_QUALITY_NO_GRID";
             ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: 栅格生成失败, 拒绝保存");
@@ -354,8 +376,19 @@ bool Ros1SlamInterface::handleStopMap(
         }
     }
 
+    // 整段写盘 (xzmap + pgm/yaml + 缩略图) 与载图/并发写盘互斥:
+    // 之前只有 saveMapData 内部那把锁, 重命名/缩略图/PGM 读取都在锁外。
+    map_adapter::MapIoGuard io_guard(/*wait_ms=*/5000);
+    if (!io_guard.ok()) {
+        res.success = false;
+        res.error = "MAP_IO_BUSY";
+        ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: map io busy (load in progress): "
+                         << base);
+        return true;
+    }
+
     rosiwit_slam::MapData map_data;
-    if (!engine_.algo()->exportMapData(map_data) ||
+    if (!engine_.exportCoreMapData(map_data) ||
         !map_adapter::saveMapData(map_data, base)) {
         res.success = false;
         res.error = "MAP_SAVE_XZMAP_FAILED";
@@ -371,7 +404,7 @@ bool Ros1SlamInterface::handleStopMap(
     // 先写临时文件再 rename: 掉电/进程被杀时不会留下"新 xzmap + 旧 pgm"的混合.
     const std::string tmp_pgm = base + ".tmp.pgm";
     const std::string tmp_yaml = base + ".tmp.yaml";
-    if (!engine_.algo()->saveGridMap(tmp_pgm, tmp_yaml, grid_resolution_)) {
+    if (!engine_.saveCoreGridMap(tmp_pgm, tmp_yaml, grid_resolution_)) {
         res.success = false;
         res.error = "MAP_SAVE_GRID_FAILED";
         ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: saveGridMap failed: " << base);
@@ -399,14 +432,16 @@ bool Ros1SlamInterface::handleStopMap(
         charging_json.clear();   // 旧实现失败时取默认构造的空串
     }
 
+    // curr_pose_ 由 tick 线程发布时更新, 这里是另一条线程 -> 取快照
+    const Xz3dPose pose_snap = currentPoseSnapshot();
     res.current_pose.header.frame_id = kMapFrame;
-    res.current_pose.pose.pose.position.x = curr_pose_.x;
-    res.current_pose.pose.pose.position.y = curr_pose_.y;
-    res.current_pose.pose.pose.position.z = curr_pose_.z;   // **真实 z**, 不是 -0.07
-    res.current_pose.pose.pose.orientation.x = curr_pose_.q.x();
-    res.current_pose.pose.pose.orientation.y = curr_pose_.q.y();
-    res.current_pose.pose.pose.orientation.z = curr_pose_.q.z();
-    res.current_pose.pose.pose.orientation.w = curr_pose_.q.w();
+    res.current_pose.pose.pose.position.x = pose_snap.x;
+    res.current_pose.pose.pose.position.y = pose_snap.y;
+    res.current_pose.pose.pose.position.z = pose_snap.z;   // **真实 z**, 不是 -0.07
+    res.current_pose.pose.pose.orientation.x = pose_snap.q.x();
+    res.current_pose.pose.pose.orientation.y = pose_snap.q.y();
+    res.current_pose.pose.pose.orientation.z = pose_snap.q.z();
+    res.current_pose.pose.pose.orientation.w = pose_snap.q.w();
     res.charging_pile_json = charging_json;
     // map_resolution / map_origin / map_negate / *_thresh / error 全部留默认空值:
     // 旧代码里那几行是注释掉的 (legacy.cpp:2506-2515), 照旧留空。
@@ -467,9 +502,9 @@ bool Ros1SlamInterface::handleExpandMap(
     const std::string base = xzMapBase(req.map_dir);
     bool ok = false;
     if (engine_.algo()) {
-        ok = engine_.algo()->loadMap(base);
+        ok = engine_.loadCoreMap(base);
         if (ok) {
-            engine_.algo()->setPipelineMode("localization");
+            engine_.setCorePipelineMode("localization", /*wait_ms=*/1000);
             slam_mode_ = SlamMode::LOCALIZATION;
             applyInitPose(req.initial_pose, false);
             last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;

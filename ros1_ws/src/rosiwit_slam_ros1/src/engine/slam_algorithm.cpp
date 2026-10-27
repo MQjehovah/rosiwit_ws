@@ -15,6 +15,8 @@
 #include <sensor_msgs/point_cloud2_iterator.h>
 
 #include <algorithm>
+#include <chrono>
+#include <future>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -194,9 +196,24 @@ bool SlamAlgorithm::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
 }
 
 bool SlamAlgorithm::computeBaseFrames(bool blocking) {
+    // 三条线程都会调: tick (每 20ms, 非阻塞)、FE/服务 (imuFromChild)、初始位姿 (阻塞 3s)。
+    // 解析过程串行, 结果发布成快照; 非阻塞调用者拿不到锁就按"还没解析好"处理,
+    // 绝不能因为别人正在等 TF 就把 tick 线程卡住。
+    if (blocking) {
+        std::lock_guard<std::timed_mutex> lk(mount_mu_);
+        return computeBaseFramesLocked(true);
+    }
+    std::unique_lock<std::timed_mutex> lk(mount_mu_, std::try_to_lock);
+    if (!lk.owns_lock()) return hasBaseImu();
+    return computeBaseFramesLocked(false);
+}
+
+bool SlamAlgorithm::computeBaseFramesLocked(bool blocking) {
     // 行业标准: 算法估计 IMU body; ROS1 接口层负责 base_link <-> IMU 的输出/输入换算.
     // base_lidar 只给 BBS 的车体系投影用 (输入仍是原始 lidar 点云).
-    if (base_imu_.valid) return true;   // 输出/初始位姿只需要 base_link <- imu
+    RigidTransform base_imu = baseImu();
+    RigidTransform base_lidar = baseLidar();
+    if (base_imu.valid) return true;   // 输出/初始位姿只需要 base_link <- imu
     // 失败后**限频重试**(每 2s 最多一次):
     //   - 每帧重试: lookupTransform 最多阻塞 3s, 会把 100Hz 定时器拖死(实测 /slam/info 停发);
     //   - 只试一次: 启动瞬间 robot_state_publisher 还没发 /tf_static 就永远失败。
@@ -238,34 +255,45 @@ bool SlamAlgorithm::computeBaseFrames(bool blocking) {
     // blocking=true (启动/初始位姿): 最多 ~3s; false: 只试一次, 2s 节流后重试.
     const int attempts = blocking ? 30 : 1;
     for (int i = 0; i < attempts; ++i) {
-        bool ok_imu = base_imu_.valid;
-        bool ok_lidar = base_lidar_.valid;
+        bool ok_imu = base_imu.valid;
+        bool ok_lidar = base_lidar.valid;
         if (!ok_imu) {
             if (mount_imu_frame_ == mount_base_frame_) {
-                base_imu_.set(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
+                base_imu.set(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
                 ok_imu = true;
             } else {
-                ok_imu = lookup(mount_base_frame_, mount_imu_frame_, base_imu_, "imu");
+                ok_imu = lookup(mount_base_frame_, mount_imu_frame_, base_imu, "imu");
             }
         }
         if (!ok_lidar) {
             if (mount_lidar_frame_ == mount_base_frame_) {
-                base_lidar_.set(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
+                base_lidar.set(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
                 ok_lidar = true;
-            } else if (mount_lidar_frame_ == mount_imu_frame_ && base_imu_.valid) {
-                base_lidar_ = base_imu_;
+            } else if (mount_lidar_frame_ == mount_imu_frame_ && base_imu.valid) {
+                base_lidar = base_imu;
                 ok_lidar = true;
             } else {
-                ok_lidar = lookup(mount_base_frame_, mount_lidar_frame_, base_lidar_, "lidar");
+                ok_lidar = lookup(mount_base_frame_, mount_lidar_frame_, base_lidar, "lidar");
             }
         }
-        if (ok_imu && ok_lidar) return true;
+        if (ok_imu && ok_lidar) {
+            base_imu_slot_.publish(std::make_shared<const RigidTransform>(base_imu));
+            base_lidar_slot_.publish(std::make_shared<const RigidTransform>(base_lidar));
+            return true;
+        }
         if (i + 1 < attempts) ros::Duration(0.05).sleep();
     }
-    if (!base_imu_.valid) {
+    // 部分成功也要发布 (例如只有 base<-imu 拿到), 调用方按 .valid 判断
+    if (base_imu.valid) {
+        base_imu_slot_.publish(std::make_shared<const RigidTransform>(base_imu));
+    }
+    if (base_lidar.valid) {
+        base_lidar_slot_.publish(std::make_shared<const RigidTransform>(base_lidar));
+    }
+    if (!base_imu.valid) {
         ROS_WARN_STREAM("[slam_algo] TF base_link <- imu unavailable; retry in 2s");
     }
-    return base_imu_.valid;
+    return base_imu.valid;
 }
 
 bool SlamAlgorithm::imuFromChild(const std::string& child_frame, RigidTransform& out) {
@@ -274,15 +302,21 @@ bool SlamAlgorithm::imuFromChild(const std::string& child_frame, RigidTransform&
         out.set(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
         return true;
     }
-    if (child_frame == mount_base_frame_ && base_imu_.valid) {
-        out = base_imu_;   // T_base_link_imu
+    const RigidTransform base_imu = baseImu();
+    if (child_frame == mount_base_frame_ && base_imu.valid) {
+        out = base_imu;   // T_base_link_imu
         return true;
     }
-    auto it = child_to_imu_.find(child_frame);
-    if (it != child_to_imu_.end()) {
-        out = it->second;
-        return true;
+    {
+        std::lock_guard<std::mutex> lk(child_mu_);
+        auto it = child_to_imu_.find(child_frame);
+        if (it != child_to_imu_.end()) {
+            out = it->second;
+            return true;
+        }
     }
+    // TF 查询要串行; 拿到锁再建 buffer/listener (它们只在 mount_mu_ 保护下使用)
+    std::lock_guard<std::timed_mutex> mount_lk(mount_mu_);
     if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
     if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     try {
@@ -295,7 +329,10 @@ bool SlamAlgorithm::imuFromChild(const std::string& child_frame, RigidTransform&
                 Eigen::Vector3d(tf.transform.translation.x,
                                 tf.transform.translation.y,
                                 tf.transform.translation.z));
-        child_to_imu_[child_frame] = out;
+        {
+            std::lock_guard<std::mutex> lk(child_mu_);
+            child_to_imu_[child_frame] = out;
+        }
         return true;
     } catch (const tf2::TransformException&) {
         ROS_WARN_STREAM_THROTTLE(2.0, "[slam_algo] TF imu <- " << child_frame
@@ -493,19 +530,20 @@ SlamAlgorithm::SlamAlgorithm(ros::NodeHandle& nh, ros::NodeHandle& pnh,
         pnh_.param<double>("mount_extra_roll_deg", ex_roll, ex_roll);
         pnh_.param<double>("mount_extra_pitch_deg", ex_pitch, ex_pitch);
         pnh_.param<double>("mount_extra_yaw_deg", ex_yaw, ex_yaw);
-        Eigen::Matrix3d r_bl_used = base_lidar_.R;
-        if (base_lidar_.valid && (std::fabs(ex_roll) + std::fabs(ex_pitch) + std::fabs(ex_yaw) > 1e-9)) {
+        const RigidTransform base_lidar = baseLidar();
+        Eigen::Matrix3d r_bl_used = base_lidar.R;
+        if (base_lidar.valid && (std::fabs(ex_roll) + std::fabs(ex_pitch) + std::fabs(ex_yaw) > 1e-9)) {
             const Eigen::Matrix3d R_ex =
                 (Eigen::AngleAxisd(ex_yaw * M_PI / 180.0, Eigen::Vector3d::UnitZ())
                  * Eigen::AngleAxisd(ex_pitch * M_PI / 180.0, Eigen::Vector3d::UnitY())
                  * Eigen::AngleAxisd(ex_roll * M_PI / 180.0, Eigen::Vector3d::UnitX()))
                     .toRotationMatrix();
-            r_bl_used = R_ex * base_lidar_.R;
+            r_bl_used = R_ex * base_lidar.R;
             std::cout << "[compat] mount extra rpy(deg)=[" << ex_roll << " " << ex_pitch
                       << " " << ex_yaw << "] applied (experimental)" << std::endl;
         }
         config_path_ = writeXz3dOverrideYaml(base, r_il, t_il, have_extr,
-                                              base_lidar_.valid ? &r_bl_used : nullptr,
+                                              base_lidar.valid ? &r_bl_used : nullptr,
                                               /*write_map_dir=*/true);
         std::cout << "[compat] extrinsic source = " << extr_src << std::endl;
         if (have_extr) {
@@ -550,9 +588,13 @@ void SlamAlgorithm::start()
     // FrontEnd: 唯一消费帧的线程 (替代原 50Hz processCB 里的 tryPopAndProcess)
     frontend_.reset(new rosiwit_common::Thread("slam_fe",
         [this](rosiwit_common::CancelToken token) { frontendLoop(token); }));
-    // Tick: 只跑接口挂的发布钩子, 50Hz (原 processCB 的后半段)
+    // Tick: 新接口的精简输出 (只发 /lio_odom 等), 50Hz
     tick_.reset(new rosiwit_common::PeriodicThread("slam_tick",
         std::chrono::milliseconds(20), [this] { tickLoop(); }));
+    // Publish: 老契约位姿/TF/健康话题, 独立线程 —— 与 tick 抢同一线程会把
+    // /lio_odom 从 ~96Hz 拖到 67Hz (实测)。
+    publish_.reset(new rosiwit_common::PeriodicThread("slam_pub",
+        std::chrono::milliseconds(20), [this] { publishLoop(); }));
     ROS_INFO("[slam_algo] started: frontend thread + 50Hz tick%s",
              executor_ ? " (+ injected executor)" : "");
 }
@@ -564,6 +606,7 @@ void SlamAlgorithm::shutdown()
     input_.close();
     if (frontend_) { frontend_->requestStop(); frontend_->join(); frontend_.reset(); }
     if (tick_) { tick_->requestStop(); tick_->join(); tick_.reset(); }
+    if (publish_) { publish_->requestStop(); publish_->join(); publish_.reset(); }
 }
 
 void SlamAlgorithm::frontendLoop(rosiwit_common::CancelToken token)
@@ -593,6 +636,11 @@ void SlamAlgorithm::tickLoop()
     for (auto & h : tick_hooks_) { if (h) { h(); } }
 }
 
+void SlamAlgorithm::publishLoop()
+{
+    for (auto & h : publish_hooks_) { if (h) { h(); } }
+}
+
 bool SlamAlgorithm::runOnLane(
     const std::string& lane, std::string name,
     std::function<void(rosiwit_common::CancelToken)> job)
@@ -615,6 +663,48 @@ bool SlamAlgorithm::runOnLane(
         return false;
     }
     return true;
+}
+
+bool SlamAlgorithm::runOnLaneAndWait(
+    const std::string& lane, std::string name,
+    std::function<void(rosiwit_common::CancelToken)> job, int timeout_ms)
+{
+    if (!executor_) {
+        ROS_WARN("[slam_algo] runOnLaneAndWait('%s'): no executor injected", lane.c_str());
+        return false;
+    }
+    struct State {
+        std::promise<bool> done;
+        std::atomic<bool> body_ok{false};
+    };
+    auto st = std::make_shared<State>();
+    auto fut = st->done.get_future();
+
+    rosiwit_common::JobOptions opt;
+    opt.name = name;
+    const rosiwit_common::JobId id = executor_->submit(
+        lane, std::move(opt),
+        [st, job = std::move(job)](rosiwit_common::CancelToken token) {
+            job(token);
+            st->body_ok.store(true);
+        },
+        [st](rosiwit_common::JobId, bool ok) {
+            // 执行完成/被取消/被丢弃 都会进这里, 保证等待方一定被唤醒
+            try { st->done.set_value(ok); } catch (...) {}
+        });
+    if (id == rosiwit_common::kInvalidJobId) {
+        const auto stats = executor_->stats();
+        ROS_WARN("[slam_algo] runOnLaneAndWait('%s','%s') rejected (queued=%zu rejected=%lu)",
+                 lane.c_str(), name.c_str(), stats.queued,
+                 static_cast<unsigned long>(stats.rejected));
+        return false;
+    }
+    if (fut.wait_for(std::chrono::milliseconds(timeout_ms)) != std::future_status::ready) {
+        ROS_ERROR("[slam_algo] runOnLaneAndWait('%s','%s') timeout after %d ms",
+                  lane.c_str(), name.c_str(), timeout_ms);
+        return false;
+    }
+    return fut.get() && st->body_ok.load();
 }
 
 void SlamAlgorithm::enqueueInput(InputItem item) {
@@ -832,6 +922,84 @@ void SlamAlgorithm::onInitialPoseMsg(const geometry_msgs::PoseWithCovarianceStam
     applyInitPose(*msg, /*zero_if_insane=*/false, /*force_z_zero=*/false);
 }
 
+namespace {
+/// 结构锁的统一取法: wait_ms<0 阻塞; >=0 最多等这么久, 拿不到就放弃
+bool lockExcl(std::timed_mutex& mu, int wait_ms, const char* what)
+{
+    if (wait_ms < 0) { mu.lock(); return true; }
+    if (wait_ms == 0) {
+        if (mu.try_lock()) return true;
+    } else if (mu.try_lock_for(std::chrono::milliseconds(wait_ms))) {
+        return true;
+    }
+    ROS_WARN("[slam_algo] core busy, '%s' skipped (structural op in progress)", what);
+    return false;
+}
+}  // namespace
+
+bool SlamAlgorithm::loadLocalizationMapData(const rosiwit_slam::MapData& data,
+                                            uint64_t expect_generation) {
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_);   // 允许等 (装载本来就是慢操作)
+    std::lock_guard<std::mutex> lk(core_mu_);
+    if (!algo_raw_) return false;
+    if (expect_generation != core_generation_.load()) {
+        ROS_WARN("[slam_algo] discard map load: core was reset during parse (gen %lu -> %lu)",
+                 static_cast<unsigned long>(expect_generation),
+                 static_cast<unsigned long>(core_generation_.load()));
+        return false;
+    }
+    return algo_raw_->loadLocalizationMapData(data);
+}
+
+bool SlamAlgorithm::setCorePipelineMode(const std::string& mode, int wait_ms) {
+    if (!lockExcl(core_excl_mu_, wait_ms, "setPipelineMode")) return false;
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_, std::adopt_lock);
+    std::lock_guard<std::mutex> lk(core_mu_);
+    return algo_raw_ && algo_raw_->setPipelineMode(mode);
+}
+
+void SlamAlgorithm::cancelCoreMapLoad() {
+    std::lock_guard<std::mutex> lk(core_mu_);
+    if (algo_raw_) algo_raw_->cancelMapLoad();
+}
+
+bool SlamAlgorithm::exportCoreMapData(rosiwit_slam::MapData& out) {
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_);
+    std::lock_guard<std::mutex> lk(core_mu_);
+    return algo_raw_ && algo_raw_->exportMapData(out);
+}
+
+bool SlamAlgorithm::getCoreGridMap(double resolution, rosiwit_slam::GridInfo& out) {
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_);
+    std::lock_guard<std::mutex> lk(core_mu_);
+    return algo_raw_ && algo_raw_->getRealtimeGrid(resolution, out);
+}
+
+bool SlamAlgorithm::saveCoreGridMap(const std::string& pgm, const std::string& yaml,
+                                    double resolution) {
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_);
+    std::lock_guard<std::mutex> lk(core_mu_);
+    return algo_raw_ && algo_raw_->saveGridMap(pgm, yaml, resolution);
+}
+
+bool SlamAlgorithm::setCoreGridMapGenerator(const std::string& name) {
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_);
+    std::lock_guard<std::mutex> lk(core_mu_);
+    return algo_raw_ && algo_raw_->setGridMapGenerator(name);
+}
+
+bool SlamAlgorithm::appendCoreMap(const std::string& path) {
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_);
+    std::lock_guard<std::mutex> lk(core_mu_);
+    return algo_raw_ && algo_raw_->appendMap(path);
+}
+
+bool SlamAlgorithm::loadCoreMap(const std::string& path) {
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_);
+    std::lock_guard<std::mutex> lk(core_mu_);
+    return algo_raw_ && algo_raw_->loadMap(path);
+}
+
 void SlamAlgorithm::requestRelocalization() {
     if (algo_raw_) algo_raw_->requestRelocalization();
 }
@@ -878,9 +1046,10 @@ void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped
     // 缺省 map/IMU zero 位姿已经在上面的分支直通，不能再次叠加安装角。
     if (default_map_pose) {
         if (force_z_zero) p.trans.z() = 0.0;
-    } else if (computeBaseFrames(/*blocking=*/true) && base_imu_.valid) {
+    } else if (computeBaseFrames(/*blocking=*/true) && baseImu().valid) {
+        const RigidTransform base_imu = baseImu();
         const double yaw_b = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
-        p = composeRight(p, base_imu_);
+        p = composeRight(p, base_imu);
         if (force_z_zero) p.trans.z() = 0.0;
         const double yaw_a = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
         char b[256];
@@ -942,9 +1111,10 @@ void SlamAlgorithm::absoluteCB(const geometry_msgs::PoseWithCovarianceStamped::C
     for (int r = 0; r < 6; ++r)
         for (int c = 0; c < 6; ++c)
             cov(r, c) = msg->pose.covariance[mi(r) * 6 + mi(c)];
-    if (!computeBaseFrames(/*blocking=*/false) || !base_imu_.valid) return;
-    p = composeRight(p, base_imu_);   // map<-base -> map<-imu
-    cov = transformCovariance(cov, base_imu_.R);
+    const RigidTransform base_imu = baseImu();
+    if (!computeBaseFrames(/*blocking=*/false) || !base_imu.valid) return;
+    p = composeRight(p, base_imu);   // map<-base -> map<-imu
+    cov = transformCovariance(cov, base_imu.R);
     algo_->onAbsolute(p, cov);
 }
 
@@ -1007,8 +1177,13 @@ double SlamAlgorithm::getMatchingDegree() const {
 }
 
 bool SlamAlgorithm::resetCore() {
+    // 重建会替换核心内部对象: 必须与"装载地图/导出整图"互斥。
+    // 200ms 拿不到就明确失败 (调用方是 ROS 服务线程, 不能在这里挂住 spinner)。
+    if (!lockExcl(core_excl_mu_, 200, "resetCore")) return false;
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_, std::adopt_lock);
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return false;
+    ++core_generation_;   // 让"解析中"的地图装载作废
     // 先复位 latch/快照类状态, 免得重建后还带着上一轮的位姿
     {
         std::lock_guard<std::mutex> lk(out_mutex_);
@@ -1054,6 +1229,14 @@ bool SlamAlgorithm::priorUncertainty(double& xy_sigma, double& yaw_sigma) const 
 
 void SlamAlgorithm::clearTickHooks() {
     tick_hooks_.clear();
+}
+
+void SlamAlgorithm::clearPublishHooks() {
+    publish_hooks_.clear();
+}
+
+void SlamAlgorithm::addPublishHook(std::function<void()> hook) {
+    if (hook) publish_hooks_.push_back(std::move(hook));
 }
 
 void SlamAlgorithm::clearInputHooks() {

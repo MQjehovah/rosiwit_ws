@@ -150,14 +150,15 @@ void Ros1SlamInterface::initTimerPub() {
     if (!(rt_hz > 0.0)) rt_hz = 1.0;
     const double rt_gap = 1.0 / rt_hz;
 
-    std::cout << "[ros1_slam] timers: pub=" << pub_time_gap << "s, pose=0.01s, rt_grid="
+    std::cout << "[ros1_slam] timers: pub=" << pub_time_gap << "s, pose=tick(20ms), rt_grid="
               << rt_gap << "s (rt_grid_map_publish_hz=" << cfg_.rt_grid_map_publish_hz
               << ", publish_hz=" << cfg_.publish_hz << " 无效-硬编码 0.1)" << std::endl;
 
     point_cloud_mapping_timer_ = nh_.createTimer(
         ros::Duration(pub_time_gap), &Ros1SlamInterface::timerPublishLocalCloudAndSubmap, this);
-    localization_pose_timer_ = nh_.createTimer(
-        ros::Duration(0.01), &Ros1SlamInterface::timerPublishLocalizationPose, this);
+    // 位姿 / TF / slam/info / localization/state 改由 slam_tick 线程驱动 (§C3):
+    // 主线程一旦被存图/切图/服务回调占住, 这些也照常发布。50Hz 足够 (核心输出按雷达帧)。
+    engine_.addPublishHook([this] { publishCurrPose(); });
     realtime_grid_map_timer_ = nh_.createTimer(
         ros::Duration(rt_gap), &Ros1SlamInterface::timerPublishRealtimeGridMap, this);
     // 告警定时器与 rt_grid 同周期 (legacy.cpp:267)
@@ -178,12 +179,12 @@ SlamMode Ros1SlamInterface::updateModeFromCore() {
         slam_mode_ = SlamMode::FREE;
         // 切图过渡期间 core 会短暂 idle；此时不能清掉刚设置的地图状态。
         if (!map_switch_busy_.load() && !relocating_.load()) {
-            curr_map_name_ = "";
+            setMapName(std::string());
             curr_map_path_.clear();
             realtime_grid_map_area_ = 0.0;
-            static_map_valid_ = false;
-            curr_pose_valid_ = false;
-            realtime_grid_map_ = nav_msgs::OccupancyGrid();
+            static_map_valid_.store(false);
+            curr_pose_valid_.store(false);
+            clearStaticMap();
             last_static_map_pub_ = ros::Time();
         }
     } else {
@@ -193,19 +194,19 @@ SlamMode Ros1SlamInterface::updateModeFromCore() {
 }
 
 void Ros1SlamInterface::applyModeToCore(SlamMode m) {
-    auto* algo = engine_.algo();
-    if (!algo) return;
     const char* core_mode = (m == SlamMode::MAPPING)      ? "mapping"
                           : (m == SlamMode::LOCALIZATION) ? "localization"
                                                           : "idle";
-    if (!algo->setPipelineMode(core_mode)) {
-        ROS_WARN_STREAM("[ros1_slam] core rejected pipeline mode '" << core_mode << "'");
+    // 改模式是结构操作: 走持锁入口, 拿不到 (正在装载地图/重建) 就明确失败
+    if (!engine_.setCorePipelineMode(core_mode)) {
+        ROS_WARN_STREAM("[ros1_slam] core rejected/deferred pipeline mode '" << core_mode
+                        << "' (busy with map load?)");
     }
 }
 
 void Ros1SlamInterface::setModeFromConfig(SlamMode m) {
     const bool changed = (slam_mode_ != m);
-    if (m != SlamMode::LOCALIZATION) static_map_valid_ = false;
+    if (m != SlamMode::LOCALIZATION) static_map_valid_.store(false);
     slam_mode_ = m;
     applyModeToCore(m);
     if (changed) {
@@ -243,10 +244,10 @@ void Ros1SlamInterface::resetCoreAndCaches() {
     engine_.resetCore();   // 注意: 这里必须是 engine_.resetCore(), 不是本函数自己
     // 本层缓存一并复位 (见头文件注释)
     realtime_grid_.clear();
-    realtime_grid_map_ = nav_msgs::OccupancyGrid();
+    clearStaticMap();
     realtime_grid_map_area_ = 0.0;
     curr_pose_ = Xz3dPose();
-    curr_pose_valid_ = false;
+    curr_pose_valid_.store(false);
     last_new_pose_ros_ = ros::Time();
     last_high_rate_pub_ = ros::Time();
     last_high_rate_tf_ = ros::Time();

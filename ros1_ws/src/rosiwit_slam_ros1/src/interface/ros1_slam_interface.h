@@ -95,7 +95,10 @@ public:
     /// 换图/进入定位/重定位时调 (旧实现: relocating_ = true)
     void resetLocalizationLatch();
     /// 旧 `curr_map_name_` (slam/info 的 map_name), 初值空串 (legacy.cpp:93)
-    void setMapName(const std::string& name) { curr_map_name_ = name; }
+    void setMapName(const std::string& name) {
+        std::lock_guard<std::mutex> lk(map_name_mu_);
+        curr_map_name_ = name;
+    }
 
     /// [T8] /switch_map 里读完 `<map_base>.pgm/.yaml` 后调
     /// (对应旧实现 LocalizationSetGridMap, legacy.cpp:373-455)。
@@ -206,6 +209,9 @@ private:
                          bool count_as_jump);
     bool handleStopMap(xzrobot_ros_dependency::StopMapOperation::Request& req,
                        xzrobot_ros_dependency::StopMapOperation::Response& res);
+    /// 存图主体 (跑在 disk_write lane 上)
+    bool doStopMap(xzrobot_ros_dependency::StopMapOperation::Request& req,
+                   xzrobot_ros_dependency::StopMapOperation::Response& res);
     bool handleGlobalLocalization(std_srvs::Empty::Request& req, std_srvs::Empty::Response& res);
     // 手动落盘飞行记录仪 (诊断, 2026-10-18 日志重构); LOST 翻转会自动落盘
     bool handleDumpRecorder(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res);
@@ -240,17 +246,23 @@ private:
     const bool is_debug_;
     const bool use_tf_;
 
-    SlamMode slam_mode_ = SlamMode::FREE;
-    std::string curr_map_name_ = "";   // legacy.cpp:93
-    Xz3dPose curr_pose_;
+    // 位姿/TF 发布已挪到 slam_tick 线程 (§C3), 下面这些字段主线程与 tick 线程都会碰,
+    // 因此: 标量用 atomic, 字符串/大消息用短锁。tick 独占的状态保持普通成员。
+    std::atomic<SlamMode> slam_mode_{SlamMode::FREE};
+    Xz3dPose curr_pose_;                    // tick 线程写, 其它线程用 currentPoseSnapshot()
+    mutable std::mutex pose_mu_;
+    Xz3dPose currentPoseSnapshot() const {
+        std::lock_guard<std::mutex> lk(pose_mu_);
+        return curr_pose_;
+    }
     double last_pose_stamp_ = 0.0;         // 同帧去重 (legacy.cpp:1116/1121)
 
     bool have_imu_ = false, have_laser_ = false;    // legacy 的 get_imu_data_/get_laser_data_
     bool debug_map_published_ = false;              // 每进一次模式只发一次 global_map
-    double realtime_grid_map_area_ = 0.0;
-    bool static_map_valid_ = false;      // /switch_map 已加载 PGM，由 pose 定时器兜底重发
+    std::atomic<double> realtime_grid_map_area_{0.0};   // 主线程写(1Hz), tick 读
+    std::atomic<bool> static_map_valid_{false};   // /switch_map 已加载 PGM，由 tick 兜底重发
     ros::Time last_static_map_pub_;
-    bool curr_pose_valid_ = false;       // 用于定位 50Hz 高频重发
+    std::atomic<bool> curr_pose_valid_{false};    // 用于定位高频重发
     ros::Time last_new_pose_ros_;
     ros::Time last_high_rate_pub_;
     ros::Time last_high_rate_tf_;
@@ -263,6 +275,38 @@ private:
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= mapping.grid.resolution)
     double realtime_grid_resolution_ = 0.3;         // 实时 /map 分辨率 (= mapping.grid.realtime_resolution)
     nav_msgs::OccupancyGrid global_grid_map_msg_;   // 旧 global_grid_map_ (latch 一次)
+
+    // 静态/实时栅格: 主线程的 1Hz timer 与 beginMapSwitch 写, tick 线程读 (slam/info、
+    // /localization/state、兜底重发) -> 用拷贝快照, 别让 std::vector 边写边读。
+    mutable std::mutex static_map_mu_;
+    nav_msgs::OccupancyGrid staticMapSnapshot() const {
+        std::lock_guard<std::mutex> lk(static_map_mu_);
+        return realtime_grid_map_;
+    }
+    bool hasStaticMap() const {
+        std::lock_guard<std::mutex> lk(static_map_mu_);
+        return !realtime_grid_map_.data.empty();
+    }
+    void setStaticMap(nav_msgs::OccupancyGrid msg) {
+        std::lock_guard<std::mutex> lk(static_map_mu_);
+        realtime_grid_map_ = std::move(msg);
+    }
+    void clearStaticMap() {
+        std::lock_guard<std::mutex> lk(static_map_mu_);
+        realtime_grid_map_ = nav_msgs::OccupancyGrid();
+    }
+
+    // 地图名: 服务线程写 (switch_map), tick 线程读 (slam/info、planar)
+    std::string curr_map_name_;   // 只能经 mapName()/setMapName() 访问
+    mutable std::mutex map_name_mu_;
+    std::string mapName() const {
+        std::lock_guard<std::mutex> lk(map_name_mu_);
+        return curr_map_name_;
+    }
+    void setMapNameLocked(const std::string& name) {
+        std::lock_guard<std::mutex> lk(map_name_mu_);
+        curr_map_name_ = name;
+    }
     nav_msgs::Path mapping_path_msg_;               // 建图轨迹 (累积后整条重发)
     double last_mapping_path_time_ = -1.0;          // 轨迹去重: 同一个核心位姿不重复入队
     ros::Time last_mapping_path_pub_;               // 轨迹整条重发节流 (10Hz -> 1Hz)
@@ -275,9 +319,10 @@ private:
     bool core_ever_localized_ = false;
     // confidently-wrong 防线: 激光位姿位移 vs 轮式里程计位移 的窗口一致性
     OdomConsistencyMonitor odom_mon_;
-    bool odom_mon_wrong_prev_ = false;
-    double last_odom_x_ = 0.0, last_odom_y_ = 0.0;
-    double last_odom_t_ = -1.0;
+    bool odom_mon_wrong_prev_ = false;            // tick 独占
+    // /odom 回调在主线程写, tick 读 -> 原子
+    std::atomic<double> last_odom_x_{0.0}, last_odom_y_{0.0};
+    std::atomic<double> last_odom_t_{-1.0};
     RealtimeGrid realtime_grid_;    // T2
 
     // ---- 发布器 (14 个, legacy.cpp:282-297 的名字/类型/queue/latch 逐字照抄) ----
@@ -325,7 +370,7 @@ private:
     ros::Publisher point_puber_;              // origin_point      PointCloud2  10
 
     ros::Timer point_cloud_mapping_timer_;    // 0.1s
-    ros::Timer localization_pose_timer_;      // 0.01s
+
     ros::Timer realtime_grid_map_timer_;      // 1/rt_grid_map_publish_hz
 
     // 旧 /map 的那张"实时栅格"对象 (legacy.cpp 的 realtime_grid_map_):

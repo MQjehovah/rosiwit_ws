@@ -306,9 +306,17 @@ void RosiwitInterface::mapCB(const ros::TimerEvent&) {
 
 bool RosiwitInterface::handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,
                                      rosiwit_slam_ros1::SaveMap::Response& res) {
-    rosiwit_slam::MapData data;
-    res.success = engine_.algo() && engine_.algo()->exportMapData(data) &&
-                  map_adapter::saveMapData(data, req.path);
+    // 导出整图 + 写盘是秒级操作: 丢 disk_write lane, 服务等结果 (主线程不被占)
+    bool done_ok = false;
+    const bool ran = engine_.runOnLaneAndWait(
+        "disk_write", "save_map", [this, &req, &done_ok](rosiwit_common::CancelToken) {
+            rosiwit_slam::MapData data;
+            if (!engine_.exportCoreMapData(data)) return;
+            map_adapter::MapIoGuard guard(/*wait_ms=*/5000);
+            if (!guard.ok()) return;
+            done_ok = map_adapter::saveMapData(data, req.path);
+        });
+    res.success = ran && done_ok;
     res.message = res.success ? "ok" : "failed";
     return true;
 }
@@ -321,20 +329,36 @@ bool RosiwitInterface::handleLoadMap(rosiwit_slam_ros1::LoadMap::Request& req,
     // for the legacy xzmap (keyframe) map format.
     const bool is_pcd = req.path.size() >= 4 &&
                         req.path.compare(req.path.size() - 4, 4, ".pcd") == 0;
-    if (is_pcd) {
-        res.success = engine_.algo() && engine_.algo()->loadMap(req.path);
-    } else {
-        rosiwit_slam::MapData data;
-        res.success = engine_.algo() && map_adapter::loadMapData(req.path, data) &&
-                      engine_.algo()->loadLocalizationMapData(data);
-    }
+    // 载图同样是秒级 (解析 + 装配): disk_read lane, 服务等结果
+    bool done_ok = false;
+    const bool ran = engine_.runOnLaneAndWait(
+        "disk_read", "load_map", [this, is_pcd, &req, &done_ok](rosiwit_common::CancelToken) {
+            if (is_pcd) {
+                done_ok = engine_.loadCoreMap(req.path);
+                return;
+            }
+            rosiwit_slam::MapData data;
+            const uint64_t gen = engine_.coreGeneration();
+            done_ok = map_adapter::loadMapData(req.path, data) &&
+                      engine_.loadLocalizationMapData(data, gen);
+        });
+    res.success = ran && done_ok;
     res.message = res.success ? "ok" : "failed";
     return true;
 }
 
 bool RosiwitInterface::handleMergeMap(rosiwit_slam_ros1::LoadMap::Request& req,
                                       rosiwit_slam_ros1::LoadMap::Response& res) {
-    res.success = engine_.algo() && engine_.algo()->appendMap(req.path);
+    // 融合会重建栅格 (秒级): 丢 disk_read lane, 服务等结果
+    bool done_ok = false;
+    const bool ran = engine_.runOnLaneAndWait(
+        "disk_read", "merge_map",
+        [this, &req, &done_ok](rosiwit_common::CancelToken) {
+            map_adapter::MapIoGuard guard(/*wait_ms=*/5000);
+            if (!guard.ok()) return;
+            done_ok = engine_.appendCoreMap(req.path);
+        });
+    res.success = ran && done_ok;
     res.message = res.success ? "ok" : "failed";
     return true;
 }
@@ -342,20 +366,27 @@ bool RosiwitInterface::handleMergeMap(rosiwit_slam_ros1::LoadMap::Request& req,
 bool RosiwitInterface::handleSaveGridMap(rosiwit_slam_ros1::SaveGridMap::Request& req,
                                          rosiwit_slam_ros1::SaveGridMap::Response& res) {
     if (!engine_.algo()) { res.success = false; res.message = "failed"; return true; }
-    // 请求里带了 generator 就临时切到该 2D 栅格策略再落盘 (空则沿用当前策略)
-    if (!req.generator.empty() && !engine_.algo()->setGridMapGenerator(req.generator)) {
-        ROS_WARN_STREAM("[rosiwit_interface] save_grid_map: unknown grid_map_generator '"
-                        << req.generator << "', using current generator");
-    }
-    res.success = engine_.algo()->saveGridMap(req.pgm_path, req.yaml_path, req.resolution);
+    bool done_ok = false;
+    const bool ran = engine_.runOnLaneAndWait(
+        "disk_write", "save_grid_map", [this, &req, &done_ok](rosiwit_common::CancelToken) {
+            // 请求里带了 generator 就临时切到该 2D 栅格策略再落盘 (空则沿用当前策略)
+            if (!req.generator.empty() && !engine_.setCoreGridMapGenerator(req.generator)) {
+                ROS_WARN_STREAM("[rosiwit_interface] save_grid_map: unknown grid_map_generator '"
+                                << req.generator << "', using current generator");
+            }
+            map_adapter::MapIoGuard guard(/*wait_ms=*/5000);
+            if (!guard.ok()) return;
+            done_ok = engine_.saveCoreGridMap(req.pgm_path, req.yaml_path, req.resolution);
+        });
+    res.success = ran && done_ok;
     res.message = res.success ? "ok" : "failed";
     return true;
 }
 
 bool RosiwitInterface::handleSetMode(rosiwit_slam_ros1::SetSlamMode::Request& req,
                                      rosiwit_slam_ros1::SetSlamMode::Response& res) {
-    if (engine_.algo() && req.mode == "idle") engine_.algo()->cancelMapLoad();
-    res.success = engine_.algo() && engine_.algo()->setPipelineMode(req.mode);
+    if (req.mode == "idle") engine_.cancelCoreMapLoad();
+    res.success = engine_.setCorePipelineMode(req.mode);
     res.message = res.success ? "ok" : "unsupported";
     return true;
 }

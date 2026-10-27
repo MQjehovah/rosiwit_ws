@@ -30,6 +30,7 @@ public:
         // FrontEnd 线程会调 input_seen/raw_lidar 钩子, 实时栅格线程会调回本对象。
         // 若等成员析构完才摘, 中间的每一拍都是 use-after-free。
         engine_.clearTickHooks();
+        engine_.clearPublishHooks();
         engine_.clearInputHooks();
         interface_->stopBackgroundWork();   // 停 RealtimeGrid worker (它会调回本对象)
     }
