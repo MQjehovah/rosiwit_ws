@@ -48,6 +48,7 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                 m_max_consistency_rot_deg = lc["max_consistency_rot_deg"].as<double>(m_max_consistency_rot_deg);
                 m_submap_half_window = lc["submap_half_window"].as<int>(m_submap_half_window);
                 m_min_overlap = lc["min_overlap"].as<float>(m_min_overlap);
+                m_odom_gate_m = lc["odom_gate_m"].as<double>(m_odom_gate_m);
 
                 ScanContext::Config sc_cfg;
                 sc_cfg.num_rings   = common && common["num_rings"]
@@ -75,7 +76,8 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
               << ", sectors=" << m_cfg_num_sectors
               << ", max_r=" << m_cfg_max_radius
               << ", dist_thresh=" << m_dist_thresh
-              << ", icp_fitness<" << m_icp_fitness_thresh << ")" << std::endl;
+              << ", icp_fitness<" << m_icp_fitness_thresh
+              << ", odom_gate=" << m_odom_gate_m << "m)" << std::endl;
     return true;
 }
 
@@ -121,25 +123,34 @@ CloudType::Ptr ScanContextLoopClosure::buildSubmap(size_t center_idx, int half_w
     return out;
 }
 
+CloudType::Ptr ScanContextLoopClosure::downsampleCloud(const CloudType::Ptr& in, float leaf) {
+    CloudType::Ptr out(new CloudType);
+    if (!in || in->empty()) return out;
+    pcl::VoxelGrid<PointType> vg;
+    vg.setInputCloud(in);
+    vg.setLeafSize(leaf, leaf, leaf);
+    vg.filter(*out);
+    return out;
+}
+
 bool ScanContextLoopClosure::icpVerify(
     const CloudType::Ptr& src, const CloudType::Ptr& tgt,
     const Eigen::Matrix4f& init_guess,
     Eigen::Matrix4f& out_delta, float& out_fitness, float& out_overlap)
 {
+    const auto src_down = downsampleCloud(src, m_icp_voxel_res);
+    const auto tgt_down = downsampleCloud(tgt, m_icp_voxel_res);
+    return icpVerifyDownsampled(src_down, tgt_down, init_guess,
+                                out_delta, out_fitness, out_overlap);
+}
+
+bool ScanContextLoopClosure::icpVerifyDownsampled(
+    const CloudType::Ptr& src_down, const CloudType::Ptr& tgt_down,
+    const Eigen::Matrix4f& init_guess,
+    Eigen::Matrix4f& out_delta, float& out_fitness, float& out_overlap) const
+{
     out_overlap = 0.0f;
-    // 降采样
-    auto downsample = [&](const CloudType::Ptr& in) -> CloudType::Ptr {
-        CloudType::Ptr out(new CloudType);
-        pcl::VoxelGrid<PointType> vg;
-        vg.setInputCloud(in);
-        vg.setLeafSize(m_icp_voxel_res, m_icp_voxel_res, m_icp_voxel_res);
-        vg.filter(*out);
-        return out;
-    };
-
-    auto src_down = downsample(src);
-    auto tgt_down = downsample(tgt);
-
+    if (!src_down || !tgt_down) return false;
     if (src_down->size() < 10 || tgt_down->size() < 10) return false;
 
     pcl::GeneralizedIterativeClosestPoint<PointType, PointType> gicp;
@@ -274,6 +285,8 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
     Eigen::Matrix4f best_delta = Eigen::Matrix4f::Identity();
     // 当前端附近的小子图只构建一次; 候选侧按需构建.
     CloudType::Ptr latest_sub = buildSubmap(latest_idx, m_submap_half_window);
+    // 只降采样一次: 每个候选 × 每个初值都要用它, 以前每次 ICP 都重新滤波
+    const CloudType::Ptr latest_down = downsampleCloud(latest_sub, m_icp_voxel_res);
 
     for (size_t ci = 0; ci < num_candidates; ++ci) {
         const auto& cand = candidates[ci];
@@ -287,43 +300,65 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         }
         if (desc_d >= m_dist_thresh) continue;
 
-        // ICP 验证. ScanContext 的列偏移方向依赖于描述子的约定,
-        // 这里同时尝试 +yaw 和 -yaw, 避免正确的起点/终点回环因为初值符号错误被拒.
-        double yaw_diff = 2.0 * M_PI * col_shift / m_cfg_num_sectors;
-        Eigen::Matrix4f init_guess = Eigen::Matrix4f::Identity();
-        init_guess.block<3,3>(0,0) = Eigen::AngleAxisf(yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
+        // === 里程计门控 ===
+        // 前端里程计说这两帧相距 m_odom_gate_m 以上, 就不可能是同一个地方。
+        // 以前所有候选都要跑 GICP, 既浪费 (aarch64 上一次检测几十次 ICP) 又增加假回环机会。
+        const double odom_gap = (latest.pose.trans - cand_rec.pose.trans).norm();
+        if (odom_gap > m_odom_gate_m) {
+            continue;
+        }
+
+        // === ICP 初值集合 ===
+        // 之前只用 ScanContext 列偏移给 yaw、平移给单位阵: 里程计漂移 > icp_max_corr_dist
+        // 时 GICP 根本收敛不了, 很容易停在错误的局部极小 (假回环的常见来源)。
+        // 这里把**里程计相对位姿**作为首选初值 (它离真值通常只有漂移量级), 再保留
+        // ScanContext 的 ±yaw 与 (起点候选的) 单位阵作为兜底。
         CloudType::Ptr cand_sub = buildSubmap(cand.idx, m_submap_half_window);
+        const CloudType::Ptr cand_down = downsampleCloud(cand_sub, m_icp_voxel_res);
+
+        std::vector<std::pair<const char*, Eigen::Matrix4f>> inits;
+        {
+            Eigen::Matrix4f odom_prior = Eigen::Matrix4f::Identity();
+            odom_prior.block<3,3>(0,0) =
+                (cand_rec.pose.rot.transpose() * latest.pose.rot).cast<float>();
+            odom_prior.block<3,1>(0,3) =
+                (cand_rec.pose.rot.transpose() *
+                 (latest.pose.trans - cand_rec.pose.trans)).cast<float>();
+            inits.emplace_back("odom", odom_prior);
+        }
+        const double yaw_diff = 2.0 * M_PI * col_shift / m_cfg_num_sectors;
+        {
+            Eigen::Matrix4f sc = Eigen::Matrix4f::Identity();
+            sc.block<3,3>(0,0) =
+                Eigen::AngleAxisf(yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
+            inits.emplace_back("sc_yaw", sc);
+            Eigen::Matrix4f sc_flip = Eigen::Matrix4f::Identity();
+            sc_flip.block<3,3>(0,0) =
+                Eigen::AngleAxisf(-yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
+            inits.emplace_back("sc_yaw_flip", sc_flip);
+            if (cand.idx < 20) {
+                inits.emplace_back("identity", Eigen::Matrix4f::Identity());
+            }
+        }
 
         Eigen::Matrix4f delta;
         float fitness = std::numeric_limits<float>::infinity();
         float overlap = 0.0f;
-        bool icp_ok = icpVerify(latest_sub, cand_sub, init_guess, delta, fitness, overlap);
-        if (!icp_ok) {
-            Eigen::Matrix4f init_guess_flip = Eigen::Matrix4f::Identity();
-            init_guess_flip.block<3,3>(0,0) =
-                Eigen::AngleAxisf(-yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
-            Eigen::Matrix4f delta_flip;
-            float fitness_flip = std::numeric_limits<float>::infinity();
-            float overlap_flip = 0.0f;
-            if (icpVerify(latest_sub, cand_sub, init_guess_flip, delta_flip,
-                          fitness_flip, overlap_flip)) {
+        bool icp_ok = false;
+        const char* used_init = "none";
+        for (const auto& init : inits) {
+            Eigen::Matrix4f d;
+            float f = std::numeric_limits<float>::infinity();
+            float ov = 0.0f;
+            if (!icpVerifyDownsampled(latest_down, cand_down, init.second, d, f, ov)) continue;
+            if (!icp_ok || f < fitness) {
                 icp_ok = true;
-                delta = delta_flip;
-                fitness = fitness_flip;
-                overlap = overlap_flip;
-            }
-        }
-        // 起终点通常姿态接近; ScanContext 列偏移可能给错初值, 对起点额外尝试单位初值.
-        if (!icp_ok && cand.idx < 20) {
-            Eigen::Matrix4f delta_id;
-            float fitness_id = std::numeric_limits<float>::infinity();
-            float overlap_id = 0.0f;
-            if (icpVerify(latest_sub, cand_sub, Eigen::Matrix4f::Identity(), delta_id,
-                          fitness_id, overlap_id)) {
-                icp_ok = true;
-                delta = delta_id;
-                fitness = fitness_id;
-                overlap = overlap_id;
+                delta = d;
+                fitness = f;
+                overlap = ov;
+                used_init = init.first;
+                // 已经收敛得很好: 不再试其它初值 (省时间, 也避免挑到更"假"的解)
+                if (f <= 0.35f * m_icp_fitness_thresh && ov >= 0.6f) break;
             }
         }
         if (!icp_ok) {
@@ -333,7 +368,8 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
             continue;
         }
         std::cout << "[ScanContextLC] ICP passed: desc=" << desc_d
-                  << ", fitness=" << fitness << ", overlap=" << overlap << std::endl;
+                  << ", fitness=" << fitness << ", overlap=" << overlap
+                  << ", init=" << used_init << ", odom_gap=" << odom_gap << "m" << std::endl;
 
         // 先在候选层做几何门控, 再按 ICP fitness 选择最优候选.
         // 不能按 desc_dist 贪心: 假回环的 desc 往往比真回环更小.

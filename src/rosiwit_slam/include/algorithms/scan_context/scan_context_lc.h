@@ -37,6 +37,15 @@ private:
                    Eigen::Matrix4f& out_delta,
                    float& out_fitness,
                    float& out_overlap);
+    /// 已经降采样过的版本: 同一份 latest 子图/候选子图会被多个初值反复用,
+    /// 之前每次调用都重新 VoxelGrid, 检测一次要跑几十遍滤波 (aarch64 上很贵)。
+    bool icpVerifyDownsampled(const CloudType::Ptr& src_down,
+                              const CloudType::Ptr& tgt_down,
+                              const Eigen::Matrix4f& init_guess,
+                              Eigen::Matrix4f& out_delta,
+                              float& out_fitness,
+                              float& out_overlap) const;
+    static CloudType::Ptr downsampleCloud(const CloudType::Ptr& in, float leaf);
     /// 以 center 关键帧为参考，把邻近关键帧拼成局部子图；单帧 ICP 太容易受视角/稀疏影响.
     CloudType::Ptr buildSubmap(size_t center_idx, int half_window) const;
 
@@ -66,6 +75,9 @@ private:
     // 回环相对位姿必须与前端里程计先验相差不大, 防止几何上自洽但实际错配的假回环.
     double m_max_consistency_trans_m = 8.0;
     double m_max_consistency_rot_deg = 30.0;
+    /// 里程计门控: 前端里程计说两帧相距超过这个距离时, 不可能是回环。
+    /// 以前没有这道门, 每个候选都要跑 GICP (还带 2~3 个初值), 既慢又给了假回环机会。
+    double m_odom_gate_m = 10.0;
 
     std::vector<std::pair<size_t, size_t>> m_detected_loops;
 };

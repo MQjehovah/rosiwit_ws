@@ -76,6 +76,20 @@ mapping:
       y_max: 0.40
       z_min: -0.30
       z_max: 0.80
+  # 回环: 与 default.yaml 对齐。**必须显式写在这里**: 缺这段时核心会退回代码默认值,
+  # 而代码里 icp_fitness_thresh 的默认是 1.0 (MSE ~1m RMS 也放行) -> 假回环保送进后端。
+  loop_closure:
+    icp_fitness_thresh: 0.5 # 回环 ICP 适应度阈值 (PCL 均方误差; 起点回环实测 ≈0.39)
+    icp_max_corr_dist: 2.0 # 回环 ICP 最大对应距离(m)
+    icp_voxel_res: 0.3 # 回环 ICP 降采样体素(m)
+    min_keyframe_gap: 30 # 回环最小关键帧间隔
+    max_relative_trans_m: 8.0 # 进入后端的回环相对平移上限(m)
+    max_relative_rot_deg: 30.0 # 进入后端的回环相对旋转上限(deg)
+    max_consistency_trans_m: 8.0 # 一致性软尺度(m); 超过 2.5 倍的明显假回环才拒绝
+    max_consistency_rot_deg: 30.0 # 一致性软尺度(deg); 超过 2.5 倍的明显假回环才拒绝
+    submap_half_window: 3 # 回环 ICP 使用前后各 3 个关键帧组成局部子图
+    min_overlap: 0.35 # ICP 配准后源点云最近邻命中率下限
+    odom_gate_m: 10.0 # 里程计门控: 相距超过此距离的候选不做 ICP (既省时间也减少假回环)
   map_manager:
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)

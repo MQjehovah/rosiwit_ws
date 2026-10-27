@@ -139,6 +139,7 @@ mapping:
     max_consistency_rot_deg: 30.0 # 一致性软尺度(deg); 实际超过 2.5 倍(75deg)的明显假回环才拒绝
     submap_half_window: 3 # 回环 ICP 使用前后各 3 个关键帧组成局部子图
     min_overlap: 0.35 # ICP 配准后源点云最近邻命中率下限
+    odom_gate_m: 10.0 # 里程计门控: 相距超过此距离的候选不做 ICP
   map_manager:
     max_correction_trans_m: 15 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 150 # 后端修正允许的最大旋转跳变(deg)
