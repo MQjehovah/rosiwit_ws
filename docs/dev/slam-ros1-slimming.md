@@ -93,7 +93,7 @@ rosnode info /rosiwit_slam: /odom /cloud_map /grid_map 已消失; /map 只剩兼
 1. `/body_cloud`、`/lio_path`、`/slam_calibration`：仓库内**无消费者**。不是老接口的
    重复项，先留；确认 App 也不用后可以再删 3 个发布者。
 2. `services.cpp` 的 17 个服务里，`/merge_map`、`/save_grid_map`、`/set_slam_mode`
-   与老接口的 `/stop_map_operation`、`/switch_map`、`/slam_mode_switch` 功能重叠。
+   与老接口的 `/stop_map_operation`、`/switch_map`、`/slam/mode_switch` 功能重叠。
    需要确认 App 到底调哪一套，再决定删哪套。
 3. `config/config.cpp`（271 行，legacy JSON + 环境适配）与 `engine/config_bridge.cpp`
    的边界可以再讨论：前者"读 legacy 配置"，后者"把它变成核心配置"，目前是合理的两件事。
@@ -149,7 +149,7 @@ mapping:
 
 | 删除项 | 说明 |
 |---|---|
-| 5 个服务：`/save_map` `/load_map` `/merge_map` `/save_grid_map` `/set_slam_mode` | App 用的是 `/stop_map_operation` `/switch_map` `/slam_mode_switch`；全仓库无调用方 |
+| 5 个服务：`/save_map` `/load_map` `/merge_map` `/save_grid_map` `/set_slam_mode` | App 用的是 `/stop_map_operation` `/switch_map` `/slam/mode_switch`；全仓库无调用方 |
 | `/body_cloud` | 无消费者；老接口已有 `curr_scan_point` |
 | `/lio_path` | 无消费者；老接口已有 `mapping_path` |
 | `/slam_calibration` | 无消费者；标定的**更新**保留（2 s 节奏），只去掉这条话题 |
