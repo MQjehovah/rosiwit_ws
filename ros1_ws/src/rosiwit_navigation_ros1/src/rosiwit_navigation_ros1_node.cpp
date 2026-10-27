@@ -4129,16 +4129,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       return;
     }
 
-    // 定位还在初始化 (HEALTH_INIT): 位姿还不值得信任, 不能按它开车。
-    // 以前 INIT 被当成"可继续行驶"(status=1), 与 TRACKING 等价。
-    // 这里只保持停车 + 回 WAITING_LOC, 不立刻判失败 —— 初始化完成后自动继续;
-    // 若 SLAM 侧 INIT 超时转成 LOST, 由上面的分支按 FAILED_LOC_LOST 收尾。
-    if (last_slam_status_ == 1 && !last_slam_info_stamp_.isZero() &&
-        (ros::Time::now() - last_slam_info_stamp_).toSec() <= slam_info_timeout_) {
-      publishCommand(geometry_msgs::Twist());
-      setGoalStatus("WAITING_LOC");
-      return;
-    }
+    // 注意 (2026-10-28 回退): 曾把 HEALTH_INIT 当成"不可行驶"在这里停车 + WAITING_LOC。
+    // 实测同路线 3/3 全部 TIMEOUT:WAITING_LOC —— 因为 `last_slam_status_` 被**两个**
+    // 回调写 (/slam/info 的 location_status 与 LocalizationState 的 health, 语义不同),
+    // 运行中会出现 location_status=1 而 health=0(TRACKING) 的组合, 门控就把正常行驶
+    // 永久停住。要收这个口子必须先统一状态来源, 不能只看一个数字。
+    // 现状: INIT 仍按"可继续行驶"处理; 真正的丢失由 slamHealthLost() (status==2) 兜底。
 
     {
       std::string status;
