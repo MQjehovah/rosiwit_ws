@@ -84,6 +84,10 @@ bool CeresBackend::init(const std::string& config_path) {
                 backend["max_optimization_trans_m"].as<double>(max_optimization_trans_m_);
             max_optimization_rot_deg_ =
                 backend["max_optimization_rot_deg"].as<double>(max_optimization_rot_deg_);
+            loop_residual_trans_m_ =
+                backend["loop_residual_trans_m"].as<double>(loop_residual_trans_m_);
+            loop_residual_rot_deg_ =
+                backend["loop_residual_rot_deg"].as<double>(loop_residual_rot_deg_);
         }
     } catch (const std::exception& e) {
         std::cerr << "[CeresBackend] Failed to parse config: " << e.what() << std::endl;
@@ -138,8 +142,6 @@ bool CeresBackend::optimize() {
         return false;
     }
 
-    ceres::Problem problem;
-
     size_t N = keyframes_.size();
     // RAII: 使用 stack 分配的数组, 自动析构, 无需手动 delete[]
     std::vector<std::array<double, 3>> trans_blocks(N);
@@ -149,57 +151,72 @@ bool CeresBackend::optimize() {
 
     for (size_t i = 0; i < N; ++i) {
         auto& kf = keyframes_[i];
-
         trans_blocks[i][0] = kf.pose.trans.x();
         trans_blocks[i][1] = kf.pose.trans.y();
         trans_blocks[i][2] = kf.pose.trans.z();
-        problem.AddParameterBlock(trans_blocks[i].data(), 3);
-
         Eigen::Quaterniond q(kf.pose.rot);
         rot_blocks[i][0] = q.w();
         rot_blocks[i][1] = q.x();
         rot_blocks[i][2] = q.y();
         rot_blocks[i][3] = q.z();
-        // 确保四元数 w 为正, 避免不必要的参数化奇异
-        if (rot_blocks[i][0] < 0.0) {
+        if (rot_blocks[i][0] < 0.0) {   // w>0, 避免参数化奇异
             for (int j = 0; j < 4; ++j) rot_blocks[i][j] = -rot_blocks[i][j];
         }
-#if CERES_VERSION_MAJOR >= 2 && CERES_VERSION_MINOR >= 2
-        problem.AddParameterBlock(rot_blocks[i].data(), 4, new ceres::QuaternionManifold());
-#else
-        problem.AddParameterBlock(rot_blocks[i].data(), 4, new ceres::QuaternionParameterization());
-#endif
-
         param_blocks.push_back(trans_blocks[i].data());
         param_blocks.push_back(rot_blocks[i].data());
     }
 
-    if (param_blocks.size() > 2) {
-        problem.SetParameterBlockConstant(param_blocks[0]);
-        problem.SetParameterBlockConstant(param_blocks[1]);
-    }
-
-    addOdometryConstraints(problem, param_blocks);
-    addLoopConstraints(problem, param_blocks);
+    // Ceres 1.x 没有 RemoveResidualBlock, 所以"剔除坏回环后重解"要靠重建 Problem
+    auto build_and_solve = [&](ceres::Solver::Summary& summary) -> bool {
+        ceres::Problem problem;
+        for (size_t i = 0; i < N; ++i) {
+            problem.AddParameterBlock(trans_blocks[i].data(), 3);
+#if CERES_VERSION_MAJOR >= 2 && CERES_VERSION_MINOR >= 2
+            problem.AddParameterBlock(rot_blocks[i].data(), 4, new ceres::QuaternionManifold());
+#else
+            problem.AddParameterBlock(rot_blocks[i].data(), 4,
+                                      new ceres::QuaternionParameterization());
+#endif
+        }
+        if (param_blocks.size() > 2) {
+            problem.SetParameterBlockConstant(param_blocks[0]);
+            problem.SetParameterBlockConstant(param_blocks[1]);
+        }
+        addOdometryConstraints(problem, param_blocks);
+        addLoopConstraints(problem, param_blocks);
+        ceres::Solver::Options options;
+        options.max_num_iterations = max_iterations_;
+        options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+        options.minimizer_progress_to_stdout = false;
+        ceres::Solve(options, &problem, &summary);
+        return summary.IsSolutionUsable();
+    };
 
     const size_t new_constraints =
         constraints_.size() > last_success_constraints_
             ? constraints_.size() - last_success_constraints_ : 0;
 
-    ceres::Solver::Options options;
-    options.max_num_iterations = max_iterations_;
-    options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
-    options.minimizer_progress_to_stdout = false;
-
-    ceres::Solver::Summary summary;
     std::vector<PoseStamped> before;
     before.reserve(N);
     for (const auto& kf : keyframes_) before.push_back(kf.pose);
-    ceres::Solve(options, &problem, &summary);
 
-    if (!summary.IsSolutionUsable()) {
+    ceres::Solver::Summary summary;
+    if (!build_and_solve(summary)) {
         std::cerr << "[CeresBackend] Optimization failed: " << summary.message << std::endl;
         return false;
+    }
+    // 不自洽的回环会在解里留下大残差: 它没被满足, 却已经通过里程计边把轨迹拉歪了。
+    // 剔除后重解一次 (只剔约束, 不动已解出的位姿 —— 位姿还没写回)。
+    size_t dropped = 0;
+    if (!constraints_.empty()) {
+        dropped = dropInconsistentLoops(trans_blocks, rot_blocks);
+        if (dropped > 0) {
+            if (!build_and_solve(summary)) {
+                std::cerr << "[CeresBackend] Optimization failed after dropping loops: "
+                          << summary.message << std::endl;
+                return false;
+            }
+        }
     }
 
     updatePoses(param_blocks);
@@ -229,6 +246,7 @@ bool CeresBackend::optimize() {
     std::cout << "[CeresBackend] optimize N=" << N
               << " loop=" << constraints_.size()
               << " new=" << new_constraints
+              << " dropped=" << dropped
               << " cost=" << summary.initial_cost << "->" << summary.final_cost
               << " iter=" << summary.iterations.size()
               << " max_dt=" << max_dt << "m"
@@ -237,6 +255,59 @@ bool CeresBackend::optimize() {
     last_success_constraints_ = constraints_.size();
     num_optimizations_++;
     return true;
+}
+
+size_t CeresBackend::dropInconsistentLoops(
+    const std::vector<std::array<double, 3>> & trans,
+    const std::vector<std::array<double, 4>> & rot) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (constraints_.empty()) return 0;
+
+    std::vector<RelPoseConstraint> kept;
+    kept.reserve(constraints_.size());
+    size_t dropped = 0;
+    for (const auto& c : constraints_) {
+        const auto from_it = kf_index_.find(c.from_kf);
+        const auto to_it = kf_index_.find(c.to_kf);
+        if (from_it == kf_index_.end() || to_it == kf_index_.end()) {
+            kept.push_back(c);   // 缺帧的约束不在这里判断
+            continue;
+        }
+        const size_t fi = from_it->second;
+        const size_t ti = to_it->second;
+
+        Eigen::Quaterniond q_f(rot[fi][0], rot[fi][1], rot[fi][2], rot[fi][3]);
+        Eigen::Quaterniond q_t(rot[ti][0], rot[ti][1], rot[ti][2], rot[ti][3]);
+        q_f.normalize();
+        q_t.normalize();
+        const Eigen::Vector3d t_f(trans[fi][0], trans[fi][1], trans[fi][2]);
+        const Eigen::Vector3d t_t(trans[ti][0], trans[ti][1], trans[ti][2]);
+
+        // 与 RelativePoseError 同一约定: relative = T_from_to
+        const Eigen::Vector3d pred_t = q_f.conjugate() * (t_t - t_f);
+        const Eigen::Quaterniond pred_q = q_f.conjugate() * q_t;
+
+        const double d_trans = (pred_t - c.relative_pose.trans).norm();
+        const Eigen::Quaterniond meas_q(c.relative_pose.rot);
+        const Eigen::Quaterniond err_q = pred_q.conjugate() * meas_q;
+        const double d_rot_deg = 2.0 * std::acos(std::min(1.0, std::fabs(err_q.w())))
+                                 * 180.0 / M_PI;
+
+        if (d_trans > loop_residual_trans_m_ || d_rot_deg > loop_residual_rot_deg_) {
+            ++dropped;
+            std::cout << "[CeresBackend] drop inconsistent loop " << c.from_kf
+                      << " -> " << c.to_kf << " (residual " << d_trans << "m / "
+                      << d_rot_deg << "deg, limits " << loop_residual_trans_m_ << "m/"
+                      << loop_residual_rot_deg_ << "deg)" << std::endl;
+            continue;
+        }
+        kept.push_back(c);
+    }
+    if (dropped > 0) {
+        constraints_.swap(kept);
+        last_success_constraints_ = constraints_.size();
+    }
+    return dropped;
 }
 
 bool CeresBackend::getUpdatedPoses(std::vector<PoseStamped>& poses) {

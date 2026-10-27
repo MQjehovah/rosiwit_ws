@@ -158,6 +158,8 @@ private:
     VisualConstraintConfig m_visual_cfg;
     std::atomic<PipelineMode> m_mode{PipelineMode::IDLE};
     std::atomic<bool> m_localization_map_loaded{false};
+    /// 上次触发后端的 m_frame_count (防止"计数停在 50 的倍数"时每帧都优化)
+    size_t m_last_optimize_kf_ = 0;
 
     // 雷达 -> IMU 外参 (ROS1 override YAML 顶层 r_il/t_il);
     // 定位模式输出点云前需要先把扫描转到 IMU 系。

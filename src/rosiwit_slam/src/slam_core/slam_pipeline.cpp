@@ -585,8 +585,14 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
         if (m_loop) pushBackendTask(BackendTask::LOOP_CLOSURE, kf);
     }
 
-    // 定期触发后端优化 (每 50 关键帧)
-    if (m_backend && m_frame_count > 0 && m_frame_count % 50 == 0) {
+    // 定期触发后端优化 (每 50 关键帧)。
+    // ⚠ 这段在**每帧**都会执行, 而 m_frame_count 只在"新关键帧"时递增;
+    //   以前没有 m_last_optimize_kf_ 守卫, 一旦计数停在 50/100/... (例如车被安全层
+    //   停住、或关键帧间隔变大), 就会**每一帧都请求一次优化** —— Ceres + 全图重建
+    //   每秒跑 10 次, 日志里 `optimize N=50 loop=0 new=0` 连刷。
+    if (m_backend && m_frame_count > 0 && m_frame_count % 50 == 0 &&
+        m_frame_count != m_last_optimize_kf_) {
+        m_last_optimize_kf_ = m_frame_count;
         pushBackendTask(BackendTask::OPTIMIZE);
     }
 

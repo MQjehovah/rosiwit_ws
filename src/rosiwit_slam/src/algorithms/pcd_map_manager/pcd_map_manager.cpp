@@ -408,13 +408,6 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
         return;
     }
 
-    // 每个本地关键帧的最终位姿: 后端修正优先, 未匹配(后端还没消化)的用原始位姿
-    std::vector<PoseStamped> used(submaps_.size());
-    for (size_t j = 0; j < submaps_.size(); ++j) used[j] = submaps_[j].pose;
-    for (size_t i = 0; i < corrected.size(); ++i) {
-        if (kf_of_corr[i] >= 0) used[kf_of_corr[i]] = corrected[i];
-    }
-
     // 前沿锚点 A = G_last * P_last^{-1} (同一帧!), 供 pipeline 把之后的新位姿换到修正系
     const int last_matched_kf = [&]() {
         for (size_t i = corrected.size(); i-- > 0;)
@@ -422,8 +415,31 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
         return -1;
     }();
     if (last_matched_kf < 0) return;
+    // 取该帧在后端结果里的修正位姿 (used[] 还没填, 直接用 corrected)
+    PoseStamped last_corrected;
+    for (size_t i = 0; i < corrected.size(); ++i) {
+        if (kf_of_corr[i] == last_matched_kf) { last_corrected = corrected[i]; break; }
+    }
     const PoseStamped& raw_last = submaps_[last_matched_kf].pose;
-    PoseStamped anchor_new = poseMul(used[last_matched_kf], poseInv(raw_last));
+    PoseStamped anchor_new = poseMul(last_corrected, poseInv(raw_last));
+
+    // 每个本地关键帧的最终位姿: 必须**全部**在修正坐标系里。
+    //   匹配上后端的帧 -> 用后端修正位姿 G;
+    //   后端还没消化的帧 -> 用 A ∘ P_raw (与 addSubMap 的增量累积同一套变换)。
+    // 以前未匹配的帧直接用 P_raw (odom 系), 与 G 混在一张图里 -> 重建后出现整体错位,
+    // 表现就是"一回环地图反而更差"(新旧两段各在一个坐标系里, 墙变成双线)。
+    std::vector<PoseStamped> used(submaps_.size());
+    size_t backfilled = 0;
+    for (size_t j = 0; j < submaps_.size(); ++j) {
+        used[j] = poseMul(anchor_new, submaps_[j].pose);
+        ++backfilled;
+    }
+    for (size_t i = 0; i < corrected.size(); ++i) {
+        if (kf_of_corr[i] >= 0) {
+            used[kf_of_corr[i]] = corrected[i];
+            if (backfilled > 0) --backfilled;
+        }
+    }
 
     // 兜底: 相邻两帧之间的真实修正量不应有多大。超过阈值说明对齐/后端出了问题,
     // 保留上一次的锚点并告警, 避免把整张图瞬间平移旋转出去 (这才是"突然全糊"的直接表现)。
@@ -469,7 +485,8 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
     global_map_ = filtered;
 
     std::cout << "[PcdMapManager] Rebuilt map from backend poses: " << used.size() << " kfs"
-              << " (matched " << matched << "/" << corrected.size() << " backend poses)"
+              << " (matched " << matched << "/" << corrected.size() << " backend poses, "
+              << backfilled << " anchor-filled)"
               << " (" << global_map_->size() << " pts), anchor trans="
               << m_frontier_anchor_.trans.norm() << " m" << std::endl;
     ++m_revision_;

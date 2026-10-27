@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <array>
 #include <vector>
 #include <mutex>
 #include <unordered_map>
@@ -57,6 +58,14 @@ private:
     int max_iterations_ = 50;
     // 上一次成功优化时的约束数; 失败时截断到该值, 防止假回环永久留在图里.
     size_t last_success_constraints_ = 0;
+    // 回环约束"自洽性"守卫: 优化后残差还这么大的回环, 说明它和图里其它约束矛盾
+    // (典型: 假回环 / ICP 锁到相似结构)。这种约束不能留在图里 —— 它会通过
+    // 里程计边把整条轨迹匀着拉歪, 地图就"被回环改得更差"。直接剔除并重解。
+    double loop_residual_trans_m_ = 0.40;   // 回环残差(平移)上限 m
+    double loop_residual_rot_deg_ = 5.0;    // 回环残差(旋转)上限 deg
+    /// 剔除残差超限的回环约束, 返回剔除数量
+    size_t dropInconsistentLoops(const std::vector<std::array<double, 3>> & trans,
+                                 const std::vector<std::array<double, 4>> & rot);
 };
 
 } // namespace rosiwit_slam
