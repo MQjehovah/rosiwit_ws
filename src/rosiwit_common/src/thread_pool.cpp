@@ -1,6 +1,7 @@
 #include "rosiwit_common/thread_pool.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <exception>
 
 namespace rosiwit_common
@@ -47,7 +48,15 @@ void ThreadPool::finishJob(const Job & job, bool ok)
     std::lock_guard<std::mutex> lk(sources_mu_);
     sources_.erase(job.id);
   }
-  if (job.done) { job.done(job.id, ok); }
+  if (job.done) {
+    // done 回调抛异常会把整个进程带走 (worker 线程里未捕获 -> std::terminate)
+    try { job.done(job.id, ok); }
+    catch (const std::exception & e) {
+      std::fprintf(stderr, "[thread_pool] done() threw: %s\n", e.what());
+    } catch (...) {
+      std::fprintf(stderr, "[thread_pool] done() threw (unknown)\n");
+    }
+  }
 }
 
 void ThreadPool::workerLoop(std::shared_ptr<Lane> lane)
@@ -117,7 +126,15 @@ JobId ThreadPool::submit(
           return lane->stopping || lane->queue.size() < lane->capacity;
         });
         if (lane->stopping) {
+          // 关停唤醒: 任务从未入队 -> 清取消源 + 回调 done(false)。
+          // 否则 runOnLaneAndWait 等不到结果 (只能等超时), 还会留一条 ghost sources_ 记录。
           ++rejected_;
+          lk.unlock();
+          {
+            std::lock_guard<std::mutex> src_lk(sources_mu_);
+            sources_.erase(j.id);
+          }
+          finishJob(j, false);
           return kInvalidJobId;
         }
         break;
@@ -205,9 +222,14 @@ ExecutorStats ThreadPool::stats() const
 
 void ThreadPool::shutdown(bool drain)
 {
-  if (stopping_.exchange(true, std::memory_order_acq_rel)) {
-    // 已经关过了: 只做 join, 幂等
+  {
+    // 串行化多次 shutdown: 并发的 join 是 UB (joinable() 与 join() 之间有竞态)
+    static std::mutex shutdown_mu;
+    std::lock_guard<std::mutex> guard(shutdown_mu);
+    if (shutdown_done_) { return; }
+    shutdown_done_ = true;
   }
+  stopping_.store(true, std::memory_order_release);
   for (const auto & lane : lanes_) {
     std::deque<Job> dropped;
     {

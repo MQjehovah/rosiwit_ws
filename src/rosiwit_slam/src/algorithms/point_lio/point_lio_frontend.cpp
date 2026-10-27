@@ -74,7 +74,8 @@ void PointLioFrontend::propagateToTime(double target_time) {
     if (m_imu_buffer.size() < 2) return;
 
     // 在两个 IMU 之间线性内插, 传播 IESKF
-    const auto& head = m_imu_buffer.front();
+    // 必须按值拷贝: 下面的循环里 pop_front() 会让 front() 的引用失效
+    const ::IMUData head = m_imu_buffer.front();
     double current_t = m_last_imu.time;
 
     while (current_t < target_time && m_imu_buffer.size() >= 2) {
@@ -191,8 +192,9 @@ bool PointLioFrontend::processPoint(const PointType& pt, double point_time) {
         K = m_kf->P() * H_full.transpose() / S;
     }
 
-    // 状态更新
-    V21D delta_x = K * pd2;
+    // 状态更新: pd2 = n·p + d 是**模型残差**, 与 ieskf 的 "delta = -H^{-1}b" 同号约定
+    // (2026-10-28 修: 原来写成 +K*pd2, 每次更新都把状态往错误方向推, 点云越更新越离平面)
+    V21D delta_x = -K * pd2;
     m_kf->x() += delta_x;
 
     // 协方差更新: P = (I - K * H_full) * P, 其中 H_full = J * H_bar (1×21)

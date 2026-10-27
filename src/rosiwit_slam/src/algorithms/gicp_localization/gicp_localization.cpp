@@ -200,8 +200,11 @@ void GicpLocalization::onLidar(const LidarFrame& f) {
     // 如果 onImu 已做传播, 可直接使用当前位姿; 否则用缓存做传播
     if (!m_has_imu_propagation && !m_imu_buffer.empty()) {
         // 回放缓存的 IMU 数据做传播
+        // 先出队再喂给 onImu: onImu 自己还会 push_back 到同一个队列,
+        // 若不出队, 条件 size>=2 永远成立 -> LiDAR 回调死循环 (2026-10-28 修)。
         while (m_imu_buffer.size() >= 2) {
-            const auto& imu = m_imu_buffer.front();
+            const IMUSample imu = m_imu_buffer.front();
+            m_imu_buffer.pop_front();
             if (imu.time > f.end_time) break;
             onImu(imu);
         }

@@ -105,8 +105,10 @@ std::vector<DwaController::Sample> DwaController::search(
             double dv_cmd = std::abs(s.v - vel.linear_x) / max_vx_;
             double dw_cmd = std::abs(s.w - vel.angular_z) / max_vw_;
             double smooth = (dv_cmd + dw_cmd) * 0.5;
-            if (s.clearance <= 0.0) {
-                continue;  // 碰撞轨迹直接丢弃, 不允许用低权重换一条撞墙路径
+            // 碰撞轨迹直接丢弃; 内切圆带 (cost>=99 -> clearance<=0.005) 也算碰撞:
+            // 以前只拒 <=0.0, 整条轨迹落在 0.25m 内切带里也能通过 (只损失 0.097 代价).
+            if (s.clearance < 0.01) {
+                continue;
             }
             // 权重偏向航向和角速度连续性; 速度项不再压过平滑项.
             s.cost = 0.45 * h + 0.10 * c + 0.30 * v + 0.15 * smooth;

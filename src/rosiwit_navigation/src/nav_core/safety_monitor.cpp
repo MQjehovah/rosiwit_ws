@@ -139,20 +139,22 @@ SafetyResult SafetyMonitor::filter(
     }
   }
 
-  // 2) 按运动状态选 STOP 区 (nav2 的 VelocityPolygon):
-  //    原地旋转用旋转区 (车体扫掠面), 后退用后退区, 否则前进区.
+  // nav2 VelocityPolygon 的语义: rotation 区只在"真的在转"时生效
+  // (|v| 小 **且** |w| 明显).
+  // ⚠ 2026-10-28: 以前**区选择**只看 |v|<0.05, 而半径分支才看 |w|, 于是
+  // "命令为 0(停车/等待/规划中)"时也按旋转区判定 —— 侧后方的墙会命中
+  // 旋转矩形并锁存 STOP, 2 s 后误判 blocked 触发 recovery, 最终 FAILED_SAFETY_STOP。
+  // 现在两处用同一个 predicate。
+  const bool rotating = std::fabs(cmd.linear_x) < 0.05 &&
+                        std::fabs(cmd.angular_z) > 0.05;
+
+  // 2) 按运动状态选 STOP 区: 原地旋转 -> 旋转区; 后退 -> 后退区; 否则前进区.
   const std::vector<std::pair<double, double>> * stop_poly = &config_.stop_polygon;
-  if (std::fabs(cmd.linear_x) < 0.05 && !config_.stop_polygon_rotation.empty()) {
+  if (rotating && !config_.stop_polygon_rotation.empty()) {
     stop_poly = &config_.stop_polygon_rotation;
   } else if (cmd.linear_x < 0.0 && !config_.stop_polygon_backward.empty()) {
     stop_poly = &config_.stop_polygon_backward;
   }
-
-  // nav2 VelocityPolygon 的语义: rotation 区只在"真的在转"时生效
-  // (|v| 小 **且** |w| 明显). 只看 |v| 会在"蠕行/停住"时也套用旋转圆,
-  // 把 0.74m 内任何方向的物体都当障碍 -> 车在行末再也动不了 (实测卡死).
-  const bool rotating = std::fabs(cmd.linear_x) < 0.05 &&
-                        std::fabs(cmd.angular_z) > 0.05;
   int stop_count = 0;
   double stop_radius = config_.stop_radius;
   if (rotating && config_.stop_radius_rotation > 0.0) {

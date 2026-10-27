@@ -130,9 +130,9 @@ safety_source_timeout: 0.5
 # 的组合, 结果 safety_stop_polygon 整个落在自过滤框里, STOP 永远进不去.
 safety_body_margin: 0.05
 # 前进: 车头前 0 ~ 0.4m
-safety_stop_polygon: [0.55, -0.40, 0.95, -0.40, 0.95, 0.40, 0.55, 0.40]
+safety_stop_polygon: [0.55, -0.345, 0.95, -0.345, 0.95, 0.345, 0.55, 0.345]   # 侧向 ±0.345 (= 车体半宽 0.33 + 余量), 过 0.8m 门洞
 # 后退: 车尾后 0.35 ~ 0.75m
-safety_stop_polygon_backward: [-0.75, -0.40, -0.35, -0.40, -0.35, 0.40, -0.75, 0.40]
+safety_stop_polygon_backward: [-0.75, -0.345, -0.35, -0.345, -0.35, 0.345, -0.75, 0.345]
 # 原地旋转: 车体扫掠面 + 0.2m
 # 原地转用扫掠圆 (半径 = 车体最远顶点 0.64 + 余量); 0 = 用上面的矩形
 safety_rotation_radius_margin: 0.10
@@ -155,8 +155,6 @@ deadband_velocity_w: 0.0
 teleop_topic: ""               # 例如 /cmd_vel_teleop; 空=关闭
 teleop_timeout: 0.5
 strict_config: false           # true: 配置自检失败直接退出
-# 实车 footprint 外扩 0.30m
-safety_slowdown_polygon: [-0.55, -0.63, 0.85, -0.63, 0.85, 0.63, -0.55, 0.63]
 safety_slowdown_ratio: 0.5
 safety_approach_enabled: true
 safety_time_before_collision: 2.0

@@ -6,6 +6,7 @@
 #ifndef ROSIWIT_NAVIGATION__PLANNERS__ASTAR_PLANNER_HPP_
 #define ROSIWIT_NAVIGATION__PLANNERS__ASTAR_PLANNER_HPP_
 
+#include <atomic>
 #include <string>
 #include <memory>
 #include <vector>
@@ -184,7 +185,7 @@ private:
     std::shared_ptr<core::Costmap> costmap_;
     std::vector<int8_t> costmap_data_;
     unsigned int nx_, ny_;
-    bool planning_active_;
+    std::atomic<bool> planning_active_{false};   // cancel() 与 plan() 跨线程
 
     // A*核心数据
     std::vector<AStarNode> nodes_;                     // 预分配的节点数组 [nx_ * ny_]

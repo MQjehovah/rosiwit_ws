@@ -178,7 +178,11 @@ void CoverageGrid::updateStaticObstacles(const std::vector<int8_t> & map_data)
     const int v = map_data[i];
     if (cells_[i] == CoverageCell::OUTSIDE) { continue; }
     if (v >= 100) {
-      cells_[i] = CoverageCell::OBSTACLE;
+      // 已覆盖的格子不降级: 地图随建图/定位刷新时把 COVERED 改成 OBSTACLE 会让
+      // coverageRate() 反而下降, 并触发重复清扫同一条带。
+      if (cells_[i] != CoverageCell::COVERED) {
+        cells_[i] = CoverageCell::OBSTACLE;
+      }
     } else if (v < 0) {
       if (cells_[i] == CoverageCell::UNCOVERED) {
         cells_[i] = CoverageCell::UNKNOWN;

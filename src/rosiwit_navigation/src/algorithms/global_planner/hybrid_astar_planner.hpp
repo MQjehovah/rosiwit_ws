@@ -8,6 +8,7 @@
 #ifndef ROSIWIT_NAVIGATION__PLANNERS__HYBRID_ASTAR_PLANNER_HPP_
 #define ROSIWIT_NAVIGATION__PLANNERS__HYBRID_ASTAR_PLANNER_HPP_
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -123,7 +124,7 @@ private:
   core::Pose2D start_pose_;
   bool start_relaxed_ = false;
   std::vector<MotionPrimitive> primitives_;
-  bool planning_active_ = false;
+  std::atomic<bool> planning_active_{false};   // cancel() 与 plan() 跨线程
   bool cancel_requested_ = false;
 };
 

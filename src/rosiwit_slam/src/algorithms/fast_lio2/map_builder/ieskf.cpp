@@ -195,13 +195,15 @@ void IESKF::update()
     shared_data.res = 1e10;
     V21D delta = V21D::Zero();
     M21D H = M21D::Identity();
-    V21D b;
+    V21D b = V21D::Zero();
 
+    bool any_valid_iter = false;
     for (size_t i = 0; i < m_max_iter; i++)
     {
         m_loss_func(m_x, shared_data);
         if (!shared_data.valid)
             break;
+        any_valid_iter = true;
         H.setZero();
         b.setZero();
         delta = m_x - predict_x;
@@ -223,6 +225,9 @@ void IESKF::update()
             break;
     }
 
+    // 一帧都没得到有效约束时不要重写协方差: 否则 H=I、delta=0 会把 P 直接刷成单位阵,
+    // 之后所有帧都会被"过度信任"(一次空白墙/遮挡就能造成位姿跳变)。
+    if (!any_valid_iter) { return; }
     M21D L = M21D::Identity();
     // L.block<3, 3>(0, 0) = JrInv(delta.segment<3>(0));
     // L.block<3, 3>(6, 6) = JrInv(delta.segment<3>(6));

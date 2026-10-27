@@ -86,6 +86,7 @@ private:
 
   std::atomic<JobId> next_id_{1};
   std::atomic<bool> stopping_{false};
+  bool shutdown_done_ = false;   // 由 shutdown() 内的静态互斥保护
 
   std::atomic<uint64_t> submitted_{0};
   std::atomic<uint64_t> started_{0};
