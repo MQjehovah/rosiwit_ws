@@ -63,6 +63,7 @@
 #include "path_smoother.hpp"
 #include "trajectory_parameterizer.hpp"
 #include "movebase_protocol.h"
+#include "crash_handler.h"
 #include "movebase_interface.h"
 
 // 算法核心命名空间 (ROS2 薄层同样使用 rosiwit_navigation 前缀).
@@ -4802,13 +4803,18 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 int main(int argc, char ** argv)
 {
   ros::init(argc, argv, "rosiwit_navigation_ros1_node");
+  // 崩溃时打印带符号的栈 (roswit 现场排查: exit code -11 不能只有一行 died)
+  rosiwit_navigation_ros1::installCrashHandler();
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~");
   RosiwitNavigationRos1Node node(nh, pnh);
-  // 多线程 spinner: 控制环(10Hz) 不再被代价地图/规划回调饿死.
-  // 单线程时局部代价地图更新会把 controlLoop 挤到几赫兹, 表现为"走得慢".
-  int threads = 2;
-  pnh.param<int>("spinner_threads", threads, 2);
+  // **默认单线程**: 本节点的全部共享状态 (planner_costmap_ / current_map_ /
+  // current_pose_ / 路径 / 恢复状态机) 都没有锁, 2 条 spinner 线程会让订阅回调与
+  // 定时器并发读写同一份数据 -> 数据竞争 (实测有 exit code -11 的崩溃)。
+  // 异步重活已经不在 spinner 上 (规划走 async_planner_ / recovery_plan_future_),
+  // 单线程不会把控制环饿死; 需要多线程时必须先给共享状态加锁再调大这个参数。
+  int threads = 1;
+  pnh.param<int>("spinner_threads", threads, 1);
   threads = std::max(1, std::min(8, threads));
   ros::AsyncSpinner spinner(threads);
   spinner.start();

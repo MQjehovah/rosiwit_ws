@@ -33,14 +33,33 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation
 add_executable(rosiwit_navigation_ros1_node
     src/rosiwit_navigation_ros1_node.cpp
     src/movebase_protocol.cpp
-    src/movebase_interface.cpp)
+    src/movebase_interface.cpp
+    src/crash_handler.cpp)
 # 源码内联的算法核心头文件必须优先于 /opt/ros 里可能存在的旧安装头文件,
 # 否则 add_subdirectory 用的是新库, 头文件却是旧的.
 target_include_directories(rosiwit_navigation_ros1_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include
     ${catkin_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_compile_options(rosiwit_navigation_ros1_node PRIVATE -pipe -pthread)
+# -g + -rdynamic: 保留优化但带上符号表, 崩溃时 backtrace 能落成函数名+行号
+# (现场排查用; 体积代价很小, 对运行时性能无影响)
+target_compile_options(rosiwit_navigation_ros1_node PRIVATE -pipe -pthread -g)
+# ---- 可选: ThreadSanitizer (排查并发缺陷; 默认关闭, 不影响正常构建) ----
+#   catkin_make -DNAV_SANITIZE=thread
+option(NAV_SANITIZE "Build nav node with a sanitizer (thread/address)" OFF)
+if(NAV_SANITIZE)
+    message(STATUS "rosiwit_navigation_ros1: sanitizer = ${NAV_SANITIZE}")
+    # TSan 在 PIE 可执行文件上会 "unexpected memory mapping" 直接退出,
+    # 所以 sanitizer 构建必须关掉 PIE (-fno-pie / -no-pie)
+    target_compile_options(rosiwit_navigation_ros1_node PRIVATE
+        -fsanitize=${NAV_SANITIZE} -fno-omit-frame-pointer -fno-pie -g -O1)
+    target_link_libraries(rosiwit_navigation_ros1_node -fsanitize=${NAV_SANITIZE} -no-pie)
+    set_target_properties(rosiwit_navigation_ros1_node PROPERTIES
+        LINK_FLAGS "-no-pie")
+endif()
+set_target_properties(rosiwit_navigation_ros1_node PROPERTIES
+    ENABLE_EXPORTS ON
+    LINK_FLAGS "-rdynamic")
 target_link_libraries(rosiwit_navigation_ros1_node
     ${catkin_LIBRARIES}
     rosiwit_navigation)                # 核心库 (规划器/控制器/路径平滑/任务状态机)

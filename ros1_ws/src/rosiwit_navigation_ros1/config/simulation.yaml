@@ -57,7 +57,9 @@ planner_frequency: 1.0
 # 已栅格化, 5Hz 负担得起.
 costmap_update_rate: 5.0
 # spinner 线程数 (代价地图与控制环并行)
-spinner_threads: 2
+# 1 = 单线程 (默认)。节点内共享状态没有锁, 2 线程会有数据竞争。
+# 只有给 planner_costmap_/current_map_/current_pose_ 等加锁之后才考虑调大。
+spinner_threads: 1
 
 # ---- 重规划策略 ----
 # Hybrid A* 每次重规划可能给出不同的首段机动 (前进/倒车), 控制器跟着翻转 ->

@@ -279,3 +279,87 @@ const bool rotating = std::fabs(cmd.linear_x) < 0.05 && std::fabs(cmd.angular_z)
 
 停住/蠕行时回退到前进区（更宽松，符合"没在转就不需要旋转保护区"）。
 新增单测：同一个侧后方 0.70 m 的点，`(0,0,0)` 时 PASS、`(0,0,0.6)` 时 STOP。
+
+
+## nav 并发缺陷：2 条 spinner 线程 + 零同步（2026-10-27）
+
+### 现象
+
+`rosiwit_navigation_ros1_node` 在仿真里偶发 `exit code -11`（约 2/8 次），
+两次都死在 recovery 附近：
+
+```
+[recovery] 1/2: clear costmaps -> spin 60deg -> wait 2.0s -> reverse escape
+[rosiwit_navigation_ros1_node-8] process has died ... exit code -11
+```
+
+### 取证过程（以及为什么最后没有"精确栈"）
+
+| 手段 | 结果 |
+|---|---|
+| `gdb -p` 抓栈 | 环境里没有 gdb，且无 sudo 安装 |
+| `libSegFault.so` / 自建 crash handler | 可用；但后续 12+ 次仿真**一次没复现**，没有栈可抓 |
+| ThreadSanitizer | 不可用：`FATAL: ThreadSanitizer: unexpected memory mapping`（PIE 关了仍与 ROS/PCL 的映射冲突） |
+| 放大实验（`costmap_update_rate` 5 → 30 Hz） | 没有提高复现率（0/2），说明不是单纯的 costmap 重建频率问题 |
+| 代码审计 | **决定性**：`main()` 起 `AsyncSpinner(2)`，而整个 5000 行节点里 `std::mutex` 数量为 0 |
+
+被两条线程同时读写的共享状态（全部非 POD）：
+
+```
+current_pose_        std_msgs::PoseStamped   (内含 std::string frame_id)  odomCallback 写 / controlLoop 读
+current_map_         shared_ptr<OccupancyGrid>                           mapCallback 写 / 多处读
+planner_costmap_     core::Costmap{vector<int8_t>, shared_ptr<Grid>}     updateCostmap 写 / 控制环拷贝读
+planner_layers_      core::LayeredCostmap                                 updateCostmap 写 / 回调读
+current_path_ / recovery_*                                                多处读写
+```
+
+recovery 路径**额外**多出两类访问：`clearRecoveryCostmaps()` 从控制环里再调一次
+`updateCostmap()`（第二个写者），`buildStartClearedCostmap()` / `buildRecoveryCostmap()`
+拷贝 `planner_costmap_`（与写者并发）—— 与崩溃位置吻合。
+
+结论：**这是个没有同步的设计缺陷，崩不崩只是概率**，不需要"某个特定的坏指针"。
+
+### 修复
+
+1. **spinner 收到 1 条线程**（代码默认 + `config/simulation.yaml`）。
+   所有订阅/服务/定时器/action 回调因此串行，节点内状态天然互斥。
+   异步重活本来就不在 spinner 上（`async_planner_`、`recovery_plan_future_`，
+   且都传的是数据副本）。
+2. **实测控制环没有被饿死**：行驶中 `/cmd_vel` = **9.98~10.64 Hz**（目标 10 Hz）。
+   这正是当年改成 2 线程的理由，现在不成立了（规划已经异步）。
+3. **崩溃处理器**（`src/crash_handler.{h,cpp}`）：SIGSEGV/SIGABRT/SIGBUS/SIGFPE
+   → `backtrace` → stderr + `/tmp/rosiwit_nav_crash.txt`（roslaunch 下 stderr 去向不可靠，
+   所以固定落一份文件）。已用人为 `kill -SEGV` 验证端到端：
+   ```
+   [nav] FATAL signal 11 (Segmentation fault), backtrace follows:
+   ... ros_wallsleep <- waitForShutdown <- main ...
+   ```
+4. 构建保留 `-g -rdynamic`，并加 `NAV_SANITIZE=thread|address` 开关
+   （sanitizer 构建自动带 `-no-pie`，因为 TSan 在 PIE 上会直接退出）。
+
+### 顺带发现：测试脚本会留下孤儿节点
+
+roslaunch 被 SIGKILL 后子节点不会退出，历次仿真累积了 3~7 个 nav 节点；
+`pgrep`/频率测量/崩溃统计全被污染（有一轮"杀掉的 pid"其实是上一轮的旧进程）。
+测试脚本已在启动前 `pkill -9` 清理 nav/slam 节点。
+
+### 验收（单线程 spinner，同一路线 3 次）
+
+```
+RUN 1: GOAL 1/2/3 = SUCCEEDED (3/3)   matching 0.9395  recovery 走过 CLEAR->SPIN->WAIT->PLAN
+RUN 2: GOAL 1/2/3 = SUCCEEDED (3/3)   matching 0.9395
+RUN 3: GOAL 1/2/3 = SUCCEEDED (3/3)   matching 0.9434
+无 process has died / 无段错误 / 退出后无残留进程
+```
+
+**重要变化**：目标 3（返回 (-1.5, 0)，窄通道口）在改前是**稳定失败**
+（`FAILED_SAFETY_STOP`），单线程后连续两次成功。说明之前那个"窄通道执行问题"
+至少有一部分是并发导致的状态不一致（计划被并发改写/代价地图被并发重建），
+不全是几何或安全阈值问题。
+
+### 仍未做
+
+* `HEALTH_INIT` 仍按"可以继续行驶"处理（契约上 INIT = 位姿不可信，应停车等待）。
+* 若将来确实需要多线程 spinner，**必须先加锁**：`planner_costmap_`、`planner_layers_`、
+  `current_map_`、`current_pose_`、`current_path_`、恢复状态机。
+* 窄通道（0.8 m 门洞 / 0.62 m 膨胀）的通过策略仍值得单独评估（现在能过，但余量 0.25 m）。
