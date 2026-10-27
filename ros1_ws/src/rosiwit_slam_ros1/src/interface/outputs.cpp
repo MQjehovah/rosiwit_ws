@@ -18,66 +18,21 @@ using namespace rosiwit_slam;
 
 namespace rosiwit_slam_ros1 {
 
-RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine,
-                                   bool suppress_conflicts)
-    : nh_(nh), pnh_(pnh), engine_(engine),
-      suppress_conflicts_(suppress_conflicts) {
+RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
+                                   SlamAlgorithm& engine)
+    : nh_(nh), pnh_(pnh), engine_(engine) {
     // ---- 发布 ----
+    // 只发"兼容接口没有"的输出: /lio_odom 与 /world_cloud 是导航消费的;
+    // body_cloud / lio_path / slam_calibration 暂无消费者但不是兼容接口的重复项。
+    // 重复项 (odom / map / cloud_map / grid_map) 已删除 (S2)。
     odom_pub_ = nh_.advertise<nav_msgs::Odometry>("lio_odom", 1000);
-    if (!suppress_conflicts_) {
-        // 兼容接口已经发布 `odom`, 这里不再发别名 —— 连 advertise 都不做,
-        // 免得 `rosnode info` 里多出一条永远不出数据的发布者 (旧系统里
-        // /odom 由 robot_localization 提供)。
-        odom_nav_pub_ = nh_.advertise<nav_msgs::Odometry>("odom", 10);
-    }
     path_pub_ = nh_.advertise<nav_msgs::Path>("lio_path", 1000);
     body_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("body_cloud", 10000);
     world_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("world_cloud", 10000);
-    global_map_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("cloud_map", 10, true);
-    grid_map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("grid_map", 1);
     calib_pub_ = nh_.advertise<std_msgs::String>("slam_calibration", 1, true);
-    if (!suppress_conflicts_) {
-        // /map 由兼容接口独占
-        map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("map", 1, true);
-    }
 
     // ---- TF ----
-    // 兼容接口负责动态 map->odom, 这里不再发同边静态 TF,
-    // 静态同边会打架; odom->base_link 在旧系统里由 robot_localization 提供。
-    if (!suppress_conflicts_) {
-        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>();
-        static_tf_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>();
-        geometry_msgs::TransformStamped stf;
-        stf.header.stamp = ros::Time::now();
-        stf.header.frame_id = "map"; stf.child_frame_id = "odom";
-        stf.transform.rotation.w = 1.0;
-        static_tf_->sendTransform(stf);
-    }
-
-    path_.header.frame_id = engine_.worldFrame();
-
-    // 实时栅格分辨率: mapping.grid.realtime_resolution
-    try {
-        const std::string config_path = engine_.configPath();
-        if (!config_path.empty()) {
-            const YAML::Node cfg = YAML::LoadFile(config_path);
-            if (cfg["mapping"] && cfg["mapping"]["grid"] &&
-                cfg["mapping"]["grid"]["realtime_resolution"]) {
-                realtime_grid_resolution_ =
-                    cfg["mapping"]["grid"]["realtime_resolution"].as<double>();
-            }
-            // 输出平滑 (alpha-beta): localization.output.filter_alpha/beta
-            if (cfg["localization"] && cfg["localization"]["output"]) {
-                const YAML::Node oc = cfg["localization"]["output"];
-                if (oc["filter_alpha"]) out_filter_alpha_ = oc["filter_alpha"].as<double>();
-                if (oc["filter_beta"]) out_filter_beta_ = oc["filter_beta"].as<double>();
-                if (oc["extrap_max_s"]) out_filter_extrap_s_ = oc["extrap_max_s"].as<double>();
-            }
-        }
-    } catch (const std::exception& e) {
-        ROS_WARN_STREAM("[rosiwit_interface] realtime grid resolution parse failed: " << e.what());
-    }
-
+    // 动态 map->odom 与静态 TF 都由兼容接口独占 (重复发会打架), 这里不发任何 TF。
     // ---- 服务 ----
     srv_save_map_ = nh_.advertiseService("save_map", &RosiwitInterface::handleSaveMap, this);
     srv_load_map_ = nh_.advertiseService("load_map", &RosiwitInterface::handleLoadMap, this);
@@ -92,9 +47,6 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
 void RosiwitInterface::onTick() {
     SlamOutput out;
     if (engine_.latestOutput(out) && out.has_new_pose) publishPose(out);
-    // 老接口的整图/栅格输出: 重活在 cpu lane, 这里只做节流/发布
-    publishPendingMapSnapshots();
-    maybeRequestMapSnapshot();
     // 在线标定的估算更新 (原来挂在 2s 定时器上, 保持 2s 节奏)
     const ros::Time now = ros::Time::now();
     if (last_calib_pub_.isZero() || (now - last_calib_pub_).toSec() >= 2.0) {
@@ -114,95 +66,9 @@ void RosiwitInterface::onTick() {
     }
 }
 
-void RosiwitInterface::publishPendingMapSnapshots() {
-    const uint64_t cloud_v = map_snap_->global_cloud.version();
-    if (cloud_v != global_cloud_published_) {
-        const auto msg = map_snap_->global_cloud.load();
-        if (msg) {
-            global_map_pub_.publish(*msg);
-            global_cloud_published_ = cloud_v;
-        }
-    }
-    const uint64_t grid_v = map_snap_->grid.version();
-    if (grid_v != grid_published_) {
-        const auto msg = map_snap_->grid.load();
-        if (msg) {
-            grid_map_pub_.publish(*msg);
-            if (!suppress_conflicts_) map_pub_.publish(*msg);
-            grid_published_ = grid_v;
-        }
-    }
-}
-
-void RosiwitInterface::maybeRequestMapSnapshot() {
-    // 注意: suppress_conflicts=true 时 `global_map` 这条老话题是**被抑制**的
-    // (legacy 接口那边也有一个同名 latch 发布者), 所以 want_cloud 通常为 false;
-    // 这段保留是为了非冲突模式。栅格 (/grid_map、/map) 才是这条路径的常客。
-    const bool want_cloud = global_map_pub_.getNumSubscribers() > 0;
-    const bool want_grid = grid_map_pub_.getNumSubscribers() > 0 ||
-                           (!suppress_conflicts_ && map_pub_.getNumSubscribers() > 0);
-    if (!want_cloud && !want_grid) return;
-    const ros::Time now = ros::Time::now();
-    if (!last_map_req_.isZero() && (now - last_map_req_).toSec() < 2.0) return;
-    if (map_snap_->inflight.exchange(true)) return;   // 上一张还在算: 合并, 不排队
-    last_map_req_ = now;
-
-    SlamAlgorithm* eng = &engine_;
-    const std::string frame = engine_.worldFrame();
-    const double grid_res = realtime_grid_resolution_;
-    auto snap = map_snap_;
-    const bool accepted = eng->runOnLaneWithDone(
-        "cpu", "map_snapshot",
-        [eng, snap, frame, grid_res, want_cloud, want_grid](rosiwit_common::CancelToken token) {
-            if (want_cloud && !token.cancelled()) {
-                PointVec pts;
-                const bool got = eng->getCoreGlobalMap(pts);
-                if (!got || pts.empty()) {
-                    ROS_WARN_THROTTLE(10.0, "[rosiwit] global_map snapshot empty "
-                                      "(getGlobalMap=%d pts=%zu)", static_cast<int>(got),
-                                      pts.size());
-                }
-                if (got && !pts.empty()) {
-                    CloudType cloud;
-                    cloud.reserve(pts.size());
-                    for (auto & p : pts) cloud.push_back(p);
-                    cloud.width = cloud.size();
-                    cloud.height = 1;
-                    auto msg = std::make_shared<sensor_msgs::PointCloud2>();
-                    pcl::toROSMsg(cloud, *msg);
-                    msg->header.frame_id = frame;
-                    msg->header.stamp = ros::Time::now();
-                    snap->global_cloud.publish(msg);
-                }
-            }
-            if (want_grid && !token.cancelled()) {
-                GridInfo gi;
-                if (eng->getCoreGridMap(grid_res, gi) && gi.width > 0 && gi.height > 0) {
-                    auto msg = std::make_shared<nav_msgs::OccupancyGrid>();
-                    msg->header.frame_id = frame;
-                    msg->header.stamp = ros::Time::now();
-                    msg->info.resolution = gi.resolution;
-                    msg->info.width = gi.width;
-                    msg->info.height = gi.height;
-                    msg->info.origin.position.x = gi.origin_x;
-                    msg->info.origin.position.y = gi.origin_y;
-                    msg->info.origin.orientation.w = 1.0;
-                    // GridInfo 内部 row0 = 最小 y, 与 ROS OccupancyGrid 一致
-                    msg->data = gi.data;
-                    snap->grid.publish(msg);
-                }
-            }
-        },
-        [snap](bool) { snap->inflight.store(false); });
-    if (!accepted) {
-        map_snap_->inflight.store(false);
-    }
-}
-
 void RosiwitInterface::publishPose(const SlamOutput& out) {
     const PreparedPose p = preparePose(out);
     publishOdometry(p);
-    publishTransform(p);
     publishClouds(out, p);
     publishPath(p);
 }
@@ -286,27 +152,8 @@ void RosiwitInterface::publishOdometry(const PreparedPose& p) {
     odom.twist.twist.linear.x = vel_body.x();
     odom.twist.twist.linear.y = vel_body.y();
     odom.twist.twist.linear.z = vel_body.z();
+    // 只发 /lio_odom; 机体的 /odom 由底盘发布, 不再重复一份 (S2)
     odom_pub_.publish(odom);
-    if (!suppress_conflicts_ && odom_nav_pub_.getNumSubscribers() > 0) {
-        odom_nav_pub_.publish(odom);
-    }
-}
-
-void RosiwitInterface::publishTransform(const PreparedPose& p) {
-    if (suppress_conflicts_) return;
-    const Eigen::Quaterniond q(p.pose.rot);
-    geometry_msgs::TransformStamped tf;
-    tf.header.frame_id = engine_.worldFrame();
-    tf.child_frame_id = engine_.bodyFrame();
-    tf.header.stamp = p.stamp;
-    tf.transform.translation.x = p.pose.trans.x();
-    tf.transform.translation.y = p.pose.trans.y();
-    tf.transform.translation.z = p.pose.trans.z();
-    tf.transform.rotation.x = q.x();
-    tf.transform.rotation.y = q.y();
-    tf.transform.rotation.z = q.z();
-    tf.transform.rotation.w = q.w();
-    tf_broadcaster_->sendTransform(tf);
 }
 
 void RosiwitInterface::publishClouds(const SlamOutput& out, const PreparedPose& p) {

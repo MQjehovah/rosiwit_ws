@@ -241,6 +241,12 @@ public:
                           int timeout_ms = 180000);
 
 private:
+    // ---- 配置装配的三个入口 (实现在 config_bridge.cpp) ----
+    void initCalibrationConfig();
+    void loadInputConfig(bool & vo_enabled, bool & odom_enabled, bool & absolute_enabled);
+    /// legacy JSON/YAML -> 输入话题/自过滤 -> 外参推导 -> 给核心写 override YAML
+    void prepareCoreConfig();
+
     struct Cfg {
         std::string imu_topic = "/imu";
         std::string lidar_topic = "/velodyne_points";

@@ -23,7 +23,7 @@ public:
     SlamRos1Interface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine)
         : engine_(engine),
           interface_(new Ros1SlamInterface(nh, pnh, engine)),
-          outputs_(new RosiwitInterface(nh, pnh, engine, /*suppress_conflicts=*/true)) {}
+          outputs_(new RosiwitInterface(nh, pnh, engine)) {}
 
     ~SlamRos1Interface() {
         // **必须先摘钩子再销毁发布者**: tick 线程(50Hz) 会调 RosiwitInterface::onTick,

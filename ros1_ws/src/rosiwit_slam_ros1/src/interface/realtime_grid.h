@@ -21,21 +21,9 @@
 #include "rosiwit_common/periodic.hpp"
 #include "rosiwit_common/snapshot.hpp"
 
-#include "algorithms/grid_map/grid_map_postprocess.h" // GridPostConfig / applyGridPostProcess
-#include "slam_core/i_grid_map_generator.h"           // GridMapConfig
 #include "slam_core/slam_types.h"                     // GridInfo / PointVec
 
 namespace rosiwit_slam_ros1 {
-
-/// 从 YAML 读栅格配置. 键名 -> 字段的映射**逐字段对照**核心:
-///   src/algorithms/pcd_map_manager/pcd_map_manager.cpp:52-104 (grid_* 键)
-///   以及 generateGridMap() 里的 cfg.resolution / point_spacing 赋值 (同文件 271-281)
-/// 这就是设计文档 D15 说的"镜像配置": 核心若改了这批键的默认值, 这里要同步。
-/// 文件不存在 / 解析失败只告警, 用两个结构的默认值。
-void loadGridConfigFromYaml(const std::string& yaml_path,
-                            rosiwit_slam::GridMapConfig& cfg,
-                            rosiwit_slam::GridPostConfig& post,
-                            std::string& generator);
 
 /// worker 线程封装: 按 hz 节流, 调 source() 取点云并重算, 结果加锁给发布方。
 /// start() 后**立即**先算一张 (避免 1Hz 时首张要等满一秒), 之后按周期重算。
@@ -46,9 +34,6 @@ public:
     RealtimeGrid(const RealtimeGrid&) = delete;
     RealtimeGrid& operator=(const RealtimeGrid&) = delete;
 
-    void setConfig(const rosiwit_slam::GridMapConfig& cfg,
-                   const rosiwit_slam::GridPostConfig& post,
-                   const std::string& generator);
     /// 改为直接取**已经生成好的栅格** (走核心 generateGridMap): 与存 pgm 完全同一条路径,
     /// 因此实时 /map 不会有地面噪点。设置后 setSource 的点云路径不再使用。
     using GridSource = std::function<bool(rosiwit_slam::GridInfo&)>;
@@ -71,9 +56,6 @@ private:
 
     mutable std::mutex m_mtx_;          // 保护配置与 source (只在 set*/快照时短暂持有)
     GridSource m_grid_source_;
-    rosiwit_slam::GridMapConfig m_cfg_;
-    rosiwit_slam::GridPostConfig m_post_;
-    std::string m_generator_ = "height_projection";
 
     std::unique_ptr<rosiwit_common::PeriodicThread> m_thread_;
     rosiwit_common::SnapshotSlot<rosiwit_slam::GridInfo> m_slot_;   // 发布侧无锁

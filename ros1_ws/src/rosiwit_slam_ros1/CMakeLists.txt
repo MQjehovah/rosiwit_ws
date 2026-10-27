@@ -74,6 +74,11 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     src/interface/internal.cpp
     src/monitor/lost_monitor.cpp
     src/engine/slam_algorithm.cpp
+    src/engine/config_bridge.cpp
+    src/engine/mount_frames.cpp
+    src/engine/cloud_utils.cpp
+    src/engine/core_gateway.cpp
+    src/engine/input_pipeline.cpp
     src/node/slam_ros_node.cpp
     src/interface/outputs.cpp
     src/interface/convert.cpp
