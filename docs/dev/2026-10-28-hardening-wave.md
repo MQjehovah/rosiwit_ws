@@ -53,8 +53,9 @@
 | 24 | `groundAt` 每次遍历**全部**体素找 3x3 列（planar 约束每帧调用） | 增加 `(cx,cy) -> cell keys` 列索引，insert/erase/carve/decay/load 全程维护，`groundAt` 变 O(9×列内体素) |
 | 25 | `saveGridMap` 全程持 `m_mutex_`（栅格化 + 全图 RANSAC + 写 PGM/YAML），期间 `addSubMap` 被阻塞 → SLAM 位姿/TF 停发 | 改快照模式（与 `generateGridMap` 一致）：锁内拷贝、锁外构建、短锁写回 |
 | 26 | 覆盖率 `hasUncoveredReachable`（全图 BFS）在 20 Hz 控制环里跑 | 缓存 0.5 s 或车位移动 >0.15 m 才重算（"不可达"处理本身有秒级超时兜底） |
-| 27 | `HEALTH_INIT` 被当成"可继续行驶"（与 TRACKING 等价） | 初始化期间发零速 + `WAITING_LOC`，初始化完成自动继续；SLAM 侧转 LOST 仍走 `FAILED_LOC_LOST` |
+| 27 | `HEALTH_INIT` 被当成"可继续行驶"（与 TRACKING 等价） | **尝试后回退**：改成"发零速 + `WAITING_LOC`"后，同路线 3/3 全部 `TIMEOUT:WAITING_LOC` —— `last_slam_status_` 被**两个**回调写（`/slam/info` 的 `location_status` 与 `LocalizationState` 的 `health`，语义不同），运行中会出现 `location_status=1` 而 `health=0(TRACKING)` 的组合。要收这个口子必须**先统一状态来源**（见"未做"） |
 | 28 | 核心 13 个 `test_*.cpp` 只在 STANDALONE 构建里跑，`catkin_make run_tests` 看不到；且因 PCL 1.8/gtest 1.8 差异**从未编译过** | 先接入与本次改动直接相关的 2 个（`test_map_store` / `test_pcd_map_manager`），修 `PointXYZINormal(x,y,z)`、`INSTANTIATE_TEST_CASE_P`、`TempDir`、补 `main()`，并新增 3 个针对性用例 |
+| 29 | `rpp` 只按 0.5 m 前视点跟踪，`rpp_controller.cpp` 里**没有任何** footprint/costmap/clearance 代码 → 配置的 `footprint_aware_control: true` 对它无效；门洞拐弯切内角，横向偏差做到 5~10 cm（0.8 m 门洞只剩 5.5 cm 余量）→ 门框进停止区 → 停 → 恢复改不了偏差 → 循环到超时 | 声明 `supportsFootprint()`（节点本来就会把**未膨胀** raw 层注入 footprint-aware 控制器）+ 新增 `arcClearanceScale()`：沿指令弧积分位姿、把 footprint 采样点（边框等分 + 内部栅格）打到 raw 栅格，命中 `kCostLethal` 就按比例降 v（w 继续朝路径收拢）；`setLocalCostmap` 改 shared_ptr 换指针消除跨线程 vector 赋值 |
 
 ## 验证
 
@@ -63,12 +64,21 @@ catkin_make (-j6): 0 error;  catkin_test_results: 210 tests, 0 failures
 同路线 3 次（90 s 预算）: 目标 1/2 全过; 目标 3 = 2/3
   改前: 目标 3 稳定 FAILED_SAFETY_STOP（安全层误停）
   改后: 失败模式变为 TIMEOUT（还在跑, 不是被误停）
-放宽到 180 s 复跑 3 次: 目标 3 仍是 2/3 -> 不是测试预算问题（见下"已知残留"）
+放宽到 180 s 复跑 3 次: 目标 3 仍是 2/3 -> 不是测试预算问题
+修完 rpp footprint 检查后再跑 3 次: 目标 1/2/3 **全部 SUCCEEDED (3/3)**
+  为排除偶然, 又复跑 3 次: 仍 **3/3** -> 累计 **6/6**
+  safety stop / recovery: 0~3 次（改前是每 12 s 一轮的"停 -> 恢复"循环）
+  最小 footprint 间隙: 0.05 / 0.20 / 0.15 / 0.25 / 0.05 / 0.25 m
+                       （改前 0.05 / 0.05 / 0.000 m）
+  链路确认（节点 stdout）:
+    [RPP] footprint sweep check: samples=233 step=0.05 m     <- footprint 采样生效
+    [RPP] footprint-aware costmap: 121x121 res=0.05 samples=233  <- 收到未膨胀 raw 层
+    [RPPClr] 触发次数: 0 / 5 / 5 (后两次确实降过速; 0 表示该次弧线本来就不撞)
 catkin_test_results（含新接入的两个核心测试）: 242 tests, 0 failures
 smoke_legacy.sh: 与改动前完全一致 (PASS=5 FAIL=4 SKIP=3)
 ```
 
-### 已知残留：目标 3 的 1/3 失败（门洞回程）
+### 目标 3 的 1/3 失败（门洞回程）—— 已修，证据链留档
 
 失败那次的证据链（`~/.ros/log/.../rosout.log`）：
 
@@ -83,6 +93,8 @@ smoke_legacy.sh: 与改动前完全一致 (PASS=5 FAIL=4 SKIP=3)
   **完全没有** footprint / costmap / clearance 相关代码（`grep` 零命中），
   即 `footprint_aware_control: true` / `footprint_shrink` 对 rpp 不生效 ——
   它只按 0.5 m 前视点跟踪，拐弯时会切内角（这次横向偏差 >5.5 cm 就是这么来的）。
+- 修法见 §五 #29（rpp 沿指令弧的 footprint 扫掠检查）。修后同路线 3/3 通过，
+  现场可用 `[RPP] footprint sweep check: samples=N` 与 `[RPPClr]` 判断检查是否接上/触发。
 
 ## 撤销的虚警（核实后不改）
 
@@ -97,10 +109,9 @@ smoke_legacy.sh: 与改动前完全一致 (PASS=5 FAIL=4 SKIP=3)
 
 ## 仍未做（下一轮）
 
-1. `rpp_controller` 没有 footprint/代价地图感知（配置里的 `footprint_aware_control` 对它无效）。
-   门洞回程那次失败就是它切内角导致横向偏差 >5.5 cm。修法两选一（需对比验证）：
-   (a) 给 rpp 加"沿指令弧的 footprint 扫掠检查"（必须用 raw 障碍层，不能用 99 膨胀环）；
-   (b) 门洞/狭窄段切到 DWA（已有 footprint 采样 + `cost>=98` 拒绝）。
+1. `last_slam_status_` 有**两个**写入方（`/slam/info` 的 `location_status` 与
+   `LocalizationState` 的 `health`），语义不同且互相覆盖。统一之后才能把
+   `HEALTH_INIT` 作为"不可行驶"条件（本轮尝试已回退，见 §五 #27）。
 2. `observations_` 无界（保存时按帧统计动态点，长时间建图内存线性增长）。
 3. 核心另外 11 个 `test_*.cpp` 仍未接 catkin（同样有 PCL/gtest 版本差异，需逐个过一遍）。
 4. `SnapshotSlot` 的 `{数据, version}` 非一致对（当前无消费者读 version）。
