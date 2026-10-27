@@ -98,6 +98,9 @@ void BackendWorker::stopAsync() {
 }
 
 void BackendWorker::run(rosiwit_common::CancelToken token) {
+    // 每 10s 报一次队列增量: 上一次长优化期间丢了几个关键帧, 必须看得见 (I11)
+    auto last_stats_log = std::chrono::steady_clock::now();
+    rosiwit_common::ChannelStats prev_stats;
     while (!token.cancelled()) {
         auto item = m_queue.pop_for(std::chrono::milliseconds(10));
         if (item.has_value()) {
@@ -111,6 +114,21 @@ void BackendWorker::run(rosiwit_common::CancelToken token) {
             continue;   // 有新任务先消费, 保证 ADD_KF/MAP_SUBMAP 不因一次长时间优化而积压
         }
         if (m_queue.closed()) break;
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_stats_log).count() >= 10) {
+                last_stats_log = now;
+                const auto st = m_queue.stats();
+                if (st.dropped_oldest != prev_stats.dropped_oldest ||
+                    st.rejected_closed != prev_stats.rejected_closed) {
+                    std::cout << "[BackendWorker] queue: dropped_oldest+"
+                              << (st.dropped_oldest - prev_stats.dropped_oldest)
+                              << " rejected+" << (st.rejected_closed - prev_stats.rejected_closed)
+                              << " (total dropped=" << st.dropped_oldest << ")" << std::endl;
+                }
+                prev_stats = st;
+            }
+        }
         // 队列已空 (pop 超时): 这是唯一执行合并优化的地方
         if (m_optimize_requested.exchange(false)) {
             std::cout << "[BackendWorker] optimize (coalesced request)" << std::endl;

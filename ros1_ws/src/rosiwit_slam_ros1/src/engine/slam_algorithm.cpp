@@ -739,22 +739,35 @@ bool SlamAlgorithm::runOnLaneAndWait(
 }
 
 void SlamAlgorithm::enqueueInput(InputItem item) {
-    // 有界队列 + 丢旧保新; 拒绝(已关停)时直接返回。
-    if (item.kind == InputKind::IMU) { ++input_imu_in_; } else { ++input_lidar_in_; }
-    input_.push(std::move(item));
+    // 有界队列 + 丢旧保新。计数只统计**真正入队**的帧:
+    // 以前在 push 之前自增, 关停后所有被拒的帧也算进去了 (I11)。
+    const bool is_imu = (item.kind == InputKind::IMU);
+    if (input_.push(std::move(item))) {
+        if (is_imu) { ++input_imu_in_; } else { ++input_lidar_in_; }
+    }
 }
 
 void SlamAlgorithm::logInputStats() {
-    const uint64_t done = input_imu_in_.load() + input_lidar_in_.load();
-    static uint64_t last_log_done = 0;
-    if (done - last_log_done < 1000) return;
-    last_log_done = done;
+    // 每秒一条, 打印**增量**: 丢弃/拒绝/峰值都能直接看到 (I11)。
+    // 以前每 1000 帧才打一条累计值, 关停后丢帧(rejected_closed)完全不可见。
+    static auto last_log = std::chrono::steady_clock::now();
+    static rosiwit_common::ChannelStats prev;
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log).count() < 1000) {
+        return;
+    }
+    last_log = now;
     const auto st = input_.stats();
-    ROS_INFO("[slam_algo] input: imu in=%lu, lidar in=%lu, dropped_oldest=%lu, "
-             "pending=%zu, peak=%zu",
+    ROS_INFO("[slam_algo] input 1s: imu+%lu lidar+%lu | dropped_oldest+%lu dropped_newest+%lu "
+             "cleared+%lu rejected+%lu | pending=%zu peak=%zu",
              static_cast<unsigned long>(input_imu_in_.load()),
              static_cast<unsigned long>(input_lidar_in_.load()),
-             static_cast<unsigned long>(st.dropped_oldest), input_.size(), st.peak);
+             static_cast<unsigned long>(st.dropped_oldest - prev.dropped_oldest),
+             static_cast<unsigned long>(st.dropped_newest - prev.dropped_newest),
+             static_cast<unsigned long>(st.cleared - prev.cleared),
+             static_cast<unsigned long>(st.rejected_closed - prev.rejected_closed),
+             input_.size(), st.peak);
+    prev = st;
 }
 
 CloudType::Ptr SlamAlgorithm::ros2Pcl(const sensor_msgs::PointCloud2::ConstPtr& msg,
@@ -1191,6 +1204,12 @@ bool SlamAlgorithm::getGridInfo(GridInfo& out) const {
     if (!algo_raw_) return false;
     out = algo_raw_->getGridInfo();
     return true;
+}
+
+bool SlamAlgorithm::getCoreGlobalMap(PointVec& out) {
+    std::lock_guard<std::timed_mutex> excl(core_excl_mu_);
+    std::lock_guard<std::mutex> lk(core_mu_);
+    return algo_raw_ && algo_raw_->getGlobalMap(out);
 }
 
 bool SlamAlgorithm::getRealtimeGrid(double resolution, GridInfo& out) {

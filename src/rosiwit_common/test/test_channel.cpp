@@ -82,6 +82,8 @@ TEST(Channel, ClearDropsQueuedItems)
   EXPECT_TRUE(ch.push(2));
   EXPECT_EQ(ch.clear(), 2u);
   EXPECT_EQ(ch.size(), 0u);
+  EXPECT_EQ(ch.stats().cleared, 2u);
+  EXPECT_EQ(ch.stats().dropped_oldest, 0u);   // 显式清空不算"满时丢旧"
   EXPECT_FALSE(ch.pop_for(std::chrono::milliseconds(5)).has_value());
   // 清空后还能继续用
   EXPECT_TRUE(ch.push(3));

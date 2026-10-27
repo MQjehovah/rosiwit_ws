@@ -28,7 +28,10 @@
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include <atomic>
 #include <memory>
+
+#include "rosiwit_common/snapshot.hpp"
 
 #include "rosiwit_slam_ros1/LoadMap.h"
 #include "rosiwit_slam_ros1/SaveGridMap.h"
@@ -63,7 +66,6 @@ private:
     void publishClouds(const rosiwit_slam::SlamOutput& out, const PreparedPose& p);
     void publishPath(const PreparedPose& p);
 
-    void mapCB(const ros::TimerEvent&);
 
     bool handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,
                        rosiwit_slam_ros1::SaveMap::Response& res);
@@ -83,11 +85,26 @@ private:
     ros::Publisher odom_pub_, odom_nav_pub_, path_pub_, body_cloud_pub_, world_cloud_pub_,
                    global_map_pub_, grid_map_pub_, map_pub_, calib_pub_;
     ros::ServiceServer srv_save_map_, srv_load_map_, srv_merge_map_, srv_save_grid_, srv_set_mode_;
-    ros::Timer map_timer_;
+    /// 整图/栅格的"重活"在 cpu lane 上算好, 由 tick 线程发布 (I10)。
+    /// 用 shared_ptr 持有状态: 池任务的 body 只捕获 engine 指针 + 这个 shared 状态,
+    /// 不捕获 this —— 接口析构后任务仍能安全跑完 (engine 比接口活得久)。
+    struct MapSnapshotState {
+        rosiwit_common::SnapshotSlot<sensor_msgs::PointCloud2> global_cloud;
+        rosiwit_common::SnapshotSlot<nav_msgs::OccupancyGrid> grid;
+        std::atomic<bool> inflight{false};
+    };
+    std::shared_ptr<MapSnapshotState> map_snap_ = std::make_shared<MapSnapshotState>();
+    ros::Time last_map_req_;
+    uint64_t global_cloud_published_ = 0;
+    uint64_t grid_published_ = 0;
+    ros::Time last_calib_pub_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_;
 
-    bool grid_published_ = false;
+    // 2s 节流: 申请一次整图/栅格快照 (在 cpu lane 上算)
+    void maybeRequestMapSnapshot();
+    // 有新快照就发布 (tick 线程)
+    void publishPendingMapSnapshots();
     double realtime_grid_resolution_ = 0.3;  // 实时栅格分辨率 (= mapping.grid.realtime_resolution)
     // 位姿输出平滑 (alpha-beta 因果滤波), 与 ROS2 节点行为一致:
     // 只平滑发布位姿/轨迹, 不改变核心状态. filter_alpha=0 表示关闭.

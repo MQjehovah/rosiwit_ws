@@ -42,6 +42,7 @@ struct ChannelStats
   uint64_t popped = 0;
   uint64_t dropped_oldest = 0;
   uint64_t dropped_newest = 0;
+  uint64_t cleared = 0;          // 由 clear() 显式丢弃的数量 (与"满时丢弃"分开计数)
   uint64_t rejected_closed = 0;
   size_t peak = 0;
 };
@@ -143,7 +144,7 @@ public:
     std::lock_guard<std::mutex> lk(mu_);
     const size_t n = q_.size();
     q_.clear();
-    stats_.dropped_oldest += n;
+    stats_.cleared += n;
     not_full_.notify_all();
     return n;
   }

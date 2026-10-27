@@ -103,7 +103,10 @@ public:
     bool latestOutput(rosiwit_slam::SlamOutput& out) const;
     /// 丢掉最近一次核心输出快照 (切图时清掉上一张图的位姿，避免旧输出被重发)
     void clearLatestOutput();
+    /// 注意: getGlobalMap() 是**无锁只读**(旧行为, 给诊断用);
+    /// 结构操作/JIT 重建期间要读整图, 用 getCoreGlobalMap() (持结构锁)。
     bool getGlobalMap(rosiwit_slam::PointVec& out) const;
+    bool getCoreGlobalMap(rosiwit_slam::PointVec& out);
     /// 实时栅格: 走核心 generateGridMap (逐帧观测 + 地面处理), 与存 pgm 同一条路径。
     bool getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out);
     /// **唯一的初始位姿入口** (/initialpose 话题与 /switch_map、/relocation 服务都走这里)。

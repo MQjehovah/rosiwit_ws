@@ -785,8 +785,8 @@ SLAM 侧改造已完成并验证，但回归里暴露了三个 nav 问题（都�
 | I6 ✅ | Important | ~~abandon 的线程可能在进程退出时仍在跑~~ | **已修**：新增 `waitForBackgroundIdle(2s)` = **先 stopAsync 再有界等待**；实测 backend idle 0-10 ms（见 §10.16.1） |
 | I7 | Important | `~Ros1SlamInterface` 先毁发布者再 join `rt_grid`（`GridSource` lambda 调回本对象） | 已随 C1 修（析构首行 `stopBackgroundWork()`） |
 | I8 ◐ | Important | ~~`SnapshotSlot` 零拷贝没被用上~~ | **已修（GridInfo 侧）**：`latestPtr()` 无锁读，少一份整拷贝；`OccupancyGrid` 的拷贝是 ROS 协议决定的，去不掉 |
-| I10 | Important | 池 4 条 lane 只有 `disk_read` 在用 | 随 C3 接线，或删掉装饰性 lane |
-| I11 | Important | 输入丢弃不可观测：计数在 `push` 前自增，`rejected_closed` 从不打印；后端队列丢弃无统计 | 计数改到 push 成功后；按秒打印 delta |
+| I10 ◐ | Important | ~~`cpu`/`feature` lane 空转 + `mapCB` 在主线程~~ | **已修**：`mapCB` 删除，整图/栅格改 `cpu` lane 计算 + tick 发布（`/grid_map` 实测 123x115@0.1）；`feature` lane 仍空转 |
+| I11 ✅ | Important | ~~输入丢弃不可观测~~ | **已修**：计数改到 push 成功后 + 每秒打印增量（含 `rejected_closed`/`cleared`）+ 后端队列 10 s 增量 |
 
 Minor（记录备查）：`start()` 在 `shutdown()` 之后是"静默死亡"（`Channel` 无 reopen）；
 `input_imu_done_/lidar_done_` 已成死变量；`BackendWorker::push(OPTIMIZE)` 实际占一个队列槽
@@ -953,3 +953,50 @@ stop_map_operation: 2.10s success=True
 
 **仍未修**：`I10`（`cpu`/`feature` lane 空转、`mapCB` 在主线程）、`I11`（丢弃不可观测）、
 `I5` 读侧（载图的 PGM 读取仍在锁外）、以及 nav 的三个问题（§10.14）。
+
+
+### 10.16.2 I10 / I11 / I5 读侧（2026-10-27 收尾）
+
+**I10 地图输出搬出主线程**
+
+`RosiwitInterface::mapCB`（2 s `ros::Timer`）删除。整图/栅格的"重活"改由 `cpu` lane 的
+`map_snapshot` 任务算（2 s 节流 + in-flight 合并，算不完不排队），tick 线程只负责：
+有新快照就发布。返回值放在 `shared_ptr<MapSnapshotState>`（两个 `SnapshotSlot` + 一个
+inflight 标志），**任务体只捕获 engine 指针和这个 shared 状态，不捕获 `this`** ——
+接口析构后任务仍能安全跑完。`updateCalibration()` 保持 2 s 节奏挂在 tick 上。
+
+实测：`/grid_map` 123x115 @0.1 —— 由 `cpu` lane 计算、tick 发布，主线程不再参与。
+`/global_map` 在本部署里**本来就不产生流量**：`suppress_conflicts=true` 抑制了这条老话题的
+发布者，且 legacy 侧只在 `debug_publish` 时发一次。代码保留（非冲突模式可用），文档记明。
+
+**I11 丢弃可观测**
+
+* 输入计数只在**入队成功后** +1（以前在 push 前自增，关停后的拒绝也被算作"收到"）；
+* 每秒打印**增量**，丢弃/拒绝/显式清空分开计数：
+
+```
+[slam_algo] input 1s: imu+2011 lidar+98 | dropped_oldest+0 dropped_newest+0 cleared+0
+            rejected+0 | pending=0 peak=3
+```
+
+* `Channel::clear()` 单独计入 `cleared`（以前混进 `dropped_oldest`，污染唯一的丢弃指标），单测覆盖；
+* `BackendWorker` 每 10 s 打印主队列的 `dropped_oldest/rejected_closed` 增量（长优化期间丢帧可见）。
+
+**I5 读侧**
+
+`beginMapSwitch` 读 PGM 也加 `MapIoGuard(1000ms)`：与整段写盘互斥，拿不到就跳过静态图
+（`pgm_ok=false`，服务继续），不会再读到写了一半的 PGM。
+
+**本批验收**
+
+```
+定位:  /lio_odom 111.6 Hz, 目标 1/2 SUCCEEDED, 导航中 0 次误跳变
+存图:  1.77~2.14 s success=True, 期间 /slam/info max gap 0.26~0.32 s, 产物齐全
+退出:  0.5 s / 0.5 s, alive=0, 无崩溃, backend idle 0~10 ms
+老话题: /grid_map 123x115 @0.1 (cpu lane 计算)
+单测:  250 tests, 0 failures
+```
+
+**SLAM 侧剩余（都很小）**：`feature` lane 空转（等视觉/建库任务）；
+legacy 的 0.1 s `startPub()`（当前帧点云 + 轨迹）仍在主线程；
+`/global_map` 的 debug 路径与 `suppress_conflicts` 的取舍需要产品确认后再动。

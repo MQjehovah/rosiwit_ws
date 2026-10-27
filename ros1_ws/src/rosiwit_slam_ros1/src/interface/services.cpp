@@ -121,8 +121,13 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
 
     // 2. 先发布新图 PGM，App/RViz 不必等 xzmap 解析完成。
     rosiwit_slam::GridInfo static_grid;
-    ctx.pgm_ok = interface_internal::loadGridPgm(base, static_grid) &&
-                 static_grid.width > 0 && static_grid.height > 0;
+    {
+        // 读 PGM 与"整段写盘"互斥 (I5 读侧): 等不到就跳过静态图, 服务照常继续
+        map_adapter::MapIoGuard pgm_guard(/*wait_ms=*/1000);
+        ctx.pgm_ok = pgm_guard.ok() &&
+                     interface_internal::loadGridPgm(base, static_grid) &&
+                     static_grid.width > 0 && static_grid.height > 0;
+    }
     if (ctx.pgm_ok) {
         realtime_grid_map_ = toRosGrid(static_grid, kMapFrame);
         realtime_grid_map_area_ =

@@ -85,14 +85,118 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, Sl
     srv_save_grid_ = nh_.advertiseService("save_grid_map", &RosiwitInterface::handleSaveGridMap, this);
     srv_set_mode_ = nh_.advertiseService("set_slam_mode", &RosiwitInterface::handleSetMode, this);
 
-    // ---- 定时器 / 泵 ----
-    map_timer_ = nh_.createTimer(ros::Duration(2.0), &RosiwitInterface::mapCB, this);
+    // 不再用 ros::Timer (主线程): 整图/栅格在 cpu lane 上算, tick 线程发布。
     engine_.addTickHook([this] { onTick(); });
 }
 
 void RosiwitInterface::onTick() {
     SlamOutput out;
     if (engine_.latestOutput(out) && out.has_new_pose) publishPose(out);
+    // 老接口的整图/栅格输出: 重活在 cpu lane, 这里只做节流/发布
+    publishPendingMapSnapshots();
+    maybeRequestMapSnapshot();
+    // 在线标定的估算更新 (原来挂在 2s 定时器上, 保持 2s 节奏)
+    const ros::Time now = ros::Time::now();
+    if (last_calib_pub_.isZero() || (now - last_calib_pub_).toSec() >= 2.0) {
+        last_calib_pub_ = now;
+        const auto decision = engine_.updateCalibration();
+        if (calib_pub_) {
+            std::ostringstream os;
+            os << "{\"state\":\"" << decision.state << "\""
+               << ",\"applied\":" << (decision.applied ? "true" : "false")
+               << ",\"rolled_back\":" << (decision.rolled_back ? "true" : "false")
+               << ",\"time_offset\":" << decision.time_offset
+               << ",\"yaw_offset\":" << decision.yaw_offset << "}";
+            std_msgs::String msg;
+            msg.data = os.str();
+            calib_pub_.publish(msg);
+        }
+    }
+}
+
+void RosiwitInterface::publishPendingMapSnapshots() {
+    const uint64_t cloud_v = map_snap_->global_cloud.version();
+    if (cloud_v != global_cloud_published_) {
+        const auto msg = map_snap_->global_cloud.load();
+        if (msg) {
+            global_map_pub_.publish(*msg);
+            global_cloud_published_ = cloud_v;
+        }
+    }
+    const uint64_t grid_v = map_snap_->grid.version();
+    if (grid_v != grid_published_) {
+        const auto msg = map_snap_->grid.load();
+        if (msg) {
+            grid_map_pub_.publish(*msg);
+            if (!suppress_conflicts_) map_pub_.publish(*msg);
+            grid_published_ = grid_v;
+        }
+    }
+}
+
+void RosiwitInterface::maybeRequestMapSnapshot() {
+    // 注意: suppress_conflicts=true 时 `global_map` 这条老话题是**被抑制**的
+    // (legacy 接口那边也有一个同名 latch 发布者), 所以 want_cloud 通常为 false;
+    // 这段保留是为了非冲突模式。栅格 (/grid_map、/map) 才是这条路径的常客。
+    const bool want_cloud = global_map_pub_.getNumSubscribers() > 0;
+    const bool want_grid = grid_map_pub_.getNumSubscribers() > 0 ||
+                           (!suppress_conflicts_ && map_pub_.getNumSubscribers() > 0);
+    if (!want_cloud && !want_grid) return;
+    const ros::Time now = ros::Time::now();
+    if (!last_map_req_.isZero() && (now - last_map_req_).toSec() < 2.0) return;
+    if (map_snap_->inflight.exchange(true)) return;   // 上一张还在算: 合并, 不排队
+    last_map_req_ = now;
+
+    SlamAlgorithm* eng = &engine_;
+    const std::string frame = engine_.worldFrame();
+    const double grid_res = realtime_grid_resolution_;
+    auto snap = map_snap_;
+    const bool accepted = eng->runOnLaneWithDone(
+        "cpu", "map_snapshot",
+        [eng, snap, frame, grid_res, want_cloud, want_grid](rosiwit_common::CancelToken token) {
+            if (want_cloud && !token.cancelled()) {
+                PointVec pts;
+                const bool got = eng->getCoreGlobalMap(pts);
+                if (!got || pts.empty()) {
+                    ROS_WARN_THROTTLE(10.0, "[rosiwit] global_map snapshot empty "
+                                      "(getGlobalMap=%d pts=%zu)", static_cast<int>(got),
+                                      pts.size());
+                }
+                if (got && !pts.empty()) {
+                    CloudType cloud;
+                    cloud.reserve(pts.size());
+                    for (auto & p : pts) cloud.push_back(p);
+                    cloud.width = cloud.size();
+                    cloud.height = 1;
+                    auto msg = std::make_shared<sensor_msgs::PointCloud2>();
+                    pcl::toROSMsg(cloud, *msg);
+                    msg->header.frame_id = frame;
+                    msg->header.stamp = ros::Time::now();
+                    snap->global_cloud.publish(msg);
+                }
+            }
+            if (want_grid && !token.cancelled()) {
+                GridInfo gi;
+                if (eng->getCoreGridMap(grid_res, gi) && gi.width > 0 && gi.height > 0) {
+                    auto msg = std::make_shared<nav_msgs::OccupancyGrid>();
+                    msg->header.frame_id = frame;
+                    msg->header.stamp = ros::Time::now();
+                    msg->info.resolution = gi.resolution;
+                    msg->info.width = gi.width;
+                    msg->info.height = gi.height;
+                    msg->info.origin.position.x = gi.origin_x;
+                    msg->info.origin.position.y = gi.origin_y;
+                    msg->info.origin.orientation.w = 1.0;
+                    // GridInfo 内部 row0 = 最小 y, 与 ROS OccupancyGrid 一致
+                    msg->data = gi.data;
+                    snap->grid.publish(msg);
+                }
+            }
+        },
+        [snap](bool) { snap->inflight.store(false); });
+    if (!accepted) {
+        map_snap_->inflight.store(false);
+    }
 }
 
 void RosiwitInterface::publishPose(const SlamOutput& out) {
@@ -244,64 +348,6 @@ void RosiwitInterface::publishPath(const PreparedPose& p) {
         (ros::Time::now() - last_path_pub_).toSec() < 1.0) return;
     path_pub_.publish(path_);
     last_path_pub_ = ros::Time::now();
-}
-
-void RosiwitInterface::mapCB(const ros::TimerEvent&) {
-    auto* algo = engine_.algo();
-    if (!algo) return;
-
-    // cloud_map / grid_map 都是"有人订阅才发"。以前 is_loc 强制每 2s
-    // getGlobalMap() + getRealtimeGrid()，即使无人订阅也复制整张地图/栅格。
-    if (global_map_pub_.getNumSubscribers() > 0) {
-        PointVec pts;
-        if (engine_.getGlobalMap(pts) && !pts.empty()) {
-            CloudType cloud; cloud.reserve(pts.size());
-            for (auto& p : pts) cloud.push_back(p);
-            cloud.width = cloud.size(); cloud.height = 1;
-            sensor_msgs::PointCloud2 m; pcl::toROSMsg(cloud, m);
-            m.header.frame_id = engine_.worldFrame(); m.header.stamp = ros::Time::now();
-            global_map_pub_.publish(m);
-        }
-    }
-    // grid_map (+ map, 仅非冲突模式)
-    const bool want_grid = grid_map_pub_.getNumSubscribers() > 0 ||
-                           (!suppress_conflicts_ && map_pub_.getNumSubscribers() > 0);
-    if (want_grid) {
-        GridInfo gi;
-        // 必须走 getRealtimeGrid, 它会按当前观测重建栅格; 只读 getGridInfo
-        // 会在建图过程中一直发旧缓存. 核心内部按 revision 缓存, 不重复重建.
-        // 实时图用 mapping.grid.realtime_resolution; 最终图才用 ray_casting 0.05.
-        if (engine_.getRealtimeGrid(realtime_grid_resolution_, gi) && gi.width > 0 && gi.height > 0) {
-            nav_msgs::OccupancyGrid grid;
-            grid.header.frame_id = engine_.worldFrame();
-            grid.header.stamp = ros::Time::now();
-            grid.info.resolution = gi.resolution;
-            grid.info.width = gi.width;
-            grid.info.height = gi.height;
-            grid.info.origin.position.x = gi.origin_x;
-            grid.info.origin.position.y = gi.origin_y;
-            grid.info.origin.orientation.w = 1.0;
-            // GridInfo 内部 row0 = 最小 y, 与 ROS OccupancyGrid 一致.
-            // 旧 PGM 的图像坐标翻转只在存盘/读盘层做, 不能在这里翻.
-            grid.data = gi.data;
-            grid_map_pub_.publish(grid);
-            if (!suppress_conflicts_) map_pub_.publish(grid);
-            grid_published_ = true;
-        }
-    }
-
-    const auto decision = engine_.updateCalibration();
-    if (calib_pub_) {
-        std::ostringstream os;
-        os << "{\"state\":\"" << decision.state << "\""
-           << ",\"applied\":" << (decision.applied ? "true" : "false")
-           << ",\"rolled_back\":" << (decision.rolled_back ? "true" : "false")
-           << ",\"time_offset\":" << decision.time_offset
-           << ",\"yaw_offset\":" << decision.yaw_offset << "}";
-        std_msgs::String msg;
-        msg.data = os.str();
-        calib_pub_.publish(msg);
-    }
 }
 
 bool RosiwitInterface::handleSaveMap(rosiwit_slam_ros1::SaveMap::Request& req,
