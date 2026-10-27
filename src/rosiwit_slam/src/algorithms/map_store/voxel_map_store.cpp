@@ -33,8 +33,26 @@ static int64_t colKey(int cx, int cy) {
     return (ix << 21) | iy;
 }
 
+// 列索引维护 (与 m_cells 的增删保持一致)
+using ColumnIndex = std::unordered_map<int64_t, std::vector<int64_t>>;
+
+static void colAdd(ColumnIndex& cols, int64_t cell_key, int cx, int cy) {
+    cols[colKey(cx, cy)].push_back(cell_key);
+}
+
+static void colDrop(ColumnIndex& cols, int64_t cell_key, int cx, int cy) {
+    auto cit = cols.find(colKey(cx, cy));
+    if (cit == cols.end()) return;
+    auto& v = cit->second;
+    for (auto it = v.begin(); it != v.end(); ++it) {
+        if (*it == cell_key) { v.erase(it); break; }
+    }
+    if (v.empty()) cols.erase(cit);
+}
+
 bool VoxelMapStore::buildFromCloud(const CloudType::Ptr& cloud) {
     m_cells.clear();
+    m_columns.clear();
     m_size = 0;
     ++m_rev;
     insert(cloud);
@@ -55,6 +73,7 @@ void VoxelMapStore::insert(const CloudType::Ptr& world_points, double time) {
             c.pts.reset(new CloudType());
             c.cx = cx; c.cy = cy; c.cz = cz;
             it = m_cells.emplace(k, std::move(c)).first;
+            colAdd(m_columns, k, cx, cy);
         }
         it->second.pts->push_back(p);
         if (time >= 0) it->second.t = time;
@@ -155,15 +174,17 @@ VoxelStats VoxelMapStore::statsAt(const Eigen::Vector3d& p, double radius) const
 bool VoxelMapStore::groundAt(double x, double y, double& z, Eigen::Vector3d& normal) const {
     const int cx = static_cast<int>(std::floor(x / m_leaf));
     const int cy = static_cast<int>(std::floor(y / m_leaf));
-    // 取 (x,y) 3x3 列的所有 cell 点
+    // 取 (x,y) 3x3 列的所有 cell 点: 走列索引, 与地图总大小无关
     std::vector<Eigen::Vector3d> pts;
     double minz = 1e18;
     for (int dx = -1; dx <= 1; ++dx)
         for (int dy = -1; dy <= 1; ++dy) {
-            const int64_t ck = colKey(cx + dx, cy + dy);
-            for (auto& kv : m_cells) {
-                if (colKey(kv.second.cx, kv.second.cy) != ck) continue;
-                for (const auto& p : kv.second.pts->points) {
+            const auto cit = m_columns.find(colKey(cx + dx, cy + dy));
+            if (cit == m_columns.end()) continue;
+            for (const int64_t ck : cit->second) {
+                const auto it = m_cells.find(ck);
+                if (it == m_cells.end()) continue;
+                for (const auto& p : it->second.pts->points) {
                     pts.emplace_back(p.x, p.y, p.z);
                     minz = std::min(minz, static_cast<double>(p.z));
                 }
@@ -192,6 +213,7 @@ void VoxelMapStore::erase(const CloudType::Ptr& world_points) {
         auto it = m_cells.find(keyOf(p.x, p.y, p.z));
         if (it == m_cells.end()) continue;
         m_size -= it->second.pts->size();
+        colDrop(m_columns, it->first, it->second.cx, it->second.cy);
         m_cells.erase(it);
     }
     ++m_rev;
@@ -214,7 +236,11 @@ void VoxelMapStore::carve(const Eigen::Vector3d& origin, const CloudType::Ptr& e
     }
     for (const auto& kv : wiped) {
         auto it = m_cells.find(kv.first);
-        if (it != m_cells.end()) { m_size -= it->second.pts->size(); m_cells.erase(it); }
+        if (it != m_cells.end()) {
+            m_size -= it->second.pts->size();
+            colDrop(m_columns, it->first, it->second.cx, it->second.cy);
+            m_cells.erase(it);
+        }
     }
     if (!wiped.empty()) ++m_rev;
 }
@@ -225,6 +251,7 @@ void VoxelMapStore::decay(double now) {
     for (auto it = m_cells.begin(); it != m_cells.end();) {
         if (it->second.t >= 0 && now - it->second.t > m_decay_window) {
             m_size -= it->second.pts->size();
+            colDrop(m_columns, it->first, it->second.cx, it->second.cy);
             it = m_cells.erase(it);
             changed = true;
         } else {
@@ -296,6 +323,7 @@ bool VoxelMapStore::load(const std::string& path) {
     std::fread(&nc, sizeof(uint64_t), 1, fp);
     m_leaf = leaf > 0 ? leaf : 0.3;
     m_cells.clear();
+    m_columns.clear();
     m_size = 0;
     for (uint64_t i = 0; i < nc; ++i) {
         int32_t hdr[3]; uint32_t n; float t;
@@ -314,7 +342,9 @@ bool VoxelMapStore::load(const std::string& path) {
             c.pts->push_back(p);
         }
         m_size += c.pts->size();
+        const int ccx = hdr[0], ccy = hdr[1];
         m_cells.emplace(k, std::move(c));
+        colAdd(m_columns, k, ccx, ccy);
     }
     std::fclose(fp);
     ++m_rev;

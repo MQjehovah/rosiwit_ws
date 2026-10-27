@@ -1,6 +1,7 @@
 // test/test_map_store.cpp
 // P1/P2 契约测试: 各 IMapStore 实现应给出等价的最近邻/半径查询/统计.
 #include <gtest/gtest.h>
+#include <cstdio>
 #include <memory>
 #include <cmath>
 #include "algorithms/map_store/map_store_factory.h"
@@ -8,16 +9,23 @@
 
 using namespace rosiwit_slam;
 
+// PCL 1.8 的 PointXYZINormal 没有 (x,y,z) 构造函数 (只有默认构造), 这里给测试补一个。
+static PointType mkPt(float x, float y, float z) {
+    PointType p;
+    p.x = x; p.y = y; p.z = z;
+    return p;
+}
+
 namespace {
 CloudType::Ptr makeCloud() {
     CloudType::Ptr c(new CloudType());
     for (double x = 0; x <= 8; x += 0.08)
         for (double y = 0; y <= 8; y += 0.08)
-            c->push_back(PointType(static_cast<float>(x), static_cast<float>(y), 0.0f));
+            c->push_back(mkPt(static_cast<float>(x), static_cast<float>(y), 0.0f));
     for (double z = 0; z <= 2; z += 0.05)
         for (double t = 0; t <= 8; t += 0.05) {
-            c->push_back(PointType(static_cast<float>(t), 0.0f, static_cast<float>(z)));
-            c->push_back(PointType(static_cast<float>(t), 8.0f, static_cast<float>(z)));
+            c->push_back(mkPt(static_cast<float>(t), 0.0f, static_cast<float>(z)));
+            c->push_back(mkPt(static_cast<float>(t), 8.0f, static_cast<float>(z)));
         }
     return c;
 }
@@ -54,7 +62,7 @@ TEST_P(MapStoreContractTest, BuildAndQuery) {
     EXPECT_GT(st.n, 0);
 }
 
-INSTANTIATE_TEST_SUITE_P(AllStores, MapStoreContractTest,
+INSTANTIATE_TEST_CASE_P(AllStores, MapStoreContractTest,
                          ::testing::ValuesIn(MapStoreFactory::listNames()));
 
 // ---- 等价: KD树存储 vs 体素存储 最近邻距离一致 ----
@@ -83,7 +91,7 @@ TEST(MapStoreTransform, InsertErase) {
     const size_t before = store->size();
 
     CloudType::Ptr add(new CloudType());
-    for (double x = 0; x < 1; x += 0.1) add->push_back(PointType(static_cast<float>(x), 20.0f, 0.5f));
+    for (double x = 0; x < 1; x += 0.1) add->push_back(mkPt(static_cast<float>(x), 20.0f, 0.5f));
     const uint64_t r0 = store->revision();
     store->insert(add);
     EXPECT_GT(store->size(), before);
@@ -99,7 +107,8 @@ TEST(MapStorePersist, VxMapRoundTrip) {
     ASSERT_NE(s, nullptr);
     ASSERT_TRUE(s->buildFromCloud(makeCloud()));
     const size_t n0 = s->size();
-    const std::string path = std::string(::testing::TempDir()) + "test_map.vxmap";
+    // gtest 1.8 没有 ::testing::TempDir()
+    const std::string path = "/tmp/rosiwit_test_map.vxmap";
     ASSERT_TRUE(s->save(path));
 
     auto s2 = MapStoreFactory::create("voxel", 0.5);   // 不同 leaf, load 应以文件为准
@@ -122,6 +131,25 @@ TEST(MapStoreGround, GroundAtFloor) {
     EXPECT_GT(n.z(), 0.9);
 }
 
+// ---- 列索引一致性: erase 之后 groundAt 不能再看到已删除的体素 ----
+// groundAt 从"遍历全部体素"改成"列索引直查"后, 这里守住索引与 m_cells 的同步。
+TEST(MapStoreGround, EraseDropsColumnEntries) {
+    VoxelMapStore s(0.2);
+    ASSERT_TRUE(s.buildFromCloud(makeCloud()));
+    // 必须覆盖 groundAt 会查的整个 3x3 列窗口 (leaf 0.2 -> 列 [2.6,3.4)),
+    // 只删正中间那一列时, 周围列的点仍满足">=5 点 + 平面"的判定。
+    CloudType::Ptr patch(new CloudType());
+    for (double x = 2.60; x <= 3.40; x += 0.02)
+        for (double y = 2.60; y <= 3.40; y += 0.02)
+            patch->push_back(mkPt(static_cast<float>(x), static_cast<float>(y), 0.0f));
+    s.erase(patch);
+
+    double z = 99.0;
+    Eigen::Vector3d n = Eigen::Vector3d::Zero();
+    EXPECT_FALSE(s.groundAt(3.0, 3.0, z, n));      // 该列已被删空
+    EXPECT_TRUE(s.groundAt(6.0, 4.0, z, n));       // 其它位置不受影响
+}
+
 // ---- P5: decay 移除长期未更新的体素 ----
 TEST(MapStoreDecay, RemovesStaleCells) {
     VoxelMapStore s(0.2);
@@ -129,7 +157,7 @@ TEST(MapStoreDecay, RemovesStaleCells) {
     const size_t base = s.size();
 
     CloudType::Ptr add(new CloudType());
-    add->push_back(PointType(0.0f, 0.0f, 0.5f));
+    add->push_back(mkPt(0.0f, 0.0f, 0.5f));
     s.insert(add, 100.0);
     const size_t after_add = s.size();
     EXPECT_GT(after_add, base);
@@ -138,4 +166,10 @@ TEST(MapStoreDecay, RemovesStaleCells) {
     s.decay(200.0);                                // 200-100 > 10 -> 该体素移除
     EXPECT_LT(s.size(), after_add);
     EXPECT_GT(s.size(), 0u);                        // 未记时间的底图点仍在
+}
+
+// catkin_add_gtest 只链 GTEST_LIBRARIES (不含 gtest_main)
+int main(int argc, char** argv) {
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

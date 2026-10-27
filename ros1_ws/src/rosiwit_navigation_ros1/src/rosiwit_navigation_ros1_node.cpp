@@ -2261,7 +2261,17 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       if (!coverage_active_) { return; }
     }
 
-    if (!coverage_grid_.hasUncoveredReachable(pose, true)) {
+    // 全图可达性 BFS 不必 20Hz 重跑: 栅格只在覆盖/障碍更新时变化, 而"不可达"的
+    // 处理路径本来就由 coverage_retry_timeout_ (秒级) 兜底。缓存 0.5s 或车移动
+    // 超过 0.15m 再重算, 把每帧 O(栅格) 的 BFS 降到 2Hz。
+    if (coverage_reach_check_time_.isZero() ||
+        (now - coverage_reach_check_time_).toSec() >= 0.5 ||
+        pose.distanceTo(coverage_reach_pose_) > 0.15) {
+      coverage_reach_check_time_ = now;
+      coverage_reach_pose_ = pose;
+      coverage_reach_result_ = coverage_grid_.hasUncoveredReachable(pose, true);
+    }
+    if (!coverage_reach_result_) {
       if (coverage_grid_.hasAnyUncovered()) {
         if ((now - coverage_last_progress_).toSec() > coverage_retry_timeout_) {
           ROS_WARN("[coverage] %.0fs 内没有进展, 把剩余未覆盖标为不可达",
@@ -4119,6 +4129,17 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       return;
     }
 
+    // 定位还在初始化 (HEALTH_INIT): 位姿还不值得信任, 不能按它开车。
+    // 以前 INIT 被当成"可继续行驶"(status=1), 与 TRACKING 等价。
+    // 这里只保持停车 + 回 WAITING_LOC, 不立刻判失败 —— 初始化完成后自动继续;
+    // 若 SLAM 侧 INIT 超时转成 LOST, 由上面的分支按 FAILED_LOC_LOST 收尾。
+    if (last_slam_status_ == 1 && !last_slam_info_stamp_.isZero() &&
+        (ros::Time::now() - last_slam_info_stamp_).toSec() <= slam_info_timeout_) {
+      publishCommand(geometry_msgs::Twist());
+      setGoalStatus("WAITING_LOC");
+      return;
+    }
+
     {
       std::string status;
       int result_code = movebase::RESULT_PERCEPTION_TIMEOUT;
@@ -4847,6 +4868,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   core::Pose2D coverage_target_;
   core::Pose2D coverage_last_progress_pose_;
   ros::Time coverage_last_diag_;
+  // 全图可达性 BFS 缓存 (见 coverage 执行处的注释)
+  ros::Time coverage_reach_check_time_;
+  core::Pose2D coverage_reach_pose_;
+  bool coverage_reach_result_ = true;
   // 当前活动覆盖路线: 有它就不再周期重建 (每 10s 重建会让机器人反复重跑同一段)
   std::vector<core::Pose2D> coverage_route_;
   // 覆盖路线 (core::Path, 带 velocity_x: 0=原地转 1=前进), 供旋转段执行器读取

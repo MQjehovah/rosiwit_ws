@@ -134,6 +134,17 @@ if(CATKIN_ENABLE_TESTING)
         endif()
     endforeach()
 
+    # ---- 核心算法库 (src/rosiwit_slam) 的单测 ----
+    # 以前只在核心的 STANDALONE 构建里跑 (需要单独 cmake), catkin_make run_tests 看不到。
+    # 这里接入与本次改动直接相关的两个: 体素存储 (列索引) 与地图管理 (增量累积)。
+    foreach(slam_test test_map_store test_pcd_map_manager)
+        catkin_add_gtest(${slam_test}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/${slam_test}.cpp)
+        if(TARGET ${slam_test})
+            target_link_libraries(${slam_test} rosiwit_slam_ros1_lib)
+        endif()
+    endforeach()
+
     catkin_add_gtest(test_realtime_grid test/test_realtime_grid.cpp)
     if(TARGET test_realtime_grid)
         target_link_libraries(test_realtime_grid rosiwit_slam_ros1_lib)

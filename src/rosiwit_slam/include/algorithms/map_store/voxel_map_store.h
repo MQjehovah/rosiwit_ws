@@ -1,6 +1,7 @@
 // include/algorithms/map_store/voxel_map_store.h
 #pragma once
 #include <unordered_map>
+#include <vector>
 #include <cstdint>
 #include "slam_core/i_map_store.h"
 
@@ -43,6 +44,9 @@ private:
 
     double m_leaf = 0.3;
     std::unordered_map<int64_t, Cell> m_cells;
+    // 列索引 (cx,cy) -> 该列所有 cell key. groundAt 只需要 (x,y) 附近 3x3 列,
+    // 以前每次都要遍历**全部**体素做列号比较 (planar 约束每帧调用 -> O(体素数)/帧)。
+    std::unordered_map<int64_t, std::vector<int64_t>> m_columns;
     double m_decay_window = 30.0;
     uint64_t m_rev = 0;
     size_t m_size = 0;

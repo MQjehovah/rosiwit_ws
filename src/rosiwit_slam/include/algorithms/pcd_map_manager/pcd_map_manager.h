@@ -3,6 +3,7 @@
 #include <mutex>
 #include <atomic>
 #include <memory>
+#include <unordered_map>
 #include "slam_core/i_map_manager.h"
 #include "slam_core/i_grid_map_generator.h"
 #include "algorithms/grid_map/grid_map_postprocess.h"
@@ -61,6 +62,18 @@ private:
     mutable std::mutex m_mutex_;         // 保护 global_map_ / submaps_ / anchor; const 查询也加锁
     std::atomic<uint64_t> m_revision_{0}; // 地图内容版本号
     double save_voxel_ = 0.3;            // 保存/重建全局地图时的体素大小(m), yaml: map_save_voxel
+    // 增量体素累积: voxel key -> (global_map_ 里的下标, 该体素已合并的点数).
+    // addSubMap 以前每个关键帧都拿整张累积图重跑一遍 pcl::VoxelGrid (O(N^2):
+    // 关键帧越多每个关键帧越慢, 地图越大越卡)。现在只对新帧逐点并入, 用滑动平均
+    // 得到与 VoxelGrid centroid 相同的结果, 单帧代价 O(新帧点数)。
+    struct VoxelAcc {
+        size_t index = 0;
+        uint32_t count = 0;
+    };
+    std::unordered_map<int64_t, VoxelAcc> map_voxels_;
+    static int64_t voxelKey(float x, float y, float z, double leaf);
+    void accumulateCloud(const CloudType& cloud, double leaf);
+    void rebuildVoxels(double leaf);
     // 动态点剔除 (多帧一致性): 保存时只保留在 >= N 个观测帧里出现过的体素.
     // 只在单帧出现的点通常是行人/门/反光等瞬态. 0/1 = 关闭.
     // yaml: mapping.map_manager.dynamic_min_views

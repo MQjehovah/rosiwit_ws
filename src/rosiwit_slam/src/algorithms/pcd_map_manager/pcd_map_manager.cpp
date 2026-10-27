@@ -38,6 +38,58 @@ PoseStamped poseInv(const PoseStamped& p) {
 PcdMapManager::PcdMapManager()
     : global_map_(new CloudType()) {}
 
+// 体素 key: 与 VoxelGrid 的 leaf 网格一致 (21bit x 3).
+int64_t PcdMapManager::voxelKey(float x, float y, float z, double leaf) {
+    const double l = leaf > 0.0 ? leaf : 0.3;
+    const int64_t ix = static_cast<int64_t>(std::floor(x / l)) & 0x1FFFFF;
+    const int64_t iy = static_cast<int64_t>(std::floor(y / l)) & 0x1FFFFF;
+    const int64_t iz = static_cast<int64_t>(std::floor(z / l)) & 0x1FFFFF;
+    return (ix << 42) | (iy << 21) | iz;
+}
+
+// 把一帧点云并入 global_map_ 的体素累积 (单帧 O(点数), 不再重滤整图).
+void PcdMapManager::accumulateCloud(const CloudType& cloud, double leaf) {
+    if (!global_map_) global_map_.reset(new CloudType());
+    for (const auto& p : cloud.points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const int64_t k = voxelKey(p.x, p.y, p.z, leaf);
+        auto it = map_voxels_.find(k);
+        if (it == map_voxels_.end()) {
+            VoxelAcc acc;
+            acc.index = global_map_->size();
+            acc.count = 1;
+            map_voxels_.emplace(k, acc);
+            global_map_->push_back(p);
+        } else {
+            // 滑动平均 = 该体素内所有点的 centroid (与 VoxelGrid 的默认行为一致)
+            PointType& q = global_map_->points[it->second.index];
+            const float n = static_cast<float>(it->second.count + 1);
+            q.x += (p.x - q.x) / n;
+            q.y += (p.y - q.y) / n;
+            q.z += (p.z - q.z) / n;
+            ++it->second.count;
+        }
+    }
+    global_map_->width = static_cast<uint32_t>(global_map_->size());
+    global_map_->height = 1;
+    global_map_->is_dense = false;
+}
+
+// global_map_ 被整体替换 (load/append/重建/动态点剔除) 后重建索引.
+void PcdMapManager::rebuildVoxels(double leaf) {
+    map_voxels_.clear();
+    if (!global_map_) return;
+    map_voxels_.reserve(global_map_->size() * 2 + 1);
+    for (size_t i = 0; i < global_map_->size(); ++i) {
+        const auto& p = global_map_->points[i];
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        VoxelAcc acc;
+        acc.index = i;
+        acc.count = 1;
+        map_voxels_.emplace(voxelKey(p.x, p.y, p.z, leaf), acc);
+    }
+}
+
 bool PcdMapManager::init(const std::string& config_path) {
     std::ifstream fin(config_path);
     if (!fin.good()) {
@@ -208,6 +260,7 @@ bool PcdMapManager::saveMap(const std::string& name) {
         filtered->height = 1;
         filtered->is_dense = false;
         global_map_ = filtered;
+        rebuildVoxels(save_voxel_);
         std::cout << "[PcdMapManager] dynamic filter: kept "
                   << global_map_->size() << ", removed " << removed
                   << " single-view points (min_views=" << dynamic_min_views_ << ")" << std::endl;
@@ -236,6 +289,7 @@ bool PcdMapManager::loadMap(const std::string& name) {
     }
     std::lock_guard<std::mutex> lock(m_mutex_);
     global_map_ = cloud;
+    rebuildVoxels(save_voxel_);
     observations_.clear();   // 纯 PCD 无逐帧原点, 射线类策略退回整体点云
     // 换图必须丢弃旧建图关键帧/锚点, 否则后续 addSubMap/backend 会
     // 把上一张地图的关键帧重新拼回来.
@@ -321,6 +375,7 @@ bool PcdMapManager::appendMap(const std::string& name, const PoseStamped& initia
     CloudType::Ptr filtered(new CloudType());
     vg.filter(*filtered);
     global_map_ = filtered;
+    rebuildVoxels(std::max(0.02, save_voxel_));
     observations_.clear();
     ++m_revision_;
     std::cout << "[PcdMapManager] Appended: " << path
@@ -357,21 +412,15 @@ bool PcdMapManager::addSubMap(const KeyFrame& kf) {
     T.block<3,1>(0,3) = eff_pose.trans.cast<float>();
     pcl::transformPointCloud(*kf.cloud, *transformed, T);
 
-    if (!global_map_) global_map_.reset(new CloudType());
-    *global_map_ += *transformed;
+    // 增量体素累积: 只处理这一帧的新点, 不再对整张累积图重跑 VoxelGrid。
+    // (以前在第 N 个关键帧上要重滤 N 帧的点, 建图越久单帧越慢, 直接拖慢 SLAM 位姿/TF。)
+    accumulateCloud(*transformed, save_voxel_);
 
     // 保存逐帧观测(原点=修正后位置), 供射线投射类栅格策略使用
     Observation ob;
     ob.origin = eff_pose.trans;
     ob.cloud = transformed;
     observations_.push_back(ob);
-
-    pcl::VoxelGrid<PointType> vg;
-    vg.setInputCloud(global_map_);
-    vg.setLeafSize(save_voxel_, save_voxel_, save_voxel_);
-    CloudType::Ptr filtered(new CloudType());
-    vg.filter(*filtered);
-    global_map_ = filtered;
 
     ++m_revision_;
     return true;
@@ -483,6 +532,7 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
     CloudType::Ptr filtered(new CloudType());
     vg.filter(*filtered);
     global_map_ = filtered;
+    rebuildVoxels(save_voxel_);
 
     std::cout << "[PcdMapManager] Rebuilt map from backend poses: " << used.size() << " kfs"
               << " (matched " << matched << "/" << corrected.size() << " backend poses, "
@@ -570,35 +620,60 @@ bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& 
 
 bool PcdMapManager::saveGridMap(const std::string& pgm_path, const std::string& yaml_path,
                                   double resolution, const std::string& frame_id) {
-    std::lock_guard<std::mutex> lock(m_mutex_);
-    if (!global_map_ || global_map_->empty()) return false;
-    if (!grid_gen_) grid_gen_ = GridMapFactory::create("height_projection");
-    if (!grid_gen_) return false;
+    // 快照 + 锁外构建: 以前整段 (栅格化 + RANSAC 后处理 + 写 PGM/YAML) 都持 m_mutex_,
+    // 保存一张 0.05m 地图期间前端 addSubMap 全被阻塞 -> SLAM 位姿/TF 停发, App 端表现为"卡死"。
+    // 现在只在取快照/写回结果时持锁, 与 generateGridMap 的做法一致。
+    std::vector<Observation> observations;
+    CloudType::Ptr global_map;
+    GridMapConfig cfg;
+    GridPostConfig post;
+    std::string gen_name;
+    double save_voxel = 0.3;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_);
+        if (!global_map_ || global_map_->empty()) return false;
+        observations = observations_;
+        global_map = global_map_;
+        if (observations.empty() && global_map) {
+            // 锁外使用: 不能和写入方共享同一份点云
+            global_map.reset(new CloudType(*global_map));
+        }
+        cfg = grid_cfg_;
+        post = grid_post_cfg_;
+        gen_name = grid_gen_name_;
+        save_voxel = save_voxel_;
+    }
 
-    GridMapConfig cfg = grid_cfg_;
+    auto gen = GridMapFactory::create(gen_name);
+    if (!gen) gen = GridMapFactory::create("height_projection");
+    if (!gen) return false;
+
     cfg.resolution = resolution;
-    cfg.point_spacing = save_voxel_;
+    cfg.point_spacing = save_voxel;
 
     GridInfo info;
-    bool ok = !observations_.empty()
-        ? grid_gen_->buildFromObservations(observations_, Eigen::Vector3d::Zero(), cfg, info)
-        : grid_gen_->build(global_map_, Eigen::Vector3d::Zero(), cfg, info);
+    const bool ok = !observations.empty()
+        ? gen->buildFromObservations(observations, Eigen::Vector3d::Zero(), cfg, info)
+        : gen->build(global_map, Eigen::Vector3d::Zero(), cfg, info);
     if (!ok) return false;
 
-    grid_post_cfg_.resolution = info.resolution;
-    grid_post_cfg_.point_spacing = save_voxel_;
-    applyGridPostProcess(info, grid_post_cfg_);
+    post.resolution = info.resolution;
+    post.point_spacing = save_voxel;
+    applyGridPostProcess(info, post);
 
     if (!saveGridMapPGM(info, pgm_path, yaml_path, frame_id)) return false;
 
-    m_grid_data = info.data;
-    m_grid_w = info.width;
-    m_grid_h = info.height;
-    m_grid_res = info.resolution;
-    m_grid_ox = info.origin_x;
-    m_grid_oy = info.origin_y;
-    std::cout << "[PcdMapManager] Grid map saved (" << grid_gen_->name() << "): " << pgm_path
-              << " (" << m_grid_w << "x" << m_grid_h << ")" << std::endl;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_);
+        m_grid_data = info.data;
+        m_grid_w = info.width;
+        m_grid_h = info.height;
+        m_grid_res = info.resolution;
+        m_grid_ox = info.origin_x;
+        m_grid_oy = info.origin_y;
+    }
+    std::cout << "[PcdMapManager] Grid map saved (" << gen->name() << "): " << pgm_path
+              << " (" << info.width << "x" << info.height << ")" << std::endl;
     return true;
 }
 
