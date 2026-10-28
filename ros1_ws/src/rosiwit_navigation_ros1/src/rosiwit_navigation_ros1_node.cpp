@@ -3046,7 +3046,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
           for (int i = 0; i < 4; ++i) {
             const int nx = nx4[i];
             const int ny = ny4[i];
-            if (nx < 0 || nx >= static_cast<int>(w) || ny < 0 || ny >= static_cast<int>(h)) { continue; }
+            // 聚类必须限制在机器人附近的窗口内: 整面连通墙会一路蔓延到全图
+            // (实测 30 万格), 分块 map 再叠加一次, 单线程 spinner 会被拖住。
+            if (nx < local_x0 || nx > local_x1 || ny < local_y0 || ny > local_y1) { continue; }
             if (visited[static_cast<size_t>(ny) * w + nx]) { continue; }
             if (isObstacleCell(nx, ny)) { visited[static_cast<size_t>(ny) * w + nx] = 1; cluster_q.push({nx, ny}); }
           }
