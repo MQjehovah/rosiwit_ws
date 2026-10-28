@@ -515,9 +515,17 @@ bool Ros1SlamInterface::handleExpandMap(
     ROS_WARN("[ros1_slam] update_map_operation: 降级实现 (D5) —— 用 loadMap + 切定位代替 "
              "旧实现的增量扩图写回; 行为不等价");
     const std::string base = xzMapBase(req.map_dir);
+    // 核心只认 PCD 文件路径; xzMapBase 返回的是无扩展名的 base (如 "<dir>/map"),
+    // 直接传进去 loadMapForLocalization 的 ifstream 探测必然失败。
+    const std::string pcd = base + ".pcd";
     bool ok = false;
     if (engine_.algo()) {
-        ok = engine_.loadCoreMap(base);
+        ok = engine_.loadCoreMap(pcd);
+        if (!ok) {
+            ROS_ERROR_STREAM("[ros1_slam] update_map_operation: 需要 " << pcd
+                             << " (核心的扩图/载图只吃 PCD); 若目录里只有 .xzmap, "
+                             << "请走 /switch_map");
+        }
         if (ok) {
             engine_.setCorePipelineMode("localization", /*wait_ms=*/1000);
             slam_mode_ = SlamMode::LOCALIZATION;

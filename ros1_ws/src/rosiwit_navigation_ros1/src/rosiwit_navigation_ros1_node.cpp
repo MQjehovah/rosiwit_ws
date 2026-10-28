@@ -12,6 +12,8 @@
 // ============================================================================
 #include <ros/ros.h>
 
+#include <deque>
+
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/OccupancyGrid.h>
 #include <nav_msgs/Path.h>
@@ -828,7 +830,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       ROS_WARN("[rosiwit_navigation_ros1] unknown controller: %s", name.c_str());
       return false;
     }
-    if (!current_path_.poses.empty()) { next->setPath(toCorePath(current_path_)); }
+    if (!current_core_path_.points.empty()) {
+      next->setPath(current_core_path_);   // 已带 velocity_x 方向标记
+    } else if (!current_path_.poses.empty()) {
+      next->setPath(toCorePath(current_path_));
+    }
     next->setVelocityLimit(max_velocity_x_, max_velocity_theta_);
     controller_strategy_ = std::move(next);
     controller_name_ = name;
@@ -908,7 +914,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 控制器重建: allow_reverse 在 initialize 时固化
     std::unique_ptr<core::IControllerStrategy> next_ctrl;
     if (initController(controller_name_, next_ctrl, allow_reverse)) {
-      if (!current_path_.poses.empty()) { next_ctrl->setPath(toCorePath(current_path_)); }
+      if (!current_core_path_.points.empty()) {
+        next_ctrl->setPath(current_core_path_);
+      } else if (!current_path_.poses.empty()) {
+        next_ctrl->setPath(toCorePath(current_path_));
+      }
       controller_strategy_ = std::move(next_ctrl);
     }    ROS_WARN("[rosiwit_navigation_ros1] profile -> %s (allow_reverse=%d planner=%s)",
              motion_profile_.c_str(), static_cast<int>(allow_reverse), planner_name_.c_str());
@@ -1779,7 +1789,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       return;
     }
 
-    controller_strategy_->setPath(toCorePath(current_path_));
+    if (!current_core_path_.points.empty()) {
+      controller_strategy_->setPath(current_core_path_);
+    } else {
+      controller_strategy_->setPath(toCorePath(current_path_));
+    }
     global_path_pub_.publish(current_path_);
 
     planning_active_ = false;
@@ -2923,11 +2937,14 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     std::vector<char> scan_cells;
     if (scan_fresh) {
       scan_cells.assign(static_cast<size_t>(w) * h, 0);
+      // 按**米**膨胀 (5cm 物理半径), 不能按格写死 3x3: res=0.05 时每点扩 0.15m,
+      // res=0.10 时就是 0.30m —— 0.8m 门洞两侧各被吃掉 0.15m, 直接过不去。
+      const int scan_dilate = std::max(0, static_cast<int>(std::lround(0.05 / res)));
       for (const auto & pt : laser_points_) {
         const int lx = static_cast<int>((pt.x - ox) / res);
         const int ly = static_cast<int>((pt.y - oy) / res);
-        for (int oy2 = -1; oy2 <= 1; ++oy2) {
-          for (int ox2 = -1; ox2 <= 1; ++ox2) {
+        for (int oy2 = -scan_dilate; oy2 <= scan_dilate; ++oy2) {
+          for (int ox2 = -scan_dilate; ox2 <= scan_dilate; ++ox2) {
             const int mx = lx + ox2;
             const int my = ly + oy2;
             if (mx < 0 || mx >= static_cast<int>(w) ||
@@ -3168,18 +3185,22 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     auto fallback = fallback_planner_;
     const std::string pname = planner_name_;
     async_plan_future_ = std::async(std::launch::async,
-      [planner, fallback, pname, start, goal]() {
+      [this, planner, fallback, pname, start, goal]() {
       if (!planner) {
         return core::Result<core::Path>::error(
           core::ErrorCode::PLANNING_FAILED, "planner gone");
       }
       auto primary = planner->plan(start, goal);
-      if (primary.is_ok() || !fallback) { return primary; }
+      if (primary.is_ok() || !fallback) {
+        last_plan_used_fallback_.store(false);
+        return primary;
+      }
       // 窄通道/窄门洞: hybrid A* 的搜索代价爆炸 (实测 0.8m 门洞 3.4s > 2s 超时),
       // 直接回落网格 A* + 平滑 —— 差速轮可以原地转, 平滑后的栅格路径可跟.
       ROS_WARN("[plan] %s failed (%s), fallback to %s",
                pname.c_str(), primary.error_message().c_str(),
                fallback->getName().c_str());
+      last_plan_used_fallback_.store(true);
       return fallback->plan(start, goal);
     });
   }
@@ -3187,11 +3208,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   void startPlanning(const geometry_msgs::PoseStamped & goal, bool allow_initial_rotate,
                      bool restart, const core::Pose2D * start_override = nullptr)
   {
-    pending_has_start_override_ = (start_override != nullptr);
-    if (start_override != nullptr) { pending_start_override_ = *start_override; }
     // restart=true: 新目标, 先停旧路径; false: 1Hz 重规划, 继续沿旧路径控制.
     if (restart) {
-      stopNavigation();
+      stopNavigation();   // ⚠ 它会清 pending_has_start_override_, 所以 override 必须在它之后写
       current_path_.poses.clear();
       global_path_pub_.publish(current_path_);
       last_motion_stamp_ = ros::Time::now();
@@ -3199,6 +3218,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     } else {
       is_navigating_ = true;  // 重规划期间旧路径继续可用
     }
+    pending_has_start_override_ = (start_override != nullptr);
+    if (start_override != nullptr) { pending_start_override_ = *start_override; }
     if (!updateCurrentPose()) {
       ROS_ERROR("[rosiwit_navigation_ros1] cannot get current pose for planning");
       if (task_active_) {
@@ -3290,7 +3311,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 只会把路径拉进高代价膨胀区 (smoother 只看 raw grid 的 0/100, 看不到
     // 膨胀代价), 表现为"旁边有空地却贴着代价区走".
     bool smoothed = false;
-    if (planned.points.size() >= 3 && planner_name_ != "hybrid_astar") {
+    // 回退到 A* 时必须平滑: A* 是栅格折线, 不平滑会一路切角; 而 planner_name_ 仍是
+    // 配置里的 hybrid_astar, 以前这个条件把回退路径的平滑整个跳过了 (smoothed=0)。
+    if (planned.points.size() >= 3 &&
+        (planner_name_ != "hybrid_astar" || last_plan_used_fallback_.load())) {
       const core::Path raw = planned;
       planners::SmootherConfig smoother;
       smoother.max_iterations = 60;
@@ -3403,10 +3427,33 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
   void resetRecovery()
   {
+    // 作废所有在飞的逃逸规划: 它们的起点位姿/地图坐标系可能已经失效
+    // (切图、重定位、新目标都会走到这里)。只递增 generation 不够 —— future 还活着,
+    // launchReverseEscape 以前会直接复用它。
+    ++recovery_plan_gen_;
+    discardRecoveryPlan();
     recovery_stage_ = RecoveryStage::NONE;
     recovery_core_path_.points.clear();
     if (recovery_controller_) { recovery_controller_->reset(); }
     recovery_started_ = ros::Time(0);
+  }
+
+  /// 把在飞的逃逸规划移进 graveyard: 不能在控制环里 get() 等它 (最长 ~6s),
+  /// 也不能原地析构 (async future 的析构会阻塞). 已完成的顺手回收。
+  void discardRecoveryPlan()
+  {
+    if (recovery_plan_future_.valid()) {
+      recovery_plan_graveyard_.push_back(std::move(recovery_plan_future_));
+    }
+    for (auto it = recovery_plan_graveyard_.begin();
+         it != recovery_plan_graveyard_.end();) {
+      if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        try { (void)it->get(); } catch (...) {}
+        it = recovery_plan_graveyard_.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 
   // Recovery-only costmap: deep-copy the global planner costmap and mark all
@@ -3424,6 +3471,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         cm.width == 0 || cm.height == 0 || cm.resolution <= 0.0) {
       return cm;
     }
+    // 清除盒必须覆盖**规划器实际使用的轮廓** (planner_footprint_ = configured 外扩
+    // planner_footprint_margin_), 再加半格取整余量。以前用 configured_footprint_ + 0.05,
+    // 而规划器按 configured + 0.06 判定, 所以保险杠距墙 5~6cm 时 start 必被判进障碍。
+    const std::vector<std::pair<double, double>> & clear_fp =
+      planner_footprint_.size() >= 3 ? planner_footprint_ : configured_footprint_;
+    margin = std::max(margin, 0.5 * cm.resolution);
     if (cm.grid) {
       cm.grid = std::make_shared<core::CostmapGrid>(*cm.grid);
     }
@@ -3443,12 +3496,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       if (cm.grid && idx < cm.grid->data.size()) { cm.grid->data[idx] = 0; }
     };
 
-    if (configured_footprint_.size() >= 3) {
+    if (clear_fp.size() >= 3) {
       double min_x = std::numeric_limits<double>::max();
       double max_x = std::numeric_limits<double>::lowest();
       double min_y = std::numeric_limits<double>::max();
       double max_y = std::numeric_limits<double>::lowest();
-      for (const auto & v : configured_footprint_) {
+      for (const auto & v : clear_fp) {
         const double wx = pose.x + c * v.first - s * v.second;
         const double wy = pose.y + s * v.first + c * v.second;
         min_x = std::min(min_x, wx);
@@ -3472,8 +3525,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
           const double dy = wy - pose.y;
           const double lx = c * dx + s * dy;
           const double ly = -s * dx + c * dy;
-          if (pointInPolygon(lx, ly, configured_footprint_) ||
-              pointPolygonDistance(lx, ly, configured_footprint_) <= margin) {
+          if (pointInPolygon(lx, ly, clear_fp) ||
+              pointPolygonDistance(lx, ly, clear_fp) <= margin) {
             clear_cell(ix, iy);
           }
         }
@@ -3694,15 +3747,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       }
       const double planning_budget = recovery_timeout_ > 0.0
         ? std::min(6.0, recovery_timeout_ * 0.8) : 6.0;
-      // 上一次恢复规划还没结束: 复用它, 不再开新线程 (否则 future 赋值会阻塞)
-      if (recovery_plan_future_.valid()) {
-        if (recovery_plan_future_.wait_for(std::chrono::seconds(0)) !=
-            std::future_status::ready) {
-          recovery_stage_ = RecoveryStage::PLANNING;
-          return true;
-        }
-        try { (void)recovery_plan_future_.get(); } catch (...) {}
-      }
+      // 旧规划一律作废, 不复用: 它可能是上一轮恢复、甚至切图/重定位前的位姿算出来的。
+      // (以前这里"复用在飞 future", 于是 out.gen 校验对这条路径完全失效。)
+      discardRecoveryPlan();
       // 恢复规划放后台线程: 以前在 10Hz 控制定时器里同步跑, 单次最多阻塞
       // 6s, 期间不发 cmd_vel, 底盘继续执行最后一条速度指令 (危险).
       ++recovery_plan_gen_;
@@ -4531,6 +4578,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     for (const auto & pose : path.poses) {
       core::PathPoint pt;
       pt.pose = toCorePose(pose);
+      // ⚠ PathPoint 默认 velocity_x=0, 而 rpp 把 |velocity_x|<0.1 解释成
+      // "原地旋转段" (dirAt()==0 -> 只返回角速度)。ROS Path 里没有方向信息,
+      // 从外部灌进来的路径必须显式标成前进, 否则 linear.x 恒为 0: 车只转不走。
+      pt.velocity_x = 1.0;
       core_path.points.push_back(pt);
     }
     return core_path;
@@ -4725,6 +4776,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   // 恢复规划在后台线程执行; 控制环只 poll, 不再被 plan() 阻塞
   std::future<RecoveryPlanOutcome> recovery_plan_future_;
   uint64_t recovery_plan_gen_ = 0;
+  // 被作废但还没结束的逃逸规划 (async future 析构会阻塞, 只能顺带回收)
+  std::deque<std::future<RecoveryPlanOutcome>> recovery_plan_graveyard_;
 
   // 运动看门狗: 指令有效但底盘不动 -> 快速判定阻塞 (替代 60s 位移看门狗)
   ros::Time last_motion_stamp_;
@@ -4837,6 +4890,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   double recovery_spin_angle_deg_ = 60.0;
   double recovery_spin_timeout_ = 6.0;
   double recovery_wait_sec_ = 2.0;
+  // 本次规划是否用了回退规划器 (A*): 决定要不要做节点层平滑
+  std::atomic<bool> last_plan_used_fallback_{false};
   std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
   std::unique_ptr<core::IControllerStrategy> recovery_controller_;
   std::unique_ptr<core::IPlannerStrategy> coverage_planner_;

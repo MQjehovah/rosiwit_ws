@@ -1,5 +1,6 @@
 #include "hybrid_astar_planner.hpp"
 #include "rosiwit_navigation/nav_core/costmap_layer.hpp"
+#include "rosiwit_navigation/nav_core/distance_field.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -129,41 +130,17 @@ void HybridAStarPlanner::buildInflationField()
 
   const int radius_cells = std::max(1, static_cast<int>(
     std::ceil(inflation_radius_ / std::max(1e-6, resolution_))));
-  std::vector<float> dist(n, std::numeric_limits<float>::max());
-  std::queue<std::pair<int, int>> q;
-  for (int y = 0; y < static_cast<int>(ny_); ++y) {
-    for (int x = 0; x < static_cast<int>(nx_); ++x) {
-      const size_t idx = static_cast<size_t>(y) * nx_ + x;
-      // unknown(-1) 是"阻断边界", 不是实体障碍; 只有真实占据(100)产生膨胀场.
-      if (costmap_data_[idx] >= core::kCostLethal) {
-        dist[idx] = 0.0f;
-        q.push({x, y});
-      }
-    }
-  }
-  const int dx4[4] = {-1, 0, 1, 0};
-  const int dy4[4] = {0, -1, 0, 1};
-  while (!q.empty()) {
-    const auto c = q.front();
-    q.pop();
-    const float cd = dist[static_cast<size_t>(c.second) * nx_ + c.first];
-    if (cd >= radius_cells) continue;
-    for (int i = 0; i < 4; ++i) {
-      const int x = c.first + dx4[i];
-      const int y = c.second + dy4[i];
-      if (x < 0 || y < 0 || x >= static_cast<int>(nx_) ||
-          y >= static_cast<int>(ny_)) continue;
-      const size_t idx = static_cast<size_t>(y) * nx_ + x;
-      if (dist[idx] > cd + 1.0f) {
-        dist[idx] = cd + 1.0f;
-        q.push({x, y});
-      }
-    }
-  }
+  // 精确欧氏距离 (单位=格). 以前是 4 邻域 BFS = 曼哈顿距离, 45° 方向偏大 √2,
+  // 导致外接圆快速放行把 0.585m 的判据放宽到 0.41m, 且膨胀场是菱形。
+  // unknown(-1) 是"阻断边界", 不是实体障碍; 只有真实占据(100)产生膨胀场.
+  std::vector<uint8_t> lethal(n, 0);
   for (size_t i = 0; i < n; ++i) {
-    if (dist[i] < 1e6f) {
-      obstacle_dist_m_[i] = dist[i] * static_cast<float>(resolution_);
-    }
+    if (costmap_data_[i] >= core::kCostLethal) { lethal[i] = 1; }
+  }
+  const std::vector<float> dist = core::euclideanDistanceCells(
+    lethal, static_cast<unsigned int>(nx_), static_cast<unsigned int>(ny_));
+  for (size_t i = 0; i < n; ++i) {
+    obstacle_dist_m_[i] = dist[i] * static_cast<float>(resolution_);
   }
   if (inflation_radius_ <= 0.0) return;   // 只建距离场 (外接圆快速接受用)
 
@@ -306,11 +283,19 @@ bool HybridAStarPlanner::checkArc(
   const double sign = motion.distance >= 0.0 ? 1.0 : -1.0;
   const double distance = std::fabs(motion.distance);
 
-  // 原地旋转: 位置不变, 只转航向. 只做一次 footprint 检查.
+  // 原地旋转: 位置不变, 只转航向. 必须按中间姿态采样检查 —— 车头/车尾是绕着
+  // 中心扫过去的, 只查终点会把"旋转过程中扫到墙"判成可行 (门洞/贴墙处 30° 旋转
+  // 的中间姿态最危险, 安全层的旋转停障圆 r≈0.71 事后又会把这条路径否掉)。
   if (distance < 1e-9) {
+    const double span = std::fabs(motion.dtheta);
+    const int steps = std::max(2, static_cast<int>(
+      std::ceil(span / (10.0 * M_PI / 180.0))));
     core::Pose2D p = from;
-    p.theta = normalizeAngle(from.theta + motion.dtheta);
-    if (!checkPose(p)) return false;
+    for (int i = 1; i <= steps; ++i) {
+      p.theta = normalizeAngle(
+        from.theta + motion.dtheta * (static_cast<double>(i) / steps));
+      if (!checkPose(p)) return false;
+    }
     to = p;
     return true;
   }

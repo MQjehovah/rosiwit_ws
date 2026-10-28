@@ -1,4 +1,5 @@
 #include "rosiwit_navigation/nav_core/costmap_layers.hpp"
+#include "rosiwit_navigation/nav_core/distance_field.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -221,36 +222,13 @@ std::vector<int8_t> inflatedCostmap(
   inflate_cells = std::max(1, inflate_cells);
   inscribed_cells = std::max(0, std::min(inscribed_cells, inflate_cells));
 
-  std::vector<float> dist(n, std::numeric_limits<float>::max());
-  std::queue<std::pair<int, int>> q;
-  for (unsigned int y = 0; y < height; ++y) {
-    for (unsigned int x = 0; x < width; ++x) {
-      if (isLethal(raw[static_cast<size_t>(y) * width + x])) {
-        dist[static_cast<size_t>(y) * width + x] = 0.0f;
-        q.push({static_cast<int>(x), static_cast<int>(y)});
-      }
-    }
+  // 精确欧氏距离 (单位=格); 以前是 4 邻域 BFS = 曼哈顿距离, 45° 方向膨胀少 26%,
+  // 膨胀等值线呈菱形 (与规划器的距离场保持同一口径, 见 nav_core/distance_field.hpp)。
+  std::vector<uint8_t> lethal_mask(n, 0);
+  for (size_t i = 0; i < n; ++i) {
+    if (isLethal(raw[i])) { lethal_mask[i] = 1; }
   }
-
-  const int dx4[4] = {-1, 0, 1, 0};
-  const int dy4[4] = {0, -1, 0, 1};
-  while (!q.empty()) {
-    const std::pair<int, int> c = q.front();
-    q.pop();
-    const float cd = dist[static_cast<size_t>(c.second) * width + c.first];
-    if (cd >= inflate_cells) { continue; }
-    for (int i = 0; i < 4; ++i) {
-      const int nx = c.first + dx4[i];
-      const int ny = c.second + dy4[i];
-      if (nx < 0 || nx >= static_cast<int>(width) ||
-          ny < 0 || ny >= static_cast<int>(height)) { continue; }
-      float & target = dist[static_cast<size_t>(ny) * width + nx];
-      if (cd + 1.0f < target) {
-        target = cd + 1.0f;
-        q.push({nx, ny});
-      }
-    }
-  }
+  const std::vector<float> dist = core::euclideanDistanceCells(lethal_mask, width, height);
 
   const float inv = 1.0f / std::max(1, inflate_cells - inscribed_cells);
   for (size_t i = 0; i < n; ++i) {
