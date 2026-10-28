@@ -2993,7 +2993,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       scan_cells.assign(static_cast<size_t>(w) * h, 0);
       // 按**米**膨胀 (5cm 物理半径), 不能按格写死 3x3: res=0.05 时每点扩 0.15m,
       // res=0.10 时就是 0.30m —— 0.8m 门洞两侧各被吃掉 0.15m, 直接过不去。
-      const int scan_dilate = std::max(0, static_cast<int>(std::lround(0.05 / res)));
+      // 用 floor 而不是 round: res=0.1 时 0.05/0.1=0.5 会被 round 成 1 格 (0.10m),
+      // 又回到"按格放大"的老问题; floor 才是"最多扩到 5cm 半径"。
+      const int scan_dilate = std::max(0, static_cast<int>(std::floor(0.05 / res)));
       for (const auto & pt : laser_points_) {
         const int lx = static_cast<int>((pt.x - ox) / res);
         const int ly = static_cast<int>((pt.y - oy) / res);
@@ -4064,6 +4066,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     last_slam_info_stamp_ = ros::Time::now();
     last_slam_status_ = msg->location_status;
     last_slam_matching_ = msg->matching_degree;
+    // SlamInfo.slam_state: 0=MAPPING / 1=LOCALIZATION / 2=ERROR。
+    // 用来区分"没有定位(建图)"与"定位中/定位退化": 只凭 health/status 无法区分
+    // (建图模式下 LocalizationState 的 health 恒为 INIT)，以前按状态停车会永久停住。
+    last_slam_pipeline_mode_ = msg->slam_state;
   }
 
   void localizationStateCallback(
@@ -4303,6 +4309,27 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
           safety_stop_since_ = now;
         } else if ((now - safety_stop_since_).toSec() > safety_stop_timeout_) {
           safety_stop_since_ = ros::Time();
+          // 定位质量差的时候不要进恢复: 安全层是拿"当前位姿"把 /scan 换到 map 系的,
+          // 位姿偏 20~30cm 时真墙会落到地图的空白处 -> 幻影障碍 -> 停 -> 恢复也改不了
+          // 位姿 -> 预算烧完直接 FAILED_SAFETY_STOP (实测 matching=0.635 那次就是这样,
+          // 而 matching>=0.78 的两次都是 3/3)。这里改为"保持停车等定位恢复"。
+          // matching==0 表示根本没有定位 (纯建图), 不能算退化 —— 否则建图模式会永远停住。
+          // 只在 LOCALIZATION 模式判: MAPPING 下 health 恒 INIT / matching 恒 0,
+          // 按状态停车会让建图模式永久停住 (本轮回归前踩过一次)。
+          const bool loc_fresh = !last_slam_info_stamp_.isZero() &&
+            (now - last_slam_info_stamp_).toSec() <= slam_info_timeout_;
+          const bool loc_degraded = loc_fresh && last_slam_pipeline_mode_ == 1 &&
+            (last_slam_status_ != 0 ||
+             (last_slam_matching_ > 0.0 && last_slam_matching_ < slam_degrade_matching_));
+          if (loc_degraded) {
+            ROS_WARN_THROTTLE(2.0,
+              "[nav] safety stop while localization degraded (matching=%.2f < %.2f): "
+              "hold and wait for localization instead of recovery",
+              last_slam_matching_, slam_degrade_matching_);
+            publishCommand(geometry_msgs::Twist());
+            setGoalStatus("WAITING_LOC");
+            return;
+          }
           ROS_WARN("[rosiwit_navigation_ros1] safety stop %.1fs, start recovery",
                    safety_stop_timeout_);
           if (startRecovery()) { return; }
@@ -4920,6 +4947,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   int rot_dir_ = 0;   // 旋转方向锁存 (避免 ±π 附近左右摆)
   ros::Time last_slam_info_stamp_;
   int last_slam_status_ = -1;
+  int last_slam_pipeline_mode_ = -1;   // SlamInfo.slam_state: 0=MAPPING 1=LOCALIZATION 2=ERROR
   double last_slam_matching_ = 1.0;
   double slam_info_timeout_ = 2.0;
   double slam_degrade_matching_ = 0.65;
