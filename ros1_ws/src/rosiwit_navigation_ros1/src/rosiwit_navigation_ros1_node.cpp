@@ -3574,6 +3574,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
     ++recovery_attempts_;
     recovery_started_ = ros::Time::now();
+    recovery_start_pose_ = toCorePose(current_pose_);
     planning_active_ = false;
     ++plan_generation_;
     if (async_planner_) { async_planner_->cancel(); }
@@ -3731,10 +3732,18 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // came from /goal_pose or the RobotNaviCmdAction interface.  NAVIGATE goals
     // both carry goal_pose_; FOLLOW_PATH re-enters the path follower.
     const core::ActionKind kind = action_task_.kind();
+    // 恢复成功: 让任务状态机重新计时并解除可能已锁存的 FAILED_STUCK
+    // (update() 对非 RUNNING 是直接返回, 不清就会永久"判卡死 -> 恢复"循环)。
+    const core::Pose2D now_pose = toCorePose(current_pose_);
+    action_task_.noteMotion(now_pose, ros::Time::now().toSec());
+    // 预算只在"真的换了个位置"时清零: 逃逸本身是 0.4 m, 所以 >=0.5 m 才算进展。
+    // 否则原地打转 (恢复->判卡死->恢复) 会无限循环而不是如实报失败。
+    const double moved = std::hypot(now_pose.x - recovery_start_pose_.x,
+                                    now_pose.y - recovery_start_pose_.y);
+    if (!recovery_started_.isZero() && moved >= kRecoveryProgressDistance) {
+      recovery_attempts_ = 0;
+    }
     resetRecovery();
-    // 恢复成功 = 已经脱困/有进展: 预算清零, 否则同一目标里"两次恢复用完"之后
-    // 任何一次 safety stop 都会直接 FAILED_SAFETY_STOP。
-    recovery_attempts_ = 0;
     if (task_active_ && kind == core::ActionKind::FOLLOW_PATH) {
       startActionFollowPath();
       return;
@@ -3750,6 +3759,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   {
     if (recovery_stage_ == RecoveryStage::NONE) return;
     const ros::Time now = ros::Time::now();
+    // 恢复期间的倒车/原地转也是"在动": 明确告诉任务状态机, 否则卡死看门狗
+    // 会把恢复耗时算成"无进展", 恢复一结束就判 FAILED_STUCK。
+    if (task_active_ && !last_odom_stamp_.isZero()) {
+      action_task_.noteMotion(toCorePose(current_pose_), now.toSec());
+    }
     if (recovery_stage_ == RecoveryStage::CLEAR) {
       if (recovery_clear_costmaps_) { clearRecoveryCostmaps(); }
       recovery_spin_target_ = normalizeAngle(
@@ -4845,6 +4859,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   int laser_filter_window_ = 2;
   bool action_interface_active_ = false;
   ros::Time recovery_started_;
+  core::Pose2D recovery_start_pose_;   // 本轮恢复开始时的位姿 (判断是否真有进展)
+  // 逃逸动作本身是 0.4 m: 超过 0.5 m 说明确实换了位置, 而不是原地打转.
+  static constexpr double kRecoveryProgressDistance = 0.5;
 
   // ---- 动态覆盖清洁 ----
   bool coverage_active_ = false;

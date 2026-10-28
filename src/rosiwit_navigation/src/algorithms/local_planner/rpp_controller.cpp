@@ -304,26 +304,24 @@ core::VelocityCommand RppController::computeVelocityCommand(
   const double w = std::max(last_w_ - max_aw_ * 0.1,
                             std::min(last_w_ + max_aw_ * 0.1, w_des));
 
-  // footprint 扫掠检查: 纯跟踪按 0.5m 前视点走, 拐弯会切内角 —— 实测门洞
-  // (0.8m 门洞 / 0.66m 车体, 只剩 7cm/侧) 的横向偏差会做到 5~10cm,
-  // 于是门框进了安全层的停止区 -> 停 -> 恢复也改不了横向偏差 -> 循环到超时。
-  // 这里沿**即将执行的指令弧**检查 footprint 采样点: 只在真的会撞时降速,
-  // 不改变跟踪律本身 (w 继续朝路径收拢)。
-  double v_out = v;
+  // footprint 扫掠检查 —— **只观测, 不动作**。
+  // 曾经的实现按"弧上安全比例"降 v: 实测在贴墙/门洞处 scale 会掉到 0.15~0.35,
+  // 而本控制器的 w 与 v 成正比 (w_ff = 2*v*sin(e)/L, 修正项 0.8*e_y*v), 于是
+  // v→0 时 w 也→0: 车既不前进也不转向, 10s 后被 ActionTask 判 FAILED_STUCK
+  // (simulation.yaml movebase_stuck_timeout=10), 表现为"完全走不动"。
+  // 而且"减速"并不能解决切内角 (那是前视点几何问题), 所以这里只保留度量,
+  // 供现场判断门洞段的切角程度: [RPPClr] scale 越小说明指令弧越贴障碍。
   const double clr = arcClearanceScale(pose, v, w);
   if (clr < 1.0) {
-    v_out = v * std::max(0.0, clr - 0.15);   // 留一档余量
-    if (std::fabs(v_out) < 0.02) v_out = 0.0;
-    // 前 5 次一定打印 (确认检查真的在工作), 之后每 20 次一条
     const int n = ++clr_probe_;
     if (n <= 5 || n % 20 == 0) {
-      std::cout << "[RPPClr] arc blocked: n=" << n << " scale=" << clr << " v " << v
-                << " -> " << v_out << " w=" << w << std::endl;
+      std::cout << "[RPPClr] arc tight: n=" << n << " scale=" << clr
+                << " v=" << v << " w=" << w << " (仅观测, 不降速)" << std::endl;
     }
   }
-  last_v_ = v_out;
+  last_v_ = v;
   last_w_ = w;
-  return {v_out, 0.0, w};
+  return {v, 0.0, w};
 }
 
 bool RppController::isGoalReached(const core::Pose2D & pose) const

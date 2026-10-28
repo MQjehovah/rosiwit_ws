@@ -73,6 +73,13 @@ public:
 
   void reset();
 
+  /// 恢复动作 (倒车/原地转/清代价地图等待) 期间上层不走 update(), 但车确实在动:
+  /// 用一个显式入口把"刚动过"告诉状态机, 否则卡死看门狗会把恢复期间的时间也算成
+  /// "无进展", 恢复一结束就立刻 FAILED_STUCK。
+  /// 同时解除已锁存的 FAILED_STUCK: 恢复成功 = 还有戏, 必须重新进入 RUNNING,
+  /// 否则 update() 会永远返回 FAILED_STUCK (它是终态), 形成"恢复 -> 判卡死 -> 恢复"死循环。
+  void noteMotion(const Pose2D & pose, double now);
+
   ActionKind kind() const { return command_.kind; }
   ActionTaskStatus status() const { return status_; }
   bool active() const { return status_ == ActionTaskStatus::RUNNING; }

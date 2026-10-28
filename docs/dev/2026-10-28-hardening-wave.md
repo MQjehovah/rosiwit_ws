@@ -55,7 +55,28 @@
 | 26 | 覆盖率 `hasUncoveredReachable`（全图 BFS）在 20 Hz 控制环里跑 | 缓存 0.5 s 或车位移动 >0.15 m 才重算（"不可达"处理本身有秒级超时兜底） |
 | 27 | `HEALTH_INIT` 被当成"可继续行驶"（与 TRACKING 等价） | **尝试后回退**：改成"发零速 + `WAITING_LOC`"后，同路线 3/3 全部 `TIMEOUT:WAITING_LOC` —— `last_slam_status_` 被**两个**回调写（`/slam/info` 的 `location_status` 与 `LocalizationState` 的 `health`，语义不同），运行中会出现 `location_status=1` 而 `health=0(TRACKING)` 的组合。要收这个口子必须**先统一状态来源**（见"未做"） |
 | 28 | 核心 13 个 `test_*.cpp` 只在 STANDALONE 构建里跑，`catkin_make run_tests` 看不到；且因 PCL 1.8/gtest 1.8 差异**从未编译过** | 先接入与本次改动直接相关的 2 个（`test_map_store` / `test_pcd_map_manager`），修 `PointXYZINormal(x,y,z)`、`INSTANTIATE_TEST_CASE_P`、`TempDir`、补 `main()`，并新增 3 个针对性用例 |
-| 29 | `rpp` 只按 0.5 m 前视点跟踪，`rpp_controller.cpp` 里**没有任何** footprint/costmap/clearance 代码 → 配置的 `footprint_aware_control: true` 对它无效；门洞拐弯切内角，横向偏差做到 5~10 cm（0.8 m 门洞只剩 5.5 cm 余量）→ 门框进停止区 → 停 → 恢复改不了偏差 → 循环到超时 | 声明 `supportsFootprint()`（节点本来就会把**未膨胀** raw 层注入 footprint-aware 控制器）+ 新增 `arcClearanceScale()`：沿指令弧积分位姿、把 footprint 采样点（边框等分 + 内部栅格）打到 raw 栅格，命中 `kCostLethal` 就按比例降 v（w 继续朝路径收拢）；`setLocalCostmap` 改 shared_ptr 换指针消除跨线程 vector 赋值 |
+| 29 | `rpp` 只按 0.5 m 前视点跟踪，`rpp_controller.cpp` 里**没有任何** footprint/costmap/clearance 代码 → 配置的 `footprint_aware_control: true` 对它无效 | 声明 `supportsFootprint()`（节点本来就会把**未膨胀** raw 层注入 footprint-aware 控制器）+ `arcClearanceScale()`：沿指令弧积分位姿、把 footprint 采样点（边框等分 + 内部栅格）打到 raw 栅格。`setLocalCostmap` 改 shared_ptr 换指针消除跨线程 vector 赋值 |
+| 30 | **按 #29 的度量去"按比例降 v"会导致完全走不动**（见下） | 弧线检查**降级为只观测**（`[RPPClr] arc tight: scale=..`），不改变指令 |
+
+#### #30 详情：为什么"降速"变成了"停死"
+
+实测（同一台车、贴着 5 cm 间隙的墙时，用 `local_costmap` 里 100 的格子复现控制器判定）：
+
+```
+v=0.30 w=0.00 -> scale=1.00        (直行不撞)
+v=0.20 w=0.30 -> scale=0.35 -> v_out=0.04
+v=0.10 w=0.60 -> scale=0.15 -> v_out=0.00
+```
+
+rpp 的角速度与线速度成正比（`w_ff = 2*v*sin(e_theta)/L`，修正项 `0.8*e_y*v`），
+所以 `v→0` 时 `w` 也→0：车既不前进也不转向，**姿态完全冻结**。
+`simulation.yaml` 里 `movebase_stuck_timeout: 10.0`，10 s 后 ActionTask 判 `FAILED_STUCK`。
+而 `FAILED_STUCK` 是**终态**（`update()` 见到非 RUNNING 直接返回），`finishRecovery()`
+又只重置了 nav 的 recovery 状态、没有重置任务状态 → 于是
+`恢复(转60°/倒0.4m) -> 判卡死 -> 恢复 ...` 无限循环，表现就是"车在原地打转/不动"。
+
+顺带修正一条此前的判断：门洞 6/6 通过**不能**归因于 #29 的降速（6 次里 4 次 `[RPPClr]`
+一次都没触发），更可能是运行间波动。门洞切内角的正解是"前视点几何"，不是减速。
 
 ## 验证
 
@@ -109,7 +130,10 @@ smoke_legacy.sh: 与改动前完全一致 (PASS=5 FAIL=4 SKIP=3)
 
 ## 仍未做（下一轮）
 
-1. `last_slam_status_` 有**两个**写入方（`/slam/info` 的 `location_status` 与
+1. 门洞切内角的正解是**前视点几何**：rpp 用固定 `L = max(0.25, 0.35 + 0.8*|v|)`，
+   贴墙段应在 `[RPPClr] scale < 1` 时缩短前视（跟线更紧）而不是降速。需要先在
+   真实门洞段量出侧向偏差，再决定是否改；`arcClearanceScale()` 已经把度量留好了。
+2. `last_slam_status_` 有**两个**写入方（`/slam/info` 的 `location_status` 与
    `LocalizationState` 的 `health`），语义不同且互相覆盖。统一之后才能把
    `HEALTH_INIT` 作为"不可行驶"条件（本轮尝试已回退，见 §五 #27）。
 2. `observations_` 无界（保存时按帧统计动态点，长时间建图内存线性增长）。

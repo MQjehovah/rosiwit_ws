@@ -46,6 +46,14 @@ void ActionTask::reset()
   progress_ = 0.0;
 }
 
+void ActionTask::noteMotion(const Pose2D & pose, double now)
+{
+  anchorProgress(pose, now);
+  if (status_ == ActionTaskStatus::FAILED_STUCK) {
+    status_ = ActionTaskStatus::RUNNING;
+  }
+}
+
 bool ActionTask::start(const ActionTaskCommand & command, const Pose2D & pose, double now)
 {
   reset();

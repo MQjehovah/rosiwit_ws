@@ -98,6 +98,13 @@ if(CATKIN_ENABLE_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include)
         target_link_libraries(test_safety_monitor rosiwit_navigation)
     endif()
+    # 任务状态机: 卡死看门狗 + noteMotion (恢复动作也算在动, 并解除 FAILED_STUCK 锁存)
+    catkin_add_gtest(test_action_task ${CORE_TEST_DIR}/test_action_task.cpp)
+    if(TARGET test_action_task)
+        target_include_directories(test_action_task PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include)
+        target_link_libraries(test_action_task rosiwit_navigation)
+    endif()
     catkin_add_gtest(test_velocity_shaper ${CORE_TEST_DIR}/test_velocity_shaper.cpp)
     if(TARGET test_velocity_shaper)
         target_include_directories(test_velocity_shaper PRIVATE

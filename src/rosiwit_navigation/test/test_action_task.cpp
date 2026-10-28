@@ -186,6 +186,31 @@ TEST(ActionTask, RotationCountsAsProgress)
   EXPECT_EQ(task.update(pose(0, 0, 0.5), 2.0, false, 0.0), ActionTaskStatus::RUNNING);
 }
 
+// 恢复动作 (不在 update() 里) 必须能把卡死计时清零, 并把已锁存的 FAILED_STUCK
+// 重新置回 RUNNING —— 否则 update() 永远返回终态, 恢复->判卡死->恢复 死循环。
+TEST(ActionTask, NoteMotionReArmsStuckWatchdog)
+{
+  ActionTask task;
+  ActionTaskConfig config = testConfig();
+  config.stuck_timeout = 2.0;
+  task.configure(config);
+
+  ActionTaskCommand command;
+  command.kind = ActionKind::NAVIGATE;
+  ASSERT_TRUE(task.start(command, pose(0, 0, 0), 0.0));
+  EXPECT_EQ(task.update(pose(0, 0, 0), 2.5, false, 0.0), ActionTaskStatus::FAILED_STUCK);
+
+  // 恢复动作 (倒车/原地转) 期间上层每拍调用 noteMotion
+  const Pose2D moved = pose(0.0, -0.4, 0.0);
+  task.noteMotion(moved, 3.0);
+  EXPECT_EQ(task.status(), ActionTaskStatus::RUNNING);
+
+  // 重新计时: 3.0s 之后 1.5s 内仍然 RUNNING (旧实现这里会立刻再返回 FAILED_STUCK)
+  EXPECT_EQ(task.update(moved, 4.5, false, 0.0), ActionTaskStatus::RUNNING);
+  // 继续静止到超时 -> 再次失败
+  EXPECT_EQ(task.update(moved, 5.5, false, 0.0), ActionTaskStatus::FAILED_STUCK);
+}
+
 TEST(ActionTask, ResetClearsState)
 {
   ActionTask task;
@@ -201,4 +226,10 @@ TEST(ActionTask, ResetClearsState)
   EXPECT_EQ(task.status(), ActionTaskStatus::IDLE);
   EXPECT_EQ(task.kind(), ActionKind::IDLE);
   EXPECT_DOUBLE_EQ(task.progress(), 0.0);
+}
+
+// catkin_add_gtest 只链 GTEST_LIBRARIES (不含 gtest_main)
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
 }
