@@ -155,32 +155,47 @@ void Ros1SlamInterface::publishMappingPose(const SlamOutput& out, bool have_out)
     if (!have_out) return;
 
     last_pose_stamp_ = out.pose.time;
-    curr_pose_.x = out.pose.trans.x();
-    curr_pose_.y = out.pose.trans.y();
-    curr_pose_.z = out.pose.trans.z();
-    curr_pose_.yaw = stdYawFromRot(out.pose.rot);
-    curr_pose_.q = Eigen::Quaterniond(out.pose.rot);
-    curr_pose_.q.normalize();
+    // curr_pose_ 由 tick 线程写、存图服务经 currentPoseSnapshot() 读 (持 pose_mu_);
+    // 写侧以前完全不加锁 -> 可能读到 (x,y,yaw) 与四元数不同源的撕裂值。
+    const double px = out.pose.trans.x();
+    const double py = out.pose.trans.y();
+    const double pz = out.pose.trans.z();
+    const double pyaw = stdYawFromRot(out.pose.rot);
+    Eigen::Quaterniond pq(out.pose.rot);
+    pq.normalize();
+    {
+        std::lock_guard<std::mutex> lk(pose_mu_);
+        curr_pose_.x = px;
+        curr_pose_.y = py;
+        curr_pose_.z = pz;
+        curr_pose_.yaw = pyaw;
+        curr_pose_.q = pq;
+    }
 
     geometry_msgs::PoseStamped ps;
     ps.header.frame_id = kMapFrame;
     ps.header.stamp = (out.pose.time > 0) ? ros::Time(out.pose.time) : ros::Time::now();
-    ps.pose.position.x = curr_pose_.x;
-    ps.pose.position.y = curr_pose_.y;
-    ps.pose.position.z = curr_pose_.z;
-    ps.pose.orientation.x = curr_pose_.q.x();
-    ps.pose.orientation.y = curr_pose_.q.y();
-    ps.pose.orientation.z = curr_pose_.q.z();
-    ps.pose.orientation.w = curr_pose_.q.w();
+    ps.pose.position.x = px;
+    ps.pose.position.y = py;
+    ps.pose.position.z = pz;
+    ps.pose.orientation.x = pq.x();
+    ps.pose.orientation.y = pq.y();
+    ps.pose.orientation.z = pq.z();
+    ps.pose.orientation.w = pq.w();
     pose_puber_.publish(ps);
 
     if (out.pose.time <= last_mapping_path_time_ + 1e-6) return;
     last_mapping_path_time_ = out.pose.time;
-    mapping_path_msg_.poses.push_back(ps);
-    if (mapping_path_msg_.poses.size() > kMaxMappingPathPoses) {
-        const size_t drop = kMaxMappingPathPoses / 10;
-        mapping_path_msg_.poses.erase(mapping_path_msg_.poses.begin(),
-                                      mapping_path_msg_.poses.begin() + drop);
+    {
+        // 发布线程按 1Hz 整条序列化; 这里 push_back/erase 会让 vector 扩容 ->
+        // 与 publish 并发时是 UB (畸形 Path 甚至崩溃)。
+        std::lock_guard<std::mutex> lk(path_mu_);
+        mapping_path_msg_.poses.push_back(ps);
+        if (mapping_path_msg_.poses.size() > kMaxMappingPathPoses) {
+            const size_t drop = kMaxMappingPathPoses / 10;
+            mapping_path_msg_.poses.erase(mapping_path_msg_.poses.begin(),
+                                          mapping_path_msg_.poses.begin() + drop);
+        }
     }
 }
 

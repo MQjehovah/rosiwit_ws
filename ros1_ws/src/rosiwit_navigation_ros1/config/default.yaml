@@ -80,7 +80,9 @@ footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.2
 #   footprint_aware_control: true
 #   max_accel_theta: 0.3
 # 报告: docs/superpowers/specs/2026-10-21-controller-footprint-ab-report.md
-footprint_aware_control: false
+# rpp 现在会声明 supportsFootprint() 并把车体轮廓用于"沿指令弧的扫掠检查"(只观测);
+# 打开后控制器收到的是**未膨胀**障碍层 (否则 0.62m 膨胀环会把门洞吃满)。
+footprint_aware_control: true
 footprint_sample_spacing: 0.05
 path_resample_step: 0.08
 inflation_radius: 0.62

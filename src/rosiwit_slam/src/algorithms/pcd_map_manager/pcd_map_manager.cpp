@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
@@ -238,9 +239,15 @@ bool PcdMapManager::saveMap(const std::string& name) {
         };
         for (const auto& ob : observations_) {
             if (!ob.cloud) continue;
+            // 每个**帧**对同一体素最多 +1。以前按点数累加: 同一帧里一个行人几十个点
+            // 就能越过 dynamic_min_views(=2), 语义("在 >=N 帧里出现过")完全失效。
+            std::unordered_set<int64_t> seen;
+            seen.reserve(ob.cloud->size() * 2 + 1);
             for (const auto& p : ob.cloud->points) {
                 if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-                uint8_t& h = hits[vkey(p.x, p.y, p.z)];
+                const int64_t k = vkey(p.x, p.y, p.z);
+                if (!seen.insert(k).second) continue;
+                uint8_t& h = hits[k];
                 if (h < 255) ++h;
             }
         }

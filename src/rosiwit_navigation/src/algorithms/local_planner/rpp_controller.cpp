@@ -253,7 +253,13 @@ core::VelocityCommand RppController::computeVelocityCommand(
   }
 
   // ---- TRACK: 弧长前视 + RPP 调速 ----
-  const double L = std::max(0.25, 0.35 + 0.8 * std::fabs(last_v_));
+  // 前视距离必须被配置的 min/max 夹住: 以前 L 只由速度决定, v=0.8 时是 0.99m,
+  // 比 yaml 里的 max_lookahead_distance(0.9) 还大, 改配置完全无效。
+  const double la_min = cfg_.min_lookahead_distance > 0.0
+      ? cfg_.min_lookahead_distance : 0.25;
+  const double la_max = cfg_.max_lookahead_distance > 0.0
+      ? std::max(cfg_.max_lookahead_distance, la_min) : 1e9;
+  const double L = std::min(std::max(0.35 + 0.8 * std::fabs(last_v_), la_min), la_max);
   const size_t la = lookaheadIndex(s_cur_ + L);
   const auto & ref = path_.points[la].pose;
   const double dx = ref.x - pose.x;
@@ -281,6 +287,10 @@ core::VelocityCommand RppController::computeVelocityCommand(
   const double reach = std::hypot(path_.points.back().pose.x - pose.x,
                                   path_.points.back().pose.y - pose.y);
   v_ref = std::min(v_ref, std::max(0.08, 0.9 * reach));         // 末段减速
+  // slow_down_distance: 进入该距离后按比例限速 (nav2 语义); 以前这个键没有任何消费点。
+  if (cfg_.slow_down_distance > 0.0 && reach < cfg_.slow_down_distance) {
+    v_ref = std::min(v_ref, max_vx_ * std::max(0.0, reach / cfg_.slow_down_distance));
+  }
 
   const double v_des = dir * v_ref;
   const double v = std::max(last_v_ - max_ax_ * 0.1,

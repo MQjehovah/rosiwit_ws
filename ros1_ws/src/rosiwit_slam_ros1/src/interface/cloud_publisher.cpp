@@ -134,14 +134,20 @@ void Ros1SlamInterface::publishMappingScan(const CloudType& world,
 }
 
 void Ros1SlamInterface::publishMappingPath() {
-    if (!path_puber_.getNumSubscribers() || mapping_path_msg_.poses.empty()) return;
-    mapping_path_msg_.header.frame_id = kMapFrame;
+    if (!path_puber_.getNumSubscribers()) return;
     // 整条 Path 重发非常贵 (O(轨迹长度))；10Hz 调用只保留 1Hz 实际发送。
     const ros::Time now = ros::Time::now();
     if (!last_mapping_path_pub_.isZero() &&
         (now - last_mapping_path_pub_).toSec() < 1.0) return;
+    nav_msgs::Path msg;
+    {
+        std::lock_guard<std::mutex> lk(path_mu_);
+        if (mapping_path_msg_.poses.empty()) return;
+        mapping_path_msg_.header.frame_id = kMapFrame;
+        msg = mapping_path_msg_;   // 锁内拷贝, 锁外序列化
+    }
     last_mapping_path_pub_ = now;
-    path_puber_.publish(mapping_path_msg_);   // 整条重发 (legacy.cpp:885-887)
+    path_puber_.publish(msg);   // 整条重发 (legacy.cpp:885-887)
 }
 
 void Ros1SlamInterface::publishRealtimeGridMap() {

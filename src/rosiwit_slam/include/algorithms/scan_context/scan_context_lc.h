@@ -21,6 +21,7 @@ public:
                 std::string& matched_kf_id) override;
     bool saveDatabase(const std::string& path) override;
     bool getKeyframes(std::vector<KeyFrame>& out) override;
+    void updatePoses(const std::vector<PoseStamped>& corrected) override;
 
 private:
     struct KeyFrameRecord {

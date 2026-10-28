@@ -78,7 +78,7 @@ void Ros1SlamInterface::setModeFromConfig(SlamMode m) {
     }
 }
 
-void Ros1SlamInterface::resetCoreAndCaches() {
+bool Ros1SlamInterface::resetCoreAndCaches() {
     // **默认开启** (与旧实现语义一致): 旧 xz_3d_slam 每次切建图都 DELETE_PTR(mapping_ptr_)
     // 再 new, 所以上一轮绝不残留。我们单实例, 只能显式重建内部模块达到同样效果。
     //
@@ -92,11 +92,16 @@ void Ros1SlamInterface::resetCoreAndCaches() {
     if (!reset_on_mode_switch_) {
         std::cout << "[ros1_slam] reset_on_mode_switch=false -> 保留上一轮地图 (会有残留)"
                   << std::endl;
-        return;
+        return true;
     }
     std::cout << "[ros1_slam] reset_on_mode_switch=true -> rebuilding core (清空上一轮地图)"
               << std::endl;
-    engine_.resetCore();   // 注意: 这里必须是 engine_.resetCore(), 不是本函数自己
+    // 注意: 这里必须是 engine_.resetCore(), 不是本函数自己
+    const bool core_ok = engine_.resetCore();
+    if (!core_ok) {
+        std::cout << "[ros1_slam] resetCore FAILED (core busy / unsupported) -> 保留旧 mode, "
+                     "不要把本次模式切换报成成功" << std::endl;
+    }
     // 本层缓存一并复位 (见头文件注释)
     realtime_grid_.clear();
     clearStaticMap();

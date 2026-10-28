@@ -206,6 +206,25 @@ bool ScanContextLoopClosure::saveDatabase(const std::string& path) {
     return ok;
 }
 
+void ScanContextLoopClosure::updatePoses(const std::vector<PoseStamped>& corrected)
+{
+    if (corrected.empty()) return;
+    std::lock_guard<std::mutex> lk(m_mutex);
+    // 优先按时间戳匹配 (与 map_manager 同一约定), 时间对不上且数量相等时按顺序回填。
+    bool by_time = true;
+    for (const auto& c : corrected) {
+        bool hit = false;
+        for (auto& rec : m_keyframes) {
+            if (std::fabs(rec.pose.time - c.time) < 1e-3) { rec.pose = c; hit = true; break; }
+        }
+        if (!hit) { by_time = false; break; }
+    }
+    if (by_time) { return; }
+    if (corrected.size() == m_keyframes.size()) {
+        for (size_t i = 0; i < m_keyframes.size(); ++i) { m_keyframes[i].pose = corrected[i]; }
+    }
+}
+
 bool ScanContextLoopClosure::getKeyframes(std::vector<KeyFrame>& out) {
     std::lock_guard<std::mutex> lock(m_mutex);
     out.clear();

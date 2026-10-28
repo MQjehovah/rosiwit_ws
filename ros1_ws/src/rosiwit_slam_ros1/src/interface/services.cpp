@@ -83,9 +83,9 @@ bool Ros1SlamInterface::handleModeSwitch(
         // 旧 switchToLocalization (legacy.cpp:2060-2115): 先置 FREE, 再调 /set_detect_mode(0),
         // **要求成功** —— 失败就 result=0 + return false。
         // 旧实现同时 DELETE_PTR 掉了建图/定位实例 -> 我们在这里也重建核心(丢上一轮地图)。
-        resetCoreAndCaches();
+        const bool rebuilt = resetCoreAndCaches();
         setModeFromConfig(SlamMode::FREE);
-        const bool ok = callSetDetectMode(0);
+        const bool ok = rebuilt && callSetDetectMode(0);
         res.result = ok ? 1 : 0;
         return ok;
     }
@@ -95,12 +95,13 @@ bool Ros1SlamInterface::handleModeSwitch(
         // 随后 run() -> warning_code_start_task_ = true (184), 即重新开启抑制窗口。
         // **关键**: 旧实现先 DELETE_PTR(mapping_ptr_) 再 new 一个全新实例, 所以退出建图再
         // 进建图**不会残留上一轮地图**; 我们单核心实例, 必须显式重建。
-        resetCoreAndCaches();
+        const bool rebuilt = resetCoreAndCaches();
         callSetDetectMode(1);
         setModeFromConfig(SlamMode::MAPPING);
         setWarningSuppression(true);
-        res.result = 1;
-        return true;
+        // 核心没重建成功时不能对外报 MAPPING: 否则"新一帧在旧图上配准"会静默发生。
+        res.result = rebuilt ? 1 : 0;
+        return rebuilt;
     }
     return false;   // 非法 mode: result 保持默认 0
 }

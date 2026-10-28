@@ -173,6 +173,9 @@ void BackendWorker::optimizeAndPublishAnchor() {
         std::vector<PoseStamped> corrected;
         if (m_map_mgr && m_backend->getUpdatedPoses(corrected) && !corrected.empty()) {
             m_map_mgr->onBackendOptimized(corrected);
+            // 同一批修正位姿也要回写给 loop closure: 导出 xzmap 的关键帧位姿来自它,
+            // 不回写就会和已修正的 map.pcd 不一致。
+            if (m_loop) { m_loop->updatePoses(corrected); }
             PoseStamped anchor;
             if (m_map_mgr->getCorrectionAnchor(anchor) && m_anchor) {
                 std::lock_guard<std::mutex> lk(m_anchor->mu);
@@ -722,6 +725,9 @@ bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
         m_backend_worker.reset();
         std::cout << "[SlamPipeline] backend worker stopped (detached, no join)" << std::endl;
     }
+
+    // 2a) 丢掉同步层缓存: 旧 IMU/雷达帧不能进新一轮的前端初始化
+    clearBuffers();
 
     // 2) 丢掉所有模块 + 锚点状态 (= "删掉建图实例")
     m_frontend.reset();

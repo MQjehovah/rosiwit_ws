@@ -333,7 +333,7 @@ private:
 
     rosiwit_common::IExecutor* executor_ = nullptr;
 
-    std::mutex core_mu_;                 // 输入热路径 + 指针读取 (与 FE 串行)
+    mutable std::mutex core_mu_;         // 输入热路径 + 指针读取 (与 FE 串行)
     std::timed_mutex core_excl_mu_;      // 结构操作 (重建/装载/改模式/导出), 可等有超时
     std::atomic<uint64_t> core_generation_{0};   // 每次 resetCore 成功 +1
     rosiwit_common::Channel<InputItem> input_{kInputCapacity,

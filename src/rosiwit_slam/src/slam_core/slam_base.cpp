@@ -4,6 +4,15 @@
 
 namespace rosiwit_slam {
 
+void SlamBase::clearBuffers()
+{
+    std::lock_guard<std::mutex> lk(m_buf_mutex);
+    m_imu_buf.clear();
+    m_lidar_buf.clear();
+    m_pending = SyncPackage();
+    m_lidar_pushed = false;
+}
+
 void SlamBase::onImu(const IMUSample& s) {
     std::lock_guard<std::mutex> lock(m_buf_mutex);
     if (s.time >= 0 && !m_imu_buf.empty() && s.time < m_imu_buf.back().time) {

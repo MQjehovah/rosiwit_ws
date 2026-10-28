@@ -235,16 +235,23 @@ bool SlamAlgorithm::getCoreGlobalMap(PointVec& out) {
 }
 
 bool SlamAlgorithm::getRealtimeGrid(double resolution, GridInfo& out) {
+    // 建栅格是"整图结构读" (秒级): 用 core_excl_mu_ 的 try_lock, 重建/存图期间直接跳过
+    // 本周期, 既不会读到被 resetCore 换掉的实例, 也不会把输入热路径堵住几秒。
+    std::unique_lock<std::timed_mutex> excl(core_excl_mu_, std::try_to_lock);
+    if (!excl.owns_lock()) { return false; }
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return false;
     return algo_raw_->getRealtimeGrid(resolution, out);
 }
 
 bool SlamAlgorithm::getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov) const {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return false;
     return algo_raw_->getPoseCov(out, cov);
 }
 
 double SlamAlgorithm::getMatchingDegree() const {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     return algo_raw_ ? algo_raw_->getMatchingDegree() : 0.0;
 }
 
@@ -269,10 +276,12 @@ bool SlamAlgorithm::resetCore() {
 }
 
 std::string SlamAlgorithm::pipelineMode() const {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     return algo_raw_ ? algo_raw_->getPipelineMode() : std::string();
 }
 
 rosiwit_slam::ILocalization::Status SlamAlgorithm::localizationStatus() const {
+    std::lock_guard<std::mutex> core_lk(core_mu_);
     return algo_raw_ ? algo_raw_->localizationStatus() : rosiwit_slam::ILocalization::LOST;
 }
 

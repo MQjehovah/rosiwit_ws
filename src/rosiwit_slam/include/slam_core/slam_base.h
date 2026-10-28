@@ -23,6 +23,11 @@ public:
     // 测试/轮询入口:尝试同步一帧,成功则调用 onSyncedPackage 并 emitOutput
     bool tryPopAndProcess();
 
+    /// 丢弃已缓存的 IMU/LiDAR/待同步包。切模式重建前端时必须调用: 否则新一轮建图的
+    /// 前端会拿**上一轮**最多 2 万条旧 IMU 去估重力方向/陀螺零偏 (2019-…实机复现为
+    /// "进建图先看到残留、地图整体倾斜")。
+    void clearBuffers();
+
 protected:
     // 子类实现:处理一帧已同步数据,产出输出。返回 false 表示尚未产出
     virtual bool onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) = 0;

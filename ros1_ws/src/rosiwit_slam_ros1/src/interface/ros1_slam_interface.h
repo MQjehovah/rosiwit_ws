@@ -232,7 +232,8 @@ private:
     /// 核心清空后 worker 取不到新栅格就会继续发旧的那张 -> 表现为"切回来还有残留"。
     /// ⚠ **默认关闭**: 实测重建会让建图停摆 (见 .cpp 里的注释), 用
     /// `_reset_on_mode_switch:=true` 打开以便复现/排查。
-    void resetCoreAndCaches();
+    /// 返回 false 表示"核心没重建成功": 调用方必须把服务结果置 0, 不能对外报成功。
+    bool resetCoreAndCaches();
 
     // ---- [T9] 动态 map->odom TF ----
     void sendTransform();   // legacy.cpp:1899-1936, 更新并广播
@@ -306,6 +307,7 @@ private:
         curr_map_name_ = name;
     }
     nav_msgs::Path mapping_path_msg_;               // 建图轨迹 (累积后整条重发)
+    mutable std::mutex path_mu_;                    // mapping_path_msg_ 跨线程 (tick 写 / 发布读)
     double last_mapping_path_time_ = -1.0;          // 轨迹去重: 同一个核心位姿不重复入队
     ros::Time last_mapping_path_pub_;               // 轨迹整条重发节流 (10Hz -> 1Hz)
     ros::Time last_location_info_pub_;              // slam/info 节流 (最高 10Hz)

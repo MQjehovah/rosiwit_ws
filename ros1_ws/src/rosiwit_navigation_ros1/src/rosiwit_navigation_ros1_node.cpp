@@ -13,6 +13,7 @@
 #include <ros/ros.h>
 
 #include <deque>
+#include <map>
 
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/OccupancyGrid.h>
@@ -1168,6 +1169,24 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 只有成功转换到 map 的扫描才算 fresh; 否则 safety/局部 costmap
     // 会误以为仍有实时数据.
     last_scan_stamp_ = ros::Time::now();
+    last_scan_msg_stamp_ = msg->header.stamp;
+    // 一次性自检: 停止区阈值是**绝对点数**, 但每束雷达在 0.95m 处能采到的点数
+    // 取决于 angle_increment。注释里的"0.8m 处 10cm 障碍约 20 点"只在 0.36°/束成立;
+    // 换成 0.5~1°/束的雷达后, 细障碍永远凑不够点数 -> 安全层静默漏检。
+    if (!scan_geom_logged_ && msg->angle_increment > 1e-6f) {
+      scan_geom_logged_ = true;
+      const double far = 0.95;   // 前向停止区远端
+      const double expect = 0.05 / (far * static_cast<double>(msg->angle_increment));
+      ROS_INFO("[safety] scan angle_increment=%.4f rad (%.2f deg): 5cm 障碍在 %.2fm "
+               "处约 %.1f 点; 阈值 stop=%d slow=%d (含义: >N 点判停)",
+               msg->angle_increment, msg->angle_increment * 57.2957795, far, expect,
+               safety_stop_max_points_, safety_slowdown_max_points_);
+      if (expect < safety_stop_max_points_) {
+        ROS_WARN("[safety] 角分辨率不足: 5cm 障碍在该距离只有 %.1f 点, 而阈值是 %d 点 "
+                 "-> 细障碍/区远端会静默漏检 (请按现场雷达降 safety_stop_max_points)",
+                 expect, safety_stop_max_points_);
+      }
+    }
 
     // /scan 与 3D 前端使用同一套 base 系车体包围盒自过滤.
     geometry_msgs::TransformStamped base_tf;
@@ -1444,12 +1463,14 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
   bool navStopCallback(std_srvs::Trigger::Request &, std_srvs::Trigger::Response & res)
   {
+    // 空闲期调 /nav_stop 不应覆盖上一次的 FAILED_* 结论
+    const bool was_active = task_active_ || is_navigating_ || planning_active_;
     stopNavigation();
     if (task_active_) {
       clearActionState();
       if (mb_) { mb_->preempted(); }
     }
-    setGoalStatus("STOPPED");
+    if (was_active) { setGoalStatus("STOPPED"); }
     res.success = true;
     res.message = "navigation stopped";
     return true;
@@ -1584,8 +1605,38 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   void movebaseCancelCallback()
   {
     ROS_INFO("[movebase_iface] 取消当前导航");
+    // 以前这里不写 /goal_status: 取消后状态永远停在 ACCEPTED, 上位机按它判状态会误判。
+    setGoalStatus("CANCELED");
     stopNavigation();
     clearActionState();
+  }
+
+  // ---- 位姿历史: 安全层要把"扫描时刻"的点云换到 base 系 ----
+  struct PoseSample { ros::Time t; double x, y, yaw; };
+  std::deque<PoseSample> pose_hist_;
+  bool scan_geom_logged_ = false;
+  ros::Time last_scan_msg_stamp_;   // /scan 的 header.stamp (安全层对齐用)
+
+  void recordPoseSample(const ros::Time & t)
+  {
+    PoseSample s;
+    s.t = t;
+    s.x = current_pose_.pose.position.x;
+    s.y = current_pose_.pose.position.y;
+    s.yaw = yawFromQuat(current_pose_.pose.orientation);
+    pose_hist_.push_back(s);
+    while (!pose_hist_.empty() && (t - pose_hist_.front().t).toSec() > 3.0) {
+      pose_hist_.pop_front();
+    }
+  }
+
+  /// 取 t 时刻(或之前最近)的位姿; 找不到返回 false。
+  bool poseAt(const ros::Time & t, double & x, double & y, double & yaw) const
+  {
+    for (auto it = pose_hist_.rbegin(); it != pose_hist_.rend(); ++it) {
+      if (it->t <= t) { x = it->x; y = it->y; yaw = it->yaw; return true; }
+    }
+    return false;
   }
 
   core::ActionTaskCommand toTaskCommand(const movebase::Decoded & decoded,
@@ -1637,12 +1688,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     if (!action_cmd_.valid || !action_cmd_.supported) {
       ROS_WARN("[movebase_iface] navi_cmd=%d 当前核心不支持或参数非法, 回 result=%d",
                goal.navi_cmd, action_cmd_.reject_result);
-      finishTask(action_cmd_.reject_result);
+      finishTask(action_cmd_.reject_result, "REJECTED");
       return;
     }
     if (action_cmd_.command == movebase::Command::CANCEL) {
       stopNavigation();
-      finishTask(movebase::RESULT_SUCCESS);
+      finishTask(movebase::RESULT_SUCCESS, "CANCELED");   // 结果码是老契约, 状态串要如实
       return;
     }
 
@@ -2922,7 +2973,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       (ros::Time::now() - last_scan_stamp_).toSec() <= safety_source_timeout_;
 
     core::ObstacleArray obstacles;
-    std::vector<std::vector<bool>> visited(h, std::vector<bool>(w, false));
+    // 1 字节/格; 以前是 vector<vector<bool>>(h 个 vector), 每次 updateCostmap 都会
+    // 分配 4M 个 vector 头 (上限 4M 格 ≈ 100MB+/次, 5Hz) —— 单线程 spinner 下正是
+    // 让 commandWatchdog 饿死的元凶之一。
+    std::vector<uint8_t> visited(static_cast<size_t>(w) * h, 0);
     const int step = std::max(1, static_cast<int>(0.3 / res));
     // 局部障碍聚类只允许在机器人附近的窗口内扩张. 以前 BFS 从窗口内的墙点
     // 出发会沿整张连通墙一路蔓延到全图 (310k 格), 再被 15Hz /scan 反复触发,
@@ -2968,38 +3022,59 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         const int mx = cx + dx;
         const int my = cy + dy;
         if (mx < 0 || mx >= static_cast<int>(w) || my < 0 || my >= static_cast<int>(h)) { continue; }
-        if (visited[my][mx]) { continue; }
+        if (visited[static_cast<size_t>(my) * w + mx]) { continue; }
         if (!isObstacleCell(mx, my)) { continue; }
 
         std::queue<std::pair<int, int>> cluster_q;
         cluster_q.push({mx, my});
-        visited[my][mx] = true;
-        double sum_x = 0.0, sum_y = 0.0;
-        int cnt = 0, min_x = mx, max_x = mx, min_y = my, max_y = my;
+        visited[static_cast<size_t>(my) * w + mx] = 1;
+        // 每个连通域再按 0.5m 分块, 每块一个小圆。
+        // 以前一个连通域只出一个"质心 + 半径=包围盒半对角"的圆: 6m 长的一整面墙
+        // 会变成 r≈3m 的巨圆, DWA 的 clearance = |p-obs| - r 直接变负 -> 候选全丢,
+        // 表现就是"实车用 dwa 时原地不动"。
+        const double kBlockM = 0.5;
+        const int block_cells = std::max(1, static_cast<int>(std::lround(kBlockM / res)));
+        struct BlockAcc { int x0 = 1 << 30, x1 = -1, y0 = 1 << 30, y1 = -1; };
+        std::map<std::pair<int, int>, BlockAcc> blocks;
         while (!cluster_q.empty()) {
           const std::pair<int, int> c = cluster_q.front(); cluster_q.pop();
-          sum_x += c.first; sum_y += c.second; ++cnt;
-          min_x = std::min(min_x, c.first); max_x = std::max(max_x, c.first);
-          min_y = std::min(min_y, c.second); max_y = std::max(max_y, c.second);
+          BlockAcc & acc = blocks[std::make_pair(c.first / block_cells, c.second / block_cells)];
+          acc.x0 = std::min(acc.x0, c.first); acc.x1 = std::max(acc.x1, c.first);
+          acc.y0 = std::min(acc.y0, c.second); acc.y1 = std::max(acc.y1, c.second);
           const int nx4[4] = {c.first - 1, c.first + 1, c.first, c.first};
           const int ny4[4] = {c.second, c.second, c.second - 1, c.second + 1};
           for (int i = 0; i < 4; ++i) {
             const int nx = nx4[i];
             const int ny = ny4[i];
             if (nx < 0 || nx >= static_cast<int>(w) || ny < 0 || ny >= static_cast<int>(h)) { continue; }
-            if (visited[ny][nx]) { continue; }
-            if (isObstacleCell(nx, ny)) { visited[ny][nx] = true; cluster_q.push({nx, ny}); }
+            if (visited[static_cast<size_t>(ny) * w + nx]) { continue; }
+            if (isObstacleCell(nx, ny)) { visited[static_cast<size_t>(ny) * w + nx] = 1; cluster_q.push({nx, ny}); }
           }
         }
 
-        core::Obstacle obs;
-        obs.x = ox + (sum_x / cnt + 0.5) * res;
-        obs.y = oy + (sum_y / cnt + 0.5) * res;
-        const double ww = (max_x - min_x + 1) * res;
-        const double hh = (max_y - min_y + 1) * res;
-        obs.radius = std::sqrt(ww * ww + hh * hh) * 0.5;
-        obstacles.push_back(obs);
+        for (const auto & kv : blocks) {
+          const BlockAcc & b = kv.second;
+          core::Obstacle obs;
+          obs.x = ox + (0.5 * (b.x0 + b.x1) + 0.5) * res;
+          obs.y = oy + (0.5 * (b.y0 + b.y1) + 0.5) * res;
+          const double ww = (b.x1 - b.x0 + 1) * res;
+          const double hh = (b.y1 - b.y0 + 1) * res;
+          obs.radius = 0.5 * std::hypot(ww, hh);
+          obstacles.push_back(obs);
+        }
       }
+    }
+    // 分块后数量可能上百: 只保留离车最近的 128 个, 避免 DWA 每采样 × 每障碍的
+    // 三重循环把 10Hz 控制环吃满。
+    const size_t kMaxObstacles = 128;
+    if (obstacles.size() > kMaxObstacles) {
+      std::sort(obstacles.begin(), obstacles.end(),
+                [rx, ry](const core::Obstacle & a, const core::Obstacle & b) {
+                  const double da = std::hypot(a.x - rx, a.y - ry) - a.radius;
+                  const double db = std::hypot(b.x - rx, b.y - ry) - b.radius;
+                  return da < db;
+                });
+      obstacles.resize(kMaxObstacles);
     }
     controller_strategy_->setObstacles(obstacles);
   }
@@ -3638,6 +3713,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // reverse-only Hybrid A* plan can back out of a dead end/start collision
     // while preserving the normal planner's forward policy.
     if (!(recovery_planner_ && !planner_costmap_.data.empty() && recovery_controller_)) {
+      // 恢复器不可用: 这一轮没有真正开始, 把刚消耗的预算退回去
+      --recovery_attempts_;
       return false;
     }
     // 先做 nav2 式系统级恢复: 清代价地图 -> 原地转 -> 等待,
@@ -3787,7 +3864,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 否则原地打转 (恢复->判卡死->恢复) 会无限循环而不是如实报失败。
     const double moved = std::hypot(now_pose.x - recovery_start_pose_.x,
                                     now_pose.y - recovery_start_pose_.y);
-    if (!recovery_started_.isZero() && moved >= kRecoveryProgressDistance) {
+    // 逃逸动作本身是 recovery_back_distance_ (仿真实测 0.4m): 只有明显超过它才算
+    // "真的换了位置"。阈值跟着配置走, 不再写死 0.5 (仿真 0.4 时永远清不了零)。
+    const double progress_needed = std::max(0.30, 1.25 * recovery_back_distance_);
+    if (!recovery_started_.isZero() && moved >= progress_needed) {
       recovery_attempts_ = 0;
     }
     resetRecovery();
@@ -4402,6 +4482,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       current_pose_.pose.position.y = tf.transform.translation.y;
       current_pose_.pose.position.z = tf.transform.translation.z;
       current_pose_.pose.orientation = tf.transform.rotation;
+      recordPoseSample(ros::Time::now());
       return true;
     } catch (tf2::TransformException & ex) {
       ROS_WARN_THROTTLE(2.0, "[rosiwit_navigation_ros1] tf error: %s", ex.what());
@@ -4469,13 +4550,25 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       return geometry_msgs::Twist();
     }
 
-    const double yaw = yawFromQuat(current_pose_.pose.orientation);
+    // 点云是 map 系、比控制拍早 50~150ms: 必须用**扫描时刻**的位姿换到 base 系。
+    // 用最新位姿会在转弯/旋转时把整个安全区相对点云转偏 (0.8rad/s × 100ms ≈ 4.6°,
+    // 在 0.95m 处 ≈ 7.6cm, 而前向停止区的横向余量只有 1.5cm)。
+    double px = current_pose_.pose.position.x;
+    double py = current_pose_.pose.position.y;
+    double pyaw = yawFromQuat(current_pose_.pose.orientation);
+    const ros::Time scan_t =
+      !last_scan_msg_stamp_.isZero() ? last_scan_msg_stamp_ : last_scan_stamp_;
+    if (!scan_t.isZero()) {
+      double sx = 0.0, sy2 = 0.0, syaw = 0.0;
+      if (poseAt(scan_t, sx, sy2, syaw)) { px = sx; py = sy2; pyaw = syaw; }
+    }
+    const double yaw = pyaw;
     const double cy = std::cos(yaw), sy = std::sin(yaw);
     std::vector<std::pair<double, double>> points;
     points.reserve(laser_points_.size());
     for (const auto & p : laser_points_) {
-      const double dx = p.x - current_pose_.pose.position.x;
-      const double dy = p.y - current_pose_.pose.position.y;
+      const double dx = p.x - px;
+      const double dy = p.y - py;
       const double bx = cy * dx + sy * dy;
       const double by = -sy * dx + cy * dy;
       if (bx * bx + by * by < safety_self_filter_radius_ * safety_self_filter_radius_) continue;
@@ -4547,8 +4640,23 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       ++plan_generation_;
       if (async_planner_) { async_planner_->cancel(); }
     }
-    geometry_msgs::Twist stop_cmd;
-    publishCommand(stop_cmd);
+    publishHardStop();
+  }
+
+  /// 取消/结束时的停车: **不能**走速度整形器 —— 整形器对"目标 0"也做加速度限幅
+  /// (0.8m/s 时单拍只降到 0.77), 而控制环接着就 return, 0.6s 内一条指令都不发,
+  /// 合计约 1.3s / 0.75m 才真停。这里直接把 0 发给底盘。
+  void publishHardStop()
+  {
+    velocity_shaper_.reset();
+    geometry_msgs::Twist z;
+    cmd_vel_pub_.publish(z);
+    if (mb_) { mb_->publishCmdVel(z); }
+    last_published_cmd_ = z;
+    last_published_nonzero_ = false;
+    last_cmd_stamp_ = ros::Time::now();
+    last_safety_scale_ = 1.0;
+    last_safety_hard_stop_ = false;
   }
 
   // ---- 类型转换 (ROS <-> core) ----
@@ -4915,8 +5023,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   bool action_interface_active_ = false;
   ros::Time recovery_started_;
   core::Pose2D recovery_start_pose_;   // 本轮恢复开始时的位姿 (判断是否真有进展)
-  // 逃逸动作本身是 0.4 m: 超过 0.5 m 说明确实换了位置, 而不是原地打转.
-  static constexpr double kRecoveryProgressDistance = 0.5;
+
 
   // ---- 动态覆盖清洁 ----
   bool coverage_active_ = false;
