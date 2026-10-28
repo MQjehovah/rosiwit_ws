@@ -68,3 +68,34 @@
 | `location_status=1 / health=0` 是矛盾值 | 两套枚举：`SlamInfo.location_status`(0=SUCCESS,1=RECOVERING,2=FAILED) 与 `LocalizationState.health`(0=INIT,1=TRACKING,2=DEGRADED,3=LOST)，0 的含义相反。这正是 `last_slam_status_` 被两个回调互相覆盖的根因 |
 | A* 的 safety 环写 99（可通行）与注释不符，应改 100 | 注释/代码是有意为之：写 100 会让贴墙起步的 A* 直接 `Start in obstacle`，而 A* 本来就是"贴墙也得出路"的兜底；本轮改为修"回退路径不平滑" |
 | `lookahead_distance` 在 rpp 里没被消费 = 死键 | 该键由 pure_pursuit/mppi 消费；rpp 用 min/max + 速度项，本轮已夹紧 |
+
+## 回归结果与"定位质量"的相关性（本轮最后一条修复的依据）
+
+同一路线（3 目标，180s/目标）多批次回归后，失败与定位质量强相关：
+
+| 批次 | run1 | run2 | run3 | 说明 |
+|---|---|---|---|---|
+| P0+P1+P2 后（第 1 次） | 0.776 → 3/3 | **0.635 → 2/3** | 0.940 → 3/3 | run2 目标 3 `FAILED_SAFETY_STOP` |
+| 加"退化保持(matching>0)" | **匹配 0/RECOVERING → 2/3** | 0.935 → 3/3 | 0.952 → 3/3 | run1 结束时 `location_status=1 / matching=0`，条件没覆盖 |
+| 改为"模式感知保持" | 0.940 → 3/3 | **mean 0.644 → 3/3（hold 触发 4 次）** | 0.941 → 3/3 | run2 定位最差却通过 |
+
+**机制（已排除"地图过期/真障碍"）**
+
+- 世界里目标区 `(-2.3..-1.0, -0.8..1.8)` **没有任何 model pose**（283 个 pose 全查过）；
+- 保存的地图在该区域也是全 free（最近墙 2.35 m）；
+- 但安全层 STOP 命中点全落在这片 free 区域，且聚类后集中在
+  `(-1.6,1.4) / (-1.6,-0.4) / (-2.0,-0.2)`。
+  → 位姿偏 20~30 cm 时，用"当前位姿"把 `/scan` 换到 map 系，真墙会落到地图空白处，
+  安全层看到幻影障碍 → 停 → 恢复动作改不了位姿 → 预算烧完 → `FAILED_SAFETY_STOP`。
+
+**修法**：记录 `SlamInfo.slam_state`（0=MAPPING / 1=LOCALIZATION / 2=ERROR）；安全停超过
+`safety_stop_timeout` 时，若处于 LOCALIZATION 且位姿不可信（`location_status != SUCCESS`
+或 `matching < slam_degrade_matching`），则保持停车 + `WAITING_LOC`，**不进恢复、不烧预算**；
+定位恢复（`relocalize_count` 变化触发 `onPoseJump` 作废旧规划）后自动继续。
+只在 LOCALIZATION 判 —— MAPPING 下 `health` 恒 INIT / `matching` 恒 0，按状态停车会让
+建图模式永久停住（本会话早前踩过 3/3 `TIMEOUT:WAITING_LOC`）。
+
+**验证**：最终 3 次回归，9/9 目标全部 SUCCEEDED；门洞段最小 footprint 间隙
+0.05 / 0.05 / 0.10 m（改前失败态是 0.000）；safety stop 0/4/0，恢复 0/1/0。
+其中定位最差的那次（mean matching 0.644，多次掉到 0）靠"退化保持"扛过去，
+而不是失败或空转到超时。
