@@ -96,6 +96,9 @@ mapping:
     # 保存地图时剔除"只在单帧出现"的点 (行人/门/反光等瞬态): 体素需在 >=N 帧
     # 观测里出现. 1=关闭. (mapping 保存路径)
     dynamic_min_views: 2
+    # 关键帧观测帧的点数上限 (长时建图防内存线性增长; 每点 48B)。
+    # 超出后丢最旧帧, 并自动跳过"多帧一致性动态点过滤" (避免误删老静态点)。
+    max_observation_points: 2000000
   backend:
     loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m)
     max_optimization_trans_m: 20 # 含新约束的单次优化最大平移修正

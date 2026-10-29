@@ -1023,6 +1023,29 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   // 启动自检: 把"生效配置"打出来, 并对非法/自相矛盾的组合报错.
   // 背景: 真机 yaml 写 hybrid_astar, 但代码默认 motion_profile=clean +
   // clean_planner=astar, 会静默覆盖 -> 真机实际跑 A*. 这类漂移必须启动就暴露.
+public:
+  ~RosiwitNavigationRos1Node()
+  {
+    // 规划/逃逸规划的 lambda 都捕获了 this: 关停时必须先等它们结束再析构,
+    // 否则正在跑的 plan() 回来会写已释放的成员 (UAF)。先 cancel 再有限等待。
+    if (async_planner_) { async_planner_->cancel(); }
+    if (async_plan_future_.valid()) {
+      if (async_plan_future_.wait_for(std::chrono::seconds(3)) !=
+          std::future_status::ready) {
+        ROS_WARN("[nav] shutdown: planner still running after 3s (will wait)");
+      }
+      try { (void)async_plan_future_.get(); } catch (...) {}
+    }
+    if (recovery_plan_future_.valid()) {
+      try { (void)recovery_plan_future_.get(); } catch (...) {}
+    }
+    // graveyard 里的 future 由 deque 析构等待 (std::async 语义), 这里先显式取一遍
+    for (auto & f : recovery_plan_graveyard_) {
+      try { (void)f.get(); } catch (...) {}
+    }
+  }
+
+private:
   void validateConfig()
   {
     const std::string effective_planner =
@@ -1078,6 +1101,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   void mapCallback(const nav_msgs::OccupancyGrid::ConstPtr & msg)
   {
     current_map_ = msg;
+    ++map_seq_;   // 静态层只在有新地图时才需要整图拷贝
     last_map_stamp_ = ros::Time::now();
     if (coverage_active_ && coverage_grid_.ready()) {
       coverage_grid_.updateStaticObstacles(msg->data);
@@ -2892,7 +2916,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       cfg.map_origin_y = oy;
       cfg.window_x = 0;
       cfg.window_y = 0;
-      planner_static_layer_->setOccupancy(current_map_->data, w, h);
+      // StaticLayer::setOccupancy 是**整图 vector 拷贝**; 以前 1Hz(规划)+5Hz(局部)
+      // 各拷一次, 大地图上是几十 MB/s 的无谓 memcpy。按 map 版本去重。
+      if (planner_static_seq_ != map_seq_) {
+        planner_static_layer_->setOccupancy(current_map_->data, w, h);
+        planner_static_seq_ = map_seq_;
+      }
       keepout_layer_->setActive(keepout_enabled_);
       planner_layers_.configure(cfg, core::kCostFree);
       planner_layers_.update(ros::Time::now().toSec());
@@ -3148,7 +3177,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.window_x = cx - win_half;
     cfg.window_y = cy - win_half;
 
-    local_static_layer_->setOccupancy(current_map_->data, w, h);
+    if (local_static_seq_ != map_seq_) {
+      local_static_layer_->setOccupancy(current_map_->data, w, h);
+      local_static_seq_ = map_seq_;
+    }
     if (scan_fresh) {
       scan_layer_points_.clear();
       scan_layer_points_.reserve(laser_points_.size());
@@ -4389,6 +4421,22 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
   void controlLoop(const ros::TimerEvent &)
   {
+    // 单线程 spinner: 代价地图/规划/存图与看门狗共用一条回调队列, 某次回调超时
+    // 时看门狗也一起被饿死, 底盘会继续执行最后一条指令。这里在**恢复的第一拍**
+    // 立刻补一条硬停, 把"被拖住的这段时间"造成的风险限制在一拍内。
+    {
+      const ros::Time t0 = ros::Time::now();
+      if (!last_control_tick_.isZero()) {
+        const double gap = (t0 - last_control_tick_).toSec();
+        const double period = 1.0 / std::max(1.0, controller_frequency_);
+        if (gap > std::max(0.5, 3.0 * period) && last_published_nonzero_) {
+          ROS_WARN_THROTTLE(1.0,
+            "[nav] control tick late by %.2fs (spinner blocked?); force zero", gap);
+          publishHardStop();
+        }
+      }
+      last_control_tick_ = t0;
+    }
     if (pose_jump_pending_.exchange(false)) {
       onPoseJump(pending_jump_seq_.load(),
                  pending_jump_reason_.load() == 1 ? std::string("map_switched")
@@ -4961,6 +5009,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   // ---- 指令整形 / 死手 / 遥控仲裁 ----
   core::VelocityShaper velocity_shaper_;
   ros::Time last_cmd_stamp_;
+  ros::Time last_control_tick_;   // 上一拍控制开始时刻 (延迟保护)
+  uint64_t map_seq_ = 0;          // /map 版本号 (静态层整图拷贝去重)
+  uint64_t planner_static_seq_ = 0;
+  uint64_t local_static_seq_ = 0;
   double velocity_timeout_ = 0.6;
   double deadband_velocity_v_ = 0.0;
   double deadband_velocity_w_ = 0.0;

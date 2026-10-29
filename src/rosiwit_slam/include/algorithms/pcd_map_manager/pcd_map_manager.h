@@ -91,6 +91,12 @@ private:
     GridPostConfig grid_post_cfg_;      // 最终 PGM 的 2D 后处理管道
     GridPostConfig grid_realtime_post_cfg_; // 实时 /map 的后处理; 不继承 0.05 的骨架/大去噪
     std::vector<Observation> observations_;   // 逐帧观测(原点+世界系扫描), 供射线类策略使用
+    // 观测帧无界增长: 每个关键帧一份世界系点云, 长时建图会线性吃内存 (每个点 48B)。
+    // 超过上限后丢最旧的帧; 一旦截断, 保存时的"多帧一致性动态点过滤"就失去完整
+    // 视野, saveMap 会**跳过**该过滤并告警 (否则老静态点会被误删)。
+    size_t max_observation_points_ = 2000000;   // yaml: map_manager.max_observation_points
+    bool observations_truncated_ = false;
+    void trimObservations();
 };
 
 } // namespace rosiwit_slam

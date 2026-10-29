@@ -80,7 +80,8 @@ void PcdMapManager::accumulateCloud(const CloudType& cloud, double leaf) {
 void PcdMapManager::rebuildVoxels(double leaf) {
     map_voxels_.clear();
     if (!global_map_) return;
-    map_voxels_.reserve(global_map_->size() * 2 + 1);
+    // 只多留 25% 余量: 以前 *2, 大图 (千万点) 会多占上亿个桶 (~GB 级)。
+    map_voxels_.reserve(global_map_->size() + global_map_->size() / 4 + 1);
     for (size_t i = 0; i < global_map_->size(); ++i) {
         const auto& p = global_map_->points[i];
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
@@ -140,6 +141,10 @@ bool PcdMapManager::init(const std::string& config_path) {
         if (mv("dynamic_min_views")) {
             const int v = mv("dynamic_min_views").as<int>();
             if (v > 0) dynamic_min_views_ = v;
+        }
+        if (mv("max_observation_points")) {
+            const int v = mv("max_observation_points").as<int>();
+            if (v > 0) max_observation_points_ = static_cast<size_t>(v);
         }
         std::cout << "[PcdMapManager] correction limits: trans=" << m_max_correction_trans_m
                   << "m rot=" << m_max_correction_rot_rad * 180.0 / M_PI << "deg" << std::endl;
@@ -218,6 +223,28 @@ bool PcdMapManager::init(const std::string& config_path) {
     return true;
 }
 
+void PcdMapManager::trimObservations()
+{
+    if (max_observation_points_ == 0 || observations_.empty()) return;
+    size_t total = 0;
+    for (const auto& ob : observations_) {
+        total += ob.cloud ? ob.cloud->size() : 0;
+    }
+    if (total <= max_observation_points_) return;
+
+    size_t drop = 0;
+    while (drop + 1 < observations_.size() && total > max_observation_points_) {
+        total -= observations_[drop].cloud ? observations_[drop].cloud->size() : 0;
+        ++drop;
+    }
+    observations_.erase(observations_.begin(), observations_.begin() + drop);
+    observations_truncated_ = true;
+    std::cout << "[PcdMapManager] observations trimmed: dropped " << drop
+              << " oldest frames (cap " << max_observation_points_
+              << " pts, " << observations_.size() << " frames left); "
+              << "保存时将跳过动态点过滤" << std::endl;
+}
+
 bool PcdMapManager::saveMap(const std::string& name) {
     std::lock_guard<std::mutex> lock(m_mutex_);
     if (!global_map_ || global_map_->empty()) {
@@ -227,7 +254,11 @@ bool PcdMapManager::saveMap(const std::string& name) {
 
     // 动态点剔除: 统计每个体素在多少帧观测里出现过, 只保留 >= dynamic_min_views 的.
     // 单帧瞬态(行人/门/反光)在多帧统计里会被自然淘汰; 静态结构在多帧里重复出现.
-    if (dynamic_min_views_ > 1 && !observations_.empty()) {
+    if (dynamic_min_views_ > 1 && observations_truncated_) {
+        std::cout << "[PcdMapManager] WARN observations 已被截断, 跳过动态点过滤 "
+                     "(否则会按『未观测』误删老静态点)" << std::endl;
+    }
+    if (dynamic_min_views_ > 1 && !observations_.empty() && !observations_truncated_) {
         const float leaf = static_cast<float>(std::max(0.10, save_voxel_ * 2.0));
         std::unordered_map<int64_t, uint8_t> hits;
         hits.reserve(static_cast<size_t>(global_map_->size()) * 2 + 1);
@@ -428,6 +459,7 @@ bool PcdMapManager::addSubMap(const KeyFrame& kf) {
     ob.origin = eff_pose.trans;
     ob.cloud = transformed;
     observations_.push_back(ob);
+    trimObservations();
 
     ++m_revision_;
     return true;
@@ -532,6 +564,8 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
         rebuilt_obs.push_back(ob);
     }
     observations_ = std::move(rebuilt_obs);
+    observations_truncated_ = false;   // 重建后是完整的一批
+    trimObservations();
 
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(rebuilt);
