@@ -3275,22 +3275,64 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     auto planner = async_planner_;
     auto fallback = fallback_planner_;
     const std::string pname = planner_name_;
+    const core::Footprint tight_fp = configured_footprint_;
+    const core::Footprint full_fp = planner_footprint_;
+    // A* 是圆模型(无航向维度), 单个圆无法同时满足"安全"与"过窄门":
+    //   外接圆 r≈0.58: 任何朝向都不碰, 但需要 ~1.16m 通道 -> 0.8m 门洞必然无解;
+    //   内切圆 r=robot_radius(0.33): 能过门, 但车头(0.55)转弯时可插进墙 ~0.22m。
+    // 所以先用外接圆(安全), 无解再退内切圆, 由上层 pathFootprintClear() 逐点校验。
+    double a_star_circum = 0.0;
+    for (const auto & v : tight_fp) {
+      a_star_circum = std::max(a_star_circum, std::hypot(v.first, v.second));
+    }
+    a_star_circum += std::max(0.0, footprint_shrink_);   // tight_fp 是内缩过的
+    const double a_star_inner = robot_radius_;
     async_plan_future_ = std::async(std::launch::async,
-      [this, planner, fallback, pname, start, goal]() {
+      [this, planner, fallback, pname, start, goal, tight_fp, full_fp,
+       a_star_circum, a_star_inner]() {
       if (!planner) {
         return core::Result<core::Path>::error(
           core::ErrorCode::PLANNING_FAILED, "planner gone");
       }
       auto primary = planner->plan(start, goal);
-      if (primary.is_ok() || !fallback) {
+      if (primary.is_ok()) {
         last_plan_used_fallback_.store(false);
         return primary;
       }
-      // 窄通道/窄门洞: hybrid A* 的搜索代价爆炸 (实测 0.8m 门洞 3.4s > 2s 超时),
-      // 直接回落网格 A* + 平滑 —— 差速轮可以原地转, 平滑后的栅格路径可跟.
-      ROS_WARN("[plan] %s failed (%s), fallback to %s",
-               pname.c_str(), primary.error_message().c_str(),
-               fallback->getName().c_str());
+      // 第二档: 用**实际车体轮廓**(configured, 不含 0.06 安全余量)再试一次。
+      // 很多 "No valid path found" 是余量把窄处判死, 而不是真的过不去;
+      // 实车轮廓本身仍是正确的几何约束。
+      if (planner->supportsFootprint() && tight_fp.size() >= 3) {
+        planner->setRobotFootprint(tight_fp);
+        auto retry = planner->plan(start, goal);
+        planner->setRobotFootprint(full_fp);   // 复原, 不影响下一次
+        if (retry.is_ok()) {
+          last_plan_used_fallback_.store(false);
+          return retry;
+        }
+      }
+      if (!fallback) {
+        last_plan_used_fallback_.store(false);
+        return primary;
+      }
+      // 回退 A*: 先用**外接圆** (任何朝向都安全, 但窄门洞必然无解),
+      // 无解再退**内切圆** (能过窄处, 但车头可能压墙) —— 后者由上层
+      // pathFootprintClear() 用车体轮廓逐点校验, 不合格直接拒绝。
+      if (a_star_circum > 1e-3) {
+        fallback->setRobotRadius(a_star_circum);
+        auto safe = fallback->plan(start, goal);
+        if (safe.is_ok()) {
+          ROS_WARN("[plan] %s failed (%s), fallback to A* r=%.3f (外接圆: 任何朝向都安全)",
+                   pname.c_str(), primary.error_message().c_str(), a_star_circum);
+          last_plan_used_fallback_.store(true);
+          return safe;
+        }
+        ROS_WARN("[plan] A* 外接圆 r=%.3f 无解 (窄处必然), 退内切圆 r=%.3f + 轮廓校验",
+                 a_star_circum, a_star_inner);
+      }
+      fallback->setRobotRadius(a_star_inner);
+      ROS_WARN("[plan] %s failed (%s), fallback to A* r=%.3f (内切圆, 需轮廓校验)",
+               pname.c_str(), primary.error_message().c_str(), a_star_inner);
       last_plan_used_fallback_.store(true);
       return fallback->plan(start, goal);
     });
@@ -3459,6 +3501,25 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       }
     }
 
+    // 最后一道闸: 路径不得让**实际车体轮廓**压到真实障碍。
+    // (hybrid 本来就按 planner_footprint_=configured+0.06 检查, 能过;
+    //  会失败的基本只有回退 A* 的圆模型路径 —— 实测它会让车头插进墙里。)
+    std::string fp_why;
+    if (!pathFootprintClear(planned, &fp_why)) {
+      ROS_ERROR("[plan] 拒绝执行: 路径让车体轮廓压到障碍 (%s) -> 后退重规划",
+                fp_why.c_str());
+      planning_active_ = false;
+      ++plan_generation_;
+      if (startRecovery()) { return; }
+      if (task_active_) {
+        failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PATH_FOOTPRINT");
+      } else {
+        setGoalStatus("FAILED_PATH_FOOTPRINT");
+        stopNavigation();
+      }
+      return;
+    }
+
     current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
     current_core_path_ = planned;   // 旋转段执行器读取 velocity_x==0 标记
 
@@ -3589,6 +3650,45 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   // occupied, a reverse escape path cannot even get a valid start.  Both
   // Costmap::data and the shared grid copy must be cleared because Hybrid A*
   // uses data for cell checks and grid for footprint-corner checks.
+  /// 用车体轮廓逐点验证路径。回退规划器 A* 只有圆形模型 (robot_radius=0.33),
+  /// 而车体是 0.55 前 / 0.25 后 —— 它给的路径可能让车头插进墙里 (实测撞上过)。
+  /// 这种路径必须拒绝: 宁可后退重规划, 也不能下发。
+  bool pathFootprintClear(const core::Path & path, std::string * why = nullptr) const
+  {
+    if (path.points.size() < 2 || configured_footprint_.size() < 3 ||
+        planner_costmap_.data.empty() || planner_costmap_.resolution <= 0.0) {
+      return true;   // 缺数据时保持旧行为, 不额外拦
+    }
+    const auto & cm = planner_costmap_;
+    const double res = cm.resolution;
+    const std::vector<std::pair<double, double>> samples =
+      core::sampleFootprint(configured_footprint_, 0.05);
+    if (samples.empty()) { return true; }
+    for (size_t i = 0; i < path.points.size(); ++i) {
+      const core::Pose2D & p = path.points[i].pose;
+      const double c = std::cos(p.theta), s = std::sin(p.theta);
+      for (const auto & q : samples) {
+        const double wx = p.x + c * q.first - s * q.second;
+        const double wy = p.y + s * q.first + c * q.second;
+        const int gx = static_cast<int>(std::floor((wx - cm.origin_x) / res));
+        const int gy = static_cast<int>(std::floor((wy - cm.origin_y) / res));
+        if (gx < 0 || gy < 0 || gx >= static_cast<int>(cm.width) ||
+            gy >= static_cast<int>(cm.height)) {
+          continue;
+        }
+        const int v = cm.data[static_cast<size_t>(gy) * cm.width + gx];
+        // 100=真实障碍; 负数=unknown(规划器同样按阻断处理)。99 是膨胀带, 允许。
+        if (v >= 100 || v < 0) {
+          if (why != nullptr) {
+            *why = "第 " + std::to_string(i) + " 点车体压到 cost=" + std::to_string(v);
+          }
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   core::Costmap buildStartClearedCostmap(const core::Pose2D & pose,
                                          double margin,
                                          bool enabled)
