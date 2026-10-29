@@ -3510,7 +3510,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
                 fp_why.c_str());
       planning_active_ = false;
       ++plan_generation_;
-      if (startRecovery()) { return; }
+      // 只允许"后退重规划"一次: 以前每次拒绝都进恢复, 而回退 A* 的路径在窄处
+      // 反正过不了闸 -> 恢复 -> 再拒绝 -> 无限循环, 表现为"下目标没反应"。
+      if (recovery_attempts_ < 1 && startRecovery()) { return; }
       if (task_active_) {
         failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PATH_FOOTPRINT");
       } else {

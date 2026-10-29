@@ -45,7 +45,9 @@ planner_name: "hybrid_astar"
 # 加权 A* 倍率: 膨胀代价大时防搜索退化 (窄通道实测 12.8s->3.4s)
 planner_heuristic_weight: 2.0
 planner_max_iterations: 300000
-planner_timeout: 1.0   # hybrid 主规划 1s 预算, 超时立刻回落 A* (窄门洞)
+# 3.0s: 1s 时 hybrid 在"穿门+绕家具"场景经常搜不完 (实测回退率 4/8), 而回退
+# A* 是圆模型 —— 它的路径会被车体轮廓闸拒绝, 等于没有兜底。给足预算比放宽安全判据好。
+planner_timeout: 3.0
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 
