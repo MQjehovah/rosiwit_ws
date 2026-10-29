@@ -2930,6 +2930,16 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       const std::vector<int8_t> display =
         core::inflatedCostmap(semantic, w, h, safety_cells, inflate_cells);
 
+      // 平滑器只看得见传进去的栅格: 以前传的是 raw (0/100) 的 planner_costmap_.grid,
+      // 于是它把回退 A* 的折线"拉直"进 99 膨胀区 —— 用户看到的就是"规划穿过代价区"。
+      // 这里存一份膨胀后的图 (display, 99=内切/膨胀带), 平滑必须在这上面判定。
+      {
+        auto smooth_grid = std::make_shared<core::CostmapGrid>();
+        smooth_grid->info = grid->info;
+        smooth_grid->data = display;
+        planner_smooth_grid_ = std::move(smooth_grid);
+      }
+
 
       nav_msgs::OccupancyGrid costmap_msg;
       costmap_msg.header.frame_id = map_frame_;
@@ -3400,7 +3410,38 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       smoother.alpha_start = 0.45;
       smoother.alpha_end = 0.10;
       smoother.max_cost_increase = 0;
-      core::Path candidate = planners::smoothPath(raw, planner_costmap_.grid, smoother);
+      const auto smooth_map =
+        planner_smooth_grid_ ? planner_smooth_grid_ : planner_costmap_.grid;
+      core::Path candidate = planners::smoothPath(raw, smooth_map, smoother);
+      // 双保险: 平滑结果的最高代价不得高于原始路径 (99=膨胀带, 100=障碍)。
+      // smoothPath 内部的 max_cost_increase 是按段比的, 这里按整条路径再兜一层。
+      if (candidate.points.size() == raw.points.size() && smooth_map) {
+        const auto maxCost = [&smooth_map](const core::Path & p) -> int {
+          int worst = 0;
+          const auto & gi = smooth_map->info;
+          for (const auto & pt : p.points) {
+            const int gx = static_cast<int>((pt.pose.x - gi.origin.position.x) / gi.resolution);
+            const int gy = static_cast<int>((pt.pose.y - gi.origin.position.y) / gi.resolution);
+            if (gx < 0 || gy < 0 || gx >= static_cast<int>(gi.width) ||
+                gy >= static_cast<int>(gi.height)) {
+              continue;
+            }
+            worst = std::max(worst, static_cast<int>(
+              smooth_map->data[static_cast<size_t>(gy) * gi.width + gx]));
+          }
+          return worst;
+        };
+        const int raw_cost = maxCost(raw);
+        const int new_cost = maxCost(candidate);
+        if (new_cost > raw_cost) {
+          ROS_WARN("[plan] 平滑会把路径代价从 %d 抬到 %d (99=膨胀带): 放弃平滑, 保留原始路径",
+                   raw_cost, new_cost);
+          candidate = raw;
+        } else if (raw_cost >= 99) {
+          ROS_WARN("[plan] 原始路径已穿过膨胀带 (cost=%d, 99=内切/膨胀): "
+                   "这是回退规划器(A*)的能力边界, 建议保留 hybrid_astar", raw_cost);
+        }
+      }
       if (candidate.points.size() == raw.points.size()) {
         for (size_t i = 0; i < candidate.points.size(); ++i) {
           candidate.points[i].pose.theta = raw.points[i].pose.theta;
@@ -5030,6 +5071,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   double recovery_wait_sec_ = 2.0;
   // 本次规划是否用了回退规划器 (A*): 决定要不要做节点层平滑
   std::atomic<bool> last_plan_used_fallback_{false};
+  // 平滑器用的代价图 (膨胀后, 99=膨胀带): 只做平滑, 不改规划器的判据
+  std::shared_ptr<core::CostmapGrid> planner_smooth_grid_;
   std::unique_ptr<core::IPlannerStrategy> recovery_planner_;
   std::unique_ptr<core::IControllerStrategy> recovery_controller_;
   std::unique_ptr<core::IPlannerStrategy> coverage_planner_;
