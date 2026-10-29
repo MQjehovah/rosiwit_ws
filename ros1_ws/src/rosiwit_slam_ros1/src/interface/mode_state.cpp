@@ -106,7 +106,11 @@ bool Ros1SlamInterface::resetCoreAndCaches() {
     realtime_grid_.clear();
     clearStaticMap();
     realtime_grid_map_area_ = 0.0;
-    curr_pose_ = Xz3dPose();
+    {
+        // 与 tick 线程(publishMappingPose) / 存图服务(currentPoseSnapshot) 共用
+        std::lock_guard<std::mutex> lk(pose_mu_);
+        curr_pose_ = Xz3dPose();
+    }
     curr_pose_valid_.store(false);
     last_new_pose_ros_ = ros::Time();
     last_high_rate_pub_ = ros::Time();
@@ -115,7 +119,11 @@ bool Ros1SlamInterface::resetCoreAndCaches() {
     last_mapping_path_time_ = -1.0;
     last_mapping_path_pub_ = ros::Time();
     last_location_info_pub_ = ros::Time();
-    mapping_path_msg_ = nav_msgs::Path();
+    {
+        // 发布线程按 1Hz 在锁内整条拷贝; 这里清空也必须持同一把锁
+        std::lock_guard<std::mutex> lk(path_mu_);
+        mapping_path_msg_ = nav_msgs::Path();
+    }
     last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
     core_ever_localized_ = false;
     debug_map_published_ = false;

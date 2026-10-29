@@ -211,8 +211,11 @@ void ScanContextLoopClosure::updatePoses(const std::vector<PoseStamped>& correct
     if (corrected.empty()) return;
     std::lock_guard<std::mutex> lk(m_mutex);
     // 优先按时间戳匹配 (与 map_manager 同一约定), 时间对不上且数量相等时按顺序回填。
+    // 只有时间戳有效时才按时间匹配: 后端若返回 time<=0 的位姿, |0-0|<1e-3 会让
+        // 每条修正都命中第 0 个关键帧, 把整条轨迹写错。
     bool by_time = true;
     for (const auto& c : corrected) {
+        if (c.time <= 1e-6) { by_time = false; break; }
         bool hit = false;
         for (auto& rec : m_keyframes) {
             if (std::fabs(rec.pose.time - c.time) < 1e-3) { rec.pose = c; hit = true; break; }

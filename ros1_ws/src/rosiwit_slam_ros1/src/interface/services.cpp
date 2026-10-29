@@ -85,7 +85,10 @@ bool Ros1SlamInterface::handleModeSwitch(
         // 旧实现同时 DELETE_PTR 掉了建图/定位实例 -> 我们在这里也重建核心(丢上一轮地图)。
         const bool rebuilt = resetCoreAndCaches();
         setModeFromConfig(SlamMode::FREE);
-        const bool ok = rebuilt && callSetDetectMode(0);
+        // 不短路: 即使核心重建失败也要把检测模式切回 0, 否则 SLAM 侧状态与
+        // 本层 FREE 不一致 (外层只关心整体成败)。
+        const bool detect_ok = callSetDetectMode(0);
+        const bool ok = rebuilt && detect_ok;
         res.result = ok ? 1 : 0;
         return ok;
     }
@@ -146,7 +149,10 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
     static_map_valid_.store(ctx.pgm_ok);
 
     // 3. 切图默认显示地图零点，清掉上一张图的位姿/高频状态。
-    curr_pose_ = Xz3dPose();
+    {
+        std::lock_guard<std::mutex> lk(pose_mu_);
+        curr_pose_ = Xz3dPose();
+    }
     curr_pose_valid_.store(false);
     last_new_pose_ros_ = ros::Time();
     last_high_rate_pub_ = ros::Time();

@@ -1830,7 +1830,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       stamped.pose.orientation = quatFromYaw(pose.theta);
       ros_path.poses.push_back(stamped);
     }
-    current_path_ = ros_path;
+    // 换路径必须同时刷新 core 版本: 否则下面"优先用 current_core_path_"会拿到
+    // 上一条 NAVIGATE 的旧路径 (控制器跟着旧路径跑, 而 /global_path 发的是新路径)。
+    current_core_path_ = toCorePath(current_path_);
 
     core::ActionTaskCommand task_command;
     task_command.kind = core::ActionKind::FOLLOW_PATH;
@@ -3400,6 +3402,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 只会把路径拉进高代价膨胀区 (smoother 只看 raw grid 的 0/100, 看不到
     // 膨胀代价), 表现为"旁边有空地却贴着代价区走".
     bool smoothed = false;
+    bool smoothing_rejected = false;   // 平滑会把代价抬高 -> 保留原路径, 不能谎报 smoothed
     // 回退到 A* 时必须平滑: A* 是栅格折线, 不平滑会一路切角; 而 planner_name_ 仍是
     // 配置里的 hybrid_astar, 以前这个条件把回退路径的平滑整个跳过了 (smoothed=0)。
     if (planned.points.size() >= 3 &&
@@ -3426,8 +3429,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
                 gy >= static_cast<int>(gi.height)) {
               continue;
             }
-            worst = std::max(worst, static_cast<int>(
-              smooth_map->data[static_cast<size_t>(gy) * gi.width + gx]));
+            const int v = static_cast<int>(
+              smooth_map->data[static_cast<size_t>(gy) * gi.width + gx]);
+            // 与 path_smoother 的 cellCost 同一语义: 负数(unknown)按阻断算,
+            // 否则"平滑进未知区"不会被这道校验拦住。
+            worst = std::max(worst, v < 0 ? 100 : v);
           }
           return worst;
         };
@@ -3437,12 +3443,13 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
           ROS_WARN("[plan] 平滑会把路径代价从 %d 抬到 %d (99=膨胀带): 放弃平滑, 保留原始路径",
                    raw_cost, new_cost);
           candidate = raw;
+          smoothing_rejected = true;
         } else if (raw_cost >= 99) {
           ROS_WARN("[plan] 原始路径已穿过膨胀带 (cost=%d, 99=内切/膨胀): "
                    "这是回退规划器(A*)的能力边界, 建议保留 hybrid_astar", raw_cost);
         }
       }
-      if (candidate.points.size() == raw.points.size()) {
+      if (!smoothing_rejected && candidate.points.size() == raw.points.size()) {
         for (size_t i = 0; i < candidate.points.size(); ++i) {
           candidate.points[i].pose.theta = raw.points[i].pose.theta;
           candidate.points[i].velocity_x = raw.points[i].velocity_x;
@@ -3596,7 +3603,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 而规划器按 configured + 0.06 判定, 所以保险杠距墙 5~6cm 时 start 必被判进障碍。
     const std::vector<std::pair<double, double>> & clear_fp =
       planner_footprint_.size() >= 3 ? planner_footprint_ : configured_footprint_;
-    margin = std::max(margin, 0.5 * cm.resolution);
+    // 多边形本身已经含 planner_footprint_margin_(0.06), 这里只补半格取整误差;
+    // 再叠加 planning_start_clear_margin_(0.05) 会把真实墙多挖掉 5cm, 反而给
+    // "起步就贴着墙穿过去"开了口子。margin(带 0.05) 只留给下面的圆模型兜底。
+    const double poly_margin = 0.5 * cm.resolution;
     if (cm.grid) {
       cm.grid = std::make_shared<core::CostmapGrid>(*cm.grid);
     }
@@ -3630,13 +3640,13 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         max_y = std::max(max_y, wy);
       }
       const int x0 = static_cast<int>(std::floor(
-        (min_x - margin - cm.origin_x) / res));
+        (min_x - poly_margin - cm.origin_x) / res));
       const int x1 = static_cast<int>(std::ceil(
-        (max_x + margin - cm.origin_x) / res));
+        (max_x + poly_margin - cm.origin_x) / res));
       const int y0 = static_cast<int>(std::floor(
-        (min_y - margin - cm.origin_y) / res));
+        (min_y - poly_margin - cm.origin_y) / res));
       const int y1 = static_cast<int>(std::ceil(
-        (max_y + margin - cm.origin_y) / res));
+        (max_y + poly_margin - cm.origin_y) / res));
       for (int iy = y0; iy <= y1; ++iy) {
         for (int ix = x0; ix <= x1; ++ix) {
           const double wx = cm.origin_x + (ix + 0.5) * res;
@@ -3646,7 +3656,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
           const double lx = c * dx + s * dy;
           const double ly = -s * dx + c * dy;
           if (pointInPolygon(lx, ly, clear_fp) ||
-              pointPolygonDistance(lx, ly, clear_fp) <= margin) {
+              pointPolygonDistance(lx, ly, clear_fp) <= poly_margin) {
             clear_cell(ix, iy);
           }
         }
@@ -3936,6 +3946,16 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     if (task_active_ && !last_odom_stamp_.isZero()) {
       action_task_.noteMotion(toCorePose(current_pose_), now.toSec());
     }
+    // 总超时必须在 stage 分派**之前**: 各 stage 分支都是自己 return, 放在后面只覆盖
+    // 最后一个 stage (以前 PLANNING 等后台 future 时没有任何截止时间, 一旦规划线程
+    // 卡住就永远停在这一步; noteMotion 又让任务看门狗不响)。
+    if (recovery_timeout_ > 0.0 &&
+        (now - recovery_started_).toSec() > recovery_timeout_) {
+      ROS_WARN("[rosiwit_navigation_ros1] recovery timeout after %.1fs (stage=%d)",
+               (now - recovery_started_).toSec(), static_cast<int>(recovery_stage_));
+      failRecovery();
+      return;
+    }
     if (recovery_stage_ == RecoveryStage::CLEAR) {
       if (recovery_clear_costmaps_) { clearRecoveryCostmaps(); }
       recovery_spin_target_ = normalizeAngle(
@@ -4027,12 +4047,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
                out.target_distance, current_path_.poses.size());
       return;
     }
-    if (recovery_timeout_ > 0.0 &&
-        (now - recovery_started_).toSec() > recovery_timeout_) {
-      ROS_WARN("[rosiwit_navigation_ros1] recovery timeout");
-      failRecovery();
-      return;
-    }
+
     const core::Pose2D pose = toCorePose(current_pose_);
 
     if (recovery_stage_ == RecoveryStage::FOLLOW) {
@@ -4526,7 +4541,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       // 重新播种整条路径让参考点推进到旋转段之后, 否则会停在半转姿态.
       if (rotation_active_) {
         rotation_active_ = false;
-        controller_strategy_->setPath(current_core_path_);
+        if (!current_core_path_.points.empty()) {
+          controller_strategy_->setPath(current_core_path_);
+        }
         ROS_INFO("[rosiwit_navigation_ros1] rotation done -> controller re-seeded (%zu pts)",
                  current_core_path_.points.size());
       }

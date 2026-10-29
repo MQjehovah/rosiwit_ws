@@ -102,7 +102,10 @@ void Ros1SlamInterface::planarConstraintStep() {
     // 只在"最优解贴在边界"或"匹配无效"时放大: 拉到 0.6 -> 1.08 -> 1.94m.
     PlanarMatchResult r;
     for (int attempt = 0; attempt < 3; ++attempt) {
-        r = matchPlanarScan(planar_pts_base_, curr_pose_.x, curr_pose_.y, curr_pose_.yaw,
+        // curr_pose_ 由 tick 线程写、这里在输入/主线程读: 必须走加锁快照,
+        // 否则可能拿到 (x,y) 与 yaw 不同源的撕裂值。
+        const Xz3dPose cp = currentPoseSnapshot();
+        r = matchPlanarScan(planar_pts_base_, cp.x, cp.y, cp.yaw,
                             planar_grid_, planar_field_, cfg);
         if (r.valid) { break; }
         if (attempt + 1 >= 3 || r.points < cfg.min_points) { break; }
@@ -126,9 +129,10 @@ void Ros1SlamInterface::planarConstraintStep() {
     planar_cov_yy_ = r.cov_yy;
     planar_cov_yaw_ = r.cov_yyaw;
 
-    const double dx = r.x - curr_pose_.x;
-    const double dy = r.y - curr_pose_.y;
-    const double dyaw = planarNormAngle(r.yaw - curr_pose_.yaw);
+    const Xz3dPose cp2 = currentPoseSnapshot();
+    const double dx = r.x - cp2.x;
+    const double dy = r.y - cp2.y;
+    const double dyaw = planarNormAngle(r.yaw - cp2.yaw);
     const bool big = std::hypot(dx, dy) > 0.15 || std::fabs(dyaw) > 0.12;
     if (!big) { planar_pending_ = false; return; }
     if (r.condition > 1.0e5) return;   // 退化 (长走廊): 不硬拉, 交给 3D 恢复
@@ -157,7 +161,7 @@ void Ros1SlamInterface::planarConstraintStep() {
         fix.header.frame_id = kMapFrame;
         fix.pose.pose.position.x = r.x;
         fix.pose.pose.position.y = r.y;
-        fix.pose.pose.position.z = curr_pose_.z;
+        fix.pose.pose.position.z = cp2.z;
         const double half = 0.5 * r.yaw;
         fix.pose.pose.orientation.z = std::sin(half);
         fix.pose.pose.orientation.w = std::cos(half);
