@@ -62,7 +62,9 @@ void HybridAStarPlanner::buildPrimitives()
   }
   // 原地旋转基元 (distance=0): 前进-only 模式(清洁导航, 禁止倒车)下靠它
   // 掉头/对正航向, 是"不需要倒车也能走出窄空间"的关键.
-  const double kTurn = M_PI / 6.0;   // 30° / 步
+  // 步长可配 (默认 30°)。窄处 30° 一步的扫掠面太大, 会被 footprint 检查整段否掉;
+  // 15° 时同样的空间能"小步挪", 搜索成功率高得多。
+  const double kTurn = std::max(1.0, config_.turn_step_deg) * M_PI / 180.0;
   primitives_.push_back({0.0, 0.0, kTurn});
   primitives_.push_back({0.0, 0.0, -kTurn});
 }
@@ -537,10 +539,20 @@ core::Result<core::Path> HybridAStarPlanner::plan(
 
   planning_active_ = false;
   if (goal_index < 0) {
-    LOG_INFO(logger_, "No goal: iter=%d nodes=%zu open=%zu", iterations, nodes.size(), open.size());
+    const double elapsed = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - begin).count();
+    const char * why = cancel_requested_ ? "cancelled"
+        : (elapsed > timeout ? "timeout"
+        : (iterations >= max_iterations ? "max_iterations" : "exhausted"));
+    // 这三种原因的处置完全不同: timeout/迭代上限 -> 加预算或换基元;
+    // exhausted -> 真的没解 (被障碍/轮廓判死)。以前统一报 "No valid path found"。
+    LOG_WARN(logger_, "No goal: iter=%d nodes=%zu open=%zu elapsed=%.2fs why=%s",
+             iterations, nodes.size(), open.size(), elapsed, why);
+    const std::string msg = std::string("No valid path (") + why + ", iter=" +
+        std::to_string(iterations) + ", nodes=" + std::to_string(nodes.size()) + ")";
     return core::Result<core::Path>::error(
       cancel_requested_ ? core::ErrorCode::PLANNING_FAILED : core::ErrorCode::NO_VALID_PATH,
-      cancel_requested_ ? "Planning cancelled" : "No valid path found");
+      cancel_requested_ ? "Planning cancelled" : msg);
   }
 
   core::Path path = reconstruct(nodes, goal_index);

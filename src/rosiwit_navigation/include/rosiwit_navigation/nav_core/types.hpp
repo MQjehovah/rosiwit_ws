@@ -76,6 +76,9 @@ struct PlannerConfig
   /// 膨胀代价会把 g 抬高 3~4 倍, 而欧氏启发式不变 -> h/g 失衡, A* 退化成
   /// Dijkstra: 实测 0.8m 门洞 8m 行程从 0.4ms 涨到 12.8s (节点超时 -> "规划失败").
   double heuristic_weight = 1.0;
+  /// Hybrid A*: 原地转向基元的步长 (deg). 30° 时窄处"转不动"会直接搜不到解,
+  /// 15° 给搜索更多可行中间姿态; 代价是分支数翻倍 (配合 timeout 调大)。
+  double turn_step_deg = 30.0;
 };
 
 struct KinematicsLimits

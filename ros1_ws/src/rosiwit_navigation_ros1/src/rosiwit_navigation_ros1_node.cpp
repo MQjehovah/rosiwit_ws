@@ -546,6 +546,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // closer than its footprint to a mapped wall must still be able to plan
     // out.  This does not relax the rest of the route.
     pnh_.param<double>("planning_start_relax_radius", planning_start_relax_radius_, 0.0);
+    pnh_.param<double>("planner_turn_step_deg", planner_turn_step_deg_, 30.0);
 
     // 孤立激光点滤波: 只保留与相邻扫描点足够近的点.
     pnh_.param<bool>("laser_filter_enabled", laser_filter_enabled_, true);
@@ -882,6 +883,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         acfg.allow_reverse = allow_reverse;
         acfg.max_reverse_distance = planner_max_reverse_distance_;
         acfg.start_relax_radius = planning_start_relax_radius_;
+        acfg.turn_step_deg = planner_turn_step_deg_;
         next->initialize(acfg);
         next->setInflationRadius(inflation_radius_);
         next->setRobotRadius(robot_radius_);
@@ -5259,6 +5261,7 @@ private:
   bool planning_clear_start_footprint_ = true;
   double planning_start_clear_margin_ = 0.05;
   double planning_start_relax_radius_ = 0.0;
+  double planner_turn_step_deg_ = 30.0;   // hybrid 原地转向步长 (deg)
   core::Costmap last_planning_costmap_;
   bool laser_filter_enabled_ = true;
   double laser_filter_radius_ = 0.15;

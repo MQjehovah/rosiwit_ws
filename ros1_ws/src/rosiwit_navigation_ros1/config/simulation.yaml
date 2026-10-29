@@ -47,6 +47,9 @@ planner_heuristic_weight: 2.0
 planner_max_iterations: 300000
 # 3.0s: 1s 时 hybrid 在"穿门+绕家具"场景经常搜不完 (实测回退率 4/8), 而回退
 # A* 是圆模型 —— 它的路径会被车体轮廓闸拒绝, 等于没有兜底。给足预算比放宽安全判据好。
+# 原地转向基元步长: 30° 时窄处"一步转不动"就整段被轮廓检查否掉 (实测失败率高),
+# 15° 给搜索更多可行中间姿态; 分支翻倍, 配合上面的 3s 预算。
+planner_turn_step_deg: 15.0
 planner_timeout: 3.0
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
