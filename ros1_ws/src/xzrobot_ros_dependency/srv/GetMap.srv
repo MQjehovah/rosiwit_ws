@@ -1,0 +1,6 @@
+bool with_obs
+---
+bool has_map
+string map_name
+nav_msgs/OccupancyGrid map
+geometry_msgs/PoseWithCovarianceStamped initial_pose

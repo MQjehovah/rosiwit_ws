@@ -1,0 +1,14 @@
+string map_name
+string map_dir
+float64 map_resolution
+bool include_unfinished_submaps
+---
+bool success
+float64 map_resolution
+float64[] map_origin
+bool map_negate
+float64 map_occupied_thresh
+float64 map_free_thresh
+geometry_msgs/PoseWithCovarianceStamped current_pose
+string charging_pile_json
+string error

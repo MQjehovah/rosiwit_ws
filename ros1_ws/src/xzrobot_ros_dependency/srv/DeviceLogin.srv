@@ -1,0 +1,5 @@
+string username
+string password
+---
+bool result
+string data

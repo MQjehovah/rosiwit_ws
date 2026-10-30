@@ -1,0 +1,5 @@
+bool save_flag
+string save_path
+string[] valid_ssid
+---
+bool success

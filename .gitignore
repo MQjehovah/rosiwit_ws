@@ -23,5 +23,12 @@ devel/
 ros1_ws/.catkin_workspace
 ros1_ws/src/CMakeLists.txt
 
-# 厂商依赖包(66MB, 含二进制/参数), 不作为源码入库; 需要时单独分发
-ros1_ws/src/xzrobot_ros_dependency/
+# 厂商依赖包: 只入库 msg/srv/action 定义 (构建必需, ~300KB; 我们的节点用
+# xzrobot_ros_dependency/LocalizationState, 而实机 /opt 里的 vendor 版本没有它)。
+# 二进制/参数/脚本仍不入库。
+ros1_ws/src/xzrobot_ros_dependency/*
+!ros1_ws/src/xzrobot_ros_dependency/msg/
+!ros1_ws/src/xzrobot_ros_dependency/srv/
+!ros1_ws/src/xzrobot_ros_dependency/action/
+!ros1_ws/src/xzrobot_ros_dependency/CMakeLists.txt
+!ros1_ws/src/xzrobot_ros_dependency/package.xml

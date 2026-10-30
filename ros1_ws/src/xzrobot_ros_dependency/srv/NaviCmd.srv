@@ -1,0 +1,6 @@
+int8 navi_cmd
+geometry_msgs/Pose2D start_pose
+geometry_msgs/Pose2D target_pose
+geometry_msgs/Pose2D[] edgewise_plan
+---
+bool result

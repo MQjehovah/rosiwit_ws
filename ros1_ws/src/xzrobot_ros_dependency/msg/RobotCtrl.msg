@@ -1,0 +1,20 @@
+# 左轮速度
+int32 drv_wheel_speed_left
+# 右轮速度
+int32 drv_wheel_speed_right
+
+int16 motor_speed_brush
+int16 motor_speed_suction
+int16 motor_speed_spray
+int16 motor_speed_filter
+int16 motor_speed_brush_vertical
+int16 motor_speed_scratcher_vertical
+
+int8 motor_position_brush
+int8 motor_position_scratcher
+
+bool driver_enable
+int8 led_mode
+int8 disinfect
+bool clean_drain_relay
+bool dirty_drain_relay

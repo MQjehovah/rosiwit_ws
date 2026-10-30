@@ -1,0 +1,3 @@
+int8 mode # 0 - 定位模式 1 - 建图模式
+---
+int8 result

@@ -1,0 +1,3 @@
+---
+geometry_msgs/Pose middle_point
+geometry_msgs/Pose end_point

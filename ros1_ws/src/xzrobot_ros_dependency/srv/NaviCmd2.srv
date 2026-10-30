@@ -1,0 +1,13 @@
+#控制命令 0:取消导航 1：单点导航 2：两点导航 3：延边导航 4：进梯控导航 5：出梯导航 6 定位丢失原地旋转控制
+int8 navi_cmd
+#设置导航速度
+float32 robot_vel
+#导航路径点
+geometry_msgs/Pose2D[] target_path_list
+---
+#反馈规划的路径长度
+float32 path_length
+#反馈规划路径点
+geometry_msgs/PoseStamped[] path_list
+#反馈规划执行结果  false：表示规划失败 true：表示规划成功
+bool result

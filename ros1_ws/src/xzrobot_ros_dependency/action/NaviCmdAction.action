@@ -1,0 +1,62 @@
+#控制指令
+# navi_cmd = 1 单点导航
+# navi_cmd = 2 两点导航
+# navi_cmd = 3 稠密点导航
+# navi_cmd = 4 入梯控制
+# navi_cmd = 5 出梯控制
+# navi_cmd = 6 原地旋转180度
+# navi_cmd = 7 倒车控制
+int8 navi_cmd
+#控制速度
+float32 robot_vel
+#索引下标
+int64 path_index
+#执行当前路径段索引
+int64 path_segment_index
+#倒车距离
+float32 backing_dist
+#实际清洁路径记录
+geometry_msgs/Pose2D[] record_path
+#导航跟踪路径
+geometry_msgs/Pose2D[] tracking_path
+#文件路径
+string file_path
+---
+#执行结果
+#路径执行进度百分百
+float32 execution_percent
+#机器在路径上实时的路径索引下标
+int64 execution_index
+#执行当前路径段索引
+int64 execution_path_segment_index
+#路径执行对应的清洁面积
+float32 clean_area
+#机器导航走过的轨迹
+geometry_msgs/Pose2D[] execution_path
+#tracking_path_result = 1 执行成功
+#tracking_path_result = -1 获取坐标异常导致执行失败
+#tracking_path_result = -2 获取全局地图异常导致执行失败
+#tracking_path_result = -3 获取局部地图异常导致执行失败
+#tracking_path_result = -4 无法规划导致执行失败
+#tracking_path_result = -5 无法加载路径文件
+int8 tracking_path_result
+---
+#实时反馈
+#路径执行进度百分百
+float32 execution_percent
+#机器在路径上实时的路径索引下标
+int64 execution_index
+#执行当前路径段索引
+int64 execution_path_segment_index
+#路径执行对应的清洁面积
+float32 clean_area
+#导航状态
+# navi_state = 1 表示正常导航中
+# navi_state = 2 表示机器在避障中
+int8 navi_state
+#机器导航走过的轨迹
+geometry_msgs/Pose2D[] execution_path
+#实时局部规划路径
+geometry_msgs/Pose2D[] local_path
+#通过闸机id
+string access_turnstile_id

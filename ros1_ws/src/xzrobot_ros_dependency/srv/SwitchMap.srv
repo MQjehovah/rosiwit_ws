@@ -1,0 +1,11 @@
+string map_name
+string map_dir
+float64 map_resolution
+float64[] map_origin
+bool map_negate
+float64 map_occupied_thresh
+float64 map_free_thresh
+geometry_msgs/PoseWithCovarianceStamped initial_pose
+string vir_obs
+---
+bool success

@@ -1,0 +1,10 @@
+int8 PGM=0
+int8 PNG=1
+int8 JPG=2
+int8 THUMB=3
+int8 BASE64=4
+
+int8 convert_style
+string save_dir
+---
+bool success

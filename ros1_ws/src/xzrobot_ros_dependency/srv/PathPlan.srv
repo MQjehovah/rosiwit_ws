@@ -1,0 +1,29 @@
+string map_dir
+string map_cover
+float32[] map_area
+float32[] start_end_point    # 路径开始和结束点
+int8 area_type # 0：⼿绘区域 1：⼿推区域
+bool partition
+int8 type #工字形，回字形
+float32 sweep_width
+bool inverse_direction
+
+string file_path #保存json文件路径
+# /opt/xzobot/paths/xxxx/path.json    
+# /opt/xzobot/paths/xxxx/path_simple.json      
+
+
+---
+bool result
+float32 path_area
+float32 path_length
+xzrobot_ros_dependency/List[] path_simple
+
+# {
+#     "length":xxx,
+#     "area":xxx,
+#     "map_area":[ ]
+#     "partition":[{"x":double, "y":double}, {}...{}],
+#     "path":[[{"x":double, "y":double}, {}...{}],
+#             []]
+# }
