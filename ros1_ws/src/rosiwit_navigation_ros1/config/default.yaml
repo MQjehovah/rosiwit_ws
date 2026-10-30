@@ -1,3 +1,10 @@
+# ============================================================================
+# 实机唯一配置源 (2026-10-30 起)
+#   所有调参只改这个文件; movebase_compat.yaml 只保留兼容层专属键。
+#   数值已与实机 2026-10-23 生效配置对齐 (robot_radius 0.39 /
+#   hybrid_astar + mppi / footprint_aware=true / planner_timeout 2.0)。
+# 仿真请用 simulation.yaml。
+# ============================================================================
 # ============================================================
 # rosiwit_navigation_ros1 默认参数
 #
@@ -12,7 +19,7 @@ min_velocity_x: 0.0
 max_velocity_theta: 0.5
 
 max_accel_x: 0.3
-max_accel_theta: 0.2
+max_accel_theta: 0.4
 
 # MPPI 采样/代价参数
 mppi_horizon: 20
@@ -31,7 +38,10 @@ mppi_goal_weight: 1.5
 # 加权 A* 倍率: 膨胀代价大时防搜索退化 (窄通道实测 12.8s->3.4s)
 planner_heuristic_weight: 2.0
 planner_max_iterations: 200000
-planner_timeout: 1.0   # hybrid 主规划 1s 预算, 超时立刻回落 A* (窄门洞)
+planner_timeout: 2.0   # hybrid 主规划预算 (实车 2s; 仿真 3s, 因为 15° 基元分支翻倍)
+# 原地转向基元步长(deg)。实车先用 30 (与历史行为一致); 仿真里 15 更不容易在窄处
+# 搜不到解, 但需要更大的 planner_timeout (ARM 上 2s 不够)。
+planner_turn_step_deg: 30.0
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 
@@ -40,8 +50,8 @@ controller_frequency: 10.0
 planner_frequency: 1.0
 
 # 规划器 / 控制器
-planner_name: "astar"
-controller_name: "dwa"
+planner_name: "hybrid_astar"
+controller_name: "mppi"
 # 运动 profile: clean=只前进 (倒车仅在恢复), free=允许倒车.
 # 注意: 这两个 planner 名必须写, 否则会退回代码默认 (clean_planner=astar),
 # 真机会静默从 hybrid_astar 变成 A*.
@@ -69,9 +79,9 @@ max_lookahead_distance: 0.9
 #   旧的 0.39 是 xz 平台 g_min_safe(硬禁区) 常数, 落在两者之间 —— 既让
 #   0.8m 门洞只剩 0.02m 余量, 又对车头(前伸 0.55)不够保守.
 #   真实约束由 footprint + Hybrid A* / 控制器 footprint 检查保证;
-#   这里取半宽 0.33, 让 A* 兜底时能过 0.8m 门洞 (单边真实余量 0.07m).
+#   实车取 0.39 (与实机 2026-10-23 配置一致); A* 兜底只用这个圆模型,
 # inflation_radius = g_max_safe 的等效膨胀.
-robot_radius: 0.33
+robot_radius: 0.39
 # 规划器/控制器共用车体轮廓; Hybrid A* 使用它, A* 只使用 robot_radius.
 footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 # 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
@@ -88,14 +98,14 @@ path_resample_step: 0.08
 inflation_radius: 0.62
 
 # 里程计话题
-odom_topic: /odom
+odom_topic: "/odom"
 # RViz "2D Nav Goal" 默认话题; 订阅后按 goal 的箭头方向对齐末端航向
 rviz_goal_topic: "/move_base_simple/goal"
 rviz_goal_align_yaw: true
 
 # 安全层 (Nav2 Collision Monitor 等价)
 safety_enabled: true
-safety_self_filter_radius: 0.10
+safety_self_filter_radius: 0.25
 # 与 3D 前端相同的车体自过滤 (base_footprint 系包围盒):
 scan_self_filter_enabled: true
 scan_self_x_min: -0.45
@@ -110,16 +120,16 @@ safety_source_timeout: 0.5
 # 所以下面三个 STOP 区都从车体边缘之外开始. 以前用 "包围盒内不判定 + 大矩形自过滤"
 # 的组合, 结果 safety_stop_polygon 整个落在自过滤框里, STOP 永远进不去.
 safety_body_margin: 0.05
-# 前进: 车头前 0 ~ 0.4m
-safety_stop_polygon: [0.55, -0.345, 0.95, -0.345, 0.95, 0.345, 0.55, 0.345]   # 侧向 ±0.345 (= 车体半宽 0.33 + 余量), 过 0.8m 门洞
-# 后退: 车尾后 0.35 ~ 0.75m
-safety_stop_polygon_backward: [-0.75, -0.345, -0.35, -0.345, -0.35, 0.345, -0.75, 0.345]
+# 前进: 实车标定 -0.37 ~ +0.67m (含车体), 侧 ±0.45
+safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]   # 实车标定: 前 0.67 / 后 -0.37 / 侧 ±0.45
+# 后退: 车尾后 0.35 ~ 0.75m, 侧 ±0.45 (与前进区同宽; 实机 yaml 原先未设, 走代码默认 ±0.345)
+safety_stop_polygon_backward: [-0.75, -0.45, -0.35, -0.45, -0.35, 0.45, -0.75, 0.45]
 # 原地旋转: 车体扫掠面 + 0.2m
 # 原地转用扫掠圆 (半径 = 车体最远顶点 0.64 + 余量); 0 = 用上面的矩形
 safety_rotation_radius_margin: 0.10
 safety_stop_polygon_rotation: [-0.50, -0.55, 0.80, -0.55, 0.80, 0.55, -0.50, 0.55]
-# 减速: 车头前 0 ~ 0.6m
-safety_slowdown_polygon: [0.55, -0.55, 1.15, -0.55, 1.15, 0.55, 0.55, 0.55]
+# 减速: 实车标定 -0.55 ~ +0.85m, 侧 ±0.63
+safety_slowdown_polygon: [-0.55, -0.63, 0.85, -0.63, 0.85, 0.63, -0.55, 0.63]
 # 滞回 (20Hz 下 2/3 帧 = 100/150ms)
 safety_stop_trigger_frames: 2
 # 点数阈值: 0.8m 处 10cm 障碍约 20 个点, 稀疏伪回波只有 3~4 个
@@ -143,7 +153,7 @@ safety_time_before_collision: 2.0
 safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 
 # 动态障碍跟踪
-tracking_enabled: true
+tracking_enabled: false
 tracking_horizon: 0.5
 tracking_cluster_distance: 0.35
 tracking_confirm_hits: 3
@@ -157,7 +167,7 @@ recovery_back_distance: 0.60
 recovery_timeout: 20.0
 
 # 3D 体素 / STVL 层
-voxel_enabled: true
+voxel_enabled: false
 voxel_cloud_topic: "/world_cloud"
 voxel_resolution: 0.10
 voxel_max_points: 200000
@@ -174,7 +184,7 @@ coverage_resolution: 0.05          # 与地图分辨率一致最好
 coverage_replan_period: 10.0       # 周期兜底；正常按“路径走完/2s 不动”重规划
 coverage_horizon: 2.5              # 每段执行长度 m
 coverage_retry_timeout: 10.0       # 被动态障碍挡住多久后标不可达
-coverage_complete_rate: 0.99      # 覆盖率达到多少就收尾, 剩余标不可达
+coverage_complete_rate: 0.995  # 覆盖率达到多少就收尾, 剩余标不可达
 coverage_blocked_inflation: 0.10   # 动态障碍点膨胀 m
 coverage_plan_inflation: 0.0       # 覆盖 A* 不再膨胀：区域边界=硬边界, 车体形状交给 footprint
 coverage_plan_robot_radius: 0.0
@@ -221,3 +231,19 @@ recovery_start_relax_radius: 1.0
 planning_clear_start_footprint: true
 planning_start_clear_margin: 0.05
 planning_start_relax_radius: 0.0
+
+# ============================================================================
+# robot_movebase 兼容层 (旧接口 /RobotNaviCmdAction + /movebase_cmd_vel)
+# 这些键只有兼容模式才用; 普通导航不用关心。
+# ============================================================================
+movebase_compat_enabled: true
+cmd_vel_topic: "/cmd_vel"
+movebase_cmd_vel_topic: "/movebase_cmd_vel"
+movebase_robot_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+movebase_default_speed: 0.8
+movebase_back_speed: 0.1
+movebase_rotate_speed: 0.5
+movebase_stuck_timeout: 60.0
+movebase_goal_yaw_tolerance: 0.1
+movebase_rotate_tolerance: 0.05
+movebase_prediction_horizon: 1.0

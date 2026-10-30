@@ -9,11 +9,15 @@
        节点名默认 robot_move_base, 方便沿用旧 bringup 里按节点名做的检查;
        按节点名传参的地方需要同步改成 /robot_move_base_rosiwit。
        ======================================================================== -->
-  <arg name="config_file" default="$(find rosiwit_navigation_ros1)/config/movebase_compat.yaml"/>
+  <!-- 2026-10-30: default.yaml 是唯一配置源, movebase_compat.yaml 只放兼容层专属键。
+       必须先 load default, 再 load overlay (同名键后者覆盖)。 -->
+  <arg name="config_file" default="$(find rosiwit_navigation_ros1)/config/default.yaml"/>
+  <arg name="compat_file" default="$(find rosiwit_navigation_ros1)/config/movebase_compat.yaml"/>
   <arg name="node_name" default="robot_move_base"/>
 
   <node pkg="rosiwit_navigation_ros1" type="rosiwit_navigation_ros1_node"
         name="$(arg node_name)" output="screen" respawn="true" respawn_delay="2">
     <rosparam command="load" file="$(arg config_file)"/>
+    <rosparam command="load" file="$(arg compat_file)"/>
   </node>
 </launch>
