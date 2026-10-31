@@ -388,13 +388,19 @@ void Ros1SlamInterface::publishLocationInfo() {
         has_prior ? prior_xy : 0.0, has_prior ? prior_yaw : 0.0);
 
     // 位姿融合诊断 (1Hz): direct 模式下 accepted 增长但 applied_* 恒 0;
-    // eskf 模式下可看到 rejected_chi2 / rejected_in_place / applied_trans 的分布。
+    // eskf 模式下可看到 rejected_chi2 / rejected_in_place / applied_trans 与
+    // LIO 相对观测计数 (relative_accepted/reanchored) / odom 权重。
     if (fusion_diag_puber_) {
-        static int diag_tick = 0;
-        if (++diag_tick % 10 == 0) {   // 本函数 10Hz
+        // 用时间节流, 不依赖本函数的调用频率 (定位卡顿时也不会把诊断一起拖慢)
+        static ros::Time last_diag_pub;
+        const ros::Time now = ros::Time::now();
+        if (last_diag_pub.isZero() || (now - last_diag_pub).toSec() >= 1.0) {
             std_msgs::String msg;
             msg.data = engine_.poseFusionDiagnostics();
-            if (!msg.data.empty()) { fusion_diag_puber_.publish(msg); }
+            if (!msg.data.empty()) {
+                fusion_diag_puber_.publish(msg);
+                last_diag_pub = now;
+            }
         }
     }
 }

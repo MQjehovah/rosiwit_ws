@@ -73,6 +73,10 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_monitor_name     = getv<std::string>(pipe, "monitor", m_monitor_name);
     m_maintainer_name  = getv<std::string>(pipe, "map_maintainer", m_maintainer_name);
     m_fusion_name      = getv<std::string>(pipe, "pose_fusion", m_fusion_name);
+    if (!pipe || !pipe["pose_fusion"]) {
+        // 兼容旧配置: pose_fusion 直接写在 localization 下 (设备 compat_legacy.yaml 就是这种)
+        m_fusion_name = getv<std::string>(loc, "pose_fusion", m_fusion_name);
+    }
     {
         // 融合层参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效
         auto fc = loc["fusion"];
@@ -1732,6 +1736,10 @@ std::string LocalizationPipeline::poseFusionDiagnostics() const {
     std::ostringstream os;
     os << "{\"mode\":\"" << m_fusion_name << "\""
        << ",\"accepted\":" << d.accepted
+       << ",\"relative_accepted\":" << d.relative_accepted
+       << ",\"relative_reanchored\":" << d.relative_reanchored
+       << ",\"last_rel_residual\":" << d.last_rel_residual
+       << ",\"odom_weight\":" << d.odom_weight
        << ",\"rejected_chi2\":" << d.rejected_chi2
        << ",\"rejected_in_place\":" << d.rejected_in_place
        << ",\"last_chi2\":" << d.last_chi2
