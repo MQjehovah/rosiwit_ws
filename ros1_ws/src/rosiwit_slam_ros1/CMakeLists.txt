@@ -187,6 +187,11 @@ if(CATKIN_ENABLE_TESTING)
     if(TARGET test_ekf_prior)
         target_link_libraries(test_ekf_prior rosiwit_slam_ros1_lib)
     endif()
+
+    catkin_add_gtest(test_pose_fusion test/test_pose_fusion.cpp)
+    if(TARGET test_pose_fusion)
+        target_link_libraries(test_pose_fusion rosiwit_slam_ros1_lib)
+    endif()
 endif()
 
 install(TARGETS rosiwit_slam_ros1_node

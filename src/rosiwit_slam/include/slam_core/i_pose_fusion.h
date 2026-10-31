@@ -16,6 +16,9 @@ struct FusionDiag {
     double last_gain_rot = 0.0;
     double applied_trans = 0.0;   // 最近一次实际应用的平移修正 (m)
     double applied_rot_deg = 0.0; // 最近一次实际应用的旋转修正 (deg)
+    // ---- 相对位姿观测 (LIO) ----
+    int    relative_accepted = 0;      // 相对观测被采用的次数
+    double last_rel_residual = 0.0;    // 最近一次相对观测残差 (m); 也作为 LIO/S2M 分歧代理
 };
 
 /// 位姿融合层: 把"配准结果(观测)"变成"位姿(状态)".
@@ -41,6 +44,11 @@ public:
 
     /// 轮式里程计位姿 (frame=odom, 车体姿态): 速度观测, 实现自行门控
     virtual void onOdom(const PoseStamped& /*odom*/) {}
+
+    /// 相对位姿观测 (LIO 里程计): 只表达"相对上一帧走了多少", 不含绝对位置。
+    /// 默认忽略 —— direct 实现保持"配准结果直通"的旧语义。
+    virtual void onRelative(const PoseStamped& /*pose*/,
+                            const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
 
     /// 配准观测 (带协方差). 是否采信由实现决定 (chi2 / 原地旋转 / 限幅).
     virtual void onMatch(const PoseStamped& pose,

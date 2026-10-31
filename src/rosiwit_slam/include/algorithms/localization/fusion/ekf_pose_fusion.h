@@ -25,6 +25,8 @@ public:
 
     void onImu(const IMUSample& s) override;
     void onOdom(const PoseStamped& odom) override;
+    void onRelative(const PoseStamped& pose,
+                    const Eigen::Matrix<double, 6, 6>& cov) override;
 
     void onMatch(const PoseStamped& pose,
                  const Eigen::Matrix<double, 6, 6>& cov,
@@ -68,6 +70,11 @@ private:
     // 最近一次被采信的匹配, 用于原地旋转判定 (本帧航向变化)
     double m_last_match_yaw = 0.0;
     bool   m_have_last_match = false;
+
+    // ---- 相对位姿观测 (LIO) 的锚点 ----
+    bool        m_have_rel_prev = false;
+    PoseStamped m_rel_prev_lio;                              // 上一帧 LIO 位姿
+    Eigen::Vector3d m_rel_prev_state_p = Eigen::Vector3d::Zero();  // 同一时刻滤波器位置
 
     FusionDiag m_diag;
 };

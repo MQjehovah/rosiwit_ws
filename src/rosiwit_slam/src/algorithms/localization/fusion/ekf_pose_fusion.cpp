@@ -50,6 +50,7 @@ void EkfPoseFusion::reset(const PoseStamped& pose) {
     m_last_odom_time = -1.0;
     m_have_last_match = false;
     m_odom_yaw = rotToRpy(pose.rot).z();
+    m_have_rel_prev = false;
     m_diag = FusionDiag{};
 }
 
@@ -197,6 +198,46 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
     m_diag.last_gain_rot = gain(0);
     m_diag.applied_trans = d_trans.norm();
     m_diag.applied_rot_deg = d_rot.norm() * 180.0 / M_PI;
+}
+
+void EkfPoseFusion::onRelative(const PoseStamped& pose,
+                               const Eigen::Matrix<double, 6, 6>& cov) {
+    if (!m_valid) return;
+    if (!m_have_rel_prev) {
+        // 首帧只做锚定: 相对观测没有绝对信息, 需要一个基准才能比较增量
+        m_rel_prev_lio = pose;
+        m_rel_prev_state_p = m_p;
+        m_have_rel_prev = true;
+        return;
+    }
+    // LIO 与滤波各自的"上一锚点 -> 当前"平移增量, 都转到体体系再比较
+    const Eigen::Vector3d d_lio =
+        m_rel_prev_lio.rot.transpose() * (pose.trans - m_rel_prev_lio.trans);
+    const Eigen::Vector3d d_state = m_R.transpose() * (m_p - m_rel_prev_state_p);
+    const Eigen::Vector3d e = d_lio - d_state;
+
+    // 观测噪声: 取协方差平移块的均值 + 下限 (点数少时协方差会被低估)
+    double r = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        r += std::max(cov(3 + i, 3 + i), m_cfg.trans_cov_floor);
+    }
+    r /= 3.0;
+    // 位置协方差均值 -> 标量增益, 上限 gain_trans
+    double p = 0.0;
+    for (int i = 0; i < 3; ++i) p += m_P(3 + i);
+    p /= 3.0;
+    const double k = std::min(m_cfg.gain_trans, p / (p + r));
+
+    Eigen::Vector3d d = k * e;
+    if (d.norm() > m_cfg.max_correction_trans && d.norm() > 1e-12) {
+        d *= m_cfg.max_correction_trans / d.norm();
+    }
+    m_p += m_R * d;
+
+    ++m_diag.relative_accepted;
+    m_diag.last_rel_residual = e.norm();
+    m_rel_prev_lio = pose;
+    m_rel_prev_state_p = m_p;
 }
 
 PoseStamped EkfPoseFusion::predict(double t) const {
