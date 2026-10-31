@@ -322,7 +322,8 @@ void LivoMapper::buildOutputs() {
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr rgb(new pcl::PointCloud<pcl::PointXYZRGB>());
     bool has_rgb = false;
 
-    if (slam_mode_ == LIVO && LidarMeasures_.lio_vio_flg == VIO && !pcl_w_wait_pub_->empty()) {
+    if (slam_mode_ == LIVO && LidarMeasures_.lio_vio_flg == VIO && !pcl_w_wait_pub_->empty() &&
+        vio_manager_ && vio_manager_->new_frame_ && !vio_manager_->img_rgb.empty()) {
         *pcl_wait_pub_ += *pcl_w_wait_pub_;
         const size_t size = pcl_wait_pub_->points.size();
         rgb->reserve(size);
