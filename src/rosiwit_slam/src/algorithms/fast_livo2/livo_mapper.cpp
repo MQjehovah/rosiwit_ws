@@ -47,6 +47,8 @@ bool LivoMapper::init(const FastLivo2Config& config) {
     VoxelMapConfig voxel_config;
     loadVoxelConfig(cfg_, voxel_config);
     voxelmap_manager_.reset(new VoxelMapManager(voxel_config, voxel_map_));
+    voxelmap_manager_->extT_ = extT_;
+    voxelmap_manager_->extR_ = extR_;
 
     feats_undistort_.reset(new PointCloudXYZI());
     feats_down_body_.reset(new PointCloudXYZI());
