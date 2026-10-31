@@ -64,6 +64,8 @@ target_include_directories(rosiwit_slam PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithms
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithms/fast_livo2
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithms/fast_livo2/vikit/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithms/fast_lio2
     ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithms/fast_lio2/map_builder
     ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
