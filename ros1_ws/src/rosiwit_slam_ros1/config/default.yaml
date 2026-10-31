@@ -205,7 +205,7 @@ localization:
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
     map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
-    pose_fusion: direct       # direct(默认, 与改造前逐位一致) | eskf(限幅 + 多源加权)
+    pose_fusion: eskf         # eskf(限幅 + 多源加权, 默认) | direct(直通, 可回退)
 
   # ---- 位姿融合参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效 ----
   fusion:
