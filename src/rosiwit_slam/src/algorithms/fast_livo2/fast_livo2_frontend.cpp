@@ -1,7 +1,8 @@
 // src/algorithms/fast_livo2/fast_livo2_frontend.cpp
 #include "algorithms/fast_livo2/fast_livo2_frontend.h"
+#include "algorithms/fast_livo2/parse_config.h"
 
-#include <fstream>
+#include <iostream>
 
 namespace rosiwit_slam {
 
@@ -9,9 +10,13 @@ FastLivo2Frontend::FastLivo2Frontend() = default;
 FastLivo2Frontend::~FastLivo2Frontend() = default;
 
 bool FastLivo2Frontend::init(const std::string& config_path) {
-    // Full config parsing lands in the next task.
-    std::ifstream f(config_path);
-    return f.good();
+    std::string err;
+    if (!parseFastLivo2Config(config_path, m_config, err)) {
+        std::cerr << "[FastLivo2Frontend] init failed: " << err << std::endl;
+        return false;
+    }
+    m_inited = true;
+    return true;
 }
 
 void FastLivo2Frontend::onImu(const IMUSample& /*s*/) {}

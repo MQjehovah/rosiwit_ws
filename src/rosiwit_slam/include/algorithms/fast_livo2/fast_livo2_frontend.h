@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 
+#include "algorithms/fast_livo2/fast_livo2_config.h"
 #include "slam_core/i_frontend.h"
 
 namespace rosiwit_slam {
@@ -26,6 +27,10 @@ public:
     bool getKeyFrame(KeyFrame& out) override;
     bool getGlobalMap(PointVec& out) override;
     bool getRGBCloud(pcl::PointCloud<pcl::PointXYZRGB>::Ptr& out) override;
+
+private:
+    FastLivo2Config m_config;
+    bool m_inited = false;
 };
 
 }  // namespace rosiwit_slam
