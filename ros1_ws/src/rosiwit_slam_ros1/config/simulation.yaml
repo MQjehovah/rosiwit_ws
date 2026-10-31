@@ -129,6 +129,7 @@ localization:
     motion_prior: imu
     local_map: radius_submap
     matcher: pp_icp
+    pose_fusion: eskf   # 限幅 + 多源加权 (与实车一致); 回退改 direct
     monitor: windowed    # 场景变化兜底: 底图不重写, 变化沉淀为叠加层(<map>.overlay.pcd), 配准目标
     # = 底图 + 叠加层。建图没覆盖/稀疏的区域在定位过程中被逐步补齐。
     map_maintainer: overlay
