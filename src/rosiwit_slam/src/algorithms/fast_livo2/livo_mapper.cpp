@@ -119,7 +119,7 @@ void LivoMapper::addLidar(const LidarFrame& frame) {
     if (!cfg_.lidar_en || !frame.cloud) return;
 
     std::lock_guard<std::mutex> lock(mtx_buffer_);
-    const double stamp = frame.start_time - cfg_.lidar_time_offset;
+    const double stamp = frame.start_time + cfg_.lidar_time_offset;
     if (last_timestamp_lidar_ > 0.0 && stamp < last_timestamp_lidar_) {
         std::cerr << "[LivoMapper] lidar loop back, clear buffer" << std::endl;
         lid_raw_data_buffer_.clear();
@@ -138,7 +138,7 @@ void LivoMapper::addImage(const ImageFrame& frame) {
     if (!cfg_.img_en || frame.image.empty()) return;
 
     std::lock_guard<std::mutex> lock(mtx_buffer_);
-    const double stamp = frame.time - cfg_.img_time_offset;
+    const double stamp = frame.time + cfg_.img_time_offset;
     if (last_timestamp_img_ > 0.0 && stamp <= last_timestamp_img_) return;  // duplicate / out of order
     last_timestamp_img_ = stamp;
     img_buffer_.push_back(frame.image.clone());

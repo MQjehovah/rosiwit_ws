@@ -33,11 +33,17 @@ void FastLivo2Frontend::onImu(const IMUSample& s) {
 }
 
 void FastLivo2Frontend::onImage(const ImageFrame& f) {
-    if (m_mapper) m_mapper->addImage(f);
+    if (!m_mapper) return;
+    m_mapper->addImage(f);
+    // 图像到达后再推进一次：LIVO 的 LIO/VIO 切分需要图像时间，
+    // 只等下一帧 LiDAR 会多等一个扫描周期甚至卡住。
+    std::lock_guard<std::mutex> lock(m_process_mtx);
+    m_mapper->process();
 }
 
 void FastLivo2Frontend::onLidar(const LidarFrame& f) {
     if (!m_mapper) return;
+    std::lock_guard<std::mutex> lock(m_process_mtx);
     m_mapper->addLidar(f);
     m_mapper->process();
 }

@@ -1,0 +1,113 @@
+# rosiwit_slam - FAST-LIVO2 core frontend (NTU VIRAL eee_03)
+# camera + extrinsics follow ros2_ws/src/fast_livo2/config/NTU_VIRAL.yaml
+
+global:
+  slam_algorithm: fast_lio2_pipeline
+  pipeline: "rosiwit_slam"
+  pipeline_mode: mapping
+  modules:
+    frontend: "fast_livo2_frontend"
+    backend: "ceres_pose_graph"
+    loop_closure: "scan_context"
+    map_manager: "pcd_map_manager"
+    localization: "localization_pipeline"
+
+  input:
+    imu_topic: /imu/imu
+    lidar_topic: /os1_cloud_node1/points
+    image_topic: /left/image_raw
+    disable_prefilter: true      # LIVO 前端自己按 fast_livo2 参数滤波
+    lidar_filter_num: 3
+    lidar_min_range: 0.8
+    lidar_max_range: 100.0
+    scan_period_ms: 100.0
+    use_odom: false
+
+  frames:
+    lidar_frame: os1_lidar
+    imu_frame: os1_imu
+    body_frame: base_link
+    world_frame: map
+    map_frame: map
+    odom_frame: odom
+
+  map:
+    voxel_resolution: 0.3
+    save_voxel: 0.3
+
+mapping:
+  camera:
+    model: Pinhole
+    width: 752
+    height: 480
+    scale: 1.0
+    fx: 4.250258563372763e+02
+    fy: 4.267976260903337e+02
+    cx: 3.860151866550880e+02
+    cy: 2.419130336743440e+02
+    d0: -0.288105327549552
+    d1: 0.074578284234601
+    d2: 7.784489598138802e-04
+    d3: -2.277853975035461e-04
+
+  extrin_calib:
+    lidar_imu_t: [-0.050, 0.000, 0.055]
+    lidar_imu_r: [1.0, 0.0, 0.0,
+                  0.0, 1.0, 0.0,
+                  0.0, 0.0, 1.0]
+    camera_lidar_r: [0.0218308, 0.99976, -0.00201407,
+                     -0.0131205, 0.00230088, 0.999911,
+                     0.999676, -0.0218025, 0.0131676]
+    camera_lidar_t: [0.122993, 0.0398643, -0.0577101]
+
+  fast_livo2:
+    img_en: true
+    lidar_en: true
+    imu_en: true
+    lidar_type: 8
+    point_filter_num: 3
+    scan_line: 16
+    blind: 1.0
+    filter_size_surf: 0.1
+
+    imu_int_frame: 30
+    acc_cov: 0.5
+    gyr_cov: 0.3
+    b_acc_cov: 0.0001
+    b_gyr_cov: 0.0001
+
+    lio_max_iterations: 5
+    dept_err: 0.02
+    beam_err: 0.01
+    min_eigen_value: 0.0025
+    voxel_size: 0.5
+    max_layer: 2
+    max_points_num: 50
+
+    vio_max_iterations: 5
+    outlier_threshold: 1000
+    img_point_cov: 100
+    patch_size: 8
+    patch_pyrimid_level: 3
+    normal_en: true
+    raycast_en: false
+    inverse_composition_en: false
+    exposure_estimate_en: true
+    inv_expo_cov: 0.1
+
+    dense_map_en: true
+    pub_scan_num: 1
+    blind_rgb_points: 0.0
+    pub_effect_point_en: false
+    pub_plane_en: false
+    map_sliding_en: false
+    half_map_size: 100.0
+    sliding_thresh: 8.0
+
+    keyframe_trans_thresh: 1.0
+    keyframe_rot_thresh: 0.17
+
+    time_offset:
+      lidar: 0.0
+      img: 0.0
+      imu: 0.0

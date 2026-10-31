@@ -5,6 +5,8 @@
 #include "slam_core/slam_pipeline.h"
 #include <pcl_conversions/pcl_conversions.h>
 #include <yaml-cpp/yaml.h>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <tf2/time.h>
 #include <algorithm>
 #include <cstdio>
@@ -198,6 +200,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             };
             m_cfg.imu_topic        = gi("imu_topic").as<std::string>(m_cfg.imu_topic);
             m_cfg.lidar_topic      = gi("lidar_topic").as<std::string>(m_cfg.lidar_topic);
+            m_cfg.image_topic      = gi("image_topic").as<std::string>(m_cfg.image_topic);
+            m_cfg.enable_image_processing = gi("enable_image_processing").as<bool>(m_cfg.enable_image_processing);
+            m_cfg.disable_prefilter = gi("disable_prefilter").as<bool>(m_cfg.disable_prefilter);
             m_cfg.lidar_frame      = gf_node("lidar_frame").as<std::string>(m_cfg.lidar_frame);
             m_cfg.imu_frame        = gf_node("imu_frame").as<std::string>(m_cfg.imu_frame);
             m_cfg.body_frame       = gf_node("body_frame").as<std::string>(m_cfg.body_frame);
@@ -349,6 +354,17 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     const auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(500)).best_effort();
     m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, sensor_qos, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
     m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, sensor_qos, std::bind(&SlamNode::lidarCB, this, _1), sensor_sub_opts);
+    if (!m_cfg.image_topic.empty()) {
+        if (m_cfg.enable_image_processing) {
+            m_img_compressed_sub = create_subscription<sensor_msgs::msg::CompressedImage>(
+                m_cfg.image_topic, sensor_qos, std::bind(&SlamNode::compressedImageCB, this, _1), sensor_sub_opts);
+        } else {
+            m_img_sub = create_subscription<sensor_msgs::msg::Image>(
+                m_cfg.image_topic, sensor_qos, std::bind(&SlamNode::imageCB, this, _1), sensor_sub_opts);
+        }
+        RCLCPP_INFO(get_logger(), "LIVO image input: %s (%s)", m_cfg.image_topic.c_str(),
+                    m_cfg.enable_image_processing ? "compressed" : "raw");
+    }
     m_init_pose_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("initialpose", 10, std::bind(&SlamNode::initialPoseCB, this, _1), sensor_sub_opts);
     // 视觉里程计 (可选): 由 vision.enabled 开关控制, 话题名可配置
     if (m_cfg.vision_enabled) {
@@ -383,6 +399,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
 
     m_body_cloud_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("body_cloud", 10000);
     m_world_cloud_pub = create_publisher<sensor_msgs::msg::PointCloud2>("world_cloud", 10000);
+    m_rgb_cloud_pub   = create_publisher<sensor_msgs::msg::PointCloud2>("world_cloud_rgb", 100);
     m_odom_pub        = create_publisher<nav_msgs::msg::Odometry>("lio_odom", 10000);
     m_path_pub        = create_publisher<nav_msgs::msg::Path>("lio_path", 10000);
     m_global_map_pub  = create_publisher<sensor_msgs::msg::PointCloud2>("cloud_map", 10);
@@ -496,7 +513,11 @@ void SlamNode::applySelfFilter(rosiwit_slam::CloudType& cloud) {
 
 void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     LidarFrame f;
-    f.cloud = RosUtils::ros2PCL(msg, m_cfg.lidar_filter_num, m_cfg.lidar_min_range, m_cfg.lidar_max_range, m_cfg.scan_period_ms);
+    // LIVO 前端需要自己按配置滤波/抽稀: 关闭接口层预滤波, 但仍保留逐点时间(curvature)解析.
+    const int filter_num = m_cfg.disable_prefilter ? 1 : m_cfg.lidar_filter_num;
+    const double min_range = m_cfg.disable_prefilter ? 0.0 : m_cfg.lidar_min_range;
+    const double max_range = m_cfg.disable_prefilter ? 1e6 : m_cfg.lidar_max_range;
+    f.cloud = RosUtils::ros2PCL(msg, filter_num, min_range, max_range, m_cfg.scan_period_ms);
     applySelfFilter(*f.cloud);
     if (f.cloud->empty()) return;
     std::sort(f.cloud->points.begin(), f.cloud->points.end(), [](const PointType& a, const PointType& b){ return a.curvature < b.curvature; });
@@ -504,6 +525,55 @@ void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     f.end_time = f.start_time + (f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0);
     m_algo->onLidar(f);
     // 只入队, 重处理交给 work 分组定时器, 保证本回调尽快返回、不阻塞后续收包
+}
+
+void SlamNode::imageCB(const sensor_msgs::msg::Image::SharedPtr msg) {
+    if (!m_algo || msg->data.empty()) return;
+
+    cv::Mat img;
+    const std::string& enc = msg->encoding;
+    auto* data = const_cast<uint8_t*>(msg->data.data());
+    if (enc == "mono8") {
+        img = cv::Mat(msg->height, msg->width, CV_8UC1, data, msg->step).clone();
+    } else if (enc == "bgr8") {
+        img = cv::Mat(msg->height, msg->width, CV_8UC3, data, msg->step).clone();
+    } else if (enc == "rgb8") {
+        cv::Mat tmp(msg->height, msg->width, CV_8UC3, data, msg->step);
+        cv::cvtColor(tmp, img, cv::COLOR_RGB2BGR);
+    } else if (enc == "bgra8") {
+        cv::Mat tmp(msg->height, msg->width, CV_8UC4, data, msg->step);
+        cv::cvtColor(tmp, img, cv::COLOR_BGRA2BGR);
+    } else if (enc == "rgba8") {
+        cv::Mat tmp(msg->height, msg->width, CV_8UC4, data, msg->step);
+        cv::cvtColor(tmp, img, cv::COLOR_RGBA2BGR);
+    } else if (enc == "mono16") {
+        cv::Mat tmp(msg->height, msg->width, CV_16UC1, data, msg->step);
+        tmp.convertTo(img, CV_8UC1, 1.0 / 256.0);
+    } else {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                             "unsupported image encoding: %s", enc.c_str());
+        return;
+    }
+
+    ImageFrame f;
+    f.image = img;
+    f.time = RosUtils::getSec(msg->header);
+    f.frame_id = msg->header.frame_id;
+    m_algo->onImage(f);
+}
+
+void SlamNode::compressedImageCB(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
+    if (!m_algo || msg->data.empty()) return;
+    cv::Mat buf(1, static_cast<int>(msg->data.size()), CV_8UC1,
+                const_cast<uint8_t*>(msg->data.data()));
+    cv::Mat img = cv::imdecode(buf, cv::IMREAD_COLOR);
+    if (img.empty()) return;
+
+    ImageFrame f;
+    f.image = img;
+    f.time = RosUtils::getSec(msg->header);
+    f.frame_id = msg->header.frame_id;
+    m_algo->onImage(f);
 }
 
 void SlamNode::voCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -665,6 +735,13 @@ void SlamNode::publish(const SlamOutput& out) {
     };
     pub_cloud(m_body_cloud_pub, body_cloud, m_cfg.body_frame);
     pub_cloud(m_world_cloud_pub, out.world_cloud, m_cfg.world_frame);
+    if (m_rgb_cloud_pub && out.rgb_world_cloud && !out.rgb_world_cloud->empty()) {
+        sensor_msgs::msg::PointCloud2 m;
+        pcl::toROSMsg(*out.rgb_world_cloud, m);
+        m.header.frame_id = m_cfg.world_frame;
+        m.header.stamp = stamp;
+        m_rgb_cloud_pub->publish(m);
+    }
     if (m_path_pub->get_subscription_count() > 0) {
         geometry_msgs::msg::PoseStamped ps; ps.header.frame_id = m_cfg.world_frame; ps.header.stamp = stamp;
         ps.pose.position.x = pose.trans.x(); ps.pose.position.y = pose.trans.y(); ps.pose.position.z = pose.trans.z();

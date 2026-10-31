@@ -558,6 +558,11 @@ void SlamPipeline::onImu(const IMUSample& s) {
     }
 }
 
+void SlamPipeline::onImage(const ImageFrame& f) {
+    // 只转给前端；前端内部加锁缓存，后续在建图 worker 里与 LiDAR/IMU 同步。
+    if (m_frontend) m_frontend->onImage(f);
+}
+
 void SlamPipeline::onLidar(const LidarFrame& f) {
     auto mode = m_mode.load();
     if (mode == PipelineMode::IDLE) return;
@@ -768,7 +773,12 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
     }
 
     out.body_cloud = out.world_cloud = nullptr;
+    out.rgb_world_cloud.reset();
     m_frontend->getClouds(out.body_cloud, out.world_cloud);
+    if (m_frontend) {
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr rgb;
+        if (m_frontend->getRGBCloud(rgb)) out.rgb_world_cloud = rgb;
+    }
 
     // 实时回环修正: 后端优化后, 把输出位姿/轨迹与 world_cloud 平移到修正坐标系(A∘R),
     // 使 odom/tf/path 与重建后的地图一致, 回环瞬间可看到"拉回"。
@@ -790,6 +800,11 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
         CloudType::Ptr w(new CloudType());
         pcl::transformPointCloud(*out.world_cloud, *w, T);
         out.world_cloud = w;
+        if (out.rgb_world_cloud && !out.rgb_world_cloud->empty()) {
+            pcl::PointCloud<pcl::PointXYZRGB>::Ptr rgb_anchor(new pcl::PointCloud<pcl::PointXYZRGB>());
+            pcl::transformPointCloud(*out.rgb_world_cloud, *rgb_anchor, T);
+            out.rgb_world_cloud = rgb_anchor;
+        }
     }
     out.state = SlamState::RUNNING;
     out.has_new_pose = true;

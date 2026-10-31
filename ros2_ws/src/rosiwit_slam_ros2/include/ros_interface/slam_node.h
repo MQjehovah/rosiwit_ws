@@ -3,6 +3,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -45,6 +47,9 @@ private:
     struct NodeConfig {
         std::string imu_topic   = "imu";
         std::string lidar_topic = "velodyne_points";
+        std::string image_topic = "";          // 空 = 不订阅图像 (LIVO 时填写)
+        bool   enable_image_processing = false;  // true = 订阅 CompressedImage
+        bool   disable_prefilter = false;        // LIVO 前端自己滤波时置 true
         std::string lidar_frame = "lidar";
         std::string imu_frame   = "lidar";     // 核心 body frame (FAST-LIO2 估计 IMU body)
         std::string body_frame  = "base_link";
@@ -86,6 +91,8 @@ private:
 
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg);
     void lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+    void imageCB(const sensor_msgs::msg::Image::SharedPtr msg);
+    void compressedImageCB(const sensor_msgs::msg::CompressedImage::SharedPtr msg);
     void applySelfFilter(rosiwit_slam::CloudType& cloud);
     void voCB(const nav_msgs::msg::Odometry::SharedPtr msg);   // 视觉里程计 (可选)
     void odomCB(const nav_msgs::msg::Odometry::SharedPtr msg); // 轮式里程计 (可选)
@@ -124,11 +131,13 @@ private:
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr          m_imu_sub;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr  m_lidar_sub;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr        m_img_sub;
+    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr m_img_compressed_sub;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr m_init_pose_sub;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr m_vo_sub;   // 视觉里程计 (开关控制)
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr m_odom_sub; // 轮式里程计 (开关控制)
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr m_absolute_sub;  // 绝对约束
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_body_cloud_pub, m_world_cloud_pub, m_global_map_pub;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_body_cloud_pub, m_world_cloud_pub, m_global_map_pub, m_rgb_cloud_pub;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_pub;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr     m_path_pub;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr m_grid_map_pub;

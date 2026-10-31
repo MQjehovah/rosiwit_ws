@@ -28,6 +28,12 @@ set_target_properties(rosiwit_common PROPERTIES POSITION_INDEPENDENT_CODE ON)
 find_package(Threads REQUIRED)
 target_link_libraries(rosiwit_common PUBLIC Threads::Threads)
 
+# ROS 接口包内联构建时必须安装，否则运行期找不到 librosiwit_common.so。
+install(TARGETS rosiwit_common
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin)
+
 if(ROSIWIT_COMMON_STANDALONE)
     enable_testing()
     find_package(GTest QUIET)

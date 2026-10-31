@@ -91,6 +91,8 @@ public:
     void onRelative(const PoseStamped& pose,
                     const Eigen::Matrix<double, 6, 6>& cov) override;
     void onLidar(const LidarFrame& f) override;
+    /// 图像输入：直接转给前端（LIVO 前端内部缓存/同步；纯 LIO 前端忽略）。
+    void onImage(const ImageFrame& f) override;
     std::string name() const override { return m_pipeline_name; }
     bool getGlobalMap(PointVec& out) override;
     SlamState state() const override;

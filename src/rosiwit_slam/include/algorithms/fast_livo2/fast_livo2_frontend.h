@@ -39,6 +39,7 @@ private:
     bool m_inited = false;
 
     std::mutex m_mtx;
+    std::mutex m_process_mtx;
     PoseStamped m_last_keyframe_pose;
     bool m_has_last_keyframe = false;
     std::uint64_t m_keyframe_counter = 0;
