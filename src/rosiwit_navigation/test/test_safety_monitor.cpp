@@ -97,6 +97,99 @@ TEST(SafetyMonitor, SlowdownScalesAllComponents)
   EXPECT_DOUBLE_EQ(result.command.angular_z, 0.1);
 }
 
+TEST(SafetyMonitor, DynamicStopUsesBrakingDistance)
+{
+  SafetyMonitorConfig cfg;
+  cfg.enabled = true;
+  cfg.dynamic_geometry = true;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.stop_margin = 0.05;
+  cfg.side_margin = 0.03;
+  cfg.turn_margin = 0.05;
+  cfg.footprint = {{-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}};
+  cfg.stop_max_points = 2;
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_release_frames = 1;
+  cfg.slowdown_max_points = 100;
+  cfg.approach_enabled = false;
+
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  const std::vector<Point> points{{1.0, 0.0}, {1.02, 0.01}, {1.03, -0.01}};
+
+  // v=0.8: front = 0.55 + 0.8^2/(2*0.8) + 0.8*0.2 + 0.05 = 1.16 -> 1.0m 在区内
+  const auto fast = monitor.filter(VelocityCommand(0.8, 0.0, 0.0), points);
+  EXPECT_EQ(fast.state, "STOP");
+
+  // v=0.2: front = 0.55 + 0.025 + 0.04 + 0.05 = 0.665 -> 1.0m 在区外
+  monitor.reset();
+  const auto slow = monitor.filter(VelocityCommand(0.2, 0.0, 0.0), points);
+  EXPECT_NE(slow.state, "STOP");
+}
+
+TEST(SafetyMonitor, DynamicStopSideAllowsNarrowAisle)
+{
+  SafetyMonitorConfig cfg;
+  cfg.enabled = true;
+  cfg.dynamic_geometry = true;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.stop_margin = 0.05;
+  cfg.side_margin = 0.03;
+  cfg.footprint = {{-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}};
+  cfg.stop_max_points = 2;
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_release_frames = 1;
+  cfg.slowdown_max_points = 100;
+  cfg.approach_enabled = false;
+
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  // 0.8m 巷道: 侧墙约 0.40; 动态侧边界 = 0.33+0.03=0.36 -> 不应停车
+  const std::vector<Point> wall_far{{0.2, 0.40}, {0.21, 0.40}, {0.22, 0.40}};
+  const auto pass = monitor.filter(VelocityCommand(0.3, 0.0, 0.0), wall_far);
+  EXPECT_NE(pass.state, "STOP");
+
+  // 侧墙 0.34 -> 已进入 0.36 -> 停车
+  monitor.reset();
+  const std::vector<Point> wall_near{{0.2, 0.34}, {0.21, 0.34}, {0.22, 0.34}};
+  const auto stop = monitor.filter(VelocityCommand(0.3, 0.0, 0.0), wall_near);
+  EXPECT_EQ(stop.state, "STOP");
+}
+
+TEST(SafetyMonitor, ScaleSlewLimitsRecovery)
+{
+  SafetyMonitorConfig cfg;
+  cfg.enabled = true;
+  cfg.dynamic_geometry = false;
+  cfg.stop_polygon = {{-0.1, -0.1}, {0.1, -0.1}, {0.1, 0.1}, {-0.1, 0.1}};
+  cfg.stop_max_points = 100;
+  cfg.slowdown_polygon = {{-0.6, -0.6}, {0.6, -0.6}, {0.6, 0.6}, {-0.6, 0.6}};
+  cfg.slowdown_max_points = 1;
+  cfg.slowdown_ratio = 0.5;
+  cfg.approach_enabled = false;
+  cfg.scale_slew_rate = 1.0;
+  cfg.scale_dt = 0.1;
+
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  const std::vector<Point> points{{0.4, 0.0}, {0.45, 0.1}};
+
+  // 降速应立即生效 (安全优先)
+  const auto slow = monitor.filter(VelocityCommand(0.4, 0.0, 0.0), points);
+  EXPECT_EQ(slow.state, "SLOWDOWN");
+  EXPECT_NEAR(slow.scale, 0.5, 1e-9);
+
+  // 障碍消失后只允许按 slew 回升: 0.5 -> 0.6 -> 0.7
+  const std::vector<Point> empty;
+  const auto up1 = monitor.filter(VelocityCommand(0.4, 0.0, 0.0), empty);
+  EXPECT_NEAR(up1.scale, 0.6, 1e-9);
+  const auto up2 = monitor.filter(VelocityCommand(0.4, 0.0, 0.0), empty);
+  EXPECT_NEAR(up2.scale, 0.7, 1e-9);
+}
+
+
 TEST(SafetyMonitor, ApproachKeepsTimeMargin)
 {
   SafetyMonitorConfig cfg;

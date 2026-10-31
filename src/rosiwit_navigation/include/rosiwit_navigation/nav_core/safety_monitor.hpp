@@ -47,6 +47,21 @@ struct SafetyMonitorConfig
   int stop_release_frames = 1;
   int slowdown_trigger_frames = 1;
   int slowdown_release_frames = 1;
+
+  // ---- 动态安全区 (按车体 + 制动距离) ----
+  // true: 停车区不再用固定多边形, 而是按 footprint 的几何外沿 + 制动距离生成;
+  //       速度越快, 前向停车区越远; 侧向按 车半宽 + 余量 + 转向扫掠。
+  // false: 使用上面的固定 stop_polygon / slowdown_polygon (兼容旧配置).
+  bool dynamic_geometry = false;
+  double brake_decel = 0.8;        // 设计制动减速度 (m/s^2), 需按实车制动测试标定
+  double reaction_time = 0.2;      // 反应时间 (s)
+  double stop_margin = 0.05;       // 停车区前/后余量 (m)
+  double side_margin = 0.03;       // 侧向余量 (m)
+  double turn_margin = 0.05;       // 转向扫掠附加侧向余量 (m)
+  double slowdown_extra = 0.30;    // 保留字段: 动态模式下的减速区外扩 (m)
+  // 减速比例连续化: 每 0.1s 最多变化 scale_slew_rate; STOP 仍立即生效.
+  double scale_slew_rate = 0.0;    // 1/s; <=0 关闭 (默认关闭, 保持旧行为; 生产配置开启)
+  double scale_dt = 0.1;           // s
 };
 
 struct SafetyResult
@@ -78,6 +93,7 @@ public:
     slowdown_active_ = false;
     slow_trigger_ = 0;
     slow_release_ = 0;
+    last_scale_ = 1.0;
   }
 
   bool stopActive() const { return stop_active_; }
@@ -96,6 +112,7 @@ private:
   mutable bool slowdown_active_ = false;
   mutable int slow_trigger_ = 0;
   mutable int slow_release_ = 0;
+  mutable double last_scale_ = 1.0;
 };
 
 bool pointInPolygon(

@@ -136,8 +136,21 @@ safety_stop_trigger_frames: 2
 safety_stop_max_points: 4
 safety_slowdown_max_points: 6
 safety_stop_release_frames: 3
-safety_slowdown_trigger_frames: 1
-safety_slowdown_release_frames: 2
+safety_slowdown_trigger_frames: 2
+safety_slowdown_release_frames: 3
+
+# ---- 动态安全区 (按车体几何 + 制动距离) ----
+# 开启后 stop 区不再用上面的固定多边形, 而是按 footprint + 制动距离实时生成;
+# 减速不再用二值 slowdown_ratio, 改由 approach TTC + scale 变化率限制。
+safety_dynamic_geometry: true
+safety_brake_decel: 0.8      # m/s^2; ★必须按实车制动测试标定后再调
+safety_reaction_time: 0.2    # s
+safety_stop_margin: 0.05     # m
+safety_side_margin: 0.03     # m; 车半宽 0.33 + 0.03 = 0.36, 0.8m 巷道可过
+safety_turn_margin: 0.05     # m; 转向时附加侧向余量
+safety_scale_slew_rate: 1.0  # 1/s; 减速比例每秒最多变化量
+safety_scale_dt: 0.1         # s
+nav_safety_stop_timeout: 4.0 # s; 持续被挡多久才进入后退恢复 (原 2.0 偏激进)
 
 # ---- 指令整形 / 死手 / 遥控仲裁 (nav2 velocity_smoother + twist_mux) ----
 velocity_timeout: 0.6          # 无指令超时后平滑回零 (0=关闭)
@@ -211,9 +224,12 @@ require_scan: true
 require_cloud: false
 
 # ---- 重规划滞回 / costmap 节流 ----
-replan_max_interval: 5.0
-replan_min_interval: 1.0
+replan_max_interval: 30.0      # 周期重规划: 5s 太频繁, 每次换路径都会扰动控制
+replan_min_interval: 1.5
 replan_on_blocked: true
+replan_lookahead: 3.0          # 只检查前方 3m; 身后/已走过路径不触发
+replan_skip_distance: 0.5      # 跳过车体附近 0.5m
+replan_blocked_frames: 2       # 连续 2 次 blocked 才重规划 (单帧噪声不触发)
 costmap_update_rate: 5.0
 
 # ---- 激光孤立点滤波 ----

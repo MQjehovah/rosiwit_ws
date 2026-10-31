@@ -69,12 +69,51 @@ int countPointsInPolygon(
   return count;
 }
 
+/// 按车体几何 + 制动距离生成停车区 (base 系).
+/// 前/后方向: 车体该侧外沿 + v²/(2a) + v*reaction + stop_margin;
+/// 侧向: 半宽 + side_margin + 转向扫掠 (v*|w|*reaction), 上限 turn_margin。
+void buildDynamicStopPolygon(
+  const VelocityCommand & cmd,
+  const std::vector<std::pair<double, double>> & footprint,
+  double brake_decel, double reaction_time, double stop_margin,
+  double side_margin, double turn_margin,
+  std::vector<std::pair<double, double>> & out)
+{
+  if (footprint.size() < 3) { out.clear(); return; }
+
+  double min_x = footprint[0].first, max_x = footprint[0].first;
+  double min_y = footprint[0].second, max_y = footprint[0].second;
+  for (const auto & p : footprint) {
+    min_x = std::min(min_x, p.first);
+    max_x = std::max(max_x, p.first);
+    min_y = std::min(min_y, p.second);
+    max_y = std::max(max_y, p.second);
+  }
+
+  const double v = std::fabs(cmd.linear_x);
+  const double a = std::max(0.05, brake_decel);
+  const double brake = v * v / (2.0 * a) + v * std::max(0.0, reaction_time);
+  const double half_width = std::max(std::fabs(min_y), std::fabs(max_y));
+  const double turn = std::min(std::max(0.0, turn_margin),
+                               v * std::fabs(cmd.angular_z) * std::max(0.0, reaction_time));
+  const double side = half_width + std::max(0.0, side_margin) + turn;
+
+  double front = max_x + std::max(0.0, stop_margin);
+  double rear = -min_x + std::max(0.0, stop_margin);
+  if (cmd.linear_x >= 0.0) {
+    front += brake;
+  } else {
+    rear += brake;
+  }
+
+  out = {{-rear, -side}, {front, -side}, {front, side}, {-rear, side}};
+}
+
 double approachScale(  const std::vector<std::pair<double, double>> & points,
   double vx, double vy, double wz,
   const std::vector<std::pair<double, double>> & footprint,
   double max_time, double time_step)
-{
-  if (max_time <= 0.0 || time_step <= 0.0 || footprint.size() < 3) return 1.0;
+{  if (max_time <= 0.0 || time_step <= 0.0 || footprint.size() < 3) return 1.0;
   if (std::hypot(vx, vy) < 1e-6 && std::abs(wz) < 1e-6) return 1.0;
   if (points.empty()) return 1.0;
 
@@ -155,6 +194,14 @@ SafetyResult SafetyMonitor::filter(
   } else if (cmd.linear_x < 0.0 && !config_.stop_polygon_backward.empty()) {
     stop_poly = &config_.stop_polygon_backward;
   }
+  std::vector<std::pair<double, double>> dynamic_stop;
+  if (config_.dynamic_geometry && !rotating && config_.footprint.size() >= 3) {
+    buildDynamicStopPolygon(cmd, config_.footprint, config_.brake_decel,
+                            config_.reaction_time, config_.stop_margin,
+                            config_.side_margin, config_.turn_margin,
+                            dynamic_stop);
+    if (!dynamic_stop.empty()) stop_poly = &dynamic_stop;
+  }
   int stop_count = 0;
   double stop_radius = config_.stop_radius;
   if (rotating && config_.stop_radius_rotation > 0.0) {
@@ -175,6 +222,7 @@ SafetyResult SafetyMonitor::filter(
     stop_active_, stop_trigger_, stop_release_, stop_hit,
     config_.stop_trigger_frames, config_.stop_release_frames);
   if (stop_now) {
+    last_scale_ = 0.0;
     result.command = VelocityCommand{};
     result.scale = 0.0;
     result.state = "STOP";
@@ -182,7 +230,9 @@ SafetyResult SafetyMonitor::filter(
   }
 
   // 4) SLOWDOWN 同样带滞回.
-  const bool slow_hit =
+  // 动态几何模式下不再用二值 slowdown_ratio (1.0<->0.5 硬切), 改由 approachScale
+  // 按 TTC 连续降速 + 下面的变化率限制; STOP 仍然立即生效.
+  const bool slow_hit = !config_.dynamic_geometry &&
     countPointsInPolygon(pts, config_.slowdown_polygon) > config_.slowdown_max_points;
   const bool slow_now = updateHysteresis(
     slowdown_active_, slow_trigger_, slow_release_, slow_hit,
@@ -206,11 +256,23 @@ SafetyResult SafetyMonitor::filter(
   }
 
   if (scale <= 0.0) {
+    last_scale_ = 0.0;
     result.command = VelocityCommand{};
     result.scale = 0.0;
     result.state = "STOP";
     return result;
   }
+
+  // 减速比例变化率限制: 允许立即**降速**(安全优先), 只限制**回升**速度,
+  // 避免障碍消失后一帧从 0.5 跳回 1.0 造成"窜一下"。STOP 不受此限制。
+  if (config_.scale_slew_rate > 0.0) {
+    const double dt = std::max(1e-3, config_.scale_dt);
+    const double max_delta = config_.scale_slew_rate * dt;
+    if (scale > last_scale_) {
+      scale = std::min(scale, last_scale_ + max_delta);
+    }
+  }
+  last_scale_ = scale;
 
   result.command.linear_x = cmd.linear_x * scale;
   result.command.lateral_y = cmd.lateral_y * scale;

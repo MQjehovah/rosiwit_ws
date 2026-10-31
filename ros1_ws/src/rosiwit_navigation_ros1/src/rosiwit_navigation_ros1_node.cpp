@@ -232,9 +232,13 @@ private:
     pnh_.param<bool>("require_cloud", require_cloud_, false);
 
     // 重规划滞回
-    pnh_.param<double>("replan_max_interval", replan_max_interval_, 5.0);
-    pnh_.param<double>("replan_min_interval", replan_min_interval_, 1.0);
+    pnh_.param<double>("replan_max_interval", replan_max_interval_, 30.0);
+    pnh_.param<double>("replan_min_interval", replan_min_interval_, 1.5);
     pnh_.param<bool>("replan_on_blocked", replan_on_blocked_, true);
+    // 阻塞只检查机器人前方一段, 且连续 N 次才重规划 (避免单帧噪声/身后路径触发)
+    pnh_.param<double>("replan_lookahead", replan_lookahead_, 3.0);
+    pnh_.param<double>("replan_skip_distance", replan_skip_distance_, 0.5);
+    pnh_.param<int>("replan_blocked_frames", replan_blocked_frames_, 2);
 
     // costmap 构建节流 (scan 回调不再每个 scan 都做完整聚类)
     pnh_.param<double>("costmap_update_rate", costmap_update_rate_, 5.0);
@@ -265,6 +269,16 @@ private:
     pnh_.param<int>("safety_stop_release_frames", safety_stop_release_frames_, 3);
     pnh_.param<int>("safety_slowdown_trigger_frames", safety_slowdown_trigger_frames_, 1);
     pnh_.param<int>("safety_slowdown_release_frames", safety_slowdown_release_frames_, 2);
+    // 动态安全区: 按车体几何 + 制动距离生成, 避免固定多边形与巷道宽度打架
+    pnh_.param<bool>("safety_dynamic_geometry", safety_dynamic_geometry_, true);
+    pnh_.param<double>("safety_brake_decel", safety_brake_decel_, 0.8);
+    pnh_.param<double>("safety_reaction_time", safety_reaction_time_, 0.2);
+    pnh_.param<double>("safety_stop_margin", safety_stop_margin_, 0.05);
+    pnh_.param<double>("safety_side_margin", safety_side_margin_, 0.03);
+    pnh_.param<double>("safety_turn_margin", safety_turn_margin_, 0.05);
+    pnh_.param<double>("safety_slowdown_extra", safety_slowdown_extra_, 0.30);
+    pnh_.param<double>("safety_scale_slew_rate", safety_scale_slew_rate_, 1.0);
+    pnh_.param<double>("safety_scale_dt", safety_scale_dt_, 0.1);
     // 车身轮廓外扩: 只排除轮廓内的点 (nav2 exclusion_zones.robot_body)
     pnh_.param<double>("safety_body_margin", safety_body_margin_, 0.05);
     std::vector<double> stop_poly, slow_poly, footprint;
@@ -1213,8 +1227,10 @@ private:
     }
     // 只有成功转换到 map 的扫描才算 fresh; 否则 safety/局部 costmap
     // 会误以为仍有实时数据.
-    last_scan_stamp_ = ros::Time::now();
-    last_scan_msg_stamp_ = msg->header.stamp;
+    // 注意: 时间戳必须在**整帧处理成功之后**再更新。以前在这里先更新、
+    // 下面 base_tf 失败却直接 return, 结果 laser_points_ 还是上一帧的旧点,
+    // 安全层却用"新位姿 + 旧点"变换 -> 幻影障碍 -> 随机停车。
+    // (时间戳更新移到 base_tf 成功之后)
     // 一次性自检: 停止区阈值是**绝对点数**, 但每束雷达在 0.95m 处能采到的点数
     // 取决于 angle_increment。注释里的"0.8m 处 10cm 障碍约 20 点"只在 0.36°/束成立;
     // 换成 0.5~1°/束的雷达后, 细障碍永远凑不够点数 -> 安全层静默漏检。
@@ -1240,9 +1256,22 @@ private:
         base_tf = tf_buffer_.lookupTransform(robot_frame_, msg->header.frame_id,
                                              msg->header.stamp, ros::Duration(0.05));
       } catch (tf2::TransformException &) {
-        return;
+        // 扫描时刻的 TF 偶发不可用: 先用最新 TF 顶上, 不丢整帧。
+        try {
+          base_tf = tf_buffer_.lookupTransform(robot_frame_, msg->header.frame_id,
+                                               ros::Time(0), ros::Duration(0.05));
+          ROS_WARN_THROTTLE(2.0, "[scan] TF at scan stamp unavailable, using latest TF");
+        } catch (tf2::TransformException &) {
+          // 两个都拿不到: 保留上一帧点云 + 旧时间戳 (二者仍自洽), 不更新 fresh;
+          // 超过 scan_timeout 后由 sensorFailSafe/applySafety 统一 fail-safe 停车。
+          ROS_WARN_THROTTLE(2.0, "[scan] TF unavailable (stamp+latest); frame skipped");
+          return;
+        }
       }
     }
+    // 整帧确认可用后才更新时间戳 (见上方注释)
+    last_scan_stamp_ = ros::Time::now();
+    last_scan_msg_stamp_ = msg->header.stamp;
 
     const double tyaw = yawFromQuat(tf.transform.rotation);
     const double tx = tf.transform.translation.x;
@@ -1627,6 +1656,15 @@ private:
     cfg.stop_release_frames = safety_stop_release_frames_;
     cfg.slowdown_trigger_frames = safety_slowdown_trigger_frames_;
     cfg.slowdown_release_frames = safety_slowdown_release_frames_;
+    cfg.dynamic_geometry = safety_dynamic_geometry_;
+    cfg.brake_decel = safety_brake_decel_;
+    cfg.reaction_time = safety_reaction_time_;
+    cfg.stop_margin = safety_stop_margin_;
+    cfg.side_margin = safety_side_margin_;
+    cfg.turn_margin = safety_turn_margin_;
+    cfg.slowdown_extra = safety_slowdown_extra_;
+    cfg.scale_slew_rate = safety_scale_slew_rate_;
+    cfg.scale_dt = safety_scale_dt_;
     safety_monitor_.configure(cfg);
     ROS_INFO("[safety] zones: stop_fwd=%zu stop_back=%zu stop_rot=%zu slowdown=%zu "
              "hysteresis=%d/%d body=%zu",
@@ -2924,6 +2962,9 @@ private:
        << "\",\"goal_status\":\"" << goal_status_
        << "\",\"safety\":\"" << last_safety_state_
        << "\",\"safety_scale\":" << last_safety_scale_
+       << ",\"replan_count\":" << replan_count_
+       << ",\"replan_fail\":" << replan_fail_count_
+       << ",\"plan_ms\":" << last_plan_ms_
        << ",\"path_points\":" << current_path_.poses.size()
        << ",\"planner\":\"" << planner_name_ << "\""
        << ",\"profile\":\"" << motion_profile_ << "\""
@@ -3461,8 +3502,14 @@ private:
   void startPlanning(const geometry_msgs::PoseStamped & goal, bool allow_initial_rotate,
                      bool restart, const core::Pose2D * start_override = nullptr)
   {
-    // restart=true: 新目标, 先停旧路径; false: 1Hz 重规划, 继续沿旧路径控制.
+    // restart=true: 新目标, 先停旧路径; false: 周期重规划, 继续沿旧路径控制.
     planning_is_replan_ = !restart;
+    if (restart) {
+      safety_monitor_.reset();
+      replan_blocked_count_ = 0;
+    }
+    if (planning_is_replan_) ++replan_count_;
+    plan_start_time_ = ros::Time::now().toSec();
     if (restart) {
       stopNavigation();   // ⚠ 它会清 pending_has_start_override_, 所以 override 必须在它之后写
       current_path_.poses.clear();
@@ -3527,6 +3574,18 @@ private:
     if (!result.is_ok()) {
       ROS_ERROR("[rosiwit_navigation_ros1] planner '%s' failed: %s",
                 planner_name_.c_str(), result.error_message().c_str());
+      // 周期重规划失败 != 当前路径失效。旧路径仍可安全跟踪时, 只记录并延后
+      // 下一次重规划; 以前这里直接 recovery/FAILED_PLAN, 表现为"走一半突然
+      // 后退重规划/整单失败", 是现场"经常重规划、规划失败"的主要来源之一。
+      if (planning_is_replan_ && !current_core_path_.points.empty()) {
+        ROS_WARN("[plan] replan failed (%s); keep current path, retry later",
+                 result.error_message().c_str());
+        ++replan_fail_count_;
+        last_plan_ms_ = (ros::Time::now().toSec() - plan_start_time_) * 1000.0;
+        last_plan_time_ = ros::Time::now();   // 避免 blocked 每 1s 连续重试
+        planning_active_ = false;
+        return;
+      }
       if (startRecovery()) {
         ROS_WARN("[rosiwit_navigation_ros1] planning failed, reverse escape recovery then retry");
         return;
@@ -3539,6 +3598,7 @@ private:
       }
       return;
     }
+    last_plan_ms_ = (ros::Time::now().toSec() - plan_start_time_) * 1000.0;
     applyPlanningResult(result, pending_allow_initial_rotate_);
   }
 
@@ -3712,18 +3772,24 @@ private:
     }
     const int width = static_cast<int>(cm.width);
     const int height = static_cast<int>(cm.height);
-    const size_t stride = std::max<size_t>(1, current_path_.poses.size() / 100);
-    for (size_t i = 0; i < current_path_.poses.size(); i += stride) {
+    const double rx = current_pose_.pose.position.x;
+    const double ry = current_pose_.pose.position.y;
+    // 只检查机器人前方 [skip, lookahead] 一段: 身后/已走过的点没有意义,
+    // 也避免定位小跳变让旧路径段落进障碍 -> 误判 blocked 每分钟重规划。
+    for (size_t i = 0; i < current_path_.poses.size(); i += 1) {
       const auto & p = current_path_.poses[i].pose.position;
+      const double d = std::hypot(p.x - rx, p.y - ry);
+      if (d < replan_skip_distance_) { continue; }
+      if (d > replan_lookahead_) { continue; }
       const int mx = static_cast<int>(std::floor(
         (p.x - cm.origin_x) / cm.resolution));
       const int my = static_cast<int>(std::floor(
         (p.y - cm.origin_y) / cm.resolution));
       if (mx < 0 || my < 0 || mx >= width || my >= height) { return true; }
-      if (cm.data[static_cast<size_t>(my) * width + mx] < 0 ||
-          cm.data[static_cast<size_t>(my) * width + mx] >= 100) {
-        return true;
-      }
+      const int8_t c = cm.data[static_cast<size_t>(my) * width + mx];
+      // unknown(-1) 在 allow_unknown 时已被折成高代价(默认99), 这里只把
+      // 真正的 lethal(>=100) 当 blocked; 否则未知区会每 1s 触发一次重规划。
+      if (c >= 100) { return true; }
     }
     return false;
   }
@@ -3740,10 +3806,21 @@ private:
     if (goal_pose_.header.frame_id.empty() || !m_has_planner_costmap_) return;
     const ros::Time now = ros::Time::now();
     const bool path_empty = current_path_.poses.empty();
-    const bool blocked = replan_on_blocked_ && pathBlocked();
+    const bool blocked_raw = replan_on_blocked_ && pathBlocked();
+    if (blocked_raw) {
+      ++replan_blocked_count_;
+    } else {
+      replan_blocked_count_ = 0;
+    }
+    const bool blocked = replan_blocked_count_ >= std::max(1, replan_blocked_frames_);
     const double since_plan = last_plan_time_.isZero() ? 1e9 :
       (now - last_plan_time_).toSec();
-    const bool due = path_empty || since_plan >= replan_max_interval_;
+    // 快到位时不再按周期重规划: 末段换路径会让 MPPI 参考点跳变, 表现为
+    // 到点前"蹭/抖"。只有真的 blocked 才重规划。
+    const double gx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
+    const double gy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
+    const bool near_goal = std::hypot(gx, gy) < 0.8;
+    const bool due = path_empty || (!near_goal && since_plan >= replan_max_interval_);
     const bool blocked_due = blocked && since_plan >= replan_min_interval_;
     if (!due && !blocked_due) return;
     startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/false);
@@ -4448,6 +4525,8 @@ private:
     current_path_.poses.clear();
     if (controller_strategy_) { controller_strategy_->reset(); }
     resetRecovery();
+    safety_monitor_.reset();
+    replan_blocked_count_ = 0;
     // 3) 先停车: 不能让跳变前一拍算出的指令继续推机器人
     geometry_msgs::Twist stop_cmd;
     publishCommand(stop_cmd);
@@ -4915,6 +4994,10 @@ private:
   geometry_msgs::Twist applySafety(const geometry_msgs::Twist & cmd)
   {
     if (!safety_enabled_) return cmd;
+    // 位姿还没建立 (启动/切图瞬间) 时不能用默认 (0,0) 去变换扫描点,
+    // 否则会把真实障碍映射到错误位置并锁存 STOP。控制环在无位姿时本来就会
+    // 走 stopNavigation, 这里直接放行由上层兜底。
+    if (current_pose_.header.frame_id != global_frame_) return cmd;
     if (safety_fail_safe_on_timeout_ && !last_scan_stamp_.isZero() &&
         (ros::Time::now() - last_scan_stamp_).toSec() > safety_source_timeout_) {
       ROS_WARN_THROTTLE(1.0, "[safety] STALE scan age=%.2fs (timeout %.2fs)",
@@ -4997,6 +5080,9 @@ private:
   void stopNavigation()
   {
     resetRecovery();
+    // 安全层滞回状态 (stop_active_/slow_active_) 不能跨任务残留:
+    // 上一次停车/切图时的 STOP 会让新目标前几拍继续零速, 表现为"起步一顿"。
+    safety_monitor_.reset();
     is_navigating_ = false;
     is_paused_ = false;
     current_core_path_.points.clear();
@@ -5142,6 +5228,16 @@ private:
   int safety_stop_release_frames_ = 3;
   int safety_slowdown_trigger_frames_ = 1;
   int safety_slowdown_release_frames_ = 2;
+  // 动态安全区 (车体+制动距离)
+  bool safety_dynamic_geometry_ = true;
+  double safety_brake_decel_ = 0.8;
+  double safety_reaction_time_ = 0.2;
+  double safety_stop_margin_ = 0.05;
+  double safety_side_margin_ = 0.03;
+  double safety_turn_margin_ = 0.05;
+  double safety_slowdown_extra_ = 0.30;
+  double safety_scale_slew_rate_ = 1.0;
+  double safety_scale_dt_ = 0.1;
 
   // ---- 指令整形 / 死手 / 遥控仲裁 ----
   core::VelocityShaper velocity_shaper_;
@@ -5233,9 +5329,17 @@ private:
   double cloud_timeout_ = 1.0;
   bool require_scan_ = true;
   bool require_cloud_ = false;
-  double replan_max_interval_ = 5.0;
-  double replan_min_interval_ = 1.0;
+  double replan_max_interval_ = 30.0;
+  double replan_min_interval_ = 1.5;
   bool replan_on_blocked_ = true;
+  double replan_lookahead_ = 3.0;
+  double replan_skip_distance_ = 0.5;
+  int replan_blocked_frames_ = 2;
+  int replan_blocked_count_ = 0;
+  int replan_count_ = 0;
+  int replan_fail_count_ = 0;
+  double plan_start_time_ = 0.0;
+  double last_plan_ms_ = -1.0;
   double costmap_update_rate_ = 5.0;
   std::string rviz_goal_topic_ = "/move_base_simple/goal";
   bool rviz_goal_align_yaw_ = true;
