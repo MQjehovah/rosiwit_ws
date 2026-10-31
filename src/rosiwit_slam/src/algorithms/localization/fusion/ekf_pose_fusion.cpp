@@ -51,6 +51,7 @@ void EkfPoseFusion::reset(const PoseStamped& pose) {
     m_have_last_match = false;
     m_odom_yaw = rotToRpy(pose.rot).z();
     m_have_rel_prev = false;
+    m_have_slip_ref = false;
     m_diag = FusionDiag{};
 }
 
@@ -89,6 +90,12 @@ void EkfPoseFusion::onOdom(const PoseStamped& odom) {
         m_last_odom_time = odom.time;
         m_odom_yaw = rotToRpy(odom.rot).z();
         m_have_odom = true;
+        if (!m_have_slip_ref) {
+            m_slip_ref_odom = odom;
+            m_slip_ref_p = m_p;
+            m_have_slip_ref = true;
+        }
+        m_diag.odom_weight = 1.0;
         return;
     }
     const double dt = odom.time - m_last_odom_time;
@@ -98,14 +105,44 @@ void EkfPoseFusion::onOdom(const PoseStamped& odom) {
     if (m_cfg.max_odom_speed > 0.0 && speed > m_cfg.max_odom_speed) {
         m_last_odom = odom;
         m_last_odom_time = odom.time;
+        m_diag.odom_weight = 1.0;
         return;   // 打滑/毛刺样本, 整包丢弃 (与 imu_ekf 先验一致)
     }
+    // ---- 打滑门控: "锚点 -> 当前"的位姿/odom 位移比, 连续降权 ----
+    // 打滑是常态: odom 不删除, 只把权重从 1 线性压到 odom_weight_min。
+    double weight = 1.0;
+    if (m_have_slip_ref) {
+        const double d_odom = (odom.trans - m_slip_ref_odom.trans).head<2>().norm();
+        const double d_pose = (m_p - m_slip_ref_p).head<2>().norm();
+        double ratio = 1.0;
+        if (d_odom > 1e-3) ratio = d_pose / d_odom;   // 除零保护
+        const double lo = m_cfg.slip_ratio_lo;
+        const double hi = m_cfg.slip_ratio_hi;
+        if (ratio < lo || ratio > hi) {
+            const double dev = (ratio < lo) ? (lo - ratio) / std::max(lo, 1e-3)
+                                            : (ratio - hi) / std::max(hi, 1e-3);
+            weight = std::max(m_cfg.odom_weight_min, 1.0 - std::min(1.0, dev));
+        }
+        // 横摆率一致性: 打滑时轮速差速给出的转角与陀螺不一致
+        if (m_cfg.slip_yaw_thresh_deg > 0.0) {
+            const double yaw_rate =
+                normAngle(rotToRpy(odom.rot).z() - m_odom_yaw) / dt;
+            const double thresh = m_cfg.slip_yaw_thresh_deg * M_PI / 180.0;
+            if (std::fabs(yaw_rate - m_gyro_z) > thresh) weight *= 0.2;
+        }
+        // 滚动锚点: 保持"最近一步"的比值, 避免锚点过期
+        m_slip_ref_odom = odom;
+        m_slip_ref_p = m_p;
+    }
+    m_diag.odom_weight = weight;
+
     // 体体系速度观测: 用 odom 自己的朝向转 (2026-10-31 已验证 z-v 夹角≈0.7°)
     const double c = std::cos(m_odom_yaw), s = std::sin(m_odom_yaw);
     Eigen::Matrix2d R_odom_T;
     R_odom_T << c, s, -s, c;
     const Eigen::Vector2d z = R_odom_T * dp.head<2>() / dt;
-    const double r = 0.15 * 0.15;
+    // 权重 w 等价于把观测噪声放大 1/w²
+    const double r = 0.15 * 0.15 / std::max(weight * weight, 1e-6);
     for (int i = 0; i < 2; ++i) {
         const double k = m_v_cov(i, i) / (m_v_cov(i, i) + r);
         m_v(i) += k * (z(i) - m_v(i));
@@ -198,6 +235,12 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
     m_diag.last_gain_rot = gain(0);
     m_diag.applied_trans = d_trans.norm();
     m_diag.applied_rot_deg = d_rot.norm() * 180.0 / M_PI;
+    // 打滑门控: 以本帧匹配为锚点重新开始比值统计 (锚点时间最多落后一个 odom 周期)
+    if (m_have_odom) {
+        m_slip_ref_odom = m_last_odom;
+        m_slip_ref_p = m_p;
+        m_have_slip_ref = true;
+    }
 }
 
 void EkfPoseFusion::onRelative(const PoseStamped& pose,

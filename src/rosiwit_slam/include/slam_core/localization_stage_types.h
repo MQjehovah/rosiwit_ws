@@ -237,6 +237,11 @@ struct PoseFusionConfig {
     double max_odom_speed = 3.0;          // odom 速度物理上限 (m/s)
     bool   reject_in_place_trans = true;  // 原地旋转时丢弃匹配的平移分量
     double in_place_yaw_step_deg = 2.0;   // 判定"原地旋转"的单帧航向变化阈值 (deg)
+    // ---- odom 打滑门控 (打滑是常态: odom 不删, 只连续降权) ----
+    double slip_ratio_lo = 0.5;           // |d_pose|/|d_odom| 低于此开始降权
+    double slip_ratio_hi = 2.0;           // 高于此开始降权
+    double slip_yaw_thresh_deg = 20.0;    // odom 横摆率与陀螺横摆率差的阈值 (deg/s)
+    double odom_weight_min = 0.05;        // 权重下限 (保底, 不归零)
 };
 
 // ==================== 健康监测 ====================

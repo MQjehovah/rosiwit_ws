@@ -76,6 +76,11 @@ private:
     PoseStamped m_rel_prev_lio;                              // 上一帧 LIO 位姿
     Eigen::Vector3d m_rel_prev_state_p = Eigen::Vector3d::Zero();  // 同一时刻滤波器位置
 
+    // ---- odom 打滑门控的锚点 (最后一次被接受的匹配) ----
+    bool        m_have_slip_ref = false;
+    PoseStamped m_slip_ref_odom;                              // 锚点时刻的 odom 位姿
+    Eigen::Vector3d m_slip_ref_p = Eigen::Vector3d::Zero();   // 锚点时刻的融合位置
+
     FusionDiag m_diag;
 };
 

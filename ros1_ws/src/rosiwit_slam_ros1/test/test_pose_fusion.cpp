@@ -65,6 +65,29 @@ TEST(PoseFusion, DirectIgnoresRelative) {
     EXPECT_NEAR(out.trans.y(), 2.0, 1e-9);
 }
 
+// 打滑：位姿只前进 0.02 m，而 odom 报告 0.20 m -> odom 权重应降到下限
+TEST(PoseFusion, OdomSlipDownweights) {
+    EkfPoseFusion f;
+    PoseFusionConfig cfg;              // 默认值 + 显式门限
+    cfg.slip_ratio_lo = 0.6;
+    cfg.slip_ratio_hi = 1.6;
+    cfg.odom_weight_min = 0.0;
+    f.configure(cfg);
+
+    PoseStamped p = MakePose(0.0);
+    f.reset(p);
+
+    // 匹配把"真实"位移锚定在 0.02 m
+    PoseStamped m = MakePose(0.1, 0.02);
+    f.onMatch(m, SmallCov(), MatchResult{});
+
+    // odom 先给一帧 0 m，再报 0.20 m
+    f.onOdom(MakePose(0.1));
+    f.onOdom(MakePose(0.2, 0.20));
+
+    EXPECT_LT(f.diag().odom_weight, 0.2);
+}
+
 int main(int argc, char ** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

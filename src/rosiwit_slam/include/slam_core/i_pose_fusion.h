@@ -19,6 +19,8 @@ struct FusionDiag {
     // ---- 相对位姿观测 (LIO) ----
     int    relative_accepted = 0;      // 相对观测被采用的次数
     double last_rel_residual = 0.0;    // 最近一次相对观测残差 (m); 也作为 LIO/S2M 分歧代理
+    // ---- odom 打滑门控 ----
+    double odom_weight = 1.0;          // 最近一次 odom 速度观测的权重 [0,1]
 };
 
 /// 位姿融合层: 把"配准结果(观测)"变成"位姿(状态)".
