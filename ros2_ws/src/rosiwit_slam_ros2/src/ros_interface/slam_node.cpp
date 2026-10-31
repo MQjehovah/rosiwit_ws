@@ -331,7 +331,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
 
     // 回调分组: 传感器订阅独立于"重处理"(定时器/服务)分组。配合多线程执行器,
     // 即使建图/回环/保存地图耗时, 收包回调仍能在另一线程及时入队, 避免 DDS 队列溢出丢帧。
-    m_sensor_cb_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    m_sensor_cb_group = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     m_work_cb_group   = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     {
         CalibrationApplyConfig ccfg;
