@@ -4998,6 +4998,14 @@ private:
     // 否则会把真实障碍映射到错误位置并锁存 STOP。控制环在无位姿时本来就会
     // 走 stopNavigation, 这里直接放行由上层兜底。
     if (current_pose_.header.frame_id != global_frame_) return cmd;
+    // 零速指令没有运动风险, 不走 STOP/SLOWDOWN 判定: 否则停车/规划等待时
+    // 会被近处点云锁存 STOP, 诊断长期显示 safety=STOP, 下一次起步还要等释放。
+    if (std::fabs(cmd.linear.x) < 1e-4 && std::fabs(cmd.angular.z) < 1e-4) {
+      last_safety_state_ = "PASS";
+      last_safety_scale_ = 1.0;
+      last_safety_hard_stop_ = false;
+      return cmd;
+    }
     if (safety_fail_safe_on_timeout_ && !last_scan_stamp_.isZero() &&
         (ros::Time::now() - last_scan_stamp_).toSec() > safety_source_timeout_) {
       ROS_WARN_THROTTLE(1.0, "[safety] STALE scan age=%.2fs (timeout %.2fs)",
