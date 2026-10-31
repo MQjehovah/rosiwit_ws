@@ -2,12 +2,15 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "algorithms/fast_livo2/fast_livo2_config.h"
 #include "slam_core/i_frontend.h"
 
 namespace rosiwit_slam {
+
+class LivoMapper;
 
 /// FAST-LIVO2 前端（LiDAR-惯性-视觉紧耦合，ROS 无关）。
 ///
@@ -29,8 +32,16 @@ public:
     bool getRGBCloud(pcl::PointCloud<pcl::PointXYZRGB>::Ptr& out) override;
 
 private:
+    bool shouldMakeKeyframe(const PoseStamped& pose);
+
     FastLivo2Config m_config;
+    std::unique_ptr<LivoMapper> m_mapper;
     bool m_inited = false;
+
+    std::mutex m_mtx;
+    PoseStamped m_last_keyframe_pose;
+    bool m_has_last_keyframe = false;
+    std::uint64_t m_keyframe_counter = 0;
 };
 
 }  // namespace rosiwit_slam
