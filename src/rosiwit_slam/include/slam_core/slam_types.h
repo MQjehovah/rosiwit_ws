@@ -3,7 +3,9 @@
 #include <Eigen/Eigen>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
+#include <opencv2/core.hpp>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace rosiwit_slam {
@@ -27,6 +29,24 @@ struct LidarFrame {
     double end_time   = -1.0;
 };
 
+/// 相机图像帧（核心不依赖 ROS；接口层负责把 sensor_msgs 转成 cv::Mat）。
+/// image 为 BGR8 或 MONO8，time 与 IMU/LiDAR 使用同一时间基准（秒）。
+struct ImageFrame {
+    cv::Mat image;
+    double time = -1.0;
+    std::string frame_id;
+};
+
+/// 相机内参（与 config 的 camera 段一一对应；模型解释交给前端）。
+struct CameraIntrinsics {
+    std::string model = "Pinhole";  // Pinhole | EquidistantCamera | ...
+    int width = 0;
+    int height = 0;
+    double scale = 1.0;
+    double fx = 0.0, fy = 0.0, cx = 0.0, cy = 0.0;
+    double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+};
+
 enum class SlamState { INITIALIZING, READY, RUNNING, LOST };
 
 struct PoseStamped {
@@ -46,6 +66,8 @@ struct SlamOutput {
     bool has_odom_pose = false;
     CloudType::Ptr body_cloud;
     CloudType::Ptr world_cloud;
+    /// 当前帧世界系彩色点云（LIVO 前端可提供；可为空）。累计彩色地图走 PCD 导出。
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr rgb_world_cloud;
     bool has_new_pose = false;
 };
 

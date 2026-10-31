@@ -14,6 +14,7 @@
 #ifndef ROSIWIT_SLAM__ALGORITHMS__LOCALIZATION__PLANAR_SCAN_MATCHER_HPP_
 #define ROSIWIT_SLAM__ALGORITHMS__LOCALIZATION__PLANAR_SCAN_MATCHER_HPP_
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 

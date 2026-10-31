@@ -17,6 +17,8 @@ public:
     virtual bool        init(const std::string& config_path) = 0;
     virtual void        onImu(const IMUSample& s) = 0;
     virtual void        onLidar(const LidarFrame& f) = 0;
+    /// 图像输入（LIVO 前端使用；默认忽略，不影响纯 LIO 管线）。
+    virtual void        onImage(const ImageFrame& /*f*/) {}
     virtual SlamState   state() const = 0;
     virtual std::string name() const = 0;
 
