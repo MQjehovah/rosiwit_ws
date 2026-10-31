@@ -18,6 +18,7 @@ struct FusionDiag {
     double applied_rot_deg = 0.0; // 最近一次实际应用的旋转修正 (deg)
     // ---- 相对位姿观测 (LIO) ----
     int    relative_accepted = 0;      // 相对观测被采用的次数
+    int    relative_reanchored = 0;    // 相对观测因跳变/中断被重新锚定的次数
     double last_rel_residual = 0.0;    // 最近一次相对观测残差 (m); 也作为 LIO/S2M 分歧代理
     // ---- odom 打滑门控 ----
     double odom_weight = 1.0;          // 最近一次 odom 速度观测的权重 [0,1]

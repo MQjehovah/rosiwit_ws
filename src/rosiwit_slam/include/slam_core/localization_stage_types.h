@@ -242,6 +242,9 @@ struct PoseFusionConfig {
     double slip_ratio_hi = 2.0;           // 高于此开始降权
     double slip_yaw_thresh_deg = 20.0;    // odom 横摆率与陀螺横摆率差的阈值 (deg/s)
     double odom_weight_min = 0.05;        // 权重下限 (保底, 不归零)
+    // ---- 相对观测的连续性保护 (LIO 复位/模式切换/丢帧) ----
+    double rel_max_gap = 0.6;             // 两帧相对观测最大时间间隔 (s)
+    double rel_max_step = 1.0;            // 单步相对位移上限 (m), 超过视为跳变
 };
 
 // ==================== 健康监测 ====================

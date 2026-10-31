@@ -253,6 +253,17 @@ void EkfPoseFusion::onRelative(const PoseStamped& pose,
         m_have_rel_prev = true;
         return;
     }
+    // 连续性保护: LIO 复位/模式切换/长时间丢帧后位姿会跳变, 此时重新锚定,
+    // 否则一次跳变会被当成真实位移拉进位姿。
+    const double rel_gap = pose.time - m_rel_prev_lio.time;
+    const double rel_step = (pose.trans - m_rel_prev_lio.trans).norm();
+    if (rel_gap <= 0.0 || rel_gap > m_cfg.rel_max_gap ||
+        rel_step > m_cfg.rel_max_step) {
+        m_rel_prev_lio = pose;
+        m_rel_prev_state_p = m_p;
+        ++m_diag.relative_reanchored;
+        return;
+    }
     // LIO 与滤波各自的"上一锚点 -> 当前"平移增量, 都转到体体系再比较
     const Eigen::Vector3d d_lio =
         m_rel_prev_lio.rot.transpose() * (pose.trans - m_rel_prev_lio.trans);

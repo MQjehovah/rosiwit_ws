@@ -269,6 +269,15 @@ bool SlamPipeline::init(const std::string& config_path) {
     auto modules = (glob && glob["modules"]) ? glob["modules"] : cfg["modules"];
     if (!modules) return true;
 
+    // ---- 定位模式: LIO 相对观测 (默认关闭 = 改造前行为) ----
+    const YAML::Node lc = g("localization");
+    if (lc) {
+        m_use_lio_relative   = lc["use_lio_relative"].as<bool>(m_use_lio_relative);
+        m_lio_rel_cov_trans  = lc["lio_rel_cov_trans"].as<double>(m_lio_rel_cov_trans);
+        m_lio_rel_cov_rot    = lc["lio_rel_cov_rot"].as<double>(m_lio_rel_cov_rot);
+        m_lio_frontend_hz    = lc["lio_frontend_hz"].as<double>(m_lio_frontend_hz);
+    }
+
     std::string name;
     std::vector<std::string> module_errors;
     auto module_failed = [&](const std::string& key, const std::string& module_name) {
@@ -350,6 +359,16 @@ bool SlamPipeline::init(const std::string& config_path) {
                      "modules.localization and modules.map_manager" << std::endl;
         return false;
     }
+    if (m_use_lio_relative && !m_frontend) {
+        std::cerr << "[SlamPipeline] WARN: localization.use_lio_relative=true but frontend "
+                     "unavailable; falling back to odom + S2M only" << std::endl;
+        m_use_lio_relative = false;
+    }
+    if (m_use_lio_relative) {
+        std::cout << "[SlamPipeline] localization LIO relative enabled: hz=" << m_lio_frontend_hz
+                  << " cov_trans=" << m_lio_rel_cov_trans
+                  << " cov_rot=" << m_lio_rel_cov_rot << std::endl;
+    }
 
     // 视觉松耦合: 读 vision 节点, 启用时创建 VO 因子源
     if (cfg["vision"] && cfg["vision"]["enabled"].as<bool>(false)) {
@@ -393,6 +412,10 @@ void SlamPipeline::setMode(PipelineMode mode) {
     m_mode = mode;
     if (mode != PipelineMode::LOCALIZATION) {
         m_loc_buf.clear();
+        // 切出定位: 丢弃残留 IMU 与 LIO 节拍状态。前端实例保留 (建图可能复用),
+        // 但融合层的相对锚点由 EkfPoseFusion 的跳变/间隔保护自动重锚。
+        m_lio_imu_buf.clear();
+        m_last_lio_feed_time = -1.0;
     }
 }
 
@@ -462,9 +485,10 @@ void SlamPipeline::onImu(const IMUSample& s) {
     auto mode = m_mode.load();
     if (mode == PipelineMode::IDLE) return;
     if (mode == PipelineMode::LOCALIZATION) {
-        // 定位模式不喂建图前端: 前端只在 onLidar 里消费 IMU 缓冲, 而定位模式不喂 lidar,
-        // 继续喂 IMU 会让 FastLio2Frontend 的 m_imu_buffer 无界增长 (且计算完全无用).
+        // 定位模式: 融合层需要高频 IMU; LIO 前端也要 IMU, 但前端不是线程安全的,
+        // 所以这里只入队, 由定位 worker 在喂雷达帧前一次性消费 (保证每帧被消费)。
         if (m_localization) m_localization->onImu(s);
+        if (m_use_lio_relative && m_frontend) m_lio_imu_buf.push(s);
     } else {
         SlamBase::onImu(s);
     }
@@ -494,7 +518,38 @@ void SlamPipeline::localizationWorker(rosiwit_common::CancelToken token) {
         if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) continue;
         // 重定位/GICP 在 worker 线程执行，ROS spinner 仍能处理服务、TF、slam/info。
         handleLocalization(*f);
+        // LIO 相对观测: 在输出之后跑, 避免把前端耗时压在本帧 S2M 输出路径上。
+        updateLioRelative(*f);
     }
+}
+
+void SlamPipeline::updateLioRelative(const LidarFrame& f) {
+    if (!m_use_lio_relative || !m_frontend || !m_localization) return;
+    if (m_mode.load() != PipelineMode::LOCALIZATION) return;
+    if (!f.cloud || f.cloud->empty()) return;
+
+    // 降频: 前端 CPU 超预算时只处理一部分帧 (默认 10 Hz = 与雷达同频)
+    if (m_lio_frontend_hz > 0.0 && m_last_lio_feed_time >= 0.0) {
+        const double min_dt = 1.0 / m_lio_frontend_hz;
+        if (f.end_time - m_last_lio_feed_time < min_dt - 1e-6) {
+            ++m_lio_skipped;
+            return;   // IMU 留在队列里, 下次喂帧时一起消费 (有界, 不会无界增长)
+        }
+    }
+    // 前端不是线程安全的: 所有调用都在本 worker 线程, 先灌 IMU 再喂雷达。
+    while (auto s = m_lio_imu_buf.try_pop()) m_frontend->onImu(*s);
+    m_frontend->onLidar(f);
+    m_last_lio_feed_time = f.end_time;
+    ++m_lio_feeds;
+
+    PoseStamped lio;
+    if (!m_frontend->getOdometry(lio)) return;
+    // 相对观测协方差: 顺序 rot3 -> trans3, 与 MatchResult::cov 一致
+    Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Zero();
+    cov.block<3, 3>(0, 0).diagonal().setConstant(m_lio_rel_cov_rot);
+    cov.block<3, 3>(3, 3).diagonal().setConstant(m_lio_rel_cov_trans);
+    // 时间基准: getOdometry 返回 m_last_lidar_time (即本帧 end_time), 不是"最新位姿"
+    m_localization->onRelative(lio, cov);
 }
 
 void SlamPipeline::handleLocalization(const LidarFrame& f) {

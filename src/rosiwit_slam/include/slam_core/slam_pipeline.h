@@ -152,6 +152,20 @@ private:
     rosiwit_common::Channel<LidarFrame> m_loc_buf{2, rosiwit_common::OverflowPolicy::kDropOldest};
     std::unique_ptr<rosiwit_common::Thread> m_loc_worker;
 
+    // 定位模式下的 LIO 相对观测 (可选): IMU 在 sensor callback 只入队,
+    // 由定位 worker 在喂雷达前一次性消费 —— 前端不是线程安全的。
+    // 容量按 2000 帧 @200Hz (约 10 s) 设置, 与 FastLio2Frontend 内部缓冲一致。
+    rosiwit_common::Channel<IMUSample> m_lio_imu_buf{2000, rosiwit_common::OverflowPolicy::kDropOldest};
+    bool   m_use_lio_relative = false;
+    double m_lio_rel_cov_trans = 0.02;
+    double m_lio_rel_cov_rot = 0.002;
+    double m_lio_frontend_hz = 10.0;
+    double m_last_lio_feed_time = -1.0;
+    uint64_t m_lio_feeds = 0;
+    uint64_t m_lio_skipped = 0;
+    /// 在定位 worker 线程喂前端并转发相对观测 (与 onLidar 同线程)
+    void updateLioRelative(const LidarFrame& f);
+
     // 核心只保存通用 PCD/PGM 等；xzmap 导出由 ROS1 适配层完成。
 
     std::unique_ptr<IFrontend>     m_frontend;

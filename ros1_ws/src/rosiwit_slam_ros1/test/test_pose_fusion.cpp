@@ -88,6 +88,42 @@ TEST(PoseFusion, OdomSlipDownweights) {
     EXPECT_LT(f.diag().odom_weight, 0.2);
 }
 
+// 模式切出 LOCALIZATION / 重定位时，相对观测的锚点必须清空，
+// 否则重新进入后第一次相对观测会把"跨模式位移"当成真实增量。
+TEST(PoseFusion, RelativeStateClearedOnReset) {
+    EkfPoseFusion f;
+    PoseFusionConfig cfg;
+    f.configure(cfg);
+
+    const PoseStamped p = MakePose(1.0);
+    f.reset(p);
+    f.onRelative(p, SmallCov());   // 锚定
+    f.reset(p);                    // 模拟模式切换/重定位
+
+    f.onRelative(MakePose(1.1, 5.0), SmallCov());   // 复位后的首帧只记录锚点
+    EXPECT_EQ(f.diag().relative_accepted, 0);
+}
+
+// LIO 复位或长时间中断后位姿会跳变: 必须重新锚定, 不能当成真实位移。
+TEST(PoseFusion, RelativeJumpReanchors) {
+    EkfPoseFusion f;
+    PoseFusionConfig cfg;
+    f.configure(cfg);
+
+    const PoseStamped p = MakePose(1.0);
+    f.reset(p);
+    f.onRelative(p, SmallCov());                    // 锚定
+
+    f.onRelative(MakePose(1.1, 5.0), SmallCov());   // 5 m 跳变 -> 重新锚定
+    EXPECT_NEAR(f.predict(1.1).trans.x(), 0.0, 1e-9);
+    EXPECT_EQ(f.diag().relative_accepted, 0);
+    EXPECT_EQ(f.diag().relative_reanchored, 1);
+
+    // 重新锚定之后的正常增量应继续生效
+    f.onRelative(MakePose(1.2, 5.05), SmallCov());
+    EXPECT_EQ(f.diag().relative_accepted, 1);
+}
+
 int main(int argc, char ** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

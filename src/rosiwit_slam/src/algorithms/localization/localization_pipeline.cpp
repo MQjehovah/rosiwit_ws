@@ -89,6 +89,12 @@ bool LocalizationPipeline::init(const std::string& config_path) {
             m_fusion_cfg.max_odom_speed          = getv<double>(fc, "max_odom_speed", m_fusion_cfg.max_odom_speed);
             m_fusion_cfg.reject_in_place_trans   = getv<bool>(fc, "reject_in_place_trans", m_fusion_cfg.reject_in_place_trans);
             m_fusion_cfg.in_place_yaw_step_deg   = getv<double>(fc, "in_place_yaw_step_deg", m_fusion_cfg.in_place_yaw_step_deg);
+            m_fusion_cfg.slip_ratio_lo           = getv<double>(fc, "slip_ratio_lo", m_fusion_cfg.slip_ratio_lo);
+            m_fusion_cfg.slip_ratio_hi           = getv<double>(fc, "slip_ratio_hi", m_fusion_cfg.slip_ratio_hi);
+            m_fusion_cfg.slip_yaw_thresh_deg     = getv<double>(fc, "slip_yaw_thresh_deg", m_fusion_cfg.slip_yaw_thresh_deg);
+            m_fusion_cfg.odom_weight_min         = getv<double>(fc, "odom_weight_min", m_fusion_cfg.odom_weight_min);
+            m_fusion_cfg.rel_max_gap             = getv<double>(fc, "rel_max_gap", m_fusion_cfg.rel_max_gap);
+            m_fusion_cfg.rel_max_step            = getv<double>(fc, "rel_max_step", m_fusion_cfg.rel_max_step);
         }
     }
 

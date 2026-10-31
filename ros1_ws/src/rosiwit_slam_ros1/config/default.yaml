@@ -175,6 +175,12 @@ mapping:
     line_min_len_m: 0.0 # Hough线段最小长度(m)
     axis_snap: false # Hough线段吸附水平/垂直
 localization:
+  # ---- LIO 相对观测 (LIO 常开作预测源; 默认关闭 = 改造前行为) ----
+  # frontend 必须已配置 (modules.frontend); 缺失时自动退回 odom + S2M。
+  use_lio_relative: false
+  lio_rel_cov_trans: 0.02   # 相对观测平移噪声 (m^2) —— 只表达"走了多少"
+  lio_rel_cov_rot: 0.002    # 相对观测旋转噪声 (rad^2)
+  lio_frontend_hz: 10       # 前端喂帧上限 (Hz); CPU 超预算时降低
   # 各阶段按名选择算法, 便于对同一阶段的不同算法做横向性能验证.
   # 可用实现 (见 algorithms/localization/localization_factory.cpp):
   #   relocalizer : none | scan_context | bbs | fpfh_ransac
@@ -199,6 +205,18 @@ localization:
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
     map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
+    pose_fusion: direct       # direct(默认, 与改造前逐位一致) | eskf(限幅 + 多源加权)
+
+  # ---- 位姿融合参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效 ----
+  fusion:
+    # odom 打滑门控: 打滑是常态, odom 不删, 只连续降权
+    slip_ratio_lo: 0.5          # |d_pose|/|d_odom| 低于此开始降权
+    slip_ratio_hi: 2.0          # 高于此开始降权
+    slip_yaw_thresh_deg: 20.0   # odom 横摆率与陀螺横摆率差的阈值 (deg/s)
+    odom_weight_min: 0.05       # 权重下限 (保底, 不归零)
+    # 相对观测连续性保护: LIO 复位/模式切换/丢帧时重新锚定
+    rel_max_gap: 0.6            # 最大时间间隔 (s)
+    rel_max_step: 1.0           # 单步相对位移上限 (m)
 
   # ---- 配准器 (matcher: gicp | pp_icp | p2p_icp | vgicp) ----
   matcher:
