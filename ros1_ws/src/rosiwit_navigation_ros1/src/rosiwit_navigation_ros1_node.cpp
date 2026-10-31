@@ -4851,46 +4851,8 @@ private:
       }
     }
 
-    // 末段精调 (<0.6m): MPPI 低速小位移的采样分辨率不够, 末段对位会卡.
-    // 两段式: 先对正"朝向目标点的方位"(偏差大时原地转, 不前进, 避免斜着顶墙),
-    // 再小速度逼近; 进入 xy 容差后原地转到目标朝向.
-    if (!coverage_active_ && recovery_stage_ == RecoveryStage::NONE &&
-        !goal_pose_.header.frame_id.empty()) {
-      const core::Pose2D gp = toCorePose(goal_pose_);
-      const core::Pose2D cp = toCorePose(current_pose_);
-      const double d = std::hypot(gp.x - cp.x, gp.y - cp.y);
-      if (d < 0.6) {
-        geometry_msgs::Twist c;
-        if (d > goal_tolerance_xy_) {
-          const double bearing = std::atan2(gp.y - cp.y, gp.x - cp.x);
-          const double head_err = normalizeAngle(bearing - cp.theta);
-          if (std::fabs(head_err) > 0.4) {
-            c.linear.x = 0.0;   // 先对正行进方向
-          } else {
-            c.linear.x = std::min(max_velocity_x_, 0.9 * d);
-          }
-          // 与旋转段执行器同一套锁存逻辑, 避免末段对位来回转
-          if (std::fabs(head_err) > 0.08) {
-            if (rot_dir_ == 0) rot_dir_ = head_err > 0.0 ? 1 : -1;
-            c.angular.z = rot_dir_ * std::min(max_velocity_theta_,
-                                              std::max(0.15, 2.0 * std::fabs(head_err)));
-          } else {
-            rot_dir_ = 0;
-            c.angular.z = 0.0;
-          }
-        } else {
-          c.linear.x = 0.0;     // 已到 xy 容差: 原地对末朝向
-          const double yaw_err = normalizeAngle(gp.theta - cp.theta);
-          c.angular.z = std::max(-max_velocity_theta_,
-                                 std::min(max_velocity_theta_, 1.5 * yaw_err));
-        }
-        publishCommand(c);
-        recordActionTraveled();
-        if (task_active_) { publishActionOutputs(); }
-        return;
-      }
-    }
-
+    // 末端完全交给 MPPI: 不再用 <0.6m 的独立 P 控制器切换
+    // (会造成前进/停/转反复, 且与 MPPI 的速度/加速度约束不一致)。
     auto cmd = computeVelocityCommand();
     // 旋转段: 先原地转到位, 再交回 MPPI 跟踪前进段 (控制器自带原地旋转能力时
     // 由控制器自己执行)
