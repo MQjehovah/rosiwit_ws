@@ -8,6 +8,7 @@
 
 #include "algorithms/localization/fusion/direct_pose_fusion.h"
 #include "algorithms/localization/fusion/ekf_pose_fusion.h"
+#include "algorithms/localization/maintainer/insert_gate.h"
 
 using namespace rosiwit_slam;
 
@@ -122,6 +123,21 @@ TEST(PoseFusion, RelativeJumpReanchors) {
     // 重新锚定之后的正常增量应继续生效
     f.onRelative(MakePose(1.2, 5.05), SmallCov());
     EXPECT_EQ(f.diag().relative_accepted, 1);
+}
+
+// 地图插入门控: 非 TRACKING / 本帧匹配未被接受 / LIO-S2M 分歧过大时都不得写入叠加层。
+TEST(MapGate, RejectsWhenNotTrackingOrDiverged) {
+    MaintainerConfig cfg;
+    cfg.max_insert_divergence = 0.2;
+
+    EXPECT_FALSE(allowMapInsert(false, true, 0.01, cfg));   // 非 TRACKING
+    EXPECT_FALSE(allowMapInsert(true, false, 0.01, cfg));   // 匹配未被接受
+    EXPECT_FALSE(allowMapInsert(true, true, 0.50, cfg));    // LIO/S2M 分歧过大
+    EXPECT_TRUE (allowMapInsert(true, true, 0.05, cfg));    // 全部满足
+
+    // 0 = 关闭分歧门控 (默认行为兼容)
+    cfg.max_insert_divergence = 0.0;
+    EXPECT_TRUE(allowMapInsert(true, true, 100.0, cfg));
 }
 
 int main(int argc, char ** argv) {

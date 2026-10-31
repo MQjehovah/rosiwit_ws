@@ -2,6 +2,7 @@
 #include "algorithms/localization/localization_pipeline.h"
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_utils.h"
+#include "algorithms/localization/maintainer/insert_gate.h"
 #include "algorithms/map_store/map_store_factory.h"
 #include <cmath>
 #include <Eigen/Geometry>
@@ -287,6 +288,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.pose_graph       = getv<bool>(mtc, "pose_graph", m_maintainer_cfg.pose_graph);
         m_maintainer_cfg.pg_min_keyframes = getv<int>(mtc, "pg_min_keyframes", m_maintainer_cfg.pg_min_keyframes);
         m_maintainer_cfg.max_voxels       = getv<int>(mtc, "max_voxels", m_maintainer_cfg.max_voxels);
+        m_maintainer_cfg.max_insert_divergence =
+            getv<double>(mtc, "max_insert_divergence", m_maintainer_cfg.max_insert_divergence);
     }
     auto plc = loc["planar"];
     if (plc) {
@@ -1511,8 +1514,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 单假设模式下同步假设容器
     if (!m_hyp.ambiguous()) m_hyp.reset(m_pose);
 
-    // 地图维护: 仅在位姿可信(配准被采纳)时写入/雕刻叠加层
-    if (m_maintainer) m_maintainer->onLocalized(out_pose, scan, m_last_match, accepted);
+    // 地图维护: 只在"位姿可信 + 本帧被接受 + 两路来源不矛盾"时写入/雕刻叠加层。
+    // 插入比定位更严格: 错误位姿写进先验地图后会变成"地图的一部分", 更难恢复。
+    if (m_maintainer) {
+        const FusionDiag fd = fusionDiag();   // LIO/S2M 分歧代理 (无 LIO 时为 0)
+        if (allowMapInsert(m_status == LOCALIZED, accepted, fd.last_rel_residual,
+                           m_maintainer_cfg)) {
+            m_maintainer->onLocalized(out_pose, scan, m_last_match, accepted);
+        }
+    }
 
     // 过桥计数: 连续未采纳帧数
     m_coast_count = accepted ? 0 : (m_coast_count + 1);

@@ -422,6 +422,8 @@ localization:
     refresh_frames: 300       # ★联动: 周期性用叠加层刷新全局重定位库(环境变化防失效)
     decay_frames: 3000        # 长期未再观测的叠加体素移除
     override_base: true       # 结构被移除/替换时压制原图旧点
+    # 插入门控: LIO 相对观测与 S2M 残差超过此值则不写入 (0=关闭该条)
+    max_insert_divergence: 0.2
     delta_min: 0.3            # 只沉淀"离原图 > 该距离(m)"的新结构(变化增量), 不重复静态
     carve_stride: 20          # 自由空间雕刻抽样步长 (看到空 -> 从叠加层移除鬼影)
     # L13 位姿图维护 (可选): 变化关键帧缓冲后用 GTSAM 平滑再写入

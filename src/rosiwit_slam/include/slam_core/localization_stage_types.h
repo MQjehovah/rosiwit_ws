@@ -340,6 +340,9 @@ struct MaintainerConfig {
     int    pg_min_keyframes = 3;     // 触发一次位姿图优化的最少关键帧数
     // 叠加层容量上限 (体素). 超过后整体重置并告警, 防止长期运行无界增长.
     int    max_voxels = 400000;
+    // ---- 插入门控 (规则 1~3) ----
+    // LIO 相对观测与 S2M 的残差超过此值时不写入 (0=关闭该条).
+    double max_insert_divergence = 0.2;
 };
 
 } // namespace rosiwit_slam
