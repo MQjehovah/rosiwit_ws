@@ -181,7 +181,6 @@ ros2 bag play remap_ros2 --clock
 > 属于退出阶段问题，不影响建图数据。
 
 ### 6.3 通用 PointCloud2（Vanjee，LiDAR+IMU，`lidar_type: 8`）
-
 - 数据：`remap_20260908.bag`（ROS1）→ ROS2，仅 `/vanjee_points722` + `/vanjee_lidar_imu_packets`（3.2 GB）
 - 点云字段：`x, y, z, intensity, ring(uint16), timestamp(float64, 秒，扫描内相对时间 0~0.1 s)`
 - IMU：`/vanjee_lidar_imu_packets`，200 Hz
@@ -223,6 +222,32 @@ ros2 bag play remap_ros2 --clock
 > 21 bit/轴，哈希表 + 质心/颜色平均），0.05 m 甚至更小都能正常降采样；
 > 上面这次运行已直接用节点内 0.05 m 降采样（779,848 点）。
 > `docs/artifacts/` 里放的 PCD 是再按 0.1%~99.9% 去掉离群点后的版本（729,701 点），仅便于可视化。
+
+### 6.5 核心版 `fast_livo2_frontend`（离线回放验证）
+
+ROS2 节点管线（executor/定时器/地图回调）仍在修，核心算法用**离线回放工具**单独验证：
+
+```bash
+ros2 run rosiwit_slam_ros2 livo_replay \
+  <install>/share/rosiwit_slam_ros2/config/fast_livo2_ntu.yaml \
+  /path/to/eee_03_ros2  out_odom.txt \
+  /os1_cloud_node1/points /imu/imu /left/image_raw
+```
+
+工具用 `rosbag2_cpp` 顺序读包、直接调用 `FastLivo2Frontend`（onImu/onLidar/onImage），
+不经过任何 ROS executor/定时器。
+
+NTU VIRAL `eee_03`（整段 181 s）结果：
+
+| 指标 | 值 |
+|---|---|
+| 处理帧 | LiDAR **1814**、图像 **1813**、IMU **70475** |
+| 输出位姿 | **1811**（10 Hz） |
+| 与 Leica 真值（SE3，1509 匹配） | **RMSE 0.237 m**，mean 0.221 m，max 0.547 m |
+| 轨迹长度 | 142.9 m（真值 127.8 m） |
+
+对比独立包（`ros2_ws/src/fast_livo2`）的 0.257 m，核心版精度一致甚至略好，
+说明 **LIVO 移植没有引入精度退化**。
 
 ## 7. 复现步骤（NTU VIRAL）
 

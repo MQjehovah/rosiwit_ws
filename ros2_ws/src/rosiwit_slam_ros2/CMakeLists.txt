@@ -23,6 +23,8 @@ find_package(std_srvs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
+find_package(rosbag2_storage REQUIRED)
 
 # ==================== 消息和服务生成 ====================
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -57,6 +59,17 @@ rosidl_get_typesupport_target(typesupport_target ${PROJECT_NAME} "rosidl_typesup
 target_link_libraries(${NODE_NAME}
     "${typesupport_target}"
     rosiwit_slam)                      # 核心库 (含 PCL/OpenCV/GTSAM/Ceres/Sophus 等传递依赖)
+
+# ==================== 离线回放 (LIVO 验证) ====================
+add_executable(livo_replay
+    src/livo_replay.cpp
+    src/ros_interface/ros_utils.cpp)
+target_include_directories(livo_replay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(livo_replay PRIVATE BOOST_ALL_NO_LIB)
+ament_target_dependencies(livo_replay
+    rclcpp sensor_msgs rosbag2_cpp rosbag2_storage pcl_conversions)
+target_link_libraries(livo_replay rosiwit_slam)
+install(TARGETS livo_replay DESTINATION lib/${PROJECT_NAME})
 
 # ==================== 安装 ====================
 install(TARGETS ${NODE_NAME} DESTINATION lib/${PROJECT_NAME})
