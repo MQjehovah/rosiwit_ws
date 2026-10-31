@@ -424,6 +424,15 @@ bool SlamPipeline::init(const std::string& config_path) {
 void SlamPipeline::setMode(PipelineMode mode) {
     m_mode = mode;
     if (mode == PipelineMode::LOCALIZATION) {
+        // 运行中从 mapping/free 切入定位时, 定位 worker 可能从未创建 (init 时
+        // 只在启动即定位才建)。没有它, m_loc_buf 只进不出 —— 表现为永远 INIT。
+        if (!m_loc_worker) {
+            m_loc_worker.reset(new rosiwit_common::Thread(
+                "slam_loc", [this](rosiwit_common::CancelToken token) {
+                    localizationWorker(token);
+                }));
+            std::cout << "[SlamPipeline] localization worker started" << std::endl;
+        }
         // 每一轮进入定位都用**新的** LIO 前端: 上一轮/建图留下的内部地图与位姿
         // 不能带进来 (plan Review Focus 5)。
         if (m_use_lio_relative) {
@@ -595,6 +604,7 @@ void SlamPipeline::updateLioRelative(const LidarFrame& f) {
     std::lock_guard<std::mutex> fe_lk(m_lio_frontend_mu);
     if (!m_lio_frontend) return;
 
+    const auto t0 = std::chrono::steady_clock::now();
     // 前端不是线程安全的: 所有调用都在本 worker 线程。
     // 只喂时刻 <= 本帧结束时刻的 IMU, 更晚的留给下一帧 (与建图路径同一时间窗约束)。
     {
@@ -612,18 +622,45 @@ void SlamPipeline::updateLioRelative(const LidarFrame& f) {
     ++m_lio_feeds;
 
     PoseStamped lio;
-    if (!m_lio_frontend->getOdometry(lio)) return;
-    // 相对观测协方差: 顺序 rot3 -> trans3, 与 MatchResult::cov 一致
-    Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Zero();
-    cov.block<3, 3>(0, 0).diagonal().setConstant(m_lio_rel_cov_rot);
-    cov.block<3, 3>(3, 3).diagonal().setConstant(m_lio_rel_cov_trans);
-    // 时间基准: getOdometry 返回 m_last_lidar_time (即本帧 end_time), 不是"最新位姿"
-    m_localization->onRelative(lio, cov);
+    const bool have_lio = m_lio_frontend->getOdometry(lio);
+    if (have_lio) {
+        // 相对观测协方差: 顺序 rot3 -> trans3, 与 MatchResult::cov 一致
+        Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Zero();
+        cov.block<3, 3>(0, 0).diagonal().setConstant(m_lio_rel_cov_rot);
+        cov.block<3, 3>(3, 3).diagonal().setConstant(m_lio_rel_cov_trans);
+        // 时间基准: getOdometry 返回 m_last_lidar_time (即本帧 end_time), 不是"最新位姿"
+        m_localization->onRelative(lio, cov);
+    }
+    {
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        static double ema = -1.0;
+        ema = (ema < 0.0) ? ms : (0.9 * ema + 0.1 * ms);
+        if (m_lio_feeds % 50 == 0) {
+            std::cout << "[LioPerf] feeds=" << m_lio_feeds << " lio_ms_ema=" << ema
+                      << " last_ms=" << ms << " odom_ok=" << (have_lio ? 1 : 0)
+                      << " skipped=" << m_lio_skipped << " imu_pending=" << m_lio_imu_buf.size()
+                      << std::endl;
+        }
+    }
 }
 
 void SlamPipeline::handleLocalization(const LidarFrame& f) {
     if (!m_localization) return;
+    const auto t0 = std::chrono::steady_clock::now();
     m_localization->onLidar(f);
+    // 单帧 S2M 端到端耗时 (含去畸变/局部图/配准/融合): 预算 100 ms
+    {
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        static double ema = -1.0;
+        static int n = 0;
+        ema = (ema < 0.0) ? ms : (0.9 * ema + 0.1 * ms);
+        if (++n % 50 == 0) {
+            std::cout << "[LocPerf] frames=" << n << " s2m_ms_ema=" << ema
+                      << " last_ms=" << ms << " queue=" << m_loc_buf.size() << std::endl;
+        }
+    }
 
     const ILocalization::Status st = m_localization->getStatus();
     const bool pose_usable = (st == ILocalization::LOCALIZED ||
@@ -922,18 +959,24 @@ bool SlamPipeline::setPipelineMode(const std::string& mode) {
     if (mode == "mapping") {
         if (!m_frontend) { std::cerr << "[SlamPipeline] mapping unavailable: frontend missing" << std::endl; return false; }
         setMode(PipelineMode::MAPPING);
+        std::cout << "[SlamPipeline] pipeline mode -> mapping" << std::endl;
         return true;
     }
     if (mode == "localization") {
         if (!m_localization) { std::cerr << "[SlamPipeline] localization unavailable: module missing" << std::endl; return false; }
         if (!m_localization_map_loaded.load()) {
-            std::cerr << "[SlamPipeline] localization requires load_map first" << std::endl;
+            std::cerr << "[SlamPipeline] localization requires load_map first (map not loaded)" << std::endl;
             return false;
         }
         setMode(PipelineMode::LOCALIZATION);
+        std::cout << "[SlamPipeline] pipeline mode -> localization" << std::endl;
         return true;
     }
-    if (mode == "idle") { setMode(PipelineMode::IDLE); return true; }
+    if (mode == "idle") {
+        setMode(PipelineMode::IDLE);
+        std::cout << "[SlamPipeline] pipeline mode -> idle" << std::endl;
+        return true;
+    }
     return false;
 }
 

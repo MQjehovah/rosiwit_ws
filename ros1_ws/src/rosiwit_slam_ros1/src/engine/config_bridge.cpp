@@ -49,10 +49,24 @@ std::string writeXz3dOverrideYaml(const std::string& base_yaml,
                                     bool write_extrinsic,
                                     const Eigen::Matrix3d* r_bl,
                                     bool write_map_dir = true) {
+    // 配置目录: HOME 在 systemd 下可能未设置, 且 roslaunch 的 CWD 常是 ROS_HOME。
+    // 以前直接 home?:"." 会在 CWD=~/.ros 时拼出 ~/.ros/.ros/... (读了旧文件,
+    // 表现为话题退回默认 /imu、/lidar, 雷达帧完全收不到)。优先 HOME, 其次 ROS_HOME。
+    std::string cfg_root;
     const char* home = std::getenv("HOME");
-    const std::string dir = std::string(home ? home : ".") + "/.ros/rosiwit_slam_ros1";
-    ::mkdir(dir.c_str(), 0755);                 // 失败也无所谓(可能已存在)
-    ::mkdir((std::string(home ? home : ".") + "/.ros").c_str(), 0755);
+    if (home && *home) {
+        cfg_root = std::string(home) + "/.ros";
+    } else {
+        const char* ros_home = std::getenv("ROS_HOME");
+        if (ros_home && *ros_home) {
+            cfg_root = ros_home;   // ROS_HOME 本身已指向 ~/.ros
+        } else {
+            cfg_root = "./.ros";
+        }
+    }
+    const std::string dir = cfg_root + "/rosiwit_slam_ros1";
+    ::mkdir(cfg_root.c_str(), 0755);            // 失败也无所谓(可能已存在)
+    ::mkdir(dir.c_str(), 0755);
     const std::string out_path =
         dir + (write_map_dir ? "/compat_legacy.yaml" : "/core_extrinsic.yaml");
 

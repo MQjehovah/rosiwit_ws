@@ -220,7 +220,10 @@ void Ros1SlamInterface::startMapLoadJob(
                 map_switch_busy_.store(false);
                 return;
             }
-            engine_.setCorePipelineMode("localization", /*wait_ms=*/1000);
+            if (!engine_.setCorePipelineMode("localization", /*wait_ms=*/1000)) {
+                ROS_ERROR_STREAM("[ros1_slam] /switch_map: core setPipelineMode(localization) FAILED"
+                                 << " (map_loaded flag or busy)");
+            }
             applyInitPose(init_pose, true);
             relocating_ = false;
             map_switch_busy_.store(false);
