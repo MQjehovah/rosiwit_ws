@@ -27,6 +27,12 @@ public:
     /// 默认忽略 —— 非融合实现 (gicp/scan_context) 不受影响。
     virtual void onRelative(const PoseStamped& /*pose*/,
                             const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
+
+    /// 清空相对观测锚点 (重新进入定位模式时调用)
+    virtual void resetRelativeAnchor() {}
+
+    /// 当前融合实现名 ("direct" | "eskf"), 供上层判断 LIO 是否会被使用
+    virtual std::string poseFusionName() const { return "direct"; }
     virtual Status getStatus() = 0;
     virtual bool getPose(PoseStamped& out) = 0;
 

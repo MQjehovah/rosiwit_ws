@@ -78,6 +78,9 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         // 兼容旧配置: pose_fusion 直接写在 localization 下 (设备 compat_legacy.yaml 就是这种)
         m_fusion_name = getv<std::string>(loc, "pose_fusion", m_fusion_name);
     }
+    std::cout << "[LocPipeline] pose_fusion=" << m_fusion_name
+              << (m_fusion_name == "direct" ? " (LIO relative observations ignored)" : "")
+              << std::endl;
     {
         // 融合层参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效
         auto fc = loc["fusion"];
@@ -728,6 +731,11 @@ void LocalizationPipeline::onRelative(const PoseStamped& pose,
                                       const Eigen::Matrix<double, 6, 6>& cov) {
     std::lock_guard<std::mutex> fk(m_fusion_mu);
     if (m_fusion) m_fusion->onRelative(pose, cov);
+}
+
+void LocalizationPipeline::resetRelativeAnchor() {
+    std::lock_guard<std::mutex> fk(m_fusion_mu);
+    if (m_fusion) m_fusion->resetRelative();
 }
 
 CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseStamped& end_pose) {
@@ -1516,10 +1524,17 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
 
     // 地图维护: 只在"位姿可信 + 本帧被接受 + 两路来源不矛盾"时写入/雕刻叠加层。
     // 插入比定位更严格: 错误位姿写进先验地图后会变成"地图的一部分", 更难恢复。
+    // - LOCALIZED 会跨过 lost_patience 保持, 所以再要求本帧 fitness 达到可信阈值
+    // - LIO 残差只在新鲜时参与 (LIO 停掉/只重锚时不拿旧值一直拦住插入)
     if (m_maintainer) {
-        const FusionDiag fd = fusionDiag();   // LIO/S2M 分歧代理 (无 LIO 时为 0)
-        if (allowMapInsert(m_status == LOCALIZED, accepted, fd.last_rel_residual,
-                           m_maintainer_cfg)) {
+        const FusionDiag fd = fusionDiag();
+        double divergence = 0.0;
+        if (fd.last_rel_time >= 0.0 && f.end_time - fd.last_rel_time <= 0.5) {
+            divergence = fd.last_rel_residual;
+        }
+        const bool tracking = (m_status == LOCALIZED) &&
+            (!m_monitor_cfg.enabled || res.fitness >= m_monitor_cfg.credible_fitness);
+        if (allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg)) {
             m_maintainer->onLocalized(out_pose, scan, m_last_match, accepted);
         }
     }

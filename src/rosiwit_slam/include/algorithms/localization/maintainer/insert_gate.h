@@ -1,5 +1,6 @@
 // include/algorithms/localization/maintainer/insert_gate.h
 #pragma once
+#include <cmath>
 #include "slam_core/localization_stage_types.h"
 
 namespace rosiwit_slam {
@@ -18,6 +19,7 @@ inline bool allowMapInsert(bool tracking, bool match_accepted,
                            const MaintainerConfig& cfg) {
     if (!tracking) return false;
     if (!match_accepted) return false;
+    if (!std::isfinite(lio_s2m_divergence_m)) return false;   // NaN 不能放行
     if (cfg.max_insert_divergence > 0.0 &&
         lio_s2m_divergence_m > cfg.max_insert_divergence) {
         return false;

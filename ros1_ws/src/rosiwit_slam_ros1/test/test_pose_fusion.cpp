@@ -66,27 +66,42 @@ TEST(PoseFusion, DirectIgnoresRelative) {
     EXPECT_NEAR(out.trans.y(), 2.0, 1e-9);
 }
 
-// 打滑：位姿只前进 0.02 m，而 odom 报告 0.20 m -> odom 权重应降到下限
-TEST(PoseFusion, OdomSlipDownweights) {
+// 持续打滑: 两次匹配之间真实只走了 0.02 m，odom 却报 0.20 m ->
+// 独立对照 (匹配位移 vs odom 位移) 必须把 odom 权重压下来。
+TEST(PoseFusion, OdomSlipDetectedBetweenMatches) {
     EkfPoseFusion f;
-    PoseFusionConfig cfg;              // 默认值 + 显式门限
+    PoseFusionConfig cfg;
     cfg.slip_ratio_lo = 0.6;
     cfg.slip_ratio_hi = 1.6;
     cfg.odom_weight_min = 0.0;
     f.configure(cfg);
 
-    PoseStamped p = MakePose(0.0);
+    const PoseStamped p = MakePose(0.0);
     f.reset(p);
+    f.onOdom(MakePose(0.0));                                    // 建立 odom 锚点
+    f.onMatch(MakePose(0.1), SmallCov(), MatchResult{});        // 匹配 1: 原点
+    f.onOdom(MakePose(0.1, 0.20));                              // odom 报前进 0.20 m
+    f.onMatch(MakePose(0.2, 0.02), SmallCov(), MatchResult{});   // 匹配 2: 只前进 0.02 m
 
-    // 匹配把"真实"位移锚定在 0.02 m
-    PoseStamped m = MakePose(0.1, 0.02);
-    f.onMatch(m, SmallCov(), MatchResult{});
-
-    // odom 先给一帧 0 m，再报 0.20 m
-    f.onOdom(MakePose(0.1));
-    f.onOdom(MakePose(0.2, 0.20));
-
+    f.onOdom(MakePose(0.2, 0.20));                              // 消费上面的权重
     EXPECT_LT(f.diag().odom_weight, 0.2);
+}
+
+// 正常行驶: 匹配与 odom 的位移一致时, 权重必须保持接近 1 (不能把好数据压掉)。
+TEST(PoseFusion, OdomWeightStaysHighWhenMatchesAgree) {
+    EkfPoseFusion f;
+    PoseFusionConfig cfg;   // 默认门限
+    f.configure(cfg);
+
+    const PoseStamped p = MakePose(0.0);
+    f.reset(p);
+    f.onOdom(MakePose(0.0));
+    f.onMatch(MakePose(0.1), SmallCov(), MatchResult{});
+    f.onOdom(MakePose(0.1, 0.10));
+    f.onMatch(MakePose(0.2, 0.10), SmallCov(), MatchResult{});
+
+    f.onOdom(MakePose(0.2, 0.10));
+    EXPECT_GT(f.diag().odom_weight, 0.9);
 }
 
 // 模式切出 LOCALIZATION / 重定位时，相对观测的锚点必须清空，
@@ -138,6 +153,23 @@ TEST(MapGate, RejectsWhenNotTrackingOrDiverged) {
     // 0 = 关闭分歧门控 (默认行为兼容)
     cfg.max_insert_divergence = 0.0;
     EXPECT_TRUE(allowMapInsert(true, true, 100.0, cfg));
+}
+
+// 相对观测新息门控: 平滑但错误的 LIO 增量不能每帧都拉满限幅。
+TEST(PoseFusion, RelativeInnovationGateRejectsOutlier) {
+    EkfPoseFusion f;
+    PoseFusionConfig cfg;
+    cfg.rel_chi2_gate = 16.0;
+    f.configure(cfg);
+
+    const PoseStamped p = MakePose(1.0);
+    f.reset(p);
+    f.onRelative(p, SmallCov());                        // 锚定
+    f.onRelative(MakePose(1.1, 1.5), SmallCov());       // 状态没动, LIO 说走了 1.5 m
+
+    EXPECT_EQ(f.diag().relative_rejected, 1);
+    EXPECT_EQ(f.diag().relative_accepted, 0);
+    EXPECT_NEAR(f.predict(1.1).trans.x(), 0.0, 1e-9);
 }
 
 int main(int argc, char ** argv) {

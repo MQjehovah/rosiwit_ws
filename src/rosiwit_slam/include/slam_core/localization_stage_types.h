@@ -244,7 +244,8 @@ struct PoseFusionConfig {
     double odom_weight_min = 0.05;        // 权重下限 (保底, 不归零)
     // ---- 相对观测的连续性保护 (LIO 复位/模式切换/丢帧) ----
     double rel_max_gap = 0.6;             // 两帧相对观测最大时间间隔 (s)
-    double rel_max_step = 1.0;            // 单步相对位移上限 (m), 超过视为跳变
+    double rel_max_step = 3.0;            // 单步相对位移上限 (m), 超过视为跳变
+    double rel_chi2_gate = 16.0;          // 相对观测卡方门限 (3DoF, 99.9%≈16.3); 0=关
 };
 
 // ==================== 健康监测 ====================

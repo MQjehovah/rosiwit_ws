@@ -19,7 +19,10 @@ struct FusionDiag {
     // ---- 相对位姿观测 (LIO) ----
     int    relative_accepted = 0;      // 相对观测被采用的次数
     int    relative_reanchored = 0;    // 相对观测因跳变/中断被重新锚定的次数
+    int    relative_rejected = 0;      // 相对观测因卡方门控被拒的次数
     double last_rel_residual = 0.0;    // 最近一次相对观测残差 (m); 也作为 LIO/S2M 分歧代理
+    double last_rel_chi2 = -1.0;       // 最近一次相对观测卡方 (<0=无)
+    double last_rel_time = -1.0;       // 最近一次被采用的相对观测时间 (s); <0=无
     // ---- odom 打滑门控 ----
     double odom_weight = 1.0;          // 最近一次 odom 速度观测的权重 [0,1]
 };
@@ -41,6 +44,9 @@ public:
 
     /// 初始化/重定位后锚定 (清速度, 重置协方差)
     virtual void reset(const PoseStamped& pose) = 0;
+
+    /// 只清相对观测锚点 (模式切换/重新进入定位时调用; 不动状态量)
+    virtual void resetRelative() {}
 
     /// 高频 IMU: 用于姿态推进与协方差扩散
     virtual void onImu(const IMUSample& /*s*/) {}

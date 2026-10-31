@@ -216,7 +216,8 @@ localization:
     odom_weight_min: 0.05       # 权重下限 (保底, 不归零)
     # 相对观测连续性保护: LIO 复位/模式切换/丢帧时重新锚定
     rel_max_gap: 0.6            # 最大时间间隔 (s)
-    rel_max_step: 1.0           # 单步相对位移上限 (m)
+    rel_max_step: 3.0           # 单步相对位移上限 (m); 检出跳变用, 不是速度限制
+    rel_chi2_gate: 16.0         # 相对观测卡方门限 (3DoF, 99.9%≈16.3); 0=关
 
   # ---- 配准器 (matcher: gicp | pp_icp | p2p_icp | vgicp) ----
   matcher:

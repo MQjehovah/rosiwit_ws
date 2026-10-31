@@ -154,8 +154,9 @@ private:
 
     // 定位模式下的 LIO 相对观测 (可选): IMU 在 sensor callback 只入队,
     // 由定位 worker 在喂雷达前一次性消费 —— 前端不是线程安全的。
-    // 容量按 2000 帧 @200Hz (约 10 s) 设置, 与 FastLio2Frontend 内部缓冲一致。
-    rosiwit_common::Channel<IMUSample> m_lio_imu_buf{2000, rosiwit_common::OverflowPolicy::kDropOldest};
+    // 只消费 time <= 本帧 end_time 的样本, 保证与扫描时间窗一致。
+    std::mutex m_lio_imu_mu;
+    std::deque<IMUSample> m_lio_imu_buf;
     bool   m_use_lio_relative = false;
     double m_lio_rel_cov_trans = 0.02;
     double m_lio_rel_cov_rot = 0.002;
@@ -163,6 +164,14 @@ private:
     double m_last_lio_feed_time = -1.0;
     uint64_t m_lio_feeds = 0;
     uint64_t m_lio_skipped = 0;
+    // 定位专用 LIO 前端: 与建图前端**分开实例**, 避免模式切换时残留状态,
+    // 也避免定位 worker 与建图线程同时进同一个前端。
+    std::mutex m_lio_frontend_mu;
+    std::unique_ptr<IFrontend> m_lio_frontend;
+    std::string m_frontend_name;
+    std::string m_config_path;
+    /// 进入定位模式时创建独立 LIO 前端 (失败则关闭 LIO 相对观测)
+    void createLioFrontend();
     /// 在定位 worker 线程喂前端并转发相对观测 (与 onLidar 同线程)
     void updateLioRelative(const LidarFrame& f);
 

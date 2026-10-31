@@ -22,6 +22,7 @@ public:
     void configure(const PoseFusionConfig& cfg) override { m_cfg = cfg; }
 
     void reset(const PoseStamped& pose) override;
+    void resetRelative() override;
 
     void onImu(const IMUSample& s) override;
     void onOdom(const PoseStamped& odom) override;
@@ -75,11 +76,18 @@ private:
     bool        m_have_rel_prev = false;
     PoseStamped m_rel_prev_lio;                              // 上一帧 LIO 位姿
     Eigen::Vector3d m_rel_prev_state_p = Eigen::Vector3d::Zero();  // 同一时刻滤波器位置
+    Eigen::Matrix3d m_rel_prev_state_R = Eigen::Matrix3d::Identity();  // 同一时刻滤波器姿态
 
-    // ---- odom 打滑门控的锚点 (最后一次被接受的匹配) ----
+    // ---- odom 打滑门控的锚点 ----
+    // plan 语义: 最近一次被接受的匹配位姿/时刻
     bool        m_have_slip_ref = false;
     PoseStamped m_slip_ref_odom;                              // 锚点时刻的 odom 位姿
     Eigen::Vector3d m_slip_ref_p = Eigen::Vector3d::Zero();   // 锚点时刻的融合位置
+    // 独立对照: 两次匹配之间的位移 vs 同区间 odom 位移 (不被滤波器自证)
+    bool        m_have_prev_match = false;
+    PoseStamped m_prev_match_pose;                            // 上一次被接受的匹配位姿
+    PoseStamped m_prev_match_odom;                            // 上一次匹配时刻的 odom
+    double      m_odom_slip_weight = 1.0;                     // 由匹配区间算出的 odom 权重
 
     FusionDiag m_diag;
 };

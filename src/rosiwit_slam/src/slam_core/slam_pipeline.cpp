@@ -226,6 +226,7 @@ void SlamPipeline::stopLocalizationWorker() {
 }
 
 bool SlamPipeline::init(const std::string& config_path) {
+    m_config_path = config_path;
     YAML::Node cfg;
     try {
         cfg = YAML::LoadFile(config_path);
@@ -293,6 +294,8 @@ bool SlamPipeline::init(const std::string& config_path) {
         if (!m_frontend || !m_frontend->init(config_path)) {
             m_frontend.reset();
             module_failed(key, name);
+        } else {
+            m_frontend_name = name;
         }
     };
     auto createBackend = [&](const std::string& key) {
@@ -359,15 +362,25 @@ bool SlamPipeline::init(const std::string& config_path) {
                      "modules.localization and modules.map_manager" << std::endl;
         return false;
     }
-    if (m_use_lio_relative && !m_frontend) {
-        std::cerr << "[SlamPipeline] WARN: localization.use_lio_relative=true but frontend "
-                     "unavailable; falling back to odom + S2M only" << std::endl;
-        m_use_lio_relative = false;
+    if (m_use_lio_relative) {
+        if (!m_localization || m_localization->poseFusionName() == "direct") {
+            std::cerr << "[SlamPipeline] WARN: localization.use_lio_relative=true but pose_fusion="
+                      << (m_localization ? m_localization->poseFusionName() : std::string("none"))
+                      << "; LIO observations would be ignored. Disabling LIO relative input."
+                      << std::endl;
+            m_use_lio_relative = false;
+        } else if (m_frontend_name.empty()) {
+            std::cerr << "[SlamPipeline] WARN: localization.use_lio_relative=true but "
+                         "modules.frontend is not configured. Disabling LIO relative input."
+                      << std::endl;
+            m_use_lio_relative = false;
+        }
     }
     if (m_use_lio_relative) {
         std::cout << "[SlamPipeline] localization LIO relative enabled: hz=" << m_lio_frontend_hz
                   << " cov_trans=" << m_lio_rel_cov_trans
                   << " cov_rot=" << m_lio_rel_cov_rot << std::endl;
+        if (m_mode == PipelineMode::LOCALIZATION) createLioFrontend();
     }
 
     // 视觉松耦合: 读 vision 节点, 启用时创建 VO 因子源
@@ -410,13 +423,50 @@ bool SlamPipeline::init(const std::string& config_path) {
 
 void SlamPipeline::setMode(PipelineMode mode) {
     m_mode = mode;
-    if (mode != PipelineMode::LOCALIZATION) {
-        m_loc_buf.clear();
-        // 切出定位: 丢弃残留 IMU 与 LIO 节拍状态。前端实例保留 (建图可能复用),
-        // 但融合层的相对锚点由 EkfPoseFusion 的跳变/间隔保护自动重锚。
-        m_lio_imu_buf.clear();
+    if (mode == PipelineMode::LOCALIZATION) {
+        // 每一轮进入定位都用**新的** LIO 前端: 上一轮/建图留下的内部地图与位姿
+        // 不能带进来 (plan Review Focus 5)。
+        if (m_use_lio_relative) {
+            createLioFrontend();
+            // 跨模式的相对锚点必须显式清掉, 不能只靠跳变保护
+            if (m_localization) m_localization->resetRelativeAnchor();
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_lio_imu_mu);
+            m_lio_imu_buf.clear();
+        }
         m_last_lio_feed_time = -1.0;
+    } else {
+        m_loc_buf.clear();
+        {
+            std::lock_guard<std::mutex> lk(m_lio_imu_mu);
+            m_lio_imu_buf.clear();
+        }
+        m_last_lio_feed_time = -1.0;
+        std::lock_guard<std::mutex> lk(m_lio_frontend_mu);
+        m_lio_frontend.reset();
     }
+}
+
+void SlamPipeline::createLioFrontend() {
+    std::lock_guard<std::mutex> lk(m_lio_frontend_mu);
+    if (m_lio_frontend) return;
+    if (m_frontend_name.empty() || m_config_path.empty()) {
+        std::cerr << "[SlamPipeline] WARN: LIO frontend not configured; "
+                     "localization LIO relative disabled" << std::endl;
+        m_use_lio_relative = false;
+        return;
+    }
+    auto fe = SlamFactory::createFrontend(m_frontend_name);
+    if (!fe || !fe->init(m_config_path)) {
+        std::cerr << "[SlamPipeline] WARN: LIO frontend '" << m_frontend_name
+                  << "' init failed; localization LIO relative disabled" << std::endl;
+        m_use_lio_relative = false;
+        return;
+    }
+    m_lio_frontend = std::move(fe);
+    std::cout << "[SlamPipeline] LIO frontend ready for localization ("
+              << m_frontend_name << ")" << std::endl;
 }
 
 void SlamPipeline::onVisualOdometry(double time, const PoseStamped& vo_pose) {
@@ -486,9 +536,14 @@ void SlamPipeline::onImu(const IMUSample& s) {
     if (mode == PipelineMode::IDLE) return;
     if (mode == PipelineMode::LOCALIZATION) {
         // 定位模式: 融合层需要高频 IMU; LIO 前端也要 IMU, 但前端不是线程安全的,
-        // 所以这里只入队, 由定位 worker 在喂雷达帧前一次性消费 (保证每帧被消费)。
+        // 所以这里只入队, 由定位 worker 在喂雷达帧前消费 (只消费时刻不晚于本帧的样本)。
         if (m_localization) m_localization->onImu(s);
-        if (m_use_lio_relative && m_frontend) m_lio_imu_buf.push(s);
+        if (m_use_lio_relative) {
+            std::lock_guard<std::mutex> lk(m_lio_imu_mu);
+            constexpr size_t kMaxImuBuffer = 2000;   // ~10s @200Hz
+            if (m_lio_imu_buf.size() >= kMaxImuBuffer) m_lio_imu_buf.pop_front();
+            m_lio_imu_buf.push_back(s);
+        }
     } else {
         SlamBase::onImu(s);
     }
@@ -524,26 +579,40 @@ void SlamPipeline::localizationWorker(rosiwit_common::CancelToken token) {
 }
 
 void SlamPipeline::updateLioRelative(const LidarFrame& f) {
-    if (!m_use_lio_relative || !m_frontend || !m_localization) return;
+    if (!m_use_lio_relative || !m_localization) return;
     if (m_mode.load() != PipelineMode::LOCALIZATION) return;
     if (!f.cloud || f.cloud->empty()) return;
 
-    // 降频: 前端 CPU 超预算时只处理一部分帧 (默认 10 Hz = 与雷达同频)
+    // 降频: 前端 CPU 超预算时只处理一部分帧 (默认 10 Hz = 与雷达同频)。
+    // 用半周期容差, 避免 10Hz 雷达的正常时间抖动导致"隔帧丢弃"。
     if (m_lio_frontend_hz > 0.0 && m_last_lio_feed_time >= 0.0) {
         const double min_dt = 1.0 / m_lio_frontend_hz;
-        if (f.end_time - m_last_lio_feed_time < min_dt - 1e-6) {
+        if (f.end_time - m_last_lio_feed_time < 0.5 * min_dt) {
             ++m_lio_skipped;
-            return;   // IMU 留在队列里, 下次喂帧时一起消费 (有界, 不会无界增长)
+            return;   // IMU 留在队列里, 下次喂帧时一起消费 (有界)
         }
     }
-    // 前端不是线程安全的: 所有调用都在本 worker 线程, 先灌 IMU 再喂雷达。
-    while (auto s = m_lio_imu_buf.try_pop()) m_frontend->onImu(*s);
-    m_frontend->onLidar(f);
+    std::lock_guard<std::mutex> fe_lk(m_lio_frontend_mu);
+    if (!m_lio_frontend) return;
+
+    // 前端不是线程安全的: 所有调用都在本 worker 线程。
+    // 只喂时刻 <= 本帧结束时刻的 IMU, 更晚的留给下一帧 (与建图路径同一时间窗约束)。
+    {
+        std::lock_guard<std::mutex> imu_lk(m_lio_imu_mu);
+        while (!m_lio_imu_buf.empty() && m_lio_imu_buf.front().time <= f.end_time) {
+            m_lio_frontend->onImu(m_lio_imu_buf.front());
+            m_lio_imu_buf.pop_front();
+        }
+        // 防御: 时间戳异常/长时间无帧时也不能无界增长
+        constexpr size_t kMaxImuBuffer = 2000;
+        while (m_lio_imu_buf.size() > kMaxImuBuffer) m_lio_imu_buf.pop_front();
+    }
+    m_lio_frontend->onLidar(f);
     m_last_lio_feed_time = f.end_time;
     ++m_lio_feeds;
 
     PoseStamped lio;
-    if (!m_frontend->getOdometry(lio)) return;
+    if (!m_lio_frontend->getOdometry(lio)) return;
     // 相对观测协方差: 顺序 rot3 -> trans3, 与 MatchResult::cov 一致
     Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Zero();
     cov.block<3, 3>(0, 0).diagonal().setConstant(m_lio_rel_cov_rot);
@@ -778,6 +847,19 @@ bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
     //
     // 0) 停定位 worker，避免 reset 模块时 worker 仍持有 m_localization。
     stopLocalizationWorker();
+    // 0b) 先把模式置为 IDLE 并清掉 LIO 队列/前端, 否则重建期间传感器线程还会
+    //     把旧 IMU 灌进新前端 (reset 完成得比一帧 IMU 慢)。
+    m_mode = PipelineMode::IDLE;
+    {
+        std::lock_guard<std::mutex> lk(m_lio_imu_mu);
+        m_lio_imu_buf.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_lio_frontend_mu);
+        m_lio_frontend.reset();
+    }
+    m_last_lio_feed_time = -1.0;
+    m_frontend_name.clear();
     //
     // 1) 停后端 worker: stopAsync() 只置停止并 detach, 不 join (后端可能正卡在 optimize).
     //    worker 只持有自己的 shared_ptr<IBackend/IMapManager/AnchorState>, 不会访问本对象,
