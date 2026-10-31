@@ -14,6 +14,11 @@
 
 #include <deque>
 #include <map>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/OccupancyGrid.h>
@@ -159,8 +164,10 @@ public:
     loadParams();
     setupCore();
     setupRos();
-    ROS_INFO("[rosiwit_navigation_ros1] node started (planner=%s, controller=%s)",
-             planner_name_.c_str(), controller_name_.c_str());
+    costmap_worker_ = std::thread(&RosiwitNavigationRos1Node::costmapWorkerLoop, this);
+    ROS_INFO("[rosiwit_navigation_ros1] node started (planner=%s, controller=%s; "
+             "costmap worker off the ROS spinner)", planner_name_.c_str(),
+             controller_name_.c_str());
   }
 
 private:
@@ -919,7 +926,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         if (next->supportsFootprint() && !configured_footprint_.empty()) {
           next->setRobotFootprint(planner_footprint_);
         }
-        if (m_has_planner_costmap_) { next->setCostmap(planner_costmap_); }
+        if (m_has_planner_costmap_) {
+          std::lock_guard<std::mutex> map_lk(map_mu_);
+          next->setCostmap(planner_costmap_);
+        }
         async_planner_ = std::move(next);
         // 窄通道回落: 非 grid 规划器配一个 A* 备用 (栅格 A* 穿窄门是 ms 级)
         if (planner != "astar" && planner != "navfn") {
@@ -1021,9 +1031,6 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     control_timer_ = nh_.createTimer(
       ros::Duration(1.0 / std::max(1.0, controller_frequency_)),
       &RosiwitNavigationRos1Node::controlLoop, this);
-    local_costmap_timer_ = nh_.createTimer(
-      ros::Duration(1.0 / std::max(0.5, costmap_update_rate_)),
-      &RosiwitNavigationRos1Node::publishLocalCostmap, this);
     replanning_timer_ = nh_.createTimer(
       ros::Duration(1.0 / std::max(0.1, planner_frequency_)),
       &RosiwitNavigationRos1Node::replanningCheck, this);
@@ -1057,6 +1064,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 public:
   ~RosiwitNavigationRos1Node()
   {
+    costmap_worker_stop_ = true;
+    costmap_worker_cv_.notify_all();
+    if (costmap_worker_.joinable()) costmap_worker_.join();
     // 规划/逃逸规划的 lambda 都捕获了 this: 关停时必须先等它们结束再析构,
     // 否则正在跑的 plan() 回来会写已释放的成员 (UAF)。先 cancel 再有限等待。
     if (async_planner_) { async_planner_->cancel(); }
@@ -1135,14 +1145,17 @@ private:
 
   void mapCallback(const nav_msgs::OccupancyGrid::ConstPtr & msg)
   {
-    current_map_ = msg;
-    ++map_seq_;   // 静态层只在有新地图时才需要整图拷贝
+    {
+      std::lock_guard<std::mutex> mp(map_ptr_mu_);
+      current_map_ = msg;
+      ++map_seq_;   // 静态层只在有新地图时才需要整图拷贝
+    }
     last_map_stamp_ = ros::Time::now();
     if (coverage_active_ && coverage_grid_.ready()) {
       coverage_grid_.updateStaticObstacles(msg->data);
     }
     last_global_costmap_update_ = ros::Time(0);
-    updateCostmap();
+    wakeCostmapWorker();
     ROS_INFO("[rosiwit_navigation_ros1] map received: %d x %d, res=%.3f",
              static_cast<int>(msg->info.width), static_cast<int>(msg->info.height),
              msg->info.resolution);
@@ -1184,18 +1197,24 @@ private:
       }
       polygons.push_back(std::move(poly));
     }
-    keepout_layer_->setPolygons(polygons);
+    {
+      std::lock_guard<std::mutex> lk(layers_mu_);
+      keepout_layer_->setPolygons(polygons);
+    }
     // 禁行区变化必须立刻重建规划视图, 否则最多等 1Hz 的常规刷新.
     last_global_costmap_update_ = ros::Time(0);
-    updateCostmap();
-    ROS_INFO("[rosiwit_navigation_ros1] virtual obstacles -> %zu keepout polygons",
-             keepout_layer_->polygonCount());
-    if (keepout_layer_->polygonCount() > 0) {
-      // stamp 在 updateCostmap() 里执行; 这里读的是刚算完的结果.
-      ROS_INFO("[rosiwit_navigation_ros1] keepout marked %u cells (view %ux%u @ %.3f)",
-               keepout_layer_->lastMarkedCells(),
-               planner_layers_.config().width, planner_layers_.config().height,
-               planner_layers_.config().resolution);
+    wakeCostmapWorker();
+    // 下面读的是 worker 上一次构建的结果(异步), 只做日志用.
+    {
+      std::lock_guard<std::mutex> lk(layers_mu_);
+      ROS_INFO("[rosiwit_navigation_ros1] virtual obstacles -> %zu keepout polygons",
+               keepout_layer_->polygonCount());
+      if (keepout_layer_->polygonCount() > 0) {
+        ROS_INFO("[rosiwit_navigation_ros1] keepout marked %u cells (last view %ux%u @ %.3f)",
+                 keepout_layer_->lastMarkedCells(),
+                 planner_layers_.config().width, planner_layers_.config().height,
+                 planner_layers_.config().resolution);
+      }
     }
   }
 
@@ -1270,6 +1289,8 @@ private:
       }
     }
     // 整帧确认可用后才更新时间戳 (见上方注释)
+    // unique_lock: 处理完就放锁, 不让 worker 在本线程发布 marker 时干等.
+    std::unique_lock<std::mutex> data_lk(data_mu_);
     last_scan_stamp_ = ros::Time::now();
     last_scan_msg_stamp_ = msg->header.stamp;
 
@@ -1355,15 +1376,8 @@ private:
       }
       tracker_.update(tracker_points_, msg->header.stamp.toSec());
       tracker_points_.clear();
+      data_lk.unlock();
       publishTrackedObstacles();
-    }
-    const ros::Time now = ros::Time::now();
-    const double period = costmap_update_rate_ > 0.0 ?
-      1.0 / costmap_update_rate_ : 0.0;
-    if (period <= 0.0 || last_costmap_build_.isZero() ||
-        (now - last_costmap_build_).toSec() >= period) {
-      updateCostmap();
-      last_costmap_build_ = now;
     }
   }
 
@@ -1429,7 +1443,10 @@ private:
       p.z = zx * px + zy * py + zz * pz + tz;
       points.push_back(p);
     }
-    voxel_layer_.update(points, msg->header.stamp.toSec());
+    {
+      std::lock_guard<std::mutex> lk(layers_mu_);
+      voxel_layer_.update(points, msg->header.stamp.toSec());
+    }
   }
 
   bool transformGoalToMap(geometry_msgs::PoseStamped & goal, const char * source)
@@ -1965,10 +1982,13 @@ private:
       return;
     }
 
-    if (!current_core_path_.points.empty()) {
-      controller_strategy_->setPath(current_core_path_);
-    } else {
-      controller_strategy_->setPath(toCorePath(current_path_));
+    if (controller_strategy_) {
+      std::lock_guard<std::mutex> cl(controller_mu_);
+      if (!current_core_path_.points.empty()) {
+        controller_strategy_->setPath(current_core_path_);
+      } else {
+        controller_strategy_->setPath(toCorePath(current_path_));
+      }
     }
     global_path_pub_.publish(current_path_);
 
@@ -2049,6 +2069,8 @@ private:
   geometry_msgs::Twist coverageCommand()
   {
     if (!coverage_controller_) { return geometry_msgs::Twist(); }
+    // worker 会并发给这个实例注入局部代价地图.
+    std::lock_guard<std::mutex> cl(controller_mu_);
     return toRosTwist(coverage_controller_->computeVelocityCommand(
       toCorePose(current_pose_), toCoreVelocity(current_velocity_)));
   }
@@ -2997,15 +3019,58 @@ private:
   }
 
   // ---- costmap ----
+  void wakeCostmapWorker()
+  {
+    {
+      std::lock_guard<std::mutex> lk(costmap_worker_mu_);
+      costmap_worker_wake_ = true;
+    }
+    costmap_worker_cv_.notify_one();
+  }
+
+  void costmapWorkerLoop()
+  {
+    const double rate = costmap_update_rate_ > 0.0 ? costmap_update_rate_ : 5.0;
+    const auto period = std::chrono::duration<double>(1.0 / rate);
+    while (true) {
+      {
+        std::unique_lock<std::mutex> lk(costmap_worker_mu_);
+        costmap_worker_cv_.wait_for(lk, period, [this] {
+          return costmap_worker_stop_.load() || costmap_worker_wake_;
+        });
+        if (costmap_worker_stop_.load()) break;
+        costmap_worker_wake_ = false;
+      }
+      updateCostmap();
+      publishLocalCostmap(ros::TimerEvent());
+    }
+  }
+
   void updateCostmap()
   {
-    if (!current_map_) { return; }
+    std::lock_guard<std::mutex> costmap_lk(costmap_mu_);
+    nav_msgs::OccupancyGrid::ConstPtr map;
+    uint64_t map_seq = 0;
+    {
+      std::lock_guard<std::mutex> mp(map_ptr_mu_);
+      map = current_map_;
+      map_seq = map_seq_;
+    }
+    if (!map) { return; }
+    std::vector<geometry_msgs::Point> scan_points;
+    ros::Time scan_stamp;
+    {
+      std::lock_guard<std::mutex> dk(data_mu_);
+      scan_points = laser_points_;
+      scan_stamp = last_scan_stamp_;
+    }
+    std::lock_guard<std::mutex> map_lk(map_mu_);
 
-    const unsigned int w = current_map_->info.width;
-    const unsigned int h = current_map_->info.height;
-    const float res = current_map_->info.resolution;
-    const double ox = current_map_->info.origin.position.x;
-    const double oy = current_map_->info.origin.position.y;
+    const unsigned int w = map->info.width;
+    const unsigned int h = map->info.height;
+    const float res = map->info.resolution;
+    const double ox = map->info.origin.position.x;
+    const double oy = map->info.origin.position.y;
     if (w == 0 || h == 0 ||
         static_cast<uint64_t>(w) * static_cast<uint64_t>(h) > 4000000ULL) {
       ROS_ERROR_THROTTLE(2.0,
@@ -3029,15 +3094,18 @@ private:
       cfg.window_y = 0;
       // StaticLayer::setOccupancy 是**整图 vector 拷贝**; 以前 1Hz(规划)+5Hz(局部)
       // 各拷一次, 大地图上是几十 MB/s 的无谓 memcpy。按 map 版本去重。
-      if (planner_static_seq_ != map_seq_) {
-        planner_static_layer_->setOccupancy(current_map_->data, w, h);
-        planner_static_seq_ = map_seq_;
+      if (planner_static_seq_ != map_seq) {
+        planner_static_layer_->setOccupancy(map->data, w, h);
+        planner_static_seq_ = map_seq;
       }
-      keepout_layer_->setActive(keepout_enabled_);
-      planner_layers_.configure(cfg, core::kCostFree);
-      planner_layers_.update(ros::Time::now().toSec());
-
-      const std::vector<int8_t> & semantic = planner_layers_.combined();
+      std::vector<int8_t> semantic;
+      {
+        std::lock_guard<std::mutex> lk(layers_mu_);
+        keepout_layer_->setActive(keepout_enabled_);
+        planner_layers_.configure(cfg, core::kCostFree);
+        planner_layers_.update(ros::Time::now().toSec());
+        semantic = planner_layers_.combined();
+      }
 
       auto grid = std::make_shared<core::CostmapGrid>();
       grid->info.width = w;
@@ -3045,7 +3113,7 @@ private:
       grid->info.resolution = res;
       grid->info.origin.position.x = ox;
       grid->info.origin.position.y = oy;
-      grid->data = current_map_->data;
+      grid->data = map->data;
 
       core::Costmap cm;
       cm.grid = grid;
@@ -3139,8 +3207,8 @@ private:
 
     // /scan 停止后不能把最后一帧点云永久当成实时障碍; safety 会停车,
     // 局部 costmap/聚类也不能继续使用陈旧点.
-    const bool scan_fresh = !last_scan_stamp_.isZero() &&
-      (ros::Time::now() - last_scan_stamp_).toSec() <= safety_source_timeout_;
+    const bool scan_fresh = !scan_stamp.isZero() &&
+      (ros::Time::now() - scan_stamp).toSec() <= safety_source_timeout_;
 
     core::ObstacleArray obstacles;
     // 1 字节/格; 以前是 vector<vector<bool>>(h 个 vector), 每次 updateCostmap 都会
@@ -3166,7 +3234,7 @@ private:
       // 用 floor 而不是 round: res=0.1 时 0.05/0.1=0.5 会被 round 成 1 格 (0.10m),
       // 又回到"按格放大"的老问题; floor 才是"最多扩到 5cm 半径"。
       const int scan_dilate = std::max(0, static_cast<int>(std::floor(0.05 / res)));
-      for (const auto & pt : laser_points_) {
+      for (const auto & pt : scan_points) {
         const int lx = static_cast<int>((pt.x - ox) / res);
         const int ly = static_cast<int>((pt.y - oy) / res);
         for (int oy2 = -scan_dilate; oy2 <= scan_dilate; ++oy2) {
@@ -3185,7 +3253,7 @@ private:
       if (mx < local_x0 || mx > local_x1 || my < local_y0 || my > local_y1) {
         return false;
       }
-      if (current_map_->data[my * w + mx] >= 100) { return true; }
+      if (map->data[my * w + mx] >= 100) { return true; }
       return scan_fresh && scan_cells[my * w + mx] == 1;
     };
 
@@ -3250,19 +3318,44 @@ private:
                 });
       obstacles.resize(kMaxObstacles);
     }
-    controller_strategy_->setObstacles(obstacles);
+    {
+      std::lock_guard<std::mutex> cl(controller_mu_);
+      controller_strategy_->setObstacles(obstacles);
+    }
   }
 
   void publishLocalCostmap(const ros::TimerEvent &)
   {
-    if (!current_map_) { return; }
+    std::lock_guard<std::mutex> costmap_lk(costmap_mu_);
+    nav_msgs::OccupancyGrid::ConstPtr map;
+    uint64_t map_seq = 0;
+    {
+      std::lock_guard<std::mutex> mp(map_ptr_mu_);
+      map = current_map_;
+      map_seq = map_seq_;
+    }
+    if (!map) { return; }
+    std::vector<geometry_msgs::Point> scan_points;
+    ros::Time scan_stamp;
+    std::vector<core::TrackedObstacle> tracks;
+    std::vector<core::Point2D> voxel_points;
+    {
+      std::lock_guard<std::mutex> dk(data_mu_);
+      scan_points = laser_points_;
+      scan_stamp = last_scan_stamp_;
+      tracks = tracker_.predicted(tracking_horizon_);
+    }
+    {
+      std::lock_guard<std::mutex> lk(layers_mu_);
+      voxel_points = voxel_layer_.occupancyPoints();
+    }
     if (!local_static_layer_ || !local_scan_layer_ || !local_track_layer_ ||
         !local_voxel_layer_ || !keepout_layer_) { return; }
-    const unsigned int w = current_map_->info.width;
-    const unsigned int h = current_map_->info.height;
-    const float res = current_map_->info.resolution;
-    const double ox = current_map_->info.origin.position.x;
-    const double oy = current_map_->info.origin.position.y;
+    const unsigned int w = map->info.width;
+    const unsigned int h = map->info.height;
+    const float res = map->info.resolution;
+    const double ox = map->info.origin.position.x;
+    const double oy = map->info.origin.position.y;
 
     double rx = 0.0, ry = 0.0;
     try {
@@ -3280,8 +3373,8 @@ private:
     const int cy = static_cast<int>((ry - oy) / res);
 
     // 与 updateCostmap 一致: 超时的 /scan 不再写入实时障碍.
-    const bool scan_fresh = !last_scan_stamp_.isZero() &&
-      (ros::Time::now() - last_scan_stamp_).toSec() <= safety_source_timeout_;
+    const bool scan_fresh = !scan_stamp.isZero() &&
+      (ros::Time::now() - scan_stamp).toSec() <= safety_source_timeout_;
 
     const int lw = win_half * 2 + 1;
 
@@ -3306,33 +3399,36 @@ private:
     cfg.window_x = cx - win_half;
     cfg.window_y = cy - win_half;
 
-    if (local_static_seq_ != map_seq_) {
-      local_static_layer_->setOccupancy(current_map_->data, w, h);
-      local_static_seq_ = map_seq_;
+    if (local_static_seq_ != map_seq) {
+      local_static_layer_->setOccupancy(map->data, w, h);
+      local_static_seq_ = map_seq;
     }
     if (scan_fresh) {
       scan_layer_points_.clear();
-      scan_layer_points_.reserve(laser_points_.size());
-      for (const auto & p : laser_points_) { scan_layer_points_.push_back({p.x, p.y}); }
+      scan_layer_points_.reserve(scan_points.size());
+      for (const auto & p : scan_points) { scan_layer_points_.push_back({p.x, p.y}); }
       local_scan_layer_->setPoints(scan_layer_points_);
     } else {
       local_scan_layer_->clear();
     }
     if (tracking_enabled_) {
-      local_track_layer_->setCircles(tracker_.predicted(tracking_horizon_));
+      local_track_layer_->setCircles(tracks);
     } else {
       local_track_layer_->clear();
     }
     if (voxel_enabled_) {
-      local_voxel_layer_->setPoints(voxel_layer_.occupancyPoints());
+      local_voxel_layer_->setPoints(voxel_points);
     } else {
       local_voxel_layer_->clear();
     }
-    keepout_layer_->setActive(keepout_enabled_);
-
-    local_layers_.configure(cfg, core::kCostFree);
-    local_layers_.update(ros::Time::now().toSec());
-    std::vector<int8_t> raw = local_layers_.combined();
+    std::vector<int8_t> raw;
+    {
+      std::lock_guard<std::mutex> lk(layers_mu_);
+      keepout_layer_->setActive(keepout_enabled_);
+      local_layers_.configure(cfg, core::kCostFree);
+      local_layers_.update(ros::Time::now().toSec());
+      raw = local_layers_.combined();
+    }
 
     // 窗口内但在地图外的栅格: 旧实现视为致命 (不可穿越), 保持等价.
     for (int y = 0; y < lw; ++y) {
@@ -3386,6 +3482,7 @@ private:
       } else {
         grid.data = local_costmap.data;
       }
+      std::lock_guard<std::mutex> cl(controller_mu_);
       controller_strategy_->setLocalCostmap(grid);
       // 覆盖率执行用的是另一个控制器实例, 同一份局部代价地图也要给它
       if (coverage_controller_ && coverage_active_) {
@@ -3630,6 +3727,7 @@ private:
     // 配置里的 hybrid_astar, 以前这个条件把回退路径的平滑整个跳过了 (smoothed=0)。
     if (planned.points.size() >= 3 &&
         (planner_name_ != "hybrid_astar" || last_plan_used_fallback_.load())) {
+      std::lock_guard<std::mutex> map_lk(map_mu_);
       const core::Path raw = planned;
       planners::SmootherConfig smoother;
       smoother.max_iterations = 60;
@@ -3717,7 +3815,10 @@ private:
 
     // 直接把核心路径交给控制器, 不能用 toCorePath(ROS Path) 转一圈: ROS
     // Path 没有前进/倒车方向字段, 会把 Hybrid A* 的反向段丢成“前进”.
-    if (controller_strategy_) controller_strategy_->setPath(planned);
+    if (controller_strategy_) {
+      std::lock_guard<std::mutex> cl(controller_mu_);
+      controller_strategy_->setPath(planned);
+    }
     // A2: 时间参数化 (cusp/旋转段/末段由轨迹接管; 控制器可选消费)
     {
       core::TrajectoryLimits limits;
@@ -3728,6 +3829,7 @@ private:
       limits.max_lat_accel = 0.5;
       const core::TimedTrajectory traj = planners::parameterizeTrajectory(planned, limits);
       if (controller_strategy_ && traj.valid) {
+        std::lock_guard<std::mutex> cl(controller_mu_);
         controller_strategy_->setTrajectory(traj);
       }
     }
@@ -3765,6 +3867,7 @@ private:
 
   bool pathBlocked() const
   {
+    std::lock_guard<std::mutex> map_lk(map_mu_);
     const core::Costmap & cm =
       last_planning_costmap_.data.empty() ? planner_costmap_ : last_planning_costmap_;
     if (current_path_.poses.empty() || cm.data.empty() || cm.resolution <= 0.0) {
@@ -3934,7 +4037,11 @@ private:
                                          double margin,
                                          bool enabled)
   {
-    core::Costmap cm = planner_costmap_;
+    core::Costmap cm;
+    {
+      std::lock_guard<std::mutex> map_lk(map_mu_);
+      cm = planner_costmap_;
+    }
     if (!enabled || cm.data.empty() ||
         cm.width == 0 || cm.height == 0 || cm.resolution <= 0.0) {
       return cm;
@@ -4128,9 +4235,15 @@ private:
   {
     // 清掉"动态层残留": 体素、跟踪目标、scan 缓存. 规划视图本身是 static+keepout,
     // 重建一次即可 (可能上一次因地图更新没刷到).
-    tracker_.clear();
-    voxel_layer_.clear();
-    laser_points_.clear();
+    {
+      std::lock_guard<std::mutex> dk(data_mu_);
+      tracker_.clear();
+      laser_points_.clear();
+    }
+    {
+      std::lock_guard<std::mutex> lk(layers_mu_);
+      voxel_layer_.clear();
+    }
     last_global_costmap_update_ = ros::Time(0);
     updateCostmap();
     publishLocalCostmap(ros::TimerEvent());
@@ -4923,6 +5036,7 @@ private:
     if (controller_strategy_) {
       const auto core_pose = toCorePose(current_pose_);
       const auto core_vel = toCoreVelocity(current_velocity_);
+      std::lock_guard<std::mutex> cl(controller_mu_);
       const auto cmd = controller_strategy_->computeVelocityCommand(core_pose, core_vel);
       return toRosTwist(cmd);
     }
@@ -5146,6 +5260,22 @@ private:
   // ---- 成员 ----
   ros::NodeHandle nh_;
   ros::NodeHandle pnh_;
+
+  // Heavy costmap work (4M-grid copy / inflation / layer update) runs on this
+  // worker; the ROS spinner only runs control + sensor callbacks.
+  std::thread costmap_worker_;
+  std::atomic<bool> costmap_worker_stop_{false};
+  std::mutex costmap_worker_mu_;
+  std::condition_variable costmap_worker_cv_;
+  bool costmap_worker_wake_ = false;
+
+  // Minimal shared state between the worker and the ROS spinner.
+  mutable std::mutex costmap_mu_;
+  mutable std::mutex data_mu_;
+  mutable std::mutex map_ptr_mu_;
+  mutable std::mutex map_mu_;
+  mutable std::mutex controller_mu_;
+  mutable std::mutex layers_mu_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
 
@@ -5378,7 +5508,7 @@ private:
   bool pending_allow_initial_rotate_ = true;
   geometry_msgs::PoseStamped pending_goal_;
   core::Costmap planner_costmap_;
-  bool m_has_planner_costmap_ = false;
+  std::atomic<bool> m_has_planner_costmap_{false};
   std::unique_ptr<core::IControllerStrategy> controller_strategy_;
   std::unique_ptr<core::IControllerStrategy> coverage_controller_;
 
@@ -5407,7 +5537,6 @@ private:
   ros::Time last_costmap_build_;
   ros::Time last_global_costmap_update_;
   ros::Timer control_timer_;
-  ros::Timer local_costmap_timer_;
   ros::Timer replanning_timer_;
   ros::Timer diagnostics_timer_;
 
