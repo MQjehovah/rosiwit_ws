@@ -5,6 +5,7 @@
 //   2) direct 实现必须忽略相对观测（回退语义）。
 #include <gtest/gtest.h>
 #include <Eigen/Eigen>
+#include <cmath>
 
 #include "algorithms/localization/fusion/direct_pose_fusion.h"
 #include "algorithms/localization/fusion/ekf_pose_fusion.h"
@@ -153,6 +154,10 @@ TEST(MapGate, RejectsWhenNotTrackingOrDiverged) {
     // 0 = 关闭分歧门控 (默认行为兼容)
     cfg.max_insert_divergence = 0.0;
     EXPECT_TRUE(allowMapInsert(true, true, 100.0, cfg));
+
+    // NaN 不能放行 (NaN > 阈值恒为 false, 不显式检查会漏)
+    cfg.max_insert_divergence = 0.2;
+    EXPECT_FALSE(allowMapInsert(true, true, std::nan(""), cfg));
 }
 
 // 相对观测新息门控: 平滑但错误的 LIO 增量不能每帧都拉满限幅。

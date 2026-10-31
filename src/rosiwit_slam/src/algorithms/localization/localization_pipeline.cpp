@@ -1763,7 +1763,9 @@ std::string LocalizationPipeline::poseFusionDiagnostics() const {
        << ",\"accepted\":" << d.accepted
        << ",\"relative_accepted\":" << d.relative_accepted
        << ",\"relative_reanchored\":" << d.relative_reanchored
+       << ",\"relative_rejected\":" << d.relative_rejected
        << ",\"last_rel_residual\":" << d.last_rel_residual
+       << ",\"last_rel_chi2\":" << d.last_rel_chi2
        << ",\"odom_weight\":" << d.odom_weight
        << ",\"rejected_chi2\":" << d.rejected_chi2
        << ",\"rejected_in_place\":" << d.rejected_in_place
