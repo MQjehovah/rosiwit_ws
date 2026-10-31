@@ -1,0 +1,12 @@
+build/*
+
+# runtime outputs (节点运行时写入 Log/)
+Log/mat_pre.txt
+Log/mat_out.txt
+Log/imu.txt
+Log/result/*.txt
+Log/pcd/*
+!Log/pcd/.gitkeep
+Log/image/*
+!Log/image/.gitkeep
+Log/Colmap/images/

@@ -1,0 +1,15 @@
+dataset:            NTU VIRAL eee_03 (open dataset, HuggingFace mirror Yuan-Shenghai/NTU-VIRAL-DATASET)
+sensors:            Ouster OS1-16 (/os1_cloud_node1/points) + /imu/imu + /left/image_raw
+bag duration:       181.3 s (ROS2, converted with rosbags-convert)
+run:                full sequence, 1x, use_sim_time
+config:             config/NTU_VIRAL.yaml (seq_name=eee_03, img_en=1, pcd_save_en=true, filter_size_pcd=0.10)
+poses:              1809
+lio_frames:         1809
+map_raw_points:     2498816
+map_downsampled:    889839   (voxel 0.10 m)
+traj_length_est:    137.2 m
+traj_length_gt:     127.8 m
+ate_se3_rmse:       0.257 m
+ate_se3_mean:       0.244 m
+ate_se3_max:        0.463 m
+ate_matched_poses:  1509

@@ -1,0 +1,12 @@
+dataset:            FAST-LIVO2-Dataset / Retail_Street (official, Google Drive)
+sensors:            Livox Avia (/livox/lidar CustomMsg) + /livox/imu + /left_camera/image (color)
+bag duration:       135.5 s (ROS1 bag converted to ROS2 with rosbags-convert)
+run:                full sequence, 1x, use_sim_time, img_en=1
+config:             config/avia.yaml + config/camera_pinhole.yaml (seq_name=retail_street)
+lidar_frames:       1355 in bag, 1348 processed
+map_raw_points:     18895135  (colored)
+map_0.05m_points:   779848     (on-node int64 voxel downsample)
+artifact_pcd:       729701     (outlier-cropped 0.1%-99.9% for visualization)
+rgb_mean:           124.0 115.2 108.9
+rgb_std:            62.5 59.2 58.9
+lio_residual_m:     ~0.013
