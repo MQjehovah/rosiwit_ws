@@ -11,6 +11,7 @@
 #include "algorithms/grid_map/grid_map_factory.h"
 // 新增算法
 #include "algorithms/point_lio/point_lio_frontend.h"
+#include "algorithms/fast_livo2/fast_livo2_frontend.h"
 #include "algorithms/scan_context/scan_context_lc.h"
 
 #ifdef USE_GTSAM
@@ -31,6 +32,7 @@ std::vector<std::string> SlamFactory::listNames() {
 std::unique_ptr<IFrontend> SlamFactory::createFrontend(const std::string& name) {
     if (name == "fast_lio2_frontend") return std::make_unique<FastLio2Frontend>();
     if (name == "point_lio_frontend")  return std::make_unique<PointLioFrontend>();
+    if (name == "fast_livo2_frontend") return std::make_unique<FastLivo2Frontend>();
     return nullptr;
 }
 

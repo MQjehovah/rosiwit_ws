@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "slam_core/i_frontend.h"
+#include "slam_core/slam_factory.h"
 #include "slam_core/slam_types.h"
 
 namespace {
@@ -34,4 +35,9 @@ TEST(FastLivo2Types, Defaults) {
     frontend.onImage(frame);  // default no-op, must not crash
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr rgb;
     EXPECT_FALSE(frontend.getRGBCloud(rgb));
+}
+
+TEST(FastLivo2Factory, CreatesFrontend) {
+    auto frontend = rosiwit_slam::SlamFactory::createFrontend("fast_livo2_frontend");
+    ASSERT_NE(frontend, nullptr);
 }
