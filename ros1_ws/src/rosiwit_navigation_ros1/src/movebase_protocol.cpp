@@ -353,6 +353,13 @@ Decoded decodeGoal(const Goal & goal)
       if (index >= goal.tracking_path.size()) {
         index = goal.tracking_path.size() - 1;
       }
+      // APP 的 cmd=1 常带 2 个点: [当前位置, 目的地], 而 path_index 默认 0。
+      // 直接取 [0] 就是"原地到达"(实测 2026-10-31: 目标在 10.8 m 外, 却 0.1 m
+      // 就报 reached, 然后在原地转了 15 s 收尾)。给 2 个点且 path_index=0 时取最后一点。
+      if (goal.single_point_use_last_pose && out.path_index == 0 &&
+          goal.tracking_path.size() >= 2) {
+        index = goal.tracking_path.size() - 1;
+      }
       out.target = goal.tracking_path[index];
       out.valid = true;
       out.supported = true;

@@ -153,6 +153,8 @@ void Ros1SlamInterface::initPub() {
     // (不改变默认行为; 打开前需要 seed_max_drift 收紧, 否则核心会假定位.)
     scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
     warning_code_puber_ = nh_.advertise<std_msgs::String>("slam_warning_code", 10);
+    // 位姿融合诊断 (JSON, 1Hz): 用于 direct / eskf 两种方案的现场 A/B 与回归
+    fusion_diag_puber_ = nh_.advertise<std_msgs::String>("slam/fusion_diag", 2);
     point_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("origin_point", 10);
 }
 

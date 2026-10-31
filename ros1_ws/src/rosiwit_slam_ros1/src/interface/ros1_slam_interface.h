@@ -367,6 +367,7 @@ private:
     int planar_apply_repeats_ = 0;
     ros::Publisher scan_puber_;               // points_2d         PointCloud2  10 (永不发)
     ros::Publisher warning_code_puber_;       // slam_warning_code String       10 (T7)
+    ros::Publisher fusion_diag_puber_;        // slam/fusion_diag String  2 (pose_fusion 诊断, 1Hz)
     ros::Publisher point_puber_;              // origin_point      PointCloud2  10
 
     ros::Timer point_cloud_mapping_timer_;    // 0.1s

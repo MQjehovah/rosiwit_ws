@@ -89,6 +89,9 @@ public:
 
     /// 绝对约束输入 (地图系位姿 + 协方差; 默认忽略)
     virtual void onAbsolute(const PoseStamped& /*pose*/, const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
+
+    /// 位姿融合诊断 (JSON; 未启用融合/不支持时返回空串)
+    virtual std::string poseFusionDiagnostics() const { return std::string(); }
 };
 
 } // namespace rosiwit_slam

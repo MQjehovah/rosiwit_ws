@@ -834,4 +834,9 @@ bool SlamPipeline::priorUncertainty(double& xy_sigma, double& yaw_sigma) const {
     return m_localization->priorUncertainty(xy_sigma, yaw_sigma);
 }
 
+std::string SlamPipeline::poseFusionDiagnostics() const {
+    if (!m_localization) return std::string();
+    return m_localization->poseFusionDiagnostics();
+}
+
 } // namespace rosiwit_slam

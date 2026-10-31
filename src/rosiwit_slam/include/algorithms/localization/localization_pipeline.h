@@ -10,6 +10,7 @@
 #include "slam_core/i_scan_matcher.h"
 #include "slam_core/i_local_map_provider.h"
 #include "slam_core/i_motion_prior.h"
+#include "slam_core/i_pose_fusion.h"
 #include "slam_core/i_global_localizer.h"
 #include "slam_core/i_localization_monitor.h"
 #include "slam_core/i_map_maintainer.h"
@@ -56,7 +57,9 @@ public:
         return m_snapshot_confidence;
     }
     std::string describe() const;
-
+    /// 位姿融合诊断 (direct 模式下计数值无意义)
+    FusionDiag fusionDiag() const;
+    std::string poseFusionDiagnostics() const override;
 private:
     void setMapImpl(const std::string& map_name);
     bool acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
@@ -78,6 +81,9 @@ private:
     std::unique_ptr<IScanMatcher>         m_global_matcher;   // 全局候选精配专用，独立线程使用
     std::unique_ptr<ILocalizationMonitor> m_monitor;
     std::unique_ptr<IMapMaintainer>       m_maintainer;   // 第6阶段: 非破坏性叠加地图维护
+    // 第7阶段: 位姿融合 (direct=直通 / eskf=IMU+odom 推进 + 匹配观测限幅修正)
+    std::unique_ptr<IPoseFusion>          m_fusion;
+    mutable std::mutex                    m_fusion_mu;
     std::atomic<bool> m_cancel_set_map{false};
 
     // 配置
@@ -101,6 +107,8 @@ private:
     std::string m_matcher_name = "pp_icp";
     std::string m_monitor_name = "windowed";
     std::string m_maintainer_name = "none";
+    std::string m_fusion_name = "direct";   // direct | eskf
+    PoseFusionConfig m_fusion_cfg;
 
     // 状态
     // 并发契约:

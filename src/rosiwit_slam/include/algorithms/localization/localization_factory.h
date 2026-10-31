@@ -9,6 +9,7 @@
 #include "slam_core/i_global_localizer.h"
 #include "slam_core/i_localization_monitor.h"
 #include "slam_core/i_map_maintainer.h"
+#include "slam_core/i_pose_fusion.h"
 
 namespace rosiwit_slam {
 
@@ -21,6 +22,7 @@ public:
     static std::unique_ptr<IGlobalLocalizer>     createGlobalLocalizer(const std::string& name);
     static std::unique_ptr<ILocalizationMonitor> createMonitor(const std::string& name);
     static std::unique_ptr<IMapMaintainer>       createMapMaintainer(const std::string& name);
+    static std::unique_ptr<IPoseFusion>          createPoseFusion(const std::string& name);
 
     static std::vector<std::string> listMatchers();
     static std::vector<std::string> listLocalMapProviders();
@@ -28,6 +30,7 @@ public:
     static std::vector<std::string> listGlobalLocalizers();
     static std::vector<std::string> listMonitors();
     static std::vector<std::string> listMapMaintainers();
+    static std::vector<std::string> listPoseFusions();
 };
 
 } // namespace rosiwit_slam

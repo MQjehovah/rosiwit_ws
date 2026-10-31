@@ -67,6 +67,10 @@ public:
     /// init 成功才为 true。为 false 时 core 可能为 nullptr, 调用方不应再建接口层。
     bool ok() const { return ok_; }
     rosiwit_slam::ISlamAlgorithm* algo() const { return algo_raw_; }
+    /// 位姿融合诊断 (转发到核心; 用于 /slam/fusion_diag)
+    std::string poseFusionDiagnostics() const {
+        return algo_ ? algo_->poseFusionDiagnostics() : std::string();
+    }
     rosiwit_slam::SlamBase* base() const { return base_; }
 
     const std::string& configPath() const { return config_path_; }

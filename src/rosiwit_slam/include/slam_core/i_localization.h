@@ -50,6 +50,9 @@ public:
     /// 匹配置信度/覆盖率 [0,1] (跨配准器统一口径). 默认 0 —— 不支持的实现可不管.
     /// 旧 xz_3d_slam 的 slam/info.matching_degree 就是这个 (等价于旧的 getFitness()).
     virtual double confidence() const { return 0.0; }
+
+    /// 位姿融合诊断 (JSON; 未启用融合时返回空串)
+    virtual std::string poseFusionDiagnostics() const { return std::string(); }
 };
 
 } // namespace rosiwit_slam

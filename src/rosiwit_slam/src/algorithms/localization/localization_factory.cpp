@@ -17,6 +17,8 @@
 #include "algorithms/localization/monitor/threshold_monitor.h"
 #include "algorithms/localization/monitor/windowed_monitor.h"
 #include "algorithms/localization/maintainer/overlay_map_maintainer.h"
+#include "algorithms/localization/fusion/direct_pose_fusion.h"
+#include "algorithms/localization/fusion/ekf_pose_fusion.h"
 
 namespace rosiwit_slam {
 
@@ -62,11 +64,18 @@ std::unique_ptr<IMapMaintainer> LocalizationFactory::createMapMaintainer(const s
     return nullptr;
 }
 
+std::unique_ptr<IPoseFusion> LocalizationFactory::createPoseFusion(const std::string& name) {
+    if (name == "direct" || name == "none") return std::make_unique<DirectPoseFusion>();
+    if (name == "eskf")                     return std::make_unique<EkfPoseFusion>();
+    return nullptr;
+}
+
 std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp", "p2p_icp", "vgicp", "ndt2d"}; }
 std::vector<std::string> LocalizationFactory::listLocalMapProviders() { return {"global", "radius_submap", "keyframe_submap"}; }
 std::vector<std::string> LocalizationFactory::listMotionPriors()      { return {"constant_velocity", "imu", "imu_ekf"}; }
 std::vector<std::string> LocalizationFactory::listGlobalLocalizers()  { return {"none", "scan_context", "bbs", "fpfh_ransac"}; }
 std::vector<std::string> LocalizationFactory::listMonitors()          { return {"threshold", "windowed"}; }
 std::vector<std::string> LocalizationFactory::listMapMaintainers()    { return {"overlay"}; }
+std::vector<std::string> LocalizationFactory::listPoseFusions()       { return {"direct", "eskf"}; }
 
 } // namespace rosiwit_slam

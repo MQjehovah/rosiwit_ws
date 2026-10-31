@@ -221,6 +221,24 @@ struct GlobalLocalizeConfig {
     double fpfh_similarity = 0.9;     // 预拒绝相似度阈值
 };
 
+// ==================== 位姿融合 (pose_fusion) ====================
+// 把"配准结果(观测)"变成"位姿(状态)"的那一步. direct=直接采用(旧行为),
+// eskf=IMU/odom 推进 + 带协方差观测做增益修正 (单帧修正有界, 防止 1m 级跳变).
+struct PoseFusionConfig {
+    double gain_trans = 0.6;              // 位置增益上限 (0~1)
+    double gain_rot = 0.8;                // 旋转增益上限
+    double max_correction_trans = 0.15;   // 单帧最大平移修正 (m)
+    double max_correction_rot_deg = 3.0;  // 单帧最大旋转修正 (deg)
+    double trans_cov_floor = 0.02;        // 匹配平移协方差下限 (m^2)
+    double rot_cov_floor = 0.001;         // 匹配旋转协方差下限 (rad^2)
+    double process_trans = 0.05;          // 每帧位置过程噪声 (m^2)
+    double process_rot = 0.01;            // 每帧旋转过程噪声 (rad^2)
+    double chi2_gate = 20.0;              // 新息卡方门控 (6DoF, 99.9%≈22.5); 0=关
+    double max_odom_speed = 3.0;          // odom 速度物理上限 (m/s)
+    bool   reject_in_place_trans = true;  // 原地旋转时丢弃匹配的平移分量
+    double in_place_yaw_step_deg = 2.0;   // 判定"原地旋转"的单帧航向变化阈值 (deg)
+};
+
 // ==================== 健康监测 ====================
 enum class MonitorLevel { INIT = 0, CREDIBLE = 1, DEGRADED = 2, LOST = 3 };
 

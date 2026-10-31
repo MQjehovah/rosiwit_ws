@@ -117,15 +117,19 @@ void EkfMotionPrior::onImu(const IMUSample& s) {
 
 void EkfMotionPrior::onOdom(const PoseStamped& odom) {
     if (!m_cfg.use_odom) return;   // 开关: 关闭时速度只来自激光位移(纯 IMU+EKF 退化为智能常速)
+
     if (m_have_odom && odom.time > m_odom_time) {
         const double dt = odom.time - m_odom_time;
         if (dt > 1e-3) {
             // 前置物理门 (硬阈值, 卡方之外的保底):
             //   平移速度超物理上限 = 打滑/毛刺样本, 整包丢弃
-            const V3D dp_w = odom.trans - m_odom.trans;
-            const double speed = dp_w.head<2>().norm() / dt;
+            const V3D dp_odom = odom.trans - m_odom.trans;
+            const double speed = dp_odom.head<2>().norm() / dt;
             if (m_cfg.max_odom_speed > 0 && speed > m_cfg.max_odom_speed) {
                 ++m_odom_rejected;
+                ++m_odom_rejected_speed;
+                m_odom = odom;
+                m_odom_time = odom.time;
                 return;
             }
             // 前置偏航一致性门: 直行打滑时 yaw 两边都 ~0 挡不住平移, 但转弯打滑
@@ -134,13 +138,42 @@ void EkfMotionPrior::onOdom(const PoseStamped& odom) {
             m_odom_yaw_rate = std::atan2(dR(1, 0), dR(0, 0)) / dt;
             if (std::fabs(m_odom_yaw_rate - m_gyro_yaw_rate) > m_cfg.slip_yaw_thresh) {
                 ++m_odom_rejected;
+                ++m_odom_rejected_yaw;
+                m_odom = odom;
+                m_odom_time = odom.time;
                 return;
             }
-            // EKF 更新: 体系速度观测 z = R(θ)ᵀ·Δp/dt
-            const Eigen::Vector2d z =
-                yawRot(std::atan2(m_pose.rot(1, 0), m_pose.rot(0, 0))).transpose() *
-                dp_w.head<2>() / dt;
-            velocityUpdate(z, m_cfg.ekf_r_odom * m_cfg.ekf_r_odom);
+            // EKF 更新: 体系速度观测 z = R(θ_odom)ᵀ·Δp_odom/dt
+            // ★ 2026-10-31 修正: 以前用 map 系的 θ 去转 odom 系位移, 而两者一般
+            //   差一个恒定刚性变换 (本机 map→odom 的 yaw ≈ -90°), 等于把"直行"
+            //   观测成"横移". 体系速度必须用 **odom 自己的朝向** 转, 与地图无关;
+            //   这样重定位改变 map→odom 也不会污染 odom 观测。
+            const double odom_yaw = std::atan2(odom.rot(1, 0), odom.rot(0, 0));
+            const Eigen::Vector2d z = yawRot(odom_yaw).transpose() * dp_odom.head<2>() / dt;
+            // 诊断: 观测与滤波速度的夹角 (正常行驶应≈0°; 稳定在 ±90° 说明两源不一致)
+            {
+                const double nz = z.norm(), nv = m_v.norm();
+                if (nz > 0.02 && nv > 0.02) {
+                    const double c = std::max(-1.0, std::min(1.0, z.dot(m_v) / (nz * nv)));
+                    m_odom_z_vs_v_deg = std::acos(c) * 180.0 / M_PI;
+                }
+            }
+            if (velocityUpdate(z, m_cfg.ekf_r_odom * m_cfg.ekf_r_odom)) {
+                ++m_odom_accepted;
+            } else {
+                ++m_odom_rejected;
+                ++m_odom_rejected_chi2;
+            }
+            if (++m_odom_probe % 100 == 0) {
+                std::cout << "[odom] acc=" << m_odom_accepted
+                          << " rej(speed/yaw/chi2)=" << m_odom_rejected_speed << "/"
+                          << m_odom_rejected_yaw << "/" << m_odom_rejected_chi2
+                          << " z-v=" << m_odom_z_vs_v_deg << "deg"
+                          << " v=(" << m_v.x() << "," << m_v.y() << ")"
+                          << " z=(" << z.x() << "," << z.y() << ")"
+                          << " map-odom=" << m_odom_offset_yaw_deg << "deg"
+                          << std::endl;
+            }
         }
     }
     m_odom = odom;
@@ -148,18 +181,18 @@ void EkfMotionPrior::onOdom(const PoseStamped& odom) {
     m_have_odom = true;
 }
 
-void EkfMotionPrior::velocityUpdate(const Eigen::Vector2d& z, double r_var) {
+bool EkfMotionPrior::velocityUpdate(const Eigen::Vector2d& z, double r_var) {
     // H = I; S = P + R; 卡方门控 (2 自由度, 95% = 5.99)
     const Eigen::Matrix2d S = m_P + Eigen::Matrix2d::Identity() * r_var;
     const Eigen::Vector2d nu = z - m_v;
     const double chi2 = nu.transpose() * S.ldlt().solve(nu);
     if (m_cfg.ekf_chi2 > 0 && chi2 > m_cfg.ekf_chi2) {
-        ++m_odom_rejected;
-        return;   // 新息与协差不一致: 打滑/外力, 拒绝该观测
+        return false;   // 新息与协差不一致: 打滑/外力, 拒绝该观测 (计数由调用方区分来源)
     }
     const Eigen::Matrix2d K = m_P * S.inverse();
     m_v += K * nu;
     m_P = (Eigen::Matrix2d::Identity() - K) * m_P;
+    return true;
 }
 
 PoseStamped EkfMotionPrior::predict(double t) {
@@ -201,6 +234,16 @@ void EkfMotionPrior::onMatch(const PoseStamped& pose) {
     m_pose.vel = m_pose.rot * V3D(m_v.x(), m_v.y(), 0.0);
     m_last_match_time = pose.time;
     m_last_match_trans = pose.trans;
+    // 诊断用: map 与 odom 的朝向差 (本机应≈-90°)。只打印, 不参与计算 ——
+    // odom 的体系速度用的是 odom 自己的 yaw, 与这个差值无关。
+    if (m_cfg.use_odom && m_have_odom) {
+        const double map_yaw = std::atan2(m_pose.rot(1, 0), m_pose.rot(0, 0));
+        const double odom_yaw = std::atan2(m_odom.rot(1, 0), m_odom.rot(0, 0));
+        double d = (map_yaw - odom_yaw) * 180.0 / M_PI;
+        while (d > 180.0) d -= 360.0;
+        while (d < -180.0) d += 360.0;
+        m_odom_offset_yaw_deg = d;
+    }
 }
 
 }   // namespace rosiwit_slam

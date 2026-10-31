@@ -547,6 +547,21 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // out.  This does not relax the rest of the route.
     pnh_.param<double>("planning_start_relax_radius", planning_start_relax_radius_, 0.0);
     pnh_.param<double>("planner_turn_step_deg", planner_turn_step_deg_, 30.0);
+    // unknown(-1) 处理: false = 保持"未知区阻断规划"(旧行为); true = 折成
+    // unknown_cost 的高代价, 让规划器尽量绕开但不因为空洞直接拒绝整条路径。
+    pnh_.param<bool>("allow_unknown", allow_unknown_, false);
+    pnh_.param<int>("unknown_cost", unknown_cost_, 99);
+    // 路径轮廓检查的起点豁免半径: 贴墙/门框起步时, 车自身足迹压在墙上属正常。
+    pnh_.param<double>("path_footprint_check_skip", path_footprint_check_skip_, 0.5);
+    // 两点导航到点后是否对齐目标航向 (旧行为 false: 只到点, 不管车头朝哪)
+    pnh_.param<bool>("two_point_final_rotate", two_point_final_rotate_, false);
+    // 路径跟踪 (navi_cmd=3) 走完后是否对齐终点位姿的 yaw
+    pnh_.param<bool>("path_final_rotate", path_final_rotate_, false);
+    // 单点导航末端朝向来源: true = 用 tracking_path[0]->[1] 的方向 (APP 常用它表示
+    // "下一段延线往哪走"); false = 用 tracking_path[0].theta 原值。
+    pnh_.param<bool>("final_yaw_from_next_point", final_yaw_from_next_point_, false);
+    // cmd=1 带多个点时: 用最后一点当目标 (APP 常见的 [当前位置, 目的地] 写法)
+    pnh_.param<bool>("single_point_use_last_pose", single_point_use_last_pose_, false);
 
     // 孤立激光点滤波: 只保留与相邻扫描点足够近的点.
     pnh_.param<bool>("laser_filter_enabled", laser_filter_enabled_, true);
@@ -1096,8 +1111,12 @@ private:
   {
     last_odom_stamp_ = ros::Time::now();
     current_velocity_ = msg->twist.twist;
-    current_pose_.header = msg->header;
-    current_pose_.pose = msg->pose.pose;
+    // /odom 是 odom 系: 原样收在 odom_pose_ 里 (里程/打滑/诊断用)。
+    // 不能写进 current_pose_: 那个变量的所有消费者 (规划起点/代价地图/
+    // robot_footprint 发布) 都按 global_frame_(map) 解释, 不看 frame_id。
+    // 本机 map->odom 的 yaw ≈ -90°, 混用就表现为"footprint 与 SLAM 位姿差 90°"。
+    odom_pose_.header = msg->header;
+    odom_pose_.pose = msg->pose.pose;
   }
 
   void mapCallback(const nav_msgs::OccupancyGrid::ConstPtr & msg)
@@ -1674,10 +1693,27 @@ private:
         command.kind = core::ActionKind::NAVIGATE;
         command.final_rotate = true;   // 单点导航到位后对齐目标航向
         command.final_yaw = target.theta;
+        // APP 对"单点导航"往往下发两个点: [到达点, 延线下一点]。真实意图是到位后
+        // 让车头朝向**下一段延线方向**, 而 tracking_path[0].theta 常常是 0(未填),
+        // 直接用它会让车头正好差 180°(实测 2026-10-31)。开关打开时用 p0→p1 方向。
+        if (final_yaw_from_next_point_ && action_goal_.tracking_path.size() >= 2) {
+          const core::Pose2D & a = action_goal_.tracking_path[0];
+          const core::Pose2D & b = action_goal_.tracking_path[1];
+          const double dx = b.x - a.x;
+          const double dy = b.y - a.y;
+          if (std::hypot(dx, dy) > 0.1) {
+            command.final_yaw = std::atan2(dy, dx);
+            ROS_INFO("[movebase_iface] final_yaw 取 p0->p1 方向 = %.1fdeg (app theta=%.1fdeg)",
+                     command.final_yaw * 57.2957795, target.theta * 57.2957795);
+          }
+        }
         break;
       case movebase::Command::TWO_POINTS:
         command.kind = core::ActionKind::NAVIGATE;
-        command.final_rotate = false;  // 两点导航只保证到达目标点
+        // 两点导航历史上只保证"到点", 不对齐末端航向 -> 若最后一段是倒车/大角度切入,
+        // 到点时车头可能是反的 (实测 2026-10-31: 末端 yaw 与目标差 ~180°)。
+        // 用参数控制: 打开后到点再原地对齐到目标位姿的 yaw。
+        command.final_rotate = two_point_final_rotate_;
         command.final_yaw = target.theta;
         break;
       case movebase::Command::FOLLOW_PATH:
@@ -1703,13 +1739,22 @@ private:
     ROS_INFO("[movebase_iface] 收到 navi_cmd=%d vel=%.2f poses=%zu file='%s'",
              goal.navi_cmd, goal.robot_vel, goal.tracking_path.size(),
              goal.file_path.c_str());
+    // 把起点/终点打出来: 只有这样才能区分"APP 让车去远处"和"APP 发了个原地目标"
+    // (实测 2026-10-31: 连续几条 navi_cmd 都在同一个点 '到达', 车其实没动)。
+    if (!goal.tracking_path.empty()) {
+      const core::Pose2D & s = goal.tracking_path.front();
+      const core::Pose2D & t = goal.tracking_path.back();
+      ROS_INFO("[movebase_iface]   path[0]=(%.2f,%.2f,yaw=%.1fdeg) path[last]=(%.2f,%.2f,yaw=%.1fdeg)",
+               s.x, s.y, s.theta * 57.2957795, t.x, t.y, t.theta * 57.2957795);
+    }
 
     // actionlib 在收到新 goal 前会先触发 preempt; 这里再清一次, 保证状态干净.
     clearActionState();
     action_interface_active_ = true;
     action_traveled_.clear();
     action_goal_ = goal;
-    action_cmd_ = movebase::decodeGoal(goal);
+    action_goal_.single_point_use_last_pose = single_point_use_last_pose_;
+    action_cmd_ = movebase::decodeGoal(action_goal_);
 
     if (!action_cmd_.valid || !action_cmd_.supported) {
       ROS_WARN("[movebase_iface] navi_cmd=%d 当前核心不支持或参数非法, 回 result=%d",
@@ -1811,7 +1856,17 @@ private:
     // 两点导航的起点由调用方给定, 与车头朝向无关, 不做起步原地旋转.
     const bool allow_initial_rotate =
       (action_cmd_.command == movebase::Command::SINGLE_POINT);
-    beginNavigationTask(goal, toTaskCommand(action_cmd_, target), start,
+    // ★ 最终朝向必须在**规划时**就定下来, 而不是到位后再原地转:
+    //   Hybrid A* 的状态含 θ (goal 接受判据 dtheta<=0.45rad, 且末点 pose 直接
+    //   吸附到 goal), 所以把 final_yaw 塞进 goal.orientation, 路径会自己收尾到
+    //   目标朝向; 否则会先按 app 给的 theta(=0) 规划, 到位后再原地转 180°
+    //   (实测 2026-10-31: 15 s 原地旋转)。
+    core::ActionTaskCommand task_cmd = toTaskCommand(action_cmd_, target);
+    if (task_cmd.final_rotate) {
+      target.theta = task_cmd.final_yaw;
+      goal.pose.orientation = quatFromYaw(task_cmd.final_yaw);
+    }
+    beginNavigationTask(goal, task_cmd, start,
                         allow_initial_rotate, start_override, action_speed_);
   }
 
@@ -1862,6 +1917,10 @@ private:
 
     core::ActionTaskCommand task_command;
     task_command.kind = core::ActionKind::FOLLOW_PATH;
+    // 走完路径后的朝向: 以前完全没设 final_yaw, 到点就用"当时车头"收尾
+    // (实测 2026-10-31: 路径跟随后 yaw 与终点朝向差 125°, 任务却报 SUCCEEDED)。
+    task_command.final_rotate = path_final_rotate_;
+    task_command.final_yaw = path.back().theta;
     if (!action_task_.start(task_command, toCorePose(current_pose_),
                             ros::Time::now().toSec())) {
       failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PLAN");
@@ -2835,6 +2894,8 @@ private:
   void publishFootprintPolygon()
   {
     if (!footprint_pub_ || movebase_footprint_.empty()) { return; }
+    // 必须与 /local_costmap、/global_costmap 同系 (map), 否则叠图会差 map->odom 的旋转。
+    if (current_pose_.header.frame_id != global_frame_) { return; }
     geometry_msgs::PolygonStamped msg;
     msg.header = current_pose_.header;
     msg.header.stamp = ros::Time::now();
@@ -2854,6 +2915,8 @@ private:
 
   void diagnosticsCallback(const ros::TimerEvent &)
   {    // footprint 与任务状态无关: 1Hz 直发 (体积极小), RViz 在 idle 时也能看到车体轮廓
+    // 位姿只认 TF: idle 时控制环不跑, 这里补一次刷新, 保证 footprint 是最新的 map 位姿。
+    updateCurrentPose();
     publishFootprintPolygon();
     if (!diagnostics_pub_) return;
     std::ostringstream os;
@@ -2881,6 +2944,11 @@ private:
        << ",\"goal_path\":" << action_goal_.tracking_path.size()
        << ",\"cmd_path\":" << action_cmd_.path.size()
        << ",\"odom_age\":" << (last_odom_stamp_.isZero() ? -1.0 : (ros::Time::now() - last_odom_stamp_).toSec())
+       // odom 系位姿 (frame_id 会打出 "odom"): 与 map 系位姿对照, 便于现场区分"两系混用"
+       << ",\"odom_pose\":{\"frame\":\"" << odom_pose_.header.frame_id << "\""
+       << ",\"x\":" << odom_pose_.pose.position.x
+       << ",\"y\":" << odom_pose_.pose.position.y
+       << ",\"yaw\":" << (yawFromQuat(odom_pose_.pose.orientation) * 57.2957795) << "}"
        << "}";
     std_msgs::String msg;
     msg.data = os.str();
@@ -2946,10 +3014,25 @@ private:
       cm.origin_x = ox;
       cm.origin_y = oy;
       cm.data.assign(semantic.size(), 0);
+      // unknown(-1) 策略: 以前整条链路都按"100=碰撞"处理, 只要路径/足迹碰到一块
+      // 没扫到的地方就整条路径作废 (实测 2026-10-31: 机器人停在未建图的口袋旁边,
+      // 每次规划都在"第 5 点车体压到 cost=-1"处被拒 -> FAILED_PATH_FOOTPRINT)。
+      // 语义上 -1 只是"没有数据", 既不是墙也不是代价; 这里按参数把它折成高代价
+      // (默认 99), 规划器会尽量避免, 但不会因为一块空洞就拒绝整条路径。
+      // 真实障碍仍由 100 与安全层(实时 /scan)兜底。
+      const int8_t unknown_repl = static_cast<int8_t>(
+        std::max(1, std::min(99, unknown_cost_)));
+      const auto fixUnknown = [&](std::vector<int8_t> & v) {
+        if (!allow_unknown_) { return; }
+        for (auto & c : v) { if (c < 0) { c = unknown_repl; } }
+      };
       for (size_t i = 0; i < semantic.size(); ++i) {
         // 层与 Costmap 同一套语义 (-1/0..100), 直接复制.
         cm.data[i] = semantic[i];
       }
+      // 规划器两套数组都要改: hybrid 的 isObstacle 读 data(), 足迹检查读 grid->data.
+      fixUnknown(cm.data);
+      if (grid) { fixUnknown(grid->data); }
       // /scan 是实时传感器障碍层: 只进入 local costmap/controller/safety,
       // 不能直接写成 global planner 的 lethal。否则 15Hz 的瞬态点会被 A*
       // 当成全局永久障碍, 形成大面积假墙并让全局路径无法生成.
@@ -2960,8 +3043,11 @@ private:
       // 膨胀并发布供 RViz 可视化
       const int inflate_cells = static_cast<int>(std::ceil(inflation_radius_ / res));
       const int safety_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_ / res)));
-      const std::vector<int8_t> display =
+      std::vector<int8_t> display =
         core::inflatedCostmap(semantic, w, h, safety_cells, inflate_cells);
+      // 显示/平滑视图与规划器保持同一套数值: 否则 /makeplan_map 上还是一片 -1,
+      // 现场看到的"未知区"和规划器实际用的"99 代价"不一致, 排查时会被误导。
+      fixUnknown(display);
 
       // 平滑器只看得见传进去的栅格: 以前传的是 raw (0/100) 的 planner_costmap_.grid,
       // 于是它把回退 A* 的折线"拉直"进 99 膨胀区 —— 用户看到的就是"规划穿过代价区"。
@@ -3376,6 +3462,7 @@ private:
                      bool restart, const core::Pose2D * start_override = nullptr)
   {
     // restart=true: 新目标, 先停旧路径; false: 1Hz 重规划, 继续沿旧路径控制.
+    planning_is_replan_ = !restart;
     if (restart) {
       stopNavigation();   // ⚠ 它会清 pending_has_start_override_, 所以 override 必须在它之后写
       current_path_.poses.clear();
@@ -3540,6 +3627,15 @@ private:
     //  会失败的基本只有回退 A* 的圆模型路径 —— 实测它会让车头插进墙里。)
     std::string fp_why;
     if (!pathFootprintClear(planned, &fp_why)) {
+      // 重规划(1Hz)被拒 != 任务失败: 旧路径仍然可用, 直接丢掉这一版继续走,
+      // 下一拍再规划。以前每条被拒的重规划都会进恢复并最终 FAILED_PATH_FOOTPRINT
+      // (实测 2026-10-31: 走了 1 m 之后被重规划拒掉, 整单结束 -> "走一半停了")。
+      if (planning_is_replan_ && !current_core_path_.points.empty()) {
+        ROS_WARN("[plan] 重规划被轮廓检查拒绝 (%s), 保留旧路径继续走", fp_why.c_str());
+        planning_active_ = false;
+        ++plan_generation_;
+        return;
+      }
       ROS_ERROR("[plan] 拒绝执行: 路径让车体轮廓压到障碍 (%s) -> 后退重规划",
                 fp_why.c_str());
       planning_active_ = false;
@@ -3578,7 +3674,17 @@ private:
     global_path_pub_.publish(current_path_);
 
     m_need_initial_rotate_ = false;
-    if (allow_initial_rotate && planned.points.size() > 2 && !first_reverse) {
+    // 起步原地旋转只在"路还长"时值得做: 目标就在车边上 (实测 cmd=1 的
+    // tracking_path[0] 距车 0.2 m) 时先转 180° 再挪 20 cm, 纯属浪费 7 秒,
+    // 而且会和末端对齐叠成"原地绕很久"。
+    double path_span = 0.0;
+    if (planned.points.size() >= 2) {
+      const auto & a = planned.points.front().pose;
+      const auto & b = planned.points.back().pose;
+      path_span = std::hypot(b.x - a.x, b.y - a.y);
+    }
+    if (allow_initial_rotate && planned.points.size() > 2 && !first_reverse &&
+        path_span > 0.6) {
       const double current_yaw = yawFromQuat(current_pose_.pose.orientation);
       const double dx = planned.points[1].pose.x - planned.points[0].pose.x;
       const double dy = planned.points[1].pose.y - planned.points[0].pose.y;
@@ -3697,11 +3803,31 @@ private:
     }
     const auto & cm = planner_costmap_;
     const double res = cm.resolution;
+    // 采样粒度按"路径来源"区分:
+    //   hybrid 路径: 规划器自己已按 planner_footprint_ + 0.20m 粗采样验证过可行性,
+    //     这里用同样的粒度复核即可。以前统一用 0.05m 细采样, 等于比规划器更严,
+    //     会把 hybrid 明明可行的路径否掉 (实测 2026-10-31: 第 35 点(距起点 136cm)
+    //     cost=100 -> 恢复 -> FAILED_PATH_FOOTPRINT, "走一半停了")。
+    //   A* 回退路径: 只有圆模型, 必须细采样兜住切角。
+    const bool from_fallback = last_plan_used_fallback_.load();
+    const double sample_step = from_fallback ? 0.05 : 0.20;
+    const core::Footprint & check_fp =
+      (from_fallback || planner_footprint_.size() < 3) ? configured_footprint_ : planner_footprint_;
     const std::vector<std::pair<double, double>> samples =
-      core::sampleFootprint(configured_footprint_, 0.05);
+      core::sampleFootprint(check_fp, sample_step);
     if (samples.empty()) { return true; }
+    // 起点邻域豁免: 机器人可能正贴着墙/门框, 它**自身**的足迹本来就压在 100 上;
+    // 规划器已经用"起点清障盒"把这一小片清成 free 并验证过起点可达, 这里若再拿
+    // 未清障的图去判, 就会"起步即被自己否掉"(实测 2026-10-31: 第 0 点 cost=100 ->
+    // 恢复 -> FAILED_PATH_FOOTPRINT)。起点附近 skip 距离内跳过轮廓检查。
+    const double skip = std::max(0.0, path_footprint_check_skip_);
+    const core::Pose2D & p_start = path.points.front().pose;
     for (size_t i = 0; i < path.points.size(); ++i) {
       const core::Pose2D & p = path.points[i].pose;
+      const double from_start = std::hypot(p.x - p_start.x, p.y - p_start.y);
+      // 起点自身也算在内: 车贴墙/贴门框时, 起点足迹本来就压在 100 上, 而规划器
+      // 已用"起点清障盒"验证过起点可达 (否则会在起点处永远失败)。
+      if (skip > 0.0 && from_start < skip) { continue; }
       const double c = std::cos(p.theta), s = std::sin(p.theta);
       for (const auto & q : samples) {
         const double wx = p.x + c * q.first - s * q.second;
@@ -3713,10 +3839,12 @@ private:
           continue;
         }
         const int v = cm.data[static_cast<size_t>(gy) * cm.width + gx];
-        // 100=真实障碍; 负数=unknown(规划器同样按阻断处理)。99 是膨胀带, 允许。
+        // 100=真实障碍; 负数=unknown(规划和本检查同一套数值, 已按 allow_unknown 折成代价)。
         if (v >= 100 || v < 0) {
           if (why != nullptr) {
-            *why = "第 " + std::to_string(i) + " 点车体压到 cost=" + std::to_string(v);
+            *why = "第 " + std::to_string(i) + " 点(距起点 " +
+                   std::to_string(static_cast<int>(from_start * 100)) +
+                   "cm)车体压到 cost=" + std::to_string(v);
           }
           return false;
         }
@@ -4591,7 +4719,14 @@ private:
         xy_reached, controller_progress);
 
       if (task_status == core::ActionTaskStatus::SUCCEEDED) {
-        ROS_INFO("[rosiwit_navigation_ros1] goal reached");
+        // 打印末端航向与目标航向, 以后"到点朝向不对"能直接从日志看出来。
+        const double cur_yaw = yawFromQuat(current_pose_.pose.orientation);
+        const double goal_yaw = yawFromQuat(goal_pose_.pose.orientation);
+        ROS_INFO("[rosiwit_navigation_ros1] goal reached: pos=(%.2f,%.2f) yaw=%.1fdeg "
+                 "goal_yaw=%.1fdeg err=%.1fdeg",
+                 current_pose_.pose.position.x, current_pose_.pose.position.y,
+                 cur_yaw * 57.2957795, goal_yaw * 57.2957795,
+                 normalizeAngle(goal_yaw - cur_yaw) * 57.2957795);
         finishTask(movebase::RESULT_SUCCESS);
         return;
       }
@@ -5203,7 +5338,17 @@ private:
   ros::Timer diagnostics_timer_;
 
   nav_msgs::OccupancyGrid::ConstPtr current_map_;
+  // ---- 位姿: 两个来源、两个坐标系, 分开存 ----
+  // 坐标系链 (实测):
+  //   map --(SLAM 发布, 重定位/建图原点决定)--> odom --(底盘轮速)--> base_footprint
+  //   base_footprint --(静态)--> base_link --(静态, rpy≈43°/-0.3°/90°)--> lidar / laser
+  // 本机实测 map->odom 的 yaw ≈ -90° (地图 origin 锚在建图起始朝向), 所以
+  // 把 odom 系的数当成 map 用, 等价于整体差 90°。
+  // current_pose_: **只**由 updateCurrentPose() 从 TF(global_frame_<-robot_frame_) 写,
+  //   永远是 global_frame_(map); 规划起点/代价地图/RViz 多边形都用它。
+  // odom_pose_: /odom 原样 (frame_id=odom), 只用于里程/打滑/诊断, 不许进 map 系计算。
   geometry_msgs::PoseStamped current_pose_;
+  geometry_msgs::PoseStamped odom_pose_;
   geometry_msgs::Twist current_velocity_;
   geometry_msgs::PoseStamped goal_pose_;
   nav_msgs::Path current_path_;
@@ -5262,6 +5407,14 @@ private:
   double planning_start_clear_margin_ = 0.05;
   double planning_start_relax_radius_ = 0.0;
   double planner_turn_step_deg_ = 30.0;   // hybrid 原地转向步长 (deg)
+  bool allow_unknown_ = false;            // unknown(-1) 是否按代价放行 (见 updateCostmap)
+  int unknown_cost_ = 99;                 // allow_unknown 时给 -1 的代价
+  double path_footprint_check_skip_ = 0.5;  // 路径轮廓检查跳过起点附近该半径内 (m)
+  bool two_point_final_rotate_ = false;   // 两点导航到点后是否原地对齐目标航向
+  bool path_final_rotate_ = false;        // 路径跟踪走完后是否原地对齐终点航向
+  bool final_yaw_from_next_point_ = false;  // 单点导航: 用 p0->p1 方向当末端朝向
+  bool single_point_use_last_pose_ = false; // 单点导航给了多点时用最后一点当目标
+  bool planning_is_replan_ = false;         // 本次在途规划是不是 1Hz 重规划(非新目标)
   core::Costmap last_planning_costmap_;
   bool laser_filter_enabled_ = true;
   double laser_filter_radius_ = 0.15;

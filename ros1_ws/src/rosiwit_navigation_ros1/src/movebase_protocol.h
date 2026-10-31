@@ -68,6 +68,8 @@ struct Goal
   double backing_dist = 0.0;
   std::vector<core::Pose2D> tracking_path;
   std::string file_path;
+  // cmd=1 且 tracking_path 有 >=2 点时, 用最后一点当目标 (见 decodeGoal 注释)
+  bool single_point_use_last_pose = false;
 };
 
 struct Decoded

@@ -386,6 +386,17 @@ void Ros1SlamInterface::publishLocationInfo() {
         static_cast<int>(health), relocating_.load() ? 1 : 0,
         planar_constraint_enabled_ ? 1 : 0, has_prior ? "" : "n/a ",
         has_prior ? prior_xy : 0.0, has_prior ? prior_yaw : 0.0);
+
+    // 位姿融合诊断 (1Hz): direct 模式下 accepted 增长但 applied_* 恒 0;
+    // eskf 模式下可看到 rejected_chi2 / rejected_in_place / applied_trans 的分布。
+    if (fusion_diag_puber_) {
+        static int diag_tick = 0;
+        if (++diag_tick % 10 == 0) {   // 本函数 10Hz
+            std_msgs::String msg;
+            msg.data = engine_.poseFusionDiagnostics();
+            if (!msg.data.empty()) { fusion_diag_puber_.publish(msg); }
+        }
+    }
 }
 
 void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) {

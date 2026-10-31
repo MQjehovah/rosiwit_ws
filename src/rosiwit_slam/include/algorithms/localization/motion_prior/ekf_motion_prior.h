@@ -10,7 +10,8 @@ namespace rosiwit_slam {
 /// 状态 x = [vx, vy] (体系二维速度), P 2x2; 陀螺零偏沿用 L11 静止标定 + 匹配航向
 /// 误差在线微调 (与 ImuMotionPrior 同款, 该部分已被实机验证, 不重造)。
 ///   预测 @IMU 199Hz:  p += R(θ)·v·dt ; θ += (gz - b)·dt ; P += q_v·dt·I
-///   更新 @odom:       z = R(θ)ᵀ·Δp_odom/dt (体系速度), 卡方门控(χ²)后标准更新
+///   更新 @odom:       Δp 先由 R_ow(odom→world) 旋到世界系, 再 z = R(θ)ᵀ·Δp_world/dt
+///                     (体系速度), 卡方门控(χ²)后标准更新
 ///   更新 @match:      同结构, 大测量噪声(激光位移是低频弱观测); 并锚定绝对位姿
 ///
 /// 对比 ImuMotionPrior (常速外推 + odom 锚定偏移 + 速度上限硬阈值) 的三个实质提升:
@@ -36,9 +37,13 @@ public:
     Eigen::Matrix2d velocityCov() const { return m_P; }
     int odomRejected() const { return m_odom_rejected; }
     V3D gyroBias() const { return m_gyro_bias; }
+    /// 求得的 odom→world 旋转 yaw (deg)。本机 /odom 与 map 差 ~-90°，这个值应≈-90。
+    double odomToWorldYawDeg() const { return m_odom_offset_yaw_deg; }
+    /// 最近一次 odom 速度观测与滤波速度的夹角 (deg)。直行时应≈0；稳定在 ±90 说明坐标系没对齐。
+    double odomZvsVDeg() const { return m_odom_z_vs_v_deg; }
 
 private:
-    void velocityUpdate(const Eigen::Vector2d& z, double r_var);
+    bool velocityUpdate(const Eigen::Vector2d& z, double r_var);
     MotionPriorConfig m_cfg;
     PoseStamped m_pose;
 
@@ -46,6 +51,19 @@ private:
     Eigen::Vector2d m_v = Eigen::Vector2d::Zero();
     Eigen::Matrix2d m_P = Eigen::Matrix2d::Identity();
     int m_odom_rejected = 0;
+
+    // ---- odom → 体系速度 (2026-10-31 修正) ----
+    // 旧实现把 odom 系位移当世界系位移用 (R(θ_map)ᵀ·Δp_odom)，而本机 map→odom
+    // 的 yaw ≈ -90°，等于把前向速度观测转成横向。体系速度只能用 odom 自己的
+    // 朝向转：z = R(θ_odom)ᵀ·Δp_odom/dt —— 与地图无关，重定位也不会污染它。
+    double m_odom_offset_yaw_deg = 0.0;   // 诊断: θ_map - θ_odom (本机应≈-90°)，不参与计算
+    // 观测质量计数 (现场只调参、看不到这些数就没法判断 odom 是否在起作用)
+    int m_odom_accepted = 0;
+    int m_odom_rejected_speed = 0;
+    int m_odom_rejected_yaw = 0;
+    int m_odom_rejected_chi2 = 0;
+    double m_odom_z_vs_v_deg = 0.0;
+    int m_odom_probe = 0;
 
     // IMU 积分
     double m_last_imu_time = -1.0;

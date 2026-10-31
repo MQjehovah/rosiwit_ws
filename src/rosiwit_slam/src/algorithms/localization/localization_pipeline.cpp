@@ -72,6 +72,25 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_matcher_name     = getv<std::string>(pipe, "matcher", m_matcher_name);
     m_monitor_name     = getv<std::string>(pipe, "monitor", m_monitor_name);
     m_maintainer_name  = getv<std::string>(pipe, "map_maintainer", m_maintainer_name);
+    m_fusion_name      = getv<std::string>(pipe, "pose_fusion", m_fusion_name);
+    {
+        // 融合层参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效
+        auto fc = loc["fusion"];
+        if (fc) {
+            m_fusion_cfg.gain_trans              = getv<double>(fc, "gain_trans", m_fusion_cfg.gain_trans);
+            m_fusion_cfg.gain_rot                = getv<double>(fc, "gain_rot", m_fusion_cfg.gain_rot);
+            m_fusion_cfg.max_correction_trans    = getv<double>(fc, "max_correction_trans", m_fusion_cfg.max_correction_trans);
+            m_fusion_cfg.max_correction_rot_deg  = getv<double>(fc, "max_correction_rot_deg", m_fusion_cfg.max_correction_rot_deg);
+            m_fusion_cfg.trans_cov_floor         = getv<double>(fc, "trans_cov_floor", m_fusion_cfg.trans_cov_floor);
+            m_fusion_cfg.rot_cov_floor           = getv<double>(fc, "rot_cov_floor", m_fusion_cfg.rot_cov_floor);
+            m_fusion_cfg.process_trans           = getv<double>(fc, "process_trans", m_fusion_cfg.process_trans);
+            m_fusion_cfg.process_rot             = getv<double>(fc, "process_rot", m_fusion_cfg.process_rot);
+            m_fusion_cfg.chi2_gate               = getv<double>(fc, "chi2_gate", m_fusion_cfg.chi2_gate);
+            m_fusion_cfg.max_odom_speed          = getv<double>(fc, "max_odom_speed", m_fusion_cfg.max_odom_speed);
+            m_fusion_cfg.reject_in_place_trans   = getv<bool>(fc, "reject_in_place_trans", m_fusion_cfg.reject_in_place_trans);
+            m_fusion_cfg.in_place_yaw_step_deg   = getv<double>(fc, "in_place_yaw_step_deg", m_fusion_cfg.in_place_yaw_step_deg);
+        }
+    }
 
     auto mc = loc["matcher"];
     if (mc) {
@@ -303,6 +322,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     m_local_map   = LocalizationFactory::createLocalMapProvider(m_local_map_name);
     m_matcher     = LocalizationFactory::createMatcher(m_matcher_name);
     m_monitor     = LocalizationFactory::createMonitor(m_monitor_name);
+    m_fusion      = LocalizationFactory::createPoseFusion(m_fusion_name);
 
     // 飞行记录仪配置 (diagnostics: 分区; 2026-10-18 日志重构)
 #ifndef YAML_CPP_DISABLED
@@ -324,6 +344,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     if (!m_local_map) { std::cerr << "[LocPipeline] unknown local_map: " << m_local_map_name << std::endl; return false; }
     if (!m_monitor) { std::cerr << "[LocPipeline] unknown monitor: " << m_monitor_name << std::endl; return false; }
     if (!m_relocalizer) { std::cerr << "[LocPipeline] unknown relocalizer: " << m_relocalizer_name << std::endl; return false; }
+    if (!m_fusion) { std::cerr << "[LocPipeline] unknown pose_fusion: " << m_fusion_name << std::endl; return false; }
 
     m_matcher->configure(m_matcher_cfg);
     m_global_matcher = LocalizationFactory::createMatcher(m_matcher_name);
@@ -332,6 +353,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     m_local_map->configure(m_local_map_cfg);
     m_monitor->configure(m_monitor_cfg);
     m_relocalizer->configure(m_global_cfg);
+    m_fusion->configure(m_fusion_cfg);
 
     // 配置不变量校验 (配置治理, 2026-10-18): 阈值联动关系被打破时立刻报警,
     // 而不是等到现场出现"僵尸带/弱接受循环"再反推 (2026-10-17 事故链的教训)。
@@ -406,6 +428,7 @@ std::string LocalizationPipeline::describe() const {
            " matcher=" + m_matcher_name +
            " monitor=" + m_monitor_name +
            " map_maintainer=" + m_maintainer_name +
+           " pose_fusion=" + m_fusion_name +
            " accept_mode=" + std::to_string(m_accept_cfg.mode);
 }
 
@@ -649,8 +672,14 @@ void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
 }
 
 void LocalizationPipeline::onImu(const IMUSample& s) {
-    std::lock_guard<std::mutex> prior_lk(m_prior_mu);
-    if (m_prior) m_prior->onImu(s);
+    {
+        std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+        if (m_prior) m_prior->onImu(s);
+    }
+    {
+        std::lock_guard<std::mutex> fk(m_fusion_mu);
+        if (m_fusion) m_fusion->onImu(s);
+    }
 }
 
 void LocalizationPipeline::requestRelocalization() {
@@ -672,8 +701,14 @@ void LocalizationPipeline::requestRelocalization() {
 }
 
 void LocalizationPipeline::onOdom(const PoseStamped& odom) {
-    std::lock_guard<std::mutex> prior_lk(m_prior_mu);
-    if (m_prior) m_prior->onOdom(odom);
+    {
+        std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+        if (m_prior) m_prior->onOdom(odom);
+    }
+    {
+        std::lock_guard<std::mutex> fk(m_fusion_mu);
+        if (m_fusion) m_fusion->onOdom(odom);
+    }
 }
 
 CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseStamped& end_pose) {
@@ -833,6 +868,10 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
         m_prior->reset(m_pose);
+    }
+    {
+        std::lock_guard<std::mutex> fk(m_fusion_mu);
+        if (m_fusion) m_fusion->reset(m_pose);
     }
     m_monitor->reset();
     m_healthy_streak = 0;
@@ -1109,6 +1148,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 std::lock_guard<std::mutex> prior_lk(m_prior_mu);
                 if (m_prior) m_prior->reset(pending_pose);
             }
+            {
+                std::lock_guard<std::mutex> fk(m_fusion_mu);
+                if (m_fusion) m_fusion->reset(pending_pose);
+            }
             // 不 reset 创新监视器: 它统计的是"传感器 vs 地图"的固有创新特性
             // (含 3D 匹配与 IMU 在 roll/pitch 上约 12° 的固有偏差), 与位姿无关.
             // 清空后窗口内样本不足 -> d2 超过卡方门限 -> acceptMatch 每帧都拒
@@ -1253,6 +1296,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     {
                         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
                         if (m_prior) m_prior->reset(m_pose);
+                    }
+                    {
+                        std::lock_guard<std::mutex> fk(m_fusion_mu);
+                        if (m_fusion) m_fusion->reset(m_pose);
                     }
                     out_pose = m_last_accepted;
                 } else {
@@ -1399,6 +1446,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         {
             std::lock_guard<std::mutex> prior_lk(m_prior_mu);
             m_prior->onMatch(out_pose);
+        }
+        // 位姿融合层: 把匹配结果作为"带协方差的观测"喂给估计器 (direct 模式下等价于直通)
+        {
+            std::lock_guard<std::mutex> fk(m_fusion_mu);
+            if (m_fusion) m_fusion->onMatch(out_pose, res.cov, res);
+            // eskf: 下游看到的位姿改用融合输出 (单帧修正有界)
+            if (m_fusion && m_fusion->name() != "direct") {
+                out_pose = m_fusion->predict(out_pose.time);
+            }
         }
         m_last_accepted = out_pose;      // 逸出保护用的回退锚点
         m_have_last_accepted = true;
@@ -1642,9 +1698,36 @@ bool LocalizationPipeline::getPoseWithCov(PoseStamped& out, Eigen::Matrix<double
 
 bool LocalizationPipeline::predictAt(double t, PoseStamped& out) {
     if (!m_initialized || !m_prior) return false;
+    // eskf: 位姿由融合层输出 (IMU/odom 推进 + 匹配观测限幅修正);
+    // direct: 沿用运动先验预测 (与改造前一致)。
+    if (m_fusion && m_fusion->name() != "direct") {
+        std::lock_guard<std::mutex> fk(m_fusion_mu);
+        out = m_fusion->predict(t);
+        return true;
+    }
     std::lock_guard<std::mutex> prior_lk(m_prior_mu);
     out = m_prior->predict(t);   // 运动先验(IMU)从最后校正位姿传播
     return true;
+}
+
+FusionDiag LocalizationPipeline::fusionDiag() const {
+    std::lock_guard<std::mutex> fk(m_fusion_mu);
+    return m_fusion ? m_fusion->diag() : FusionDiag{};
+}
+
+std::string LocalizationPipeline::poseFusionDiagnostics() const {
+    const FusionDiag d = fusionDiag();
+    std::ostringstream os;
+    os << "{\"mode\":\"" << m_fusion_name << "\""
+       << ",\"accepted\":" << d.accepted
+       << ",\"rejected_chi2\":" << d.rejected_chi2
+       << ",\"rejected_in_place\":" << d.rejected_in_place
+       << ",\"last_chi2\":" << d.last_chi2
+       << ",\"gain_trans\":" << d.last_gain_trans
+       << ",\"gain_rot\":" << d.last_gain_rot
+       << ",\"applied_trans\":" << d.applied_trans
+       << ",\"applied_rot_deg\":" << d.applied_rot_deg << "}";
+    return os.str();
 }
 
 void LocalizationPipeline::onAbsolute(const PoseStamped& pose,
