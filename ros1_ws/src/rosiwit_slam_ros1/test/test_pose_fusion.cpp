@@ -49,6 +49,22 @@ TEST(PoseFusion, RelativeMeasurementPullsTowardsLio) {
     EXPECT_GT(f.diag().last_rel_residual, 0.0);
 }
 
+// direct 模式：相对观测必须被忽略（保持"配准直通"的回退语义）。
+// 该用例验证的是 IPoseFusion 默认实现被 direct 继承，因此写完后即刻通过。
+TEST(PoseFusion, DirectIgnoresRelative) {
+    DirectPoseFusion f;
+    const PoseStamped p = MakePose(1.0, 1.0, 2.0);
+    f.reset(p);
+
+    PoseStamped lio = p;
+    lio.trans.x() = 9.0;
+    f.onRelative(lio, SmallCov());
+
+    const PoseStamped out = f.predict(1.0);
+    EXPECT_NEAR(out.trans.x(), 1.0, 1e-9);
+    EXPECT_NEAR(out.trans.y(), 2.0, 1e-9);
+}
+
 int main(int argc, char ** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

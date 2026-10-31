@@ -70,6 +70,10 @@ public:
                               const PoseStamped& /*rel*/, double /*cov*/) {}
     /// 轮式里程计 (可选, 供定位运动先验; 默认忽略)
     virtual void onOdom(const PoseStamped& /*odom*/) {}
+
+    /// 相对位姿观测 (LIO 里程计): 只表达增量。默认忽略。
+    virtual void onRelative(const PoseStamped& /*pose*/,
+                            const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
     /// 高频预测位姿 (定位模式; 供高频输出/TF; 默认不支持)
     virtual bool getHighRatePose(double /*t*/, PoseStamped& /*out*/) { return false; }
     /// 位姿 + 协方差 (order [rot(3),trans(3)]; 默认不支持)

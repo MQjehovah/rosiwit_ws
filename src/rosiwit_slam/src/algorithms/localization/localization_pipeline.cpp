@@ -711,6 +711,12 @@ void LocalizationPipeline::onOdom(const PoseStamped& odom) {
     }
 }
 
+void LocalizationPipeline::onRelative(const PoseStamped& pose,
+                                      const Eigen::Matrix<double, 6, 6>& cov) {
+    std::lock_guard<std::mutex> fk(m_fusion_mu);
+    if (m_fusion) m_fusion->onRelative(pose, cov);
+}
+
 CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseStamped& end_pose) {
     if (!m_deskew_enabled || !f.cloud || f.cloud->empty()) return f.cloud;
     if (!m_have_last_accepted && m_pose.time < 0.0) return f.cloud;

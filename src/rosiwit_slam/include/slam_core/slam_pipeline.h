@@ -88,6 +88,8 @@ public:
     bool init(const std::string& config_path) override;
     void onImu(const IMUSample& s) override;
     void onOdom(const PoseStamped& odom) override;
+    void onRelative(const PoseStamped& pose,
+                    const Eigen::Matrix<double, 6, 6>& cov) override;
     void onLidar(const LidarFrame& f) override;
     std::string name() const override { return m_pipeline_name; }
     bool getGlobalMap(PointVec& out) override;

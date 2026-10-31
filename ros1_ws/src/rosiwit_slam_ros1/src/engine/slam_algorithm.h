@@ -71,6 +71,11 @@ public:
     std::string poseFusionDiagnostics() const {
         return algo_ ? algo_->poseFusionDiagnostics() : std::string();
     }
+    /// 相对位姿观测透传 (LIO): 只在 LOCALIZATION 模式由核心自行判定, 这里不做模式判断。
+    void onRelative(const rosiwit_slam::PoseStamped& pose,
+                    const Eigen::Matrix<double, 6, 6>& cov) {
+        if (algo_) algo_->onRelative(pose, cov);
+    }
     rosiwit_slam::SlamBase* base() const { return base_; }
 
     const std::string& configPath() const { return config_path_; }

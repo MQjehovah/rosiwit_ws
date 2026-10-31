@@ -22,6 +22,11 @@ public:
     virtual void onLidar(const LidarFrame& f) = 0;
     /// 可选: 轮式里程计 (运动先验, 默认忽略)
     virtual void onOdom(const PoseStamped& /*odom*/) {}
+
+    /// 相对位姿观测 (LIO 里程计): 只表达"相对上一帧走了多少", 不含绝对位置。
+    /// 默认忽略 —— 非融合实现 (gicp/scan_context) 不受影响。
+    virtual void onRelative(const PoseStamped& /*pose*/,
+                            const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
     virtual Status getStatus() = 0;
     virtual bool getPose(PoseStamped& out) = 0;
 

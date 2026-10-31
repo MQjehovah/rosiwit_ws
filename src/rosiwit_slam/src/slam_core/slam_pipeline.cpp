@@ -404,6 +404,13 @@ void SlamPipeline::onOdom(const PoseStamped& odom) {
     if (m_mode.load() == PipelineMode::LOCALIZATION && m_localization) m_localization->onOdom(odom);
 }
 
+void SlamPipeline::onRelative(const PoseStamped& pose,
+                              const Eigen::Matrix<double, 6, 6>& cov) {
+    if (m_mode.load() == PipelineMode::LOCALIZATION && m_localization) {
+        m_localization->onRelative(pose, cov);
+    }
+}
+
 bool SlamPipeline::getHighRatePose(double t, PoseStamped& out) {
     if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) return false;
     return m_localization->predictAt(t, out);
