@@ -61,9 +61,10 @@ planner_frequency: 1.0
 # 最多滞后 0.5s, 0.4m/s 下就是 0.2m, 贴障碍表现为一顿一顿); scan 点标记
 # 已栅格化, 5Hz 负担得起.
 costmap_update_rate: 5.0
-# spinner 线程数 (代价地图与控制环并行)
-# 1 = 单线程 (默认)。节点内共享状态没有锁, 2 线程会有数据竞争。
-# 只有给 planner_costmap_/current_map_/current_pose_ 等加锁之后才考虑调大。
+# spinner 线程数
+# 1 = 单线程 (默认)。控制/传感器回调都在同一个 spinner 上, action/path 生命周期无竞态。
+# 重活 (updateCostmap + publishLocalCostmap) 已挪到节点内 costmap_worker_ 线程,
+# 代价地图不需要再加 spinner; 见 docs/dev/nav-ros1-thread-model.md
 spinner_threads: 1
 
 # ---- 重规划策略 ----
