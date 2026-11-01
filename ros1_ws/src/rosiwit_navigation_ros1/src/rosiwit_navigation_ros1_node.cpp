@@ -66,6 +66,7 @@
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 #include "rosiwit_navigation/nav_core/footprint.hpp"
 #include "rosiwit_navigation/nav_core/localization_health.hpp"
+#include "rosiwit_navigation/nav_core/path_centering.hpp"
 #include <xzrobot_ros_dependency/SlamInfo.h>
 #include <xzrobot_ros_dependency/LocalizationState.h>
 #include <xzrobot_ros_dependency/VirtualObstacles.h>
@@ -3882,6 +3883,24 @@ private:
     // plan_truncated_ 交给 replanningCheck 消费 (见那里的 due); 这里不能拨
     // last_plan_time_ —— 本函数末尾会无条件把它重置为 now (评审 finding 3)。
 
+    // ESDF 居中: 规划器只保证"不撞", 不保证"走在通道中间";
+    // 窄门/窄通道下单边余量只有几厘米, 居中能直接决定过不过得去。
+    {
+      core::CostmapGrid center_grid;
+      {
+        std::lock_guard<std::mutex> map_lk(map_mu_);
+        if (last_planning_costmap_.grid) { center_grid = *last_planning_costmap_.grid; }
+      }
+      if (center_grid.data.size() > 0) {
+        core::ObstacleDistance esdf;
+        esdf.update(center_grid);
+        core::CenteringConfig cc;
+        core::Path centered = planned;
+        if (core::centerPathAlongClearance(&centered, esdf, planner_footprint_, cc)) {
+          planned = centered;
+        }
+      }
+    }
     current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
     current_core_path_ = planned;   // 旋转段执行器读取 velocity_x==0 标记
 
