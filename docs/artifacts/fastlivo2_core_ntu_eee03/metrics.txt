@@ -1,0 +1,17 @@
+dataset:            NTU VIRAL eee_03 (ROS2 bag, 181.3 s)
+frontend:           rosiwit_slam core fast_livo2_frontend (FasLivo2Frontend / LivoMapper)
+runner:             ros2 run rosiwit_slam_ros2 livo_replay (offline rosbag2, no executor/timers)
+frames:             imu=70475 lidar=1814 image=1813
+poses:              1811
+ate_se3_rmse:       0.237 m
+ate_se3_mean:       0.221 m
+ate_se3_max:        0.547 m
+ate_matched_poses:  1509
+traj_length_est:    142.9 m
+traj_length_gt:     127.8 m
+
+# reference: standalone package ros2_ws/src/fast_livo2 (same bag)
+standalone_ate_se3_rmse: 0.257 m
+standalone_ate_se3_mean: 0.244 m
+standalone_ate_se3_max:  0.463 m
+standalone_poses:        1809

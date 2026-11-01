@@ -249,6 +249,13 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
 对比独立包（`ros2_ws/src/fast_livo2`）的 0.257 m，核心版精度一致甚至略好，
 说明 **LIVO 移植没有引入精度退化**。
 
+轨迹对比（红=核心，绿=独立包，蓝=Leica 真值，均已 SE3 对齐）：
+
+![compare](../artifacts/fastlivo2_core_ntu_eee03/compare_core_vs_standalone.png)
+
+结果文件：`docs/artifacts/fastlivo2_core_ntu_eee03/`
+（`trajectory_eee03.txt`、`metrics.txt`、`traj_vs_gt.png`、`compare_core_vs_standalone.png`）。
+
 ## 7. 复现步骤（NTU VIRAL）
 
 ```bash
