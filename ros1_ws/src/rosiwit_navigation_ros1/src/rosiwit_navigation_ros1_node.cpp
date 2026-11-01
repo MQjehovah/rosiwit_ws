@@ -2990,6 +2990,9 @@ private:
        // health_scale: 定位退化时的速度缩放 (1.0 = 未降速). 现场"为什么慢"
        // 先看这两个数: safety_scale(安全层) 与 health_scale(定位质量)
        << ",\"health_scale\":" << slamHealthScale()
+       // recovery: 卡住时最需要知道"恢复跑到第几次/哪一步", 否则现场只看到车不动
+       << ",\"recovery_attempts\":" << recovery_attempts_
+       << ",\"recovery_stage\":" << static_cast<int>(recovery_stage_)
        << ",\"replan_count\":" << replan_count_
        << ",\"replan_fail\":" << replan_fail_count_
        << ",\"plan_ms\":" << last_plan_ms_
