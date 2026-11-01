@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <Eigen/Eigen>
+#include <pcl/kdtree/kdtree_flann.h>
 #include "slam_core/slam_types.h"
 
 namespace rosiwit_slam {
@@ -27,5 +28,18 @@ void poseInnovation(const PoseStamped& match, const PoseStamped& pred,
 /// 替换 —— 叠加层作为权威, 原图同处旧点不再参与配准)
 void suppressBaseByOverlay(CloudType::Ptr& cloud, const CloudType::Ptr& overlay,
                            double radius);
+
+
+/// 以 center 为中心、radius 为半径裁剪局部子图 (KD-tree 半径搜索).
+///
+/// 全局重定位只需要候选附近的结构: 在 110 万点全图上给每个候选跑 GICP,
+/// 单候选几百 ms~秒级且随地图线性变慢 —— 这是重定位 20~45 s 的主要来源。
+/// 裁 25~30 m 后目标通常只剩 1~5 万点, 单候选 GICP 降到 10~50 ms。
+CloudType::Ptr cropRadius(const CloudType::Ptr& cloud, const V3D& center, double radius);
+
+/// 同上, 但复用调用方已建好的 KD-tree (整图只建一次树), 并限制返回点数上限。
+CloudType::Ptr cropRadius(const pcl::KdTreeFLANN<PointType>& kdtree,
+                          const CloudType::Ptr& cloud, const V3D& center, double radius,
+                          double max_points = 60000);
 
 } // namespace rosiwit_slam

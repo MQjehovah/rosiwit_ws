@@ -100,8 +100,13 @@ bool FpfhRansacGlobalLocalizer::localize(const CloudType::Ptr& scan, GlobalCandi
     if (!sac.hasConverged()) return false;
 
     Eigen::Matrix4f guess = sac.getFinalTransformation();
+    CloudType::Ptr target = m_cfg.reloc_submap_radius > 0.0
+        ? cropRadius(m_kdtree, m_map_down, V3D(guess.block<3, 1>(0, 3).cast<double>()),
+                     m_cfg.reloc_submap_radius)
+        : m_map_down;
+    if (!target || target->size() < 100) target = m_map_down;
     m_gicp.setInputSource(scan_down);
-    m_gicp.setInputTarget(m_map_down);
+    m_gicp.setInputTarget(target);
     CloudType refined;
     m_gicp.align(refined, guess);
 
@@ -142,11 +147,14 @@ int FpfhRansacGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_
     // 每轮留 85% 随机子集: 不同的采样让 RANSAC 在重复结构下落到不同的"相似位置",
     // 这是产生多候选的来源 (同一份数据同一采样 = 同一个解, 跑再多轮也没用)。
     const int keep = std::max(64, static_cast<int>(0.85 * n));
-    const int attempts = std::max(6, 3 * max_k);
+    // 每轮一个完整 RANSAC 已经很贵, 尝试次数控制在 max_k+2 内;
+    // 多候选主要靠不同随机子集, 不是靠堆次数.
+    const int attempts = std::max(2, max_k + 2);
     const auto t0 = std::chrono::steady_clock::now();
     auto budget_left = [&]() {
         return std::chrono::duration<double, std::milli>(
-                   std::chrono::steady_clock::now() - t0).count() < 6000.0;
+                   std::chrono::steady_clock::now() - t0).count() <
+                       static_cast<double>(std::max(500, m_cfg.reloc_budget_ms));
     };
 
     std::vector<GlobalCandidate> cands;
@@ -177,8 +185,13 @@ int FpfhRansacGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_
         if (!sac.hasConverged()) continue;
 
         Eigen::Matrix4f guess = sac.getFinalTransformation();
+        CloudType::Ptr target = m_cfg.reloc_submap_radius > 0.0
+            ? cropRadius(m_kdtree, m_map_down, V3D(guess.block<3, 1>(0, 3).cast<double>()),
+                         m_cfg.reloc_submap_radius)
+            : m_map_down;
+        if (!target || target->size() < 100) target = m_map_down;
         m_gicp.setInputSource(scan_down);   // 精配用全量(非子集), 与 localize() 一致
-        m_gicp.setInputTarget(m_map_down);
+        m_gicp.setInputTarget(target);
         CloudType refined;
         m_gicp.align(refined, guess);
         Eigen::Matrix4d T = guess.cast<double>();

@@ -118,7 +118,7 @@ install(DIRECTORY include/ DESTINATION include)
 
 if(ROSIWIT_SLAM_STANDALONE)
     # ---- 离线工具 ----
-    foreach(tool grid_map_tool grid_map_post localization_eval traj_eval)
+    foreach(tool grid_map_tool grid_map_post localization_eval traj_eval reloc_bench)
         add_executable(${tool} tools/${tool}.cpp)
         target_link_libraries(${tool} PRIVATE rosiwit_slam)
     endforeach()

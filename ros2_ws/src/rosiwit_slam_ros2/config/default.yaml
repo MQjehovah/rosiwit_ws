@@ -130,6 +130,10 @@ localization:
   pipeline:
     # fpfh_ransac 是 3D 特征匹配, 不依赖 base<-lidar 投影; BBS 需要 bbs_mount_r,
     # 在 ROS2 薄层未注入安装旋转时会按雷达系投影 (俯装/侧装雷达下候选会偏).
+    # 提速结论 (2026-11, tools/reloc_bench, NTU 251k 点地图 / 20 场景):
+    #   scan_context + 两级精配 p95 1.7 s / 召回 100% / 误锁 0%;
+    #   fpfh_ransac 同一地图 p95 数十秒. 有 .scdb 时优先 scan_context:
+    #     relocalizer: scan_context
     relocalizer: fpfh_ransac
     motion_prior: imu
     local_map: keyframe_submap
@@ -210,6 +214,10 @@ localization:
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0
     icp_max_iter: 32
+    # 精配准局部子图半径(m): 全局重定位只需要候选附近的结构.
+    # 全图上给每个候选跑 GICP 是重定位 20~45 s 的主要来源; 30 m + 两级精配实测 p95 < 2 s.
+    # 0 = 不裁剪 (旧行为, 地图很大时会退化成几十秒).
+    reloc_submap_radius: 30.0
     sc_num_rings: 20
     sc_num_sectors: 60
     sc_max_radius: 80.0

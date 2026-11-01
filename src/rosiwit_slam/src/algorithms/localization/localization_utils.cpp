@@ -1,4 +1,5 @@
 // src/algorithms/localization/localization_utils.cpp
+#include <cmath>
 #include "algorithms/localization/localization_utils.h"
 #include <cmath>
 #include <pcl/filters/voxel_grid.h>
@@ -65,6 +66,45 @@ void suppressBaseByOverlay(CloudType::Ptr& cloud, const CloudType::Ptr& overlay,
         if (kd.nearestKSearch(p, 1, idx, sq) <= 0 || sq[0] > r2) out->push_back(p);
     }
     cloud = out;
+}
+
+
+CloudType::Ptr cropRadius(const pcl::KdTreeFLANN<PointType>& kdtree,
+                          const CloudType::Ptr& cloud, const V3D& center, double radius,
+                          double max_points) {
+    CloudType::Ptr out(new CloudType());
+    if (!cloud || cloud->empty() || radius <= 0.0) return out;
+    if (kdtree.getInputCloud() == nullptr) return out;
+
+    std::vector<int> ids;
+    std::vector<float> sq;
+    const float r = static_cast<float>(radius);
+    if (kdtree.radiusSearch(PointType(static_cast<float>(center.x()),
+                                      static_cast<float>(center.y()),
+                                      static_cast<float>(center.z())),
+                            r, ids, sq) <= 0) {
+        return out;
+    }
+    // 半径内点太多时等间隔抽稀 (GICP 的代价主要由源/目标点数决定)
+    const size_t step = (max_points > 0 && ids.size() > static_cast<size_t>(max_points))
+                            ? static_cast<size_t>(std::ceil(ids.size() / max_points))
+                            : 1;
+    out->reserve(ids.size() / step + 1);
+    for (size_t i = 0; i < ids.size(); i += step) {
+        out->push_back(cloud->points[static_cast<size_t>(ids[i])]);
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    out->is_dense = false;
+    return out;
+}
+
+CloudType::Ptr cropRadius(const CloudType::Ptr& cloud, const V3D& center, double radius) {
+    CloudType::Ptr out(new CloudType());
+    if (!cloud || cloud->empty() || radius <= 0.0) return out;
+    pcl::KdTreeFLANN<PointType> kdtree;
+    kdtree.setInputCloud(cloud);
+    return cropRadius(kdtree, cloud, center, radius);
 }
 
 } // namespace rosiwit_slam
