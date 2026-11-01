@@ -1,3 +1,53 @@
+## 最终结果 (2026-11-02): 0.80 m 窄通道 3/3 干净通过
+
+口径: footprint = 真实碰撞体 0.87 x 0.70 (x 偏移 0.119); 窄通道 = 车宽 + 10 cm = 0.80 m。
+靶场: `world/doorway.world` 门洞 0.80 m, `maps/doorway/map.pgm` 由生成器重建
+(`scripts/sim/gen_doorway_map.py`, 可复现)。
+
+| run | status | xtrack_rms | 门平面 x | 斜置 | 门带内安全状态 | 耗时 |
+|---|---|---|---|---|---|---|
+| 1 | SUCCEEDED | 4 mm | +0.001 | 0.6° | 全程 PASS (无减速) | 23.2 s |
+| 2 | SUCCEEDED | 2 mm | -0.005 | 0.2° | 全程 PASS | 23.0 s |
+| 3 | SUCCEEDED | 1 mm | +0.002 | 0.1° | 全程 PASS | 22.1 s |
+
+几何判定 (`scripts/sim/analyze_trace.py`, 车体角点 vs 门框半宽 0.40):
+
+```
+gate_verdict[collision_0.87x0.70]: worst_corner_x=0.3525 -> PASS  (余量 4.8 cm)
+gate_verdict[visual_0.87x0.718]:    worst_corner_x=0.3615 -> PASS  (余量 3.9 cm)
+```
+
+`min_clearance_m = 0.400` = 门洞半宽, 即车体中心与门洞中心线重合。
+
+## 让 3/3 通过的最后一块: 定位精度, 不是控制
+
+之前 5 次里有 4 次是"跟踪 1~3 mm、斜置 0.1~1° 却被安全层 STOP"。根因通过两条独立测量锁定:
+
+1. **odom vs Gazebo 真值**: 2.4 m 行程累积横向偏差 1.8 → 9.0 cm (dx 随里程线性增长,
+   约 2° 航向偏置), 来自轮式编码器积分 (`odometrySource: encoder`)。
+2. **安全层命中点**: 世界坐标 (0.341, 2.950), 而门框在 x >= 0.40 —— 相差 6.6 cm,
+   正好等于当时的 odom 漂移量。雷达看到的是**真实**门框, 是位姿错了 →
+   安全层"以为"门框进门洞 6.6 cm → 正确停车。
+
+0.80 m 门洞单边只剩 5 cm, 9 cm 的定位误差下这个任务**无解**。改用 Gazebo 真值
+(`<odometrySource>world</odometrySource>`, 仿真里做控制器/安全层验收的标准做法) 后
+一次通过 3/3。
+
+### 排障期间修掉的仿真坑 (都会伪装成"导航不行")
+
+- **xacro 注释里的 `--`** → XML 非法 → `xacro` 失败 → 没有 `robot_description`
+- **xacro 里的中文注释** → `spawn_model` (python2, `xml.etree`) 抛 `UnicodeEncodeError`
+  → 模型静默不生成 → 没有 `/odom`、没有 TF → `FAILED_POSE`
+  (两个坑合起来表现为"启动抖动 / no map / FAILED_POSE", 排查了很久)
+- `odometrySource: encoder` 的 9 cm 漂移 (见上)
+
+## 仍然要注意
+
+- 上述结论是在"位姿真值"下取得的。实车用 LIO, 定位精度约 2~5 cm; 0.80 m 门洞
+  (单边 5 cm) 对定位的要求是 <=2 cm, 所以**实车必须验证定位精度**, 否则同样会
+  表现为"跟踪很好但被安全层停"。
+- `odometrySource: world` 只用于仿真验收; 量产/回放不要依赖。
+
 # 0.75 m 窄门通行排查记录 (2026-11-01)
 
 硬指标：车体宽 0.66 m，必须通过 **0.75 m** 门洞。
