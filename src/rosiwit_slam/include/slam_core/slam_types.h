@@ -16,6 +16,28 @@ using PointVec  = std::vector<PointType, Eigen::aligned_allocator<PointType>>;
 using M3D = Eigen::Matrix3d;
 using V3D = Eigen::Vector3d;
 
+/// PCL 的宽高契约: width * height == points.size().
+/// 点云用 push_back 拼出来时 width/height 常常还是 0, 而 pcl::transformPointCloud
+/// 内部按 height = size / width 计算 —— width 为 0 就是整数除零 (SIGFPE)。
+/// 任何要把点云交给 PCL 运算/发布的地方, 先过一遍这个函数。
+inline void ensureCloudDims(CloudType & cloud)
+{
+  if (cloud.width != cloud.size() || cloud.height != 1) {
+    cloud.width = static_cast<uint32_t>(cloud.size());
+    cloud.height = 1;
+    cloud.is_dense = false;
+  }
+}
+
+inline void ensureCloudDims(pcl::PointCloud<pcl::PointXYZRGB> & cloud)
+{
+  if (cloud.width != cloud.size() || cloud.height != 1) {
+    cloud.width = static_cast<uint32_t>(cloud.size());
+    cloud.height = 1;
+    cloud.is_dense = false;
+  }
+}
+
 struct IMUSample {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     V3D acc  = V3D::Zero();

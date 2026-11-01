@@ -1,5 +1,7 @@
 // include/slam_core/slam_base.h
 #pragma once
+#include <atomic>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <functional>
@@ -28,6 +30,25 @@ public:
     /// "进建图先看到残留、地图整体倾斜")。
     void clearBuffers();
 
+    /// 同步诊断: 收到的原始条数 / 已生成的同步包数 / 当前缓冲区深度.
+    /// "有话题没位姿" 时靠这组数就能分清是没收包、收包后同步不出包, 还是前端不产位姿。
+    struct SyncStats {
+        uint64_t imu_rx = 0;
+        uint64_t lidar_rx = 0;
+        uint64_t pkg_rx = 0;
+        size_t   imu_buf = 0;
+        size_t   lidar_buf = 0;
+        bool     lidar_pushed = false;
+        double   last_imu_time = -1.0;      // 最新收到 IMU 的时刻
+        double   last_lidar_end = -1.0;     // 最新收到雷达帧的结束时刻
+        double   pending_end = -1.0;        // 正在等 IMU 的那一帧的结束时刻
+    };
+    SyncStats syncStats() const;
+
+    /// IMU 覆盖不足时是否丢弃该雷达帧 (默认 true: 保护 LIO 不用陈旧 IMU 强行传播).
+    /// LIVO 前端自己缓存 IMU 并做预积分, 丢帧反而让它失去连续性 -> 这类前端应关闭.
+    void setDropOnImuGap(bool v) { m_drop_on_imu_gap = v; }
+
 protected:
     // 子类实现:处理一帧已同步数据,产出输出。返回 false 表示尚未产出
     virtual bool onSyncedPackage(const SyncPackage& pkg, SlamOutput& out) = 0;
@@ -41,9 +62,15 @@ private:
     std::deque<LidarFrame> m_lidar_buf;
     mutable std::mutex     m_buf_mutex;
     bool   m_lidar_pushed = false;
+    bool   m_drop_on_imu_gap = true;
+    double m_last_imu_time = -1.0;
+    double m_last_lidar_end = -1.0;
     SyncPackage m_pending;
     OutputCallback m_cb;
     SlamState m_state = SlamState::INITIALIZING;
+    std::atomic<uint64_t> m_imu_rx{0};
+    std::atomic<uint64_t> m_lidar_rx{0};
+    std::atomic<uint64_t> m_pkg_rx{0};
 };
 
 } // namespace rosiwit_slam

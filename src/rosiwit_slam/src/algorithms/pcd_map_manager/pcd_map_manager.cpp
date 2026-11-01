@@ -2,6 +2,7 @@
 #include "algorithms/grid_map/grid_map_factory.h"
 #include "algorithms/grid_map/grid_map_io.h"
 #include <iostream>
+#include <atomic>
 #include <fstream>
 #include <algorithm>
 #include <cmath>
@@ -434,6 +435,22 @@ bool PcdMapManager::getGlobalMap(PointVec& out) {
 
 bool PcdMapManager::addSubMap(const KeyFrame& kf) {
     if (!kf.cloud || kf.cloud->empty()) return false;
+
+    // PCL 的宽高契约: width*height == points.size().
+    // 关键帧点云多是 push_back 拼出来的 (width/height 还是 0), 而
+    // pcl::transformPointCloud 会算 height = size/width —— width 为 0 时
+    // 整数除零直接 SIGFPE (实测崩在 BackendWorker -> addSubMap -> transformPointCloud).
+    if (kf.cloud->width == 0 || kf.cloud->width * kf.cloud->height != kf.cloud->size()) {
+        static std::atomic<int> warned{0};
+        if (warned.fetch_add(1) < 3) {
+            std::cerr << "[PcdMapManager] keyframe cloud dims w=" << kf.cloud->width
+                      << " h=" << kf.cloud->height << " n=" << kf.cloud->size()
+                      << " -> normalized to w=n,h=1" << std::endl;
+        }
+        kf.cloud->width = static_cast<uint32_t>(kf.cloud->size());
+        kf.cloud->height = 1;
+        kf.cloud->is_dense = false;
+    }
 
     std::lock_guard<std::mutex> lock(m_mutex_);
     Submap sm;

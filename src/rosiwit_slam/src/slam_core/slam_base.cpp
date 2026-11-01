@@ -14,7 +14,9 @@ void SlamBase::clearBuffers()
 }
 
 void SlamBase::onImu(const IMUSample& s) {
+    m_imu_rx.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(m_buf_mutex);
+    if (s.time >= 0) m_last_imu_time = s.time;
     if (s.time >= 0 && !m_imu_buf.empty() && s.time < m_imu_buf.back().time) {
         m_imu_buf.clear();   // 乱序,重置
     }
@@ -47,7 +49,9 @@ void SlamBase::onImu(const IMUSample& s) {
 }
 
 void SlamBase::onLidar(const LidarFrame& f) {
+    m_lidar_rx.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(m_buf_mutex);
+    if (f.end_time > 0) m_last_lidar_end = f.end_time;
     if (!m_lidar_buf.empty() && f.start_time < m_lidar_buf.back().start_time) {
         m_lidar_buf.clear();
     }
@@ -74,7 +78,7 @@ bool SlamBase::popSyncedPackage(SyncPackage& out) {
     // 跳过 IMU 覆盖不足的 lidar 帧, 避免用陈旧 IMU 强行传播污染状态。
     // 注意: 判定时【不消费 IMU】, 丢弃帧时 IMU 保留在 buffer 中, 避免 IMU/lidar 失同步。
     int dropped = 0;
-    while (true) {
+    while (m_drop_on_imu_gap) {
         const double frame_begin = m_pending.frame.start_time;
         const double frame_end   = m_pending.frame.end_time;
         const double window = frame_end - frame_begin;
@@ -111,10 +115,31 @@ bool SlamBase::popSyncedPackage(SyncPackage& out) {
         m_pending.imus.push_back(std::move(m_imu_buf.front()));
         m_imu_buf.pop_front();
     }
+    // 前瞻一个样本 (不弹出): FAST-LIVO2/LIO 的 IMU 预积分要求"最新 IMU 时刻 >= 雷达帧
+    // 结束时刻"(否则整帧被跳过, 前端永远等 IMU, 表现为 [ LIO ]: No point!!! 之后不再出位姿)。
+    // 只把 < end_time 的样本交给前端时, 这里恰好差一个样本。这个前瞻样本会在下一个包里
+    // 再出现一次; 前端按 [last_lio, lio_time] 时间窗消费, 同一时刻重复一个样本无副作用。
+    if (!m_imu_buf.empty()) m_pending.imus.push_back(m_imu_buf.front());
     out = std::move(m_pending);
     m_lidar_buf.pop_front();
     m_lidar_pushed = false;
+    m_pkg_rx.fetch_add(1, std::memory_order_relaxed);
     return true;
+}
+
+SlamBase::SyncStats SlamBase::syncStats() const {
+    std::lock_guard<std::mutex> lock(m_buf_mutex);
+    SyncStats s;
+    s.imu_rx = m_imu_rx.load(std::memory_order_relaxed);
+    s.lidar_rx = m_lidar_rx.load(std::memory_order_relaxed);
+    s.pkg_rx = m_pkg_rx.load(std::memory_order_relaxed);
+    s.imu_buf = m_imu_buf.size();
+    s.lidar_buf = m_lidar_buf.size();
+    s.lidar_pushed = m_lidar_pushed;
+    s.last_imu_time = m_last_imu_time;
+    s.last_lidar_end = m_last_lidar_end;
+    s.pending_end = m_pending.frame.end_time;
+    return s;
 }
 
 bool SlamBase::tryPopAndProcess() {
