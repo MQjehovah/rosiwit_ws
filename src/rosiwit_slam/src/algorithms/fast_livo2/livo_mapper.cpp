@@ -322,33 +322,59 @@ void LivoMapper::buildOutputs() {
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr rgb(new pcl::PointCloud<pcl::PointXYZRGB>());
     bool has_rgb = false;
 
-    if (slam_mode_ == LIVO && LidarMeasures_.lio_vio_flg == VIO && !pcl_w_wait_pub_->empty() &&
+    if (slam_mode_ == LIVO && LidarMeasures_.lio_vio_flg == VIO && pcl_w_wait_pub_ && !pcl_w_wait_pub_->empty() &&
         vio_manager_ && vio_manager_->new_frame_ && !vio_manager_->img_rgb.empty()) {
-        *pcl_wait_pub_ += *pcl_w_wait_pub_;
-        const size_t size = pcl_wait_pub_->points.size();
-        rgb->reserve(size);
-        const cv::Mat& img_rgb = vio_manager_->img_rgb;
-        for (size_t i = 0; i < size; ++i) {
-            const auto& pi = pcl_wait_pub_->points[i];
-            V3D p_w(pi.x, pi.y, pi.z);
-            V3D pf(vio_manager_->new_frame_->w2f(p_w));
-            if (pf[2] < 0) continue;
-            V2D pc(vio_manager_->new_frame_->w2c(p_w));
-            if (!vio_manager_->new_frame_->cam_->isInFrame(pc.cast<int>(), 3)) continue;
-
-            V3F pixel = vio_manager_->getInterpolatedPixel(img_rgb, pc);
-            pcl::PointXYZRGB pointRGB;
-            pointRGB.x = pi.x;
-            pointRGB.y = pi.y;
-            pointRGB.z = pi.z;
-            pointRGB.r = pixel[2];
-            pointRGB.g = pixel[1];
-            pointRGB.b = pixel[0];
-            if (pf.norm() > cfg_.blind_rgb_points) rgb->push_back(pointRGB);
+        // 灰度/单通道相机也要能上色: 统一转 3 通道, 并做边界裁剪避免越界读.
+        cv::Mat color;
+        const cv::Mat& src_img = vio_manager_->img_rgb;
+        if (src_img.channels() == 3) {
+            color = src_img;
+        } else if (src_img.channels() == 1) {
+            cv::cvtColor(src_img, color, cv::COLOR_GRAY2BGR);
+        } else if (src_img.channels() == 4) {
+            cv::cvtColor(src_img, color, cv::COLOR_BGRA2BGR);
         }
-        has_rgb = !rgb->empty();
-        PointCloudXYZI().swap(*pcl_wait_pub_);
-        PointCloudXYZI().swap(*pcl_w_wait_pub_);
+
+        if (!color.empty()) {
+            *pcl_wait_pub_ += *pcl_w_wait_pub_;
+            const size_t size = pcl_wait_pub_->points.size();
+            rgb->reserve(size);
+            for (size_t i = 0; i < size; ++i) {
+                const auto& pi = pcl_wait_pub_->points[i];
+                V3D p_w(pi.x, pi.y, pi.z);
+                V3D pf(vio_manager_->new_frame_->w2f(p_w));
+                if (!(pf[2] > 0)) continue;
+                V2D pc(vio_manager_->new_frame_->w2c(p_w));
+                if (!std::isfinite(pc[0]) || !std::isfinite(pc[1])) continue;
+                const int u = static_cast<int>(std::floor(pc[0]));
+                const int v = static_cast<int>(std::floor(pc[1]));
+                if (u < 0 || v < 0 || u + 1 >= color.cols || v + 1 >= color.rows) continue;
+
+                // 双线性插值 (BGR)
+                const float sub_u = static_cast<float>(pc[0] - u);
+                const float sub_v = static_cast<float>(pc[1] - v);
+                const cv::Vec3b& c00 = color.at<cv::Vec3b>(v, u);
+                const cv::Vec3b& c01 = color.at<cv::Vec3b>(v, u + 1);
+                const cv::Vec3b& c10 = color.at<cv::Vec3b>(v + 1, u);
+                const cv::Vec3b& c11 = color.at<cv::Vec3b>(v + 1, u + 1);
+                const float w00 = (1.f - sub_u) * (1.f - sub_v);
+                const float w01 = sub_u * (1.f - sub_v);
+                const float w10 = (1.f - sub_u) * sub_v;
+                const float w11 = sub_u * sub_v;
+
+                pcl::PointXYZRGB pointRGB;
+                pointRGB.x = pi.x;
+                pointRGB.y = pi.y;
+                pointRGB.z = pi.z;
+                pointRGB.b = static_cast<uint8_t>(w00 * c00[0] + w01 * c01[0] + w10 * c10[0] + w11 * c11[0]);
+                pointRGB.g = static_cast<uint8_t>(w00 * c00[1] + w01 * c01[1] + w10 * c10[1] + w11 * c11[1]);
+                pointRGB.r = static_cast<uint8_t>(w00 * c00[2] + w01 * c01[2] + w10 * c10[2] + w11 * c11[2]);
+                if (pf.norm() > cfg_.blind_rgb_points) rgb->push_back(pointRGB);
+            }
+            has_rgb = !rgb->empty();
+            PointCloudXYZI().swap(*pcl_wait_pub_);
+            PointCloudXYZI().swap(*pcl_w_wait_pub_);
+        }
     }
 
     std::lock_guard<std::mutex> lock(mtx_output_);
