@@ -3529,7 +3529,11 @@ private:
     const core::Pose2D goal = toCorePose(pending_goal_);
     const core::Costmap planning_costmap = buildStartClearedCostmap(
       start, planning_start_clear_margin_, planning_clear_start_footprint_);
-    last_planning_costmap_ = planning_costmap;
+    {
+      // pathFootprintClear() 会在控制线程读它; 与上面的构建/复核同锁
+      std::lock_guard<std::mutex> map_lk(map_mu_);
+      last_planning_costmap_ = planning_costmap;
+    }
     async_planner_->setCostmap(planning_costmap);
     if (fallback_planner_) {
       fallback_planner_->setCostmap(planning_costmap);
@@ -3805,20 +3809,33 @@ private:
         return;
       }
       // 首版规划被拒: 若前段是干净的 (>=4 点且 >=0.40m), 截到最后一个安全点先走,
-      // 并在 ~3s 后强制重规划, 让它用更新的地图把后半段接上。
+      // 并让 replanningCheck 立刻重规划 (plan_truncated_)。
       // 依据 (2026-11-01 仿真): hybrid 自己按 planner_footprint_ 验证过的路径,
       // 在 d_start=358cm 处被判 cost=100 -> 直接 FAILED_PATH_FOOTPRINT (3/3)。
       // 直接失败对用户没有价值: 前 3.5m 明明是清的。
-      if (fp_bad >= 4 && planned.points.size() > fp_bad) {
+      // 但截断点必须离被拒点还有**停车余量**, 否则等于把车开到贴着障碍的地方停
+      // (评审 finding 1): 规划基元 0.1~0.3m + 半格容差, 0.5m 才够。
+      if (fp_bad >= 4) {
+        // 从被拒点往回退, 直到"截断点到被拒点" >= 0.5m: 留停车余量, 别把车
+        // 停在贴着障碍的位置 (评审 finding 1: 规划基元 0.1~0.3m + 半格容差)。
+        const core::Pose2D & pb = planned.points[fp_bad].pose;
+        size_t k = fp_bad;
+        while (k > 1) {
+          const core::Pose2D & q = planned.points[k - 1].pose;
+          if (std::hypot(pb.x - q.x, pb.y - q.y) >= 0.50) { break; }
+          --k;
+        }
         const core::Pose2D & p0 = planned.points.front().pose;
-        const core::Pose2D & pk = planned.points[fp_bad - 1].pose;
+        const core::Pose2D & pk = planned.points[k - 1].pose;
         const double clear_len = std::hypot(pk.x - p0.x, pk.y - p0.y);
-        if (clear_len >= 0.40) {
+        if (k >= 4 && clear_len >= 0.40) {
           ROS_WARN("[plan] 轮廓检查在 %s 处失败 -> 只走清白前段 %.2fm (%zu/%zu 点), "
-                   "3s 后重规划", fp_why.c_str(), clear_len, fp_bad,
-                   planned.points.size());
-          planned.points.resize(fp_bad);
+                   "立即重规划", fp_why.c_str(), clear_len, k, planned.points.size());
+          planned.points.resize(k);
           plan_truncated_ = true;
+        } else {
+          ROS_WARN("[plan] 清白前段太短 (k=%zu, %.2fm), 不走截断 (%s)",
+                   k, clear_len, fp_why.c_str());
         }
       }
       if (!plan_truncated_) {
@@ -3838,13 +3855,8 @@ private:
         return;
       }
     }
-    if (plan_truncated_) {
-      // 先把 last_plan_time_ 往回拨, 让 1Hz 的重规划检查 ~3s 内就认为"到期",
-      // 不必等 replan_max_interval_(20~30s). 只拨一次, 成功后清标志.
-      last_plan_time_ = ros::Time::now() - ros::Duration(
-        std::max(0.0, replan_max_interval_ - 3.0));
-      plan_truncated_ = false;
-    }
+    // plan_truncated_ 交给 replanningCheck 消费 (见那里的 due); 这里不能拨
+    // last_plan_time_ —— 本函数末尾会无条件把它重置为 now (评审 finding 3)。
 
     current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
     current_core_path_ = planned;   // 旋转段执行器读取 velocity_x==0 标记
@@ -3959,9 +3971,13 @@ private:
     const double gx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
     const double gy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
     const bool near_goal = std::hypot(gx, gy) < 0.8;
-    const bool due = path_empty || (!near_goal && since_plan >= replan_max_interval_);
+    // plan_truncated_: 首版规划被轮廓检查截断 (只走了清白前段), 必须马上重规划,
+    // 不能等 replan_max_interval_ (20~30s), 也不能被 near_goal 抑制。
+    const bool due = path_empty || plan_truncated_ ||
+                     (!near_goal && since_plan >= replan_max_interval_);
     const bool blocked_due = blocked && since_plan >= replan_min_interval_;
     if (!due && !blocked_due) return;
+    plan_truncated_ = false;
     startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/false);
   }
 
@@ -4021,6 +4037,9 @@ private:
     //   * planner 用的是"起点清障后"的图 (buildStartClearedCostmap), 复核用未清障
     //     的原图会在起点附近自己否自己。
     // 两者都指向同一件事: 复核必须和规划用同一张图。
+    // 与 launchPlan 的写入互斥 (spinner_threads>1 时规划回调与控制定时器会并发;
+    // 默认单 spinner 下是潜在问题, 见评审 finding 6)。锁必须在取引用之前。
+    std::lock_guard<std::mutex> map_lk(map_mu_);
     const core::Costmap & snapshot =
       last_planning_costmap_.data.empty() ? planner_costmap_ : last_planning_costmap_;
     if (path.points.size() < 2 || configured_footprint_.size() < 3 ||
@@ -4039,12 +4058,11 @@ private:
     const double sample_step = from_fallback ? 0.05 : 0.20;
     const core::Footprint & check_fp =
       (from_fallback || planner_footprint_.size() < 3) ? configured_footprint_ : planner_footprint_;
-    // 复核容差 = 半格: 地图是离散栅格 (res=0.1) 且 hybrid 的航向按 5° 量化,
-    // "规划器按自己的位姿验证过、复核按导出的位姿又压到边界格" 会差出 ~半格。
-    // 不给这点容差会出现"hybrid 自己说能过、复核说压到 100"的假拒绝
-    // (2026-11-01 仿真: 6m 目标 3/3 FAILED_PATH_FOOTPRINT, 点距起点 358cm)。
-    // A* 回退路径的切角量级是 0.2m 级, 半格容差拦不住它, 所以守卫仍然有效。
-    const core::Footprint check_fp_tol = insetFootprint(check_fp, 0.5 * res);
+    // 容差只给 hybrid 路径 (规划器已按整条足迹验证过), 且最多 2cm:
+    // A* 回退路径用的是**真实车体**轮廓, 大分辨率地图 (res=0.2) 下半格=10cm
+    // 会放行"车头切角"的路径 (评审 finding 4)。
+    const double fp_tol = from_fallback ? 0.0 : std::min(0.02, 0.5 * res);
+    const core::Footprint check_fp_tol = insetFootprint(check_fp, fp_tol);
     const std::vector<std::pair<double, double>> samples =
       core::sampleFootprint(check_fp_tol, sample_step);
     if (samples.empty()) { return true; }
@@ -4713,10 +4731,14 @@ private:
   {
     const bool fresh = !last_slam_info_stamp_.isZero() &&
       (ros::Time::now() - last_slam_info_stamp_).toSec() <= slam_info_timeout_;
-    // matching<=0 = 建图 / SLAM 没给分数: 不算退化, 不能因此把整条指令乘 0.5
-    // (2026-11-01 仿真: 10m 走廊 v 0.8->0.4, 42s->31s; 见 core/localization_health.hpp)
+    core::SlamMode mode = core::SlamMode::Unknown;
+    if (last_slam_pipeline_mode_ == 0) { mode = core::SlamMode::Mapping; }
+    else if (last_slam_pipeline_mode_ == 1) { mode = core::SlamMode::Localization; }
+    else if (last_slam_pipeline_mode_ == 2) { mode = core::SlamMode::Error; }
+    // 建图/未知模式下 matching==0 不算退化; 定位模式下没有匹配分才降速
+    // (见 core/localization_health.hpp 与 test_localization_health)
     return core::localizationSpeedScale(fresh, last_slam_matching_,
-                                        slam_degrade_matching_, slam_degrade_scale_);
+                                        slam_degrade_matching_, slam_degrade_scale_, mode);
   }
 
   // 旋转段执行器: Hybrid A* 前进-only 模式用"原地旋转基元"掉头/对正, 路径点
@@ -5079,7 +5101,11 @@ private:
     // 到点判定必须看**目标点**, 不能只看路径终点: 首版规划被轮廓检查截断时,
     // 路径终点只是"清白前段"的末端 —— 用控制器(按 path_.back())判到会谎报
     // SUCCEEDED (2026-11-01 仿真: 截断到 3.5m, xy_err 2.4m 仍报成功)。
-    if (!goal_pose_.header.frame_id.empty()) {
+    // 只对 NAVIGATE 生效: FOLLOW_PATH 不设置 goal_pose_, 拿旧目标判会永远
+    // "没到" -> 60s 后 FAILED_STUCK (2026-11-01 评审 finding 2)。
+    const bool navigate_task =
+      !task_active_ || action_task_.kind() == core::ActionKind::NAVIGATE;
+    if (navigate_task && !goal_pose_.header.frame_id.empty()) {
       const double dx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
       const double dy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
       if (std::hypot(dx, dy) > std::max(0.02, goal_tolerance_xy_)) { return false; }
