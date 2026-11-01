@@ -5292,8 +5292,14 @@ private:
       // 减速档: 不在输出端乘 (v,w) —— 那会破坏控制器内部 (v,w) 的曲率一致性
       // (实测: 横漂 0.9m, min_clearance 0)。改为把这个比例反馈给控制器,
       // 下一拍它用 v_max*scale 重新算 omega。
-      safety_speed_scale_ = std::max(0.15, result.scale);
-      out = toCoreVelocity(cmd);   // 用控制器原指令, 限速交给下一拍
+      const double floor_scale = std::max(0.15, result.scale);
+      safety_speed_scale_ = floor_scale;
+      // 当拍就要压住线速度 (带 0.15 下限), omega 保持控制器原值:
+      // 否则 STOP 判定用当前指令、减速却要等下一拍 -> "停"比"减"先到, 门前一拍被锁死。
+      out = toCoreVelocity(cmd);
+      const double v_lim = max_velocity_x_ * floor_scale;
+      out.linear_x = (cmd.linear.x >= 0.0) ? std::min(cmd.linear.x, v_lim)
+                                           : std::max(cmd.linear.x, -v_lim);
     } else {
       safety_speed_scale_ = 1.0;
     }
