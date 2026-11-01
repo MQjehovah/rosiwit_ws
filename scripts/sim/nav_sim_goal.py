@@ -43,6 +43,7 @@ class Run(object):
         self.gc_first = None
         self.gc_last = None
         self.path = None
+        self.clearance_samples = []
         self.track_errs = []
         self.t_start = None
 
@@ -53,6 +54,25 @@ class Run(object):
         rospy.Subscriber('/global_costmap', OccupancyGrid, self.on_global, queue_size=5)
         rospy.Subscriber('/global_path', Path, self.on_path, queue_size=2)
         self.goal_pub = rospy.Publisher('/goal_pose', PoseStamped, queue_size=1)
+
+    def nearest_lethal(self, pose):
+        # distance from robot to nearest lethal cell (local window search)
+        if self.map_msg is None:
+            return None
+        info = self.map_msg.info
+        res = info.resolution
+        cx, cy = self.to_cell(pose[0], pose[1])
+        best = 1e9
+        for dy in range(-20, 21):
+            for dx in range(-20, 21):
+                gx, gy = cx + dx, cy + dy
+                if gx < 0 or gy < 0 or gx >= info.width or gy >= info.height:
+                    continue
+                if self.map_msg.data[gy * info.width + gx] >= 100:
+                    d = math.hypot(dx * res, dy * res)
+                    if d < best:
+                        best = d
+        return None if best > 1e9 else best
 
     def on_path(self, msg):
         if msg.poses:
@@ -215,6 +235,12 @@ def main():
     if len(sys.argv) > 3 and ',' in sys.argv[3]:
         a, b = sys.argv[3].split(',')
         goal_band = (float(a), float(b))
+    # fixed goal: argv[4] = "x,y[,yaw]" (repeatable scenes)
+    fixed_goal = None
+    if len(sys.argv) > 4 and ',' in sys.argv[4]:
+        parts = [float(v) for v in sys.argv[4].split(',')]
+        if len(parts) >= 2:
+            fixed_goal = parts
     rospy.init_node('nav_sim_driver', anonymous=True)
     run = Run(timeout)
     run.goal_band = goal_band
@@ -227,7 +253,13 @@ def main():
         time.sleep(0.2)
 
     pose = pose_from_diag(run.diag)
-    goal = run.pick_goal(pose)
+    if fixed_goal is not None:
+        gx0, gy0 = fixed_goal[0], fixed_goal[1]
+        gyaw0 = (fixed_goal[2] if len(fixed_goal) > 2
+                 else math.atan2(gy0 - pose[1], gx0 - pose[0]))
+        goal = (gx0, gy0, gyaw0, math.hypot(gx0 - pose[0], gy0 - pose[1]))
+    else:
+        goal = run.pick_goal(pose)
     if goal is None:
         info = run.map_msg.info
         print(json.dumps({'label': label, 'error': 'no reachable goal',
@@ -272,6 +304,9 @@ def main():
         if st not in seen_states:
             seen_states.append(st)
         if st == 'NAVIGATING':
+            _c = run.nearest_lethal(pose_from_diag(d))
+            if _c is not None:
+                run.clearance_samples.append(_c)
             _e = run.track_err()
             if _e is not None:
                 run.track_errs.append(_e)
@@ -312,6 +347,8 @@ def main():
         'label': label,
         'status': status,
         'states_seen': seen_states,
+        'min_clearance_m': (round(min(run.clearance_samples), 3)
+                            if run.clearance_samples else None),
         'xtrack_rms_m': (round(math.sqrt(sum(e * e for e in run.track_errs) / len(run.track_errs)), 3)
                          if run.track_errs else None),
         'xtrack_max_m': round(max(run.track_errs), 3) if run.track_errs else None,

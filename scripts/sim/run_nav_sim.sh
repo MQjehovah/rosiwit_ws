@@ -18,6 +18,7 @@ TOLERANCE=""
 BAND=""
 CONFIG=""
 SPAWN=""
+GOAL=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -29,6 +30,7 @@ while [ $# -gt 0 ]; do
     --band) BAND=$2; shift 2 ;;
     --config) CONFIG=$2; shift 2 ;;
     --spawn) SPAWN=$2; shift 2 ;;
+    --goal) GOAL=$2; shift 2 ;;
     *) echo "unknown arg: $1"; exit 2 ;;
   esac
 done
@@ -107,7 +109,7 @@ fi
 echo "nav node pid=$PID threads=$(ls /proc/$PID/task | wc -l)"
 
 echo "=== nav test ($DRIVER) ==="
-timeout 600 python2 "$SCRIPT" "$LABEL" 150 "$BAND" 2>&1 | tee "$OUT/run_${LABEL}.log" \
+timeout 600 python2 "$SCRIPT" "$LABEL" 150 "$BAND" "$GOAL" 2>&1 | tee "$OUT/run_${LABEL}.log" \
   | grep -E '^\{' | tee -a "$OUT/results.jsonl"
 
 echo "=== post-run health ==="
