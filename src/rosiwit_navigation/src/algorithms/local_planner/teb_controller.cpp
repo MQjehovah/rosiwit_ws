@@ -386,7 +386,7 @@ VelocityCommand TebController::computeVelocityCommand(const Pose2D & pose,
 
   // 与上一位姿差太多 (跳变/换任务) 时重建候选
   if (candidates_.empty() ||
-      std::hypot(pose.x - last_pose_.x, pose.y - last_pose_.y) > 1.0) {
+      std::hypot(pose.x - last_pose_.x, pose.y - last_pose_.y) > 0.5) {
     rebuildCandidates(pose);
   }
   last_pose_ = pose;
@@ -395,6 +395,13 @@ VelocityCommand TebController::computeVelocityCommand(const Pose2D & pose,
 
   // 起点锚定到当前位姿 (弹性带不跟机器人就会输出反向速度)
   for (auto & band : candidates_) {
+    // 裁剪: 丢掉离机器人过近的顶点, 保证 band[1] 在**前方**, 否则首段方向会朝后
+    size_t drop = 0;
+    while (drop + 2 < band.size() &&
+           std::hypot(band[drop + 1].x - pose.x, band[drop + 1].y - pose.y) < prune_distance_) {
+      ++drop;
+    }
+    if (drop > 0) { band.erase(band.begin(), band.begin() + static_cast<std::ptrdiff_t>(drop)); }
     band.front().x = pose.x;
     band.front().y = pose.y;
     band.front().theta = pose.theta;
@@ -407,7 +414,7 @@ VelocityCommand TebController::computeVelocityCommand(const Pose2D & pose,
     if (!bandFeasible(candidates_[c])) { continue; }
     const double cost = bandCost(candidates_[c]);
     // 迟滞: 上一拍赢家在 15% 以内就继续用它, 避免两族来回跳
-    if (static_cast<int>(c) == best_candidate_ && cost <= best_cost * 1.15) { continue; }
+    if (static_cast<int>(c) == best_candidate_ && cost <= best_cost * 1.05) { continue; }
     if (cost < best_cost) {
       best_cost = cost;
       best = static_cast<int>(c);

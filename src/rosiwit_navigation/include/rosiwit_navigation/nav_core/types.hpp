@@ -124,7 +124,7 @@ struct ControllerConfig
   double mppi_speed_weight = 2.0;
   double mppi_goal_weight = 1.5;
   // ---- TEB (定时弹性带) ----
-  double teb_weight_path = 1.0;
+  double teb_weight_path = 20.0;
   double teb_weight_obstacle = 8.0;
   double teb_weight_kinematics = 6.0;
   double teb_weight_velocity = 4.0;
