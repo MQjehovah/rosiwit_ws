@@ -1,5 +1,5 @@
 <?xml version="1.0" ?>
-<!-- 0.9 m 门洞: 两道墙在 y=3 处留 gap x in [-0.45, 0.45].
+<!-- 0.75 m 门洞 (硬指标: 车体 0.66 m): 两道墙在 y=3 处留 gap x in [-0.45, 0.45].
      机器人 (0.66 m 宽) 起点 (0,0) 朝 +y, 目标 (0,6). 用于窄通道对比. -->
 <sdf version="1.6">
   <world name="default">
@@ -8,10 +8,10 @@
 
     <model name="wall_left">
       <static>1</static>
-      <pose>-2.800 3.0 0.5 0 0 0</pose>
+      <pose>-2.6875 3.0 0.5 0 0 0</pose>
       <link name="link">
-        <collision name="c"><geometry><box><size>4.40 0.2 1.0</size></box></geometry></collision>
-        <visual name="v"><geometry><box><size>4.40 0.2 1.0</size></box></geometry>
+        <collision name="c"><geometry><box><size>4.625 0.2 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>4.625 0.2 1.0</size></box></geometry>
           <material><script><uri>file://media/materials/scripts/gazebo.material</uri>
             <name>Gazebo/Grey</name></script></material></visual>
       </link>
@@ -19,10 +19,10 @@
 
     <model name="wall_right">
       <static>1</static>
-      <pose>2.800 3.0 0.5 0 0 0</pose>
+      <pose>2.6875 3.0 0.5 0 0 0</pose>
       <link name="link">
-        <collision name="c"><geometry><box><size>4.40 0.2 1.0</size></box></geometry></collision>
-        <visual name="v"><geometry><box><size>4.40 0.2 1.0</size></box></geometry>
+        <collision name="c"><geometry><box><size>4.625 0.2 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>4.625 0.2 1.0</size></box></geometry>
           <material><script><uri>file://media/materials/scripts/gazebo.material</uri>
             <name>Gazebo/Grey</name></script></material></visual>
       </link>
