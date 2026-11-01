@@ -268,6 +268,11 @@ def main():
         return 1
 
     gx, gy, gyaw, bfs_len = goal
+    # publisher 连接建立前的 publish 会被直接丢弃 (queue_size=1 且非 latched),
+    # 整轮 goal_status 就会一直停在 IDLE —— 先等真有订阅者再发。
+    t_conn = time.time()
+    while run.goal_pub.get_num_connections() == 0 and time.time() - t_conn < 15.0:
+        time.sleep(0.1)
     msg = PoseStamped()
     msg.header.frame_id = 'map'
     msg.header.stamp = rospy.Time.now()
@@ -290,8 +295,11 @@ def main():
     replan_fail_max = 0
     replan_count_max = 0
     plan_ms_max = -1.0
+    safety_states = []
+    slow_scale_min = 1.0
     status = 'TIMEOUT'
-    resent = False
+    sends = 1
+    last_send = time.time()
     while not rospy.is_shutdown():
         if time.time() - t0 > 60 + timeout:
             status = 'TIMEOUT'
@@ -314,6 +322,15 @@ def main():
             safety_min = min(safety_min, float(d.get('safety_scale', 1.0)))
         except (TypeError, ValueError):
             pass
+        # 安全层到底有没有进 SLOWDOWN/APPROACH (只看 safety_scale_min 会被 STOP 的 0 掩盖)
+        _s = d.get('safety')
+        if _s and _s not in safety_states:
+            safety_states.append(_s)
+        if _s in ('SLOWDOWN', 'APPROACH'):
+            try:
+                slow_scale_min = min(slow_scale_min, float(d.get('safety_scale', 1.0)))
+            except (TypeError, ValueError):
+                pass
         try:
             health_min = min(health_min, float(d.get('health_scale', 1.0)))
         except (TypeError, ValueError):
@@ -328,19 +345,24 @@ def main():
                 or (gs and gs.startswith('STOPPED'))):
             status = gs
             break
-        # FAILED_POSE = 启动瞬态(SLAM/TF 还没起来), 等 2s 重发一次再判失败
-        if (not resent and gs == 'FAILED_POSE' and time.time() - t0 > 62):
-            rospy.logwarn('FAILED_POSE (pose not ready), resending once')
+        # 重发 (最多 6 次): 单次 publish 一旦丢失, 整轮就会干等到超时。
+        #   IDLE            -> 首包丢失 / 连接未建立 (节点根本没收到)
+        #   FAILED_POSE     -> 启动瞬态, SLAM/TF 还没起来
+        #   ACCEPTED+IDLE   -> 受理了但一直没动
+        need = False
+        if gs in (None, '', 'IDLE') and time.time() - last_send > 5.0:
+            need = True
+        elif gs == 'FAILED_POSE' and time.time() - t0 > 62:
+            need = True
+        elif gs == 'ACCEPTED' and st == 'IDLE' and time.time() - t0 > 66:
+            need = True
+        if need and sends < 6:
+            rospy.logwarn('goal not running (status=%s state=%s) -> resend #%d',
+                          gs, st, sends)
             msg.header.stamp = rospy.Time.now()
             run.goal_pub.publish(msg)
-            resent = True
-            continue
-        # 单次发布(RViz/App 语义); 若 ACCEPTED 但一直 IDLE, 补发一次
-        if (not resent and gs == 'ACCEPTED' and st == 'IDLE'
-                and time.time() - t0 > 66):
-            msg.header.stamp = rospy.Time.now()
-            run.goal_pub.publish(msg)
-            resent = True
+            sends += 1
+            last_send = time.time()
         time.sleep(0.1)
 
     p = pose_from_diag(run.diag)
@@ -380,11 +402,13 @@ def main():
         'local_map_hz': round(lm_hz, 2),
         'global_costmap_hz': round(gc_hz, 2),
         'safety_scale_min': round(safety_min, 3),
+        'safety_states': safety_states,
+        'slow_scale_min': round(slow_scale_min, 3),
         'health_scale_min': round(health_min, 3),
         'replan_count': replan_count_max,
         'replan_fail': replan_fail_max,
         'plan_ms_max': round(plan_ms_max, 1),
-        'goal_resent': resent,
+        'goal_resent': sends > 1,
         'wall_s': round(time.time() - t0, 1),
     }
     print(json.dumps(out))

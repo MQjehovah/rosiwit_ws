@@ -51,6 +51,11 @@ private:
   /// (1 = 整段无碰撞, 0 = 起步就撞)。只用未膨胀障碍层判定。
   double arcClearanceScale(const core::Pose2D & pose, double v, double w) const;
 
+  /// 车身左右两侧最近的真实障碍距离 (m)。1e9 = 窗口内没有障碍。
+  /// 用来判断"现在还有没有本钱打舵": 窄口里余量只有 2~3cm 时任何 ω 都会
+  /// 在制动期间把车体斜置撑宽扫掠区, 安全层就必判 STOP。
+  double lateralSlack(const core::Pose2D & pose) const;
+
   core::ControllerConfig cfg_;
   core::Path path_;
   std::vector<double> s_;      // 累计弧长

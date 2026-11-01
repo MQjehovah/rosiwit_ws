@@ -186,6 +186,15 @@ private:
     pnh_.param<double>("lookahead_distance", lookahead_distance_, 0.6);
     pnh_.param<double>("min_lookahead_distance", min_lookahead_distance_, 0.3);
     pnh_.param<double>("max_lookahead_distance", max_lookahead_distance_, 0.9);
+    // 前瞻 = clamp(offset + gain*|v|, min, max). gain 以前写死 1.0, 于是
+    // min_lookahead_distance 在 rpp 里永远不生效 (rpp 还额外写死 0.35 硬底)。
+    pnh_.param<double>("lookahead_gain", lookahead_gain_, 0.8);
+    pnh_.param<double>("lookahead_offset", lookahead_offset_, 0.10);
+    // 调速 (regulated): 横向/航向偏差越大线速度越低
+    pnh_.param<double>("cross_track_speed_gain", cross_track_speed_gain_, 3.0);
+    pnh_.param<double>("heading_speed_gain", heading_speed_gain_, 2.0);
+    pnh_.param<double>("min_speed_scale", min_speed_scale_, 0.2);
+    pnh_.param<double>("prealign_heading_error", prealign_heading_error_, 0.26);
     pnh_.param<double>("inflation_radius", inflation_radius_, 0.5);
     pnh_.param<double>("robot_radius", robot_radius_, 0.21);
     pnh_.param<int>("planner_max_iterations", planner_max_iterations_, 200000);
@@ -287,6 +296,10 @@ private:
     pnh_.param<double>("safety_side_margin", safety_side_margin_, 0.03);
     pnh_.param<double>("safety_turn_margin", safety_turn_margin_, 0.05);
     pnh_.param<double>("safety_slowdown_extra", safety_slowdown_extra_, 0.30);
+    // 扫掠减速"看多远"(s): 以前 slowdown_extra 只写进没人读的 cfg.slowdown_extra,
+    // 扫掠分支用的是硬编码 0.8 -> 减速距离完全无法调。现在两者指向同一处。
+    pnh_.param<double>("safety_slowdown_lookahead", safety_slowdown_lookahead_,
+                       safety_slowdown_extra_);
     pnh_.param<double>("safety_scale_slew_rate", safety_scale_slew_rate_, 1.0);
     pnh_.param<double>("safety_scale_dt", safety_scale_dt_, 0.1);
     // 车身轮廓外扩: 只排除轮廓内的点 (nav2 exclusion_zones.robot_body)
@@ -466,6 +479,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 实时 scan)跟得上; 0.66m 车体 + 0.06m -> 0.78m 巷道仍可规划.
     pnh_.param<double>("planner_footprint_margin", planner_footprint_margin_, 0.06);
     pnh_.param<double>("path_resample_step", path_resample_step_, 0.08);
+    // 路径 ESDF 居中: 把路径推到通道几何中轴 (窄门/窄通道决定性)。
+    // max_shift 限住单点偏移, 防止把路径推进门的另一侧。
+    pnh_.param<bool>("path_centering_enabled", path_centering_enabled_, true);
+    pnh_.param<double>("path_centering_max_shift", path_centering_max_shift_, 0.15);
     configured_footprint_.clear();
     controller_footprint_.clear();  // 实际是否启用由 setupCore 按控制器能力决定
     // 规划器/控制器统一车体轮廓；优先读显式 footprint，缺失时回退到
@@ -780,7 +797,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       ccfg.lookahead_distance = lookahead_distance_;
       ccfg.xy_goal_tolerance = 0.15;
       ccfg.slow_down_distance = 1.0;
-      ccfg.lookahead_gain = 1.0;
+      ccfg.lookahead_gain = lookahead_gain_;
+      ccfg.lookahead_offset = lookahead_offset_;
       ccfg.max_lookahead_distance = max_lookahead_distance_;
       ccfg.min_lookahead_distance = min_lookahead_distance_;
       ccfg.max_linear_velocity = std::max(0.1, coverage_max_speed_);
@@ -840,7 +858,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.lookahead_distance = lookahead_distance_;
     cfg.xy_goal_tolerance = goal_tolerance_xy_;
     cfg.slow_down_distance = 1.5;
-    cfg.lookahead_gain = 1.0;
+    cfg.lookahead_gain = lookahead_gain_;
+    cfg.lookahead_offset = lookahead_offset_;
+    cfg.cross_track_speed_gain = cross_track_speed_gain_;
+    cfg.heading_speed_gain = heading_speed_gain_;
+    cfg.min_speed_scale = min_speed_scale_;
+    cfg.prealign_heading_error = prealign_heading_error_;
     cfg.max_lookahead_distance = max_lookahead_distance_;
     cfg.min_lookahead_distance = min_lookahead_distance_;
     cfg.max_linear_velocity = max_velocity_x_;
@@ -1704,6 +1727,7 @@ private:
     cfg.side_margin = safety_side_margin_;
     cfg.turn_margin = safety_turn_margin_;
     cfg.slowdown_extra = safety_slowdown_extra_;
+    cfg.slowdown_lookahead = safety_slowdown_lookahead_;
     cfg.scale_slew_rate = safety_scale_slew_rate_;
     cfg.scale_dt = safety_scale_dt_;
     safety_monitor_.configure(cfg);
@@ -3018,6 +3042,7 @@ private:
        << ",\"replan_fail\":" << replan_fail_count_
        << ",\"plan_ms\":" << last_plan_ms_
        << ",\"path_points\":" << current_path_.poses.size()
+       << ",\"path_turn_deg\":" << last_path_turn_deg_
        << ",\"planner\":\"" << planner_name_ << "\""
        << ",\"profile\":\"" << motion_profile_ << "\""
        << ",\"controller\":\"" << controller_name_ << "\""
@@ -3885,7 +3910,7 @@ private:
 
     // ESDF 居中: 规划器只保证"不撞", 不保证"走在通道中间";
     // 窄门/窄通道下单边余量只有几厘米, 居中能直接决定过不过得去。
-    {
+    if (path_centering_enabled_) {
       core::CostmapGrid center_grid;
       {
         std::lock_guard<std::mutex> map_lk(map_mu_);
@@ -3895,12 +3920,16 @@ private:
         core::ObstacleDistance esdf;
         esdf.update(center_grid);
         core::CenteringConfig cc;
+        cc.max_shift = path_centering_max_shift_;
         core::Path centered = planned;
         if (core::centerPathAlongClearance(&centered, esdf, planner_footprint_, cc)) {
           planned = centered;
         }
       }
     }
+    // 诊断: 折角过大 (=路径锯齿) 是"控制器甩头 -> 安全层判撞"的直接原因,
+    // 现场只看路径点看不出锯齿, 所以把最大折角打进 /nav_diagnostics。
+    last_path_turn_deg_ = core::detail::pathMaxTurnDegrees(planned);
     current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
     current_core_path_ = planned;   // 旋转段执行器读取 velocity_x==0 标记
 
@@ -3937,14 +3966,30 @@ private:
       path_span = std::hypot(b.x - a.x, b.y - a.y);
     }
     if (allow_initial_rotate && planned.points.size() > 2 && !first_reverse &&
-        path_span > 0.6) {
+        path_span > 0.6 && !goal_pose_.header.frame_id.empty()) {
       const double current_yaw = yawFromQuat(current_pose_.pose.orientation);
       const double dx = planned.points[1].pose.x - planned.points[0].pose.x;
       const double dy = planned.points[1].pose.y - planned.points[0].pose.y;
       const double path_yaw = std::atan2(dy, dx);
-      if (std::abs(normalizeAngle(path_yaw - current_yaw)) > 0.35) {
+      // 规划器从"当前朝向"起步 -> path_yaw 几乎总等于 current_yaw, 下面这条判断
+      // 实际上永不触发, 车只能靠"边转边走"的弧消化几十度转向。0.75m 门洞实测:
+      // 起步 28° 航向差直接开走, 在 y=0.5 处就偏出 0.26m, 到门平面还剩 6.3° 斜置,
+      // 车体横向占用 0.55*sin(6.3°)+0.33*cos(6.3°) = 0.388m > 门洞 0.375m -> 必停。
+      // 目标较远时直接朝"目标方位角"转, 让后续路径从直线起步。
+      double target_yaw = path_yaw;
+      if (path_span > 1.0) {
+        const double gx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
+        const double gy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
+        if (std::hypot(gx, gy) > 1.0) {
+          const double bearing = std::atan2(gy, gx);
+          if (std::abs(normalizeAngle(bearing - current_yaw)) > 0.35) {
+            target_yaw = bearing;
+          }
+        }
+      }
+      if (std::abs(normalizeAngle(target_yaw - current_yaw)) > 0.35) {
         m_need_initial_rotate_ = true;
-        m_initial_rotate_target_ = path_yaw;
+        m_initial_rotate_target_ = target_yaw;
       }
     }
 
@@ -5076,6 +5121,11 @@ private:
       const double angle_error = normalizeAngle(m_initial_rotate_target_ - current_yaw);
       if (std::abs(angle_error) < 0.08) {
         m_need_initial_rotate_ = false;
+        // 转完必须按新朝向重规划: 否则路径还是"从旧朝向起步"的弧线, 控制器
+        // 逼近这段弧时会再次把车甩出 0.2m (等于白转)。
+        ROS_INFO("[rosiwit_navigation_ros1] initial rotate done -> replan from new heading");
+        startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/true);
+        return;
       } else {
         rot_cmd.angular.z = std::max(-0.8, std::min(0.8, 1.5 * angle_error));
         publishCommand(rot_cmd);
@@ -5436,6 +5486,12 @@ private:
   double goal_tolerance_yaw_ = 0.1;
   double lookahead_distance_ = 0.6;
   double min_lookahead_distance_ = 0.3;
+  double lookahead_gain_ = 0.8;
+  double lookahead_offset_ = 0.10;
+  double cross_track_speed_gain_ = 3.0;
+  double heading_speed_gain_ = 2.0;
+  double min_speed_scale_ = 0.2;
+  double prealign_heading_error_ = 0.26;
   double max_lookahead_distance_ = 0.9;
   double inflation_radius_ = 0.5;
   double robot_radius_ = 0.21;
@@ -5484,6 +5540,7 @@ private:
   double safety_side_margin_ = 0.03;
   double safety_turn_margin_ = 0.05;
   double safety_slowdown_extra_ = 0.30;
+  double safety_slowdown_lookahead_ = 0.8;
   double safety_scale_slew_rate_ = 1.0;
   double safety_scale_dt_ = 0.1;
 
@@ -5601,6 +5658,10 @@ private:
   double planner_footprint_margin_ = 0.06;   // 规划器轮廓外扩(最小离墙余量)
   core::Footprint planner_footprint_;        // 规划用轮廓 = 车体 + margin
   double path_resample_step_ = 0.08;
+  bool path_centering_enabled_ = true;
+  double path_centering_max_shift_ = 0.15;
+  /// 最近一条发布路径的最大折角 (度): 诊断"路径锯齿 -> 控制器甩头"
+  double last_path_turn_deg_ = 0.0;
   core::Footprint configured_footprint_;
   core::Footprint controller_footprint_;
 

@@ -157,27 +157,42 @@ double approachScale(  const std::vector<std::pair<double, double>> & points,
 /// 做法: 沿预测轨迹采样 n 个未来位姿, 点落在任一位姿的 footprint 内即算命中。
 /// 与"footprint 外扩"(静态安全区)互补: 外扩管静止/贴边余量, 扫掠管制动过程。
 /// 预测用**匀速**(不衰减)近似 -> 扫掠区偏大, 属于安全侧。
+///
+/// 余量必须**各向异性**: 前/后用 long_margin (制动余量), 侧向用 lat_margin。
+/// 以前只有一个 margin = max(stop_margin, side_margin) 沿径向均匀外扩, 于是
+/// 5cm 的"刹车余量"被同时加到了车身两侧: 0.33+0.05=0.38 > 0.75/2=0.375,
+/// 0.75m 门洞在**任何**跟踪精度下都不可能通过 (实测门洞场景必停在门前 0.6m)。
 int countSweptHits(const std::vector<std::pair<double, double>> & pts,
                    const std::vector<std::pair<double, double>> & footprint,
                    double v, double w, double brake_decel, double heading_brake_decel,
-                   double reaction_time, int samples, double max_time, double margin,
-                   double extra_time)
+                   double reaction_time, int samples, double max_time,
+                   double long_margin, double lat_margin, double extra_time)
 {
   // extra_time: SLOWDOWN 区用它把"看得更远"的那一段加上去 (同样的 footprint, 更长的扫掠)
 
   if (footprint.size() < 3) { return 0; }
-  // 先把 footprint 按静态余量**径向外扩**, 再扫掠:
+  // 先把 footprint 按静态余量外扩 (前/后 = long_margin, 左右 = lat_margin):
   // 这样"静态安全区(外扩)"与"动态安全区(扫掠)"是叠加的, 而不是二选一。
+  // 用包围盒中心的各向异性缩放, 保持车体形状的相对比例 (梯形前脸不会被拉平)。
   std::vector<std::pair<double, double>> grown = footprint;
-  if (margin > 0.0) {
-    double cx = 0.0, cy = 0.0;
-    for (const auto & q : footprint) { cx += q.first; cy += q.second; }
-    cx /= static_cast<double>(footprint.size());
-    cy /= static_cast<double>(footprint.size());
+  {
+    double min_x = footprint[0].first, max_x = footprint[0].first;
+    double min_y = footprint[0].second, max_y = footprint[0].second;
+    for (const auto & q : footprint) {
+      min_x = std::min(min_x, q.first);
+      max_x = std::max(max_x, q.first);
+      min_y = std::min(min_y, q.second);
+      max_y = std::max(max_y, q.second);
+    }
+    const double xmid = 0.5 * (min_x + max_x);
+    const double ymid = 0.5 * (min_y + max_y);
+    const double hx = std::max(1e-6, 0.5 * (max_x - min_x));
+    const double hy = std::max(1e-6, 0.5 * (max_y - min_y));
+    const double sx = (hx + std::max(0.0, long_margin)) / hx;
+    const double sy = (hy + std::max(0.0, lat_margin)) / hy;
     for (auto & q : grown) {
-      const double dx = q.first - cx, dy = q.second - cy;
-      const double n = std::hypot(dx, dy);
-      if (n > 1e-9) { q.first += margin * dx / n; q.second += margin * dy / n; }
+      q.first = xmid + (q.first - xmid) * sx;
+      q.second = ymid + (q.second - ymid) * sy;
     }
   }
   const auto & fp = grown;
@@ -252,19 +267,21 @@ SafetyResult SafetyMonitor::filter(
   int swept_slow_hits = -1;
   if (config_.heading_aware && config_.dynamic_geometry && config_.footprint.size() >= 3 &&
       (std::fabs(cmd.linear_x) > 1e-3 || std::fabs(cmd.angular_z) > 1e-3)) {
-    const double sweep_margin = std::max(std::max(0.0, config_.stop_margin),
-                                        std::max(0.0, config_.side_margin));
+    // 各向异性余量: 前/后用 stop_margin (制动余量), 侧向用 side_margin。
+    // 侧向绝不继承 stop_margin —— 否则窄门/窄通道的横向余量会把通道"算窄"。
+    const double long_margin = std::max(0.0, config_.stop_margin);
+    const double lat_margin = std::max(0.0, config_.side_margin);
     swept_hits = countSweptHits(pts, config_.footprint, cmd.linear_x, cmd.angular_z,
                                 config_.brake_decel, config_.heading_brake_decel,
                                 config_.reaction_time, config_.sweep_samples,
-                                config_.sweep_max_time, sweep_margin, 0.0);
+                                config_.sweep_max_time, long_margin, lat_margin, 0.0);
     // SLOWDOWN = 同一个 footprint 扫掠, 但时间更长 (看得更远): 提前减速, 不要等到 STOP
     const double slow_extra = std::max(0.0, config_.slowdown_lookahead);
     swept_slow_hits = countSweptHits(pts, config_.footprint, cmd.linear_x, cmd.angular_z,
                                      config_.brake_decel, config_.heading_brake_decel,
                                      config_.reaction_time, config_.sweep_samples,
-                                     config_.sweep_max_time + slow_extra, sweep_margin,
-                                     slow_extra);
+                                     config_.sweep_max_time + slow_extra, long_margin,
+                                     lat_margin, slow_extra);
   }
 
   // nav2 VelocityPolygon 的语义: rotation 区只在"真的在转"时生效

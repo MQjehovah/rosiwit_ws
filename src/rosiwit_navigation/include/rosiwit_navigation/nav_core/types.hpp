@@ -98,6 +98,10 @@ struct ControllerConfig
   double max_lookahead_distance;
   double min_lookahead_distance;
   double lookahead_gain;
+  /// 前瞻距离的常数偏置 (m): L = clamp(lookahead_offset + lookahead_gain*|v|,
+  /// min_lookahead_distance, max_lookahead_distance)。以前 rpp 里写死 0.35,
+  /// 于是 min_lookahead_distance 永远不生效 (0.35 > 任何小于它的配置值)。
+  double lookahead_offset = 0.10;
   KinematicsLimits kinematics;
   double max_linear_velocity;
   double max_angular_velocity;
@@ -109,6 +113,21 @@ struct ControllerConfig
   double footprint_sample_spacing = 0.10;  // 多边形边采样间距 (m)
   /// 外部路径跟踪时把稀疏 waypoint 插值到最大间距(m); 0=关闭.
   double path_resample_step = 0.08;
+  /// 起步/大偏差时先原地对准的航向阈值 (rad): 0 = 关闭。
+  /// 纯跟踪带 20°+ 航向误差起步会切出一条 0.2m 的弧 (实测: 起点朝 +x, 目标 +y,
+  /// 规划路径无旋转段 -> y=0.5 处已偏 0.26m, 到门平面还剩 7° -> 必停)。
+  double prealign_heading_error = 0.26;
+  /// 调速 (regulated): 横向/航向偏差越大, 线速度越低 —— 偏了还猛冲只会把
+  /// 偏差带进窄门。scale = clamp(1 - k_y*|e_y| - k_h*|e_theta|, floor, 1)
+  double cross_track_speed_gain = 3.0;
+  double heading_speed_gain = 2.0;
+  double min_speed_scale = 0.2;
+  /// 弧线贴障碍时把 ω 按"弧线安全比例"衰减 (直行通过窄口)。
+  /// 窄门里可用横向余量只有 2~3cm, 任何 ω 都会把车体斜置撑宽扫掠区。
+  bool tight_arc_straighten = true;
+  /// 车身左右余量低于它时按比例压 ω (m): 门内等于不许打舵。
+  /// 0 = 关闭。
+  double tight_lateral_slack = 0.06;
   bool allow_reverse = true;
   // MPPI tuning (ignored by other controllers).
   int mppi_horizon = 20;

@@ -138,4 +138,18 @@ if(CATKIN_ENABLE_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include)
         target_link_libraries(test_path_centering rosiwit_navigation)
     endif()
+    catkin_add_gtest(test_rpp_alignment ${CORE_TEST_DIR}/test_rpp_alignment.cpp)
+    if(TARGET test_rpp_alignment)
+        target_include_directories(test_rpp_alignment PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/src/algorithms/local_planner)
+        target_link_libraries(test_rpp_alignment rosiwit_navigation)
+    endif()
+    catkin_add_gtest(test_door075_passage ${CORE_TEST_DIR}/test_door075_passage.cpp)
+    if(TARGET test_door075_passage)
+        target_include_directories(test_door075_passage PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/src/algorithms/local_planner)
+        target_link_libraries(test_door075_passage rosiwit_navigation)
+    endif()
 endif()

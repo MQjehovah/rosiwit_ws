@@ -72,6 +72,21 @@ Path makeStraightPath(double y, double x0, double x1, double step)
   return p;
 }
 
+Path makeStraightPathY(double x, double y0, double y1, double step)
+{
+  Path p;
+  for (double y = y0; y <= y1 + 1e-9; y += step) {
+    Pose2D q;
+    q.x = x;
+    q.y = y;
+    q.theta = M_PI / 2.0;
+    PathPoint pp(q);
+    pp.velocity_x = 1.0;
+    p.points.push_back(pp);
+  }
+  return p;
+}
+
 Footprint makeFootprint() { return {{-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}}; }
 
 // 生产改动会让这些测试失败的情形:
@@ -145,6 +160,77 @@ TEST(PathCentering, MaxShiftIsRespected)
 }
 
 }  // namespace
+
+// ============================================================================
+// 门洞几何回归: 0.70m 缺口 (地图栅格化后的 0.75m 门洞) + 0.66m 车体
+//
+// 这两条锁住"居中不能引入锯齿":
+//   v1 的逐点梯度上升在门洞段产生 ±8cm 的 sawtooth (相邻点间距才 4cm),
+//   控制器跟着甩头到 27°, 安全层判必撞 -> FAILED_SAFETY_STOP。
+// ============================================================================
+CostmapGrid makeDoorMap(double gap_half = 0.35)
+{
+  // 6m x 6m, 0.05m: 一堵横墙 (|y| < 0.10), 中间 gap_half 半宽的缺口
+  const double res = 0.05;
+  CostmapGrid g;
+  g.info.width = 120;
+  g.info.height = 120;
+  g.info.resolution = res;
+  g.info.origin.position.x = -3.0;
+  g.info.origin.position.y = -3.0;
+  g.data.assign(static_cast<size_t>(g.info.width) * g.info.height, 0);
+  for (unsigned r = 0; r < g.info.height; ++r) {
+    const double wy = g.info.origin.position.y + (r + 0.5) * res;
+    if (std::fabs(wy) >= 0.10) { continue; }
+    for (unsigned c = 0; c < g.info.width; ++c) {
+      const double wx = g.info.origin.position.x + (c + 0.5) * res;
+      if (std::fabs(wx) > gap_half) {
+        g.data[static_cast<size_t>(r) * g.info.width + c] = 100;
+      }
+    }
+  }
+  return g;
+}
+
+TEST(PathCentering, DoorPassageStaysSmoothWhenAlreadyCentered)
+{
+  CostmapGrid g = makeDoorMap();
+  ObstacleDistance esdf;
+  esdf.update(g);
+  Path path = makeStraightPathY(0.0, -1.2, 1.2, 0.05);
+  CenteringConfig cc;
+  centerPathAlongClearance(&path, esdf, makeFootprint(), cc);
+  // 居中路径不许被推歪, 更不许出现锯齿
+  for (size_t i = 0; i < path.points.size(); ++i) {
+    EXPECT_LT(std::fabs(path.points[i].pose.x), 0.02) << "i=" << i;
+  }
+  EXPECT_LT(rosiwit_navigation::core::detail::pathMaxTurnDegrees(path), 12.0);
+}
+
+TEST(PathCentering, DoorPassageIsRecoveredFromOffset)
+{
+  CostmapGrid g = makeDoorMap();
+  ObstacleDistance esdf;
+  esdf.update(g);
+  // 偏 0.12m 进 0.70m 缺口 (车体已经"压"在门框上): 应被拉回中心
+  Path path = makeStraightPathY(0.12, -1.2, 1.2, 0.05);
+  CenteringConfig cc;
+  const bool moved = centerPathAlongClearance(&path, esdf, makeFootprint(), cc);
+  EXPECT_TRUE(moved);
+  // 缺口附近的点应回到中心线附近, 且整条路径仍然平滑
+  double worst = 0.0;
+  double worst_plane = 0.0;
+  for (size_t i = 0; i < path.points.size(); ++i) {
+    const double y = path.points[i].pose.y;
+    const double x = std::fabs(path.points[i].pose.x);
+    if (std::fabs(y) <= 0.25) { worst = std::max(worst, x); }
+    if (std::fabs(y) <= 0.05) { worst_plane = std::max(worst_plane, x); }
+  }
+  // 进门过渡段 (|y| 0.3~0.8) 允许保留原来的弯, 但门洞段必须对中
+  EXPECT_LT(worst, 0.02) << "door band worst=" << worst;
+  EXPECT_LT(worst_plane, 0.01) << "door plane worst=" << worst_plane;
+  EXPECT_LT(rosiwit_navigation::core::detail::pathMaxTurnDegrees(path), 12.0);
+}
 
 int main(int argc, char ** argv)
 {
