@@ -849,6 +849,26 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.kinematics.max_velocity_x = max_velocity_x_;
     cfg.kinematics.max_velocity_theta = max_velocity_theta_;
     cfg.footprint = controller_footprint_;
+    // ---- TEB 参数 (从 yaml 同名键读取; 未配置时用 ControllerConfig 的默认值) ----
+    cfg.teb_weight_path = pnh_.param<double>("teb_weight_path", cfg.teb_weight_path);
+    cfg.teb_weight_obstacle = pnh_.param<double>("teb_weight_obstacle", cfg.teb_weight_obstacle);
+    cfg.teb_weight_kinematics =
+      pnh_.param<double>("teb_weight_kinematics", cfg.teb_weight_kinematics);
+    cfg.teb_weight_velocity = pnh_.param<double>("teb_weight_velocity", cfg.teb_weight_velocity);
+    cfg.teb_weight_acceleration =
+      pnh_.param<double>("teb_weight_acceleration", cfg.teb_weight_acceleration);
+    cfg.teb_weight_time = pnh_.param<double>("teb_weight_time", cfg.teb_weight_time);
+    cfg.teb_weight_shortest = pnh_.param<double>("teb_weight_shortest", cfg.teb_weight_shortest);
+    cfg.teb_min_obstacle_dist =
+      pnh_.param<double>("teb_min_obstacle_dist", cfg.teb_min_obstacle_dist);
+    cfg.teb_inflation_dist = pnh_.param<double>("teb_inflation_dist", cfg.teb_inflation_dist);
+    cfg.teb_max_deviation = pnh_.param<double>("teb_max_deviation", cfg.teb_max_deviation);
+    cfg.teb_homotopy_classes =
+      pnh_.param<int>("teb_homotopy_classes", cfg.teb_homotopy_classes);
+    cfg.teb_homotopy_offset = pnh_.param<double>("teb_homotopy_offset", cfg.teb_homotopy_offset);
+    cfg.teb_max_iterations = pnh_.param<int>("teb_max_iterations", cfg.teb_max_iterations);
+    cfg.teb_max_samples = pnh_.param<int>("teb_max_samples", cfg.teb_max_samples);
+    cfg.teb_dt_ref = pnh_.param<double>("teb_dt_ref", cfg.teb_dt_ref);
     cfg.footprint_sample_spacing = footprint_sample_spacing_;
     cfg.path_resample_step = path_resample_step_;
     cfg.allow_reverse = allow_reverse;

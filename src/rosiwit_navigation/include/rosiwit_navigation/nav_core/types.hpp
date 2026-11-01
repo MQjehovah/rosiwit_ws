@@ -123,6 +123,22 @@ struct ControllerConfig
   double mppi_control_weight = 0.03;
   double mppi_speed_weight = 2.0;
   double mppi_goal_weight = 1.5;
+  // ---- TEB (定时弹性带) ----
+  double teb_weight_path = 1.0;
+  double teb_weight_obstacle = 8.0;
+  double teb_weight_kinematics = 6.0;
+  double teb_weight_velocity = 4.0;
+  double teb_weight_acceleration = 3.0;
+  double teb_weight_time = 1.0;
+  double teb_weight_shortest = 1.0;
+  double teb_min_obstacle_dist = 0.12;
+  double teb_inflation_dist = 0.30;
+  double teb_max_deviation = 0.60;
+  int teb_homotopy_classes = 3;
+  double teb_homotopy_offset = 0.35;
+  int teb_max_iterations = 3;
+  int teb_max_samples = 80;
+  double teb_dt_ref = 0.30;
   /// 控制器内部周期性调试输出 ([RPPProbe]/[RPPClr] 等). 默认关:
   /// 以前这两处 std::cout 常驻, 每 ~5s 往控制线程的 stdout 写一次, 仿真日志上百 MB.
   bool debug_probe = false;
