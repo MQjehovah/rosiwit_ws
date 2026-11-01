@@ -5151,6 +5151,9 @@ private:
       const auto core_pose = toCorePose(current_pose_);
       const auto core_vel = toCoreVelocity(current_velocity_);
       std::lock_guard<std::mutex> cl(controller_mu_);
+      // 安全层上一拍给的减速比例 -> 控制器速度上限 (它据此重算 omega)
+      controller_strategy_->setVelocityLimit(
+        std::max(0.05, max_velocity_x_ * safety_speed_scale_), max_velocity_theta_);
       const auto cmd = controller_strategy_->computeVelocityCommand(core_pose, core_vel);
       return toRosTwist(cmd);
     }
@@ -5266,11 +5269,14 @@ private:
     last_safety_state_ = result.state;
     last_safety_scale_ = result.scale;
     core::VelocityCommand out = result.command;
-    // 接近/减速档只降线速度, 角速度保持原值: 原地旋转不产生位移, 若把 w
-    // 也缩到 0.4x, 末段 120° 对位要转十几秒 (实测超过任务超时).
-    if (result.scale > 1e-3 && result.scale < 0.999 &&
-        std::fabs(cmd.angular.z) > 1e-3) {
-      out.angular_z = cmd.angular.z;
+    if (result.scale > 1e-3 && result.scale < 0.999) {
+      // 减速档: 不在输出端乘 (v,w) —— 那会破坏控制器内部 (v,w) 的曲率一致性
+      // (实测: 横漂 0.9m, min_clearance 0)。改为把这个比例反馈给控制器,
+      // 下一拍它用 v_max*scale 重新算 omega。
+      safety_speed_scale_ = std::max(0.15, result.scale);
+      out = toCoreVelocity(cmd);   // 用控制器原指令, 限速交给下一拍
+    } else {
+      safety_speed_scale_ = 1.0;
     }
     return toRosTwist(out);
   }
@@ -5486,6 +5492,8 @@ private:
   double safety_slowdown_ratio_ = 0.5;
   bool safety_approach_enabled_ = true;
   double safety_time_before_collision_ = 2.0;
+  /// 安全层减速 -> 下一拍控制器速度上限的比例 (1.0 = 不限)
+  double safety_speed_scale_ = 1.0;
   /// 控制器内部调试打印 ([RPPProbe]/[RPPClr]) 开关, 默认关.
   bool controller_debug_probe_ = false;
   core::SafetyMonitor safety_monitor_;
