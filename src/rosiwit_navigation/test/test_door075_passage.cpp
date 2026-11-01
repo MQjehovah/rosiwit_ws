@@ -98,22 +98,29 @@ SafetyMonitorConfig safetyConfig()
   return cfg;
 }
 
+double envOr(const char * key, double def)
+{
+  const char * v = getenv(key);
+  return (v != nullptr && *v != '\0') ? atof(v) : def;
+}
+
 std::unique_ptr<RppController> makeController()
 {
   rosiwit_navigation::core::ControllerConfig cfg;
-  cfg.max_linear_velocity = 0.45;
+  cfg.max_linear_velocity = envOr("DOOR_VMAX", 0.45);
   cfg.max_angular_velocity = 0.8;
   cfg.max_accel_x = 0.8;
   cfg.max_accel_theta = 0.6;
   cfg.xy_goal_tolerance = 0.15;
   cfg.slow_down_distance = 0.0;
-  cfg.min_lookahead_distance = 0.18;
-  cfg.max_lookahead_distance = 0.50;
+  cfg.min_lookahead_distance = envOr("DOOR_LA_MIN", 0.30);
+  cfg.max_lookahead_distance = envOr("DOOR_LA_MAX", 0.90);
   cfg.lookahead_gain = 0.8;
   cfg.use_velocity_scaled_lookahead_dist = true;
-  cfg.lookahead_time = 1.5;
+  cfg.lookahead_time = envOr("DOOR_LA_TIME", 1.5);
   cfg.use_rotate_to_heading = true;
   cfg.rotate_to_heading_min_angle = 0.785;
+  cfg.regulated_linear_scaling_min_speed = envOr("DOOR_MIN_SPEED", 0.2);
   cfg.path_resample_step = 0.05;
   std::unique_ptr<RppController> c(new RppController());
   c->initialize(cfg);
@@ -266,6 +273,16 @@ TEST(Door075, StartOffsetWithHeadingErrorConverges)
   EXPECT_FALSE(r.clipped) << "worst corner |x| = " << r.worst_corner_x;
   EXPECT_FALSE(r.stopped_in_gate) << "门带内触发 STOP; max_skew = " << r.max_skew_deg << " deg";
   EXPECT_TRUE(r.reached) << "final_y = " << r.final_y;
+}
+// 参数扫描用: 打印严苛起步 (4cm 横偏 + 2° 航向差) 下门带内的斜置/越界指标。
+// 由 DOOR_* 环境变量驱动, 只打印不断言 (供离线台秒级扫参)。
+TEST(Door075, PrintMetricsForSweep)
+{
+  const DoorRun r = runDoor(straightPathY(4.0), Pose2D(0.04, 0.0, M_PI / 2.0 + 0.035));
+  printf("SWEEP reached=%d stopped=%d clipped=%d skew=%.2f worst_x=%.4f y=%.3f\n",
+         static_cast<int>(r.reached), static_cast<int>(r.stopped_in_gate),
+         static_cast<int>(r.clipped), r.max_skew_deg, r.worst_corner_x, r.final_y);
+  EXPECT_TRUE(true);
 }
 }  // namespace
 

@@ -486,6 +486,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 实时 scan)跟得上; 0.66m 车体 + 0.06m -> 0.78m 巷道仍可规划.
     pnh_.param<double>("planner_footprint_margin", planner_footprint_margin_, 0.06);
     pnh_.param<double>("path_resample_step", path_resample_step_, 0.08);
+    // 规划器只看位置, 末端航向交给 final_rotate (nav2 goal_checker 分工)
+    pnh_.param<bool>("plan_goal_yaw_from_bearing", plan_goal_yaw_from_bearing_, true);
     // 路径 ESDF 居中: 把路径推到通道几何中轴 (窄门/窄通道决定性)。
     // max_shift 限住单点偏移, 防止把路径推进门的另一侧。
     pnh_.param<bool>("path_centering_enabled", path_centering_enabled_, true);
@@ -3584,7 +3586,16 @@ private:
     }
     const core::Pose2D start = pending_has_start_override_
       ? pending_start_override_ : toCorePose(current_pose_);
-    const core::Pose2D goal = toCorePose(pending_goal_);
+    core::Pose2D goal = toCorePose(pending_goal_);
+    // 规划器只负责"走到位置", 目标航向由末端 final_rotate 负责 (nav2 的
+    // goal_checker + RotateToGoal 分工)。若把目标航向原样交给规划器,
+    // "沿 +y 进门却要求末端朝 +x" 会被它提前 1.5m 拐成一条大弧:
+    // 实测门前方 1.5m 处偏出 24cm, 到门平面还剩 28° 航向差 -> 0.75m 门洞必碰。
+    if (plan_goal_yaw_from_bearing_ && !pending_has_start_override_) {
+      const double dxg = goal.x - start.x;
+      const double dyg = goal.y - start.y;
+      if (std::hypot(dxg, dyg) > 0.5) { goal.theta = std::atan2(dyg, dxg); }
+    }
     const core::Costmap planning_costmap = buildStartClearedCostmap(
       start, planning_start_clear_margin_, planning_clear_start_footprint_);
     {
@@ -5675,6 +5686,7 @@ private:
   double planner_footprint_margin_ = 0.06;   // 规划器轮廓外扩(最小离墙余量)
   core::Footprint planner_footprint_;        // 规划用轮廓 = 车体 + margin
   double path_resample_step_ = 0.08;
+  bool plan_goal_yaw_from_bearing_ = true;
   bool path_centering_enabled_ = true;
   double path_centering_max_shift_ = 0.15;
   /// 最近一条发布路径的最大折角 (度): 诊断"路径锯齿 -> 控制器甩头"

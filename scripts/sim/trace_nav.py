@@ -28,6 +28,7 @@ class Trace(object):
         self.diag = None
         self.cmd = (0.0, 0.0)
         self.last_path = None
+        self.path_saved = False
         self.odom = None
         rospy.Subscriber('/nav_diagnostics', String, self.on_diag, queue_size=20)
         rospy.Subscriber('/cmd_vel', Twist, self.on_cmd, queue_size=50)
@@ -54,7 +55,11 @@ class Trace(object):
     def on_path(self, msg):
         if msg.poses:
             self.last_path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
-            # 每次重规划覆盖写: 进程被 kill 也留得下数据
+            # 只保存**第一条**路径 (recovery 之前的规划结果), 用来判断
+            # "规划出来的路径在门前是不是直线"
+            if self.path_saved:
+                return
+            self.path_saved = True
             with open(self.path_file, 'w') as pf:
                 pf.write('%.4f %.4f\n' % (rospy.Time.now().to_sec(), len(self.last_path)))
                 for x, y in self.last_path:
