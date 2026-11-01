@@ -160,8 +160,11 @@ double approachScale(  const std::vector<std::pair<double, double>> & points,
 int countSweptHits(const std::vector<std::pair<double, double>> & pts,
                    const std::vector<std::pair<double, double>> & footprint,
                    double v, double w, double brake_decel, double heading_brake_decel,
-                   double reaction_time, int samples, double max_time, double margin)
+                   double reaction_time, int samples, double max_time, double margin,
+                   double extra_time)
 {
+  // extra_time: SLOWDOWN 区用它把"看得更远"的那一段加上去 (同样的 footprint, 更长的扫掠)
+
   if (footprint.size() < 3) { return 0; }
   // 先把 footprint 按静态余量**径向外扩**, 再扫掠:
   // 这样"静态安全区(外扩)"与"动态安全区(扫掠)"是叠加的, 而不是二选一。
@@ -182,7 +185,7 @@ int countSweptHits(const std::vector<std::pair<double, double>> & pts,
   const double a = std::max(0.05, brake_decel);
   const double aw = std::max(0.05, heading_brake_decel);
   double t_stop = std::max(std::fabs(v) / a, std::fabs(w) / aw) +
-                  std::max(0.0, reaction_time);
+                  std::max(0.0, reaction_time) + std::max(0.0, extra_time);
   t_stop = std::min(t_stop, std::max(0.05, max_time));
 
   std::vector<std::vector<std::pair<double, double>>> poses;
@@ -246,6 +249,7 @@ SafetyResult SafetyMonitor::filter(
   // 动态安全区: 用当前 footprint 在未来运动上的**扫掠区域**判定 (任意 v,w)。
   // 与 footprint 外扩(静态安全区)互补; 只在 dynamic_geometry 下启用, 老配置/单测不受影响。
   int swept_hits = -1;
+  int swept_slow_hits = -1;
   if (config_.heading_aware && config_.dynamic_geometry && config_.footprint.size() >= 3 &&
       (std::fabs(cmd.linear_x) > 1e-3 || std::fabs(cmd.angular_z) > 1e-3)) {
     const double sweep_margin = std::max(std::max(0.0, config_.stop_margin),
@@ -253,7 +257,14 @@ SafetyResult SafetyMonitor::filter(
     swept_hits = countSweptHits(pts, config_.footprint, cmd.linear_x, cmd.angular_z,
                                 config_.brake_decel, config_.heading_brake_decel,
                                 config_.reaction_time, config_.sweep_samples,
-                                config_.sweep_max_time, sweep_margin);
+                                config_.sweep_max_time, sweep_margin, 0.0);
+    // SLOWDOWN = 同一个 footprint 扫掠, 但时间更长 (看得更远): 提前减速, 不要等到 STOP
+    const double slow_extra = std::max(0.0, config_.slowdown_lookahead);
+    swept_slow_hits = countSweptHits(pts, config_.footprint, cmd.linear_x, cmd.angular_z,
+                                     config_.brake_decel, config_.heading_brake_decel,
+                                     config_.reaction_time, config_.sweep_samples,
+                                     config_.sweep_max_time + slow_extra, sweep_margin,
+                                     slow_extra);
   }
 
   // nav2 VelocityPolygon 的语义: rotation 区只在"真的在转"时生效
@@ -314,8 +325,12 @@ SafetyResult SafetyMonitor::filter(
   // 4) SLOWDOWN 同样带滞回.
   // 动态几何模式下不再用二值 slowdown_ratio (1.0<->0.5 硬切), 改由 approachScale
   // 按 TTC 连续降速 + 下面的变化率限制; STOP 仍然立即生效.
-  const bool slow_hit = !config_.dynamic_geometry &&
-    countPointsInPolygon(pts, config_.slowdown_polygon) > config_.slowdown_max_points;
+  bool slow_hit;
+  if (swept_slow_hits >= 0) {
+    slow_hit = swept_slow_hits > config_.slowdown_max_points;
+  } else {
+    slow_hit = countPointsInPolygon(pts, config_.slowdown_polygon) > config_.slowdown_max_points;
+  }
   const bool slow_now = updateHysteresis(
     slowdown_active_, slow_trigger_, slow_release_, slow_hit,
     config_.slowdown_trigger_frames, config_.slowdown_release_frames);

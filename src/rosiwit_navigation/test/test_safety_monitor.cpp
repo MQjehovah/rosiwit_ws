@@ -373,6 +373,43 @@ TEST(SafetyMonitor, RotationCircleStillStopsRealObstacle)
   EXPECT_EQ(r.state, "STOP");
 }
 
+
+TEST(SafetyMonitor, SweptSlowdownZoneSlowsBeforeStop)
+{
+  // 同样的 footprint, SLOWDOWN 扫掠更久: 障碍在"减速区但不在停止区"时应减速不停车
+  SafetyMonitorConfig cfg;
+  cfg.enabled = true;
+  cfg.dynamic_geometry = true;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.stop_margin = 0.05;
+  cfg.side_margin = 0.03;
+  cfg.footprint = {{-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}};
+  cfg.stop_max_points = 2;
+  cfg.slowdown_max_points = 2;
+  cfg.slowdown_ratio = 0.5;
+  cfg.slowdown_lookahead = 0.8;
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_release_frames = 1;
+  cfg.slowdown_trigger_frames = 1;
+  cfg.slowdown_release_frames = 1;
+  cfg.approach_enabled = false;
+
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  // v=0.5: stop 扫掠到车头+0.51m (0.55+0.41); slow 扫掠再多 0.4m
+  const std::vector<Point> far_points{{1.05, 0.0}, {1.06, 0.05}, {1.04, -0.05}};
+  const auto slow = monitor.filter(VelocityCommand(0.5, 0.0, 0.0), far_points);
+  EXPECT_NE(slow.state, "STOP");
+  EXPECT_LT(slow.scale, 1.0) << slow.state;
+
+  // 换成 0.5m 处: 落进 STOP 扫掠区 -> 停
+  monitor.reset();
+  const std::vector<Point> near_points{{0.70, 0.0}, {0.71, 0.05}, {0.69, -0.05}};
+  const auto stop = monitor.filter(VelocityCommand(0.5, 0.0, 0.0), near_points);
+  EXPECT_EQ(stop.state, "STOP");
+}
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

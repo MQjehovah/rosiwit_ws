@@ -22,6 +22,8 @@ struct SafetyMonitorConfig
   double heading_brake_decel = 0.8;
   /// 扫掠时间上限 (s), 防止低速时扫掠区过长
   double sweep_max_time = 1.0;
+  /// SLOWDOWN 扫掠区比 STOP 多扫多久 (s): 一样的 footprint, 只是看得更远
+  double slowdown_lookahead = 0.8;
   bool enabled = true;
   std::vector<std::pair<double, double>> stop_polygon;
   double stop_radius = 0.0;  // >0: 用圆形安全区, 优先于 polygon
