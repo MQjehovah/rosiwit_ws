@@ -3790,7 +3790,8 @@ private:
     // (hybrid 本来就按 planner_footprint_=configured+0.06 检查, 能过;
     //  会失败的基本只有回退 A* 的圆模型路径 —— 实测它会让车头插进墙里。)
     std::string fp_why;
-    if (!pathFootprintClear(planned, &fp_why)) {
+    size_t fp_bad = 0;
+    if (!pathFootprintClear(planned, &fp_why, &fp_bad)) {
       // 重规划(1Hz)被拒 != 任务失败: 旧路径仍然可用, 直接丢掉这一版继续走,
       // 下一拍再规划。以前每条被拒的重规划都会进恢复并最终 FAILED_PATH_FOOTPRINT
       // (实测 2026-10-31: 走了 1 m 之后被重规划拒掉, 整单结束 -> "走一半停了")。
@@ -3800,20 +3801,46 @@ private:
         ++plan_generation_;
         return;
       }
-      ROS_ERROR("[plan] 拒绝执行: 路径让车体轮廓压到障碍 (%s) -> 后退重规划",
-                fp_why.c_str());
-      planning_active_ = false;
-      ++plan_generation_;
-      // 只允许"后退重规划"一次: 以前每次拒绝都进恢复, 而回退 A* 的路径在窄处
-      // 反正过不了闸 -> 恢复 -> 再拒绝 -> 无限循环, 表现为"下目标没反应"。
-      if (recovery_attempts_ < 1 && startRecovery()) { return; }
-      if (task_active_) {
-        failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PATH_FOOTPRINT");
-      } else {
-        setGoalStatus("FAILED_PATH_FOOTPRINT");
-        stopNavigation();
+      // 首版规划被拒: 若前段是干净的 (>=4 点且 >=0.40m), 截到最后一个安全点先走,
+      // 并在 ~3s 后强制重规划, 让它用更新的地图把后半段接上。
+      // 依据 (2026-11-01 仿真): hybrid 自己按 planner_footprint_ 验证过的路径,
+      // 在 d_start=358cm 处被判 cost=100 -> 直接 FAILED_PATH_FOOTPRINT (3/3)。
+      // 直接失败对用户没有价值: 前 3.5m 明明是清的。
+      if (fp_bad >= 4 && planned.points.size() > fp_bad) {
+        const core::Pose2D & p0 = planned.points.front().pose;
+        const core::Pose2D & pk = planned.points[fp_bad - 1].pose;
+        const double clear_len = std::hypot(pk.x - p0.x, pk.y - p0.y);
+        if (clear_len >= 0.40) {
+          ROS_WARN("[plan] 轮廓检查在 %s 处失败 -> 只走清白前段 %.2fm (%zu/%zu 点), "
+                   "3s 后重规划", fp_why.c_str(), clear_len, fp_bad,
+                   planned.points.size());
+          planned.points.resize(fp_bad);
+          plan_truncated_ = true;
+        }
       }
-      return;
+      if (!plan_truncated_) {
+        ROS_ERROR("[plan] 拒绝执行: 路径让车体轮廓压到障碍 (%s) -> 后退重规划",
+                  fp_why.c_str());
+        planning_active_ = false;
+        ++plan_generation_;
+        // 只允许"后退重规划"一次: 以前每次拒绝都进恢复, 而回退 A* 的路径在窄处
+        // 反正过不了闸 -> 恢复 -> 再拒绝 -> 无限循环, 表现为"下目标没反应"。
+        if (recovery_attempts_ < 1 && startRecovery()) { return; }
+        if (task_active_) {
+          failTask(movebase::RESULT_PLAN_FAILED, "FAILED_PATH_FOOTPRINT");
+        } else {
+          setGoalStatus("FAILED_PATH_FOOTPRINT");
+          stopNavigation();
+        }
+        return;
+      }
+    }
+    if (plan_truncated_) {
+      // 先把 last_plan_time_ 往回拨, 让 1Hz 的重规划检查 ~3s 内就认为"到期",
+      // 不必等 replan_max_interval_(20~30s). 只拨一次, 成功后清标志.
+      last_plan_time_ = ros::Time::now() - ros::Duration(
+        std::max(0.0, replan_max_interval_ - 3.0));
+      plan_truncated_ = false;
     }
 
     current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
@@ -3981,13 +4008,23 @@ private:
   /// 用车体轮廓逐点验证路径。回退规划器 A* 只有圆形模型 (robot_radius=0.33),
   /// 而车体是 0.55 前 / 0.25 后 —— 它给的路径可能让车头插进墙里 (实测撞上过)。
   /// 这种路径必须拒绝: 宁可后退重规划, 也不能下发。
-  bool pathFootprintClear(const core::Path & path, std::string * why = nullptr) const
+  bool pathFootprintClear(const core::Path & path, std::string * why = nullptr,
+                          size_t * fail_index = nullptr) const
   {
+    // 用**规划时那一份**代价地图复核, 而不是"当前最新的" planner_costmap_:
+    //   * 地图 1Hz 刷新, 规划耗时 1~2.5s, 期间可能出现新的 scan/体素点 ->
+    //     用新图复核会把规划器当时判定可行的路径否掉 (2026-11-01 仿真 3/3
+    //     FAILED_PATH_FOOTPRINT, 6m 目标, plan_ms 1.2~2.4s);
+    //   * planner 用的是"起点清障后"的图 (buildStartClearedCostmap), 复核用未清障
+    //     的原图会在起点附近自己否自己。
+    // 两者都指向同一件事: 复核必须和规划用同一张图。
+    const core::Costmap & snapshot =
+      last_planning_costmap_.data.empty() ? planner_costmap_ : last_planning_costmap_;
     if (path.points.size() < 2 || configured_footprint_.size() < 3 ||
-        planner_costmap_.data.empty() || planner_costmap_.resolution <= 0.0) {
+        snapshot.data.empty() || snapshot.resolution <= 0.0) {
       return true;   // 缺数据时保持旧行为, 不额外拦
     }
-    const auto & cm = planner_costmap_;
+    const auto & cm = snapshot;
     const double res = cm.resolution;
     // 采样粒度按"路径来源"区分:
     //   hybrid 路径: 规划器自己已按 planner_footprint_ + 0.20m 粗采样验证过可行性,
@@ -3999,8 +4036,14 @@ private:
     const double sample_step = from_fallback ? 0.05 : 0.20;
     const core::Footprint & check_fp =
       (from_fallback || planner_footprint_.size() < 3) ? configured_footprint_ : planner_footprint_;
+    // 复核容差 = 半格: 地图是离散栅格 (res=0.1) 且 hybrid 的航向按 5° 量化,
+    // "规划器按自己的位姿验证过、复核按导出的位姿又压到边界格" 会差出 ~半格。
+    // 不给这点容差会出现"hybrid 自己说能过、复核说压到 100"的假拒绝
+    // (2026-11-01 仿真: 6m 目标 3/3 FAILED_PATH_FOOTPRINT, 点距起点 358cm)。
+    // A* 回退路径的切角量级是 0.2m 级, 半格容差拦不住它, 所以守卫仍然有效。
+    const core::Footprint check_fp_tol = insetFootprint(check_fp, 0.5 * res);
     const std::vector<std::pair<double, double>> samples =
-      core::sampleFootprint(check_fp, sample_step);
+      core::sampleFootprint(check_fp_tol, sample_step);
     if (samples.empty()) { return true; }
     // 起点邻域豁免: 机器人可能正贴着墙/门框, 它**自身**的足迹本来就压在 100 上;
     // 规划器已经用"起点清障盒"把这一小片清成 free 并验证过起点可达, 这里若再拿
@@ -4028,10 +4071,13 @@ private:
         // 100=真实障碍; 负数=unknown(规划和本检查同一套数值, 已按 allow_unknown 折成代价)。
         if (v >= 100 || v < 0) {
           if (why != nullptr) {
-            *why = "第 " + std::to_string(i) + " 点(距起点 " +
+            // ASCII-only: 日志文件是 C locale, 中文会被写成 '?' (现场无法定位)
+            *why = "pt " + std::to_string(i) + " d_start=" +
                    std::to_string(static_cast<int>(from_start * 100)) +
-                   "cm)车体压到 cost=" + std::to_string(v);
+                   "cm cost=" + std::to_string(v) +
+                   (from_fallback ? " (fallback)" : " (hybrid)");
           }
+          if (fail_index != nullptr) { *fail_index = i; }
           return false;
         }
       }
@@ -5027,6 +5073,14 @@ private:
 
   bool isGoalReached()
   {
+    // 到点判定必须看**目标点**, 不能只看路径终点: 首版规划被轮廓检查截断时,
+    // 路径终点只是"清白前段"的末端 —— 用控制器(按 path_.back())判到会谎报
+    // SUCCEEDED (2026-11-01 仿真: 截断到 3.5m, xy_err 2.4m 仍报成功)。
+    if (!goal_pose_.header.frame_id.empty()) {
+      const double dx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
+      const double dy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
+      if (std::hypot(dx, dy) > std::max(0.02, goal_tolerance_xy_)) { return false; }
+    }
     if (controller_strategy_) {
       return controller_strategy_->isGoalReached(toCorePose(current_pose_));
     }
@@ -5569,6 +5623,8 @@ private:
   bool is_navigating_;
   bool is_paused_;
   bool m_need_initial_rotate_ = false;
+  /// 首版规划被轮廓检查截断 (只走清白前段), 用来触发 3s 内的重规划
+  bool plan_truncated_ = false;
   double m_initial_rotate_target_ = 0.0;
 
   // ---- robot_movebase 兼容层 (接口层) ----
