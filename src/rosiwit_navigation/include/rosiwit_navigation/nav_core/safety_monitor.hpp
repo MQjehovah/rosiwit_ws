@@ -16,8 +16,12 @@ struct SafetyMonitorConfig
 {
   /// 直行时只按沿运动方向的扫掠走廊判定 STOP (左右两侧不参与)
   bool heading_aware = true;
-  /// 角速度超过此值时不启用走廊判定 (转弯会扫到侧面), rad/s
-  double heading_aware_max_w = 0.15;
+  /// 扫掠区采样数 (当前 footprint 沿未来运动采样多少个位姿)
+  int sweep_samples = 8;
+  /// 角加速度上限, 用于算"转多久停下"; <=0 时用 brake_decel
+  double heading_brake_decel = 0.8;
+  /// 扫掠时间上限 (s), 防止低速时扫掠区过长
+  double sweep_max_time = 1.0;
   bool enabled = true;
   std::vector<std::pair<double, double>> stop_polygon;
   double stop_radius = 0.0;  // >0: 用圆形安全区, 优先于 polygon

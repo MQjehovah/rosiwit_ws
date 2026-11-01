@@ -153,6 +153,71 @@ double approachScale(  const std::vector<std::pair<double, double>> & points,
   return 1.0;
 }
 
+/// 动态安全区 = 当前 footprint 在未来 t_stop 内的**扫掠区域**(任意 v,w)。
+/// 做法: 沿预测轨迹采样 n 个未来位姿, 点落在任一位姿的 footprint 内即算命中。
+/// 与"footprint 外扩"(静态安全区)互补: 外扩管静止/贴边余量, 扫掠管制动过程。
+/// 预测用**匀速**(不衰减)近似 -> 扫掠区偏大, 属于安全侧。
+int countSweptHits(const std::vector<std::pair<double, double>> & pts,
+                   const std::vector<std::pair<double, double>> & footprint,
+                   double v, double w, double brake_decel, double heading_brake_decel,
+                   double reaction_time, int samples, double max_time, double margin)
+{
+  if (footprint.size() < 3) { return 0; }
+  // 先把 footprint 按静态余量**径向外扩**, 再扫掠:
+  // 这样"静态安全区(外扩)"与"动态安全区(扫掠)"是叠加的, 而不是二选一。
+  std::vector<std::pair<double, double>> grown = footprint;
+  if (margin > 0.0) {
+    double cx = 0.0, cy = 0.0;
+    for (const auto & q : footprint) { cx += q.first; cy += q.second; }
+    cx /= static_cast<double>(footprint.size());
+    cy /= static_cast<double>(footprint.size());
+    for (auto & q : grown) {
+      const double dx = q.first - cx, dy = q.second - cy;
+      const double n = std::hypot(dx, dy);
+      if (n > 1e-9) { q.first += margin * dx / n; q.second += margin * dy / n; }
+    }
+  }
+  const auto & fp = grown;
+  const int n = std::max(2, samples);
+  const double a = std::max(0.05, brake_decel);
+  const double aw = std::max(0.05, heading_brake_decel);
+  double t_stop = std::max(std::fabs(v) / a, std::fabs(w) / aw) +
+                  std::max(0.0, reaction_time);
+  t_stop = std::min(t_stop, std::max(0.05, max_time));
+
+  std::vector<std::vector<std::pair<double, double>>> poses;
+  poses.reserve(static_cast<size_t>(n));
+  const bool turning = std::fabs(w) > 1e-4;
+  for (int k = 1; k <= n; ++k) {
+    const double t = t_stop * static_cast<double>(k) / static_cast<double>(n);
+    double px = 0.0, py = 0.0, dth = 0.0;
+    if (turning) {
+      const double r = v / w;
+      dth = w * t;
+      px = r * std::sin(dth);
+      py = r * (1.0 - std::cos(dth));
+    } else {
+      px = v * t;
+    }
+    const double c = std::cos(dth), s2 = std::sin(dth);
+    std::vector<std::pair<double, double>> poly;
+    poly.reserve(fp.size());
+    for (const auto & q : fp) {
+      poly.push_back({px + c * q.first - s2 * q.second,
+                      py + s2 * q.first + c * q.second});
+    }
+    poses.push_back(std::move(poly));
+  }
+
+  int hits = 0;
+  for (const auto & pt : pts) {
+    for (const auto & poly : poses) {
+      if (pointInPolygon(pt.first, pt.second, poly)) { ++hits; break; }
+    }
+  }
+  return hits;
+}
+
 SafetyResult SafetyMonitor::filter(
   const VelocityCommand & cmd,
   const std::vector<std::pair<double, double>> & points) const
@@ -178,34 +243,17 @@ SafetyResult SafetyMonitor::filter(
     }
   }
 
-  // heading_aware corridor: 直行时只把"沿运动方向、车宽以内、制动距离以内"的点
-  // 当作 STOP 依据。左右两侧(门框、走廊侧墙)在直行时不会被车体扫到, 不参与判定。
-  // 旋转/倒车/带明显角速度时不启用 —— 那时车体扫过的横向范围会变大。
-  if (config_.heading_aware && config_.dynamic_geometry &&
-      config_.footprint.size() >= 3 &&
-      std::fabs(cmd.angular_z) <= config_.heading_aware_max_w &&
-      std::fabs(cmd.linear_x) > 0.05) {
-    double half_w = 0.0;
-    double front_len = 0.0;
-    for (const auto & v : config_.footprint) {
-      half_w = std::max(half_w, std::fabs(v.second));
-      front_len = std::max(front_len, v.first);
-    }
-    const double speed = std::fabs(cmd.linear_x);
-    const double brake = speed * speed / (2.0 * std::max(0.05, config_.brake_decel)) +
-                         speed * std::max(0.0, config_.reaction_time);
-    const double lat = half_w + std::max(0.0, config_.side_margin);
-    const double fwd = front_len + std::max(0.0, config_.stop_margin) + brake;
-    const double dir = (cmd.linear_x >= 0.0) ? 1.0 : -1.0;
-    std::vector<std::pair<double, double>> corridor;
-    corridor.reserve(pts.size());
-    for (const auto & q : pts) {
-      const double x = dir * q.first;              // 沿运动方向为正
-      if (x < 0.0 || x > fwd) { continue; }        // 身后 / 制动距离外
-      if (std::fabs(q.second) > lat) { continue; } // 走廊两侧
-      corridor.push_back(q);
-    }
-    pts.swap(corridor);
+  // 动态安全区: 用当前 footprint 在未来运动上的**扫掠区域**判定 (任意 v,w)。
+  // 与 footprint 外扩(静态安全区)互补; 只在 dynamic_geometry 下启用, 老配置/单测不受影响。
+  int swept_hits = -1;
+  if (config_.heading_aware && config_.dynamic_geometry && config_.footprint.size() >= 3 &&
+      (std::fabs(cmd.linear_x) > 1e-3 || std::fabs(cmd.angular_z) > 1e-3)) {
+    const double sweep_margin = std::max(std::max(0.0, config_.stop_margin),
+                                        std::max(0.0, config_.side_margin));
+    swept_hits = countSweptHits(pts, config_.footprint, cmd.linear_x, cmd.angular_z,
+                                config_.brake_decel, config_.heading_brake_decel,
+                                config_.reaction_time, config_.sweep_samples,
+                                config_.sweep_max_time, sweep_margin);
   }
 
   // nav2 VelocityPolygon 的语义: rotation 区只在"真的在转"时生效
@@ -237,7 +285,11 @@ SafetyResult SafetyMonitor::filter(
   if (rotating && config_.stop_radius_rotation > 0.0) {
     stop_radius = config_.stop_radius_rotation;   // 原地转: 用扫掠圆
   }
-  if (stop_radius > 0.0) {
+  if (swept_hits >= 0) {
+    stop_count = swept_hits;   // 扫掠区就是动态安全区本身
+    (void)stop_poly;
+    (void)stop_radius;
+  } else if (stop_radius > 0.0) {
     const double r2 = stop_radius * stop_radius;
     for (const auto & p : pts) {
       if (p.first * p.first + p.second * p.second <= r2) ++stop_count;
