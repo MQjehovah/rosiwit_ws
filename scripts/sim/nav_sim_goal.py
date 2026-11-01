@@ -16,7 +16,7 @@ import time
 
 import rospy
 from geometry_msgs.msg import PoseStamped, Twist
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Path
 from std_msgs.msg import String
 
 
@@ -42,6 +42,8 @@ class Run(object):
         self.lm_last = None
         self.gc_first = None
         self.gc_last = None
+        self.path = None
+        self.track_errs = []
         self.t_start = None
 
         rospy.Subscriber('/map', OccupancyGrid, self.on_map, queue_size=1)
@@ -49,7 +51,35 @@ class Run(object):
         rospy.Subscriber('/cmd_vel', Twist, self.on_cmd, queue_size=50)
         rospy.Subscriber('/local_map', OccupancyGrid, self.on_local_map, queue_size=5)
         rospy.Subscriber('/global_costmap', OccupancyGrid, self.on_global, queue_size=5)
+        rospy.Subscriber('/global_path', Path, self.on_path, queue_size=2)
         self.goal_pub = rospy.Publisher('/goal_pose', PoseStamped, queue_size=1)
+
+    def on_path(self, msg):
+        if msg.poses:
+            self.path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
+
+    def track_err(self):
+        """当前位姿到 /global_path 折线的最近距离 (m)."""
+        if not self.path or self.diag is None:
+            return None
+        p = self.diag.get('odom_pose') or {}
+        x, y = p.get('x'), p.get('y')
+        if x is None or y is None:
+            return None
+        best = 1e9
+        for i in range(len(self.path) - 1):
+            ax, ay = self.path[i]
+            bx, by = self.path[i + 1]
+            dx, dy = bx - ax, by - ay
+            L2 = dx * dx + dy * dy
+            if L2 < 1e-12:
+                d = math.hypot(x - ax, y - ay)
+            else:
+                t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / L2))
+                d = math.hypot(x - (ax + t * dx), y - (ay + t * dy))
+            if d < best:
+                best = d
+        return best
 
     def on_map(self, msg):
         if msg.info.width > 0 and len(msg.data) > 0:
@@ -240,6 +270,10 @@ def main():
         gs = d.get('goal_status')
         if st not in seen_states:
             seen_states.append(st)
+        if st == 'NAVIGATING':
+            _e = run.track_err()
+            if _e is not None:
+                run.track_errs.append(_e)
         try:
             safety_min = min(safety_min, float(d.get('safety_scale', 1.0)))
         except (TypeError, ValueError):
@@ -273,6 +307,9 @@ def main():
         'label': label,
         'status': status,
         'states_seen': seen_states,
+        'xtrack_rms_m': (round(math.sqrt(sum(e * e for e in run.track_errs) / len(run.track_errs)), 3)
+                         if run.track_errs else None),
+        'xtrack_max_m': round(max(run.track_errs), 3) if run.track_errs else None,
         'goal': [round(gx, 3), round(gy, 3), round(gyaw, 3)],
         'bfs_len_m': round(bfs_len, 2),
         'start_pose': [round(v, 3) for v in pose],
