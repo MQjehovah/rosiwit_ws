@@ -144,6 +144,7 @@ struct DoorRun {
   bool stopped_in_gate{false};   // 门带内出现过 STOP (= 真机上就是 FAILED_SAFETY_STOP)
   bool clipped{false};           // 车体角点真的进了门框
   double max_skew_deg{0.0};
+  double max_omega_in_gate{0.0};   // 门带内发出的 |ω| (窄口 lane 应把它压到 ~0)
   double final_y{0.0};
   double worst_corner_x{0.0};    // 门带内车体角点的最大 |x| (相对门洞半宽 0.375)
 };
@@ -202,6 +203,9 @@ DoorRun runDoor(const Path & path, const Pose2D & start, double max_time = 45.0,
   const double dt = 0.1;
   for (double t = 0.0; t < max_time; t += dt) {
     VelocityCommand cmd = ctrl->computeVelocityCommand(pose, VelocityCommand(0.0, 0.0, 0.0));
+    if (pose.y > kDoorY0 - 0.15 && pose.y < kDoorY1 + 0.05) {
+      r.max_omega_in_gate = std::max(r.max_omega_in_gate, std::fabs(cmd.angular_z));
+    }
     double scale = 1.0;
     if (std::fabs(cmd.linear_x) > 1e-4 || std::fabs(cmd.angular_z) > 1e-4) {
       const SafetyResult sr = monitor.filter(cmd, toBaseFrame(world_pts, pose, 3.0));
@@ -275,6 +279,19 @@ TEST(Door075, StartOffsetWithHeadingErrorConverges)
   EXPECT_FALSE(r.stopped_in_gate) << "门带内触发 STOP; max_skew = " << r.max_skew_deg << " deg";
   EXPECT_TRUE(r.reached) << "final_y = " << r.final_y;
 }
+// 窄口 lane: 门带内不许"边转边走" (ω 冻结到 lane_max_omega), 且能干净通过。
+// 起点故意给 8cm 横偏 + 4° 航向差 (比真机定位误差还大), 收敛必须在 lane 前的
+// 1m 里完成。
+TEST(Door075, NarrowLaneFreezesTurning)
+{
+  const DoorRun r = runDoor(straightPathY(4.0), Pose2D(0.08, 0.0, M_PI / 2.0 + 0.07));
+  EXPECT_FALSE(r.clipped) << "worst corner |x| = " << r.worst_corner_x;
+  EXPECT_FALSE(r.stopped_in_gate) << "门带内触发 STOP; max_skew = " << r.max_skew_deg << " deg";
+  EXPECT_TRUE(r.reached) << "final_y = " << r.final_y;
+  EXPECT_LT(r.max_omega_in_gate, 0.05)
+      << "门带内仍在转向 omega=" << r.max_omega_in_gate << " (lane 冻结失效)";
+}
+
 // 参数扫描用: 打印严苛起步 (4cm 横偏 + 2° 航向差) 下门带内的斜置/越界指标。
 // 由 DOOR_* 环境变量驱动, 只打印不断言 (供离线台秒级扫参)。
 TEST(Door075, PrintMetricsForSweep)

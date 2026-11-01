@@ -201,6 +201,14 @@ private:
     pnh_.param<double>("regulated_linear_scaling_min_speed", regulated_linear_scaling_min_speed_, 0.2);
     pnh_.param<double>("approach_velocity_scaling_dist", approach_velocity_scaling_dist_, 0.6);
     pnh_.param<double>("min_approach_linear_velocity", min_approach_linear_velocity_, 0.05);
+    // 门区直穿 (窄口 lane / door mode)
+    pnh_.param<bool>("door_lane_enabled", door_lane_enabled_, true);
+    pnh_.param<double>("lane_width", lane_width_, 0.95);
+    pnh_.param<double>("lane_engage_dist", lane_engage_dist_, 1.0);
+    pnh_.param<double>("lane_exit_dist", lane_exit_dist_, 0.4);
+    pnh_.param<double>("lane_max_speed", lane_max_speed_, 0.20);
+    pnh_.param<double>("lane_max_omega", lane_max_omega_, 0.03);
+    pnh_.param<double>("lane_freeze_max_heading", lane_freeze_max_heading_, 0.25);
     pnh_.param<double>("inflation_radius", inflation_radius_, 0.5);
     // nav2 inflation_layer: 膨胀代价 = 100*exp(-factor*(d - inscribed))。
     // 越小 -> 势场越宽越"温和", 规划器越愿意走通道中轴 (窄道推荐做法)。
@@ -882,6 +890,13 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.regulated_linear_scaling_min_speed = regulated_linear_scaling_min_speed_;
     cfg.approach_velocity_scaling_dist = approach_velocity_scaling_dist_;
     cfg.min_approach_linear_velocity = min_approach_linear_velocity_;
+    cfg.door_lane_enabled = door_lane_enabled_;
+    cfg.lane_width = lane_width_;
+    cfg.lane_engage_dist = lane_engage_dist_;
+    cfg.lane_exit_dist = lane_exit_dist_;
+    cfg.lane_max_speed = lane_max_speed_;
+    cfg.lane_max_omega = lane_max_omega_;
+    cfg.lane_freeze_max_heading = lane_freeze_max_heading_;
     cfg.max_lookahead_distance = max_lookahead_distance_;
     cfg.min_lookahead_distance = min_lookahead_distance_;
     cfg.max_linear_velocity = max_velocity_x_;
@@ -5528,6 +5543,13 @@ private:
   double regulated_linear_scaling_min_speed_ = 0.2;
   double approach_velocity_scaling_dist_ = 0.6;
   double min_approach_linear_velocity_ = 0.05;
+  bool door_lane_enabled_ = true;
+  double lane_width_ = 0.95;
+  double lane_engage_dist_ = 1.0;
+  double lane_exit_dist_ = 0.4;
+  double lane_max_speed_ = 0.20;
+  double lane_max_omega_ = 0.03;
+  double lane_freeze_max_heading_ = 0.25;
   double max_lookahead_distance_ = 0.9;
   double inflation_radius_ = 0.5;
   double inflation_cost_scaling_factor_ = 1.0;

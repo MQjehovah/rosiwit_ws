@@ -48,8 +48,12 @@ void RppController::setLocalCostmap(const core::CostmapGrid & grid)
               << " samples=" << fp_samples_.size() << std::endl;
   }
   auto next = std::make_shared<core::CostmapGrid>(grid);
-  std::lock_guard<std::mutex> lk(map_mu_);
-  costmap_ptr_ = std::move(next);
+  {
+    std::lock_guard<std::mutex> lk(map_mu_);
+    costmap_ptr_ = std::move(next);
+  }
+  // 新代价地图 -> 净宽可能变了, 重建车道标记
+  updateLaneProfile();
 }
 
 bool RppController::initialize(const core::ControllerConfig & config)
@@ -155,6 +159,94 @@ void RppController::setPath(const core::Path & path)
 {
   path_ = path;
   rebuild();
+  updateLaneProfile();
+}
+
+int RppController::laneZoneAt(size_t i) const
+{
+  if (!cfg_.door_lane_enabled || lane_zone_.size() != path_.points.size()) { return 0; }
+  return (i < lane_zone_.size()) ? static_cast<int>(lane_zone_[i]) : 0;
+}
+
+// 窄口车道标记: 沿路径每个点向左右打短射线, 量净宽; 净宽 < lane_width 视为窄口。
+//   1 = 窄口内   (冻结 ω, 限速)
+//   2 = 窄口前的收敛段 (只限速, 正常转向: 偏差必须在这里修完)
+void RppController::updateLaneProfile()
+{
+  lane_zone_.assign(path_.points.size(), 0);
+  if (!cfg_.door_lane_enabled || path_.points.size() < 3) { return; }
+  std::shared_ptr<const core::CostmapGrid> map;
+  {
+    std::lock_guard<std::mutex> lk(map_mu_);
+    map = costmap_ptr_;
+  }
+  if (!map || map->data.empty()) { return; }
+  const double res = map->info.resolution;
+  const int gw = static_cast<int>(map->info.width);
+  const int gh = static_cast<int>(map->info.height);
+  const double ox = map->info.origin.position.x;
+  const double oy = map->info.origin.position.y;
+  if (res <= 1e-6 || gw <= 0 || gh <= 0) { return; }
+
+  const size_t n = path_.points.size();
+  // 每个点的"单侧净宽" (m), 打不到墙就记为 lane_width (即"不窄")
+  std::vector<double> half_width(n, cfg_.lane_width);
+  const double max_ray = std::max(0.3, cfg_.lane_width);
+  for (size_t i = 0; i < n; ++i) {
+    const auto & p = path_.points[i].pose;
+    // 切线/法向
+    const size_t ia = (i == 0) ? 0 : i - 1;
+    const size_t ib = (i + 1 < n) ? i + 1 : i;
+    double tx = path_.points[ib].pose.x - path_.points[ia].pose.x;
+    double ty = path_.points[ib].pose.y - path_.points[ia].pose.y;
+    const double tn = std::hypot(tx, ty);
+    if (tn < 1e-6) { continue; }
+    tx /= tn;
+    ty /= tn;
+    double worst = cfg_.lane_width;
+    for (int side = -1; side <= 1; side += 2) {
+      for (double d = 0.05; d <= max_ray + 1e-9; d += 0.02) {
+        const double wx = p.x + side * d * (-ty);
+        const double wy = p.y + side * d * tx;
+        const int gx = static_cast<int>(std::floor((wx - ox) / res));
+        const int gy = static_cast<int>(std::floor((wy - oy) / res));
+        if (gx < 0 || gy < 0 || gx >= gw || gy >= gh) { break; }   // 窗口外: 不算窄
+        if (map->data[static_cast<size_t>(gy) * gw + gx] >= core::kCostLethal) {
+          worst = std::min(worst, d);
+          break;
+        }
+      }
+    }
+    half_width[i] = worst;
+  }
+
+  // 窄段 = 两侧净宽之和 < lane_width
+  std::vector<bool> narrow(n, false);
+  for (size_t i = 0; i < n; ++i) { narrow[i] = (2.0 * half_width[i]) < cfg_.lane_width; }
+
+  // 标记: 窄段本身 = 1; 窄段前 lane_engage_dist 内 = 2; 窄段后 lane_exit_dist 内 = 1
+  size_t i = 0;
+  while (i < n) {
+    if (!narrow[i]) { ++i; continue; }
+    size_t j = i;
+    while (j + 1 < n && narrow[j + 1]) { ++j; }
+    for (size_t k = i; k <= j; ++k) { lane_zone_[k] = 1; }
+    // 之后
+    double acc = 0.0;
+    for (size_t k = j + 1; k < n && acc < cfg_.lane_exit_dist; ++k) {
+      acc = std::hypot(path_.points[k].pose.x - path_.points[j].pose.x,
+                       path_.points[k].pose.y - path_.points[j].pose.y);
+      lane_zone_[k] = 1;
+    }
+    // 之前 (收敛段: 只限速)
+    acc = 0.0;
+    for (size_t k = i; k-- > 0 && acc < cfg_.lane_engage_dist;) {
+      acc = std::hypot(path_.points[k].pose.x - path_.points[i].pose.x,
+                       path_.points[k].pose.y - path_.points[i].pose.y);
+      if (lane_zone_[k] == 0) { lane_zone_[k] = 2; }
+    }
+    i = j + 1;
+  }
 }
 
 void RppController::rebuild()
@@ -324,6 +416,17 @@ core::VelocityCommand RppController::computeVelocityCommand(
   double v = std::max(last_v_ - max_ax_ * 0.1,
                       std::min(last_v_ + max_ax_ * 0.1, v_des));
 
+  // ---- 门区直穿 (窄口 lane) ----
+  // 窄口前 lane_engage_dist: 只限速 (偏差要在这里收敛完)
+  // 窄口内: 冻结横向修正 (|ω| <= lane_max_omega), 保持直穿
+  //   * 窄口里横向余量只有几厘米, 边转边走必然把车体斜置撑宽
+  //   * 高 ω 还会放大雷达点云与位姿的时间偏斜 (0.8rad/s * 120ms ≈ 5.5°),
+  //     在 0.6m 处把门框点"转"进门洞 7cm -> 幻影障碍 -> 停车
+  const int lane_zone = laneZoneAt(idx_);
+  if (lane_zone != 0 && cfg_.lane_max_speed > 0.0) {
+    v = std::min(v, std::max(cfg_.lane_max_speed, 0.05));
+  }
+
   if (cfg_.debug_probe) {
     static int probe_n = 0;
     if (++probe_n % 50 == 0) {
@@ -340,6 +443,13 @@ core::VelocityCommand RppController::computeVelocityCommand(
   const double w_des = std::max(-max_vw_, std::min(max_vw_, w_ff + 0.8 * e_y * v));
   double w = std::max(last_w_ - max_aw_ * 0.1,
                       std::min(last_w_ + max_aw_ * 0.1, w_des));
+
+  // 窄口内冻结横向修正 (航向已经基本正了才冻结; 本来就歪的必须先转正)
+  if (lane_zone == 1 && cfg_.lane_max_omega >= 0.0 &&
+      std::fabs(e_theta) < cfg_.lane_freeze_max_heading) {
+    const double wc = cfg_.lane_max_omega;
+    w = std::max(-wc, std::min(wc, w));
+  }
 
   // 碰撞检测调速 (nav2 use_collision_detection): 沿指令弧 max_allowed_time_to_collision
   // 内会撞到真实障碍就按"弧上可安全行程比例"减速。(v,w) 同时缩放 -> 曲率不变。

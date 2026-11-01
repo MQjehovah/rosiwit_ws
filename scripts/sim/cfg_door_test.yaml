@@ -261,3 +261,12 @@ safety_swept_geometry: false
 safety_stop_margin: 0.05
 
 rotate_to_heading_min_angle: 0.03
+
+door_lane_enabled: true
+lane_width: 0.95
+lane_engage_dist: 1.0
+lane_exit_dist: 0.4
+lane_max_speed: 0.20
+lane_max_omega: 0.03
+lane_freeze_max_heading: 0.25
+safety_turn_margin: 0.0

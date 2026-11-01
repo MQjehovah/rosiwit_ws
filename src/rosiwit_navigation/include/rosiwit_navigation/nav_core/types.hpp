@@ -110,7 +110,6 @@ struct ControllerConfig
   /// 外部路径跟踪时把稀疏 waypoint 插值到最大间距(m); 0=关闭.
   double path_resample_step = 0.08;
   // ---- 以下对齐 nav2_regulated_pure_pursuit_controller 的参数语义 ----
-  /// 前瞻用 v*lookahead_time 缩放 (否则用固定 lookahead_distance)
   bool use_velocity_scaled_lookahead_dist = true;
   double lookahead_time = 1.5;
   /// 航向差超过它且车没在走 -> 原地转到路径朝向。
@@ -132,6 +131,23 @@ struct ControllerConfig
   /// 末段调速 (nav2 approach_velocity_scaling_dist / min_approach_linear_velocity)
   double approach_velocity_scaling_dist = 0.6;
   double min_approach_linear_velocity = 0.05;
+  // ---- 门区直穿 (窄口 lane): 行业里的 "door mode" ----
+  // 窄口内可用横向余量只有几厘米, 而"边转边走"会把车体斜置撑宽扫掠区;
+  // 同时高角速度会让雷达点云与位姿的时间偏斜放大 (实测 ω=0.8rad/s + 120ms
+  // 时延 ≈ 5.5°, 在 0.6m 处把门框点"转"进门洞 7cm -> 幻影障碍 -> 停车)。
+  // 所以: 窄口前 lane_engage_dist 内先限速把偏差收敛掉, 窄口内冻结 ω 直穿。
+  bool door_lane_enabled = true;
+  /// 净宽低于它就算窄口 (m)
+  double lane_width = 0.95;
+  /// 窄口前方的收敛段长度 (m): 只限速, 允许转向
+  double lane_engage_dist = 1.0;
+  /// 窄口后继续直穿的长度 (m)
+  double lane_exit_dist = 0.4;
+  double lane_max_speed = 0.20;
+  /// 窄口内允许的角速度上限 (rad/s); 0 = 不冻结
+  double lane_max_omega = 0.03;
+  /// 航向差超过它就不冻结 (车本来就歪, 必须先转正)
+  double lane_freeze_max_heading = 0.25;
   bool allow_reverse = true;
   // MPPI tuning (ignored by other controllers).
   int mppi_horizon = 20;
