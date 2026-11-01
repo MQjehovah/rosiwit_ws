@@ -89,6 +89,8 @@ private:
   size_t max_samples_ = 80;
   double dt_ref_ = 0.3;
   double prune_distance_ = 0.3;
+  double last_v_ = 0.0;   // 单拍加速度限幅用
+  double last_w_ = 0.0;
 
   bool initialized_ = false;
   bool goal_reached_ = false;

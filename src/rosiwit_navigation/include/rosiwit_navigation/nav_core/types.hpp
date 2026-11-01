@@ -125,13 +125,13 @@ struct ControllerConfig
   double mppi_goal_weight = 1.5;
   // ---- TEB (定时弹性带) ----
   double teb_weight_path = 20.0;
-  double teb_weight_obstacle = 8.0;
+  double teb_weight_obstacle = 30.0;
   double teb_weight_kinematics = 6.0;
   double teb_weight_velocity = 4.0;
   double teb_weight_acceleration = 3.0;
   double teb_weight_time = 1.0;
   double teb_weight_shortest = 1.0;
-  double teb_min_obstacle_dist = 0.12;
+  double teb_min_obstacle_dist = 0.18;
   double teb_inflation_dist = 0.30;
   double teb_max_deviation = 0.60;
   int teb_homotopy_classes = 3;

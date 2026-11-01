@@ -443,9 +443,22 @@ VelocityCommand TebController::computeVelocityCommand(const Pose2D & pose,
   }
   const double ds = std::hypot(band[1].x - band[0].x, band[1].y - band[0].y);
   const double dt = std::max(0.05, band[0].dt);
-  double v = sign * std::min(max_vx_, ds / dt);
-  double w = std::min(max_vw_, std::max(-max_vw_,
-      normAngle(band[1].theta - band[0].theta) / dt));
+  double v_des = sign * std::min(max_vx_, ds / dt);
+  // 角速度用前两段加权平均, 避免单段 Δθ/dt 的跳变
+  double w_des = normAngle(band[1].theta - band[0].theta) / dt;
+  if (band.size() > 2) {
+    const double dt2 = std::max(0.05, band[1].dt);
+    const double w2 = normAngle(band[2].theta - band[1].theta) / dt2;
+    w_des = 0.65 * w_des + 0.35 * w2;
+  }
+  w_des = std::min(max_vw_, std::max(-max_vw_, w_des));
+  // 单拍加速度限幅 (与 rpp 一致): 控制器自己也不该一拍跳 0.3 m/s
+  const double dv_max = std::max(0.05, max_ax_) * 0.1;
+  const double dw_max = std::max(0.1, max_vw_) * 0.1;
+  double v = std::min(last_v_ + dv_max, std::max(last_v_ - dv_max, v_des));
+  double w = std::min(last_w_ + dw_max, std::max(last_w_ - dw_max, w_des));
+  last_v_ = v;
+  last_w_ = w;
 
   std::ostringstream os;
   os << "infeasible=0,classes=" << candidates_.size() << ",best=" << best
@@ -476,6 +489,8 @@ void TebController::reset()
   best_candidate_ = 0;
   goal_reached_ = false;
   last_pose_ = Pose2D();
+  last_v_ = 0.0;
+  last_w_ = 0.0;
 }
 
 std::string TebController::getName() const { return name_; }
