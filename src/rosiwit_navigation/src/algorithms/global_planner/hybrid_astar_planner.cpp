@@ -107,6 +107,13 @@ void HybridAStarPlanner::setInflationRadius(double radius_meters)
     buildInflationField();
 }
 
+void HybridAStarPlanner::setCostScalingFactor(double factor)
+{
+  cost_scaling_factor_ = factor;
+  if (costmap_ && costmap_data_.size() == static_cast<size_t>(nx_) * ny_)
+    buildInflationField();
+}
+
 void HybridAStarPlanner::setRobotFootprint(const core::Footprint & footprint)
 {
   footprint_ = footprint;
@@ -146,12 +153,26 @@ void HybridAStarPlanner::buildInflationField()
   }
   if (inflation_radius_ <= 0.0) return;   // 只建距离场 (外接圆快速接受用)
 
+  // 膨胀代价: 对齐 nav2_cm2d inflation_layer.
+  //   d < inscribed          -> 100 (贴死)
+  //   d >= inscribed         -> 100*exp(-cost_scaling_factor*(d - inscribed))
+  //   d > inflation_radius   -> 0
+  // 旧的线性 1-d/r 在通道中段的梯度是常数, 规划器没有明显理由走中轴;
+  // 指数势场在贴近障碍处涨得极快, 规划器就会主动挑"离两边都远"的位置。
   for (size_t i = 0; i < n; ++i) {
-    if (dist[i] >= radius_cells) continue;
-    const double ratio = 1.0 - static_cast<double>(dist[i]) /
-                               static_cast<double>(radius_cells);
+    const double d_m = static_cast<double>(dist[i]) * resolution_;
+    if (d_m > inflation_radius_) continue;
+    double cost = 0.0;
+    if (d_m <= inscribed_radius_) {
+      cost = 100.0;
+    } else if (cost_scaling_factor_ > 0.0) {
+      cost = 100.0 * std::exp(-cost_scaling_factor_ * (d_m - inscribed_radius_));
+    } else {
+      // 退回旧的线性势场 (兼容老配置)
+      cost = 100.0 * (1.0 - d_m / std::max(1e-6, inflation_radius_));
+    }
     inflation_field_[i] = static_cast<int8_t>(
-      std::max(0.0, std::min(100.0, ratio * 100.0)));
+      std::max(0.0, std::min(100.0, std::round(cost))));
   }
 }
 

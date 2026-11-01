@@ -202,6 +202,9 @@ private:
     pnh_.param<double>("approach_velocity_scaling_dist", approach_velocity_scaling_dist_, 0.6);
     pnh_.param<double>("min_approach_linear_velocity", min_approach_linear_velocity_, 0.05);
     pnh_.param<double>("inflation_radius", inflation_radius_, 0.5);
+    // nav2 inflation_layer: 膨胀代价 = 100*exp(-factor*(d - inscribed))。
+    // 越小 -> 势场越宽越"温和", 规划器越愿意走通道中轴 (窄道推荐做法)。
+    pnh_.param<double>("inflation_cost_scaling_factor", inflation_cost_scaling_factor_, 1.0);
     pnh_.param<double>("robot_radius", robot_radius_, 0.21);
     pnh_.param<int>("planner_max_iterations", planner_max_iterations_, 200000);
     pnh_.param<double>("planner_timeout", planner_timeout_, 2.0);
@@ -719,6 +722,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       async_planner_->initialize(acfg);
       async_planner_->setInflationRadius(inflation_radius_);
       async_planner_->setRobotRadius(robot_radius_);
+      // nav2 inflation_layer 语义: 内切半径内视为贴死, 外面按指数衰减 (温和势场)
+      async_planner_->setInscribedRadius(robot_radius_);
+      async_planner_->setCostScalingFactor(inflation_cost_scaling_factor_);
       if (async_planner_->supportsFootprint() && !configured_footprint_.empty()) {
         async_planner_->setRobotFootprint(planner_footprint_);
       }
@@ -5521,6 +5527,7 @@ private:
   double min_approach_linear_velocity_ = 0.05;
   double max_lookahead_distance_ = 0.9;
   double inflation_radius_ = 0.5;
+  double inflation_cost_scaling_factor_ = 1.0;
   double robot_radius_ = 0.21;
   int planner_max_iterations_ = 200000;
   double planner_heuristic_weight_ = 2.0;

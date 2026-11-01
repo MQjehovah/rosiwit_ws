@@ -20,6 +20,9 @@ public:
   virtual void setCostmap(const Costmap & costmap) = 0;
   virtual void setInflationRadius(double /*radius_meters*/) {}  // optional
   virtual void setRobotRadius(double /*radius*/) {}
+  /// nav2 inflation_layer: 膨胀代价 = 100*exp(-factor*(d - inscribed))
+  virtual void setCostScalingFactor(double /*factor*/) {}
+  virtual void setInscribedRadius(double /*radius*/) {}
   /// 朝向感知的规划器 (Hybrid A*) 使用真实车体轮廓; 栅格 A* 无法使用,
   /// 默认忽略并由 supportsFootprint() 明确声明.
   virtual void setRobotFootprint(const Footprint & /*footprint*/) {}

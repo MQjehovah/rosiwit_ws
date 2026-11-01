@@ -16,6 +16,7 @@
 #include <memory>
 #include <vector>
 
+#include "rosiwit_navigation/nav_core/navigation_factory.hpp"
 #include "rosiwit_navigation/nav_core/rpp_controller.hpp"
 #include "rosiwit_navigation/nav_core/safety_monitor.hpp"
 #include "rosiwit_navigation/nav_core/types.hpp"
