@@ -260,4 +260,4 @@ safety_swept_geometry: false
 
 safety_stop_margin: 0.05
 
-rotate_to_heading_min_angle: 0.10
+rotate_to_heading_min_angle: 0.03
