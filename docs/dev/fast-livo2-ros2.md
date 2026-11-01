@@ -281,12 +281,12 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
 |---|---|---|---|
 | LiDAR 帧 | **1814 / 1814**（无丢帧） | 1814 | 1814 |
 | 输出位姿 | **1810** | 1811 | 1809 |
-| **ATE (SE3) RMSE** | **0.246 m** | 0.237 m | 0.257 m |
-| mean / max | 0.227 / 0.598 m | 0.221 / 0.547 m | 0.244 / 0.463 m |
-| 轨迹长度 | 146.1 m | 142.9 m | 137.2 m |
-| 地图 | 25.30 M 原始点 → **4.51 M**（0.1 m 体素，PCD 69 MB） | – | – |
+| **ATE (SE3) RMSE** | **0.242 m** | 0.237 m | 0.257 m |
+| mean / max | 0.224 / 0.629 m | 0.221 / 0.547 m | 0.244 / 0.463 m |
+| 轨迹长度 | 146.7 m | 142.9 m | 137.2 m |
+| 地图 | 22.75 M 原始点 → **4.21 M**（0.1 m 体素，PCD 65 MB） | – | – |
 
-节点管线与本机离线回放差 0.009 m（< 4%），误差来自消息到达顺序/丢帧差异，
+节点管线与本机离线回放差 0.005 m（< 3%），误差来自消息到达顺序/丢帧差异，
 **可以认为两条路径等价**。
 
 ![compare](../artifacts/fastlivo2_node_ntu_eee03/compare_node_vs_replay.png)
@@ -297,7 +297,7 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
 
 结果文件：`docs/artifacts/fastlivo2_node_ntu_eee03/`
 （`trajectory_eee03.txt`、`metrics.txt`、`map_3d.png`、`map_top.png`、
-`compare_node_vs_replay.png`、`node_tail.txt`）。PCD 69 MB 不入库。
+`compare_node_vs_replay.png`、`node_tail.txt`）。PCD 65 MB 不入库。
 
 #### 调试过程中修掉的 4 个问题（都会“看起来像算法坏了”）
 
@@ -312,7 +312,7 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
    后 **1814/1814 全收到**（代价是播放会被反压拖慢）。
 3. **`pcl::VoxelGrid` 把地图“降”成 3893 点**：int32 网格索引在
    `(extent/leaf)^3` 溢出时会让结果几乎全丢（不是文档里说的“返回原始点云”）。
-   换成 int64 key 的 `voxelDownsampleInt64()`（21 bit/轴）后 25.30 M → 4.51 M 正常。
+   换成 int64 key 的 `voxelDownsampleInt64()`（21 bit/轴）后 22.75 M → 4.21 M 正常。
 4. **`ros2 launch` 不转发 SIGINT**：`kill -INT <launch pid>` 时节点收不到信号，
    一直挂着不存图。节点现在自己接管 SIGINT/SIGTERM，检测到后
    「停止收帧 → 排空队列 → 存 PCD → 退出」；外部脚本应直接给
@@ -321,7 +321,7 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
 #### 性能说明
 
 整段 181 s 的包，节点处理约 **6–7 帧/s**（LIO+VIO 单帧 15–30 ms，但长序列上
-体素/稀疏地图持续增大，单帧耗时随帧数上升），所以 1814 帧用了 ~290 s。
+体素/稀疏地图持续增大，单帧耗时随帧数上升），所以 1814 帧用了 ~240 s。
 实时 10 Hz 跑长序列需要开 `map_sliding` 或做地图裁剪，这属于后续优化项；
 本次验证以「不丢帧、结果与离线回放一致」为准。
 

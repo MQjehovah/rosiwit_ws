@@ -1,12 +1,12 @@
-[livo_node-1] [INFO] [1793502953.542895325] [fast_livo2]: processed 200/200 lidar in 34.6 s (172.9 ms/fr); core 12.7 ms, pub 0.4 ms, cpu 74.9%, qmax 0
-[livo_node-1] [INFO] [1793502974.181983090] [fast_livo2]: processed 400/406 lidar in 55.2 s (138.0 ms/fr); core 34.1 ms, pub 0.8 ms, cpu 103.1%, qmax 6
-[livo_node-1] [INFO] [1793502998.197069988] [fast_livo2]: processed 600/640 lidar in 78.5 s (130.9 ms/fr); core 115.5 ms, pub 1.0 ms, cpu 131.2%, qmax 38
-[livo_node-1] [INFO] [1793503027.937699384] [fast_livo2]: processed 800/937 lidar in 108.3 s (135.3 ms/fr); core 147.0 ms, pub 1.6 ms, cpu 150.9%, qmax 136
-[livo_node-1] [INFO] [1793503057.515800009] [fast_livo2]: processed 1000/1233 lidar in 137.9 s (137.9 ms/fr); core 145.3 ms, pub 2.4 ms, cpu 161.8%, qmax 231
-[livo_node-1] [INFO] [1793503094.370987903] [fast_livo2]: processed 1200/1594 lidar in 174.0 s (145.0 ms/fr); core 179.6 ms, pub 0.9 ms, cpu 169.8%, qmax 392
-[livo_node-1] [INFO] [1793503134.537092041] [fast_livo2]: processed 1400/1814 lidar in 213.5 s (152.5 ms/fr); core 196.3 ms, pub 1.0 ms, cpu 175.1%, qmax 504
-[livo_node-1] [INFO] [1793503173.509649981] [fast_livo2]: processed 1600/1814 lidar in 251.5 s (157.2 ms/fr); core 189.5 ms, pub 0.8 ms, cpu 176.7%, qmax 413
-[livo_node-1] [INFO] [1793503205.972921981] [fast_livo2]: processed 1800/1814 lidar in 283.3 s (157.4 ms/fr); core 153.9 ms, pub 5.0 ms, cpu 178.0%, qmax 213
-[livo_node-1] [fast_livo2] map accumulate: rgb_frames=355 gray_frames=1455 empty_frames=0 raw_points=25296254
-[livo_node-1] [fast_livo2] voxel 0.1 m: 25296254 -> 4509824 points (int64 grid)
-[livo_node-1] [fast_livo2] map saved: /home/jmq/livo_test/node/node_map.pcd raw=25296254 points=4509824
+[livo_node-1] [INFO] [1793504084.322335312] [fast_livo2]: processed 200/200 lidar in 32.9 s (164.3 ms/fr); core 9.0 ms, pub 0.3 ms, cpu 56.0%, qmax 0
+[livo_node-1] [INFO] [1793504104.404490801] [fast_livo2]: processed 400/400 lidar in 52.9 s (132.4 ms/fr); core 10.0 ms, pub 0.3 ms, cpu 74.4%, qmax 0
+[livo_node-1] [INFO] [1793504125.878325650] [fast_livo2]: processed 600/604 lidar in 73.3 s (122.2 ms/fr); core 29.6 ms, pub 0.6 ms, cpu 108.2%, qmax 3
+[livo_node-1] [INFO] [1793504151.045316865] [fast_livo2]: processed 800/844 lidar in 97.3 s (121.6 ms/fr); core 118.6 ms, pub 1.1 ms, cpu 131.8%, qmax 43
+[livo_node-1] [INFO] [1793504175.609839140] [fast_livo2]: processed 1000/1089 lidar in 121.8 s (121.8 ms/fr); core 121.1 ms, pub 1.6 ms, cpu 146.8%, qmax 88
+[livo_node-1] [INFO] [1793504203.455780815] [fast_livo2]: processed 1200/1356 lidar in 148.5 s (123.8 ms/fr); core 132.7 ms, pub 0.8 ms, cpu 157.3%, qmax 155
+[livo_node-1] [INFO] [1793504232.626651409] [fast_livo2]: processed 1400/1637 lidar in 176.6 s (126.1 ms/fr); core 139.2 ms, pub 0.8 ms, cpu 164.9%, qmax 235
+[livo_node-1] [INFO] [1793504266.831229571] [fast_livo2]: processed 1600/1814 lidar in 209.6 s (131.0 ms/fr); core 161.8 ms, pub 3.3 ms, cpu 170.1%, qmax 310
+[livo_node-1] [INFO] [1793504295.180561226] [fast_livo2]: processed 1800/1814 lidar in 236.7 s (131.5 ms/fr); core 135.0 ms, pub 0.8 ms, cpu 173.0%, qmax 213
+[livo_node-1] [fast_livo2] map accumulate: rgb_frames=564 gray_frames=1246 empty_frames=0 raw_points=22747062
+[livo_node-1] [fast_livo2] voxel 0.1 m: 22747062 -> 4211931 points (int64 grid)
+[livo_node-1] [fast_livo2] map saved: /home/jmq/livo_test/node/node_map.pcd raw=22747062 points=4211931
