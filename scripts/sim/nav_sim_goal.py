@@ -328,6 +328,13 @@ def main():
                 or (gs and gs.startswith('STOPPED'))):
             status = gs
             break
+        # FAILED_POSE = 启动瞬态(SLAM/TF 还没起来), 等 2s 重发一次再判失败
+        if (not resent and gs == 'FAILED_POSE' and time.time() - t0 > 62):
+            rospy.logwarn('FAILED_POSE (pose not ready), resending once')
+            msg.header.stamp = rospy.Time.now()
+            run.goal_pub.publish(msg)
+            resent = True
+            continue
         # 单次发布(RViz/App 语义); 若 ACCEPTED 但一直 IDLE, 补发一次
         if (not resent and gs == 'ACCEPTED' and st == 'IDLE'
                 and time.time() - t0 > 66):
