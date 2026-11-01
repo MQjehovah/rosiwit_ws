@@ -118,4 +118,11 @@ if(CATKIN_ENABLE_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include)
         target_link_libraries(test_velocity_shaper rosiwit_navigation)
     endif()
+    # 定位退化 -> 限速的判定: matching==0(建图)不能被当成退化
+    catkin_add_gtest(test_localization_health ${CORE_TEST_DIR}/test_localization_health.cpp)
+    if(TARGET test_localization_health)
+        target_include_directories(test_localization_health PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_navigation/include)
+        target_link_libraries(test_localization_health rosiwit_navigation)
+    endif()
 endif()
