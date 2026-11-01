@@ -410,6 +410,38 @@ TEST(SafetyMonitor, SweptSlowdownZoneSlowsBeforeStop)
   EXPECT_EQ(stop.state, "STOP");
 }
 
+
+TEST(SafetyMonitor, SlowdownKeepsMinimumSpeed)
+{
+  // 减速比 0.1 会把 0.6 m/s 压到 0.06 -> 低于下限, 应抬到 slowdown_min_speed
+  SafetyMonitorConfig cfg;
+  cfg.enabled = true;
+  cfg.dynamic_geometry = true;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.stop_margin = 0.05;
+  cfg.side_margin = 0.03;
+  cfg.footprint = {{-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}};
+  cfg.stop_max_points = 2;
+  cfg.slowdown_max_points = 2;
+  cfg.slowdown_ratio = 0.1;
+  cfg.slowdown_min_speed = 0.15;
+  cfg.slowdown_lookahead = 0.8;
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_release_frames = 1;
+  cfg.slowdown_trigger_frames = 1;
+  cfg.slowdown_release_frames = 1;
+  cfg.approach_enabled = false;
+
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  // v=0.6: stop 扫掠到 1.12m, slow 扫掠到 1.60m -> 1.30m 只落在减速区
+  const std::vector<Point> pts{{1.30, 0.0}, {1.31, 0.05}, {1.29, -0.05}};
+  const auto r = monitor.filter(VelocityCommand(0.6, 0.0, 0.0), pts);
+  EXPECT_NE(r.state, "STOP");
+  EXPECT_GE(std::fabs(r.command.linear_x), 0.15 - 1e-6);
+}
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

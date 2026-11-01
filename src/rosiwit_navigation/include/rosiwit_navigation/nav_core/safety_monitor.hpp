@@ -31,6 +31,8 @@ struct SafetyMonitorConfig
   std::vector<std::pair<double, double>> slowdown_polygon;
   int slowdown_max_points = 2;
   double slowdown_ratio = 0.35;
+  /// 减速档线速度下限 (m/s): 压太狠会让 v*e_y 横向修正消失 -> 漂移
+  double slowdown_min_speed = 0.15;
   bool approach_enabled = true;
   double time_before_collision = 2.0;
   double simulation_time_step = 0.1;

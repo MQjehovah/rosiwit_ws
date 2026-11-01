@@ -371,6 +371,13 @@ SafetyResult SafetyMonitor::filter(
   }
   last_scale_ = scale;
 
+  // 减速档不要把线速度压死: 控制器靠 v*e_y 做横向修正, v 太小只剩漂移
+  if (scale > 0.0 && scale < 1.0 && config_.slowdown_min_speed > 0.0) {
+    const double v_abs = std::fabs(cmd.linear_x);
+    if (v_abs > 1e-3) {
+      scale = std::max(scale, std::min(1.0, config_.slowdown_min_speed / v_abs));
+    }
+  }
   result.command.linear_x = cmd.linear_x * scale;
   result.command.lateral_y = cmd.lateral_y * scale;
   result.command.angular_z = cmd.angular_z * scale;
