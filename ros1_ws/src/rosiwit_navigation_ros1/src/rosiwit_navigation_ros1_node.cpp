@@ -65,6 +65,7 @@
 #include "rosiwit_navigation/nav_core/action_task.hpp"
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 #include "rosiwit_navigation/nav_core/footprint.hpp"
+#include "rosiwit_navigation/nav_core/localization_health.hpp"
 #include <xzrobot_ros_dependency/SlamInfo.h>
 #include <xzrobot_ros_dependency/LocalizationState.h>
 #include <xzrobot_ros_dependency/VirtualObstacles.h>
@@ -264,6 +265,7 @@ private:
     pnh_.param<double>("safety_slowdown_ratio", safety_slowdown_ratio_, 0.5);
     pnh_.param<bool>("safety_approach_enabled", safety_approach_enabled_, true);
     pnh_.param<double>("safety_time_before_collision", safety_time_before_collision_, 2.0);
+    pnh_.param<bool>("controller_debug_probe", controller_debug_probe_, false);
     // 滞回 (nav2 trigger/release_consecutive_points): 连续 N 帧才进入/释放,
     // 单帧噪声不会再让 stop/slow 来回跳.
     // 原地转安全半径 = max|footprint 顶点| + 该余量. 0 = 退回矩形旋转区.
@@ -850,6 +852,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.footprint_sample_spacing = footprint_sample_spacing_;
     cfg.path_resample_step = path_resample_step_;
     cfg.allow_reverse = allow_reverse;
+    cfg.debug_probe = controller_debug_probe_;
     applyMppiParams(cfg);
     out->initialize(cfg);
     out->setVelocityLimit(max_velocity_x_, max_velocity_theta_);
@@ -2984,6 +2987,9 @@ private:
        << "\",\"goal_status\":\"" << goal_status_
        << "\",\"safety\":\"" << last_safety_state_
        << "\",\"safety_scale\":" << last_safety_scale_
+       // health_scale: 定位退化时的速度缩放 (1.0 = 未降速). 现场"为什么慢"
+       // 先看这两个数: safety_scale(安全层) 与 health_scale(定位质量)
+       << ",\"health_scale\":" << slamHealthScale()
        << ",\"replan_count\":" << replan_count_
        << ",\"replan_fail\":" << replan_fail_count_
        << ",\"plan_ms\":" << last_plan_ms_
@@ -4656,11 +4662,12 @@ private:
 
   double slamHealthScale() const
   {
-    if (last_slam_info_stamp_.isZero() ||
-        (ros::Time::now() - last_slam_info_stamp_).toSec() > slam_info_timeout_) {
-      return 1.0;   // 没有健康信息时不额外限速 (兼容未接 SLAM 的部署)
-    }
-    return last_slam_matching_ < slam_degrade_matching_ ? slam_degrade_scale_ : 1.0;
+    const bool fresh = !last_slam_info_stamp_.isZero() &&
+      (ros::Time::now() - last_slam_info_stamp_).toSec() <= slam_info_timeout_;
+    // matching<=0 = 建图 / SLAM 没给分数: 不算退化, 不能因此把整条指令乘 0.5
+    // (2026-11-01 仿真: 10m 走廊 v 0.8->0.4, 42s->31s; 见 core/localization_health.hpp)
+    return core::localizationSpeedScale(fresh, last_slam_matching_,
+                                        slam_degrade_matching_, slam_degrade_scale_);
   }
 
   // 旋转段执行器: Hybrid A* 前进-only 模式用"原地旋转基元"掉头/对正, 路径点
@@ -5369,6 +5376,8 @@ private:
   double safety_slowdown_ratio_ = 0.5;
   bool safety_approach_enabled_ = true;
   double safety_time_before_collision_ = 2.0;
+  /// 控制器内部调试打印 ([RPPProbe]/[RPPClr]) 开关, 默认关.
+  bool controller_debug_probe_ = false;
   core::SafetyMonitor safety_monitor_;
   core::ObstacleTracker tracker_;
   core::VoxelLayer voxel_layer_;

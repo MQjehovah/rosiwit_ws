@@ -254,6 +254,7 @@ def main():
                 'FAILED_TF', 'STOPPED', 'STOPPED_ODOM', 'CANCELED')
     seen_states = []
     safety_min = 1.0
+    health_min = 1.0
     replan_fail_max = 0
     replan_count_max = 0
     plan_ms_max = -1.0
@@ -276,6 +277,10 @@ def main():
                 run.track_errs.append(_e)
         try:
             safety_min = min(safety_min, float(d.get('safety_scale', 1.0)))
+        except (TypeError, ValueError):
+            pass
+        try:
+            health_min = min(health_min, float(d.get('health_scale', 1.0)))
         except (TypeError, ValueError):
             pass
         replan_fail_max = max(replan_fail_max, int(d.get('replan_fail', 0)))
@@ -327,6 +332,7 @@ def main():
         'local_map_hz': round(lm_hz, 2),
         'global_costmap_hz': round(gc_hz, 2),
         'safety_scale_min': round(safety_min, 3),
+        'health_scale_min': round(health_min, 3),
         'replan_count': replan_count_max,
         'replan_fail': replan_fail_max,
         'plan_ms_max': round(plan_ms_max, 1),

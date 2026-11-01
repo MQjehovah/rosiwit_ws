@@ -123,6 +123,9 @@ struct ControllerConfig
   double mppi_control_weight = 0.03;
   double mppi_speed_weight = 2.0;
   double mppi_goal_weight = 1.5;
+  /// 控制器内部周期性调试输出 ([RPPProbe]/[RPPClr] 等). 默认关:
+  /// 以前这两处 std::cout 常驻, 每 ~5s 往控制线程的 stdout 写一次, 仿真日志上百 MB.
+  bool debug_probe = false;
 };
 
 struct CostmapGridInfo

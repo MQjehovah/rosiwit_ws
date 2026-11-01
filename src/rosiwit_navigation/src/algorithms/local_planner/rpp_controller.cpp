@@ -298,7 +298,7 @@ core::VelocityCommand RppController::computeVelocityCommand(
   {
     // [RPPProbe] 倒车段为什么不倒车: 打印方向标记/索引/航向误差/速度
     static int probe_n = 0;
-    if (++probe_n % 50 == 0) {   // 10Hz 控制下约 0.2Hz
+    if (cfg_.debug_probe && ++probe_n % 50 == 0) {   // 10Hz 控制下约 0.2Hz
       std::cout << "[RPPProbe] pts=" << path_.points.size()
                 << " idx=" << idx_ << " dir=" << dir
                 << " vx=" << path_.points[idx_].velocity_x
@@ -322,7 +322,7 @@ core::VelocityCommand RppController::computeVelocityCommand(
   // 而且"减速"并不能解决切内角 (那是前视点几何问题), 所以这里只保留度量,
   // 供现场判断门洞段的切角程度: [RPPClr] scale 越小说明指令弧越贴障碍。
   const double clr = arcClearanceScale(pose, v, w);
-  if (clr < 1.0) {
+  if (cfg_.debug_probe && clr < 1.0) {
     const int n = ++clr_probe_;
     if (n <= 5 || n % 20 == 0) {
       std::cout << "[RPPClr] arc tight: n=" << n << " scale=" << clr
