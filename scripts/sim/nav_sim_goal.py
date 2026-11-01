@@ -321,7 +321,11 @@ def main():
         replan_fail_max = max(replan_fail_max, int(d.get('replan_fail', 0)))
         replan_count_max = max(replan_count_max, int(d.get('replan_count', 0)))
         plan_ms_max = max(plan_ms_max, float(d.get('plan_ms', -1)))
-        if gs in terminal:
+        # 终态判定用前缀: FAILED_* / STOPPED_* 都是终态
+        # (之前穷举列表漏了 FAILED_RECOVERY, 导致 harness 白等 210s)
+        if (gs == 'SUCCEEDED' or gs == 'CANCELED'
+                or (gs and gs.startswith('FAILED'))
+                or (gs and gs.startswith('STOPPED'))):
             status = gs
             break
         # 单次发布(RViz/App 语义); 若 ACCEPTED 但一直 IDLE, 补发一次
