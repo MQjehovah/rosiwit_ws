@@ -29,7 +29,7 @@ scene_args() {
     house_short) echo "--goal 1.0,2.0" ;;
     house_long)  echo "--band 5,7" ;;
     corridor)    echo "--world $WORLD_DIR/large.world --spawn -18,-18,1.57 --band 8,12" ;;
-    doorway)     echo "--world $WORLD_DIR/doorway.world --goal 0.0,6.0" ;;
+    doorway)     echo "--world $WORLD_DIR/doorway.world --goal 0.0,4.5" ;;
     blocked)     echo "--goal 1.0,2.0" ;;
     *) echo "" ;;
   esac
