@@ -1,0 +1,27 @@
+dataset:            NTU VIRAL eee_03 (ROS2 bag, 181.3 s)
+pipeline:           ros2 launch rosiwit_slam_ros2 fast_livo2.launch.py (livo_node)
+frontend:           core FastLivo2Frontend (LivoMapper), fetched by a dedicated worker thread
+lidar_frames:       1814 / 1814 received and processed (reliable QoS, no drops)
+imu_messages:       70475
+image_messages:     1813 (mono8 752x480 -> grayscale map)
+poses:              1810
+ate_se3_rmse:       0.246 m
+ate_se3_mean:       0.227 m
+ate_se3_max:        0.598 m
+ate_matched_poses:  1507
+traj_length_est:    146.1 m
+traj_length_gt:     127.8 m
+
+map:
+  accumulate_frames: rgb=355  gray=1455
+  raw_points:        25296254
+  voxel_0.1m:        4509824
+  pcd_size:          69 MB (not committed; regenerate with output_pcd:=...)
+
+wall_clock:
+  bag_play:          185 s
+  drain_and_save:    289 s total (node processes ~6-7 lidar frames/s)
+
+# reference (same bag, same core algorithm)
+livo_replay_ate_se3_rmse: 0.237 m
+standalone_pkg_ate_se3_rmse: 0.257 m

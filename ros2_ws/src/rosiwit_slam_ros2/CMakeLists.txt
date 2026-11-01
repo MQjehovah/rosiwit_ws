@@ -71,6 +71,18 @@ ament_target_dependencies(livo_replay
 target_link_libraries(livo_replay rosiwit_slam)
 install(TARGETS livo_replay DESTINATION lib/${PROJECT_NAME})
 
+# ==================== FAST-LIVO2 专用管线 (播包出图) ====================
+add_executable(livo_node
+    src/livo_node.cpp
+    src/ros_interface/ros_utils.cpp)
+target_include_directories(livo_node PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(livo_node PRIVATE BOOST_ALL_NO_LIB)
+ament_target_dependencies(livo_node
+    rclcpp sensor_msgs nav_msgs geometry_msgs std_msgs pcl_conversions)
+target_link_libraries(livo_node rosiwit_slam)
+target_link_options(livo_node PRIVATE -rdynamic)
+install(TARGETS livo_node DESTINATION lib/${PROJECT_NAME})
+
 # ==================== 安装 ====================
 install(TARGETS ${NODE_NAME} DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)

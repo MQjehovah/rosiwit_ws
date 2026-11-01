@@ -256,6 +256,75 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
 结果文件：`docs/artifacts/fastlivo2_core_ntu_eee03/`
 （`trajectory_eee03.txt`、`metrics.txt`、`traj_vs_gt.png`、`compare_core_vs_standalone.png`）。
 
+### 6.6 节点管线版 `livo_node`（播包出图，正式管线）
+
+`ros2_ws/src/rosiwit_slam_ros2` 新增专用管线 `livo_node`：直接驱动核心
+`FastLivo2Frontend`，自建 worker 线程消费队列，绕开通用 `SlamPipeline` 的
+`mapTimerCB`/定时器路径。
+
+```bash
+ros2 launch rosiwit_slam_ros2 fast_livo2.launch.py \
+  config_path:=<install>/share/rosiwit_slam_ros2/config/fast_livo2_ntu.yaml \
+  output_pcd:=$HOME/livo_test/node_map.pcd use_rviz:=false use_sim_time:=true
+
+# 另一个终端
+ros2 bag play /path/to/eee_03_ros2 --clock
+```
+
+话题：`/lio_odom`（10 Hz）、`/lio_path`（1 Hz）、`/body_cloud`、`/world_cloud`
+（1 Hz）、`/world_cloud_rgb`（5 Hz）、`/cloud_map`（1 Hz）。收到 SIGINT 后
+**先排空队列再存图**，最后写 `output_pcd`。
+
+NTU VIRAL `eee_03`（整段 181 s）结果：
+
+| 指标 | 节点管线 `livo_node` | 离线回放 `livo_replay` | 独立包 |
+|---|---|---|---|
+| LiDAR 帧 | **1814 / 1814**（无丢帧） | 1814 | 1814 |
+| 输出位姿 | **1810** | 1811 | 1809 |
+| **ATE (SE3) RMSE** | **0.246 m** | 0.237 m | 0.257 m |
+| mean / max | 0.227 / 0.598 m | 0.221 / 0.547 m | 0.244 / 0.463 m |
+| 轨迹长度 | 146.1 m | 142.9 m | 137.2 m |
+| 地图 | 25.30 M 原始点 → **4.51 M**（0.1 m 体素，PCD 69 MB） | – | – |
+
+节点管线与本机离线回放差 0.009 m（< 4%），误差来自消息到达顺序/丢帧差异，
+**可以认为两条路径等价**。
+
+![compare](../artifacts/fastlivo2_node_ntu_eee03/compare_node_vs_replay.png)
+
+建图结果（高度着色；`eee_03` 相机是 **mono8**，所以没有真彩色，只有灰度/高度色）：
+
+![map3d](../artifacts/fastlivo2_node_ntu_eee03/map_3d.png)
+
+结果文件：`docs/artifacts/fastlivo2_node_ntu_eee03/`
+（`trajectory_eee03.txt`、`metrics.txt`、`map_3d.png`、`map_top.png`、
+`compare_node_vs_replay.png`、`node_tail.txt`）。PCD 69 MB 不入库。
+
+#### 调试过程中修掉的 4 个问题（都会“看起来像算法坏了”）
+
+1. **单目相机导致 SIGSEGV**：`VIOManager::getInterpolatedPixel()` 按 3 通道
+   `img.data + (v*width+u)*3` 取值，`eee_03` 的 `/left/image_raw` 是 `mono8`，
+   直接越界读 → 段错误（栈：`buildOutputs → getInterpolatedPixel`）。
+   核心 `LivoMapper::buildOutputs()` 改为先把图统一成 3 通道（灰度图复制成 BGR），
+   并自己做边界裁剪 + 双线性插值的 `cv::Vec3b` 访问。
+2. **`best_effort` 订阅静默丢 1/3 点云**：节点原来用
+   `QoS(KeepLast(2000)).best_effort()`，实测 1814 帧只收到 ~1170 帧
+   （`ros2 topic hz` 空跑也只有 5.4 Hz）。改成 `QoS(KeepLast(500)).reliable()`
+   后 **1814/1814 全收到**（代价是播放会被反压拖慢）。
+3. **`pcl::VoxelGrid` 把地图“降”成 3893 点**：int32 网格索引在
+   `(extent/leaf)^3` 溢出时会让结果几乎全丢（不是文档里说的“返回原始点云”）。
+   换成 int64 key 的 `voxelDownsampleInt64()`（21 bit/轴）后 25.30 M → 4.51 M 正常。
+4. **`ros2 launch` 不转发 SIGINT**：`kill -INT <launch pid>` 时节点收不到信号，
+   一直挂着不存图。节点现在自己接管 SIGINT/SIGTERM，检测到后
+   「停止收帧 → 排空队列 → 存 PCD → 退出」；外部脚本应直接给
+   `lib/rosiwit_slam_ros2/livo_node` 进程发信号。
+
+#### 性能说明
+
+整段 181 s 的包，节点处理约 **6–7 帧/s**（LIO+VIO 单帧 15–30 ms，但长序列上
+体素/稀疏地图持续增大，单帧耗时随帧数上升），所以 1814 帧用了 ~290 s。
+实时 10 Hz 跑长序列需要开 `map_sliding` 或做地图裁剪，这属于后续优化项；
+本次验证以「不丢帧、结果与离线回放一致」为准。
+
 ## 7. 复现步骤（NTU VIRAL）
 
 ```bash
