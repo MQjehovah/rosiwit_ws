@@ -217,6 +217,15 @@
                 <commandTopic>cmd_vel</commandTopic>
                 <odometryFrame>odom</odometryFrame>
                 <odometryTopic>odom</odometryTopic>
+                <!-- odometrySource: encoder | world.
+                     NOTE: keep this comment ASCII-only -- spawn_model (python2)
+                     parses robot_description with xml.etree and fails on
+                     non-ASCII characters (UnicodeEncodeError), which makes the
+                     model silently not spawn (no odom / no TF / FAILED_POSE).
+                     encoder: wheel integration; measured 9 cm lateral drift vs
+                     Gazebo truth over 2.4 m (~2 deg heading bias) -- fatal for a
+                     0.80 m door with 5 cm per-side clearance.
+                     world: Gazebo ground truth. -->
                 <odometrySource>encoder</odometrySource>
                 <robotBaseFrame>base_footprint</robotBaseFrame>
             </plugin>

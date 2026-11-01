@@ -134,28 +134,43 @@ def main():
         ('collision_0.87x0.70', [(-0.316, -0.35), (0.554, -0.35), (0.554, 0.35), (-0.316, 0.35)]),
         ('visual_0.87x0.718', [(-0.327, -0.359), (0.565, -0.359), (0.565, 0.359), (-0.327, 0.359)]),
     ]
-    for name, fp in bodies:
-        worst = 0.0
-        samples = 0
-        for r in rows:
-            if r['y'] < 2.80 or r['y'] > 3.30:
-                continue
-            c = math.cos(math.radians(r['yaw']))
-            s = math.sin(math.radians(r['yaw']))
-            for lx, ly in fp:
-                wx = r['x'] + c * lx - s * ly
-                wy = r['y'] + s * lx + c * ly
-                if 2.90 <= wy <= 3.10:
-                    worst = max(worst, abs(wx))
-                    samples += 1
-        if samples == 0:
-            verdict = 'NOT_REACHED'
-        elif worst <= door_half:
-            verdict = 'PASS'
-        else:
-            verdict = 'CLIP(+%.0fmm)' % ((worst - door_half) * 1000)
-        print('gate_verdict[%s]: worst_corner_x=%.4f (half_gap %.2f, n=%d) -> %s' % (
-            name, worst, door_half, samples, verdict))
+    def judge(use_gt, tag):
+        for name, fp in bodies:
+            worst = 0.0
+            samples = 0
+            for r in rows:
+                try:
+                    if use_gt:
+                        px, py, pyaw = float(r['gt_x']), float(r['gt_y']), float(r['gt_yaw'])
+                        if math.isnan(px):
+                            continue
+                    else:
+                        px, py, pyaw = r['x'], r['y'], r['yaw']
+                except (KeyError, ValueError):
+                    continue
+                if py < 2.80 or py > 3.30:
+                    continue
+                c = math.cos(math.radians(pyaw))
+                s = math.sin(math.radians(pyaw))
+                for lx, ly in fp:
+                    wx = px + c * lx - s * ly
+                    wy = py + s * lx + c * ly
+                    if 2.90 <= wy <= 3.10:
+                        worst = max(worst, abs(wx))
+                        samples += 1
+            if samples == 0:
+                verdict = 'NOT_REACHED'
+            elif worst <= door_half:
+                verdict = 'PASS'
+            else:
+                verdict = 'CLIP(+%.0fmm)' % ((worst - door_half) * 1000)
+            print('gate_verdict%s[%s]: worst_corner_x=%.4f (half_gap %.2f, n=%d) -> %s' % (
+                tag, name, worst, door_half, samples, verdict))
+
+    # 判定两个口径: odom (导航自己以为的位姿) 与 Gazebo 真值 (物理真相)。
+    # 两者差距 = 定位/里程计误差, 在 5cm 余量的窄门里是决定性的。
+    judge(False, '')
+    judge(True, '_gt')
     return 0
 
 

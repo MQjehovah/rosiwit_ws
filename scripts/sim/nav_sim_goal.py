@@ -340,19 +340,22 @@ def main():
         plan_ms_max = max(plan_ms_max, float(d.get('plan_ms', -1)))
         # 终态判定用前缀: FAILED_* / STOPPED_* 都是终态
         # (之前穷举列表漏了 FAILED_RECOVERY, 导致 harness 白等 210s)
-        if (gs == 'SUCCEEDED' or gs == 'CANCELED'
+        # FAILED_POSE 是启动瞬态 (TF 还没起来), 不立刻判终态: 交给下面的重发
+        if gs == 'FAILED_POSE' and sends < 6:
+            pass
+        elif (gs == 'SUCCEEDED' or gs == 'CANCELED'
                 or (gs and gs.startswith('FAILED'))
                 or (gs and gs.startswith('STOPPED'))):
             status = gs
             break
         # 重发 (最多 6 次): 单次 publish 一旦丢失, 整轮就会干等到超时。
         #   IDLE            -> 首包丢失 / 连接未建立 (节点根本没收到)
-        #   FAILED_POSE     -> 启动瞬态, SLAM/TF 还没起来
+        #   FAILED_POSE     -> 启动瞬态 (TF/位姿还没起来) —— 立刻重发, 不要等到 62s
         #   ACCEPTED+IDLE   -> 受理了但一直没动
         need = False
         if gs in (None, '', 'IDLE') and time.time() - last_send > 5.0:
             need = True
-        elif gs == 'FAILED_POSE' and time.time() - t0 > 62:
+        elif gs == 'FAILED_POSE' and time.time() - last_send > 2.0:
             need = True
         elif gs == 'ACCEPTED' and st == 'IDLE' and time.time() - t0 > 66:
             need = True

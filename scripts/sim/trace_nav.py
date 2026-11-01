@@ -16,6 +16,7 @@ import sys
 import rospy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from gazebo_msgs.msg import ModelStates
 from std_msgs.msg import String
 
 
@@ -23,7 +24,7 @@ class Trace(object):
     def __init__(self, path):
         self.path_file = path + '.path'
         self.f = open(path, 'w')
-        self.f.write('t,x,y,yaw,safety,goal_status,state,scale,v,w,path_pts,rec_stage,turn\n')
+        self.f.write('t,x,y,yaw,safety,goal_status,state,scale,v,w,path_pts,rec_stage,turn,gt_x,gt_y,gt_yaw\n')
         self.t0 = None
         self.diag = None
         self.cmd = (0.0, 0.0)
@@ -35,6 +36,20 @@ class Trace(object):
         rospy.Subscriber('/global_path', Path, self.on_path, queue_size=5)
         # /nav_diagnostics 只有 1Hz, 看不清门前 1m 内的动态; 位姿改用 /odom (30Hz)
         rospy.Subscriber('/odom', Odometry, self.on_odom, queue_size=50)
+        # Gazebo 真值: 用来量 odom 漂移 (安全层看的是 odom/TF, 真值才知道真实差距)
+        self.gt = None
+        rospy.Subscriber('/gazebo/model_states', ModelStates, self.on_model_states, queue_size=5)
+
+    def on_model_states(self, msg):
+        try:
+            i = msg.name.index('mrobot')
+        except ValueError:
+            return
+        p = msg.pose[i]
+        q = p.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self.gt = (p.position.x, p.position.y, yaw)
 
     def on_odom(self, msg):
         p = msg.pose.pose
@@ -79,12 +94,15 @@ class Trace(object):
         if self.odom is not None:
             x, y, yaw = self.odom
             yaw_deg = yaw * 180.0 / math.pi
-        self.f.write('%7.2f,%.4f,%.4f,%.2f,%s,%s,%s,%.3f,%.4f,%.4f,%d,%d,%.1f\n' % (
+        g = self.gt if self.gt is not None else (float('nan'),) * 3
+        self.f.write('%7.2f,%.4f,%.4f,%.2f,%s,%s,%s,%.3f,%.4f,%.4f,%d,%d,%.1f,'
+                     '%.4f,%.4f,%.2f\n' % (
             now - self.t0, x, y, yaw_deg,
             d.get('safety', '?'), d.get('goal_status', '?'),
             d.get('state', '?'), float(d.get('safety_scale', 1.0)),
             self.cmd[0], self.cmd[1], int(d.get('path_points', 0)),
-            int(d.get('recovery_stage', 0)), float(d.get('path_turn_deg', 0.0))))
+            int(d.get('recovery_stage', 0)), float(d.get('path_turn_deg', 0.0)),
+            g[0], g[1], g[2] * 180.0 / math.pi))
         self.f.flush()
 
     def close(self):
