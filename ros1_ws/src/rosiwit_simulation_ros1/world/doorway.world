@@ -31,7 +31,7 @@
 
     <model name="wall_back">
       <static>1</static>
-      <pose>0.0 5.5 0.5 0 0 0</pose>
+      <pose>0.0 5.0 0.5 0 0 0</pose>
       <link name="link">
         <collision name="c"><geometry><box><size>6.0 0.2 1.0</size></box></geometry></collision>
         <visual name="v"><geometry><box><size>6.0 0.2 1.0</size></box></geometry>
