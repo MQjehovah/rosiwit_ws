@@ -1,49 +1,48 @@
 # 控制器对比（第一轮）— 2026-11-01
 
-> 状态：**脚手架跑通，样本量 1 次/控制器**。这张表用来证明对比链路可用、并给出第一批数字；
-> 结论性结论需要 Task 7 的 4×2×5×3 = 120 次矩阵。
+> 状态：脚手架跑通；`house_short` 四个控制器各 1 次；`doorway` 场景**未跑通**（见第 3 节）。
+> 结论性数字仍需多次重复（每档 3 次）与 `free` profile。
 
-## 方法
+## 1. 方法
 
-- 场景：`house_short`（house.world，起点 (0,0,0)，固定终点 **(1.0, 2.0)**），`--goal 1.0,2.0` 跳过 BFS 选点
-- profile：`clean`（四个控制器都拿单向路径 + 末端原地转）
-- 每个控制器 1 次：`CONTROLLERS="rpp dwa teb" SCENES="house_short" RUNS=1 ./scripts/sim/compare_controllers.sh`
-- 指标来源：`/nav_diagnostics` + `/cmd_vel` + `/global_path` + `/map`
-  （`min_clearance_m` = 机器人到最近 lethal 格的距离，20 格窗口内搜索）
+- `house_short`：house.world，起点 (0,0,0)，固定终点 **(1.0, 2.0)**，`clean` profile
+- `doorway`：新增 `world/doorway.world`（0.9 m 门洞，门在 y=3，起点 (0,0)，终点 (0,6)），`clean`
+- 每次：`./scripts/sim/compare_controllers.sh`（控制器名/profile 用临时 yaml 覆盖，
+  指标来自 `/nav_diagnostics` + `/cmd_vel` + `/global_path` + `/map`）
 
-## 结果（第一轮）
+## 2. house_short 结果（每控制器 1 次）
 
-| 控制器 | 结果 | 到点 xy | 到点 yaw | 用时 | 均速 | 峰值 v | 单拍 Δv | 单拍 Δω | xtrack RMS | 最小间隙 | safety_scale 最小 |
+| 控制器 | 结果 | 到点 xy | 到点 yaw | 用时 | 均速 | 峰值 v | 单拍 Δv | 单拍 Δω | xtrack RMS | 最小间隙 | safety_scale |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `rpp` | SUCCEEDED | 0.183 m | −0.198 rad | 15.6 s | 0.341 | 0.744 | 0.112 | 0.104 | **0.030** | **1.02 m** | 1.00 |
-| `dwa` | SUCCEEDED | 0.191 m | −0.017 rad | **145.7 s** | 0.046 | 0.777 | 0.15 | 0.121 | 0.217 | 0.90 m | 1.00 |
-| `teb` | SUCCEEDED | **0.045 m** | 0.158 rad | **12.0 s** | 0.506 | 0.800 | 0.600 | **0.063** | 0.107 | 0.949 m | 0.75 |
+| `rpp` | SUCCEEDED | 0.177 m | −0.193 rad | 15.5 s | 0.338 | 0.741 | 0.107 | 0.094 | **0.036** | **1.005 m** | 1.00 |
+| `mppi` | SUCCEEDED | 0.172 m | −0.040 rad | 36.1 s | 0.181 | 0.476 | **0.085** | **0.083** | 0.060 | 0.906 m | 1.00 |
+| `teb` | SUCCEEDED | **0.091 m** | 0.159 rad | **13.1 s** | 0.504 | 0.800 | 0.560 | 0.067 | 0.134 | 0.854 m | 0.70 |
+| `dwa` | SUCCEEDED | 0.201 m | −0.042 rad | **149.8 s** | 0.050 | 0.769 | 0.150 | 0.086 | 0.161 | 0.906 m | 1.00 |
 
-## 读法（暂定，样本 1 次）
+读法：
 
-- **三者都能到点**（xy ≤ 0.19 m），说明这条短距场景下"控制层"不是主要瓶颈 —— 与之前
-  `rpp` 的多次结果一致。真正的差异在速度/平滑/稳定性。
-- `teb` 本轮最快、到点最准，但 `Δv 0.60` 明显大于 `rpp`（0.11）：带每拍重解会让首段速度跳。
-  需要把速度/加速度项真正放进 GN，而不是只在代价里算。
-- `dwa` 在本场景退化到 0.046 m/s（145 s）：它的速度项仍是"越快代价越高"的写法，
-  这一轮没来得及修（补丁未命中，见 `progress.md`）。
-- `teb` 的 `safety_scale 0.75` 说明安全层减速过一次；`min_clearance 0.95 m` 说明不是贴墙 ——
-  多半是减速区（1.15 m）内的点触发了 slow-down，属于预期行为但要和 `rpp`（1.02 m 未触发）对比确认。
+- 四个控制器都能到点（xy ≤ 0.20 m），**短距场景下控制层不是瓶颈**。
+- `teb` 最快（13.1 s）且到点最准（0.091 m），但 `Δv 0.56` 是 `rpp` 的 5 倍 —— 带每拍重解导致首段速度跳；
+  同时 `safety_scale 0.70` 说明安全层减速过一次（`min_clearance 0.854 m`，是缓降区触发，不是贴墙）。
+- `mppi` 最平滑（Δv 0.085）但只有 0.181 m/s 均速；`rpp` 速度/精度/平滑三者最均衡。
+- `dwa` 仍然是 0.05 m/s（149.8 s）。**速度项翻转的修复没有解决它** —— 说明真正的限速不在代价函数，
+  而在 `dynamicWindow()`（`b.max_vx = min(max_vx_, vel.linear_x + max_accel_*dt_)`）：若 `dt_` 很小，
+  单拍可达速度增量就小，速度永远爬不起来。下一步先打印 `dt_/max_accel_` 实参。
 
-## 未完成
+## 3. doorway：场景未跑通（重要）
 
-1. `mppi` 还没进矩阵（同一脚本加 `CONTROLLERS="... mppi"` 即可）
-2. 每控制器只跑了 1 次 → 无法给出方差；`teb` 此前有过 1 次 `FAILED_PATH_FOOTPRINT`，必须多次重复
-3. 场景只跑了 `house_short`；`corridor` / `house_long` / `doorway` / `blocked` 未跑
-4. `doorway.world` 还没建（0.9 m 门洞）
-5. `free` profile 未跑（TEB/RPP 会拿到带倒车的双向路径）
+`rpp` 与 `teb` 都在 doorway 场景 **TIMEOUT，均值速度 0.000**（210 s 完全不动，`xy_err 5.96 m`）。
+两个完全不同的控制器表现完全一致 → 问题不在控制器，而在场景/上游（安全层 STOP、SLAM 没地图、
+或 spawn/世界配置）。下一轮先单独诊断 doorway（看 `/nav_diagnostics` 的 `safety`/`map_w`）。
 
-## 复现
+顺带：`min_clearance_m` 在这两个 run 里输出 `1e9` —— 我的实现 `return None if best > 1e9 else best`
+在"20 格内没有任何 lethal 格"时返回 1e9 而不是 None，属于指标 bug，要改成 `>= 1e9`。
+
+## 4. 复现
 
 ```bash
-CONTROLLERS="rpp mppi dwa teb" SCENES="house_short house_long corridor" RUNS=3 \
-  ./scripts/sim/compare_controllers.sh
+CONTROLLERS="rpp mppi dwa teb" SCENES="house_short" RUNS=3 ./scripts/sim/compare_controllers.sh
+CONTROLLERS="rpp teb" SCENES="doorway" RUNS=1 ./scripts/sim/compare_controllers.sh
 ```
 
-结果写 `~/sim_verify/results_compare.csv`（列：scene, profile, controller, run, status, xy/yaw 误差,
-用时, 速度统计, Δv/Δω, xtrack, min_clearance, safety_scale, replan 计数）。
+CSV：`~/sim_verify/results_compare.csv`。

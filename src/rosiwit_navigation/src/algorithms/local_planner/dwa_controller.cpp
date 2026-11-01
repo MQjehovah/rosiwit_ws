@@ -113,7 +113,11 @@ std::vector<DwaController::Sample> DwaController::search(
                 continue;
             }
             // 权重偏向航向和角速度连续性; 速度项不再压过平滑项.
-            s.cost = 0.45 * h + 0.10 * c + 0.30 * v + 0.15 * smooth;
+            // speed term used to reward slowness (v = 1 - speed/max): that capped
+            // the robot at ~0.05 m/s. Reward speed instead, half weight.
+            const double speed_reward =
+                std::min(1.0, std::abs(s.v) / std::max(1e-6, max_vx_));
+            s.cost = 0.45 * h + 0.10 * c - 0.15 * speed_reward + 0.15 * smooth;
             samples.push_back(s);
         }
     }
