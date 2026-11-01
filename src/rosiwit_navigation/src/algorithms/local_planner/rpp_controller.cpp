@@ -143,45 +143,6 @@ double RppController::arcClearanceScale(
   return 1.0;
 }
 
-double RppController::lateralSlack(const core::Pose2D & pose) const
-{
-  std::shared_ptr<const core::CostmapGrid> map;
-  {
-    std::lock_guard<std::mutex> lk(map_mu_);
-    map = costmap_ptr_;
-  }
-  if (!map || map->data.empty() || fp_samples_.empty()) { return 1e9; }
-  const double res = map->info.resolution;
-  const int gw = static_cast<int>(map->info.width);
-  const int gh = static_cast<int>(map->info.height);
-  if (res <= 1e-6 || gw <= 0 || gh <= 0) { return 1e9; }
-  const double ox = map->info.origin.position.x;
-  const double oy = map->info.origin.position.y;
-  const double c = std::cos(pose.theta), s = std::sin(pose.theta);
-  // 车身最宽处的几个纵向位置 (footprint y 极值 = ±0.33 的那几条边)
-  const double xs[3] = {-0.20, 0.10, 0.40};
-  double best = 1e9;
-  for (int k = 0; k < 3; ++k) {
-    const double bx = pose.x + c * xs[k];
-    const double by = pose.y + s * xs[k];
-    for (int side = -1; side <= 1; side += 2) {
-      // 沿车体法向向外走, 找第一个真实障碍
-      for (double d = 0.0; d <= 0.30 + 1e-9; d += 0.01) {
-        const double wx = bx + side * d * (-s);
-        const double wy = by + side * d * c;
-        const int gx = static_cast<int>(std::floor((wx - ox) / res));
-        const int gy = static_cast<int>(std::floor((wy - oy) / res));
-        if (gx < 0 || gy < 0 || gx >= gw || gy >= gh) { break; }   // 窗口外: 交给安全层
-        if (map->data[static_cast<size_t>(gy) * gw + gx] >= core::kCostLethal) {
-          best = std::min(best, 0.33 + d);
-          break;
-        }
-      }
-    }
-  }
-  return best;
-}
-
 int RppController::dirAt(size_t i) const
 {
   if (i >= path_.points.size()) return 1;
@@ -291,17 +252,15 @@ core::VelocityCommand RppController::computeVelocityCommand(
     return {0.0, 0.0, w};
   }
 
-  // ---- TRACK: 弧长前视 + RPP 调速 ----
-  // 前视距离必须被配置的 min/max 夹住, 且 min 必须真的能生效:
-  // 以前写死 L = clamp(0.35 + 0.8*|v|, la_min, la_max), 0.35 的硬底让
-  // min_lookahead_distance 形同虚设 (窄门要 0.18~0.25 的短前瞻才跟得住)。
-  const double la_min = cfg_.min_lookahead_distance > 0.0
-      ? cfg_.min_lookahead_distance : 0.25;
+  // ---- TRACK: 对齐 nav2_regulated_pure_pursuit_controller ----
+  // 前瞻: use_velocity_scaled_lookahead_dist -> L = v*lookahead_time, 夹在 [min,max]
+  const double la_min = cfg_.min_lookahead_distance > 0.0 ? cfg_.min_lookahead_distance : 0.3;
   const double la_max = cfg_.max_lookahead_distance > 0.0
-      ? std::max(cfg_.max_lookahead_distance, la_min) : 1e9;
-  const double la_gain = cfg_.lookahead_gain > 0.0 ? cfg_.lookahead_gain : 1.0;
-  const double la_bias = cfg_.lookahead_offset >= 0.0 ? cfg_.lookahead_offset : 0.10;
-  const double L = std::min(std::max(la_bias + la_gain * std::fabs(last_v_), la_min), la_max);
+      ? std::max(cfg_.max_lookahead_distance, la_min) : 0.9;
+  const double la_time = cfg_.lookahead_time > 0.0 ? cfg_.lookahead_time : 1.5;
+  double L = cfg_.lookahead_distance > 0.0 ? cfg_.lookahead_distance : 0.6;
+  if (cfg_.use_velocity_scaled_lookahead_dist) { L = std::fabs(last_v_) * la_time; }
+  L = std::min(std::max(L, la_min), la_max);
   const size_t la = lookaheadIndex(s_cur_ + L);
   const auto & ref = path_.points[la].pose;
   const double dx = ref.x - pose.x;
@@ -310,7 +269,6 @@ core::VelocityCommand RppController::computeVelocityCommand(
   const int dir = dirAt(idx_);
   const double heading_ref = (dist > 1e-3) ? std::atan2(dy, dx) : ref.theta;
   double e_theta = normAngle(heading_ref - pose.theta);
-  // 倒车: 机器人朝向与行进方向相反, 参考航向加 π
   if (dir < 0) e_theta = normAngle(e_theta - M_PI);
 
   // 横向误差 (路径切向叉积)
@@ -318,12 +276,15 @@ core::VelocityCommand RppController::computeVelocityCommand(
   const double tang = std::atan2(ref.y - cur.y + 1e-9, ref.x - cur.x + 1e-9);
   const double e_y = std::sin(tang) * (pose.x - cur.x) - std::cos(tang) * (pose.y - cur.y);
 
-  // 先对准再走: 航向差过大且车还没动 -> 原地转, 不要用"边转边走"的弧去消化
-  // 几十度的航向差 (那会把车甩到路径外 0.2m, 窄门处根本收不回来)。
-  if (cfg_.prealign_heading_error > 0.0 &&
-      std::fabs(e_theta) > cfg_.prealign_heading_error && std::fabs(last_v_) < 0.05) {
+  // rotate_to_heading (等价 nav2 rotation_shim / RPP use_rotate_to_heading):
+  // 航向差超过 rotate_to_heading_min_angle 且车还没在走 -> 原地转到路径朝向,
+  // 不要用"边转边走"的弧去消化几十度 (那会把车甩出 0.2m, 窄门收不回来)。
+  if (cfg_.use_rotate_to_heading && std::fabs(last_v_) < 0.05 &&
+      std::fabs(e_theta) > cfg_.rotate_to_heading_min_angle) {
     if (align_dir_ == 0) { align_dir_ = e_theta > 0.0 ? 1 : -1; }
-    const double w = align_dir_ * std::min(max_vw_, std::max(0.15, 2.0 * std::fabs(e_theta)));
+    const double w_max = cfg_.rotate_to_heading_angular_vel > 0.0
+        ? cfg_.rotate_to_heading_angular_vel : 1.8;
+    const double w = align_dir_ * std::min(w_max, std::max(0.15, 2.0 * std::fabs(e_theta)));
     last_v_ = 0.0;
     last_w_ = w;
     return {0.0, 0.0, w};
@@ -331,65 +292,64 @@ core::VelocityCommand RppController::computeVelocityCommand(
   align_dir_ = 0;
 
   double v_ref = max_vx_;
-  // 调速 (regulated pure pursuit): 偏航/横向偏差越大越慢。
-  // 以前是 v *= max(0.3, 1-1.2|e_y|) 与 v *= max(0.3, cos(e_theta)):
-  // 实测 26cm 横向偏差时仍保留 69% 速度 (0.65 m/s) 往窄门冲, 收敛距离不够,
-  // 到门平面还留 4° 航向误差 -> 扫掠区横向 0.389 > 门洞 0.375 -> 必停。
-  const double reg = 1.0 - cfg_.cross_track_speed_gain * std::fabs(e_y)
-                        - cfg_.heading_speed_gain * std::fabs(e_theta);
-  v_ref *= std::min(1.0, std::max(cfg_.min_speed_scale, reg));
-  // 轨迹前馈 (若已参数化): 用同索引点的参考速度做上限, cusp/末段自动减速
+  // 曲率调速 (use_regulated_linear_velocity_scaling)
+  const double curvature = (L > 1e-3) ? 2.0 * std::sin(e_theta) / L : 0.0;
+  const double min_radius = cfg_.regulated_linear_scaling_min_radius > 0.0
+      ? cfg_.regulated_linear_scaling_min_radius : 0.9;
+  const double min_speed = std::max(0.05, cfg_.regulated_linear_scaling_min_speed);
+  if (cfg_.use_regulated_linear_velocity_scaling && std::fabs(curvature) > 1e-3) {
+    const double radius = 1.0 / std::fabs(curvature);
+    const double scale = std::min(1.0, std::max(min_speed / std::max(0.05, max_vx_),
+                                                radius / min_radius));
+    v_ref *= scale;
+  }
+  // 轨迹前馈 (若已参数化): 用同索引点的参考速度做上限
   if (traj_.valid && traj_.points.size() == path_.points.size()) {
     const size_t ti = std::min(idx_, traj_.points.size() - 1);
     v_ref = std::min(v_ref, std::max(0.05, std::fabs(traj_.points[ti].v)));
   }
   const double reach = std::hypot(path_.points.back().pose.x - pose.x,
                                   path_.points.back().pose.y - pose.y);
-  v_ref = std::min(v_ref, std::max(0.08, 0.9 * reach));         // 末段减速
-  // slow_down_distance: 进入该距离后按比例限速 (nav2 语义); 以前这个键没有任何消费点。
-  if (cfg_.slow_down_distance > 0.0 && reach < cfg_.slow_down_distance) {
-    v_ref = std::min(v_ref, max_vx_ * std::max(0.0, reach / cfg_.slow_down_distance));
+  // 末段调速 (approach_velocity_scaling_dist / min_approach_linear_velocity)
+  const double app_dist = cfg_.approach_velocity_scaling_dist > 0.0
+      ? cfg_.approach_velocity_scaling_dist : 0.6;
+  const double app_min = cfg_.min_approach_linear_velocity > 0.0
+      ? cfg_.min_approach_linear_velocity : 0.05;
+  if (reach < app_dist) {
+    v_ref = std::min(v_ref, std::max(app_min, max_vx_ * reach / app_dist));
   }
+  v_ref = std::max(v_ref, min_speed);   // 防止任何调速把车压死
 
   const double v_des = dir * v_ref;
-  const double v = std::max(last_v_ - max_ax_ * 0.1,
-                            std::min(last_v_ + max_ax_ * 0.1, v_des));
-  {
-    // [RPPProbe] 倒车段为什么不倒车: 打印方向标记/索引/航向误差/速度
+  double v = std::max(last_v_ - max_ax_ * 0.1,
+                      std::min(last_v_ + max_ax_ * 0.1, v_des));
+
+  if (cfg_.debug_probe) {
     static int probe_n = 0;
-    if (cfg_.debug_probe && ++probe_n % 50 == 0) {   // 10Hz 控制下约 0.2Hz
+    if (++probe_n % 50 == 0) {
       std::cout << "[RPPProbe] pts=" << path_.points.size()
                 << " idx=" << idx_ << " dir=" << dir
-                << " vx=" << path_.points[idx_].velocity_x
                 << " e_theta_deg=" << e_theta * 57.2957795
                 << " e_y=" << e_y
-                << " v_ref=" << v_ref << " v=" << v
-                << " pose_yaw_deg=" << pose.theta * 57.2957795
-                << " ref_yaw_deg=" << heading_ref * 57.2957795 << std::endl;
+                << " L=" << L << " v_ref=" << v_ref << " v=" << v
+                << " pose_yaw_deg=" << pose.theta * 57.2957795 << std::endl;
     }
   }
+
   const double w_ff = (L > 1e-3) ? 2.0 * v * std::sin(e_theta) / L : 0.0;
   const double w_des = std::max(-max_vw_, std::min(max_vw_, w_ff + 0.8 * e_y * v));
   double w = std::max(last_w_ - max_aw_ * 0.1,
                       std::min(last_w_ + max_aw_ * 0.1, w_des));
 
-  // 窄口里不打舵: 两层判据 (都只降 ω, 不动 v —— v→0 会让 w 也→0, 车就不动了)
-  //
-  // 0.75m 门洞 + 0.66m 车体: 门带内可用横向余量只有 2~3cm。安全层的扫掠区会把
-  // "制动期间继续以当前 ω 旋转"也算进横向占用: ω=0.24rad/s × 0.41s = 5.6°,
-  // 车体横向 0.345 + 0.55*sin(5.6°) = 0.399m > 门洞 0.375m -> 必停
-  // (实测: 门前 x=1.2cm, 斜置仅 1.1°, 就因 ω=0.238 被判 STOP)。
-  //   1) 弧线真的会蹭到: 按弧线安全比例降 ω
-  //   2) 车身左右余量 < tight_lateral_slack: 按余量比例降 ω (门内等于不许打舵)
+  // 碰撞检测调速 (nav2 use_collision_detection): 沿指令弧 max_allowed_time_to_collision
+  // 内会撞到真实障碍就按"弧上可安全行程比例"减速。(v,w) 同时缩放 -> 曲率不变。
   const double clr = arcClearanceScale(pose, v, w);
-  if (cfg_.tight_arc_straighten && clr < 1.0) {
-    w *= std::max(0.0, std::min(1.0, clr));
-  }
-  if (cfg_.tight_lateral_slack > 0.0) {
-    const double slack = lateralSlack(pose);
-    if (slack < cfg_.tight_lateral_slack) {
-      w *= std::max(0.0, slack / cfg_.tight_lateral_slack);
-    }
+  if (cfg_.use_collision_detection && clr < 1.0) {
+    double k = std::max(0.0, clr);
+    if (std::fabs(v) > 1e-6) { k = std::max(k, min_speed / std::fabs(v)); }
+    k = std::min(1.0, k);
+    v *= k;
+    w *= k;
   }
   if (cfg_.debug_probe && clr < 1.0) {
     const int n = ++clr_probe_;

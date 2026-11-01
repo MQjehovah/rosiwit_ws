@@ -110,11 +110,10 @@ std::unique_ptr<RppController> makeController()
   cfg.min_lookahead_distance = 0.18;
   cfg.max_lookahead_distance = 0.50;
   cfg.lookahead_gain = 0.8;
-  cfg.lookahead_offset = 0.10;
-  cfg.prealign_heading_error = 0.26;
-  cfg.cross_track_speed_gain = 3.0;
-  cfg.heading_speed_gain = 2.0;
-  cfg.min_speed_scale = 0.2;
+  cfg.use_velocity_scaled_lookahead_dist = true;
+  cfg.lookahead_time = 1.5;
+  cfg.use_rotate_to_heading = true;
+  cfg.rotate_to_heading_min_angle = 0.785;
   cfg.path_resample_step = 0.05;
   std::unique_ptr<RppController> c(new RppController());
   c->initialize(cfg);

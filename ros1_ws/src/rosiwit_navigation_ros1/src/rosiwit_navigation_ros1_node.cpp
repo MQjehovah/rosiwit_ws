@@ -189,12 +189,18 @@ private:
     // 前瞻 = clamp(offset + gain*|v|, min, max). gain 以前写死 1.0, 于是
     // min_lookahead_distance 在 rpp 里永远不生效 (rpp 还额外写死 0.35 硬底)。
     pnh_.param<double>("lookahead_gain", lookahead_gain_, 0.8);
-    pnh_.param<double>("lookahead_offset", lookahead_offset_, 0.10);
-    // 调速 (regulated): 横向/航向偏差越大线速度越低
-    pnh_.param<double>("cross_track_speed_gain", cross_track_speed_gain_, 3.0);
-    pnh_.param<double>("heading_speed_gain", heading_speed_gain_, 2.0);
-    pnh_.param<double>("min_speed_scale", min_speed_scale_, 0.2);
-    pnh_.param<double>("prealign_heading_error", prealign_heading_error_, 0.26);
+    // nav2 RPP: 前瞻按 v*lookahead_time 缩放, 夹在 [min,max]
+    pnh_.param<bool>("use_velocity_scaled_lookahead_dist", use_velocity_scaled_lookahead_dist_, true);
+    pnh_.param<double>("lookahead_time", lookahead_time_, 1.5);
+    // nav2 rotation_shim 语义: 航向差 > rotate_to_heading_min_angle 且车没走 -> 原地转
+    pnh_.param<bool>("use_rotate_to_heading", use_rotate_to_heading_, true);
+    pnh_.param<double>("rotate_to_heading_min_angle", rotate_to_heading_min_angle_, 0.3925);
+    pnh_.param<double>("rotate_to_heading_angular_vel", rotate_to_heading_angular_vel_, 1.8);
+    // nav2 RPP 调速: 曲率 / 碰撞检测 / 末段
+    pnh_.param<double>("regulated_linear_scaling_min_radius", regulated_linear_scaling_min_radius_, 0.9);
+    pnh_.param<double>("regulated_linear_scaling_min_speed", regulated_linear_scaling_min_speed_, 0.2);
+    pnh_.param<double>("approach_velocity_scaling_dist", approach_velocity_scaling_dist_, 0.6);
+    pnh_.param<double>("min_approach_linear_velocity", min_approach_linear_velocity_, 0.05);
     pnh_.param<double>("inflation_radius", inflation_radius_, 0.5);
     pnh_.param<double>("robot_radius", robot_radius_, 0.21);
     pnh_.param<int>("planner_max_iterations", planner_max_iterations_, 200000);
@@ -290,6 +296,7 @@ private:
     pnh_.param<int>("safety_slowdown_release_frames", safety_slowdown_release_frames_, 2);
     // 动态安全区: 按车体几何 + 制动距离生成, 避免固定多边形与巷道宽度打架
     pnh_.param<bool>("safety_dynamic_geometry", safety_dynamic_geometry_, true);
+    pnh_.param<bool>("safety_swept_geometry", safety_swept_geometry_, false);
     pnh_.param<double>("safety_brake_decel", safety_brake_decel_, 0.8);
     pnh_.param<double>("safety_reaction_time", safety_reaction_time_, 0.2);
     pnh_.param<double>("safety_stop_margin", safety_stop_margin_, 0.05);
@@ -798,7 +805,6 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       ccfg.xy_goal_tolerance = 0.15;
       ccfg.slow_down_distance = 1.0;
       ccfg.lookahead_gain = lookahead_gain_;
-      ccfg.lookahead_offset = lookahead_offset_;
       ccfg.max_lookahead_distance = max_lookahead_distance_;
       ccfg.min_lookahead_distance = min_lookahead_distance_;
       ccfg.max_linear_velocity = std::max(0.1, coverage_max_speed_);
@@ -859,11 +865,15 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.xy_goal_tolerance = goal_tolerance_xy_;
     cfg.slow_down_distance = 1.5;
     cfg.lookahead_gain = lookahead_gain_;
-    cfg.lookahead_offset = lookahead_offset_;
-    cfg.cross_track_speed_gain = cross_track_speed_gain_;
-    cfg.heading_speed_gain = heading_speed_gain_;
-    cfg.min_speed_scale = min_speed_scale_;
-    cfg.prealign_heading_error = prealign_heading_error_;
+    cfg.use_velocity_scaled_lookahead_dist = use_velocity_scaled_lookahead_dist_;
+    cfg.lookahead_time = lookahead_time_;
+    cfg.use_rotate_to_heading = use_rotate_to_heading_;
+    cfg.rotate_to_heading_min_angle = rotate_to_heading_min_angle_;
+    cfg.rotate_to_heading_angular_vel = rotate_to_heading_angular_vel_;
+    cfg.regulated_linear_scaling_min_radius = regulated_linear_scaling_min_radius_;
+    cfg.regulated_linear_scaling_min_speed = regulated_linear_scaling_min_speed_;
+    cfg.approach_velocity_scaling_dist = approach_velocity_scaling_dist_;
+    cfg.min_approach_linear_velocity = min_approach_linear_velocity_;
     cfg.max_lookahead_distance = max_lookahead_distance_;
     cfg.min_lookahead_distance = min_lookahead_distance_;
     cfg.max_linear_velocity = max_velocity_x_;
@@ -1721,6 +1731,8 @@ private:
     cfg.slowdown_trigger_frames = safety_slowdown_trigger_frames_;
     cfg.slowdown_release_frames = safety_slowdown_release_frames_;
     cfg.dynamic_geometry = safety_dynamic_geometry_;
+    // 可选: 更严格的扫掠区 (nav2 collision_monitor 不做这件事, 默认关)
+    cfg.swept_geometry = safety_swept_geometry_;
     cfg.brake_decel = safety_brake_decel_;
     cfg.reaction_time = safety_reaction_time_;
     cfg.stop_margin = safety_stop_margin_;
@@ -5487,11 +5499,15 @@ private:
   double lookahead_distance_ = 0.6;
   double min_lookahead_distance_ = 0.3;
   double lookahead_gain_ = 0.8;
-  double lookahead_offset_ = 0.10;
-  double cross_track_speed_gain_ = 3.0;
-  double heading_speed_gain_ = 2.0;
-  double min_speed_scale_ = 0.2;
-  double prealign_heading_error_ = 0.26;
+  bool use_velocity_scaled_lookahead_dist_ = true;
+  double lookahead_time_ = 1.5;
+  bool use_rotate_to_heading_ = true;
+  double rotate_to_heading_min_angle_ = 0.3925;
+  double rotate_to_heading_angular_vel_ = 1.8;
+  double regulated_linear_scaling_min_radius_ = 0.9;
+  double regulated_linear_scaling_min_speed_ = 0.2;
+  double approach_velocity_scaling_dist_ = 0.6;
+  double min_approach_linear_velocity_ = 0.05;
   double max_lookahead_distance_ = 0.9;
   double inflation_radius_ = 0.5;
   double robot_radius_ = 0.21;
@@ -5534,6 +5550,7 @@ private:
   int safety_slowdown_release_frames_ = 2;
   // 动态安全区 (车体+制动距离)
   bool safety_dynamic_geometry_ = true;
+  bool safety_swept_geometry_ = false;
   double safety_brake_decel_ = 0.8;
   double safety_reaction_time_ = 0.2;
   double safety_stop_margin_ = 0.05;

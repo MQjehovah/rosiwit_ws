@@ -2,88 +2,104 @@
 
 硬指标：车体宽 0.66 m，必须通过 **0.75 m** 门洞。
 
+> 重要前提（仿真 vs 需求）：Gazebo 里 `gt_robot.xacro` 的**碰撞体是 0.87 × 0.70**
+> (`base_collision_box2`)，即碰撞体宽 **0.70 m**，而导航声明 footprint 是 0.66 m
+> (±0.33)。所以这套仿真实际考的是"**0.70 m 车过 0.75 m 门**"——单边只剩
+> **2.5 cm**，要求门内斜置 ≤1°。比用户口径（0.66 m → 单边 4.5 cm）严格得多。
+
 ## 结论速览
 
 | 层 | 结论 | 证据 |
 |---|---|---|
-| 安全层几何 | **原实现下 0.75 m 门洞数学上不可通过** | `sweep_margin = max(stop_margin 0.05, side_margin 0.03)` 各向同性外扩 → 侧向半宽 0.373 m ≈ 门洞半宽 0.375 m |
-| 安全层几何 (修后) | 侧向用 `side_margin`，前/后用 `stop_margin` | `test_safety_monitor` 新增 3 条门洞契约测试 |
-| 路径居中 | 逐点梯度上升会把路径变成锯齿 (±8 cm/4 cm 间距) | 改为"法向扫描取中轴中点 + 沿路径平滑"，`test_path_centering` 8 条 |
-| 控制器跟踪 | 起步带 28° 航向差直接开走 → 切出 0.2 m 弧 → 到门平面仍剩 6~7° 斜置 | `test_rpp_alignment` 闭环复现 + 修复 |
-| 完整链路 | 干净接近时**可以过** 0.75 m | `test_door075_passage` 4 条：控制器 + 安全层 + 门框点云 + 运动学积分 |
-| 实仿真 | 仍未干净通过 (见下) | 首轮停在 y≈2.3 (门前 0.6 m) |
+| 安全层 (旧) | **0.75 m 门洞数学上不可通过** | 侧向余量误用 stop_margin 0.05 → 0.33+0.05 = 0.38 > 0.375 |
+| 安全层 (新) | 改回 Nav2 `velocity_polygon` 语义：按速度选多边形，前/后用制动距离 + stop_margin，侧向只加 side_margin | `test_safety_monitor` 22 项 |
+| 自车回波 | 排除盒 0.01 太小 → 停在自己的轮子/挡泥板回波上 | `[safety] STOP hits b(0.35,-0.35)`，改 `safety_body_margin 0.05` 后命中点变成真门框 |
+| 路径居中 | 旧版逐点梯度上升产生 ±8 cm 锯齿；新版法向扫描 + 平滑 | `test_path_centering` 6 项，门处 `path_x = -0.001` |
+| 跟踪 | 按 Nav2 RPP 参数重写后 `xtrack_rms` 3.1~4.9 cm → **1.6 cm** | 仿真 4 轮 |
+| 门内斜置 | **仍未达标**：最好一次 x=1 cm、斜置 3.3°，要求 ≤1° | 见下 |
+| 端到端 | 干净接近可以过 (离线断言 4/4)，实仿真尚未干净通过 | `test_door075_passage` |
 
-## 关键几何 (算出来的，不是估的)
+## 关键几何（算出来的）
 
-车体 0.80 m 长 × 0.66 m 宽，门洞半宽 0.375 m。斜置 θ 时车体横向占用：
+车体长 0.87（碰撞体），门洞半宽 0.375，碰撞半宽 0.35：
 
 ```
-half_extent = 0.55·sin(θ) + 0.33·cos(θ)
-θ = 2.3°  → 0.375   (边界)
-θ = 4°    → 0.388   (塞不进)
-θ = 6.3°  → 0.403   (塞不进)
+斜置 θ 时横向占用 = 0.554·sin(θ) + 0.35·cos(θ)     (前 0.554 / 半宽 0.35)
+θ = 0°   → 0.350   (余量 2.5 cm)
+θ = 1°   → 0.360   (余量 1.5 cm)
+θ = 3.3° → 0.382   (已超 0.375 → 必碰)
 ```
 
-**所以门带内车体斜置必须 < 2.3°**（含安全层 side_margin 时 < 1.5°）。这不是调参能绕过的物理约束。
+**门带内斜置必须 ≤1°**。这解释了为什么"跟踪误差只有 1 cm"仍然过不去。
 
-## 本轮修掉的 4 个确定缺陷
+## 本轮按行业标准修掉的 5 个缺陷
 
 1. **扫掠区余量各向同性**（`safety_monitor.cpp`）
-   `margin = max(stop_margin, side_margin)` 沿径向均匀外扩：5 cm 的"刹车余量"被同时加到车身两侧 →
-   `0.33 + 0.05 = 0.38 > 0.375`，任何跟踪精度都不可能通过。改为前/后用 `stop_margin`、
-   侧向用 `side_margin`（包围盒中心各向异性缩放，保持车体形状比例）。
+   `margin = max(stop_margin 0.05, side_margin 0.03)` 沿径向均匀外扩，5 cm 的"刹车余量"
+   被加到车身两侧 → 侧向半宽 0.38 > 门槛 0.375 → 任何跟踪精度都不可能通过。
 
-2. **`side_margin` 在扫掠分支从未被使用**
-   只有 `buildDynamicStopPolygon` 用它，而 `dynamic_geometry` 下那个函数的结果被扫掠结果覆盖 → 死参数。
+2. **安全层语义对齐 `nav2_collision_monitor`**
+   默认改为按速度选多边形（`buildDynamicStopPolygon`：前/后 = 制动距离 + stop_margin，
+   侧向 = 半宽 + side_margin + 转向余量）；旧的"把 footprint 沿预测轨迹扫掠、并把
+   制动期间继续以 ω 旋转也算进去"保留为可选 `safety_swept_geometry`（**默认关**）。
+   Nav2 不做这个外推 —— 它会与窄通道直接冲突（0.4 s 内 ω 转 5° 就把扫掠区撑宽）。
 
-3. **`safety_slowdown_extra` 写进没人读的字段**
-   扫掠减速实际用硬编码的 `slowdown_lookahead = 0.8`。新增 `safety_slowdown_lookahead` 并接线。
+3. **`side_margin` 在扫掠分支从未被使用** → 死参数（只有被覆盖的 `buildDynamicStopPolygon` 用）。
 
-4. **`min_lookahead_distance` 永远不生效**
-   rpp 里 `L = clamp(0.35 + 0.8|v|, la_min, la_max)` 的 0.35 硬底 > 任何合理 min 值。
-   改为 `L = clamp(lookahead_offset + lookahead_gain·|v|, la_min, la_max)`，并把 gain/offset 接到参数。
+4. **`safety_slowdown_extra` / `min_lookahead_distance` / `lookahead_offset` 三类死参数**
+   - 扫掠减速实际用硬编码 `slowdown_lookahead = 0.8` → 新增 `safety_slowdown_lookahead` 并接线
+   - rpp 的 `L = clamp(0.35 + 0.8|v|, min, max)` 里 0.35 硬底让 `min_lookahead_distance` 失效
 
-## 本轮新增的行为
+5. **自车回波被当成障碍**（致命且隐蔽）
+   `safety_body_margin = 0.01` 时，命中点是 base 系 `(0.35, -0.35)` 这类"贴着车身外沿 1 cm"
+   的点 —— 是自己的轮子/挡泥板。Gazebo 碰撞体 0.70 > 声明 0.66，所以排除盒必须按真实
+   车体外扩。改回 0.05 后命中点变成真门框 `(0.649, -0.345)` / world `(0.388, 2.938)`。
 
-- **`core/path_centering.hpp` 重写**：法向一维扫描找"间隙最大的横向偏移"（取平台区中点，避免偏向
-  进入侧），再沿路径做 [0.25,0.5,0.25] 平滑 + 相邻点斜率限幅。开阔处（间隙充足）不动。
-- **起步先对准**（rpp `prealign_heading_error`，默认 15°）：航向差过大且车没动时先原地转，
-  不要用"边转边走"的弧去消化几十度。
-- **调速 (regulated)**：`v *= clamp(1 - k_y|e_y| - k_h|e_θ|, floor, 1)`，偏了先减速。
-- **窄口不打舵**：`tight_arc_straighten`（弧线会蹭时按弧线安全比例压 ω）+ `tight_lateral_slack`
-  （车身左右余量 < 6 cm 时按比例压 ω）。原因：安全层把"制动期间继续以当前 ω 旋转"也算进横向占用，
-  ω=0.24 rad/s × 0.41 s = 5.6° → 横向 0.399 m > 0.375 m → 必停。
-- **初始旋转改用目标方位角 + 转完重规划**：原来用"路径第一个方向"，而规划器从当前朝向起步，
-  两者几乎相等 → 该分支形同虚设。
+## 按行业参数重写的控制器（rpp → nav2 RPP 语义）
 
-## 离线门洞回归台 (秒级，替代 4 分钟仿真)
+| 参数 | 值 (Nav2 默认) | 作用 |
+|---|---|---|
+| `use_velocity_scaled_lookahead_dist` / `lookahead_time` | true / 1.5 | `L = clamp(v·1.5, min, max)` |
+| `min/max_lookahead_dist` | 0.3 / 0.9 | 前瞻夹紧 |
+| `use_rotate_to_heading` / `rotate_to_heading_min_angle` | true / 0.3925 | 等价 rotation_shim 的 `angular_disengage_threshold` |
+| `use_regulated_linear_velocity_scaling` / `_min_radius` | true / 0.9 | 曲率调速 |
+| `use_collision_detection` | true | 沿指令弧会撞就降速（v,ω 同比例 → 曲率不变） |
+| `regulated_linear_scaling_min_speed` | 0.2 | 调速下限，防止压死 |
+| `approach_velocity_scaling_dist` / `min_approach_linear_velocity` | 0.6 / 0.05 | 末段调速 |
 
-`src/rosiwit_navigation/test/test_door075_passage.cpp`：rpp 控制器 + `core::SafetyMonitor`
-（扫掠安全区）+ 门框点云 + 单极模型积分，断言：
+同时删掉上一轮我自创的 `cross_track_speed_gain` / `heading_speed_gain` /
+`tight_arc_straighten` / `tight_lateral_slack` / `prealign_heading_error`（非行业做法）。
 
-1. 居中直行：不 STOP、不越界、通过；
-2. 起点朝 +x（需转 90°）：先转后走，仍通过；
-3. 起点横偏 5 cm：在门口前收敛，通过；
-4. 起点 4 cm 横偏 + 2° 航向差：通过（锁 ω 抑制）。
+## 离线门洞回归台（秒级，替代 4 分钟仿真）
 
-## 已知遗留
+`src/rosiwit_navigation/test/test_door075_passage.cpp`：rpp + 真实 `SafetyMonitor` +
+门框点云 + 单极模型积分。4 条全过：
+居中直行 / 起点需转 90° / 起点横偏 5 cm / 起点 4 cm 横偏 + 2° 航向差。
 
-- **实仿真首轮仍停在 y≈2.3**：此时 x≈0.03、斜置 ≈1°，但控制器仍在打 ω 收敛；
-  安全层扫掠把 ω 的旋转也计入 → 判撞。ω 抑制已加，最近一轮已能到 `SUCCEEDED`，
-  但那一次是 recovery 期间轮子打滑导致 odom 漂移（`xtrack_max 0.85`、`min_clearance 0`），
-  **不是干净的通过**，不能作为验收依据。
-- 判据需要升级：以"门带内无 STOP + 车体角点始终在门框内 + 轨迹是直线"为准，
-  不能只看 `goal_status == SUCCEEDED`（odom 漂移会造成假成功）。
-- 规划器起步段仍会给出 S 形路径（最大折角 70~136°）；门带内路径本身已居中
-  (`path_x_at_door ≈ 0.000`)，但门前 0.8~1.5 m 的收敛需要更多行程。
+`test_rpp_alignment.cpp`：3 条（先转后走存在、直线跟踪 ≤3 cm、需转 90° 起步仍能在门平面 ≤2.3°）。
+
+## 遗留（唯一一条，已量化）
+
+门带内**斜置 3.3°**（要求 ≤1°）。原因是横向偏差在门前方 0.3 m 才收敛完，
+收敛过程本身就带 8° 左右的航向；而 Nav2 RPP 的 `la_min = 0.3 m` 决定了
+"每米衰减 e^-3.3"，起点瞬态的 ~10 cm 误差到门前只收到 1 cm、航向还没settle。
+
+三条标准解法（下一步选一条，都能在离线台秒级验证）：
+1. **门区 lane 直穿**：用代价地图的 inflation 势场（Nav2 tuning guide 推荐的
+   "gentle potential field"）+ 规划器平滑，让门前的路径在 1 m 内就是直线，
+   而不是靠控制器收敛；
+2. **门区降速**：`max_velocity_x 0.2` + `la_min 0.2`（窄口专用），把收敛距离缩到 0.4 m；
+3. **前置对准点**：在门前 1 m 插入一个"对准航向"的原地旋转（Nav2 rotation_shim 的
+   正常用法），转完再直穿 —— 但要同步把 rotation 安全区从"最远顶点 + 0.10"收到 +0.02。
 
 ## 复现命令
 
 ```bash
-# 离线门洞回归 (秒级)
 cd ~/rosiwit_ws/ros1_ws && catkin_make -DCATKIN_ENABLE_TESTING=1
-./devel/lib/rosiwit_navigation_ros1/test_door075_passage
+./devel/lib/rosiwit_navigation_ros1/test_door075_passage   # 秒级端到端
+./devel/lib/rosiwit_navigation_ros1/test_rpp_alignment
+./devel/lib/rosiwit_navigation_ros1/test_safety_monitor
 
-# 实仿真 (约 3 分钟): Gazebo doorway.world + maps/doorway + cfg_door_test.yaml
-bash scripts/sim/door_trace.sh   # 录像 -> /tmp 分析
+# 实仿真 (~3 分钟)
+bash scripts/sim/door_trace.sh
 ```

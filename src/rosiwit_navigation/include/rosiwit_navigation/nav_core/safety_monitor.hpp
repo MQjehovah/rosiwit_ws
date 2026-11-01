@@ -16,6 +16,10 @@ struct SafetyMonitorConfig
 {
   /// 直行时只按沿运动方向的扫掠走廊判定 STOP (左右两侧不参与)
   bool heading_aware = true;
+  /// 旧的可选模式: 把 footprint 沿预测轨迹扫掠, 并把"制动期间继续以当前 ω 旋转"
+  /// 也算进横向占用。比 nav2_collision_monitor 更保守; **会让 0.75m 门洞判停**
+  /// (0.66m 车体只剩 2~3cm 侧向余量, 任何 ω 在 0.4s 内转 5° 都超宽)。默认关。
+  bool swept_geometry = false;
   /// 扫掠区采样数 (当前 footprint 沿未来运动采样多少个位姿)
   int sweep_samples = 8;
   /// 角加速度上限, 用于算"转多久停下"; <=0 时用 brake_decel

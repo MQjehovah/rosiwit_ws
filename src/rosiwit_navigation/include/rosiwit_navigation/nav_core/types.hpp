@@ -98,10 +98,6 @@ struct ControllerConfig
   double max_lookahead_distance;
   double min_lookahead_distance;
   double lookahead_gain;
-  /// 前瞻距离的常数偏置 (m): L = clamp(lookahead_offset + lookahead_gain*|v|,
-  /// min_lookahead_distance, max_lookahead_distance)。以前 rpp 里写死 0.35,
-  /// 于是 min_lookahead_distance 永远不生效 (0.35 > 任何小于它的配置值)。
-  double lookahead_offset = 0.10;
   KinematicsLimits kinematics;
   double max_linear_velocity;
   double max_angular_velocity;
@@ -113,21 +109,29 @@ struct ControllerConfig
   double footprint_sample_spacing = 0.10;  // 多边形边采样间距 (m)
   /// 外部路径跟踪时把稀疏 waypoint 插值到最大间距(m); 0=关闭.
   double path_resample_step = 0.08;
-  /// 起步/大偏差时先原地对准的航向阈值 (rad): 0 = 关闭。
-  /// 纯跟踪带 20°+ 航向误差起步会切出一条 0.2m 的弧 (实测: 起点朝 +x, 目标 +y,
-  /// 规划路径无旋转段 -> y=0.5 处已偏 0.26m, 到门平面还剩 7° -> 必停)。
-  double prealign_heading_error = 0.26;
-  /// 调速 (regulated): 横向/航向偏差越大, 线速度越低 —— 偏了还猛冲只会把
-  /// 偏差带进窄门。scale = clamp(1 - k_y*|e_y| - k_h*|e_theta|, floor, 1)
-  double cross_track_speed_gain = 3.0;
-  double heading_speed_gain = 2.0;
-  double min_speed_scale = 0.2;
-  /// 弧线贴障碍时把 ω 按"弧线安全比例"衰减 (直行通过窄口)。
-  /// 窄门里可用横向余量只有 2~3cm, 任何 ω 都会把车体斜置撑宽扫掠区。
-  bool tight_arc_straighten = true;
-  /// 车身左右余量低于它时按比例压 ω (m): 门内等于不许打舵。
-  /// 0 = 关闭。
-  double tight_lateral_slack = 0.06;
+  // ---- 以下对齐 nav2_regulated_pure_pursuit_controller 的参数语义 ----
+  /// 前瞻用 v*lookahead_time 缩放 (否则用固定 lookahead_distance)
+  bool use_velocity_scaled_lookahead_dist = true;
+  double lookahead_time = 1.5;
+  /// 航向差超过它且车没在走 -> 原地转到路径朝向。
+  /// 取 nav2 rotation_shim 的 angular_disengage_threshold = 0.3925 (22.5°):
+  /// 只转到这个窗口就交给跟踪, 但残余的 20°+ 航向差在窄门里会把车体斜置
+  /// 带进扫掠区, 所以门洞场景建议再小一些 (见 cfg_door_test.yaml)。
+  bool use_rotate_to_heading = true;
+  double rotate_to_heading_min_angle = 0.3925;
+  double rotate_to_heading_angular_vel = 1.8;
+  /// 曲率调速: 转弯半径小于它时降速
+  bool use_regulated_linear_velocity_scaling = true;
+  double regulated_linear_scaling_min_radius = 0.9;
+  /// 任何调速的下限 (nav2 要求 > 0.1, 防止把车压死)
+  double regulated_linear_scaling_min_speed = 0.2;
+  /// 碰撞检测调速: 沿指令弧 max_allowed_time_to_collision_up_to_carrot 内
+  /// 会撞到真实障碍就降速 (v,ω 同比例缩放, 曲率不变)
+  bool use_collision_detection = true;
+  double max_allowed_time_to_collision_up_to_carrot = 1.0;
+  /// 末段调速 (nav2 approach_velocity_scaling_dist / min_approach_linear_velocity)
+  double approach_velocity_scaling_dist = 0.6;
+  double min_approach_linear_velocity = 0.05;
   bool allow_reverse = true;
   // MPPI tuning (ignored by other controllers).
   int mppi_horizon = 20;

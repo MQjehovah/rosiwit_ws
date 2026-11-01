@@ -69,15 +69,18 @@ int countPointsInPolygon(
   return count;
 }
 
-/// 按车体几何 + 制动距离生成停车区 (base 系).
+/// 按车体几何 + 制动距离生成停车区 (base 系) —— 等价于 nav2_collision_monitor 的
+/// velocity_polygon (translation_forward / translation_backward / rotation)：
 /// 前/后方向: 车体该侧外沿 + v²/(2a) + v*reaction + stop_margin;
 /// 侧向: 半宽 + side_margin + 转向扫掠 (v*|w|*reaction), 上限 turn_margin。
+/// extra_time: SLOWDOWN 区用它把"看得更远"的那一段加进去 (同一个多边形, 更长的车头)。
 void buildDynamicStopPolygon(
   const VelocityCommand & cmd,
   const std::vector<std::pair<double, double>> & footprint,
   double brake_decel, double reaction_time, double stop_margin,
   double side_margin, double turn_margin,
-  std::vector<std::pair<double, double>> & out)
+  std::vector<std::pair<double, double>> & out,
+  double extra_time = 0.0)
 {
   if (footprint.size() < 3) { out.clear(); return; }
 
@@ -92,7 +95,8 @@ void buildDynamicStopPolygon(
 
   const double v = std::fabs(cmd.linear_x);
   const double a = std::max(0.05, brake_decel);
-  const double brake = v * v / (2.0 * a) + v * std::max(0.0, reaction_time);
+  const double brake = v * v / (2.0 * a) +
+                       v * (std::max(0.0, reaction_time) + std::max(0.0, extra_time));
   const double half_width = std::max(std::fabs(min_y), std::fabs(max_y));
   const double turn = std::min(std::max(0.0, turn_margin),
                                v * std::fabs(cmd.angular_z) * std::max(0.0, reaction_time));
@@ -261,21 +265,24 @@ SafetyResult SafetyMonitor::filter(
     }
   }
 
-  // 动态安全区: 用当前 footprint 在未来运动上的**扫掠区域**判定 (任意 v,w)。
-  // 与 footprint 外扩(静态安全区)互补; 只在 dynamic_geometry 下启用, 老配置/单测不受影响。
+  // 动态安全区: 按当前速度选多边形 (nav2 velocity_polygon 语义)。
+  // swept_geometry 是**更严格**的可选模式 (旧实现): 把 footprint 沿预测轨迹扫掠,
+  // 并且把"制动期间继续以当前 ω 旋转"也算进横向占用 —— nav2 的 collision_monitor
+  // 不做这件事, 因为它会与"窄通道可通过"直接冲突: 0.75m 门洞里 0.66m 车体只剩
+  // 2~3cm 侧向余量, 任何 ω 在 0.4s 内转出的 5° 都会让扫掠区超宽而必然判停。
+  // 默认关 (行业默认), 需要"更保守"时再打开。
+  const bool sweep = config_.swept_geometry && config_.heading_aware &&
+    config_.dynamic_geometry && config_.footprint.size() >= 3 &&
+    (std::fabs(cmd.linear_x) > 1e-3 || std::fabs(cmd.angular_z) > 1e-3);
   int swept_hits = -1;
   int swept_slow_hits = -1;
-  if (config_.heading_aware && config_.dynamic_geometry && config_.footprint.size() >= 3 &&
-      (std::fabs(cmd.linear_x) > 1e-3 || std::fabs(cmd.angular_z) > 1e-3)) {
-    // 各向异性余量: 前/后用 stop_margin (制动余量), 侧向用 side_margin。
-    // 侧向绝不继承 stop_margin —— 否则窄门/窄通道的横向余量会把通道"算窄"。
+  if (sweep) {
     const double long_margin = std::max(0.0, config_.stop_margin);
     const double lat_margin = std::max(0.0, config_.side_margin);
     swept_hits = countSweptHits(pts, config_.footprint, cmd.linear_x, cmd.angular_z,
                                 config_.brake_decel, config_.heading_brake_decel,
                                 config_.reaction_time, config_.sweep_samples,
                                 config_.sweep_max_time, long_margin, lat_margin, 0.0);
-    // SLOWDOWN = 同一个 footprint 扫掠, 但时间更长 (看得更远): 提前减速, 不要等到 STOP
     const double slow_extra = std::max(0.0, config_.slowdown_lookahead);
     swept_slow_hits = countSweptHits(pts, config_.footprint, cmd.linear_x, cmd.angular_z,
                                      config_.brake_decel, config_.heading_brake_decel,
@@ -301,29 +308,37 @@ SafetyResult SafetyMonitor::filter(
     stop_poly = &config_.stop_polygon_backward;
   }
   std::vector<std::pair<double, double>> dynamic_stop;
+  std::vector<std::pair<double, double>> dynamic_slow;
   if (config_.dynamic_geometry && !rotating && config_.footprint.size() >= 3) {
     buildDynamicStopPolygon(cmd, config_.footprint, config_.brake_decel,
                             config_.reaction_time, config_.stop_margin,
                             config_.side_margin, config_.turn_margin,
                             dynamic_stop);
     if (!dynamic_stop.empty()) stop_poly = &dynamic_stop;
+    // nav2 的 slowdown 区就是"同一个多边形的更大版本": 车头多算
+    // v*slowdown_lookahead 的行程, 侧向不变 (侧向不能靠时间放大, 否则窄口又算窄)
+    buildDynamicStopPolygon(cmd, config_.footprint, config_.brake_decel,
+                            config_.reaction_time, config_.stop_margin,
+                            config_.side_margin, config_.turn_margin,
+                            dynamic_slow, std::max(0.0, config_.slowdown_lookahead));
   }
   int stop_count = 0;
   double stop_radius = config_.stop_radius;
   if (rotating && config_.stop_radius_rotation > 0.0) {
     stop_radius = config_.stop_radius_rotation;   // 原地转: 用扫掠圆
   }
-  if (swept_hits >= 0) {
-    stop_count = swept_hits;   // 扫掠区就是动态安全区本身
-    (void)stop_poly;
-    (void)stop_radius;
-  } else if (stop_radius > 0.0) {
+  if (rotating || stop_radius <= 0.0) {
+    stop_count = countPointsInPolygon(pts, *stop_poly);
+  }
+  if (rotating && stop_radius > 0.0) {
+    stop_count = 0;
     const double r2 = stop_radius * stop_radius;
     for (const auto & p : pts) {
       if (p.first * p.first + p.second * p.second <= r2) ++stop_count;
     }
-  } else {
-    stop_count = countPointsInPolygon(pts, *stop_poly);
+  }
+  if (swept_hits >= 0) {
+    stop_count = swept_hits;   // 可选: 更严格的扫掠区
   }
 
   // 3) 滞回: 连续 trigger 帧才进入, 连续 release 帧才释放.
@@ -345,6 +360,8 @@ SafetyResult SafetyMonitor::filter(
   bool slow_hit;
   if (swept_slow_hits >= 0) {
     slow_hit = swept_slow_hits > config_.slowdown_max_points;
+  } else if (!dynamic_slow.empty()) {
+    slow_hit = countPointsInPolygon(pts, dynamic_slow) > config_.slowdown_max_points;
   } else {
     slow_hit = countPointsInPolygon(pts, config_.slowdown_polygon) > config_.slowdown_max_points;
   }
