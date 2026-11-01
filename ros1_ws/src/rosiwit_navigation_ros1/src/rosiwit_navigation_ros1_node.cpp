@@ -3581,6 +3581,7 @@ private:
     async_plan_future_ = std::async(std::launch::async,
       [this, planner, fallback, pname, start, goal, tight_fp, full_fp,
        a_star_circum, a_star_inner]() {
+      ROS_WARN("[plan-dbg] lambda begin");
       if (!planner) {
         return core::Result<core::Path>::error(
           core::ErrorCode::PLANNING_FAILED, "planner gone");
@@ -3702,6 +3703,9 @@ private:
     }
 
     if (!result.is_ok()) {
+      // plan_ms 在失败时也记录: 以前只在成功路径写, 失败永远显示 -1,
+      // 现场会误判成"规划没跑"(2026-11-01 doorway 排查踩过).
+      last_plan_ms_ = (ros::Time::now().toSec() - plan_start_time_) * 1000.0;
       ROS_ERROR("[rosiwit_navigation_ros1] planner '%s' failed: %s",
                 planner_name_.c_str(), result.error_message().c_str());
       // 周期重规划失败 != 当前路径失效。旧路径仍可安全跟踪时, 只记录并延后
@@ -5273,6 +5277,9 @@ private:
 
   void stopNavigation()
   {
+    ROS_WARN("[plan-dbg] stopNavigation active=%d task=%d nav=%d pending='%s'",
+             static_cast<int>(planning_active_), static_cast<int>(task_active_),
+             static_cast<int>(is_navigating_), pending_goal_.header.frame_id.c_str());
     resetRecovery();
     // 安全层滞回状态 (stop_active_/slow_active_) 不能跨任务残留:
     // 上一次停车/切图时的 STOP 会让新目标前几拍继续零速, 表现为"起步一顿"。
