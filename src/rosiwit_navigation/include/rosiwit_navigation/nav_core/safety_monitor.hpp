@@ -14,6 +14,10 @@ namespace core
 
 struct SafetyMonitorConfig
 {
+  /// 直行时只按沿运动方向的扫掠走廊判定 STOP (左右两侧不参与)
+  bool heading_aware = true;
+  /// 角速度超过此值时不启用走廊判定 (转弯会扫到侧面), rad/s
+  double heading_aware_max_w = 0.15;
   bool enabled = true;
   std::vector<std::pair<double, double>> stop_polygon;
   double stop_radius = 0.0;  // >0: 用圆形安全区, 优先于 polygon

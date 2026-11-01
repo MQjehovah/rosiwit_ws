@@ -178,6 +178,36 @@ SafetyResult SafetyMonitor::filter(
     }
   }
 
+  // heading_aware corridor: 直行时只把"沿运动方向、车宽以内、制动距离以内"的点
+  // 当作 STOP 依据。左右两侧(门框、走廊侧墙)在直行时不会被车体扫到, 不参与判定。
+  // 旋转/倒车/带明显角速度时不启用 —— 那时车体扫过的横向范围会变大。
+  if (config_.heading_aware && config_.dynamic_geometry &&
+      config_.footprint.size() >= 3 &&
+      std::fabs(cmd.angular_z) <= config_.heading_aware_max_w &&
+      std::fabs(cmd.linear_x) > 0.05) {
+    double half_w = 0.0;
+    double front_len = 0.0;
+    for (const auto & v : config_.footprint) {
+      half_w = std::max(half_w, std::fabs(v.second));
+      front_len = std::max(front_len, v.first);
+    }
+    const double speed = std::fabs(cmd.linear_x);
+    const double brake = speed * speed / (2.0 * std::max(0.05, config_.brake_decel)) +
+                         speed * std::max(0.0, config_.reaction_time);
+    const double lat = half_w + std::max(0.0, config_.side_margin);
+    const double fwd = front_len + std::max(0.0, config_.stop_margin) + brake;
+    const double dir = (cmd.linear_x >= 0.0) ? 1.0 : -1.0;
+    std::vector<std::pair<double, double>> corridor;
+    corridor.reserve(pts.size());
+    for (const auto & q : pts) {
+      const double x = dir * q.first;              // 沿运动方向为正
+      if (x < 0.0 || x > fwd) { continue; }        // 身后 / 制动距离外
+      if (std::fabs(q.second) > lat) { continue; } // 走廊两侧
+      corridor.push_back(q);
+    }
+    pts.swap(corridor);
+  }
+
   // nav2 VelocityPolygon 的语义: rotation 区只在"真的在转"时生效
   // (|v| 小 **且** |w| 明显).
   // ⚠ 2026-10-28: 以前**区选择**只看 |v|<0.05, 而半径分支才看 |w|, 于是
