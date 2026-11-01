@@ -31,6 +31,7 @@ class Run(object):
         self.cmd_first = None
         self.cmd_last = None
         self.cmd_max_v = 0.0
+        self.cmd_v_sum = 0.0
         self.cmd_max_w = 0.0
         self.cmd_dv = 0.0
         self.cmd_dw = 0.0
@@ -73,6 +74,7 @@ class Run(object):
         self.cmd_last = rospy.Time.now()
         self.cmd_count += 1
         self.cmd_max_v = max(self.cmd_max_v, abs(v))
+        self.cmd_v_sum += abs(v)
         self.cmd_max_w = max(self.cmd_max_w, abs(w))
         if self.prev_cmd is not None:
             self.cmd_dv = max(self.cmd_dv, abs(v - self.prev_cmd[0]))
@@ -144,8 +146,13 @@ class Run(object):
         start = self.to_cell(pose[0], pose[1])
         if not self.free(*start):
             return None
-        dist = self.bfs(start, 5.0)
-        bands = [(2.0, 4.0, 3.0, 0.45), (1.2, 5.0, 2.5, 0.35), (0.8, 5.0, 1.8, 0.25)]
+        band = getattr(self, 'goal_band', None)
+        max_len = max(5.0, band[1] if band else 5.0)
+        dist = self.bfs(start, max_len)
+        bands = []
+        if band:
+            bands.append((band[0], band[1], 0.5 * (band[0] + band[1]), 0.35))
+        bands += [(2.0, 4.0, 3.0, 0.45), (1.2, 5.0, 2.5, 0.35), (0.8, 5.0, 1.8, 0.25)]
         for lo, hi, mid, clear in bands:
             best = None
             for cell, d in dist.items():
@@ -173,8 +180,14 @@ def pose_from_diag(d):
 def main():
     label = sys.argv[1] if len(sys.argv) > 1 else 'run'
     timeout = float(sys.argv[2]) if len(sys.argv) > 2 else 150.0
+    # 可选第 3 参数: 目标距离带 "lo,hi" (默认 2.0,4.0 -> 3.0)
+    goal_band = None
+    if len(sys.argv) > 3 and ',' in sys.argv[3]:
+        a, b = sys.argv[3].split(',')
+        goal_band = (float(a), float(b))
     rospy.init_node('nav_sim_driver', anonymous=True)
     run = Run(timeout)
+    run.goal_band = goal_band
 
     t0 = time.time()
     while run.map_msg is None or run.diag is None:
@@ -269,6 +282,7 @@ def main():
         'cmd_n': run.cmd_count,
         'cmd_hz': round(cmd_hz, 2),
         'cmd_max_v': round(run.cmd_max_v, 3),
+        'cmd_mean_v': round(run.cmd_v_sum / max(1, run.cmd_count), 3),
         'cmd_max_w': round(run.cmd_max_w, 3),
         'cmd_max_dv': round(run.cmd_dv, 3),
         'cmd_max_dw': round(run.cmd_dw, 3),

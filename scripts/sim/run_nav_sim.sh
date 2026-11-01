@@ -14,6 +14,9 @@ LABEL=run
 BINARY=""
 WORLD=""
 GUI=false
+TOLERANCE=""
+BAND=""
+CONFIG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -21,6 +24,9 @@ while [ $# -gt 0 ]; do
     --label) LABEL=$2; shift 2 ;;
     --binary) BINARY=$2; shift 2 ;;
     --world) WORLD=$2; shift 2 ;;
+    --tolerance) TOLERANCE=$2; shift 2 ;;
+    --band) BAND=$2; shift 2 ;;
+    --config) CONFIG=$2; shift 2 ;;
     *) echo "unknown arg: $1"; exit 2 ;;
   esac
 done
@@ -51,6 +57,16 @@ sleep 5
 LOG=$OUT/sim_${LABEL}.log
 EXTRA=""
 if [ -n "$WORLD" ]; then EXTRA="world_name:=$WORLD"; fi
+# 用独立配置覆盖 goal_tolerance (实车 0.10, 仿真默认 0.20) 或整份配置
+CFG=$CONFIG
+if [ -z "$CFG" ] && [ -n "$TOLERANCE" ]; then
+  CFG=$OUT/sim_cfg_${LABEL}.yaml
+  sed -e "s/^goal_tolerance_xy:.*/goal_tolerance_xy: $TOLERANCE/" \
+      -e "s/^goal_tolerance_yaw:.*/goal_tolerance_yaw: $TOLERANCE/" \
+      "$WS/ros1_ws/src/rosiwit_navigation_ros1/config/simulation.yaml" > "$CFG"
+  echo "config override: $CFG (tolerance=$TOLERANCE)"
+fi
+if [ -n "$CFG" ]; then EXTRA="$EXTRA navigation_config:=$CFG"; fi
 echo "=== launch ($LABEL) -> $LOG ==="
 setsid nohup roslaunch rosiwit_starter_ros1 sim_slam_nav.launch \
   gui:=$GUI rviz:=false use_drive:=false $EXTRA > "$LOG" 2>&1 < /dev/null &
@@ -82,7 +98,7 @@ fi
 echo "nav node pid=$PID threads=$(ls /proc/$PID/task | wc -l)"
 
 echo "=== nav test ($DRIVER) ==="
-timeout 600 python2 "$SCRIPT" "$LABEL" 2>&1 | tee "$OUT/run_${LABEL}.log" \
+timeout 600 python2 "$SCRIPT" "$LABEL" 150 "$BAND" 2>&1 | tee "$OUT/run_${LABEL}.log" \
   | grep -E '^\{' | tee -a "$OUT/results.jsonl"
 
 echo "=== post-run health ==="
