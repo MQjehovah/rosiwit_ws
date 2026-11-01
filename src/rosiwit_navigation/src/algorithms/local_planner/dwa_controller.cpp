@@ -19,6 +19,8 @@ DwaController::~DwaController() = default;
 bool DwaController::initialize(const core::ControllerConfig& config) {
     cfg_ = config;
     max_vx_ = config.max_linear_velocity > 0 ? config.max_linear_velocity : 0.5;
+    // reverse: planner may emit velocity_x<0 segments; keep one-way when disabled
+    min_vx_ = config.allow_reverse ? -0.5 * max_vx_ : 0.0;
     max_vw_ = config.max_angular_velocity > 0 ? config.max_angular_velocity : 1.0;
     max_accel_ = config.max_accel_x > 0 ? config.max_accel_x :
       (config.kinematics.max_velocity_x > 0 ? config.kinematics.max_velocity_x : 0.5);
