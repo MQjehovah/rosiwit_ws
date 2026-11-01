@@ -1,0 +1,22 @@
+dataset:            NTU VIRAL eee_03 (ROS2 bag, 181.3 s)
+command:            ros2 launch rosiwit_slam_ros2 fast_livo2.launch.py config:=fast_livo2_ntu.yaml
+                    (standard node rosiwit_slam_ros2 -> SlamPipeline -> fast_livo2_frontend)
+lidar_frames:       1814 / 1814 received (reliable QoS), 1696 sync packages, 0 frames dropped
+imu_messages:       70475
+poses_recorded:     474 (ros2 bag record /lio_odom; node merges poses when behind real time)
+ate_se3_rmse:       0.234 m
+ate_se3_mean:       0.200 m
+ate_se3_max:        0.454 m
+ate_matched_poses:  194
+traj_span:          1609060335.1 .. 1609060515.9 (whole bag)
+
+map (save_map service):
+  map.pcd:          7.7 MB   (XYZ + intensity, pcd_map_manager)
+  map_rgb.pcd:      48 MB    3089091 points @0.1 m voxel (int64 grid)
+  rgb frames:       1693, raw 26668962 points
+
+wall_clock:         bag 189 s, node idle after 240 s
+
+# reference (same bag)
+livo_replay_ate_se3_rmse: 0.237 m   (n=1509)
+standalone_pkg_ate_se3_rmse: 0.257 m (n=1509)

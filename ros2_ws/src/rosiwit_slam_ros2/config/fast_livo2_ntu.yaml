@@ -7,8 +7,12 @@ global:
   pipeline_mode: mapping
   modules:
     frontend: "fast_livo2_frontend"
-    backend: "ceres_pose_graph"
-    loop_closure: "scan_context"
+    # 数据集回放默认关掉位姿图后端/回环:
+    #   181 s 的序列不需要回环; ScanContext 在这种旋转很大的室外场景也没调过,
+    #   而且后端 worker (transformPointCloud / ICP) 曾经在关键帧点云宽高为 0 时
+    #   直接 SIGFPE (见 docs/dev/fast-livo2-ros2.md 6.6). 需要后端时把名字填回去.
+    backend: ""
+    loop_closure: ""
     map_manager: "pcd_map_manager"
     localization: "localization_pipeline"
 
@@ -17,6 +21,7 @@ global:
     lidar_topic: /os1_cloud_node1/points
     image_topic: /left/image_raw
     disable_prefilter: true      # LIVO 前端自己按 fast_livo2 参数滤波
+    qos_reliable: true           # 离线播包: 避免 best_effort 读端静默丢 ~1/3 点云帧
     lidar_filter_num: 3
     lidar_min_range: 0.8
     lidar_max_range: 100.0

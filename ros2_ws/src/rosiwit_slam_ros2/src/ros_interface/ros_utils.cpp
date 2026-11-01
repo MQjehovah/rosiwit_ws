@@ -24,7 +24,10 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RosUtils::ros2PCL(
     for (const auto& f : msg->fields) {
         if (f.name == "timestamp" || f.name == "offset_time" || f.name == "t") {
             const int ps = msg->point_step;
-            const size_t n = msg->width;
+            // 注意: 必须用 width*height, organized point cloud 的 height>1 时
+            // 只用 width 会让 pt_times 只覆盖 1/height 的点, 后面 pt_times[i] 越界读
+            // (UB) 得到垃圾 curvature -> 帧 end_time 变成 inf, 同步层永远等不到 IMU.
+            const size_t n = static_cast<size_t>(msg->width) * msg->height;
             pt_times.reserve(n);
             const uint8_t* data = msg->data.data();
             for (size_t i = 0; i < n; ++i) {
@@ -48,6 +51,8 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RosUtils::ros2PCL(
         // 判断时间字段是否有效覆盖扫描周期:
         // 若跨度 < 扫描周期 5% (近同时采集或常量字段), 不可用于去畸变, 回退线性模型。
         if (span < 0.05 * scan_period_ms * 1e6) have_time = false;   // ns → 周期*1e6
+        // 防御: 时间数组必须覆盖全部点, 否则回退线性模型 (绝不能越界读)
+        if (pt_times.size() < static_cast<size_t>(tmp_cloud->size())) have_time = false;
     }
     double t0 = 0.0;
     if (have_time) t0 = *std::min_element(pt_times.begin(), pt_times.end());

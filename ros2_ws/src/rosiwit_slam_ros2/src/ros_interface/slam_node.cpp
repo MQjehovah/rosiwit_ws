@@ -9,10 +9,12 @@
 #include <opencv2/imgproc.hpp>
 #include <tf2/time.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <functional>
 #include <cmath>
+#include <thread>
 #include "ros_interface/ros_utils.h"
 
 using namespace std::chrono_literals;
@@ -38,17 +40,26 @@ bool SlamNode::lookupMount(const std::string& target, const std::string& source,
         return true;
     }
     if (!m_tf_buffer) return false;
-    try {
-        const auto tf = m_tf_buffer->lookupTransform(
-            target, source, tf2::TimePointZero, tf2::durationFromSec(timeout_sec));
-        const auto& q_msg = tf.transform.rotation;
-        Eigen::Quaterniond q(q_msg.w, q_msg.x, q_msg.y, q_msg.z);
-        q.normalize();
-        const auto& t_msg = tf.transform.translation;
-        out.set(q.toRotationMatrix(), Eigen::Vector3d(t_msg.x, t_msg.y, t_msg.z));
-        return true;
-    } catch (const tf2::TransformException&) {
-        return false;
+    // 有界等待用 steady_clock, 不能依赖 tf2 的 timeout:
+    // use_sim_time=true 而 /clock 还没起来时时钟不走, 3 s 超时会变成永远等待,
+    // 节点就卡死在构造函数里 (实测现象: 只有 /tf /rosout, 其他话题都没建).
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(timeout_sec));
+    while (true) {
+        try {
+            const auto tf = m_tf_buffer->lookupTransform(
+                target, source, tf2::TimePointZero, tf2::durationFromSec(0.0));
+            const auto& q_msg = tf.transform.rotation;
+            Eigen::Quaterniond q(q_msg.w, q_msg.x, q_msg.y, q_msg.z);
+            q.normalize();
+            const auto& t_msg = tf.transform.translation;
+            out.set(q.toRotationMatrix(), Eigen::Vector3d(t_msg.x, t_msg.y, t_msg.z));
+            return true;
+        } catch (const tf2::TransformException&) {
+            if (std::chrono::steady_clock::now() >= deadline) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
     }
 }
 
@@ -182,6 +193,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_algo = SlamFactory::create(algo_name);
     if (!m_algo) { RCLCPP_FATAL(this->get_logger(), "Unknown algo: %s", algo_name.c_str()); throw std::runtime_error("unknown algo"); }
     m_algo_raw = m_algo.get();
+    RCLCPP_INFO(this->get_logger(), "init: algo=%s config=%s use_sim_time=%s",
+                algo_name.c_str(), config_path.c_str(),
+                this->get_parameter("use_sim_time").as_bool() ? "true" : "false");
     if (!config_path.empty()) {
         YAML::Node cfg = YAML::LoadFile(config_path);
         if (cfg) {
@@ -203,6 +217,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.image_topic      = gi("image_topic").as<std::string>(m_cfg.image_topic);
             m_cfg.enable_image_processing = gi("enable_image_processing").as<bool>(m_cfg.enable_image_processing);
             m_cfg.disable_prefilter = gi("disable_prefilter").as<bool>(m_cfg.disable_prefilter);
+            m_cfg.sensor_reliable = gi("qos_reliable").as<bool>(m_cfg.sensor_reliable);
             m_cfg.lidar_frame      = gf_node("lidar_frame").as<std::string>(m_cfg.lidar_frame);
             m_cfg.imu_frame        = gf_node("imu_frame").as<std::string>(m_cfg.imu_frame);
             m_cfg.body_frame       = gf_node("body_frame").as<std::string>(m_cfg.body_frame);
@@ -286,11 +301,15 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_tf_listener = std::make_shared<tf2_ros::TransformListener>(*m_tf_buffer);
 
     RigidTransform imu_lidar;
-    if (!lookupMount(m_cfg.imu_frame, m_cfg.lidar_frame, imu_lidar, 3.0)) {
-        RCLCPP_FATAL(get_logger(),
-                     "cannot determine T_%s_%s from TF; provide TF or set imu_frame==lidar_frame",
-                     m_cfg.imu_frame.c_str(), m_cfg.lidar_frame.c_str());
-        throw std::runtime_error("missing imu<-lidar TF");
+    const bool have_imu_lidar_tf = lookupMount(m_cfg.imu_frame, m_cfg.lidar_frame, imu_lidar, 3.0);
+    if (!have_imu_lidar_tf) {
+        // 离线包/数据集通常没有 /tf, 外参写在 YAML 的 extrin_calib (r_il/t_il) 里,
+        // 核心会直接用配置值. 这里只做 identity mount, 不再中止进程.
+        RCLCPP_WARN(get_logger(),
+                    "T_%s_%s unavailable from TF; using configured extrinsics "
+                    "(extrin_calib/lidar_imu_*) and identity mount",
+                    m_cfg.imu_frame.c_str(), m_cfg.lidar_frame.c_str());
+        imu_lidar.set(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
     }
     RigidTransform base_imu, base_lidar;
     const bool have_base_imu = lookupMount(m_cfg.body_frame, m_cfg.imu_frame, base_imu, 3.0);
@@ -320,10 +339,13 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
         RCLCPP_INFO(get_logger(),
             "IMU/LiDAR share frame '%s'; keeping configured r_il/t_il",
             m_cfg.imu_frame.c_str());
-    } else {
+    } else if (have_imu_lidar_tf) {
         config_path = writeExtrinsicOverride(
             config_path, imu_lidar, m_base_lidar,
             have_base_imu ? base_imu : RigidTransform{});
+    } else {
+        RCLCPP_INFO(get_logger(),
+            "no TF override written; core keeps r_il/t_il from config");
     }
 
     if (!m_algo->init(config_path)) { RCLCPP_FATAL(this->get_logger(), "Init failed"); throw std::runtime_error("init failed"); }
@@ -351,7 +373,11 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
 
     // 真实 LiDAR/IMU 驱动通常 best-effort; 默认 reliable 订阅会直接匹配不上.
     // reliable 发布者可以被 best-effort 订阅者接收, 仿真/实机都兼容.
-    const auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(500)).best_effort();
+    // 默认 best_effort 保证与真机驱动兼容; 离线播包 (ros2 bag play 发 reliable) 配
+    // qos_reliable: true, 否则 best_effort 读端会静默丢 ~1/3 点云帧.
+    const auto sensor_qos = m_cfg.sensor_reliable
+        ? rclcpp::QoS(rclcpp::KeepLast(500)).reliable()
+        : rclcpp::QoS(rclcpp::KeepLast(500)).best_effort();
     m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, sensor_qos, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
     m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, sensor_qos, std::bind(&SlamNode::lidarCB, this, _1), sensor_sub_opts);
     if (!m_cfg.image_topic.empty()) {
@@ -675,6 +701,25 @@ void SlamNode::timerCB() {
     auto* base = dynamic_cast<SlamBase*>(m_algo.get());
     // 一次 tick 内排空所有已同步的包, 防止重处理慢时数据在内部缓冲区积压
     if (base) { while (base->tryPopAndProcess()) {} }
+    // 每 2 s 打一行同步诊断: 收包数 / 同步包数 / 缓冲深度。
+    // "有话题没位姿" 时, 这行足以定位是没收包、同步不出包, 还是前端不产位姿。
+    if (base) {
+        static auto last = std::chrono::steady_clock::now();
+        const auto now_t = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(now_t - last).count() >= 2.0) {
+            last = now_t;
+            const auto st = base->syncStats();
+            RCLCPP_INFO(get_logger(),
+                        "sync: imu_rx=%llu lidar_rx=%llu pkgs=%llu | buf imu=%zu lidar=%zu pushed=%d "
+                        "| t_imu=%.3f t_lidar_end=%.3f pending_end=%.3f (imu-pending=%.3f)",
+                        static_cast<unsigned long long>(st.imu_rx),
+                        static_cast<unsigned long long>(st.lidar_rx),
+                        static_cast<unsigned long long>(st.pkg_rx),
+                        st.imu_buf, st.lidar_buf, st.lidar_pushed ? 1 : 0,
+                        st.last_imu_time, st.last_lidar_end, st.pending_end,
+                        st.last_imu_time - st.pending_end);
+        }
+    }
     // 定位模式的 LiDAR 由 SlamPipeline 内部 worker 处理，避免重定位阻塞 spinner。
     SlamOutput out; bool should_publish = false;
     {
