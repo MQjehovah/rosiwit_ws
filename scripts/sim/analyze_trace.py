@@ -45,6 +45,7 @@ def at_y(rows, y_target, tol=0.06):
 def main():
     csv_path = sys.argv[1]
     door_y = float(sys.argv[2]) if len(sys.argv) > 2 else 2.9
+    door_half = float(sys.argv[3]) if len(sys.argv) > 3 else 0.40
     rows = load(csv_path)
     if not rows:
         print('no rows')
@@ -128,9 +129,10 @@ def main():
     # ---- 物理判定: 门带内车体角点是否越过门框 ----
     # Gazebo 碰撞体 = 0.87 x 0.70 (x 偏移 0.119) -> x -0.316..0.554, y +-0.35
     # (导航声明 footprint 是 0.66 宽, 比碰撞体窄 4cm; 两个口径都算)
+    # 门洞 0.80m (碰撞体 0.70 + 10cm) -> 半宽 0.40
     bodies = [
-        ('collision_0.70', [(-0.316, -0.35), (0.554, -0.35), (0.554, 0.35), (-0.316, 0.35)]),
-        ('footprint_0.66', [(-0.25, -0.33), (0.55, -0.33), (0.55, 0.33), (-0.25, 0.33)]),
+        ('collision_0.87x0.70', [(-0.316, -0.35), (0.554, -0.35), (0.554, 0.35), (-0.316, 0.35)]),
+        ('visual_0.87x0.718', [(-0.327, -0.359), (0.565, -0.359), (0.565, 0.359), (-0.327, 0.359)]),
     ]
     for name, fp in bodies:
         worst = 0.0
@@ -148,12 +150,12 @@ def main():
                     samples += 1
         if samples == 0:
             verdict = 'NOT_REACHED'
-        elif worst <= 0.375:
+        elif worst <= door_half:
             verdict = 'PASS'
         else:
-            verdict = 'CLIP(+%.0fmm)' % ((worst - 0.375) * 1000)
-        print('gate_verdict[%s]: worst_corner_x=%.4f (half_gap 0.375, n=%d) -> %s' % (
-            name, worst, samples, verdict))
+            verdict = 'CLIP(+%.0fmm)' % ((worst - door_half) * 1000)
+        print('gate_verdict[%s]: worst_corner_x=%.4f (half_gap %.2f, n=%d) -> %s' % (
+            name, worst, door_half, samples, verdict))
     return 0
 
 

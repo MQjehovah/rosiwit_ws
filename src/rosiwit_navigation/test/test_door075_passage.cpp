@@ -5,8 +5,8 @@
 // 目的: 把"0.75m 门洞能不能过"变成秒级可重复的断言, 而不是每次 4 分钟仿真。
 //
 // 几何 (与 world/doorway.world 一致):
-//   门框: y ∈ [2.90, 3.10], |x| ≥ 0.375  (门洞宽 0.75m, 车体宽 0.66m)
-//   车体: 0.66 x 0.80 (footprint x -0.25..0.55, y ±0.33)
+//   门框: y ∈ [2.90, 3.10], |x| ≥ 0.40   (门洞宽 0.80m = 车宽 0.70 + 10cm)
+//   车体: 碰撞体 0.87 x 0.70 (x -0.316..0.554, y ±0.35)
 // ============================================================================
 #include <gtest/gtest.h>
 
@@ -34,7 +34,7 @@ using rosiwit_navigation::core::VelocityCommand;
 
 constexpr double kDoorY0 = 2.90;
 constexpr double kDoorY1 = 3.10;
-constexpr double kDoorHalf = 0.375;
+constexpr double kDoorHalf = 0.40;   // 0.80m 门洞 = 碰撞体 0.70 + 10cm
 
 // 门框内表面的采样点 (世界系) —— 相当于 /scan 看到的东西
 std::vector<std::pair<double, double>> doorSurfacePoints()
@@ -78,12 +78,12 @@ SafetyMonitorConfig safetyConfig()
   cfg.sweep_samples = 8;
   cfg.sweep_max_time = 1.0;
   cfg.stop_margin = 0.05;
-  cfg.side_margin = 0.015;
+  cfg.side_margin = 0.02;
   cfg.turn_margin = 0.05;
-  cfg.footprint = {{-0.25, -0.33}, {0.45, -0.33}, {0.55, -0.20},
-                   {0.55, 0.20}, {0.45, 0.33}, {-0.25, 0.33}};
-  // 车身排除盒 = footprint + 0.01 (safety_body_margin)
-  cfg.body_polygon = {{-0.26, -0.34}, {0.56, -0.34}, {0.56, 0.34}, {-0.26, 0.34}};
+  // 真实碰撞体 (gt_robot.xacro base_collision_box2 = 0.87 x 0.70, x 偏移 0.119)
+  cfg.footprint = {{-0.316, -0.35}, {0.554, -0.35}, {0.554, 0.35}, {-0.316, 0.35}};
+  // 车身排除盒 = 碰撞体 + 0.02 (safety_body_margin)
+  cfg.body_polygon = {{-0.336, -0.37}, {0.574, -0.37}, {0.574, 0.37}, {-0.336, 0.37}};
   cfg.stop_max_points = 4;
   cfg.slowdown_max_points = 6;
   cfg.slowdown_ratio = 0.30;
@@ -120,7 +120,7 @@ std::unique_ptr<RppController> makeController()
   cfg.use_velocity_scaled_lookahead_dist = true;
   cfg.lookahead_time = envOr("DOOR_LA_TIME", 1.5);
   cfg.use_rotate_to_heading = true;
-  cfg.rotate_to_heading_min_angle = 0.785;
+  cfg.rotate_to_heading_min_angle = envOr("DOOR_ROT_ANG", 0.03);
   cfg.regulated_linear_scaling_min_speed = envOr("DOOR_MIN_SPEED", 0.2);
   cfg.path_resample_step = 0.05;
   std::unique_ptr<RppController> c(new RppController());
@@ -152,7 +152,7 @@ struct DoorRun {
 std::vector<std::pair<double, double>> bodyCorners(const Pose2D & pose)
 {
   const std::vector<std::pair<double, double>> fp = {
-    {-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}};
+    {-0.316, -0.35}, {0.554, -0.35}, {0.554, 0.35}, {-0.316, 0.35}};
   std::vector<std::pair<double, double>> out;
   const double c = std::cos(pose.theta), s = std::sin(pose.theta);
   for (const auto & q : fp) {
