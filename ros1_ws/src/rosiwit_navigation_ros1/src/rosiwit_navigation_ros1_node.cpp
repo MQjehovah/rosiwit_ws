@@ -5148,7 +5148,10 @@ private:
       geometry_msgs::Twist rot_cmd;
       const double current_yaw = yawFromQuat(current_pose_.pose.orientation);
       const double angle_error = normalizeAngle(m_initial_rotate_target_ - current_yaw);
-      if (std::abs(angle_error) < 0.08) {
+      // 对准精度: 起步航向残差会原封不动变成"规划起点的航向", 于是整条路径
+      // 从起点就斜着 (实测残差 3.2° -> 路径斜 3.2° -> 沿路径直行 1.2m 漂 8cm ->
+      // 门前斜置 3~5°)。0.08rad(4.6°) 太松, 收到 0.02rad(1.1°)。
+      if (std::abs(angle_error) < 0.02) {
         m_need_initial_rotate_ = false;
         // 转完必须按新朝向重规划: 否则路径还是"从旧朝向起步"的弧线, 控制器
         // 逼近这段弧时会再次把车甩出 0.2m (等于白转)。

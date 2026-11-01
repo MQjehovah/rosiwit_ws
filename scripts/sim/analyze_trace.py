@@ -115,15 +115,15 @@ def main():
         pts = []
     if len(pts) < 2:
         print('path: not captured')
-        return 0
-    xs = [x for x, y in pts if abs(y - door_y) < 0.15]
-    print('path_pts=%d  path_x_at_door=%s' % (
-        len(pts), ('%.3f' % (sum(xs) / len(xs))) if xs else 'none'))
-    # 路径整体横向偏移 (相对门中心 x=0), 只统计门附近 1m
-    near = [x for x, y in pts if abs(y - door_y) < 1.0]
-    if near:
-        print('path_x_mean_near_door=%.3f max_abs=%.3f' % (
-            sum(near) / len(near), max(abs(v) for v in near)))
+        pts = []
+    if pts:
+        xs = [x for x, y in pts if abs(y - door_y) < 0.15]
+        print('path_pts=%d  path_x_at_door=%s' % (
+            len(pts), ('%.3f' % (sum(xs) / len(xs))) if xs else 'none'))
+        near = [x for x, y in pts if abs(y - door_y) < 1.0]
+        if near:
+            print('path_x_mean_near_door=%.3f max_abs=%.3f' % (
+                sum(near) / len(near), max(abs(v) for v in near)))
 
     # ---- 物理判定: 门带内车体角点是否越过门框 ----
     # Gazebo 碰撞体 = 0.87 x 0.70 (x 偏移 0.119) -> x -0.316..0.554, y +-0.35
@@ -147,7 +147,7 @@ def main():
                     worst = max(worst, abs(wx))
                     samples += 1
         if samples == 0:
-            verdict = 'NOT_REACHED(车体从未进入门带)'
+            verdict = 'NOT_REACHED'
         elif worst <= 0.375:
             verdict = 'PASS'
         else:
