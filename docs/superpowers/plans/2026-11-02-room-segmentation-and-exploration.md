@@ -57,6 +57,9 @@
 
 namespace core = rosiwit_navigation::core;
 
+// 约定: 本文件所有测试夹具(合成栅格/面积统计)都放在这个匿名命名空间里,
+// 后续 task 新增的 dumbbellGrid()/corridorGrid()/polygonArea()/knownFreeArea()/
+// totalRoomArea() 也加在这里, 不新建测试文件.
 namespace {
 // 20 m x 10 m 空间, 中点一道墙(墙厚 0.2 m), 墙上留 door_w 宽的门
 std::vector<int8_t> twoRoomGrid(double door_w, double res = 0.05);
@@ -324,7 +327,7 @@ git commit -am "feat(nav-core): stable room ids across successive segmentations"
   - 订阅 `/map`（`transient_local`）
   - 发布 `/room_labels`（`nav_msgs/OccupancyGrid`，int8：-1/0..126/127）、`/room_markers`（`MarkerArray`）
   - 服务 `~/segment`（`std_srvs/Trigger`，立即重算）、`~/save_rooms`（`std_srvs/Trigger`，写 `<save_dir>/<map_id>.rooms.json`）
-  - 参数：`map_topic`、`room_labels_topic`、`door_width_max`、`min_area_m2`、`corridor_min_length_m`、`period`（默认 5.0 s）、`save_dir`
+  - 参数：`map_topic`、`room_labels_topic`、`door_width_max`、`min_area_m2`、`corridor_min_length_m`、`period`（默认 5.0 s）、`save_dir`、`map_file`（非空 = 离线模式：只读该 PGM+同目录 yaml，分割一次、发布一次后退出，供建图后回放/验收用）
 
 - [ ] **Step 1: 写失败测试（集成，launch 起节点）**
 
@@ -580,7 +583,7 @@ Run: `python3 scripts/sim/explore_eval.py --scenario <world> --runs 5 --compare 
 
 - [ ] **Step 2: 房间分割验收**（3–5 张真实站点地图）
 
-Run: `ros2 run rosiwit_navigation_ros2 room_segmentation_node --ros-args -p map_file:=<pgm>`（离线模式）
+Run: `ros2 run rosiwit_navigation_ros2 room_segmentation_node --ros-args -p map_file:=/path/map.pgm`（离线模式，读同目录的 map.yaml 取分辨率/原点）
 判定：IoU > 0.8、房间数误差 ≤ 1、门召回 > 90%、耗时 < 300 ms（100×100 m / 0.05 m）。
 
 - [ ] **Step 3: 写文档** — 结果表 + 参数含义 + 已知失败模式（开放空间过度切分、家具假门、未知区边界）。
