@@ -187,6 +187,11 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     std::string config_path;
     this->declare_parameter<std::string>("config_file", "");
     this->declare_parameter<std::string>("config_path", "");
+    // 话题/QoS 可用 ROS 参数覆盖: 离线播包不必改配置文件 (见 slam.launch.py)
+    this->declare_parameter<std::string>("image_topic", "");   // 空 = 用配置
+    this->declare_parameter<std::string>("lidar_topic", "");   // 空 = 用配置
+    this->declare_parameter<std::string>("imu_topic", "");     // 空 = 用配置
+    this->declare_parameter<int>("qos_reliable", -1);          // -1 = 用配置; 0/1 = 强制
     this->get_parameter("config_file", config_path);
     if (config_path.empty()) this->get_parameter("config_path", config_path);
 
@@ -218,6 +223,21 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.enable_image_processing = gi("enable_image_processing").as<bool>(m_cfg.enable_image_processing);
             m_cfg.disable_prefilter = gi("disable_prefilter").as<bool>(m_cfg.disable_prefilter);
             m_cfg.sensor_reliable = gi("qos_reliable").as<bool>(m_cfg.sensor_reliable);
+            // 前端选择只写在 global.modules.frontend 一处: LIVO 前端自己按 fast_livo2 参数
+            // 滤波/抽稀, 接口层就不能再预滤波, 否则逐点时间(curvature)会丢.
+            {
+                const YAML::Node mods = (glob && glob["modules"]) ? glob["modules"] : YAML::Node();
+                const std::string fe = (mods && mods["frontend"])
+                    ? mods["frontend"].as<std::string>("") : std::string();
+                if (fe == "fast_livo2_frontend") {
+                    if (!m_cfg.disable_prefilter) {
+                        RCLCPP_INFO(get_logger(),
+                                    "frontend=%s -> disable interface prefilter (frontend filters itself)",
+                                    fe.c_str());
+                    }
+                    m_cfg.disable_prefilter = true;
+                }
+            }
             m_cfg.lidar_frame      = gf_node("lidar_frame").as<std::string>(m_cfg.lidar_frame);
             m_cfg.imu_frame        = gf_node("imu_frame").as<std::string>(m_cfg.imu_frame);
             m_cfg.body_frame       = gf_node("body_frame").as<std::string>(m_cfg.body_frame);
@@ -293,6 +313,29 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             }
             if (out["smoothing_alpha"])
                 m_ema_alpha = out["smoothing_alpha"].as<double>();
+        }
+    }
+    // ROS 参数覆盖 (离线播包不必改配置文件): image_topic 空=用配置; qos_reliable<0=用配置
+    {
+        const auto p_img = this->get_parameter_or<std::string>("image_topic", std::string());
+        if (!p_img.empty()) {
+            m_cfg.image_topic = p_img;
+            RCLCPP_INFO(get_logger(), "image_topic overridden by parameter: %s", p_img.c_str());
+        }
+        const auto p_lidar = this->get_parameter_or<std::string>("lidar_topic", std::string());
+        if (!p_lidar.empty()) {
+            m_cfg.lidar_topic = p_lidar;
+            RCLCPP_INFO(get_logger(), "lidar_topic overridden by parameter: %s", p_lidar.c_str());
+        }
+        const auto p_imu = this->get_parameter_or<std::string>("imu_topic", std::string());
+        if (!p_imu.empty()) {
+            m_cfg.imu_topic = p_imu;
+            RCLCPP_INFO(get_logger(), "imu_topic overridden by parameter: %s", p_imu.c_str());
+        }
+        const int p_qos = this->get_parameter_or<int>("qos_reliable", -1);
+        if (p_qos >= 0) {
+            m_cfg.sensor_reliable = (p_qos != 0);
+            RCLCPP_INFO(get_logger(), "qos_reliable overridden by parameter: %d", p_qos);
         }
     }
     // 行业标准: 核心估计 IMU body; r_il/t_il 必须由 ROS2 层从 TF 推导后注入.

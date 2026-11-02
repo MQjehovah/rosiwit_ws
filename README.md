@@ -7,8 +7,8 @@
 | 能力 | 现状 |
 |---|---|
 | 定位 | FAST-LIO2 前端 + GICP 局部匹配 + 9 状态 ESKF；10 Hz 输出；静态抖动 5–6 mm（eskf），单帧最大 21 mm |
-| LIVO（激光+惯性+相机） | FAST-LIVO2 已移植进核心（零 ROS），标准节点 `config:=fast_livo2_ntu.yaml` 直接跑；NTU eee_03 整段 **ATE 0.234 m**（离线回放 0.237 / 独立包 0.257）；单目相机也能上色（灰度） |
-| 建图 | 关键帧子图 + PCD 地图 + 2D 栅格 + 叠加层（半静态变化沉淀，不重写底图）；LIVO 额外输出彩色地图 `map_rgb.pcd` |
+| LIVO（激光+惯性+相机） | FAST-LIVO2 已移植进核心（零 ROS），`default.yaml` 里 `frontend: fast_livo2_frontend` 一行切换即可跑；NTU eee_03 离线回放 **ATE 0.237 m**（独立包 0.257）；单目相机也能上色（灰度） |
+| 建图 | 关键帧子图 + PCD 地图 + 2D 栅格 + 叠加层（半静态变化沉淀，不重写底图）；地图只产出一个 `map.pcd`，有相机时字段自动带 `rgb`（`x y z intensity rgb`） |
 | 回环 / 重定位 | Scan Context 回环；全局重定位改为 **ScanContext 候选级联**：252k 点地图/20 个合成场景 **p95 3.3 s、召回 100%、误锁 0%**（原 FPFH 整图 RANSAC 22–45 s，现仅作无 `.scdb` 兜底） |
 | 导航 | Hybrid A* + MPPI + footprint-aware 控制、窄道检测、速度限制、未知区代价 |
 | 感知 | ROS2：AVM、地面纹理、QR、相机低矮障碍检测；ROS1：无 3D 语义/跟踪 |

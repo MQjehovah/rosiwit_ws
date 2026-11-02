@@ -229,7 +229,7 @@ ROS2 节点管线（executor/定时器/地图回调）仍在修，核心算法�
 
 ```bash
 ros2 run rosiwit_slam_ros2 livo_replay \
-  <install>/share/rosiwit_slam_ros2/config/fast_livo2_ntu.yaml \
+  <install>/share/rosiwit_slam_ros2/config/default.yaml \
   /path/to/eee_03_ros2  out_odom.txt \
   /os1_cloud_node1/points /imu/imu /left/image_raw
 ```
@@ -256,46 +256,58 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
 结果文件：`docs/artifacts/fastlivo2_core_ntu_eee03/`
 （`trajectory_eee03.txt`、`metrics.txt`、`traj_vs_gt.png`、`compare_core_vs_standalone.png`）。
 
-### 6.6 标准节点 + `fast_livo2` 配置（播包出图，正式管线）
+### 6.6 标准节点 + `default.yaml`（播包出图，正式管线）
 
-没有单独的 LIVO 节点：`rosiwit_slam_ros2` 主节点按配置选前端，**同一份 `fast_livo2_ntu.yaml` 就能跑 LIVO**：
+**没有单独的 LIVO 节点，也没有单独的 LIVO 配置**：`rosiwit_slam_ros2` 主节点按配置选前端，
+`config/default.yaml` 里同时带着两套前端的参数块，切 LIVO 只改一行：
 
 ```yaml
 global:
   slam_algorithm: fast_lio2_pipeline            # SlamPipeline
   modules:
-    frontend: "fast_livo2_frontend"             # FastLivo2Frontend / LivoMapper
+    # 纯 LiDAR+IMU: fast_lio2_frontend ; 带相机: fast_livo2_frontend
+    frontend: "fast_livo2_frontend"
 ```
 
+相机内参 / 外参 / FAST-LIVO2 全部参数都在同一份 `default.yaml` 的
+`mapping.camera`、`mapping.extrin_calib`、`mapping.fast_livo2` 里；
+`img_en: false`（纯 LIO）时相机块可以不配（解析器只在 `img_en=true` 时要求相机）。
+
+节点会自己处理两件联动：
+- `frontend=fast_livo2_frontend` → 自动关闭接口层预滤波（由前端自己滤波）；
+- 离线播包的话题/QoS 不必改配置，用 launch 参数覆盖即可。
+
 ```bash
-# 专用入口（只是把默认配置换成 LIVO 那份，节点本身还是标准节点）
-ros2 launch rosiwit_slam_ros2 fast_livo2.launch.py use_rviz:=false
-# 等价于
-ros2 launch rosiwit_slam_ros2 slam.launch.py config:=fast_livo2_ntu.yaml use_sim_time:=true
+ros2 launch rosiwit_slam_ros2 slam.launch.py \
+  config:=default.yaml use_sim_time:=true use_rviz:=false \
+  lidar_topic:=/os1_cloud_node1/points imu_topic:=/imu/imu \
+  image_topic:=/left/image_raw qos_reliable:=1     # bag 发 reliable, 否则丢 ~1/3 帧
 
 # 另一个终端
 ros2 bag play /path/to/eee_03_ros2 --clock
-# 跑完存图（主地图 + 彩色地图）
+
+# 跑完存图: 只产出一个 map.pcd（有相机时自带 rgb）
 ros2 service call /save_map rosiwit_slam_ros2/srv/SaveMap "{path: '$HOME/map.pcd'}"
 ```
 
 一键脚本：`ros2_ws/src/rosiwit_slam_ros2/scripts/run_livo_bag.sh <bag> <out_dir>`。
 
 话题：`/lio_odom`、`/lio_path`、`/body_cloud`、`/world_cloud`、`/world_cloud_rgb`、
-`/cloud_map`、`/grid_map`、`/map`；`/save_map` 一次写两个文件：
-`map.pcd`（XYZ+强度）和 `map_rgb.pcd`（彩色，`<path>` + `_rgb.pcd`）。
+`/cloud_map`、`/grid_map`、`/map`。
+
+**地图只有一个文件**：`/save_map` 写 `<path>`，字段随数据自动变化 ——
+有颜色时是 `x y z intensity rgb`，纯激光时是 `x y z intensity`（+法向/曲率字段），
+下游按 PCD 字段自适应，不需要区分两个文件。
 
 NTU VIRAL `eee_03`（整段 181 s）实测：
 
 | 指标 | 标准节点（fast_livo2 配置） | 离线回放 `livo_replay` | 独立包 |
 |---|---|---|---|
-| LiDAR 帧 | **1814 / 1814**（reliable QoS，0 丢帧） | 1814 | 1814 |
-| 同步包 | 1696 | – | – |
-| 输出位姿 | 474 条 `ros2 bag record`（落后于实时时节点会合并位姿） | 1811 | 1809 |
-| **ATE (SE3) RMSE** | **0.234 m** | 0.237 m | 0.257 m |
-| mean / max | 0.200 / 0.454 m | 0.221 / 0.547 m | 0.244 / 0.463 m |
-| 主地图 | `map.pcd` 7.7 MB | – | – |
-| 彩色地图 | **3.09 M 点**（0.1 m 体素，48 MB；1693 帧，26.67 M 原始点） | – | – |
+| LiDAR 帧 | **1812 / 1814**（reliable QoS） | 1814 | 1814 |
+| 同步包 | 1279 | – | – |
+| 输出位姿 | 225 条 `ros2 bag record`（见下方"位姿空档"） | 1811 | 1809 |
+| **ATE (SE3) RMSE** | **0.23 m**（匹配段 ~30 m，样本偏少） | 0.237 m（1509 匹配，全轨迹） | 0.257 m |
+| 地图（单文件） | `map.pcd` **225 k 点 / 4.3 MB**，`x y z intensity rgb`（88% 有点颜色） | – | – |
 
 轨迹对比（红=标准节点，绿=离线回放，蓝=Leica 真值，均 SE3 对齐）：
 
@@ -307,7 +319,7 @@ NTU VIRAL `eee_03`（整段 181 s）实测：
 
 结果文件：`docs/artifacts/fastlivo2_stdnode_ntu_eee03/`
 （`trajectory_eee03.txt`、`metrics.txt`、`map_3d.png`、`map_top.png`、
-`compare_stdnode_vs_replay.png`、`node_tail.txt`）。两个 PCD 不入库。
+`compare_stdnode_vs_replay.png`、`node_tail.txt`）。PCD 不入库。
 
 #### 这条路上修掉的问题（都是“看起来像算法坏了”的坑）
 
@@ -339,9 +351,19 @@ NTU VIRAL `eee_03`（整段 181 s）实测：
    `mono8` 图越界（见 6.5 的说明，已修）；顺带把点云宽高归一化。
 9. **没日志可查**：节点启动先打一行 `init: algo=… config=… use_sim_time=…`，
    每 2 s 打一行同步诊断，崩溃时打印 C 栈回溯（`main.cpp` 里装 SIGSEGV/SIGFPE 处理）。
+10. **地图写成一个 193 MB 的点云**：后端按位姿重建全图时用 `pcl::VoxelGrid`，
+    关键帧堆出来的图跨度大且含少量远点，int32 索引溢出 → **静默返回原始点云**
+    （10.1 M 点原样写盘）。改用 `voxelDownsampleXYZI()`（int64 key）后回到 0.3 m 体素密度
+    （225 k 点 / 4.3 MB）。
+11. **一份配置两种前端**：把 LIVO 的相机/外参/参数块并进 `default.yaml`，
+    `frontend` 一个字段切换；`img_en: false` 时相机块可缺省，纯激光机器不用另存一份 yaml。
+12. **⚠ 未修：`/lio_odom` 有长时间空档**。本机两次实测（不同配置）都出现一次 ~2 min 的断流
+    （中间位姿完全不发），而前端仍在正常出图（地图完整）。因此标准节点的 ATE 只能在大约
+    30 m 的匹配段上统计（0.23 m），**全轨迹精度以 6.5 的离线回放为准（0.237 m，1509 匹配）**。
+    待查方向：`timerCB` 的 `has_new_pose` 消费与 work 回调组被地图/服务回调挤占。
 
-> 说明：`fast_livo2_ntu.yaml` 默认把 `backend` / `loop_closure` 置空（181 s 序列不需要
-> 回环，ScanContext 在这种大旋转场景也没调过）。需要后端时把模块名填回去即可。
+> 说明：`default.yaml` 保持 `backend: ceres_pose_graph` / `loop_closure: scan_context` 打开，
+> 与纯激光模式一致；181 s 的回放跑下来也稳定（后端重投影重建走 int64 体素降采样，见下）。
 
 #### 性能说明
 

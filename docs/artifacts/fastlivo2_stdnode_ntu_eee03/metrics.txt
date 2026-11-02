@@ -20,3 +20,18 @@ wall_clock:         bag 189 s, node idle after 240 s
 # reference (same bag)
 livo_replay_ate_se3_rmse: 0.237 m   (n=1509)
 standalone_pkg_ate_se3_rmse: 0.257 m (n=1509)
+
+# ---- 2026-11-02 复测: 合并成一份 default.yaml + 单个 map.pcd ----
+# 命令: ros2 launch rosiwit_slam_ros2 slam.launch.py config:=default.yaml \
+#         use_sim_time:=true use_rviz:=false lidar_topic:=/os1_cloud_node1/points \
+#         imu_topic:=/imu/imu image_topic:=/left/image_raw qos_reliable:=1
+#   (frontend 由 default.yaml 的 global.modules.frontend = fast_livo2_frontend 决定)
+rerun_2026_11_02:
+  lidar_frames:      1812 / 1814
+  sync_packages:     1279
+  map:               map.pcd 225410 pts / 4.3 MB, FIELDS x y z intensity rgb
+                     (198266 / 225410 = 88% 的点有颜色; 0.3 m 体素)
+  rgb_frames:        1276 (raw 18.6 M 点)
+  poses_published:   225 (存在一次约 2 min 的位姿断流, 见 docs 6.6 问题 12)
+  ate_matched:       63 个位姿 / ~30 m 轨迹, SE3 RMSE 0.23 m
+  note:              全轨迹精度仍以离线回放 livo_replay 为准 (0.237 m / 1509 匹配)

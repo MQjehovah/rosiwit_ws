@@ -8,7 +8,9 @@
 #include <cmath>
 #include <pcl/common/transforms.h>
 #include <pcl/io/pcd_io.h>
+#include <unordered_map>
 
+#include "slam_core/point_xyzirgb.h"
 #include "slam_core/voxel_downsample.h"
 
 namespace rosiwit_slam {
@@ -943,36 +945,89 @@ void SlamPipeline::cancelMapLoad() {
 
 bool SlamPipeline::saveMap(const std::string& path) {
     if (!m_map_mgr) return false;
+
+    // 只产出一个地图文件. 先让 map_manager 按它自己的口径落盘
+    // (动态点过滤 + save_voxel 重采样 + 体素重建), 这一步的副作用后面还要用.
     bool ok = m_map_mgr->saveMap(path);
     if (ok && m_loop) m_loop->saveDatabase(path + ".scdb");
-    // 彩色点云单独存: 主地图 (含强度) 格式不变, 定位/回环路径不受影响.
-    // <path> 形如 /x/map.pcd -> 彩色地图写到 /x/map_rgb.pcd
+    if (!ok) return false;
+
+    // 前端有彩色输出时, 把颜色并回同一个 map.pcd (x,y,z,intensity,rgb).
+    // 颜色按体素查表: 3M 点建表 ~0.3 s, 比 KD-tree 逐点最近邻(几秒)更适合保存路径.
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr rgb_map;
+    size_t frames = 0;
+    size_t raw = 0;
     {
-        pcl::PointCloud<pcl::PointXYZRGB>::Ptr dense;
-        size_t frames = 0;
-        size_t raw = 0;
-        {
-            std::lock_guard<std::mutex> lock(m_rgb_map_mu);
-            if (!m_rgb_map || m_rgb_map->empty()) return ok;
-            dense = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
-            voxelDownsampleRGB(*m_rgb_map, kRgbMapLeaf, *dense);
+        std::lock_guard<std::mutex> lock(m_rgb_map_mu);
+        if (m_rgb_map && !m_rgb_map->empty()) {
+            rgb_map = m_rgb_map;
             frames = m_rgb_map_frames;
             raw = m_rgb_map_raw;
         }
-        std::string rgb_path = path;
-        const std::string ext = ".pcd";
-        if (rgb_path.size() > ext.size() &&
-            rgb_path.compare(rgb_path.size() - ext.size(), ext.size(), ext) == 0) {
-            rgb_path = rgb_path.substr(0, rgb_path.size() - ext.size());
-        }
-        rgb_path += "_rgb.pcd";
-        const int ret = pcl::io::savePCDFileBinary(rgb_path, *dense);
-        std::cerr << "[SlamPipeline] rgb map: frames=" << frames << " raw=" << raw
-                  << " -> " << dense->size() << " points (" << kRgbMapLeaf << " m), "
-                  << (ret == 0 ? "saved " : "FAILED ") << rgb_path << std::endl;
-        if (ret != 0) ok = false;
     }
-    return ok;
+    if (!rgb_map) {
+        std::cerr << "[SlamPipeline] map saved (xyz+intensity): " << path << std::endl;
+        return true;
+    }
+
+    PointVec pts;
+    if (!m_map_mgr->getGlobalMap(pts) || pts.empty()) {
+        std::cerr << "[SlamPipeline] map saved (xyz+intensity, no map cloud): " << path << std::endl;
+        return true;
+    }
+
+    constexpr double kColorLeaf = 0.20;   // 颜色查表体素: 与 save_voxel 同量级
+    const double inv = 1.0 / kColorLeaf;
+    std::unordered_map<int64_t, uint32_t> color_of;
+    color_of.reserve(rgb_map->size() * 2 + 1);
+    for (const auto& p : rgb_map->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const int64_t ix = static_cast<int64_t>(std::floor(p.x * inv));
+        const int64_t iy = static_cast<int64_t>(std::floor(p.y * inv));
+        const int64_t iz = static_cast<int64_t>(std::floor(p.z * inv));
+        const uint32_t packed = (static_cast<uint32_t>(p.r) << 16) |
+                                (static_cast<uint32_t>(p.g) << 8) |
+                                static_cast<uint32_t>(p.b);
+        color_of.emplace(voxel_detail::voxelKey(ix, iy, iz), packed);
+    }
+
+    pcl::PointCloud<PointXYZIRGB> merged;
+    merged.reserve(pts.size());
+    size_t colored = 0;
+    for (const auto& p : pts) {
+        PointXYZIRGB q;
+        q.x = p.x;
+        q.y = p.y;
+        q.z = p.z;
+        q.intensity = p.intensity;
+        q.rgb = 0.0f;
+        if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z)) {
+            const int64_t ix = static_cast<int64_t>(std::floor(p.x * inv));
+            const int64_t iy = static_cast<int64_t>(std::floor(p.y * inv));
+            const int64_t iz = static_cast<int64_t>(std::floor(p.z * inv));
+            const auto it = color_of.find(voxel_detail::voxelKey(ix, iy, iz));
+            if (it != color_of.end()) {
+                const uint32_t c = it->second;
+                q.r = static_cast<uint8_t>((c >> 16) & 0xFF);
+                q.g = static_cast<uint8_t>((c >> 8) & 0xFF);
+                q.b = static_cast<uint8_t>(c & 0xFF);
+                ++colored;
+            } else {
+                q.r = q.g = q.b = 190;   // 没拍到颜色的点用中性灰
+            }
+        }
+        merged.push_back(q);
+    }
+    merged.width = static_cast<uint32_t>(merged.size());
+    merged.height = 1;
+    merged.is_dense = false;
+
+    const int ret = pcl::io::savePCDFileBinary(path, merged);
+    std::cerr << "[SlamPipeline] map saved (xyz+intensity+rgb): " << path
+              << " points=" << merged.size() << " colored=" << colored << "/" << merged.size()
+              << " (rgb frames=" << frames << ", raw=" << raw << ")"
+              << (ret == 0 ? "" : " FAILED") << std::endl;
+    return ret == 0;
 }
 
 bool SlamPipeline::loadMap(const std::string& path) {

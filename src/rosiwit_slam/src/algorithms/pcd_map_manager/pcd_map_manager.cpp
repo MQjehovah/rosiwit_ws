@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
+
+#include "slam_core/voxel_downsample.h"
 #include <unordered_set>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
@@ -374,10 +376,8 @@ bool PcdMapManager::appendMap(const std::string& name, const PoseStamped& initia
         const double leaf = std::max(0.05, save_voxel_);
         CloudType::Ptr target_ds(new CloudType());
         CloudType::Ptr source_ds(new CloudType());
-        pcl::VoxelGrid<PointType> vg;
-        vg.setLeafSize(leaf, leaf, leaf);
-        vg.setInputCloud(global_map_); vg.filter(*target_ds);
-        vg.setInputCloud(source); vg.filter(*source_ds);
+        voxelDownsampleXYZI(*global_map_, leaf, *target_ds);
+        voxelDownsampleXYZI(*source, leaf, *source_ds);
 
         pcl::IterativeClosestPoint<PointType, PointType> icp;
         icp.setMaximumIterations(60);
@@ -407,14 +407,11 @@ bool PcdMapManager::appendMap(const std::string& name, const PoseStamped& initia
     pcl::transformPointCloud(*source, *transformed, final_tf);
     *global_map_ += *transformed;
 
-    pcl::VoxelGrid<PointType> vg;
-    vg.setInputCloud(global_map_);
     const double leaf = std::max(0.02, save_voxel_);
-    vg.setLeafSize(leaf, leaf, leaf);
     CloudType::Ptr filtered(new CloudType());
-    vg.filter(*filtered);
+    voxelDownsampleXYZI(*global_map_, leaf, *filtered);
     global_map_ = filtered;
-    rebuildVoxels(std::max(0.02, save_voxel_));
+    rebuildVoxels(leaf);
     observations_.clear();
     ++m_revision_;
     std::cout << "[PcdMapManager] Appended: " << path
@@ -584,11 +581,10 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
     observations_truncated_ = false;   // 重建后是完整的一批
     trimObservations();
 
-    pcl::VoxelGrid<PointType> vg;
-    vg.setInputCloud(rebuilt);
-    vg.setLeafSize(save_voxel_, save_voxel_, save_voxel_);
+    // 注意: 这里必须用 int64 版本. 关键帧堆出来的图跨度大且含少量远点,
+    // pcl::VoxelGrid 的 int32 索引会溢出并静默返回原始点云 (实测 10.1 M 点原样写盘).
     CloudType::Ptr filtered(new CloudType());
-    vg.filter(*filtered);
+    voxelDownsampleXYZI(*rebuilt, std::max(0.02, save_voxel_), *filtered);
     global_map_ = filtered;
     rebuildVoxels(save_voxel_);
 

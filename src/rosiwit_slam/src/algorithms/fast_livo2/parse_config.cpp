@@ -66,29 +66,35 @@ bool parseFastLivo2Config(const std::string& yaml_path, FastLivo2Config& out, st
         return false;
     }
 
-    const YAML::Node cam = root["mapping"]["camera"];
-    if (!cam || !cam.IsMap()) {
-        err = "missing mapping.camera (camera intrinsics are required for LIVO)";
-        return false;
-    }
     FastLivo2Config cfg;
 
-    cfg.camera.model = cam["model"] ? cam["model"].as<std::string>() : "Pinhole";
-    if (!cam["width"] || !cam["height"] || !cam["fx"] || !cam["fy"] || !cam["cx"] || !cam["cy"]) {
-        err = "mapping.camera requires width/height/fx/fy/cx/cy";
-        return false;
+    // 相机只在 img_en=true 时必需: 同一份配置里把 img_en 设 false 就能当纯 LIO 用,
+    // 不需要再维护一份"没有相机"的配置.
+    const YAML::Node fl_head = root["mapping"]["fast_livo2"];
+    const bool img_en_req = getBool(fl_head, "img_en", cfg.img_en);
+    const YAML::Node cam = root["mapping"]["camera"];
+    if (img_en_req || (cam && cam.IsMap())) {
+        if (!cam || !cam.IsMap()) {
+            err = "missing mapping.camera (required when mapping.fast_livo2.img_en=true)";
+            return false;
+        }
+        cfg.camera.model = cam["model"] ? cam["model"].as<std::string>() : "Pinhole";
+        if (!cam["width"] || !cam["height"] || !cam["fx"] || !cam["fy"] || !cam["cx"] || !cam["cy"]) {
+            err = "mapping.camera requires width/height/fx/fy/cx/cy";
+            return false;
+        }
+        cfg.camera.width = cam["width"].as<int>();
+        cfg.camera.height = cam["height"].as<int>();
+        cfg.camera.scale = getDouble(cam, "scale", 1.0);
+        cfg.camera.fx = cam["fx"].as<double>();
+        cfg.camera.fy = cam["fy"].as<double>();
+        cfg.camera.cx = cam["cx"].as<double>();
+        cfg.camera.cy = cam["cy"].as<double>();
+        cfg.camera.d0 = getDouble(cam, "d0", 0.0);
+        cfg.camera.d1 = getDouble(cam, "d1", 0.0);
+        cfg.camera.d2 = getDouble(cam, "d2", 0.0);
+        cfg.camera.d3 = getDouble(cam, "d3", 0.0);
     }
-    cfg.camera.width = cam["width"].as<int>();
-    cfg.camera.height = cam["height"].as<int>();
-    cfg.camera.scale = getDouble(cam, "scale", 1.0);
-    cfg.camera.fx = cam["fx"].as<double>();
-    cfg.camera.fy = cam["fy"].as<double>();
-    cfg.camera.cx = cam["cx"].as<double>();
-    cfg.camera.cy = cam["cy"].as<double>();
-    cfg.camera.d0 = getDouble(cam, "d0", 0.0);
-    cfg.camera.d1 = getDouble(cam, "d1", 0.0);
-    cfg.camera.d2 = getDouble(cam, "d2", 0.0);
-    cfg.camera.d3 = getDouble(cam, "d3", 0.0);
 
     // ---- extrinsics: yaml first, root (TF) overrides ----
     const YAML::Node ext = root["mapping"]["extrin_calib"];

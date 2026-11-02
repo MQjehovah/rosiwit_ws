@@ -3,7 +3,8 @@
 #
 #   ./run_livo_bag.sh <bag_dir> [out_dir] [config]
 #
-# 产物: <out_dir>/lio_odom.csv  <out_dir>/node.log  <out_dir>/map.pcd  <out_dir>/map_rgb.pcd
+# 产物: <out_dir>/lio_odom.csv  <out_dir>/node.log  <out_dir>/map.pcd
+#       (map.pcd 在有相机时自带 rgb 字段, 纯激光时是 xyz+intensity —— 只有一个地图文件)
 #
 # 说明: 节点收到 SIGINT 不会自动存图, 这里在播包结束后调用 save_map 服务,
 #       彩色地图写到 <path 去掉 .pcd>_rgb.pcd.
@@ -11,7 +12,7 @@ set -uo pipefail
 
 BAG=${1:?usage: run_livo_bag.sh <bag_dir> [out_dir] [config]}
 OUT=${2:-$PWD/livo_run}
-CFG=${3:-fast_livo2_ntu.yaml}
+CFG=${3:-default.yaml}
 
 PKG_SHARE="$(ros2 pkg prefix rosiwit_slam_ros2)/share/rosiwit_slam_ros2"
 CFG_PATH="$PKG_SHARE/config/$CFG"
@@ -36,8 +37,10 @@ PY
 )
 
 mkdir -p "$OUT"
-ros2 launch rosiwit_slam_ros2 fast_livo2.launch.py \
-  config:="$CFG" use_rviz:=false use_sim_time:=true > "$OUT/node.log" 2>&1 &
+# 数据集回放: 不改配置, 用 launch 参数覆盖话题与 QoS
+ros2 launch rosiwit_slam_ros2 slam.launch.py \
+  config:="$CFG" use_rviz:=false use_sim_time:=true \
+  image_topic:=/left/image_raw qos_reliable:=1 > "$OUT/node.log" 2>&1 &
 LPID=$!
 
 for i in $(seq 1 40); do
