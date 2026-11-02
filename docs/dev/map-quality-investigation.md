@@ -70,13 +70,33 @@ total 2700: free 82.5% / occupied 16.5% / unknown 1.0%
 - 安全层按雷达 → 不受地图影响 (该停还是停)。
 
 ### 建议的修法 (按代价从低到高)
-
 1. **先量真实门洞**: 在门洞处用 `map_quality_probe.py` 的 ASCII + 自由宽度检查,
    确认 `自由宽度 >= 676 + 100 = 776mm`。若不足, 优先降 `dilate_radius` (1 → 0)。
 2. **重建地图时**: 把 `mapping.grid.min_height` 提到 0.5 左右 (滤掉桌椅腿/地面杂波),
    建图现场清人; 重建后用 `map_quality_probe.py` 复测 (occupied 目标 <=5%)。
 3. **地图后处理**: 形态学开运算去散点 + `min_hits>=2`; 或用当前激光"证明为 free"
    的位置擦掉障碍 (`repair_map_grid` / `map_cleanup`)。
+
+## 转弯黑块/叠图 = 万集点云 ring-major + 去畸变顺序 (2026-11-02 已修)
+
+实测 `/vanjee_points722`:
+
+```
+1200x32, ring 1..32, 每个 ring 1200 点, 每个 ring 的 timestamp 都是 0..0.1s
+-> 全局 timestamp 有 31 次回绕, 不是升序
+```
+
+而核心 `IMUProcessor::undistort()` 是**从点云尾部向前**、按 `curvature` 单调匹配 IMU
+位姿的 (`imu_processor.cpp:176-201`), 要求点按时间升序。ring-major 输入会让去畸变
+拿错位姿: 平移时角度变化小看不出, **一转弯就叠图/大块黑区**。
+
+修复: `cloud_utils.cpp` 填完 `curvature` 后 `std::stable_sort` 按逐点时间升序, 再交给核心;
+并在首次转换日志打印 `backjumps` 便于现场核对 (必须为 0)。
+
+```
+实车验证: point-time check: kept=11002 curvature_ms=[0 .. 99.94] backjumps=0
+(修复前同一帧的原始点云 backjumps=31)
+```
 
 ## 工具
 
