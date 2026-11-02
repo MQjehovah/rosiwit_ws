@@ -4,7 +4,7 @@
          and no reliable collision at the spawn point. -->
     <include>
       <uri>model://ground_plane</uri>
-      <pose>0 0 -0.01 0 0 0</pose>
+      <pose>0 0 0.01 0 0 0</pose>
     </include>
     <gui fullscreen='0'>
       <camera name='gzclient_camera'>
