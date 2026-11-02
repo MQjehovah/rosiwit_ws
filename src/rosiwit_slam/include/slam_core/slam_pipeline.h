@@ -171,6 +171,7 @@ private:
     std::mutex m_lio_frontend_mu;
     std::unique_ptr<IFrontend> m_lio_frontend;
     std::string m_frontend_name;
+    bool m_direct_imu = false;   // LIVO: IMU 收到就喂前端, 不再按同步包门控
     std::string m_config_path;
     /// 进入定位模式时创建独立 LIO 前端 (失败则关闭 LIO 相对观测)
     void createLioFrontend();
@@ -184,6 +185,22 @@ private:
     std::unique_ptr<ILocalization> m_localization;
     std::unique_ptr<VisualConstraintSource> m_visual;   // 视觉松耦合因子源
     VisualConstraintConfig m_visual_cfg;
+
+    // 彩色地图累积 (LIVO) ----
+    // 前端每帧给出"带色世界点云" (rgb_world_cloud)，这里按帧累加，供
+    // saveMap 写彩色 PCD、供节点发布 /cloud_map_rgb。点在 anchor 修正之后
+    // 写入，才能和 odom/tf/cloud_map 保持同一坐标系。
+    // rgb 为空时 (纯 LIO 前端 / 该帧没走到 VIO) 用 world_cloud 补灰度点,
+    // 否则彩色地图会稀稀拉拉只有几十帧.
+    void accumulateRgbMap(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr& rgb,
+                          const CloudType::Ptr& world);
+    std::mutex m_rgb_map_mu;
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr m_rgb_map{
+        new pcl::PointCloud<pcl::PointXYZRGB>()};
+    size_t m_rgb_map_raw = 0;        // 已累积的原始点数 (日志)
+    size_t m_rgb_map_frames = 0;     // 有彩色输出的帧数
+    static constexpr size_t kRgbMapDownsampleAbove = 6000000;  // 超过就现场降采样
+    static constexpr double kRgbMapLeaf = 0.1;                 // 存盘/发布体素尺寸
     std::atomic<PipelineMode> m_mode{PipelineMode::IDLE};
     std::atomic<bool> m_localization_map_loaded{false};
     /// 上次触发后端的 m_frame_count (防止"计数停在 50 的倍数"时每帧都优化)
