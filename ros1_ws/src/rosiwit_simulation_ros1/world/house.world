@@ -1,5 +1,11 @@
 <sdf version='1.6'>
   <world name='default'>
+    <!-- Catch the robot at the origin; the visual floor mesh has gaps
+         and no reliable collision at the spawn point. -->
+    <include>
+      <uri>model://ground_plane</uri>
+      <pose>0 0 -0.01 0 0 0</pose>
+    </include>
     <gui fullscreen='0'>
       <camera name='gzclient_camera'>
         <pose frame=''>-3.54494 4.69529 17.4378 0 1.2538 -1.54171</pose>
