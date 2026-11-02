@@ -1,6 +1,6 @@
 # ============================================================================
-# 实机唯一配置源 (2026-10-30 起)
-#   所有调参只改这个文件; movebase_compat.yaml 只保留兼容层专属键。
+# 实机唯一配置源 (2026-10-30 起; 2026-11-03 合并兼容层 overlay)
+#   所有调参只改这个文件; 原 movebase_compat.yaml 的键已全部合并到这里并删除。
 #   数值已与实机 2026-10-23 生效配置对齐 (robot_radius 0.39 /
 #   hybrid_astar + mppi / footprint_aware=true / planner_timeout 2.0)。
 # 仿真请用 simulation.yaml。
@@ -9,7 +9,7 @@
 # rosiwit_navigation_ros1 默认参数
 #
 # ⚠ 车体/安全参数取自实车 192.168.21.166 的 /robot_move_base/*，
-#   不是仿真值。robot_movebase 兼容接口请用 config/movebase_compat.yaml。
+#   不是仿真值。robot_movebase 兼容接口也读这一份 (原 movebase_compat.yaml 已合并删除)。
 # 速度/加速度/容差/前瞻/安全距离的实车依据见
 # docs/superpowers/specs/2026-10-21-ros1-movebase-interface-compat-design.md §9。
 # ============================================================
@@ -264,7 +264,9 @@ movebase_default_speed: 0.8
 movebase_back_speed: 0.1
 movebase_rotate_speed: 0.5
 movebase_stuck_timeout: 60.0
-movebase_goal_yaw_tolerance: 0.1
+movebase_goal_yaw_tolerance: 3.14   # 到点后的航向容差; 3.14 ≈ 跳过"原地对齐" (nav2 yaw_goal_tolerance).
+                                    # 原地转不开的窄处, 0.1 会让车一直转、被安全层清零 -> App 超时.
+                                    # 航向交给后续路径跟踪/下一段修正.
 movebase_rotate_tolerance: 0.05
 movebase_prediction_horizon: 1.0
 

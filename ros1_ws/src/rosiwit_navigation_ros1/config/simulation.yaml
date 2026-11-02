@@ -1,7 +1,7 @@
 # ============================================================
 # rosiwit_navigation_ros1 仿真参数 (Gazebo + rosiwit_slam_ros1)
 #
-# 与 default.yaml / movebase_compat.yaml (实车) 分开, 避免仿真调参污染实车。
+# 与 default.yaml (实车) 分开, 避免仿真调参污染实车。
 # 仿真环境事实:
 #   * 车体: gt 实机模型 (模型 x -0.327..0.565, y +-0.359), 轮半径 0.0708, 轮距 0.467
 #   * 传感器: VLP-16 (/velodyne_points) + IMU (/imu), 没有 2D /scan
