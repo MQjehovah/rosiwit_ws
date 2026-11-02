@@ -27,19 +27,20 @@ using namespace rosiwit_slam_ros1::interface_internal;
 
 namespace rosiwit_slam_ros1 {
 void Ros1SlamInterface::loadWarningCodeTable() {
-    // M6: 从**本包 share**读, 不读 /opt —— 旧实现用的是编译期 PROJECT_PATH
+    // 从**本包 share**读, 不读 /opt —— 旧实现用的是编译期 PROJECT_PATH
     // (json_warning_code.cpp:168 的 project_path)。
+    // 码表与配置同目录 (config/): conf/ 已废弃, SLAM 不再读任何 conf 下的 json。
     const std::string path =
-        ros::package::getPath("rosiwit_slam_ros1") + "/conf/warning_code.json";
+        ros::package::getPath("rosiwit_slam_ros1") + "/config/warning_code.json";
     std::ifstream fin(path);
     if (!fin.good()) {
-        ROS_WARN_STREAM("[ros1_slam] warning_code.json not readable: " << path);
+        ROS_WARN_STREAM("[ros1_slam] config/warning_code.json not readable: " << path);
         return;
     }
     try {
         const YAML::Node n = YAML::LoadFile(path);   // JSON 是 YAML 的子集
         if (!n.IsMap()) {
-            ROS_WARN_STREAM("[ros1_slam] warning_code.json is not a map: " << path);
+            ROS_WARN_STREAM("[ros1_slam] config/warning_code.json is not a map: " << path);
             return;
         }
         for (auto it = n.begin(); it != n.end(); ++it) {
@@ -64,7 +65,7 @@ void Ros1SlamInterface::loadWarningCodeTable() {
             warning_code_table_[20003505] = wi;
         }
     } catch (const std::exception& e) {
-        ROS_WARN_STREAM("[ros1_slam] warning_code.json parse error (" << e.what()
+        ROS_WARN_STREAM("[ros1_slam] config/warning_code.json parse error (" << e.what()
                         << "): " << path);
     }
 }

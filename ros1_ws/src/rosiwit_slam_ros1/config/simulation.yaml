@@ -23,6 +23,8 @@ global:
                        # 按方位角推导的顺序/相位和 Gazebo 插件对不上, 实测反而把旋转时的
                        # 位置误差从 0.25m 放大到 0.5m). 实机 10Hz 点云带 timestamp, 不受影响.
     use_odom: false # 是否订阅并使用轮式odom
+    publish_hz: 20 # 里程计/位姿发布频率(Hz)
+    rt_grid_map_publish_hz: 1.0 # 实时栅格地图发布频率(Hz)
   frames:
     lidar_frame: lidar  # 雷达frame (与实机 xzrobot.v3.urdf 同名)
     imu_frame: imu_link # IMU frame
@@ -30,6 +32,7 @@ global:
     world_frame: map # 世界frame
     map_frame: map # 地图frame
     odom_frame: odom # 里程计frame
+    use_tf: true # 是否按 TF 自动推导雷达-IMU 外参
   map:
     voxel_resolution: 0.10 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图 (0.3 太稀, 栅格会断墙)
     save_voxel: 0.10 # 地图/点云保存降采样体素(m)

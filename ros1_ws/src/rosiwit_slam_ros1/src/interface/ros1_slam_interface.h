@@ -178,7 +178,7 @@ private:
     void liftTypeCB(const std_msgs::String::ConstPtr& msg);          // 存字段 + 打日志
 
     // ---- [T7] 告警 ----
-    void loadWarningCodeTable();   // 从**本包** share 读 conf/warning_code.json (M6)
+    void loadWarningCodeTable();   // 从**本包** share 读 config/warning_code.json
     void timerPublishWarningCode(const ros::TimerEvent&);   // legacy.cpp:457-553
     void tickFreqWindow(bool is_lidar);   // 1s 窗口频率判定 (legacy.cpp:629-637/740-748)
 

@@ -103,12 +103,9 @@ rosnode info /rosiwit_slam: /odom /cloud_map /grid_map 已消失; /map 只剩兼
 
 原来是**两套配置 + 大量兼容逻辑**：
 
-```
-/opt/xzrobot/configs/sensor_config.json  ─┐
-conf/slam_conf.json (legacy, 40+ 字段)   ─┼─> Xz3dConfig (机型判断/旧键回落)  ─┐
-核心 YAML                                 ─┘                                   ├─> 算法
-                                          `SlamAlgorithm::Cfg` (YAML) ──────────┘
-```
+原来还有 legacy JSON 兼容层 (`/opt/xzrobot/configs/sensor_config.json` 与 `conf/slam_conf.json`),
+2026-11-02 已连同 `conf/` 目录一起删除, 现在只读 `config/*.yaml`; 故障码表移到
+`config/warning_code.json`。
 
 现在只有一份 YAML：
 
@@ -118,21 +115,21 @@ conf/slam_conf.json (legacy, 40+ 字段)   ─┼─> Xz3dConfig (机型判断/�
 | `test/test_config.cpp`（40 个用例） | 测的是上面那条已删除的链路 |
 | `sensor_config.json` / `slam_conf.json` 的读取 | 不再读；`/opt/...` 路径常量一并消失 |
 | `laser_type → 输入话题` 的硬编码映射 | mid360→livox/*、vanjee→... 这类机型特判不再需要 |
+| `conf/slam_conf.json` / `conf/sim_slam_conf.json` | 2026-11-02 删除；`conf/` 目录一并移除 |
+| `conf/warning_code.json` | 移到 `config/warning_code.json`（仍是 JSON 语法，yaml-cpp 可直接读） |
 
 改为从**同一份 YAML** 读（`SlamAlgorithm::Cfg`）：
 
 ```yaml
 global:
-  input:   { imu_topic, lidar_topic, use_odom, ... }
+  input:   { imu_topic, lidar_topic, use_odom, publish_hz, rt_grid_map_publish_hz, ... }
   is_debug: false
   debug_publish: false
   pipeline_mode: mapping        # 决定初始模式
-frames:
-  body_frame / world_frame
-  use_tf: true                  # 原来在 legacy JSON
+  frames:
+    body_frame / world_frame
+    use_tf: true                # 原来在 legacy JSON
 mapping:
-  rt_grid_map_publish_hz: 1     # 原来在 legacy JSON
-  publish_hz: 20                # 仅日志
   frontend.self_filter.*
 ```
 

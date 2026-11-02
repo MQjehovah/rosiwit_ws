@@ -59,6 +59,8 @@ global:
   slam_algorithm: fast_lio2_pipeline  # 核心算法名
   pipeline: "rosiwit_slam" # 管线名称
   pipeline_mode: mapping # 启动模式 mapping|localization|idle
+  is_debug: false # 调试日志开关
+  debug_publish: false # 发布调试话题 (world_cloud/body_cloud 等)
   modules:
     frontend: "fast_lio2_frontend"
     backend: "ceres_pose_graph" # 机器人上没有 gtsam (apt 里也没有 libgtsam-dev), gtsam_isam2 会解析成 null;
@@ -78,9 +80,12 @@ global:
     scan_period_ms: 100.0 # 单帧扫描周期(ms)
     acc_scale: 1.0 # IMU加速度单位换算
     use_odom: true # 是否订阅并使用轮式odom（legacy 由接口订阅；非 legacy 由引擎订阅）
+    publish_hz: 20 # 里程计/位姿发布频率(Hz)
+    rt_grid_map_publish_hz: 1.0 # 实时栅格地图发布频率(Hz)
   frames:
     body_frame: base_link  # 车体frame
     world_frame: odom # 世界frame
+    use_tf: true # 是否按 TF 自动推导雷达-IMU 外参 (false 则用本文件写死值)
   map:
     voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
     save_voxel: 0.3 # 地图/点云保存降采样体素(m) (对齐 Livox)

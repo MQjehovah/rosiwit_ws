@@ -39,11 +39,25 @@ footprint 内 247 格: 改前 `99=135, 100=16, 0=24` → 改后 `0=117, 99=100, 
 同时"扫描命中点 → 最近地图障碍"中位数 0.023m (p90 0.046) → **地图与实景对齐**,
 所以不是定位/坐标系问题, 是地图把"看得穿的地方"写成了障碍。
 
-最可能的来源: 3D 点云投影到 2D 栅格时的高度带过宽。
-本仓库 `rosiwit_slam_ros1/config/slam_conf.json` 是 `use_3d_z_min: 0.0` /
-`use_3d_z_max: 10` —— 地面 (z≈0)、桌面、天花板全在带内;
-而安全层用的是 **7.5cm 高的 2D 雷达**, 看不到这些 → 两者对"障碍"的定义不一致。
-(设备上 `/opt/xzrobot/configs/3d_slam/slam_conf.json` 是 28 字节空壳, 走的是 SLAM 默认值。)
+可能来源 (2026-11-02 配置收敛后修正):
+
+> 之前把原因归到 legacy `slam_conf.json` 的 `use_3d_z_min: 0.0` / `use_3d_z_max: 10`。
+> **该结论已作废**: 这两个键在核心 `rosiwit_slam` 里没有任何读取点, 且 `conf/slam_conf.json`
+> 已删除。真正决定 2D 栅格高度带的是 `config/default.yaml`:
+>
+> ```yaml
+> mapping.grid:
+>   min_height: 0.35   # 地面以上障碍最低高度
+>   max_height: 2.0    # 地面以上障碍最高高度
+>   dilate_radius: 1   # = 5cm/侧
+>   close_radius: 1
+>   occupied_thresh: 1
+> ```
+
+所以在 0.35–2.0m 带内的家具/人体/杂波都会被写进地图 (建图时现场有人的话尤其明显);
+`dilate_radius 1` 再让每个障碍格向外长 5cm (0.78m 门洞两侧各损失 5cm → 自由宽度 0.68m,
+**小于验收要求的 0.78m**)。另外上面的探针把 `unknown` 和 `occupied` 合并计数了,
+还需分离复测才能定"真的胖"还是"没建到"。
 
 ### 影响
 
@@ -53,8 +67,9 @@ footprint 内 247 格: 改前 `99=135, 100=16, 0=24` → 改后 `0=117, 99=100, 
 
 ### 建议的修法 (按代价从低到高)
 
-1. **收窄地图高度带**: `use_3d_z_min 0.15 / use_3d_z_max 1.5` (与 2D 雷达的观测面一致),
-   重录/重建地图, 用 `scripts/sim/map_quality_probe.py` 复测 (目标 <=5%)。
+1. **收窄地图高度带**: 调 `mapping.grid.min_height / max_height` (与 2D 雷达的观测面一致,
+   例如 0.15–1.2m), 并把 `dilate_radius` 降到 0 或改用非对称余量, 重录/重建地图,
+   用 `scripts/sim/map_quality_probe.py` 复测 (目标 <=5%)。
 2. **地图后处理**: 形态学开运算去散点 + 只用 `min_hits>=2` 的格子; 或"用当前激光
    证明为 free 的位置擦掉障碍"(slam 里有 `repair_map_grid` 类似机制)。
 3. 验收前必须在**真实门洞处**量地图的自由宽度 (>= 车宽+10cm), 否则门洞结论不可信。

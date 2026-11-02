@@ -212,4 +212,4 @@ install(PROGRAMS test/synthetic_publisher.py
 # 仿真/实机通用: 启动时载入已保存地图并切定位模式 (catkin_install_python 才会生成 devel 包装)
 catkin_install_python(PROGRAMS scripts/load_saved_map.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
-install(DIRECTORY launch config conf DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+install(DIRECTORY launch config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
