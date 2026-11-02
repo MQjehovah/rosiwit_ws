@@ -83,7 +83,7 @@ max_lookahead_distance: 0.9
 # inflation_radius = g_max_safe 的等效膨胀.
 robot_radius: 0.39
 # 规划器/控制器共用车体轮廓; Hybrid A* 使用它, A* 只使用 robot_radius.
-footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
+footprint: [-0.262, -0.338, 0.644, -0.338, 0.644, 0.338, -0.262, 0.338]
 # 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
 # 默认关闭: A/B 实测 DWA+footprint 会绕圈, 建议按下面组合验证后再打开:
 #   controller_name: mppi
@@ -163,7 +163,7 @@ safety_slowdown_ratio: 0.5
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
 # 实车 footprint
-safety_footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
+safety_footprint: [-0.262, -0.338, 0.644, -0.338, 0.644, 0.338, -0.262, 0.338]
 
 # 动态障碍跟踪
 tracking_enabled: false
@@ -255,7 +255,7 @@ planning_start_relax_radius: 0.0
 movebase_compat_enabled: true
 cmd_vel_topic: "/cmd_vel"
 movebase_cmd_vel_topic: "/movebase_cmd_vel"
-movebase_robot_footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
+movebase_robot_footprint: [-0.262, -0.338, 0.644, -0.338, 0.644, 0.338, -0.262, 0.338]
 movebase_default_speed: 0.8
 movebase_back_speed: 0.1
 movebase_rotate_speed: 0.5

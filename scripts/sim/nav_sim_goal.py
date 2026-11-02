@@ -63,8 +63,11 @@ class Run(object):
         res = info.resolution
         cx, cy = self.to_cell(pose[0], pose[1])
         best = 1e9
-        for dy in range(-20, 21):
-            for dx in range(-20, 21):
+        # 窗口按分辨率换算 (±1.0m): 以前写死 ±20 格, 地图换成 0.02 时只剩 ±0.4m,
+        # 于是 min_clearance 变成 1e9 (假的"很空")
+        win = max(20, int(round(1.0 / max(1e-6, res))))
+        for dy in range(-win, win + 1):
+            for dx in range(-win, win + 1):
                 gx, gy = cx + dx, cy + dy
                 if gx < 0 or gy < 0 or gx >= info.width or gy >= info.height:
                     continue

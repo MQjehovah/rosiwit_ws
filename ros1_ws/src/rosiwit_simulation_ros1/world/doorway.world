@@ -1,5 +1,5 @@
 <?xml version="1.0" ?>
-<!-- 0.80 m 门洞 = 碰撞体宽 0.70 m + 10 cm (窄通道验收口径: 车宽 + 10cm).
+<!-- 0.78 m 门洞 = 车宽 676 mm + 10 cm (窄通道验收口径: 车宽 + 10cm).
      两道墙在 y=3.0 处留 gap x in [-0.40, 0.40].
      车体碰撞体: 0.87 x 0.70, x 偏移 0.119 (见 gt_robot.xacro)
      机器人起点 (0,0) 朝 +y, 目标 (0,3.8). -->
@@ -10,10 +10,10 @@
 
     <model name="wall_left">
       <static>1</static>
-      <pose>-2.7 3.0 0.5 0 0 0</pose>
+      <pose>-2.695 3.0 0.5 0 0 0</pose>
       <link name="link">
-        <collision name="c"><geometry><box><size>4.6 0.2 1.0</size></box></geometry></collision>
-        <visual name="v"><geometry><box><size>4.6 0.2 1.0</size></box></geometry>
+        <collision name="c"><geometry><box><size>4.61 0.2 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>4.61 0.2 1.0</size></box></geometry>
           <material><script><uri>file://media/materials/scripts/gazebo.material</uri>
             <name>Gazebo/Grey</name></script></material></visual>
       </link>
@@ -21,10 +21,10 @@
 
     <model name="wall_right">
       <static>1</static>
-      <pose>2.7 3.0 0.5 0 0 0</pose>
+      <pose>2.695 3.0 0.5 0 0 0</pose>
       <link name="link">
-        <collision name="c"><geometry><box><size>4.6 0.2 1.0</size></box></geometry></collision>
-        <visual name="v"><geometry><box><size>4.6 0.2 1.0</size></box></geometry>
+        <collision name="c"><geometry><box><size>4.61 0.2 1.0</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>4.61 0.2 1.0</size></box></geometry>
           <material><script><uri>file://media/materials/scripts/gazebo.material</uri>
             <name>Gazebo/Grey</name></script></material></visual>
       </link>

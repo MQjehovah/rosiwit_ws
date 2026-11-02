@@ -5,8 +5,8 @@
 // 目的: 把"0.75m 门洞能不能过"变成秒级可重复的断言, 而不是每次 4 分钟仿真。
 //
 // 几何 (与 world/doorway.world 一致):
-//   门框: y ∈ [2.90, 3.10], |x| ≥ 0.40   (门洞宽 0.80m = 车宽 0.70 + 10cm)
-//   车体: 实机模型真实包络 0.892 x 0.717 (x -0.327..0.565, y ±0.359)
+//   门框: y ∈ [2.90, 3.10], |x| ≥ 0.39   (门洞宽 0.78m ≈ 车宽 676 + 10cm)
+//   车体: 官方图纸 906.23 x 676 (x -0.262..0.644, y ±0.338)
 // ============================================================================
 #include <gtest/gtest.h>
 
@@ -34,7 +34,7 @@ using rosiwit_navigation::core::VelocityCommand;
 
 constexpr double kDoorY0 = 2.90;
 constexpr double kDoorY1 = 3.10;
-constexpr double kDoorHalf = 0.40;   // 0.80m 门洞 = 碰撞体 0.70 + 10cm
+constexpr double kDoorHalf = 0.39;   // 0.78m 门洞 = 车宽 676 + 10cm(776) 留 2mm
 
 // 门框内表面的采样点 (世界系) —— 相当于 /scan 看到的东西
 std::vector<std::pair<double, double>> doorSurfacePoints()
@@ -80,10 +80,10 @@ SafetyMonitorConfig safetyConfig()
   cfg.stop_margin = 0.05;
   cfg.side_margin = 0.02;
   cfg.turn_margin = 0.05;
-  // 实机模型真实包络 (gt.dae 顶点包围盒, 经 base_mesh_xyz 偏移后)
-  cfg.footprint = {{-0.327, -0.359}, {0.565, -0.359}, {0.565, 0.359}, {-0.327, 0.359}};
-  // 车身排除盒 = 包络 + 0.02 (safety_body_margin)
-  cfg.body_polygon = {{-0.347, -0.379}, {0.585, -0.379}, {0.585, 0.379}, {-0.347, 0.379}};
+  // 官方图纸: 总长 906.23 / 车宽 676 / 驱动轮到后端 261.74
+  cfg.footprint = {{-0.262, -0.338}, {0.644, -0.338}, {0.644, 0.338}, {-0.262, 0.338}};
+  // 车身排除盒 = 图纸 + 0.02 (safety_body_margin)
+  cfg.body_polygon = {{-0.282, -0.358}, {0.664, -0.358}, {0.664, 0.358}, {-0.282, 0.358}};
   cfg.stop_max_points = 4;
   cfg.slowdown_max_points = 6;
   cfg.slowdown_ratio = 0.30;
@@ -153,7 +153,7 @@ struct DoorRun {
 std::vector<std::pair<double, double>> bodyCorners(const Pose2D & pose)
 {
   const std::vector<std::pair<double, double>> fp = {
-    {-0.327, -0.359}, {0.565, -0.359}, {0.565, 0.359}, {-0.327, 0.359}};
+    {-0.262, -0.338}, {0.644, -0.338}, {0.644, 0.338}, {-0.262, 0.338}};
   std::vector<std::pair<double, double>> out;
   const double c = std::cos(pose.theta), s = std::sin(pose.theta);
   for (const auto & q : fp) {

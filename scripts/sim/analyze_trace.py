@@ -46,7 +46,7 @@ def at_y(rows, y_target, tol=0.06):
 def main():
     csv_path = sys.argv[1]
     door_y = float(sys.argv[2]) if len(sys.argv) > 2 else 2.9
-    door_half = float(sys.argv[3]) if len(sys.argv) > 3 else 0.40
+    door_half = float(sys.argv[3]) if len(sys.argv) > 3 else 0.39
     rows = load(csv_path)
     if not rows:
         print('no rows')
@@ -133,7 +133,7 @@ def main():
     # 门洞 0.80m (碰撞体 0.70 + 10cm) -> 半宽 0.40
     bodies = [
         ('collision_0.87x0.70', [(-0.316, -0.35), (0.554, -0.35), (0.554, 0.35), (-0.316, 0.35)]),
-        ('visual_0.87x0.718', [(-0.327, -0.359), (0.565, -0.359), (0.565, 0.359), (-0.327, 0.359)]),
+        ('footprint_906x676', [(-0.262, -0.338), (0.644, -0.338), (0.644, 0.338), (-0.262, 0.338)]),
     ]
     def judge(use_gt, tag):
         for name, fp in bodies:
