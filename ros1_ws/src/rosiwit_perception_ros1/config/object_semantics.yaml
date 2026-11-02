@@ -1,0 +1,56 @@
+# 前置深度相机 3D 语义目标（位置 + 速度）
+# 实施方案: docs/superpowers/plans/2026-11-01-person-3d-semantics.md
+#
+# classes: 检测类别索引 -> 业务名 + 尺寸先验（只用于合理性降置信）
+#   首个类别是 person；以后加 car/bicycle 等只在这里追加，核心与消息都不用改。
+object_semantics:
+  detector: rknn                 # rknn | external（无 NPU 时用外部 2D 框做 bring-up/回放）
+  classes:
+    - {id: 0, name: person, min_height: 0.8, max_height: 2.2, max_speed: 2.5}
+    # - {id: 2, name: car, min_height: 0.3, max_height: 2.5, max_speed: 8.0}
+
+  # ---- 模型 ----（detector=rknn 时使用；支持 YOLOv8 person-only 或 COCO 子集）
+  model_path: /opt/ros/melodic/share/rosiwit_perception_ros1/model/objects_yolov8n.rknn
+  input_size: 416
+  conf_threshold: 0.35
+  nms_iou: 0.45
+  max_objects: 20
+
+  # ---- 话题与坐标系 ----
+  color_topic: /camera_01/color/image_raw
+  depth_topic: /camera_01/depth/image_raw
+  color_info_topic: /camera_01/color/camera_info
+  depth_info_topic: /camera_01/depth/camera_info
+  odom_topic: /odom
+  external_detections_topic: /perception/objects/detections_2d  # detector=external 时
+  external_max_age_s: 0.2
+  base_frame: base_link
+  color_frame: camera_01_color_optical_frame
+  depth_frame: camera_01_depth_optical_frame
+
+  # ---- 时间同步 ----
+  depth_sync_tolerance: 0.05     # 深度与彩色最大允许时间差(s)
+  max_frame_gap_s: 0.5           # 超过则本帧置 depth_valid=false
+
+  # ---- 深度 ROI ----
+  roi_w_ratio: 0.6
+  roi_v_min: 0.15
+  roi_v_max: 0.85
+  depth_min_mm: 100
+  depth_max_mm: 8000
+  min_valid_ratio: 0.30
+
+  # ---- 跟踪 ----
+  assoc_gate_chi2: 9.0
+  assoc_max_dist: 1.0
+  confirm_hits: 3
+  max_coast_s: 0.5
+  process_accel: 0.5
+  velocity_min_age_s: 0.3
+  velocity_max_mps: 2.5
+
+  # ---- 输出 ----
+  publish_image: true
+  publish_markers: true
+  publish_log: true
+  publish_persons_alias: true    # 额外发布 /perception/persons（仅 person 子集）

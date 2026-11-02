@@ -1,0 +1,12 @@
+<launch>
+  <!-- 前置深度相机 3D 语义目标（独立节点, 不依赖 object_detect） -->
+  <arg name="config" default="$(find rosiwit_perception_ros1)/config/object_semantics.yaml" />
+  <arg name="detector" default="rknn" />
+  <arg name="enable" default="true" />
+
+  <node if="$(arg enable)" pkg="rosiwit_perception_ros1" type="object_semantics_node"
+        name="object_semantics" output="screen" respawn="true" respawn_delay="2.0">
+    <rosparam file="$(arg config)" command="load" />
+    <param name="detector" value="$(arg detector)" />
+  </node>
+</launch>

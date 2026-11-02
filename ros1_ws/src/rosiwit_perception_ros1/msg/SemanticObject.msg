@@ -1,0 +1,14 @@
+std_msgs/Header header
+uint32 id
+int32 class_id
+string class_name
+geometry_msgs/PoseWithCovariance pose
+geometry_msgs/Vector3 velocity_base
+geometry_msgs/Vector3 velocity_world
+geometry_msgs/Point ground_position
+float32 distance
+float32 confidence
+bool depth_valid
+bool velocity_valid
+bool in_fov
+float32 age
