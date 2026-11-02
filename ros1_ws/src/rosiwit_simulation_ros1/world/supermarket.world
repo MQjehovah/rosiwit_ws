@@ -3,8 +3,8 @@
   <world name="supermarket">
     <include><uri>model://sun</uri></include>
     <scene>
-      <ambient>0.55 0.55 0.55 1</ambient>
-      <background>0.75 0.78 0.82 1</background>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.75 0.80 0.86 1</background>
       <shadows>1</shadows>
     </scene>
     <physics type="ode">
@@ -21,7 +21,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 35 0.1</size></box></geometry>
-          <material><ambient>0.8 0.8 0.76 1</ambient><diffuse>0.8 0.8 0.76 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/CeilingTiled</name></script></material>
         </visual>
       </link>
     </model>
@@ -34,7 +34,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 0.2 3</size></box></geometry>
-          <material><ambient>0.7 0.72 0.7 1</ambient><diffuse>0.7 0.72 0.7 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -47,7 +47,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 0.2 3</size></box></geometry>
-          <material><ambient>0.7 0.72 0.7 1</ambient><diffuse>0.7 0.72 0.7 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -60,7 +60,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.2 35 3</size></box></geometry>
-          <material><ambient>0.7 0.72 0.7 1</ambient><diffuse>0.7 0.72 0.7 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -73,266 +73,419 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.2 35 3</size></box></geometry>
-          <material><ambient>0.7 0.72 0.7 1</ambient><diffuse>0.7 0.72 0.7 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="shelf_1">
-      <static>true</static>
-      <link name="link">
-        <pose>-14.5 -13.5 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_2">
-      <static>true</static>
-      <link name="link">
-        <pose>15.5 -13.5 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_3">
-      <static>true</static>
-      <link name="link">
-        <pose>-14.5 -9 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_4">
-      <static>true</static>
-      <link name="link">
-        <pose>15.5 -9 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_5">
-      <static>true</static>
-      <link name="link">
-        <pose>-14.5 -4.5 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_6">
-      <static>true</static>
-      <link name="link">
-        <pose>15.5 -4.5 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_7">
-      <static>true</static>
-      <link name="link">
-        <pose>-14.5 4.5 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_8">
-      <static>true</static>
-      <link name="link">
-        <pose>15.5 4.5 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_9">
-      <static>true</static>
-      <link name="link">
-        <pose>-14.5 9 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_10">
-      <static>true</static>
-      <link name="link">
-        <pose>15.5 9 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_11">
-      <static>true</static>
-      <link name="link">
-        <pose>-14.5 13.5 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>19 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="shelf_12">
-      <static>true</static>
-      <link name="link">
-        <pose>15.5 13.5 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>17 0.8 1.8</size></box></geometry>
-          <material><ambient>0.55 0.45 0.3 1</ambient><diffuse>0.55 0.45 0.3 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="checkout_1">
-      <static>true</static>
-      <link name="link">
-        <pose>11 -3.6 0.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>3 0.8 1</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>3 0.8 1</size></box></geometry>
-          <material><ambient>0.25 0.35 0.55 1</ambient><diffuse>0.25 0.35 0.55 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="checkout_2">
-      <static>true</static>
-      <link name="link">
-        <pose>16 -3.6 0.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>3 0.8 1</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>3 0.8 1</size></box></geometry>
-          <material><ambient>0.25 0.35 0.55 1</ambient><diffuse>0.25 0.35 0.55 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="checkout_3">
-      <static>true</static>
-      <link name="link">
-        <pose>11 3.6 0.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>3 0.8 1</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>3 0.8 1</size></box></geometry>
-          <material><ambient>0.25 0.35 0.55 1</ambient><diffuse>0.25 0.35 0.55 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="checkout_4">
-      <static>true</static>
-      <link name="link">
-        <pose>16 3.6 0.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>3 0.8 1</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>3 0.8 1</size></box></geometry>
-          <material><ambient>0.25 0.35 0.55 1</ambient><diffuse>0.25 0.35 0.55 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="freezer_2">
-      <static>true</static>
-      <link name="link">
-        <pose>-23.5 -8 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.2 5 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.2 5 1.8</size></box></geometry>
-          <material><ambient>0.65 0.75 0.8 1</ambient><diffuse>0.65 0.75 0.8 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="freezer_10">
-      <static>true</static>
-      <link name="link">
-        <pose>-23.5 0 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.2 5 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.2 5 1.8</size></box></geometry>
-          <material><ambient>0.65 0.75 0.8 1</ambient><diffuse>0.65 0.75 0.8 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="freezer_18">
-      <static>true</static>
-      <link name="link">
-        <pose>-23.5 8 0.9 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.2 5 1.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.2 5 1.8</size></box></geometry>
-          <material><ambient>0.65 0.75 0.8 1</ambient><diffuse>0.65 0.75 0.8 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="entrance_mat">
-      <static>true</static>
-      <link name="link">
-        <pose>1 0 0.006 0 0 0</pose>
-        <visual name="v">
-          <geometry><box><size>6 3 0.01</size></box></geometry>
-          <material><ambient>0.3 0.3 0.32 1</ambient><diffuse>0.3 0.3 0.32 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_1</name>
+      <pose>-22 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_2</name>
+      <pose>-19 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_3</name>
+      <pose>-16 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_3</name>
+      <pose>-16 -9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_4</name>
+      <pose>-13 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_4</name>
+      <pose>-13 -9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_5</name>
+      <pose>-10 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_6</name>
+      <pose>8 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_6</name>
+      <pose>8 -9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_7</name>
+      <pose>11 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_8</name>
+      <pose>14 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_8</name>
+      <pose>14 -9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_9</name>
+      <pose>17 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_9</name>
+      <pose>17 -9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_10</name>
+      <pose>20 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_11</name>
+      <pose>23 -9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_12</name>
+      <pose>-22 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_12</name>
+      <pose>-22 -5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_12</name>
+      <pose>-22 -5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_13</name>
+      <pose>-19 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_14</name>
+      <pose>-16 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_15</name>
+      <pose>-13 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_15</name>
+      <pose>-13 -5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_16</name>
+      <pose>-10 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_16</name>
+      <pose>-10 -5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_17</name>
+      <pose>8 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_18</name>
+      <pose>11 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_18</name>
+      <pose>11 -5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_19</name>
+      <pose>14 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_20</name>
+      <pose>17 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_20</name>
+      <pose>17 -5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_21</name>
+      <pose>20 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_21</name>
+      <pose>20 -5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_22</name>
+      <pose>23 -5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_23</name>
+      <pose>-22 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_24</name>
+      <pose>-19 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_24</name>
+      <pose>-19 5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_24</name>
+      <pose>-19 5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_25</name>
+      <pose>-16 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_26</name>
+      <pose>-13 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_27</name>
+      <pose>-10 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_27</name>
+      <pose>-10 5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_28</name>
+      <pose>8 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_28</name>
+      <pose>8 5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_29</name>
+      <pose>11 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_30</name>
+      <pose>14 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_30</name>
+      <pose>14 5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_31</name>
+      <pose>17 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_32</name>
+      <pose>20 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_32</name>
+      <pose>20 5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_33</name>
+      <pose>23 5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_33</name>
+      <pose>23 5 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_34</name>
+      <pose>-22 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_35</name>
+      <pose>-19 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_36</name>
+      <pose>-16 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_36</name>
+      <pose>-16 9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_36</name>
+      <pose>-16 9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_37</name>
+      <pose>-13 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_38</name>
+      <pose>-10 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_39</name>
+      <pose>8 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_39</name>
+      <pose>8 9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_40</name>
+      <pose>11 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_40</name>
+      <pose>11 9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_41</name>
+      <pose>14 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_42</name>
+      <pose>17 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Vase_01</uri>
+      <name>vase_42</name>
+      <pose>17 9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_43</name>
+      <pose>20 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://KitchenCabinet_01</uri>
+      <name>shelf_44</name>
+      <pose>23 9 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Tableware_01</uri>
+      <name>plate_44</name>
+      <pose>23 9 1 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Refrigerator_01</uri>
+      <name>fridge_0</name>
+      <pose>-23 -13.5 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://Refrigerator_01</uri>
+      <name>fridge_1</name>
+      <pose>-23 -8 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://Refrigerator_01</uri>
+      <name>fridge_2</name>
+      <pose>-23 -2 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://Refrigerator_01</uri>
+      <name>fridge_3</name>
+      <pose>-23 4 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://Refrigerator_01</uri>
+      <name>fridge_4</name>
+      <pose>-23 9 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://Refrigerator_01</uri>
+      <name>fridge_5</name>
+      <pose>-23 14 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://KitchenTable_01</uri>
+      <name>checkout_0</name>
+      <pose>13 -3.8 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>cashier_0</name>
+      <pose>14.6 -3.8 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://KitchenTable_01</uri>
+      <name>checkout_1</name>
+      <pose>13 3.8 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>cashier_1</name>
+      <pose>14.6 3.8 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://FoldingDoor_01</uri>
+      <name>entry_door</name>
+      <pose>-24.5 0 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Trash_01</uri>
+      <name>trash_1</name>
+      <pose>24 -15 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Carpet_01</uri>
+      <name>mat</name>
+      <pose>0 0 0.005 0 0 0</pose>
+    </include>
   </world>
 </sdf>

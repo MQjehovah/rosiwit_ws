@@ -3,8 +3,8 @@
   <world name="school">
     <include><uri>model://sun</uri></include>
     <scene>
-      <ambient>0.55 0.55 0.55 1</ambient>
-      <background>0.75 0.78 0.82 1</background>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.75 0.80 0.86 1</background>
       <shadows>1</shadows>
     </scene>
     <physics type="ode">
@@ -21,7 +21,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 35 0.1</size></box></geometry>
-          <material><ambient>0.78 0.72 0.6 1</ambient><diffuse>0.78 0.72 0.6 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/WoodFloor</name></script></material>
         </visual>
       </link>
     </model>
@@ -34,7 +34,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 0.2 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -47,7 +47,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 0.2 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -60,7 +60,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.2 35 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -73,750 +73,819 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.2 35 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="cw_25_1">
       <static>true</static>
       <link name="link">
-        <pose>-22.8 2.5 1.5 0 0 0</pose>
+        <pose>-21.525 2.5 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>4.2 0.15 3</size></box></geometry>
+          <geometry><box><size>6.65 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>4.2 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <geometry><box><size>6.65 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="cw_25_2">
       <static>true</static>
       <link name="link">
-        <pose>-16.5 2.5 1.5 0 0 0</pose>
+        <pose>-10.5 2.5 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="cw_25_3">
       <static>true</static>
       <link name="link">
-        <pose>-9.5 2.5 1.5 0 0 0</pose>
+        <pose>3.5 2.5 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="cw_25_4">
-      <static>true</static>
-      <link name="link">
-        <pose>-2.5 2.5 1.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="cw_25_5">
-      <static>true</static>
-      <link name="link">
-        <pose>4.5 2.5 1.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="cw_25_6">
-      <static>true</static>
-      <link name="link">
-        <pose>11.5 2.5 1.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="cw_25_7">
-      <static>true</static>
-      <link name="link">
-        <pose>18.5 2.5 1.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="cw_25_end">
       <static>true</static>
       <link name="link">
-        <pose>23.8 2.5 1.5 0 0 0</pose>
+        <pose>18.025 2.5 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>2.2 0.15 3</size></box></geometry>
+          <geometry><box><size>13.65 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>2.2 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <geometry><box><size>13.65 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="cw_-25_1">
       <static>true</static>
       <link name="link">
-        <pose>-22.8 -2.5 1.5 0 0 0</pose>
+        <pose>-21.525 -2.5 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>4.2 0.15 3</size></box></geometry>
+          <geometry><box><size>6.65 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>4.2 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <geometry><box><size>6.65 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="cw_-25_2">
       <static>true</static>
       <link name="link">
-        <pose>-16.5 -2.5 1.5 0 0 0</pose>
+        <pose>-10.5 -2.5 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="cw_-25_3">
       <static>true</static>
       <link name="link">
-        <pose>-9.5 -2.5 1.5 0 0 0</pose>
+        <pose>3.5 -2.5 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="cw_-25_4">
-      <static>true</static>
-      <link name="link">
-        <pose>-2.5 -2.5 1.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="cw_-25_5">
-      <static>true</static>
-      <link name="link">
-        <pose>4.5 -2.5 1.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="cw_-25_6">
-      <static>true</static>
-      <link name="link">
-        <pose>11.5 -2.5 1.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="cw_-25_7">
-      <static>true</static>
-      <link name="link">
-        <pose>18.5 -2.5 1.5 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5.6 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="cw_-25_end">
       <static>true</static>
       <link name="link">
-        <pose>23.8 -2.5 1.5 0 0 0</pose>
+        <pose>18.025 -2.5 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>2.2 0.15 3</size></box></geometry>
+          <geometry><box><size>13.65 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>2.2 0.15 3</size></box></geometry>
-          <material><ambient>0.85 0.8 0.68 1</ambient><diffuse>0.85 0.8 0.68 1</diffuse></material>
+          <geometry><box><size>13.65 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_1">
       <static>true</static>
       <link name="link">
-        <pose>-21 9.9 1.5 0 0 0</pose>
+        <pose>-21 9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_2">
       <static>true</static>
       <link name="link">
-        <pose>-21 -9.9 1.5 0 0 0</pose>
+        <pose>-21 -9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_3">
       <static>true</static>
       <link name="link">
-        <pose>-14 9.9 1.5 0 0 0</pose>
+        <pose>-14 9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_4">
       <static>true</static>
       <link name="link">
-        <pose>-14 -9.9 1.5 0 0 0</pose>
+        <pose>-14 -9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_5">
       <static>true</static>
       <link name="link">
-        <pose>-7 9.9 1.5 0 0 0</pose>
+        <pose>-7 9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_6">
       <static>true</static>
       <link name="link">
-        <pose>-7 -9.9 1.5 0 0 0</pose>
+        <pose>-7 -9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_7">
       <static>true</static>
       <link name="link">
-        <pose>0 9.9 1.5 0 0 0</pose>
+        <pose>0 9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_8">
       <static>true</static>
       <link name="link">
-        <pose>0 -9.9 1.5 0 0 0</pose>
+        <pose>0 -9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_9">
       <static>true</static>
       <link name="link">
-        <pose>7 9.9 1.5 0 0 0</pose>
+        <pose>7 9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_10">
       <static>true</static>
       <link name="link">
-        <pose>7 -9.9 1.5 0 0 0</pose>
+        <pose>7 -9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_11">
       <static>true</static>
       <link name="link">
-        <pose>14 9.9 1.5 0 0 0</pose>
+        <pose>14 9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_12">
       <static>true</static>
       <link name="link">
-        <pose>14 -9.9 1.5 0 0 0</pose>
+        <pose>14 -9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_13">
       <static>true</static>
       <link name="link">
-        <pose>21 9.9 1.5 0 0 0</pose>
+        <pose>21 9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="div_14">
       <static>true</static>
       <link name="link">
-        <pose>21 -9.9 1.5 0 0 0</pose>
+        <pose>21 -9.925 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.15 14.8 3</size></box></geometry>
-          <material><ambient>0.82 0.77 0.65 1</ambient><diffuse>0.82 0.77 0.65 1</diffuse></material>
+          <geometry><box><size>0.15 14.85 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_1">
+    <model name="hdiv_10_1">
       <static>true</static>
       <link name="link">
-        <pose>-17.5 7 0.4 0 0 0</pose>
+        <pose>-21.525 10 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
+          <geometry><box><size>6.65 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
+          <geometry><box><size>6.65 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_2">
+    <model name="hdiv_10_2">
       <static>true</static>
       <link name="link">
-        <pose>-17.5 12 0.4 0 0 0</pose>
+        <pose>-10.5 10 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_3">
+    <model name="hdiv_10_3">
       <static>true</static>
       <link name="link">
-        <pose>-17.5 -7 0.4 0 0 0</pose>
+        <pose>3.5 10 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_4">
+    <model name="hdiv_10_end">
       <static>true</static>
       <link name="link">
-        <pose>-17.5 -12 0.4 0 0 0</pose>
+        <pose>18.025 10 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
+          <geometry><box><size>13.65 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
+          <geometry><box><size>13.65 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_5">
+    <model name="hdiv_-10_1">
       <static>true</static>
       <link name="link">
-        <pose>-10.5 7 0.4 0 0 0</pose>
+        <pose>-21.525 -10 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
+          <geometry><box><size>6.65 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
+          <geometry><box><size>6.65 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_6">
+    <model name="hdiv_-10_2">
       <static>true</static>
       <link name="link">
-        <pose>-10.5 12 0.4 0 0 0</pose>
+        <pose>-10.5 -10 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_7">
+    <model name="hdiv_-10_3">
       <static>true</static>
       <link name="link">
-        <pose>-10.5 -7 0.4 0 0 0</pose>
+        <pose>3.5 -10 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
+          <geometry><box><size>12.6 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_8">
+    <model name="hdiv_-10_end">
       <static>true</static>
       <link name="link">
-        <pose>-10.5 -12 0.4 0 0 0</pose>
+        <pose>18.025 -10 1.5 0 0 0</pose>
         <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
+          <geometry><box><size>13.65 0.15 3</size></box></geometry>
         </collision>
         <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
+          <geometry><box><size>13.65 0.15 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="desk_9">
-      <static>true</static>
-      <link name="link">
-        <pose>-3.5 7 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_10">
-      <static>true</static>
-      <link name="link">
-        <pose>-3.5 12 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_11">
-      <static>true</static>
-      <link name="link">
-        <pose>-3.5 -7 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_12">
-      <static>true</static>
-      <link name="link">
-        <pose>-3.5 -12 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_13">
-      <static>true</static>
-      <link name="link">
-        <pose>3.5 7 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_14">
-      <static>true</static>
-      <link name="link">
-        <pose>3.5 12 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_15">
-      <static>true</static>
-      <link name="link">
-        <pose>3.5 -7 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_16">
-      <static>true</static>
-      <link name="link">
-        <pose>3.5 -12 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_17">
-      <static>true</static>
-      <link name="link">
-        <pose>10.5 7 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_18">
-      <static>true</static>
-      <link name="link">
-        <pose>10.5 12 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_19">
-      <static>true</static>
-      <link name="link">
-        <pose>10.5 -7 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_20">
-      <static>true</static>
-      <link name="link">
-        <pose>10.5 -12 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_21">
-      <static>true</static>
-      <link name="link">
-        <pose>17.5 7 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_22">
-      <static>true</static>
-      <link name="link">
-        <pose>17.5 12 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_23">
-      <static>true</static>
-      <link name="link">
-        <pose>17.5 -7 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="desk_24">
-      <static>true</static>
-      <link name="link">
-        <pose>17.5 -12 0.4 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>0.8 0.6 0.8</size></box></geometry>
-          <material><ambient>0.45 0.32 0.2 1</ambient><diffuse>0.45 0.32 0.2 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="bench_4">
-      <static>true</static>
-      <link name="link">
-        <pose>-18 2 0.25 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.6 0.4 0.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.6 0.4 0.5</size></box></geometry>
-          <material><ambient>0.35 0.25 0.15 1</ambient><diffuse>0.35 0.25 0.15 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="bench_34">
-      <static>true</static>
-      <link name="link">
-        <pose>12 2 0.25 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.6 0.4 0.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.6 0.4 0.5</size></box></geometry>
-          <material><ambient>0.35 0.25 0.15 1</ambient><diffuse>0.35 0.25 0.15 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="bench_42">
-      <static>true</static>
-      <link name="link">
-        <pose>20 2 0.25 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.6 0.4 0.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.6 0.4 0.5</size></box></geometry>
-          <material><ambient>0.35 0.25 0.15 1</ambient><diffuse>0.35 0.25 0.15 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_1</name>
+      <pose>-18.7 6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_1</name>
+      <pose>-18.7 5.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_2</name>
+      <pose>-16.3 6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_2</name>
+      <pose>-16.3 5.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_3</name>
+      <pose>-17.5 9.75 1.5 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_3</name>
+      <pose>-17.5 2.65 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_3</name>
+      <pose>-18.7 13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_3</name>
+      <pose>-18.7 12.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_4</name>
+      <pose>-16.3 13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_4</name>
+      <pose>-16.3 12.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_5</name>
+      <pose>-17.5 10.25 1.5 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://RoomWindow_01</uri>
+      <name>win_5</name>
+      <pose>-17.5 17.25 1.2 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_5</name>
+      <pose>-17.5 10 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_5</name>
+      <pose>-18.7 -6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_5</name>
+      <pose>-18.7 -7.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_6</name>
+      <pose>-16.3 -6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_6</name>
+      <pose>-16.3 -7.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_7</name>
+      <pose>-17.5 -9.75 1.5 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_7</name>
+      <pose>-17.5 -2.65 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_7</name>
+      <pose>-18.7 -13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_7</name>
+      <pose>-18.7 -14.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_8</name>
+      <pose>-16.3 -13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_8</name>
+      <pose>-16.3 -14.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_9</name>
+      <pose>-17.5 -10.25 1.5 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://RoomWindow_01</uri>
+      <name>win_9</name>
+      <pose>-17.5 -17.25 1.2 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_9</name>
+      <pose>-17.5 -10 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_9</name>
+      <pose>-4.7 6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_9</name>
+      <pose>-4.7 5.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_10</name>
+      <pose>-2.3 6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_10</name>
+      <pose>-2.3 5.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_11</name>
+      <pose>-3.5 9.75 1.5 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_11</name>
+      <pose>-3.5 2.65 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_11</name>
+      <pose>-4.7 13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_11</name>
+      <pose>-4.7 12.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_12</name>
+      <pose>-2.3 13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_12</name>
+      <pose>-2.3 12.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_13</name>
+      <pose>-3.5 10.25 1.5 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://RoomWindow_01</uri>
+      <name>win_13</name>
+      <pose>-3.5 17.25 1.2 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_13</name>
+      <pose>-3.5 10 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_13</name>
+      <pose>-4.7 -6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_13</name>
+      <pose>-4.7 -7.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_14</name>
+      <pose>-2.3 -6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_14</name>
+      <pose>-2.3 -7.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_15</name>
+      <pose>-3.5 -9.75 1.5 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_15</name>
+      <pose>-3.5 -2.65 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_15</name>
+      <pose>-4.7 -13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_15</name>
+      <pose>-4.7 -14.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_16</name>
+      <pose>-2.3 -13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_16</name>
+      <pose>-2.3 -14.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_17</name>
+      <pose>-3.5 -10.25 1.5 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://RoomWindow_01</uri>
+      <name>win_17</name>
+      <pose>-3.5 -17.25 1.2 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_17</name>
+      <pose>-3.5 -10 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_17</name>
+      <pose>9.3 6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_17</name>
+      <pose>9.3 5.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_18</name>
+      <pose>11.7 6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_18</name>
+      <pose>11.7 5.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_19</name>
+      <pose>10.5 9.75 1.5 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_19</name>
+      <pose>10.5 2.65 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_19</name>
+      <pose>9.3 13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_19</name>
+      <pose>9.3 12.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_20</name>
+      <pose>11.7 13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_20</name>
+      <pose>11.7 12.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_21</name>
+      <pose>10.5 10.25 1.5 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://RoomWindow_01</uri>
+      <name>win_21</name>
+      <pose>10.5 17.25 1.2 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_21</name>
+      <pose>10.5 10 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_21</name>
+      <pose>9.3 -6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_21</name>
+      <pose>9.3 -7.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_22</name>
+      <pose>11.7 -6.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_22</name>
+      <pose>11.7 -7.25 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_23</name>
+      <pose>10.5 -9.75 1.5 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_23</name>
+      <pose>10.5 -2.65 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_23</name>
+      <pose>9.3 -13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_23</name>
+      <pose>9.3 -14.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ReadingDesk_01</uri>
+      <name>desk_24</name>
+      <pose>11.7 -13.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ChairA_01</uri>
+      <name>chair_24</name>
+      <pose>11.7 -14.75 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>board_25</name>
+      <pose>10.5 -10.25 1.5 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://RoomWindow_01</uri>
+      <name>win_25</name>
+      <pose>10.5 -17.25 1.2 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Door_01</uri>
+      <name>door_25</name>
+      <pose>10.5 -10 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://Carpet_01</uri>
+      <name>runner_0</name>
+      <pose>-16 0 0.004 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Carpet_01</uri>
+      <name>runner_1</name>
+      <pose>-8 0 0.004 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Carpet_01</uri>
+      <name>runner_2</name>
+      <pose>0 0 0.004 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Carpet_01</uri>
+      <name>runner_3</name>
+      <pose>8 0 0.004 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Carpet_01</uri>
+      <name>runner_4</name>
+      <pose>16 0 0.004 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://SofaC_01</uri>
+      <name>sofa</name>
+      <pose>22 6.25 0 0 0 3.14159</pose>
+    </include>
   </world>
 </sdf>
