@@ -272,7 +272,7 @@ private:
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= mapping.grid.resolution)
-    double realtime_grid_resolution_ = 0.3;         // 实时 /map 分辨率 (= mapping.grid.realtime_resolution)
+    double realtime_grid_resolution_ = 0.05;        // 实时 /map 分辨率 (= mapping.grid.realtime_resolution)
     nav_msgs::OccupancyGrid global_grid_map_msg_;   // 旧 global_grid_map_ (latch 一次)
 
     // 静态/实时栅格: 主线程的 1Hz timer 与 beginMapSwitch 写, tick 线程读 (slam/info、
