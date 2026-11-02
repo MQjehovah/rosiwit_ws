@@ -79,6 +79,11 @@
   <arg name="drive_angular_speed" default="0.5"/>
   <arg name="drive_duration" default="120.0"/>
 
+  <!-- Force Gazebo down on Ctrl+C: the openni depth camera can
+       hang the normal Gazebo shutdown on WSL. -->
+  <node pkg="rosiwit_simulation_ros1" type="sim_shutdown_guard.py"
+        name="sim_shutdown_guard" output="screen"/>
+
   <!-- 1. Gazebo + 机器人描述 + spawn -->
   <include file="$(find rosiwit_simulation_ros1)/launch/simulator_gazebo.launch">
     <arg name="world_name" value="$(arg world_name)"/>
