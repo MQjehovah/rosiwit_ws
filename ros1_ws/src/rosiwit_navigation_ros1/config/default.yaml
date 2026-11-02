@@ -96,6 +96,10 @@ footprint_aware_control: true
 footprint_sample_spacing: 0.05
 path_resample_step: 0.08
 inflation_radius: 0.32   # 原 0.62 把 <1.24m 通道整段判成内切; 0.32 = 车体 + 6cm
+# unknown(-1) 语义: true -> 折成 unknown_cost(99) 软代价, 规划器尽量规避但可穿越;
+# false -> 保持 -1, pathFootprintClear 会把它当死障碍 (与规划器只挡 100 不一致).
+allow_unknown: true
+unknown_cost: 99
 
 # 里程计话题
 odom_topic: "/odom"
