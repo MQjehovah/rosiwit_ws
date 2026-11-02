@@ -34,6 +34,18 @@ Toolbars:
 Visualization Manager:
   Class: ""
   Displays:
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /perception/objects/markers
+      Name: Persons
+      Namespaces: {}
+      Queue Size: 100
+    - Class: rviz/Image
+      Enabled: true
+      Image Topic: /perception/objects/image
+      Name: PerceptionImage
+      Queue Size: 2
+      Transport: raw
     - Alpha: 0.5
       Cell Size: 1
       Class: rviz/Grid

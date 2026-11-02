@@ -31,7 +31,9 @@
         发出 odom->base_footprint 的正常启动瞬态, 出现 map->odom 后自动消失。
       * use_drive 与手动 nav goal 不要同时用: 两者都往 /cmd_vel 发速度。
   -->
-  <arg name="world_name" default="$(find rosiwit_simulation_ros1)/world/house.world"/>
+  <!-- Scenes: house | parking | supermarket | school | hospital -->
+  <arg name="scene" default="house"/>
+  <arg name="world_name" default="$(find rosiwit_simulation_ros1)/world/$(arg scene).world"/>
   <!-- MPPI/代价地图的 OpenMP 默认会吃满所有核, 限制到 2 线程, 避免和 Gazebo 抢 CPU -->
   <env name="OMP_NUM_THREADS" value="2"/>
   <arg name="gui" default="true"/>
@@ -94,16 +96,16 @@
   <!-- 1.5 感知: 行人占位模型 + 真值 2D 检测 + 3D 语义输出 -->
   <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
         name="spawn_person_1" output="screen"
-        args="-sdf -file $(find rosiwit_simulation_ros1)/world/person_box.sdf
-              -model person_1 -x 2.2 -y 0.8 -z 0.0"/>
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_standing/model.sdf
+              -model person_1 -x 2.4 -y 1.2 -z 0.0"/>
   <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
         name="spawn_person_2" output="screen"
-        args="-sdf -file $(find rosiwit_simulation_ros1)/world/person_box.sdf
-              -model person_2 -x 3.0 -y -0.8 -z 0.0"/>
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_standing/model.sdf
+              -model person_2 -x 3.4 -y -1.4 -z 0.0"/>
   <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
         name="spawn_person_3" output="screen"
-        args="-sdf -file $(find rosiwit_simulation_ros1)/world/person_box.sdf
-              -model person_3 -x 3.8 -y 0.3 -z 0.0"/>
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_standing/model.sdf
+              -model person_3 -x 4.4 -y 0.5 -z 0.0"/>
 
   <!-- openni 插件只给图像 camera_info 打光学系名, 不保证发 TF; 这里补上
        camera_01_link -> 光学系 的静态变换 (yaw/pitch/roll 顺序) -->
