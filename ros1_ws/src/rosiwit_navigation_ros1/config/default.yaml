@@ -81,7 +81,7 @@ max_lookahead_distance: 0.9
 #   真实约束由 footprint + Hybrid A* / 控制器 footprint 检查保证;
 #   实车取 0.39 (与实机 2026-10-23 配置一致); A* 兜底只用这个圆模型,
 # inflation_radius = g_max_safe 的等效膨胀.
-robot_radius: 0.39
+robot_radius: 0.262      # 真内切 = min(0.262 后, 0.644 前, 0.338 侧)
 # 规划器/控制器共用车体轮廓; Hybrid A* 使用它, A* 只使用 robot_radius.
 footprint: [-0.262, -0.338, 0.644, -0.338, 0.644, 0.338, -0.262, 0.338]
 # 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
@@ -95,7 +95,7 @@ footprint: [-0.262, -0.338, 0.644, -0.338, 0.644, 0.338, -0.262, 0.338]
 footprint_aware_control: true
 footprint_sample_spacing: 0.05
 path_resample_step: 0.08
-inflation_radius: 0.62
+inflation_radius: 0.32   # 原 0.62 把 <1.24m 通道整段判成内切; 0.32 = 车体 + 6cm
 
 # 里程计话题
 odom_topic: "/odom"
