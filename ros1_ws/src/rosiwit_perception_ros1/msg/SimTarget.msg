@@ -1,0 +1,9 @@
+int32 gt_id
+int32 class_id
+string class_name
+geometry_msgs/Point center_base
+geometry_msgs/Vector3 velocity_base
+geometry_msgs/Vector3 velocity_world
+float32 range
+bool visible
+bool depth_valid

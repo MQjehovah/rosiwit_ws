@@ -5,9 +5,11 @@
 #   首个类别是 person；以后加 car/bicycle 等只在这里追加，核心与消息都不用改。
 object_semantics:
   detector: rknn                 # rknn | external（无 NPU 时用外部 2D 框做 bring-up/回放）
+  # surface_offset: 深度相机量到的是朝向相机的前表面，按类别补偿到目标中心；
+  #   0 = 不补偿（位置会系统性偏向相机一侧）
   classes:
-    - {id: 0, name: person, min_height: 0.8, max_height: 2.2, max_speed: 2.5}
-    # - {id: 2, name: car, min_height: 0.3, max_height: 2.5, max_speed: 8.0}
+    - {id: 0, name: person, min_height: 0.8, max_height: 2.2, max_speed: 2.5, surface_offset: 0.15}
+    # - {id: 2, name: car, min_height: 0.3, max_height: 2.5, max_speed: 8.0, surface_offset: 2.0}
 
   # ---- 模型 ----（detector=rknn 时使用；支持 YOLOv8 person-only 或 COCO 子集）
   model_path: /opt/ros/melodic/share/rosiwit_perception_ros1/model/objects_yolov8n.rknn

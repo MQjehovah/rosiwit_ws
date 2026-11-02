@@ -28,7 +28,9 @@ add_message_files(FILES
   SemanticObject.msg
   SemanticObjectArray.msg
   ObjectDetection2D.msg
-  ObjectDetection2DArray.msg)
+  ObjectDetection2DArray.msg
+  SimTarget.msg
+  SimGroundTruth.msg)
 generate_messages(DEPENDENCIES std_msgs geometry_msgs)
 
 catkin_package(
@@ -57,5 +59,18 @@ else()
   message(STATUS "object_semantics: RKNN not found -> only external detections / dry-run")
 endif()
 
-install(TARGETS object_semantics_node RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+# ---- 离线闭环仿真（场景真值 -> 节点 -> 评测），不参与产品链路 ----
+add_executable(sim_scene_node sim/sim_scene_node.cpp)
+target_include_directories(sim_scene_node PRIVATE ${catkin_INCLUDE_DIRS})
+target_link_libraries(sim_scene_node ${catkin_LIBRARIES})
+add_dependencies(sim_scene_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_executable(sim_eval_node sim/sim_eval_node.cpp)
+target_include_directories(sim_eval_node PRIVATE ${catkin_INCLUDE_DIRS})
+target_link_libraries(sim_eval_node ${catkin_LIBRARIES})
+add_dependencies(sim_eval_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+install(TARGETS object_semantics_node sim_scene_node sim_eval_node
+        RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 install(DIRECTORY launch config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+install(PROGRAMS scripts/run_sim_test.sh DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

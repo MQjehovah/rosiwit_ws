@@ -132,18 +132,21 @@ bool DepthAssociator::associate(const DetectionBox& box, const DepthImage& image
   // ---- 3) 反投影（方案 §5.4: 用彩色像素 + 彩色内参 + 深度中位数）----
   Eigen::Vector3d p_cam = Eigen::Vector3d::Zero();
   Eigen::Vector3d p_base = Eigen::Vector3d::Zero();
+  // 深度相机量到的是朝向相机的前表面; 按类别补偿到目标中心（0 = 不补偿）
+  const double center_depth = median_m + cls.surface_offset_m;
   if (out.depth_valid) {
     // 光学系: x 右 / y 下 / z 前；base_link: x 前 / y 左 / z 上
-    p_cam << (cu - color_.cx) / color_.fx * median_m,
-             (box.cy() - color_.cy) / color_.fy * median_m,
-             median_m;
+    p_cam << (cu - color_.cx) / color_.fx * center_depth,
+             (box.cy() - color_.cy) / color_.fy * center_depth,
+             center_depth;
     p_base = base_from_color_.R * p_cam + base_from_color_.t;
     out.z = p_base.z();
-    // 尺寸合理性: 用框顶点的射线在 median 深度处估计目标顶部高度,
+    // 尺寸合理性: 用框顶点的射线在 center 深度处估计目标顶部高度,
     // 超出该类别先验区间只降置信不丢点（蹲坐的人 / 远距离货车都能保留）
     const double top_v = box.v0;
-    const double top_y_cam = (top_v - color_.cy) / color_.fy * median_m;
-    const Eigen::Vector3d top_cam((cu - color_.cx) / color_.fx * median_m, top_y_cam, median_m);
+    const double top_y_cam = (top_v - color_.cy) / color_.fy * center_depth;
+    const Eigen::Vector3d top_cam((cu - color_.cx) / color_.fx * center_depth, top_y_cam,
+                                  center_depth);
     const double top_z = (base_from_color_.R * top_cam + base_from_color_.t).z();
     if (top_z < cls.min_height_m || top_z > cls.max_height_m) {
       out.confidence *= 0.5f;
@@ -173,8 +176,8 @@ bool DepthAssociator::associate(const DetectionBox& box, const DepthImage& image
     out.distance = out.position.norm();
 
     // ---- 5) 协方差（深度噪声 + 像素量化，转到 base 平面）----
-    const double sigma_z = params_.sigma_z_a * median_m * median_m + params_.sigma_z_b;
-    const double sigma_lat = median_m * params_.px_sigma / std::max(1.0, color_.fx);
+    const double sigma_z = params_.sigma_z_a * center_depth * center_depth + params_.sigma_z_b;
+    const double sigma_lat = center_depth * params_.px_sigma / std::max(1.0, color_.fx);
     Eigen::Matrix3d cov_cam = Eigen::Matrix3d::Zero();
     cov_cam(0, 0) = sigma_lat * sigma_lat;   // 横向（cam x）
     cov_cam(1, 1) = sigma_lat * sigma_lat;   // 纵向（cam y）

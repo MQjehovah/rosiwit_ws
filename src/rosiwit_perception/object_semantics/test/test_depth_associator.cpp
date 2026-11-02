@@ -150,6 +150,26 @@ TEST(DepthAssociator, OffCenterPersonHasLateralOffset) {
   EXPECT_NEAR(ob.position.y(), -100.0 / 478.118 * 3.0, 0.1);
 }
 
+TEST(DepthAssociator, SurfaceOffsetMovesCenterBack) {
+  // 深度相机量到前表面; surface_offset 应把位置沿视线推回目标中心
+  rp::DepthAssociator assoc;
+  assoc.configure(rp::DepthParams{}, makeColor(), makeDepth(), makeExtrinsics());
+  auto img = makeDepthImage(320, 200, 2000, 1.0);
+  rp::DetectionBox box;
+  box.u0 = 300; box.u1 = 350; box.v0 = 6; box.v1 = 413; box.score = 0.9;
+
+  rp::SemanticClass raw;
+  rp::SemanticClass compensated;
+  compensated.surface_offset_m = 0.20;
+
+  rp::ObjectObservation raw_ob, comp_ob;
+  ASSERT_TRUE(assoc.associate(box, img, raw, raw_ob));
+  ASSERT_TRUE(assoc.associate(box, img, compensated, comp_ob));
+  ASSERT_TRUE(raw_ob.depth_valid && comp_ob.depth_valid);
+  EXPECT_NEAR(comp_ob.position.x() - raw_ob.position.x(), 0.20, 1e-3);
+  EXPECT_GT(comp_ob.distance, raw_ob.distance);
+}
+
 TEST(DepthAssociator, HeightPriorIsPerClass) {
   // 1.7 m 高的人在 2 m 处: person 类先验 (0.8-2.2) 不降置信;
   // 换成"车窗高度 0.2-1.2 m"的类别先验则应降置信, 但观测仍保留。

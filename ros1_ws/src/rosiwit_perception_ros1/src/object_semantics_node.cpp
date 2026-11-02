@@ -388,6 +388,9 @@ class ObjectSemanticsNode {
       if (v[i].hasMember("max_speed")) {
         cls.max_speed_mps = static_cast<double>(v[i]["max_speed"]);
       }
+      if (v[i].hasMember("surface_offset")) {
+        cls.surface_offset_m = static_cast<double>(v[i]["surface_offset"]);
+      }
       classes_.push_back(cls);
     }
     if (classes_.empty()) {
@@ -397,8 +400,9 @@ class ObjectSemanticsNode {
       classes_.push_back(person);
     }
     for (const auto& cls : classes_) {
-      ROS_INFO("[object_semantics] class %d = %s (%.2f-%.2f m)", cls.id, cls.name.c_str(),
-               cls.min_height_m, cls.max_height_m);
+      ROS_INFO("[object_semantics] class %d = %s (h %.2f-%.2f m, offset %.2f m, vmax %.1f m/s)",
+               cls.id, cls.name.c_str(), cls.min_height_m, cls.max_height_m,
+               cls.surface_offset_m, cls.max_speed_mps);
     }
   }
 
@@ -500,7 +504,8 @@ class ObjectSemanticsNode {
   }
   void colorCB(const sensor_msgs::Image::ConstPtr& msg) {
     try {
-      last_color_ = cv_bridge::toCvShare(msg, "bgr8")->image;
+      // toCvCopy 让 Mat 自己持有像素；toCvShare 的临时 CvImagePtr 析构后数据会悬空
+      last_color_ = cv_bridge::toCvCopy(msg, "bgr8")->image;
     } catch (const cv_bridge::Exception& e) {
       ROS_ERROR_THROTTLE(5.0, "[object_semantics] cv_bridge: %s", e.what());
       return;
@@ -642,7 +647,6 @@ class ObjectSemanticsNode {
     p.id = tr.id;
     p.class_id = tr.class_id;
     p.class_name = tr.class_name;
-    p.pose.header = header;
     p.pose.pose.position.x = tr.position.x();
     p.pose.pose.position.y = tr.position.y();
     p.pose.pose.position.z = tr.z;
@@ -660,6 +664,8 @@ class ObjectSemanticsNode {
     p.depth_valid = tr.depth_valid;
     p.velocity_valid = tr.velocity_valid;
     p.in_fov = tr.in_fov;
+    p.confirmed = tr.confirmed;
+    p.coasting = tr.coasting;
     p.age = static_cast<float>(tr.age);
   }
 

@@ -73,6 +73,10 @@ struct SemanticClass {
   double max_height_m = 2.2;
   /// 该类别的速度合理性上限（m/s）: 人 2.5, 车辆要更大
   double max_speed_mps = 2.5;
+  /// 前表面 -> 目标中心的距离补偿（m）。
+  /// 深度相机测到的是朝向相机的前表面，人约半个身厚(0.15)，车辆按车长给；
+  /// 0 表示不做补偿（此时位置会系统性偏向相机一侧）。
+  double surface_offset_m = 0.0;
 
   bool valid() const { return !name.empty(); }
 };

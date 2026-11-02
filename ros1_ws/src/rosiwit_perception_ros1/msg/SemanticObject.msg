@@ -11,4 +11,6 @@ float32 confidence
 bool depth_valid
 bool velocity_valid
 bool in_fov
+bool confirmed
+bool coasting
 float32 age

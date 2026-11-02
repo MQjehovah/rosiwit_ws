@@ -1,0 +1,29 @@
+<launch>
+  <!-- 离线闭环仿真: 场景真值 -> object_semantics_node(external) -> 评测 -->
+  <arg name="frames" default="110" />
+  <arg name="seed" default="7" />
+  <arg name="noise" default="true" />
+  <arg name="scenario" default="persons" />
+
+  <node pkg="rosiwit_perception_ros1" type="sim_scene_node" name="sim_scene"
+        output="screen" required="true">
+    <param name="seed" value="$(arg seed)" />
+    <param name="noise" value="$(arg noise)" />
+    <param name="rate" value="10.0" />
+    <param name="scenario" value="$(arg scenario)" />
+  </node>
+
+  <node pkg="rosiwit_perception_ros1" type="object_semantics_node" name="object_semantics"
+        output="screen">
+    <rosparam file="$(find rosiwit_perception_ros1)/config/sim_object_semantics.yaml"
+              command="load" />
+  </node>
+
+  <!-- 评测节点跑完即退出（required=true 让 roslaunch 收掉其余节点） -->
+  <node pkg="rosiwit_perception_ros1" type="sim_eval_node" name="sim_eval"
+        output="screen" required="true">
+    <param name="frames" value="$(arg frames)" />
+    <param name="report_path" value="/tmp/object_semantics_sim_report.txt" />
+    <param name="csv_path" value="/tmp/object_semantics_sim_$(arg scenario).csv" />
+  </node>
+</launch>

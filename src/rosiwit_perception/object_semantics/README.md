@@ -36,6 +36,8 @@ ctest --test-dir build --output-on-failure
   `depth_valid=false` 并回退到地面投影（大协方差、低置信）。
 - **尺寸先验**：用框顶射线在 median 深度处估计目标顶部高度，超出该类别的
   `min_height`/`max_height` 只降置信不丢点（避免蹲坐/儿童/远处车辆被直接丢弃）。
+- **前表面补偿**：深度相机量到的是朝向相机的前表面，`SemanticClass.surface_offset_m`
+  按类别补到目标中心（人约半身厚 0.15 m）；0 表示不补偿，位置会系统性偏向相机一侧。
 - **类别**：关联时要求 `class_id` 相同；NMS 按类别分组，不同类别的重叠框互不抑制。
 - **状态**：`tentative → confirmed`（命中 3 帧）→ `coasting`（≤0.5 s）→ 删除；
   `velocity_valid` 仅在 confirmed + 深度有效 + 年龄 ≥0.3 s 时为真。
