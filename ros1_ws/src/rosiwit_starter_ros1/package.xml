@@ -16,6 +16,7 @@
   <exec_depend>rosiwit_simulation_ros1</exec_depend>
   <exec_depend>rosiwit_slam_ros1</exec_depend>
   <exec_depend>rosiwit_navigation_ros1</exec_depend>
+  <exec_depend>rosiwit_perception_ros1</exec_depend>
   <exec_depend>gazebo_ros</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>

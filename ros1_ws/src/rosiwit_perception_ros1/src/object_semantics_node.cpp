@@ -477,8 +477,11 @@ class ObjectSemanticsNode {
     depth_info_valid_ = true;
   }
   void depthCB(const sensor_msgs::Image::ConstPtr& msg) {
-    if (msg->encoding != "16UC1" && msg->encoding != "mono16") {
-      ROS_ERROR_THROTTLE(5.0, "[object_semantics] depth encoding 必须是 16UC1, got %s",
+    const bool u16 = msg->encoding == "16UC1" || msg->encoding == "mono16";
+    const bool f32 = msg->encoding == "32FC1";
+    if (!u16 && !f32) {
+      ROS_ERROR_THROTTLE(5.0,
+                         "[object_semantics] depth encoding 必须是 16UC1 或 32FC1, got %s",
                          msg->encoding.c_str());
       return;
     }
@@ -486,13 +489,31 @@ class ObjectSemanticsNode {
     depth_img_.height = static_cast<int>(msg->height);
     depth_img_.scale_mm = 1.0f;
     depth_img_.data.resize(static_cast<size_t>(msg->width) * msg->height);
-    const size_t row_bytes = static_cast<size_t>(msg->width) * sizeof(uint16_t);
-    if (msg->step == row_bytes) {
-      memcpy(depth_img_.data.data(), msg->data.data(), row_bytes * msg->height);
+
+    if (u16) {
+      const size_t row_bytes = static_cast<size_t>(msg->width) * sizeof(uint16_t);
+      if (msg->step == row_bytes) {
+        memcpy(depth_img_.data.data(), msg->data.data(), row_bytes * msg->height);
+      } else {
+        for (uint32_t v = 0; v < msg->height; ++v) {
+          memcpy(depth_img_.data.data() + static_cast<size_t>(v) * msg->width,
+                 msg->data.data() + static_cast<size_t>(v) * msg->step, row_bytes);
+        }
+      }
     } else {
+      // 32FC1 = 米（Gazebo openni / 部分实机驱动）: 转成毫米，0/NaN/Inf 记空洞
       for (uint32_t v = 0; v < msg->height; ++v) {
-        memcpy(depth_img_.data.data() + static_cast<size_t>(v) * msg->width,
-               msg->data.data() + static_cast<size_t>(v) * msg->step, row_bytes);
+        const float* src =
+            reinterpret_cast<const float*>(msg->data.data() + static_cast<size_t>(v) * msg->step);
+        uint16_t* dst = depth_img_.data.data() + static_cast<size_t>(v) * msg->width;
+        for (uint32_t u = 0; u < msg->width; ++u) {
+          const float m = src[u];
+          if (!std::isfinite(m) || m <= 0.0f) {
+            dst[u] = 0;
+          } else {
+            dst[u] = static_cast<uint16_t>(std::min(65535.0f, m * 1000.0f));
+          }
+        }
       }
     }
     depth_stamp_ = msg->header.stamp;

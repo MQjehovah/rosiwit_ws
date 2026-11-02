@@ -61,6 +61,16 @@
   <arg name="rviz_config" default="$(find rosiwit_starter_ros1)/rviz/sim_slam_nav.rviz"/>
 
   <!-- 可选: 自动运动 (建图用), figure8|circle|square|explore -->
+  <!-- Perception: front depth camera + person models + GT detector + object_semantics.
+       Enabled by default; disable with enable_perception:=false.
+       For a clean demo use the open world (ground plane, no walls):
+         world_name:=$(find rosiwit_simulation_ros1)/world/perception.world -->
+  <arg name="enable_perception" default="true"/>
+  <arg name="perception_detector" default="external"/>
+  <arg name="perception_config"
+       default="$(find rosiwit_perception_ros1)/config/sim_object_semantics.yaml"/>
+  <arg name="person_models" default="person_1,person_2,person_3"/>
+
   <arg name="use_drive" default="false"/>
   <arg name="drive_mode" default="figure8"/>
   <arg name="drive_linear_speed" default="0.3"/>
@@ -79,6 +89,44 @@
     <arg name="spawn_yaw" value="$(arg spawn_yaw)"/>
     <arg name="robot_name" value="$(arg robot_name)"/>
     <arg name="lidar_plugin" value="$(arg lidar_plugin)"/>
+  </include>
+
+  <!-- 1.5 感知: 行人占位模型 + 真值 2D 检测 + 3D 语义输出 -->
+  <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
+        name="spawn_person_1" output="screen"
+        args="-sdf -file $(find rosiwit_simulation_ros1)/world/person_box.sdf
+              -model person_1 -x 3.0 -y 1.1 -z 0.0"/>
+  <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
+        name="spawn_person_2" output="screen"
+        args="-sdf -file $(find rosiwit_simulation_ros1)/world/person_box.sdf
+              -model person_2 -x 4.5 -y -1.2 -z 0.0"/>
+  <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
+        name="spawn_person_3" output="screen"
+        args="-sdf -file $(find rosiwit_simulation_ros1)/world/person_box.sdf
+              -model person_3 -x 6.0 -y 0.4 -z 0.0"/>
+
+  <!-- openni 插件只给图像 camera_info 打光学系名, 不保证发 TF; 这里补上
+       camera_01_link -> 光学系 的静态变换 (yaw/pitch/roll 顺序) -->
+  <node if="$(arg enable_perception)" pkg="tf" type="static_transform_publisher"
+        name="camera_01_optical_tf"
+        args="0 0 0 -1.5707963 0 -1.5707963 camera_01_link camera_01_color_optical_frame 100"/>
+  <node if="$(arg enable_perception)" pkg="tf" type="static_transform_publisher"
+        name="camera_01_depth_optical_tf"
+        args="0 0 0 -1.5707963 0 -1.5707963 camera_01_link camera_01_depth_optical_frame 100"/>
+
+  <node if="$(arg enable_perception)" pkg="rosiwit_simulation_ros1"
+        type="sim_person_detector.py" name="sim_person_detector" output="screen">
+    <param name="robot_name" value="$(arg robot_name)"/>
+    <param name="model_names" value="$(arg person_models)"/>
+    <param name="color_topic" value="/camera_01/color/image_raw"/>
+    <param name="camera_info_topic" value="/camera_01/color/camera_info"/>
+    <param name="output_topic" value="/perception/objects/detections_2d"/>
+  </node>
+
+  <include if="$(arg enable_perception)"
+           file="$(find rosiwit_perception_ros1)/launch/object_semantics.launch">
+    <arg name="config" value="$(arg perception_config)"/>
+    <arg name="detector" value="$(arg perception_detector)"/>
   </include>
 
   <!-- 2. SLAM: 建图模式, 发布 /map + /lio_odom + /world_cloud -->

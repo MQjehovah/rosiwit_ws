@@ -37,6 +37,6 @@ velocity_max_mps: 2.5
 
 # 仿真里只开数组/标注图；markers 与 JSONL 不影响评测
 publish_image: true
-publish_markers: false
+publish_markers: true
 publish_log: false
 publish_persons_alias: true

@@ -25,4 +25,6 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>tf</exec_depend>
+  <!-- sim_person_detector.py 发布 ObjectDetection2DArray（仅仿真用） -->
+  <exec_depend>rosiwit_perception_ros1</exec_depend>
 </package>

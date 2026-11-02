@@ -16,8 +16,12 @@
     <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/gazebo/mbot_base.xacro"/>
     <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/lidar3d_gazebo.xacro"/>
     <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/imu_gazebo.xacro"/>
+    <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/sensors/depth_camera_gazebo.xacro"/>
     <xacro:include filename="$(find rosiwit_simulation_ros1)/urdf/xacro/robots/gt_robot.xacro"/>
 
     <xacro:gt_robot lidar_plugin="${lplug}"/>
+
+    <!-- Front color+depth camera, mounted at the real camera_01 position. -->
+    <xacro:depth_camera_gazebo prefix="camera_01" parent="camera_01_link"/>
 
 </robot>

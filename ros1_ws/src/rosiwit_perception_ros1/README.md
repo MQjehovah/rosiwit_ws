@@ -32,6 +32,24 @@ roslaunch rosiwit_perception_ros1 object_semantics.launch detector:=external
 | `/perception/objects/log` | JSONL：每目标每帧一行 |
 | `/perception/objects/detections_2d` | `detector=external` 时的输入（自带 `class_id`） |
 
+## 接入 sim_slam_nav.launch
+
+`roslaunch rosiwit_starter_ros1 sim_slam_nav.launch` 默认会：
+
+- 给仿真车加前视彩色/深度相机（`/camera_01/...`，装在实机 `camera_01_link` 位置）
+- 在车前方生成 3 个行人占位模型（`person_1..3`）
+- 跑 `sim_person_detector.py`：按 Gazebo 真值位姿投影出 2D 框
+- 跑本包的 `object_semantics_node`（`detector=external`），输出 `/perception/objects`
+
+推荐用开阔世界看效果（默认 house.world 在 (0,0) 没地面）：
+
+```bash
+roslaunch rosiwit_starter_ros1 sim_slam_nav.launch \
+  world_name:=$(rospack find rosiwit_simulation_ros1)/world/perception.world
+```
+
+不需要感知时加 `enable_perception:=false`。
+
 ## 闭环仿真验收
 
 不需要 Gazebo/真实相机：`sim_scene_node` 用已知几何渲染彩色、深度、相机内参、TF、odom 和真值框，
