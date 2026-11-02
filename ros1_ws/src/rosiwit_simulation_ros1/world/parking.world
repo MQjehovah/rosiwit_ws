@@ -3,8 +3,8 @@
   <world name="parking">
     <include><uri>model://sun</uri></include>
     <scene>
-      <ambient>0.55 0.55 0.55 1</ambient>
-      <background>0.75 0.78 0.82 1</background>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.75 0.80 0.86 1</background>
       <shadows>1</shadows>
     </scene>
     <physics type="ode">
@@ -21,7 +21,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 35 0.1</size></box></geometry>
-          <material><ambient>0.42 0.43 0.45 1</ambient><diffuse>0.42 0.43 0.45 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/DarkGrey</name></script></material>
         </visual>
       </link>
     </model>
@@ -34,7 +34,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 0.2 3</size></box></geometry>
-          <material><ambient>0.55 0.55 0.58 1</ambient><diffuse>0.55 0.55 0.58 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -47,7 +47,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>50 0.2 3</size></box></geometry>
-          <material><ambient>0.55 0.55 0.58 1</ambient><diffuse>0.55 0.55 0.58 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -60,7 +60,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.2 35 3</size></box></geometry>
-          <material><ambient>0.55 0.55 0.58 1</ambient><diffuse>0.55 0.55 0.58 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -73,7 +73,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.2 35 3</size></box></geometry>
-          <material><ambient>0.55 0.55 0.58 1</ambient><diffuse>0.55 0.55 0.58 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -86,7 +86,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -99,7 +99,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -112,7 +112,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -125,7 +125,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -138,7 +138,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -151,7 +151,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -164,7 +164,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -177,7 +177,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -190,7 +190,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -203,7 +203,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -216,7 +216,7 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
@@ -229,11 +229,24 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
     <model name="pillar_13">
+      <static>true</static>
+      <link name="link">
+        <pose>-4 0 1.5 0 0 0</pose>
+        <collision name="c">
+          <geometry><box><size>0.6 0.6 3</size></box></geometry>
+        </collision>
+        <visual name="v">
+          <geometry><box><size>0.6 0.6 3</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="pillar_14">
       <static>true</static>
       <link name="link">
         <pose>-4 7 1.5 0 0 0</pose>
@@ -242,11 +255,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_14">
+    <model name="pillar_15">
       <static>true</static>
       <link name="link">
         <pose>-4 14 1.5 0 0 0</pose>
@@ -255,11 +268,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_15">
+    <model name="pillar_16">
       <static>true</static>
       <link name="link">
         <pose>4 -14 1.5 0 0 0</pose>
@@ -268,11 +281,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_16">
+    <model name="pillar_17">
       <static>true</static>
       <link name="link">
         <pose>4 -7 1.5 0 0 0</pose>
@@ -281,11 +294,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_17">
+    <model name="pillar_18">
       <static>true</static>
       <link name="link">
         <pose>4 7 1.5 0 0 0</pose>
@@ -294,11 +307,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_18">
+    <model name="pillar_19">
       <static>true</static>
       <link name="link">
         <pose>4 14 1.5 0 0 0</pose>
@@ -307,11 +320,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_19">
+    <model name="pillar_20">
       <static>true</static>
       <link name="link">
         <pose>12 -14 1.5 0 0 0</pose>
@@ -320,11 +333,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_20">
+    <model name="pillar_21">
       <static>true</static>
       <link name="link">
         <pose>12 -7 1.5 0 0 0</pose>
@@ -333,11 +346,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_21">
+    <model name="pillar_22">
       <static>true</static>
       <link name="link">
         <pose>12 0 1.5 0 0 0</pose>
@@ -346,11 +359,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_22">
+    <model name="pillar_23">
       <static>true</static>
       <link name="link">
         <pose>12 7 1.5 0 0 0</pose>
@@ -359,11 +372,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_23">
+    <model name="pillar_24">
       <static>true</static>
       <link name="link">
         <pose>12 14 1.5 0 0 0</pose>
@@ -372,11 +385,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_24">
+    <model name="pillar_25">
       <static>true</static>
       <link name="link">
         <pose>20 -14 1.5 0 0 0</pose>
@@ -385,11 +398,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_25">
+    <model name="pillar_26">
       <static>true</static>
       <link name="link">
         <pose>20 -7 1.5 0 0 0</pose>
@@ -398,11 +411,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_26">
+    <model name="pillar_27">
       <static>true</static>
       <link name="link">
         <pose>20 0 1.5 0 0 0</pose>
@@ -411,11 +424,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_27">
+    <model name="pillar_28">
       <static>true</static>
       <link name="link">
         <pose>20 7 1.5 0 0 0</pose>
@@ -424,11 +437,11 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="pillar_28">
+    <model name="pillar_29">
       <static>true</static>
       <link name="link">
         <pose>20 14 1.5 0 0 0</pose>
@@ -437,17 +450,82 @@
         </collision>
         <visual name="v">
           <geometry><box><size>0.6 0.6 3</size></box></geometry>
-          <material><ambient>0.45 0.45 0.47 1</ambient><diffuse>0.45 0.45 0.47 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
         </visual>
       </link>
     </model>
+    <include>
+      <uri>model://hatchback</uri>
+      <name>car_0</name>
+      <pose>-17 -12.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://hatchback</uri>
+      <name>car_1</name>
+      <pose>-17 -9.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://suv</uri>
+      <name>car_2</name>
+      <pose>-11 -12.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://suv</uri>
+      <name>car_3</name>
+      <pose>-11 -9.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://hatchback</uri>
+      <name>car_4</name>
+      <pose>10 -12.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://suv</uri>
+      <name>car_5</name>
+      <pose>10 -9.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://suv</uri>
+      <name>car_6</name>
+      <pose>17 -12.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://hatchback</uri>
+      <name>car_7</name>
+      <pose>17 -9.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://suv</uri>
+      <name>car_8</name>
+      <pose>-17 12.5 0 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://hatchback</uri>
+      <name>car_9</name>
+      <pose>-11 12.5 0 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://hatchback</uri>
+      <name>car_10</name>
+      <pose>10 12.5 0 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://suv</uri>
+      <name>car_11</name>
+      <pose>17 12.5 0 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://bus</uri>
+      <name>car_12</name>
+      <pose>22 0 0 0 0 1.5708</pose>
+    </include>
     <model name="bay_1">
       <static>true</static>
       <link name="link">
-        <pose>-19 -14 0.006 0 0 0</pose>
+        <pose>-18 -14 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -457,17 +535,17 @@
         <pose>11 -14 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_3">
       <static>true</static>
       <link name="link">
-        <pose>-19 -11 0.006 0 0 0</pose>
+        <pose>-18 -11 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -477,17 +555,17 @@
         <pose>11 -11 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_5">
       <static>true</static>
       <link name="link">
-        <pose>-19 -8 0.006 0 0 0</pose>
+        <pose>-18 -8 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -497,17 +575,17 @@
         <pose>11 -8 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_7">
       <static>true</static>
       <link name="link">
-        <pose>-19 -5 0.006 0 0 0</pose>
+        <pose>-18 -5 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -517,17 +595,17 @@
         <pose>11 -5 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_9">
       <static>true</static>
       <link name="link">
-        <pose>-19 -2 0.006 0 0 0</pose>
+        <pose>-18 -2 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -537,17 +615,17 @@
         <pose>11 -2 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_11">
       <static>true</static>
       <link name="link">
-        <pose>-19 1 0.006 0 0 0</pose>
+        <pose>-18 1 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -557,17 +635,17 @@
         <pose>11 1 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_13">
       <static>true</static>
       <link name="link">
-        <pose>-19 4 0.006 0 0 0</pose>
+        <pose>-18 4 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -577,17 +655,17 @@
         <pose>11 4 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_15">
       <static>true</static>
       <link name="link">
-        <pose>-19 7 0.006 0 0 0</pose>
+        <pose>-18 7 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -597,17 +675,17 @@
         <pose>11 7 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_17">
       <static>true</static>
       <link name="link">
-        <pose>-19 10 0.006 0 0 0</pose>
+        <pose>-18 10 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -617,17 +695,17 @@
         <pose>11 10 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
     <model name="bay_19">
       <static>true</static>
       <link name="link">
-        <pose>-19 13 0.006 0 0 0</pose>
+        <pose>-18 13 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
@@ -637,270 +715,39 @@
         <pose>11 13 0.006 0 0 0</pose>
         <visual name="v">
           <geometry><box><size>6 0.08 0.01</size></box></geometry>
-          <material><ambient>0.85 0.85 0.85 1</ambient><diffuse>0.85 0.85 0.85 1</diffuse></material>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/White</name></script></material>
         </visual>
       </link>
     </model>
-    <model name="car_1">
-      <static>true</static>
-      <link name="link">
-        <pose>-18 -12.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.65 0.15 0.15 1</ambient><diffuse>0.65 0.15 0.15 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_2">
-      <static>true</static>
-      <link name="link">
-        <pose>-18 -9.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.2 0.5 0.25 1</ambient><diffuse>0.2 0.5 0.25 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_3">
-      <static>true</static>
-      <link name="link">
-        <pose>-18 9.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.75 0.75 0.75 1</ambient><diffuse>0.75 0.75 0.75 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_4">
-      <static>true</static>
-      <link name="link">
-        <pose>-18 12.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_5">
-      <static>true</static>
-      <link name="link">
-        <pose>-11 -12.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.15 0.25 0.55 1</ambient><diffuse>0.15 0.25 0.55 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_6">
-      <static>true</static>
-      <link name="link">
-        <pose>-11 -9.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.65 0.15 0.15 1</ambient><diffuse>0.65 0.15 0.15 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_7">
-      <static>true</static>
-      <link name="link">
-        <pose>-11 9.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.2 0.5 0.25 1</ambient><diffuse>0.2 0.5 0.25 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_8">
-      <static>true</static>
-      <link name="link">
-        <pose>-11 12.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.75 0.75 0.75 1</ambient><diffuse>0.75 0.75 0.75 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_9">
-      <static>true</static>
-      <link name="link">
-        <pose>10 -12.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_10">
-      <static>true</static>
-      <link name="link">
-        <pose>10 -9.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.15 0.25 0.55 1</ambient><diffuse>0.15 0.25 0.55 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_11">
-      <static>true</static>
-      <link name="link">
-        <pose>10 9.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.65 0.15 0.15 1</ambient><diffuse>0.65 0.15 0.15 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_12">
-      <static>true</static>
-      <link name="link">
-        <pose>10 12.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.2 0.5 0.25 1</ambient><diffuse>0.2 0.5 0.25 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_13">
-      <static>true</static>
-      <link name="link">
-        <pose>17 -12.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.75 0.75 0.75 1</ambient><diffuse>0.75 0.75 0.75 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_14">
-      <static>true</static>
-      <link name="link">
-        <pose>17 -9.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.12 0.12 0.12 1</ambient><diffuse>0.12 0.12 0.12 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_15">
-      <static>true</static>
-      <link name="link">
-        <pose>17 9.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.15 0.25 0.55 1</ambient><diffuse>0.15 0.25 0.55 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="car_16">
-      <static>true</static>
-      <link name="link">
-        <pose>17 12.5 0.75 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>1.8 4.2 1.5</size></box></geometry>
-          <material><ambient>0.65 0.15 0.15 1</ambient><diffuse>0.65 0.15 0.15 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="ramp">
-      <static>true</static>
-      <link name="link">
-        <pose>-22.5 0 0.35 0 0 0</pose>
-        <collision name="c">
-          <geometry><box><size>5 5 0.2</size></box></geometry>
-        </collision>
-        <visual name="v">
-          <geometry><box><size>5 5 0.2</size></box></geometry>
-          <material><ambient>0.5 0.5 0.5 1</ambient><diffuse>0.5 0.5 0.5 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="beam_5">
-      <static>true</static>
-      <link name="link">
-        <pose>-15 0 3 0 0 0</pose>
-        <visual name="v">
-          <geometry><box><size>0.4 34 0.25</size></box></geometry>
-          <material><ambient>0.35 0.35 0.38 1</ambient><diffuse>0.35 0.35 0.38 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="beam_15">
-      <static>true</static>
-      <link name="link">
-        <pose>-5 0 3 0 0 0</pose>
-        <visual name="v">
-          <geometry><box><size>0.4 34 0.25</size></box></geometry>
-          <material><ambient>0.35 0.35 0.38 1</ambient><diffuse>0.35 0.35 0.38 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="beam_25">
-      <static>true</static>
-      <link name="link">
-        <pose>5 0 3 0 0 0</pose>
-        <visual name="v">
-          <geometry><box><size>0.4 34 0.25</size></box></geometry>
-          <material><ambient>0.35 0.35 0.38 1</ambient><diffuse>0.35 0.35 0.38 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
-    <model name="beam_35">
-      <static>true</static>
-      <link name="link">
-        <pose>15 0 3 0 0 0</pose>
-        <visual name="v">
-          <geometry><box><size>0.4 34 0.25</size></box></geometry>
-          <material><ambient>0.35 0.35 0.38 1</ambient><diffuse>0.35 0.35 0.38 1</diffuse></material>
-        </visual>
-      </link>
-    </model>
+    <include>
+      <uri>model://SecurityCamera_01</uri>
+      <name>cam_1</name>
+      <pose>-16 -3 2.5 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://SecurityCamera_01</uri>
+      <name>cam_2</name>
+      <pose>8 3 2.5 0 0 3.14159</pose>
+    </include>
+    <include>
+      <uri>model://Trash_01</uri>
+      <name>trash_1</name>
+      <pose>-23 -16 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Trash_01</uri>
+      <name>trash_2</name>
+      <pose>23 16 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>sign_1</name>
+      <pose>-24.7 -2 1.6 0 0 1.5708</pose>
+    </include>
+    <include>
+      <uri>model://Board_01</uri>
+      <name>sign_2</name>
+      <pose>24.7 2 1.6 0 0 -1.5708</pose>
+    </include>
   </world>
 </sdf>

@@ -26,6 +26,7 @@ install(DIRECTORY ${_meshes_real}/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATIO
 catkin_install_python(PROGRAMS
   scripts/sim_drive.py
   scripts/sim_person_detector.py
+  scripts/sim_people_mover.py
   scripts/generate_large_loop_world.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

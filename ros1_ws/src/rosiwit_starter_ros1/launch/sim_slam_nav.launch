@@ -96,16 +96,16 @@
   <!-- 1.5 感知: 行人占位模型 + 真值 2D 检测 + 3D 语义输出 -->
   <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
         name="spawn_person_1" output="screen"
-        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_standing/model.sdf
-              -model person_1 -x 2.4 -y 1.2 -z 0.0"/>
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_walking/model.sdf
+              -model person_1 -x 3.5 -y 1.2 -z 0.0"/>
   <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
         name="spawn_person_2" output="screen"
-        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_standing/model.sdf
-              -model person_2 -x 3.4 -y -1.4 -z 0.0"/>
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_walking/model.sdf
+              -model person_2 -x 4.0 -y -0.6 -z 0.0"/>
   <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
         name="spawn_person_3" output="screen"
-        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_standing/model.sdf
-              -model person_3 -x 4.4 -y 0.5 -z 0.0"/>
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_walking/model.sdf
+              -model person_3 -x 5.0 -y 1.2 -z 0.0"/>
 
   <!-- openni 插件只给图像 camera_info 打光学系名, 不保证发 TF; 这里补上
        camera_01_link -> 光学系 的静态变换 (yaw/pitch/roll 顺序) -->
@@ -123,6 +123,11 @@
     <param name="color_topic" value="/camera_01/color/image_raw"/>
     <param name="camera_info_topic" value="/camera_01/color/camera_info"/>
     <param name="output_topic" value="/perception/objects/detections_2d"/>
+  </node>
+
+  <node if="$(arg enable_perception)" pkg="rosiwit_simulation_ros1"
+        type="sim_people_mover.py" name="sim_people_mover" output="screen">
+    <param name="model_names" value="$(arg person_models)"/>
   </node>
 
   <include if="$(arg enable_perception)"
