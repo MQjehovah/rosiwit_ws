@@ -128,6 +128,10 @@ bool Ros1SlamInterface::resetCoreAndCaches() {
     core_ever_localized_ = false;
     debug_map_published_ = false;
     std::cout << "[ros1_slam] core rebuilt + local caches cleared" << std::endl;
+    // 之前这里缺少 return: 函数声明为 bool, 默认 reset_on_mode_switch_=true 时
+    // 走到末尾是**未定义返回值** -> handleModeSwitch 把成功当失败, 服务回调返回 false,
+    // ROS 客户端看到 "service responded with an error" (实机表现: 取消建图/开始建图都失败).
+    return core_ok;
 }
 
 void Ros1SlamInterface::resetLocalizationLatch() {
