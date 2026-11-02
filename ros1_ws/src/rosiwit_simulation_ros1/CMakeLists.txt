@@ -19,6 +19,8 @@ install(DIRECTORY
 get_filename_component(_models_real "${CMAKE_CURRENT_SOURCE_DIR}/models" REALPATH)
 get_filename_component(_meshes_real "${CMAKE_CURRENT_SOURCE_DIR}/meshes" REALPATH)
 install(DIRECTORY ${_models_real}/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/models)
+install(DIRECTORY models_perception
+        DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 install(DIRECTORY ${_meshes_real}/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/meshes)
 
 catkin_install_python(PROGRAMS

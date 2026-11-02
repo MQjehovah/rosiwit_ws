@@ -25,7 +25,7 @@
     <env name="GAZEBO_RESOURCE_PATH"
          value="$(optenv GAZEBO_RESOURCE_PATH /usr/share/gazebo-9)"/>
     <env name="GAZEBO_MODEL_PATH"
-         value="$(find rosiwit_simulation_ros1)/models:$(optenv GAZEBO_MODEL_PATH /usr/share/gazebo-9/models)"/>
+         value="$(find rosiwit_simulation_ros1)/models_perception:$(find rosiwit_simulation_ros1)/models:$(optenv GAZEBO_MODEL_PATH /usr/share/gazebo-9/models)"/>
     <env name="GAZEBO_PLUGIN_PATH"
          value="$(find rosiwit_simulation_ros1)/plugins:/opt/ros/$(env ROS_DISTRO)/lib:$(optenv GAZEBO_PLUGIN_PATH)"/>
 
