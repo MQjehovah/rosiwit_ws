@@ -1,0 +1,92 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    只有"世界侧"：Gazebo + 机器人 + 行人 + 真值检测器。
+
+    配合 algo_only.launch 用：仿真容器跑这个（SIM_NODES=0），算法节点
+    （SLAM / 导航 / 感知 / RViz）在 WebIDE 里用 algo_only.launch 起，
+    两边通过同一个 ROS master 通信，改代码不用重启仿真。
+
+    单独跑（本地调试）：
+      roslaunch rosiwit_starter_ros1 world_only.launch scene:=supermarket
+  -->
+  <arg name="scene" default="house"/>
+  <arg name="world_name" default="$(find rosiwit_simulation_ros1)/world/$(arg scene).world"/>
+  <env name="OMP_NUM_THREADS" value="2"/>
+  <arg name="gui" default="true"/>
+  <arg name="paused" default="false"/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="spawn_x" default="0.0"/>
+  <arg name="spawn_y" default="0.0"/>
+  <arg name="spawn_z" default="0.1"/>
+  <arg name="spawn_yaw" default="0.0"/>
+  <arg name="person1_x" default="3.5"/>
+  <arg name="person1_y" default="1.2"/>
+  <arg name="person2_x" default="4.0"/>
+  <arg name="person2_y" default="-0.6"/>
+  <arg name="person3_x" default="5.0"/>
+  <arg name="person3_y" default="1.2"/>
+  <arg name="robot_name" default="mrobot"/>
+  <arg name="lidar_plugin" default="velodyne"/>
+  <arg name="enable_perception" default="true"/>
+  <arg name="person_models" default="person_1,person_2,person_3"/>
+
+  <node pkg="rosiwit_simulation_ros1" type="sim_shutdown_guard.py"
+        name="sim_shutdown_guard" output="screen"/>
+
+  <!-- Gazebo + 机器人描述 + spawn -->
+  <include file="$(find rosiwit_simulation_ros1)/launch/simulator_gazebo.launch">
+    <arg name="world_name" value="$(arg world_name)"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="paused" value="$(arg paused)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="spawn_x" value="$(arg spawn_x)"/>
+    <arg name="spawn_y" value="$(arg spawn_y)"/>
+    <arg name="spawn_z" value="$(arg spawn_z)"/>
+    <arg name="spawn_yaw" value="$(arg spawn_yaw)"/>
+    <arg name="robot_name" value="$(arg robot_name)"/>
+    <arg name="lidar_plugin" value="$(arg lidar_plugin)"/>
+  </include>
+
+  <!-- 把 /robot_description 参数发成 latched 话题（RosView 3D 面板要用） -->
+  <node pkg="rosiwit_simulation_ros1" type="publish_robot_description.py"
+        name="robot_description_publisher" output="screen"/>
+
+  <!-- 行人 + 真值 2D 检测 + 走动 -->
+  <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
+        name="spawn_person_1" output="screen"
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_walking/model.sdf
+              -model person_1 -x $(arg person1_x) -y $(arg person1_y) -z 0.02"/>
+  <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
+        name="spawn_person_2" output="screen"
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_walking/model.sdf
+              -model person_2 -x $(arg person2_x) -y $(arg person2_y) -z 0.02"/>
+  <node if="$(arg enable_perception)" pkg="gazebo_ros" type="spawn_model"
+        name="spawn_person_3" output="screen"
+        args="-sdf -file $(find rosiwit_simulation_ros1)/models_perception/person_walking/model.sdf
+              -model person_3 -x $(arg person3_x) -y $(arg person3_y) -z 0.02"/>
+
+  <!-- 相机光学系 TF（感知节点要用，放世界侧只发一次） -->
+  <node if="$(arg enable_perception)" pkg="tf" type="static_transform_publisher"
+        name="camera_01_optical_tf"
+        args="0 0 0 -1.5707963 0 -1.5707963 camera_01_link camera_01_color_optical_frame 100"/>
+  <node if="$(arg enable_perception)" pkg="tf" type="static_transform_publisher"
+        name="camera_01_depth_optical_tf"
+        args="0 0 0 -1.5707963 0 -1.5707963 camera_01_link camera_01_depth_optical_frame 100"/>
+
+  <node if="$(arg enable_perception)" pkg="rosiwit_simulation_ros1"
+        type="sim_person_detector.py" name="sim_person_detector" output="screen">
+    <param name="robot_name" value="$(arg robot_name)"/>
+    <param name="model_names" value="$(arg person_models)"/>
+    <param name="color_topic" value="/camera_01/color/image_raw"/>
+    <param name="camera_info_topic" value="/camera_01/color/camera_info"/>
+    <param name="output_topic" value="/perception/objects/detections_2d"/>
+  </node>
+
+  <node if="$(arg enable_perception)" pkg="rosiwit_simulation_ros1"
+        type="sim_people_mover.py" name="sim_people_mover" output="screen">
+    <param name="model_names" value="$(arg person_models)"/>
+    <param name="center_x" value="$(arg spawn_x)"/>
+    <param name="center_y" value="$(arg spawn_y)"/>
+  </node>
+</launch>
