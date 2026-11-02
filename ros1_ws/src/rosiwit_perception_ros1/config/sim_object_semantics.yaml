@@ -1,0 +1,42 @@
+# 仿真专用配置（无顶层 key，供 launch 在节点私有命名空间加载）
+detector: external
+
+# 与场景真值一致的类别定义；surface_offset = 目标半厚（前表面 -> 中心）
+classes:
+  - {id: 0, name: person, min_height: 0.8, max_height: 2.2, max_speed: 2.5, surface_offset: 0.18}
+  - {id: 2, name: car, min_height: 0.3, max_height: 2.5, max_speed: 8.0, surface_offset: 2.0}
+
+color_topic: /camera_01/color/image_raw
+depth_topic: /camera_01/depth/image_raw
+color_info_topic: /camera_01/color/camera_info
+depth_info_topic: /camera_01/depth/camera_info
+odom_topic: /odom
+external_detections_topic: /perception/objects/detections_2d
+external_max_age_s: 0.2
+base_frame: base_link
+color_frame: camera_01_color_optical_frame
+depth_frame: camera_01_depth_optical_frame
+
+depth_sync_tolerance: 0.05
+max_frame_gap_s: 0.5
+
+roi_w_ratio: 0.6
+roi_v_min: 0.15
+roi_v_max: 0.85
+depth_min_mm: 100
+depth_max_mm: 8000
+min_valid_ratio: 0.30
+
+assoc_gate_chi2: 9.0
+assoc_max_dist: 1.0
+confirm_hits: 3
+max_coast_s: 0.5
+process_accel: 0.5
+velocity_min_age_s: 0.3
+velocity_max_mps: 2.5
+
+# 仿真里只开数组/标注图；markers 与 JSONL 不影响评测
+publish_image: true
+publish_markers: true
+publish_log: false
+publish_persons_alias: true

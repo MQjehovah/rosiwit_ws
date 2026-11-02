@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!--
+        Front color + depth camera (Gazebo openni_kinect plugin).
+
+        Mounted on camera_01_link; that link's fixed joint already matches the
+        real robot mount (xyz=0.525,0,0.6725) in gt_robot.xacro. The plugin
+        publishes the optical TF:
+          camera_01_link -> camera_01_color_optical_frame
+
+        Topics (same as rosiwit_perception_ros1 defaults):
+          /camera_01/color/image_raw, /camera_01/color/camera_info
+          /camera_01/depth/image_raw (32FC1, meters), /camera_01/depth/camera_info
+    -->
+    <xacro:macro name="depth_camera_gazebo"
+                 params="prefix:=camera_01 parent:=camera_01_link hfov:=1.204">
+        <gazebo reference="${parent}">
+            <sensor type="depth" name="${prefix}_depth_camera">
+                <update_rate>10.0</update_rate>
+                <camera>
+                    <horizontal_fov>${hfov}</horizontal_fov>
+                    <image>
+                        <width>640</width>
+                        <height>480</height>
+                        <format>R8G8B8</format>
+                    </image>
+                    <clip>
+                        <near>0.15</near>
+                        <far>10.0</far>
+                    </clip>
+                </camera>
+                <plugin name="${prefix}_openni" filename="libgazebo_ros_openni_kinect.so">
+                    <cameraName>${prefix}</cameraName>
+                    <frameName>${prefix}_color_optical_frame</frameName>
+                    <imageTopicName>color/image_raw</imageTopicName>
+                    <cameraInfoTopicName>color/camera_info</cameraInfoTopicName>
+                    <depthImageTopicName>depth/image_raw</depthImageTopicName>
+                    <depthImageCameraInfoTopicName>depth/camera_info</depthImageCameraInfoTopicName>
+                    <pointCloudTopicName>depth/points</pointCloudTopicName>
+                    <hackBaseline>0.0</hackBaseline>
+                    <distortionK1>0.0</distortionK1>
+                    <distortionK2>0.0</distortionK2>
+                    <distortionK3>0.0</distortionK3>
+                    <distortionT1>0.0</distortionT1>
+                    <distortionT2>0.0</distortionT2>
+                </plugin>
+            </sensor>
+        </gazebo>
+    </xacro:macro>
+
+</robot>

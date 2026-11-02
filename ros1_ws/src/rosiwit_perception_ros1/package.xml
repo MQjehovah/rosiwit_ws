@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>rosiwit_perception_ros1</name>
+  <version>0.1.0</version>
+  <description>
+    前置深度相机 3D 语义目标（位置 + 速度）薄节点。类别可配置，默认 person，
+    后续 car/bicycle 等类别只改配置。
+    算法在 src/rosiwit_perception/object_semantics（ROS 无关核心），本包只做订阅/发布/TF。
+    实施方案见 docs/superpowers/plans/2026-11-01-person-3d-semantics.md。
+  </description>
+
+  <maintainer email="dev@rosiwit.com">rosiwit</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>message_generation</build_depend>
+  <build_depend>message_runtime</build_depend>
+  <build_depend>eigen</build_depend>
+
+  <depend>roscpp</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf</depend>
+  <depend>cv_bridge</depend>
+
+  <export>
+  </export>
+</package>

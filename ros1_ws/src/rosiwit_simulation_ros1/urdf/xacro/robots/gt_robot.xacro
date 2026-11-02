@@ -100,7 +100,14 @@
             </sensor>
         </gazebo>
 
-        <link name="camera_01_link"/>
+        <!-- Front camera mount. Give it a small inertia, otherwise Gazebo
+             drops the massless link (and the depth camera sensor on it). -->
+        <link name="camera_01_link">
+            <inertial>
+                <mass value="0.01"/>
+                <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+            </inertial>
+        </link>
         <joint name="camera_link_1_joint" type="fixed">
             <parent link="base_link"/>
             <child link="camera_01_link"/>
