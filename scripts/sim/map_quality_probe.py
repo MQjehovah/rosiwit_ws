@@ -110,40 +110,66 @@ def main():
     tyaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
     ct, stt = math.cos(tyaw), math.sin(tyaw)
 
+    # 分桶统计, 且把 occupied / unknown 分开:
+    #   occupied = 地图真的胖 (看得穿的地方写了障碍)
+    #   unknown  = 地图没建到 (不代表胖, 但规划器也会当不可走)
+    # 采样用**固定绝对距离**, 且要求命中点至少再远 0.2m,
+    # 否则 0.8*range 会落进"命中面 + 膨胀"里, 把正常墙算成地图偏胖。
+    dists = [0.3, 0.5, 0.8, 1.2, 1.8]
+    buckets = [('0.3m', 0.2, 0.4), ('0.5m', 0.4, 0.65), ('0.8m', 0.65, 1.0),
+               ('1.2m', 1.0, 1.5), ('1.8m', 1.5, 2.5)]
+    agg = {b[0]: {'n': 0, 'occ': 0, 'unk': 0, 'free': 0} for b in buckets}
     stats = {'free': 0, 'occ': 0, 'unk': 0, 'out': 0}
-    bad_occ = 0
-    bad_unk = 0
     ang = sc.angle_min
     for rng in sc.ranges:
         a = ang
         ang += sc.angle_increment
-        if not (sc.range_min < rng < 4.0):
+        if not (sc.range_min < rng < 6.0):
             continue
-        # 沿途取 0.35/0.6/0.85 三个点 (避开端点)
-        for f in (0.35, 0.6, 0.85):
-            r = rng * f
-            lx, ly = r * math.cos(a), r * math.sin(a)
+        for d in dists:
+            if rng < d + 0.20:      # 命中点太近, 这个距离会落进命中面/膨胀
+                continue
+            lx, ly = d * math.cos(a), d * math.sin(a)
             wx = tx + ct * lx - stt * ly
             wy = ty + stt * lx + ct * ly
             v = cell(wx, wy)
             if v is None:
                 stats['out'] += 1
-            elif v < 0:
+                continue
+            if v < 0:
                 stats['unk'] += 1
-                bad_unk += 1
+                kind = 'unk'
             elif v >= 65:
                 stats['occ'] += 1
-                bad_occ += 1
+                kind = 'occ'
             else:
                 stats['free'] += 1
+                kind = 'free'
+            for name, lo, hi in buckets:
+                if lo <= d < hi:
+                    agg[name]['n'] += 1
+                    agg[name][kind] += 1
+                    break
     tot = float(sum(stats.values()) or 1)
-    print('射线沿途采样: total=%d  free=%.1f%%  occ=%.1f%%  unknown=%.1f%%  地图外=%.1f%%'
+    print('射线沿途采样: total=%d  free=%.1f%%  occupied=%.1f%%  unknown=%.1f%%  地图外=%.1f%%'
           % (sum(stats.values()), 100 * stats['free'] / tot, 100 * stats['occ'] / tot,
              100 * stats['unk'] / tot, 100 * stats['out'] / tot))
-    bad = stats['occ'] + stats['unk']
-    print('判定: 激光能穿过的位置被地图判为 occ/unknown 的比例 = %.1f%%'
-          % (100.0 * bad / tot))
-    print('  <=2%%  -> 地图正常; 5~15%% -> 偏胖/部分 unknown; >20%% -> 地图生成有问题')
+    print('按“距车体固定距离”分桶 (只算地图内采样):')
+    print('  %-8s %6s %10s %10s %10s' % ('dist', 'n', 'occupied', 'unknown', 'free'))
+    for name, lo, hi in buckets:
+        b = agg[name]
+        if b['n'] == 0:
+            print('  %-8s %6d          -          -          -' % (name, 0))
+            continue
+        n = float(b['n'])
+        print('  %-8s %6d %9.1f%% %9.1f%% %9.1f%%'
+              % (name, b['n'], 100.0 * b['occ'] / n, 100.0 * b['unk'] / n, 100.0 * b['free'] / n))
+    occ_pct = 100.0 * stats['occ'] / tot
+    unk_pct = 100.0 * stats['unk'] / tot
+    print('判定: occupied=%.1f%% (地图偏胖)  unknown=%.1f%% (地图没建到)' % (occ_pct, unk_pct))
+    print('  occupied <=2%% 且 unknown <=5%% -> 地图正常;')
+    print('  occupied >10%% -> 障碍被写进可见自由区(膨胀/高度带/动态物体);')
+    print('  unknown 高 -> 建图覆盖不足, 需重录或补建。')
     return 0
 
 
