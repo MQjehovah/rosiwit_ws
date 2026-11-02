@@ -847,7 +847,10 @@ void SlamPipeline::accumulateRgbMap(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr
                                     const CloudType::Ptr & world) {
     constexpr float kMaxAbs = 1000.0f;   // 丢弃明显跑飞的点 (发散早期)
     std::lock_guard<std::mutex> lock(m_rgb_map_mu);
-    if (!m_rgb_map) {m_rgb_map = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();}
+    if (!m_rgb_map) {
+        m_rgb_map = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(
+            new pcl::PointCloud<pcl::PointXYZRGB>());
+    }
 
     size_t added = 0;
     if (rgb && !rgb->empty()) {

@@ -196,7 +196,7 @@ private:
                           const CloudType::Ptr& world);
     std::mutex m_rgb_map_mu;
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr m_rgb_map{
-        std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>()};
+        new pcl::PointCloud<pcl::PointXYZRGB>()};
     size_t m_rgb_map_raw = 0;        // 已累积的原始点数 (日志)
     size_t m_rgb_map_frames = 0;     // 有彩色输出的帧数
     static constexpr size_t kRgbMapDownsampleAbove = 6000000;  // 超过就现场降采样

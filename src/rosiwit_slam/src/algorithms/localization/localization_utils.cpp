@@ -79,10 +79,11 @@ CloudType::Ptr cropRadius(const pcl::KdTreeFLANN<PointType>& kdtree,
     std::vector<int> ids;
     std::vector<float> sq;
     const float r = static_cast<float>(radius);
-    if (kdtree.radiusSearch(PointType(static_cast<float>(center.x()),
-                                      static_cast<float>(center.y()),
-                                      static_cast<float>(center.z())),
-                            r, ids, sq) <= 0) {
+    PointType query;
+    query.x = static_cast<float>(center.x());
+    query.y = static_cast<float>(center.y());
+    query.z = static_cast<float>(center.z());
+    if (kdtree.radiusSearch(query, r, ids, sq) <= 0) {
         return out;
     }
     // 半径内点太多时等间隔抽稀 (GICP 的代价主要由源/目标点数决定)
