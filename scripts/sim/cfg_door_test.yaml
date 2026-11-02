@@ -103,8 +103,8 @@ max_lookahead_distance: 0.90
 #   内切圆 0.250 (原点到各边最小) / 外接圆 0.585 (原点到顶点最大) / 半宽 0.330;
 #   旧的 0.39 是 xz 平台 g_min_safe 常数, 落在两者之间 —— 0.8m 门洞只剩 0.02m 余量.
 #   真实约束由 footprint + Hybrid A* / 控制器 footprint 检查保证.
-robot_radius: 0.32
-footprint: [-0.316, -0.35, 0.554, -0.35, 0.554, 0.35, -0.316, 0.35]
+robot_radius: 0.327
+footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
 # 轮廓内缩(负余量): 碰撞检查时允许贴边 2cm. 配合 0.05m 栅格, 0.75m 车身
 # 可过 ~0.85m 的地图空白通道; 安全层(2D 停障多边形)仍按实际车体兜底.
 footprint_shrink: 0.02
@@ -184,7 +184,7 @@ strict_config: false           # true: 配置自检失败直接退出
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
 # 车体外轮廓 (与实车 safety_footprint 相同), movebase 兼容层的 /robot_footprint 用它
-safety_footprint: [-0.316, -0.35, 0.554, -0.35, 0.554, 0.35, -0.316, 0.35]
+safety_footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
 
 # ---------- 动态障碍跟踪 ----------
 # 跟踪聚类吃 /scan 点 (tracker_points_ 来自 laser_points_); 仿真是静态场景, 保持关闭

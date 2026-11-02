@@ -187,3 +187,70 @@ cd ~/rosiwit_ws/ros1_ws && catkin_make -DCATKIN_ENABLE_TESTING=1
 # 实仿真 (~3 分钟)
 bash scripts/sim/door_trace.sh
 ```
+
+
+# ============================================================================
+# 实车部署记录 (2026-11-02)
+# ============================================================================
+
+## 三方几何对照 (footprint vs URDF vs 实车)
+
+| 口径 | x 范围 | 宽 | 来源 |
+|---|---|---|---|
+| **实机模型 (真值)** | −0.327 … +0.565 | **0.717** | `urdf/meshes/gt/gt.dae` 顶点包围盒 (x ±0.4459, y ±0.3585) 经 `base_mesh_xyz=(0.119,0,−0.11)` 摆放 |
+| Gazebo 碰撞体 | −0.316 … +0.554 | 0.700 | `gt_robot.xacro: base_collision_box2 = 0.87 0.70 0.66` |
+| **导航 footprint (部署后)** | −0.327 … +0.565 | **0.717** | `default.yaml` / `safety_footprint` / `movebase_robot_footprint` |
+| 旧 footprint (历史) | −0.25 … +0.55 | 0.660 | 比实车窄 **5.7 cm** → 安全层每边多算 2.85 cm |
+
+结论: 旧声明比实车窄 5.7 cm, 属于真实安全风险; 现统一按实机模型包络。
+窄通道口径 = 车宽 + 10 cm = **0.82 m**; 仿真靶场用的是 0.80 m (更严, 已 3/3 通过)。
+
+## 部署内容与路径
+
+| 项 | 路径 | 说明 |
+|---|---|---|
+| 节点二进制 | `/opt/ros/melodic/lib/rosiwit_navigation_ros1/rosiwit_navigation_ros1_node` | aarch64, 在车端 `catkin_make` 生成后 `install` |
+| 算法核心 .so | `/opt/ros/melodic/lib/librosiwit_navigation.so` | **必须一起装** (见下) |
+| 头文件 | `/opt/ros/melodic/include/rosiwit_navigation/` | 同步, 防止以后编译拿到旧头 |
+| 参数 | `/opt/ros/melodic/share/rosiwit_navigation_ros1/config/default.yaml` | launch 用 `$(find rosiwit_navigation_ros1)/config/default.yaml` → **安装副本**, 不是工作区那份 |
+| 兼容层参数 | 同目录 `movebase_compat.yaml` | overlay, 会覆盖 `movebase_robot_footprint` |
+| 源码 | `~/rosiwit_ws/src/rosiwit_navigation`, `~/rosiwit_ws/ros1_ws/src/rosiwit_navigation_ros1` | 无 git, 用 tarball + 备份 |
+| 备份 | `~/rosiwit_ws/backup_navfix_<ts>.tgz`, `/opt/.../*.bak_<ts>` | 回滚用 |
+
+## 坑 1: 只装二进制 -> 启动即 SIGSEGV
+
+现象: `[nav] FATAL signal 11`, 在 `[INFO] Hybrid A* initialized` 之后, roslaunch 反复重启。
+
+原因: core 编成**动态库** `librosiwit_navigation.so`; 运行时 `LD_LIBRARY_PATH=/opt/ros/melodic/lib`
+优先, 加载的是 10 月 30 日的**旧 .so**(没有本次新增的 `setCostScalingFactor` /
+`setInscribedRadius` 虚函数), 而新节点调用它们 -> **虚表错位** -> 段错误。
+
+判据: `nm -D --defined-only 旧.so | grep -c setCostScalingFactor` = 0, 新 .so = 2。
+修正: **二进制 + .so + 头文件 + 配置四件套一起装**, 停服务后再覆盖 (否则 `Text file busy`)。
+
+## 坑 2: 参数改了不生效
+
+launch 里是 `$(find rosiwit_navigation_ros1)/config/default.yaml` → 解析到 **`/opt/ros/melodic/share`**,
+工作区里的 yaml 改了不影响运行。必须同步安装副本; 且 `movebase_compat.yaml` 会覆盖
+`movebase_robot_footprint`(旧梯形)。
+
+## 部署后核对 (实测)
+
+```
+服务            active, node pid 稳定 (5s 内不变), 近 5 分钟 FATAL 0 次
+footprint       [-0.327,-0.359, 0.565,-0.359, 0.565,0.359, -0.327,0.359]
+safety_footprint        同上
+movebase_robot_footprint 同上
+safety_body_margin 0.02 / side 0.03 / turn 0.05
+door_lane_enabled true, lane_width 0.85, lane_max_speed 0.18, lane_max_omega 0.03
+rotate_to_heading_min_angle 0.10, inflation_cost_scaling_factor 0.0 (保持旧线性势场)
+/robot_footprint 发布 4 点 (新矩形)
+/nav_diagnostics 带 path_turn_deg (证明跑的是新二进制), state=IDLE, safety=PASS
+/scan 15 Hz
+```
+
+## 真机待验证 (下一步)
+
+1. **定位精度**: 0.82 m 门洞要求横向定位误差 <=2 cm。先直行 3~5 m 量 LIO 与真值/回环偏差。
+2. **窄道 lane 行为**: `lane_width 0.85` 是否合适 (车宽 0.717 + 13 cm)。过宽会在普通走廊里冻结转向。
+3. 安全层 STALE/STOP 频率: `safety_body_margin` 从 0.05 降到 0.02 后, 自车回波是否仍被正确排除。

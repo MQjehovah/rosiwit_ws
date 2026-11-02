@@ -6,7 +6,7 @@
 //
 // 几何 (与 world/doorway.world 一致):
 //   门框: y ∈ [2.90, 3.10], |x| ≥ 0.40   (门洞宽 0.80m = 车宽 0.70 + 10cm)
-//   车体: 碰撞体 0.87 x 0.70 (x -0.316..0.554, y ±0.35)
+//   车体: 实机模型真实包络 0.892 x 0.717 (x -0.327..0.565, y ±0.359)
 // ============================================================================
 #include <gtest/gtest.h>
 
@@ -80,10 +80,10 @@ SafetyMonitorConfig safetyConfig()
   cfg.stop_margin = 0.05;
   cfg.side_margin = 0.02;
   cfg.turn_margin = 0.05;
-  // 真实碰撞体 (gt_robot.xacro base_collision_box2 = 0.87 x 0.70, x 偏移 0.119)
-  cfg.footprint = {{-0.316, -0.35}, {0.554, -0.35}, {0.554, 0.35}, {-0.316, 0.35}};
-  // 车身排除盒 = 碰撞体 + 0.02 (safety_body_margin)
-  cfg.body_polygon = {{-0.336, -0.37}, {0.574, -0.37}, {0.574, 0.37}, {-0.336, 0.37}};
+  // 实机模型真实包络 (gt.dae 顶点包围盒, 经 base_mesh_xyz 偏移后)
+  cfg.footprint = {{-0.327, -0.359}, {0.565, -0.359}, {0.565, 0.359}, {-0.327, 0.359}};
+  // 车身排除盒 = 包络 + 0.02 (safety_body_margin)
+  cfg.body_polygon = {{-0.347, -0.379}, {0.585, -0.379}, {0.585, 0.379}, {-0.347, 0.379}};
   cfg.stop_max_points = 4;
   cfg.slowdown_max_points = 6;
   cfg.slowdown_ratio = 0.30;
@@ -153,7 +153,7 @@ struct DoorRun {
 std::vector<std::pair<double, double>> bodyCorners(const Pose2D & pose)
 {
   const std::vector<std::pair<double, double>> fp = {
-    {-0.316, -0.35}, {0.554, -0.35}, {0.554, 0.35}, {-0.316, 0.35}};
+    {-0.327, -0.359}, {0.565, -0.359}, {0.565, 0.359}, {-0.327, 0.359}};
   std::vector<std::pair<double, double>> out;
   const double c = std::cos(pose.theta), s = std::sin(pose.theta);
   for (const auto & q : fp) {

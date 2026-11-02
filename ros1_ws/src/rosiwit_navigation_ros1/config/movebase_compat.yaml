@@ -6,7 +6,7 @@
 movebase_compat_enabled: true
 cmd_vel_topic: "/cmd_vel"
 movebase_cmd_vel_topic: "/movebase_cmd_vel"
-movebase_robot_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+movebase_robot_footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
 movebase_default_speed: 0.8
 movebase_back_speed: 0.1
 movebase_rotate_speed: 0.5

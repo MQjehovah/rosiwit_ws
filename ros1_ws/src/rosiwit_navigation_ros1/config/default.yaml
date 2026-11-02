@@ -83,7 +83,7 @@ max_lookahead_distance: 0.9
 # inflation_radius = g_max_safe 的等效膨胀.
 robot_radius: 0.39
 # 规划器/控制器共用车体轮廓; Hybrid A* 使用它, A* 只使用 robot_radius.
-footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
 # 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
 # 默认关闭: A/B 实测 DWA+footprint 会绕圈, 建议按下面组合验证后再打开:
 #   controller_name: mppi
@@ -119,7 +119,7 @@ safety_source_timeout: 0.5
 # 车身内的点由 body_polygon 排除 (footprint 包围盒 + safety_body_margin),
 # 所以下面三个 STOP 区都从车体边缘之外开始. 以前用 "包围盒内不判定 + 大矩形自过滤"
 # 的组合, 结果 safety_stop_polygon 整个落在自过滤框里, STOP 永远进不去.
-safety_body_margin: 0.05
+safety_body_margin: 0.02
 # 前进: 实车标定 -0.37 ~ +0.67m (含车体), 侧 ±0.45
 safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]   # 实车标定: 前 0.67 / 后 -0.37 / 侧 ±0.45
 # 后退: 车尾后 0.35 ~ 0.75m, 侧 ±0.45 (与前进区同宽; 实机 yaml 原先未设, 走代码默认 ±0.345)
@@ -163,7 +163,7 @@ safety_slowdown_ratio: 0.5
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
 # 实车 footprint
-safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+safety_footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
 
 # 动态障碍跟踪
 tracking_enabled: false
@@ -255,7 +255,7 @@ planning_start_relax_radius: 0.0
 movebase_compat_enabled: true
 cmd_vel_topic: "/cmd_vel"
 movebase_cmd_vel_topic: "/movebase_cmd_vel"
-movebase_robot_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+movebase_robot_footprint: [-0.327, -0.359, 0.565, -0.359, 0.565, 0.359, -0.327, 0.359]
 movebase_default_speed: 0.8
 movebase_back_speed: 0.1
 movebase_rotate_speed: 0.5
@@ -263,3 +263,13 @@ movebase_stuck_timeout: 60.0
 movebase_goal_yaw_tolerance: 0.1
 movebase_rotate_tolerance: 0.05
 movebase_prediction_horizon: 1.0
+
+inflation_cost_scaling_factor: 0.0
+door_lane_enabled: true
+lane_width: 0.85
+lane_engage_dist: 1.6
+lane_exit_dist: 0.4
+lane_max_speed: 0.18
+lane_max_omega: 0.03
+lane_freeze_max_heading: 0.25
+rotate_to_heading_min_angle: 0.10
