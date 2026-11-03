@@ -5515,6 +5515,7 @@ private:
     const double tube_lo = y_min - clearance_side_buffer_;
     const double tube_hi = y_max + clearance_side_buffer_;
     double dmin = 1e9;
+    double best_bx = 0.0, best_by = 0.0;
     for (const auto & p : pts) {
       const double dx = p.x - px;
       const double dy = p.y - py;
@@ -5527,7 +5528,10 @@ private:
                                 : std::max(0.0, x_min - bx);
       const double oy = std::max(std::max(y_min - by, 0.0), by - y_max);
       const double d = std::hypot(ox, oy);
-      if (d < dmin) dmin = d;
+      // 落在车体轮廓内的点 (自身回波/上一帧残点) 不参与限速: 它给出 d=0
+      // 会把速度永久压成 0 (实车 22:20 v 恒为 0); 真正接触由安全层负责.
+      if (d <= 1e-6) continue;
+      if (d < dmin) { dmin = d; best_bx = bx; best_by = by; }
     }
     if (dmin > 2.9) return cmd;
 
@@ -5541,8 +5545,8 @@ private:
     if (cmd.linear.x > 0.0) out.linear.x = std::min(cmd.linear.x, v_cap);
     else out.linear.x = std::max(cmd.linear.x, -v_cap);
     if (std::fabs(out.linear.x - cmd.linear.x) > 0.02) {
-      ROS_WARN_THROTTLE(1.0, "[speed] clearance=%.2fm -> v %.2f->%.2f",
-                        clear, cmd.linear.x, out.linear.x);
+      ROS_WARN_THROTTLE(1.0, "[speed] clearance=%.2fm b(%.2f,%.2f) -> v %.2f->%.2f",
+                        clear, best_bx, best_by, cmd.linear.x, out.linear.x);
     }
     return out;
   }
