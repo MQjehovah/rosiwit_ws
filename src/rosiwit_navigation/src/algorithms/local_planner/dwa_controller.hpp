@@ -55,11 +55,15 @@ private:
     int last_samples_{0};
     double last_best_v_{0.0}, last_best_w_{0.0}, last_best_cost_{0.0};
     double last_min_clearance_{0.0};
+    double last_cross_track_{0.0};
 
     std::vector<Sample> search(const core::Pose2D& pose, const core::VelocityCommand& vel);
     VelocityBounds dynamicWindow(const core::VelocityCommand& vel) const;
     core::Pose2D simulate(const core::Pose2D& pose, Sample& s) const;
     double headingCost(const core::Pose2D& pose) const;
+    // 到前向路径的横向偏差: 只奖励"贴着线走"的候选, 避免在窄走廊里
+    // 只看航向时一路切角贴墙 (实车 2026-11-03 22:20 偏出路径 0.45m).
+    double pathCrossTrack(const core::Pose2D& pose) const;
     double clearanceCost(const core::Pose2D& pose) const;
     size_t findClosest(const core::Pose2D& pose) const;
     static double normAngle(double a);

@@ -60,6 +60,7 @@ core::VelocityCommand DwaController::computeVelocityCommand(
     last_best_w_ = best->w;
     last_best_cost_ = best->cost;
     last_min_clearance_ = best->clearance;
+    last_cross_track_ = pathCrossTrack(pose);
 
     // 平滑推进 idx_，最多 +2 防止前视点跳变
     double px = pose.x, py = pose.y, pt = pose.theta;
@@ -101,6 +102,7 @@ std::vector<DwaController::Sample> DwaController::search(
             core::Pose2D end_pose = simulate(pose, s);
             s.heading = headingCost(end_pose);
             double h = 1.0 - s.heading;
+            const double cross = pathCrossTrack(end_pose);
             double c = (s.clearance < 0.15) ? 1.0 - s.clearance / 0.15 : 0.0;
             double v = 1.0 - (std::abs(s.v) / max_vx_ + std::abs(s.w) / max_vw_) * 0.5;
             // 平滑度：惩罚与当前速度差异大的轨迹，防止左右来回跳
@@ -117,7 +119,10 @@ std::vector<DwaController::Sample> DwaController::search(
             // the robot at ~0.05 m/s. Reward speed instead, half weight.
             const double speed_reward =
                 std::min(1.0, std::abs(s.v) / std::max(1e-6, max_vx_));
-            s.cost = 0.45 * h + 0.10 * c - 0.15 * speed_reward + 0.15 * smooth;
+            // 横向偏差: 只看航向时, 窄走廊里会一路"切内角"贴墙 (实车
+            // 2026-11-03 22:20 偏出路径 0.45m, 前右角离墙 0.10m).
+            const double e = std::min(1.0, cross / 0.4);
+            s.cost = 0.45 * h + 0.10 * c - 0.15 * speed_reward + 0.15 * smooth + 0.30 * e;
             samples.push_back(s);
         }
     }
@@ -199,6 +204,22 @@ double DwaController::headingCost(const core::Pose2D& pose) const {
     return 1.0 - std::abs(normAngle(goal_angle - pose.theta)) / M_PI;
 }
 
+double DwaController::pathCrossTrack(const core::Pose2D& pose) const {
+    if (path_.points.empty()) return 0.0;
+    const size_t n = path_.points.size();
+    // 只统计 idx_ 之后的前向路径 (至少给 40 个点/约 3m 的窗口):
+    // 路径含折返时, 用整条路径会把"回程"当成横向偏差 0.
+    const size_t end = std::min(n, idx_ + 40);
+    double best = std::numeric_limits<double>::max();
+    for (size_t i = idx_; i < end; ++i) {
+        const double dx = path_.points[i].pose.x - pose.x;
+        const double dy = path_.points[i].pose.y - pose.y;
+        const double d = dx * dx + dy * dy;
+        if (d < best) best = d;
+    }
+    return std::sqrt(best == std::numeric_limits<double>::max() ? 0.0 : best);
+}
+
 double DwaController::clearanceCost(const core::Pose2D& pose) const {
     double min_d = std::numeric_limits<double>::max();
     for (const auto& obs : obstacles_) {
@@ -242,9 +263,9 @@ void DwaController::setObstacles(const core::ObstacleArray& obs) { obstacles_ = 
 std::string DwaController::getDiagnostics() const {
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-        "controller=dwa samples=%d best_v=%.3f best_w=%.3f cost=%.3f clearance=%.3f idx=%zu",
+        "controller=dwa samples=%d best_v=%.3f best_w=%.3f cost=%.3f clearance=%.3f cross=%.3f idx=%zu",
         last_samples_, last_best_v_, last_best_w_, last_best_cost_,
-        last_min_clearance_, idx_);
+        last_min_clearance_, last_cross_track_, idx_);
     return std::string(buf);
 }
 
