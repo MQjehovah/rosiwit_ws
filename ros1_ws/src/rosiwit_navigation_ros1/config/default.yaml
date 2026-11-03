@@ -267,7 +267,7 @@ movebase_default_speed: 0.8
 movebase_back_speed: 0.1
 movebase_rotate_speed: 0.5
 movebase_stuck_timeout: 60.0
-movebase_goal_yaw_tolerance: 3.14   # 到点后的航向容差; 3.14 ≈ 跳过"原地对齐" (nav2 yaw_goal_tolerance).
+movebase_goal_yaw_tolerance: 0.30
                                     # 原地转不开的窄处, 0.1 会让车一直转、被安全层清零 -> App 超时.
                                     # 航向交给后续路径跟踪/下一段修正.
 # App 的 "Navi To Path Start Point" 发的是 [路径起点, 路径末端]; 目标应取第一点.
@@ -295,4 +295,6 @@ clearance_stop_margin: 0.15
 # Single-point nav: final yaw = path[0]->path[1] (APP protocol).
 final_yaw_from_next_point: true
 # Do not replace the goal yaw with the bearing-to-goal angle.
-plan_goal_yaw_from_bearing: false
+plan_goal_yaw_from_bearing: true
+
+final_rotate_timeout: 3.0  # 末端对齐超时: 窄处转不动时按位置到达收尾

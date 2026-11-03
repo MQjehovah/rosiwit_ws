@@ -455,6 +455,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     pnh_.param<double>("movebase_stuck_timeout", movebase_stuck_timeout_, 60.0);
     pnh_.param<double>("movebase_goal_yaw_tolerance", movebase_goal_yaw_tolerance_,
                        goal_tolerance_yaw_);
+    // 末端对齐限时: 位置已到、但原地转被安全层拦住时, 不能无限等 (实测窄处
+    // 旋转圆 0.757m > 通道一半 -> 每拍 STOP)。超时后按"位置到达"收尾并告警。
+    pnh_.param<double>("final_rotate_timeout", final_rotate_timeout_, 3.0);
     pnh_.param<double>("movebase_rotate_tolerance", movebase_rotate_tolerance_, 0.05);
     std::vector<double> movebase_footprint;
     pnh_.param<std::vector<double>>("movebase_robot_footprint", movebase_footprint, footprint);
@@ -5290,9 +5293,21 @@ private:
       // 原地旋转 (navi_cmd=6 / 单点末端对齐) 与倒车 (navi_cmd=7):
       // 速度 primitive 由算法层给出, 这里只做安全过滤与发布.
       if (action_task_.rotating()) {
+        // 末端原地对齐限时: 位置已到, 但窄处旋转被安全层每拍 STOP 时不能死等.
+        const ros::Time now = ros::Time::now();
+        if (final_rotate_since_.isZero()) { final_rotate_since_ = now; }
+        if (final_rotate_timeout_ > 0.0 &&
+            (now - final_rotate_since_).toSec() > final_rotate_timeout_) {
+          ROS_WARN("[nav] final yaw rotate timeout %.1fs -> finish at current yaw "
+                   "(safety blocked in tight space)", final_rotate_timeout_);
+          final_rotate_since_ = ros::Time();
+          finishTask(movebase::RESULT_SUCCESS);
+          return;
+        }
         publishRotationStep();
         return;
       }
+      final_rotate_since_ = ros::Time();
       if (action_task_.backing()) {
         publishBackOffStep();
         return;
@@ -6046,6 +6061,8 @@ private:
   double movebase_rotate_speed_ = 0.6;
   double movebase_stuck_timeout_ = 60.0;
   double movebase_goal_yaw_tolerance_ = 0.1;
+  double final_rotate_timeout_ = 3.0;
+  ros::Time final_rotate_since_;
   double movebase_rotate_tolerance_ = 0.05;
   std::vector<geometry_msgs::Point> movebase_footprint_;
 
