@@ -104,7 +104,9 @@ max_lookahead_distance: 0.7
 #   内切圆 0.250 (原点到各边最小) / 外接圆 0.585 (原点到顶点最大) / 半宽 0.330;
 #   旧的 0.39 是 xz 平台 g_min_safe 常数, 落在两者之间 —— 0.8m 门洞只剩 0.02m 余量.
 #   真实约束由 footprint + Hybrid A* / 控制器 footprint 检查保证.
-robot_radius: 0.33
+# 0.26 = 真实内切圆 0.250 + 1cm 余量。原来 0.33(半宽) 会把栅格 A* 的圆模型
+# 和二值安全半径一起放大 8cm，窄通道里直接判无路。
+robot_radius: 0.26
 footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 # 轮廓内缩(负余量): 碰撞检查时允许贴边 2cm. 配合 0.05m 栅格, 0.75m 车身
 # 可过 ~0.85m 的地图空白通道; 安全层(2D 停障多边形)仍按实际车体兜底.
@@ -113,7 +115,15 @@ footprint_aware_control: true
 footprint_sample_spacing: 0.05
 path_resample_step: 0.08
 # g_max_safe 的等效膨胀半径 (实车 0.62)
-inflation_radius: 0.20
+#
+# inflate 必须 > inscribed(robot_radius)，否则 buildInflationField() 里
+# d<=inscribed 全给 100、循环又只到 inflation_radius，整张图退化成二值
+# (100/0，无梯度) —— 规划器就没有"走通道中线"的理由，只会贴着墙规划，
+# 车最后停在离墙 0.5m 处，恢复要原地转(扫掠 0.64m)又被安全层挡住 -> 死锁。
+# 对齐 nav2 默认量级: inscribed 0.25 / inflation 0.55~0.60 / cost_scaling 3.0
+inflation_radius: 0.60
+# exp(-k*(d-inscribed)): k 越大贴墙代价升得越快，路径越居中
+inflation_cost_scaling_factor: 3.0
 
 # ---------- 话题 ----------
 # 用 SLAM 的 /lio_odom 而不是 Gazebo 的 /odom: nav 直接把 odom.pose 当作

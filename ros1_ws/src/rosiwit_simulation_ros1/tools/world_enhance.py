@@ -201,11 +201,11 @@ def gondola(name, x, y, yaw, length=5.6, depth=0.9, height=1.85):
 """.format(i=i, px=sx, d=depth, h=height / 2.0, hh=height,
            mat=GAZEBO_MATERIAL % 'Gazebo/DarkGrey'))
 
-    # 商品：每层 6 组，左右两面都摆（背板在中间）
+    # 商品：每层 3 组、两面各一份（够看清"货架上有货"，又不至于把 GUI 拖死）
     gi = 0
     for z in levels:
-        for j in range(6):
-            gx = -half_l + 0.5 + j * (length - 1.0) / 5.0
+        for j in range(3):
+            gx = -half_l + 0.9 + j * (length - 1.8) / 2.0
             for gy in (-0.28, 0.28):
                 mat = colors[gi % len(colors)]
                 visual_link('goods_%d' % gi, (0.42, 0.26, 0.24),
@@ -224,9 +224,9 @@ def supermarket():
     parts = [ceiling(50, 35, material='Gazebo/White')]
     parts.append(light_grid([-18, -9, 0, 9, 18], [-12, -4, 4, 12], prefix='main_'))
 
-    # 四排 5.6m 长的货架，替换原来 1m 高的"橱柜"——那样相机平视只能看到地板。
-    # 行距 3.2m（face 到 face 2.3m），正好是一条真实超市通道，相机在中间两侧都进画面。
-    for row, y in enumerate((-8.6, -5.4, 5.4, 8.6)):
+    # 只保留相机能看到的两排货架（对面两排从不进画面，GUI 却要为它们建上千个 visual，
+    # 软件渲染下会卡在 "Preparing your world" 好几分钟）
+    for row, y in enumerate((-8.6, -5.4)):
         for i in range(-4, 4):
             x = i * 5.8 + 0.4
             if x < -23 or x > 23:
@@ -237,9 +237,13 @@ def supermarket():
     parts.append(box('enh_floor', (49.6, 34.6, 0.01), (0, 0, 0.006, 0, 0, 0),
                      (0.72, 0.70, 0.64)))
 
-    # 堆头（过道里成箱的货）与购物车
-    for i, (px, py) in enumerate(((7.0, -7.4), (-7.5, -6.6))):
-        parts.append(box('enh_pallet_%d' % i, (1.2, 1.0, 0.9), (px, py, 0.45, 0, 0, 0.3),
+    # 堆头（过道里成箱的货）与购物车。
+    # 通道: 货架行 0 上沿 y=-8.15, 行 1 下沿 y=-5.85 -> 净宽 2.30m。
+    # 托盘必须**贴着一侧货架**停: 1.2x1.0 斜放(0.3rad) 在 y 向占 1.30m, 只剩 1.00m 走道,
+    # 机器人(宽 0.80m)在规划膨胀后完全过不去 —— 实测把整条通道切成 4m 死段,
+    # 导航"能规划不能走"的根因就是它。正放 + 贴行 0 停放 => y 向 0.9m, 走道 1.40m。
+    for i, (px, py) in enumerate(((7.0, -7.70), (-7.5, -7.70))):
+        parts.append(box('enh_pallet_%d' % i, (1.2, 0.9, 0.9), (px, py, 0.45, 0, 0, 0.0),
                          'Gazebo/WoodPallet'))
     for i, (px, py) in enumerate(((-2.0, -6.3), (2.5, -7.7))):
         parts.append(box('enh_cart_basket_%d' % i, (0.55, 0.9, 0.35), (px, py, 0.55, 0, 0, 0.2),
