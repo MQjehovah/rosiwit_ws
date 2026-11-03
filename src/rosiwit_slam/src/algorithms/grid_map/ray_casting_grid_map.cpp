@@ -17,8 +17,9 @@ inline int cellIndex(int col, int row, int width) { return row * width + col; }
 
 // Bresenham 2D: 把 (c0,r0)->(c1,r1) 途经格标记为 free(0).
 // 对**已占据**的格做 miss 计数: 连续 min_misses 条自由射线穿过才清除,
-// 用来擦掉人/货等瞬时障碍. 端点(c1,r1)不算 miss —— 那是命中点/墙, 不能
-// 被自己的射线清掉.
+// 用来擦掉人/货等瞬时障碍. 端点(c1,r1)不做 miss 计数 —— 那是命中点/墙,
+// 不能被自己的射线清掉; 但端点本身是**被观测到的格**, 若非占据仍标 free
+// (地面点/非障碍高度带的点必须标 free, 否则又生 unknown 噪点).
 void traceFree(std::vector<int8_t>& data, std::vector<uint16_t>& misses,
                int min_misses, int w, int h, int c0, int r0, int c1, int r1) {
     int dx = std::abs(c1 - c0);
@@ -28,9 +29,11 @@ void traceFree(std::vector<int8_t>& data, std::vector<uint16_t>& misses,
     int err = dx + dy;
     while (true) {
         const bool at_end = (c0 == c1 && r0 == r1);
-        if (!at_end && c0 >= 0 && c0 < w && r0 >= 0 && r0 < h) {
+        if (c0 >= 0 && c0 < w && r0 >= 0 && r0 < h) {
             const int idx = r0 * w + c0;
-            if (data[idx] == 100) {
+            if (at_end) {
+                if (data[idx] != 100) data[idx] = 0;   // 观测到但非障碍: free
+            } else if (data[idx] == 100) {
                 if (++misses[idx] >= min_misses) data[idx] = 0;   // 连续自由射线 -> 清除鬼影
             } else {
                 data[idx] = 0;
