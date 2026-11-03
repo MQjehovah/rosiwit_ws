@@ -3995,13 +3995,14 @@ private:
         ++plan_generation_;
         return;
       }
-      // 首版规划被拒: 若前段是干净的 (>=4 点且 >=0.40m), 截到最后一个安全点先走,
+      // 首版规划被拒: 若前段是干净的 (>=4 点且 >=1.0m), 截到最后一个安全点先走,
       // 并让 replanningCheck 立刻重规划 (plan_truncated_)。
       // 依据 (2026-11-01 仿真): hybrid 自己按 planner_footprint_ 验证过的路径,
       // 在 d_start=358cm 处被判 cost=100 -> 直接 FAILED_PATH_FOOTPRINT (3/3)。
       // 直接失败对用户没有价值: 前 3.5m 明明是清的。
-      // 但截断点必须离被拒点还有**停车余量**, 否则等于把车开到贴着障碍的地方停
-      // (评审 finding 1): 规划基元 0.1~0.3m + 半格容差, 0.5m 才够。
+      // 门槛从 0.40m 提到 1.00m: 2026-11-03 实车 7.5m 目标只剩 0.46m 清白前段,
+      // 车按这段朝墙蹭过去 (safety 连续 STOP), 还被我加的 goal 同步误判成到达。
+      // 截断点同时保留 0.5m 停车余量 (评审 finding 1)。
       if (fp_bad >= 4) {
         // 从被拒点往回退, 直到"截断点到被拒点" >= 0.5m: 留停车余量, 别把车
         // 停在贴着障碍的位置 (评审 finding 1: 规划基元 0.1~0.3m + 半格容差)。
@@ -4015,7 +4016,7 @@ private:
         const core::Pose2D & p0 = planned.points.front().pose;
         const core::Pose2D & pk = planned.points[k - 1].pose;
         const double clear_len = std::hypot(pk.x - p0.x, pk.y - p0.y);
-        if (k >= 4 && clear_len >= 0.40) {
+        if (k >= 4 && clear_len >= 1.00) {
           ROS_WARN("[plan] 轮廓检查在 %s 处失败 -> 只走清白前段 %.2fm (%zu/%zu 点), "
                    "立即重规划", fp_why.c_str(), clear_len, k, planned.points.size());
           planned.points.resize(k);
@@ -4077,7 +4078,11 @@ private:
       const double gdx = end.x - goal_pose_.pose.position.x;
       const double gdy = end.y - goal_pose_.pose.position.y;
       const double gd = std::hypot(gdx, gdy);
-      if (gd > std::max(0.15, goal_tolerance_xy_)) {
+      // 只跟随"规划器真正吸附的那一点点" (<= goal_tolerance)。路径被轮廓检查
+      // 截断时 (plan_truncated_) 末端只是"清白前段"的末点, 把 goal_pose_ 挪过去
+      // 会让车走 0.5m 就报到达, 然后按 App 路径直接朝墙开。
+      if (!plan_truncated_ && gd <= planner_goal_tolerance_ + 0.25 &&
+          gd > std::max(0.15, goal_tolerance_xy_)) {
         ROS_WARN("[plan] goal snapped %.2fm: (%.2f,%.2f) -> (%.2f,%.2f); "
                  "arrival check follows snapped goal",
                  gd, goal_pose_.pose.position.x, goal_pose_.pose.position.y,
