@@ -274,6 +274,9 @@ private:
     pnh_.param<double>("replan_lookahead", replan_lookahead_, 3.0);
     pnh_.param<double>("replan_skip_distance", replan_skip_distance_, 0.5);
     pnh_.param<int>("replan_blocked_frames", replan_blocked_frames_, 2);
+    // 目标点容错 (m): 目标压在墙脚/膨胀带/未建图边时, 规划器在半径内找
+    // 最近的 footprint-free 格. 对齐 nav2_navfn_planner 的 tolerance.
+    pnh_.param<double>("planner_goal_tolerance", planner_goal_tolerance_, 0.5);
 
     // costmap 构建节流 (scan 回调不再每个 scan 都做完整聚类)
     pnh_.param<double>("costmap_update_rate", costmap_update_rate_, 5.0);
@@ -700,6 +703,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       cfg.allow_reverse = planner_allow_reverse_;
       cfg.max_reverse_distance = planner_max_reverse_distance_;
       cfg.start_relax_radius = planning_start_relax_radius_;
+      cfg.goal_tolerance = planner_goal_tolerance_;
       planner_strategy_->initialize(cfg);
       planner_strategy_->setInflationRadius(inflation_radius_);
       planner_strategy_->setRobotRadius(robot_radius_);
@@ -727,6 +731,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       acfg.allow_reverse = planner_allow_reverse_;
       acfg.max_reverse_distance = planner_max_reverse_distance_;
       acfg.start_relax_radius = planning_start_relax_radius_;
+      acfg.goal_tolerance = planner_goal_tolerance_;
       async_planner_->initialize(acfg);
       async_planner_->setInflationRadius(inflation_radius_);
       async_planner_->setRobotRadius(robot_radius_);
@@ -751,6 +756,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       rcfg.allow_reverse = true;
       rcfg.reverse_only = true;
       rcfg.start_relax_radius = recovery_start_relax_radius_;
+      rcfg.goal_tolerance = planner_goal_tolerance_;
       ROS_INFO("[rosiwit_navigation_ros1] recovery planner config: reverse_only=%d "
                "start_relax_radius=%.2f timeout=%.2f",
                static_cast<int>(rcfg.reverse_only),
@@ -805,6 +811,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       pcfg.resolution = 0.05;
       pcfg.max_iterations = planner_max_iterations_;
       pcfg.timeout = planner_timeout_;
+      pcfg.goal_tolerance = planner_goal_tolerance_;
       coverage_planner_->initialize(pcfg);
       coverage_planner_->setInflationRadius(0.0);
       coverage_planner_->setRobotRadius(0.0);
@@ -1000,6 +1007,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         acfg.max_reverse_distance = planner_max_reverse_distance_;
         acfg.start_relax_radius = planning_start_relax_radius_;
         acfg.turn_step_deg = planner_turn_step_deg_;
+        acfg.goal_tolerance = planner_goal_tolerance_;
         next->initialize(acfg);
         next->setInflationRadius(inflation_radius_);
         next->setRobotRadius(robot_radius_);
@@ -1022,6 +1030,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
             fcfg.timeout = planner_timeout_;
             fcfg.allow_reverse = false;
             fcfg.heuristic_weight = planner_heuristic_weight_;
+            fcfg.goal_tolerance = planner_goal_tolerance_;
             fb->initialize(fcfg);
             fb->setRobotRadius(robot_radius_);
             fb->setInflationRadius(inflation_radius_);
@@ -3754,9 +3763,19 @@ private:
         last_plan_used_fallback_.store(false);
         return primary;
       }
-      // 回退 A*: 先用**外接圆** (任何朝向都安全, 但窄门洞必然无解),
-      // 无解再退**内切圆** (能过窄处, 但车头可能压墙) —— 后者由上层
-      // pathFootprintClear() 用车体轮廓逐点校验, 不合格直接拒绝。
+      // 回退 A*: 先用**内切圆**(robot_radius, 能过窄处), 路径由上层
+      // pathFootprintClear() 用车体轮廓逐点复核; 内切圆也无解时再用**外接圆**
+      // (任何朝向都安全, 但需要 ~1.45m 通道, 正常 hybrid 早就成功了).
+      // 以前先试外接圆: 0.727m 的 A* 在 1.2m 通道里必然无解, 白跑一遍超时,
+      // 而且日志里 "safety=15 cells (robot=0.73m)" 会让人误判成配置错误.
+      fallback->setRobotRadius(a_star_inner);
+      auto inner = fallback->plan(start, goal);
+      if (inner.is_ok()) {
+        ROS_WARN("[plan] %s failed (%s), fallback to A* r=%.3f (内切圆, 需轮廓校验)",
+                 pname.c_str(), primary.error_message().c_str(), a_star_inner);
+        last_plan_used_fallback_.store(true);
+        return inner;
+      }
       if (a_star_circum > 1e-3) {
         fallback->setRobotRadius(a_star_circum);
         auto safe = fallback->plan(start, goal);
@@ -3766,14 +3785,11 @@ private:
           last_plan_used_fallback_.store(true);
           return safe;
         }
-        ROS_WARN("[plan] A* 外接圆 r=%.3f 无解 (窄处必然), 退内切圆 r=%.3f + 轮廓校验",
-                 a_star_circum, a_star_inner);
+        ROS_WARN("[plan] A* 内切圆/外接圆均无解 (r=%.3f/%.3f)",
+                 a_star_inner, a_star_circum);
       }
-      fallback->setRobotRadius(a_star_inner);
-      ROS_WARN("[plan] %s failed (%s), fallback to A* r=%.3f (内切圆, 需轮廓校验)",
-               pname.c_str(), primary.error_message().c_str(), a_star_inner);
       last_plan_used_fallback_.store(true);
-      return fallback->plan(start, goal);
+      return inner;
     });
   }
 
@@ -4052,6 +4068,26 @@ private:
     // 现场只看路径点看不出锯齿, 所以把最大折角打进 /nav_diagnostics。
     last_path_turn_deg_ = core::detail::pathMaxTurnDegrees(planned);
     current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
+    // 目标容错: 规划器可能把目标吸附到 tolerance 内的 free 格 (hybrid/astar 的
+    // snapGoalToFree). 到点判定 isGoalReached() 用的是 goal_pose_, 这里必须同步,
+    // 否则车停在吸附点却永远判"没到" -> 60s 后 FAILED_STUCK.
+    if (!planned.points.empty() && !goal_pose_.header.frame_id.empty() &&
+        (!task_active_ || action_task_.kind() == core::ActionKind::NAVIGATE)) {
+      const auto & end = planned.points.back().pose;
+      const double gdx = end.x - goal_pose_.pose.position.x;
+      const double gdy = end.y - goal_pose_.pose.position.y;
+      const double gd = std::hypot(gdx, gdy);
+      if (gd > std::max(0.15, goal_tolerance_xy_)) {
+        ROS_WARN("[plan] goal snapped %.2fm: (%.2f,%.2f) -> (%.2f,%.2f); "
+                 "arrival check follows snapped goal",
+                 gd, goal_pose_.pose.position.x, goal_pose_.pose.position.y,
+                 end.x, end.y);
+        goal_pose_.pose.position.x = end.x;
+        goal_pose_.pose.position.y = end.y;
+        goal_pose_.pose.orientation = quatFromYaw(end.theta);
+        pending_goal_ = goal_pose_;
+      }
+    }
     current_core_path_ = planned;   // 旋转段执行器读取 velocity_x==0 标记
 
     // 直接把核心路径交给控制器, 不能用 toCorePath(ROS Path) 转一圈: ROS
@@ -5634,6 +5670,7 @@ private:
   int planner_max_iterations_ = 200000;
   double planner_heuristic_weight_ = 2.0;
   double planner_timeout_ = 2.0;
+  double planner_goal_tolerance_ = 0.5;
   bool planner_allow_reverse_ = true;
   double planner_max_reverse_distance_ = 1.0;
   double max_accel_x_ = 0.4;

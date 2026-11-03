@@ -209,6 +209,9 @@ private:
     bool isValid(int x, int y) const;
     bool isObstacle(int x, int y) const;
     int8_t getCost(int x, int y) const;
+    /// 目标落在障碍/膨胀区时, 在 config.goal_tolerance 内找最近的 free 格
+    /// (对齐 nav2_navfn_planner 的 tolerance 语义); 找不到返回 false.
+    bool snapGoalToFree(int gx, int gy, int& ox, int& oy) const;
     void reconstructPath(const AStarNode& goal_node, core::Path& path);
     void clearSearchData();
 };

@@ -207,6 +207,49 @@ int HybridAStarPlanner::stateKey(int ix, int iy, int itheta) const
   return (iy * static_cast<int>(nx_) + ix) * heading_bins_ + itheta;
 }
 
+bool HybridAStarPlanner::snapGoalToFree(const core::Pose2D & goal,
+                                        core::Pose2D & snapped) const
+{
+  const double tol = std::max(0.0, config_.goal_tolerance);
+  if (tol <= 0.0) return false;
+  int gx = 0, gy = 0;
+  if (!worldToGrid(goal.x, goal.y, gx, gy)) return false;
+  const int r = std::max(1, static_cast<int>(std::ceil(tol / resolution_)));
+  const int r2 = r * r;
+  double best_d2 = 1e9;
+  int best_cost = 1000;
+  bool found = false;
+  for (int dy = -r; dy <= r; ++dy) {
+    for (int dx = -r; dx <= r; ++dx) {
+      const int d2 = dx * dx + dy * dy;
+      if (d2 > r2) continue;
+      const int ix = gx + dx;
+      const int iy = gy + dy;
+      if (isObstacle(ix, iy)) continue;
+      core::Pose2D p;
+      p.x = origin_x_ + (static_cast<double>(ix) + 0.5) * resolution_;
+      p.y = origin_y_ + (static_cast<double>(iy) + 0.5) * resolution_;
+      p.theta = goal.theta;
+      if (!checkPose(p)) continue;
+      const int c = static_cast<int>(costAt(ix, iy));
+      // 最近优先; 同距离时优先代价更低 (free 优先于 unknown=99) 的格
+      if (d2 < best_d2 || (d2 == best_d2 && c < best_cost)) {
+        best_d2 = d2;
+        best_cost = c;
+        snapped = p;
+        found = true;
+      }
+    }
+  }
+  if (found) {
+    LOG_WARN(logger_,
+             "Goal in obstacle (%.2f, %.2f); snapped %.2fm to free cell (%.2f, %.2f)",
+             goal.x, goal.y, std::sqrt(best_d2) * resolution_,
+             snapped.x, snapped.y);
+  }
+  return found;
+}
+
 bool HybridAStarPlanner::isObstacle(int ix, int iy) const
 {
   if (ix < 0 || iy < 0 || ix >= static_cast<int>(nx_) || iy >= static_cast<int>(ny_)) {
@@ -458,10 +501,24 @@ core::Result<core::Path> HybridAStarPlanner::plan(
     return core::Result<core::Path>::error(
       core::ErrorCode::START_IN_OBSTACLE, "Start in obstacle");
   }
+  core::Pose2D goal_used = goal;
   if (isObstacle(gx, gy) || !checkPose(goal)) {
-    planning_active_ = false;
-    return core::Result<core::Path>::error(
-      core::ErrorCode::GOAL_IN_OBSTACLE, "Goal in obstacle");
+    // 目标点在障碍/膨胀区里: 与 nav2_navfn_planner 的 tolerance 一致,
+    // 在 goal_tolerance 半径内找一个 footprint-free 的最近格作为实际目标.
+    // 现场最常见的是清洁路径起点压在墙脚/未建图边上 -> 以前每帧都判
+    // "Goal in obstacle", 只能掉到 A* 兜底, 走到完全不对的路径.
+    core::Pose2D snapped;
+    if (!snapGoalToFree(goal, snapped)) {
+      planning_active_ = false;
+      return core::Result<core::Path>::error(
+        core::ErrorCode::GOAL_IN_OBSTACLE, "Goal in obstacle (no free cell within tolerance)");
+    }
+    goal_used = snapped;
+    if (!worldToGrid(goal_used.x, goal_used.y, gx, gy)) {
+      planning_active_ = false;
+      return core::Result<core::Path>::error(
+        core::ErrorCode::GOAL_IN_OBSTACLE, "Snapped goal outside costmap");
+    }
   }
 
   std::vector<Node> nodes;
@@ -474,7 +531,7 @@ core::Result<core::Path> HybridAStarPlanner::plan(
   start_node.y = start.y;
   start_node.theta = start.theta;
   start_node.g = 0.0;
-  start_node.f = heuristic(start, goal);
+  start_node.f = heuristic(start, goal_used);
   start_node.ix = sx;
   start_node.iy = sy;
   start_node.itheta = headingIndex(start.theta);
@@ -497,9 +554,9 @@ core::Result<core::Path> HybridAStarPlanner::plan(
     const Node current = nodes[item.index];
     if (current.f > item.f + 1e-9) continue;
 
-    const double dx = current.x - goal.x;
-    const double dy = current.y - goal.y;
-    const double dtheta = std::fabs(normalizeAngle(current.theta - goal.theta));
+    const double dx = current.x - goal_used.x;
+    const double dy = current.y - goal_used.y;
+    const double dtheta = std::fabs(normalizeAngle(current.theta - goal_used.theta));
     if (std::hypot(dx, dy) <= std::max(0.18, 3.0 * resolution_) &&
         dtheta <= 0.45) {
       goal_index = item.index;
@@ -544,7 +601,7 @@ core::Result<core::Path> HybridAStarPlanner::plan(
       node.y = next.y;
       node.theta = next.theta;
       node.g = g;
-      node.f = g + heuristic_weight_ * heuristic(next, goal);
+      node.f = g + heuristic_weight_ * heuristic(next, goal_used);
       node.parent = item.index;
       node.ix = ix;
       node.iy = iy;
@@ -578,7 +635,7 @@ core::Result<core::Path> HybridAStarPlanner::plan(
 
   core::Path path = reconstruct(nodes, goal_index);
   core::PathPoint last;
-  last.pose = goal;
+  last.pose = goal_used;
   path.points.push_back(last);
   if (path.points.size() < 2) path.points.push_back(last);
   LOG_INFO(logger_, "Hybrid A* path: %zu points, %d iterations", path.points.size(), iterations);

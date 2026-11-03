@@ -86,6 +86,9 @@ private:
   };
 
   bool worldToGrid(double x, double y, int & ix, int & iy) const;
+  /// 目标在障碍/膨胀区时, 在 config_.goal_tolerance 内找最近的 footprint-free 位姿.
+  /// 对齐 nav2_navfn_planner 的 tolerance 语义; 找不到返回 false.
+  bool snapGoalToFree(const core::Pose2D & goal, core::Pose2D & snapped) const;
   int headingIndex(double theta) const;
   int stateKey(int ix, int iy, int itheta) const;
   bool isObstacle(int ix, int iy) const;

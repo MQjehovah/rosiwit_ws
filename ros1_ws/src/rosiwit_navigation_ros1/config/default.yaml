@@ -39,6 +39,9 @@ mppi_goal_weight: 1.5
 planner_heuristic_weight: 2.0
 planner_max_iterations: 200000
 planner_timeout: 2.0   # hybrid 主规划预算 (实车 2s; 仿真 3s, 因为 15° 基元分支翻倍)
+# 目标点容错 (m): 目标压在墙脚/膨胀带/未建图边时, 在半径内吸附到最近的
+# footprint-free 格 (对齐 nav2_navfn_planner 的 tolerance 语义); 0 = 关闭.
+planner_goal_tolerance: 0.50
 # 原地转向基元步长(deg)。实车先用 30 (与历史行为一致); 仿真里 15 更不容易在窄处
 # 搜不到解, 但需要更大的 planner_timeout (ARM 上 2s 不够)。
 planner_turn_step_deg: 30.0

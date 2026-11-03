@@ -51,6 +51,7 @@ planner_max_iterations: 300000
 # 15° 给搜索更多可行中间姿态; 分支翻倍, 配合上面的 3s 预算。
 planner_turn_step_deg: 15.0
 planner_timeout: 3.0
+planner_goal_tolerance: 0.50
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 

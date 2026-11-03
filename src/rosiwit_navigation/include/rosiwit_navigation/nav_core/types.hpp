@@ -79,6 +79,10 @@ struct PlannerConfig
   /// Hybrid A*: 原地转向基元的步长 (deg). 30° 时窄处"转不动"会直接搜不到解,
   /// 15° 给搜索更多可行中间姿态; 代价是分支数翻倍 (配合 timeout 调大)。
   double turn_step_deg = 30.0;
+  /// 目标点容错半径 (m): 目标落在障碍/膨胀区时, 在半径内搜索最近的
+  /// footprint-free 格作为实际规划目标 (对齐 nav2_navfn_planner 的 tolerance 语义)。
+  /// 0 = 关闭 (保持旧的"目标在障碍里直接失败")。
+  double goal_tolerance = 0.5;
 };
 
 struct KinematicsLimits

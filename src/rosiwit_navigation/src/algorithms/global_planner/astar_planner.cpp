@@ -230,13 +230,27 @@ core::Result<core::Path> AStarPlanner::plan(
             core::ErrorCode::START_IN_OBSTACLE, "Start in obstacle");
     }
     if (isObstacle(goal_x, goal_y)) {
-        planning_active_ = false;
-        LOG_ERROR(logger_,
-            "Goal in obstacle: goal=(%d,%d) cost=%d world=(%.2f,%.2f)",
+        // 目标点在障碍里: 先按 nav2_navfn_planner 的 tolerance 语义, 在
+        // goal_tolerance 半径内找最近的 free 格; 找不到才失败.
+        int sx2 = goal_x;
+        int sy2 = goal_y;
+        if (!snapGoalToFree(goal_x, goal_y, sx2, sy2)) {
+            planning_active_ = false;
+            LOG_ERROR(logger_,
+                "Goal in obstacle: goal=(%d,%d) cost=%d world=(%.2f,%.2f), no free cell within %.2fm",
+                goal_x, goal_y, static_cast<int>(getCost(goal_x, goal_y)),
+                goal.x, goal.y, config_.goal_tolerance);
+            return core::Result<core::Path>::error(
+                core::ErrorCode::GOAL_IN_OBSTACLE, "Goal in obstacle");
+        }
+        LOG_WARN(logger_,
+            "Goal in obstacle: goal=(%d,%d) cost=%d; snapped to (%d,%d) dist=%.2fm",
             goal_x, goal_y, static_cast<int>(getCost(goal_x, goal_y)),
-            goal.x, goal.y);
-        return core::Result<core::Path>::error(
-            core::ErrorCode::GOAL_IN_OBSTACLE, "Goal in obstacle");
+            sx2, sy2,
+            std::hypot(static_cast<double>(sx2 - goal_x),
+                       static_cast<double>(sy2 - goal_y)) * resolution);
+        goal_x = sx2;
+        goal_y = sy2;
     }
 
     // 起点=终点时直接返回
@@ -433,6 +447,38 @@ int8_t AStarPlanner::getCost(int x, int y) const
         return -1;   // 界外 = 不可通行
     }
     return costmap_data_[y * nx_ + x];
+}
+
+bool AStarPlanner::snapGoalToFree(int gx, int gy, int& ox, int& oy) const
+{
+    const double tol = std::max(0.0, config_.goal_tolerance);
+    if (tol <= 0.0 || !costmap_ || !costmap_->grid) return false;
+    double res = costmap_->grid->info.resolution;
+    if (res <= 0.0) res = 0.05;
+    const int r = std::max(1, static_cast<int>(std::ceil(tol / res)));
+    const int r2 = r * r;
+    double best_d2 = 1e9;
+    int best_cost = 1000;
+    bool found = false;
+    for (int dy = -r; dy <= r; ++dy) {
+        for (int dx = -r; dx <= r; ++dx) {
+            const int d2 = dx * dx + dy * dy;
+            if (d2 > r2) continue;
+            const int x = gx + dx;
+            const int y = gy + dy;
+            if (!isValid(x, y) || isObstacle(x, y)) continue;
+            const int c = static_cast<int>(getCost(x, y));
+            // 最近优先; 同距离时优先代价更低 (free 优先于 99 膨胀带) 的格
+            if (d2 < best_d2 || (d2 == best_d2 && c < best_cost)) {
+                best_d2 = d2;
+                best_cost = c;
+                ox = x;
+                oy = y;
+                found = true;
+            }
+        }
+    }
+    return found;
 }
 
 void AStarPlanner::reconstructPath(const AStarNode& goal_node, core::Path& path)
