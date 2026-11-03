@@ -8,7 +8,10 @@ global:
   modules:
     frontend: "fast_lio2_frontend"
     backend: "ceres_pose_graph"
-    loop_closure: "scan_context" # 回环: 建图时做 ScanContext 检索 + ICP 校验, 抑制长距离漂移
+    # 回环关闭: 仿真货架 5.8m 周期重复, ScanContext 会把不同货架认成同一处并触发
+    # 后端优化, 实测把 map 帧平移 1m+ / 旋转 28°, 导航随即 "Goal outside costmap"、
+    # 2D 地图被抹花. 20m 小场景无回环时 LIO 漂移 <5cm, 不需要后端拉回.
+    loop_closure: ""
     map_manager: "pcd_map_manager"
     localization: "localization_pipeline"
 
