@@ -4156,20 +4156,24 @@ private:
       const double dx = planned.points[1].pose.x - planned.points[0].pose.x;
       const double dy = planned.points[1].pose.y - planned.points[0].pose.y;
       const double path_yaw = std::atan2(dy, dx);
-      // 规划器从"当前朝向"起步 -> path_yaw 几乎总等于 current_yaw, 下面这条判断
-      // 实际上永不触发, 车只能靠"边转边走"的弧消化几十度转向。0.75m 门洞实测:
-      // 起步 28° 航向差直接开走, 在 y=0.5 处就偏出 0.26m, 到门平面还剩 6.3° 斜置,
-      // 车体横向占用 0.55*sin(6.3°)+0.33*cos(6.3°) = 0.388m > 门洞 0.375m -> 必停。
-      // 目标较远时直接朝"目标方位角"转, 让后续路径从直线起步。
+      // 起步朝向: 取"沿路径约 1m 处"的方向, 不要用目标方位角。
+      // 目标方位角可能指向障碍: 2026-11-03 实车路径前方干净, 却按 bearing
+      // 往左转, 左侧正好有障碍 -> 安全层连续 STOP, 车被自己逼停。
+      // 路径本身是规划器验证过可走的, 沿它取前瞻方向才是安全的。
       double target_yaw = path_yaw;
-      if (path_span > 1.0) {
-        const double gx = goal_pose_.pose.position.x - current_pose_.pose.position.x;
-        const double gy = goal_pose_.pose.position.y - current_pose_.pose.position.y;
-        if (std::hypot(gx, gy) > 1.0) {
-          const double bearing = std::atan2(gy, gx);
-          if (std::abs(normalizeAngle(bearing - current_yaw)) > 0.35) {
-            target_yaw = bearing;
-          }
+      if (path_span > 1.0 && planned.points.size() >= 2) {
+        const auto & p0 = planned.points.front().pose;
+        double acc = 0.0;
+        size_t k = 1;
+        for (; k + 1 < planned.points.size(); ++k) {
+          const auto & a = planned.points[k].pose;
+          const auto & b = planned.points[k + 1].pose;
+          acc += std::hypot(b.x - a.x, b.y - a.y);
+          if (acc >= 1.0) break;
+        }
+        const auto & pk = planned.points[k].pose;
+        if (std::hypot(pk.x - p0.x, pk.y - p0.y) > 0.30) {
+          target_yaw = std::atan2(pk.y - p0.y, pk.x - p0.x);
         }
       }
       if (std::abs(normalizeAngle(target_yaw - current_yaw)) > 0.35) {
