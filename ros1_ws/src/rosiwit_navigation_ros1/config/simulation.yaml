@@ -124,6 +124,14 @@ path_resample_step: 0.08
 inflation_radius: 0.60
 # exp(-k*(d-inscribed)): k 越大贴墙代价升得越快，路径越居中
 inflation_cost_scaling_factor: 3.0
+# unknown(-1) 按「高代价可通行」处理 (等价 nav2 的 track_unknown_space: false)。
+# 关闭时未建图区域=障碍: 机器人一走到地图边界, 任何跨边界的规划都失败
+# (实测 FAILED_PATH_FOOTPRINT / 原地转圈), 而本场景是边走边建图。真实障碍
+# 仍由 100 + 安全层(实时 /scan)兜底。
+# 开启后实测: 可通行面积 28.2 -> 46.8 m², 最远可达 8.0 -> 11.2m,
+# 日志里 FAILED_PATH_FOOTPRINT 归零。
+allow_unknown: true
+unknown_cost: 99
 
 # ---------- 话题 ----------
 # 用 SLAM 的 /lio_odom 而不是 Gazebo 的 /odom: nav 直接把 odom.pose 当作
