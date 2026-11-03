@@ -4813,7 +4813,8 @@ private:
         (now - recovery_started_).toSec() > recovery_timeout_) {
       ROS_WARN("[rosiwit_navigation_ros1] recovery timeout after %.1fs (stage=%d)",
                (now - recovery_started_).toSec(), static_cast<int>(recovery_stage_));
-      if (recovery_stage_ != RecoveryStage::PLANNING ||
+      // 任何阶段超时都先试直线倒车; 只有在执行阶段(FOLLOW)或车尾不通时才判死。
+      if (recovery_stage_ == RecoveryStage::FOLLOW ||
           !startStraightReverseFallback("escape timeout")) {
         failRecovery();
       }
@@ -4871,7 +4872,10 @@ private:
       return;
     }
     if (recovery_stage_ == RecoveryStage::PLANNING) {
-      if (!recovery_plan_future_.valid()) { failRecovery(); return; }
+      if (!recovery_plan_future_.valid()) {
+        if (!startStraightReverseFallback("stale escape future")) { failRecovery(); }
+        return;
+      }
       if (recovery_plan_future_.wait_for(std::chrono::seconds(0)) !=
           std::future_status::ready) {
         // 规划中: 保持停车 (不是保持上一条速度), 控制环不被阻塞
