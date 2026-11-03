@@ -630,7 +630,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     pnh_.param<bool>("path_final_rotate", path_final_rotate_, false);
     // 单点导航末端朝向来源: true = 用 tracking_path[0]->[1] 的方向 (APP 常用它表示
     // "下一段延线往哪走"); false = 用 tracking_path[0].theta 原值。
-    pnh_.param<bool>("final_yaw_from_next_point", final_yaw_from_next_point_, false);
+    pnh_.param<bool>("final_yaw_from_next_point", final_yaw_from_next_point_, true);
     // cmd=1 带多个点时: 用最后一点当目标 (APP 常见的 [当前位置, 目的地] 写法)
     pnh_.param<bool>("single_point_use_last_pose", single_point_use_last_pose_, false);
 
@@ -1847,17 +1847,21 @@ private:
         command.kind = core::ActionKind::NAVIGATE;
         command.final_rotate = true;   // 单点导航到位后对齐目标航向
         command.final_yaw = target.theta;
-        // APP 对"单点导航"往往下发两个点: [到达点, 延线下一点]。真实意图是到位后
-        // 让车头朝向**下一段延线方向**, 而 tracking_path[0].theta 常常是 0(未填),
-        // 直接用它会让车头正好差 180°(实测 2026-10-31)。开关打开时用 p0→p1 方向。
+        // 单点导航规则 (APP 协议): 目标 = path[0]; 若存在 path[1], 目标朝向 = p0->p1.
+        // 内联两点路径的 theta 常常是 0(未填), 所以这里强制用 p0->p1 的方向;
+        // 文件路径分支在 startActionNavigation 里同样按 tail[0]->tail[1] 计算.
         if (final_yaw_from_next_point_ && action_goal_.tracking_path.size() >= 2) {
-          const core::Pose2D & a = action_goal_.tracking_path[0];
-          const core::Pose2D & b = action_goal_.tracking_path[1];
+          const size_t last_pair = action_goal_.tracking_path.size() - 2;
+          const size_t i0 = std::min<size_t>(
+            static_cast<size_t>(std::max<long>(0, action_goal_.path_index)), last_pair);
+          const core::Pose2D & a = action_goal_.tracking_path[i0];
+          const core::Pose2D & b = action_goal_.tracking_path[i0 + 1];
           const double dx = b.x - a.x;
           const double dy = b.y - a.y;
-          if (std::hypot(dx, dy) > 0.1) {
+          if (std::hypot(dx, dy) > 1e-3) {
             command.final_yaw = std::atan2(dy, dx);
-            ROS_INFO("[movebase_iface] final_yaw 取 p0->p1 方向 = %.1fdeg (app theta=%.1fdeg)",
+            ROS_INFO("[movebase_iface] final_yaw 取 p%d->p%d 方向 = %.1fdeg (app theta=%.1fdeg)",
+                     static_cast<int>(i0), static_cast<int>(i0 + 1),
                      command.final_yaw * 57.2957795, target.theta * 57.2957795);
           }
         }
@@ -1994,6 +1998,14 @@ private:
         return;
       }
       target = tail.front();
+      // 单点导航规则: 目标点 = path[0], 目标朝向 = path[0]->path[1] 的方向.
+      // 文件里每个点只有 x/y (theta 由 fillPathYaw 估算), 这里按剩余路径的
+      // 前两点再显式算一次, 保证"到点后车头沿路径前进方向".
+      if (tail.size() >= 2) {
+        const double dx = tail[1].x - tail[0].x;
+        const double dy = tail[1].y - tail[0].y;
+        if (std::hypot(dx, dy) > 1e-3) { target.theta = std::atan2(dy, dx); }
+      }
     }
 
     const core::Pose2D start = action_cmd_.has_start
@@ -2065,8 +2077,12 @@ private:
       stamped.pose.orientation = quatFromYaw(pose.theta);
       ros_path.poses.push_back(stamped);
     }
-    // 换路径必须同时刷新 core 版本: 否则下面"优先用 current_core_path_"会拿到
-    // 上一条 NAVIGATE 的旧路径 (控制器跟着旧路径跑, 而 /global_path 发的是新路径)。
+    // 换路径必须同时刷新 ROS 与 core 两份。以前这里写的是
+    //   current_core_path_ = toCorePath(current_path_);
+    // 而 current_path_ 还是上一条 NAVIGATE 的旧路径（终点=当前位置）：
+    // 控制器收到旧路径后 isGoalReached() 立刻为真 -> navi_cmd=3 一步都不跟、
+    // 直接报 "goal reached"（实测 2026-11-03 20:34:45）。
+    current_path_ = ros_path;
     current_core_path_ = toCorePath(current_path_);
 
     core::ActionTaskCommand task_command;

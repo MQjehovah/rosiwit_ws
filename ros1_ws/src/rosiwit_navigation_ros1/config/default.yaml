@@ -291,3 +291,8 @@ clearance_speed_limit: true
 clearance_brake_decel: 0.8
 clearance_front_offset: 0.45
 clearance_stop_margin: 0.15
+
+# Single-point nav: final yaw = path[0]->path[1] (APP protocol).
+final_yaw_from_next_point: true
+# Do not replace the goal yaw with the bearing-to-goal angle.
+plan_goal_yaw_from_bearing: false
