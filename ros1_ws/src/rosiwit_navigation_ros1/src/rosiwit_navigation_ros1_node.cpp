@@ -3136,6 +3136,58 @@ private:
     }
   }
 
+  // 规划视图去孤立障碍: 占据格若 8 邻域里 <=1 个占据格, 判为建图噪点并清空.
+  // 3D 雷达斜装、原地转向和行人拖影都会在栅格上留下 1~2 格的假障碍; 规划器
+  // 按 100=碰撞判定, 一个孤立格就能让 Hybrid A* 报 "Start/Goal in obstacle",
+  // 或者把 2.3m 的货架通道切成互不连通的小块. /map 本身不做修改.
+  static void removeIsolatedObstacles(std::vector<int8_t> & data,
+                                      unsigned int w, unsigned int h)
+  {
+    if (data.size() != static_cast<size_t>(w) * h) { return; }
+    const std::vector<int8_t> src = data;
+    const auto occupied = [&](int x, int y) -> int {
+      if (x < 0 || y < 0 || x >= static_cast<int>(w) || y >= static_cast<int>(h)) { return 0; }
+      return src[static_cast<size_t>(y) * w + x] > 50 ? 1 : 0;
+    };
+    for (unsigned int y = 0; y < h; ++y) {
+      for (unsigned int x = 0; x < w; ++x) {
+        const size_t i = static_cast<size_t>(y) * w + x;
+        if (src[i] <= 50) { continue; }
+        int neighbors = 0;
+        for (int dy = -1; dy <= 1 && neighbors <= 1; ++dy) {
+          for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) { continue; }
+            neighbors += occupied(static_cast<int>(x) + dx, static_cast<int>(y) + dy);
+          }
+        }
+        if (neighbors <= 1) { data[i] = core::kCostFree; }
+      }
+    }
+  }
+
+  // 把机器人当前所在的圆盘清成自由: 机器人脚下不可能是真障碍, 但建图会把机身
+  // 和转向残影标在这里, 于是每次规划都以 "Start in obstacle" 失败.
+  static void clearRobotDisk(std::vector<int8_t> & data,
+                             unsigned int w, unsigned int h,
+                             double ox, double oy, double res,
+                             double cx, double cy, double radius)
+  {
+    if (data.size() != static_cast<size_t>(w) * h || res <= 0.0) { return; }
+    const int r = static_cast<int>(std::ceil(radius / res));
+    const int gx = static_cast<int>((cx - ox) / res);
+    const int gy = static_cast<int>((cy - oy) / res);
+    for (int dy = -r; dy <= r; ++dy) {
+      for (int dx = -r; dx <= r; ++dx) {
+        if (dx * dx + dy * dy > r * r) { continue; }
+        const int x = gx + dx;
+        const int y = gy + dy;
+        if (x < 0 || y < 0 || x >= static_cast<int>(w) || y >= static_cast<int>(h)) { continue; }
+        const size_t i = static_cast<size_t>(y) * w + x;
+        if (data[i] > 0) { data[i] = core::kCostFree; }
+      }
+    }
+  }
+
   void updateCostmap()
   {
     std::lock_guard<std::mutex> costmap_lk(costmap_mu_);
@@ -3195,6 +3247,31 @@ private:
         planner_layers_.configure(cfg, core::kCostFree);
         planner_layers_.update(ros::Time::now().toSec());
         semantic = planner_layers_.combined();
+      }
+
+      // 规划视图清理（只影响规划/发布的可视化，不动 /map）:
+      //   1) 去掉孤立占据格 —— 仿真里 3D 雷达斜装 + 原地转向 + 行人拖影会留下
+      //      单格假障碍，规划器按 100=碰撞处理，会判 "Start/Goal in obstacle"，
+      //      也会把 2.3m 货架通道切碎；
+      //   2) 把机器人脚下清空 —— 自身残影常驻在当前位姿，导致每次规划都
+      //      "Start in obstacle"，而机器人所在位置在物理上必然是空的。
+      // 真实近处障碍仍由 /scan 安全层（safety_*）实时兜底。
+      removeIsolatedObstacles(semantic, w, h);
+      {
+        double sx = 0.0, sy = 0.0;
+        bool have_pose = false;
+        try {
+          const geometry_msgs::TransformStamped tf = tf_buffer_.lookupTransform(
+            map_frame_, robot_frame_, ros::Time(0), ros::Duration(0.02));
+          sx = tf.transform.translation.x;
+          sy = tf.transform.translation.y;
+          have_pose = true;
+        } catch (tf2::TransformException &) {
+          have_pose = false;
+        }
+        if (have_pose) {
+          clearRobotDisk(semantic, w, h, ox, oy, res, sx, sy, robot_radius_ + 0.05);
+        }
       }
 
       auto grid = std::make_shared<core::CostmapGrid>();

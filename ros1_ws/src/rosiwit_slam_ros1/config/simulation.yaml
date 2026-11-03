@@ -70,15 +70,17 @@ mapping:
     estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
     self_filter:
       enabled: true # 仿真启用机身过滤: 倾斜雷达会扫到自己的轮子/万向轮碰撞体
-      # base_link 系包围盒; 覆盖 gt 车体 (模型前移后 x -0.327..0.565, y +-0.359).
+      # base_link 系包围盒; 覆盖 gt 车体 + 视觉网格外沿 (实测 3D 雷达会扫到
+      # r=0.6~0.8m、z≈0.5m 的一圈机身外壳, 只按碰撞盒 x -0.327..0.565 过滤会漏,
+      # 漏掉的点在 2D 栅格上表现为贴身假障碍, 规划器直接判 "Start in obstacle".
       # z 上限抬到 0.80: 车身碰撞盒顶在 0.77, 倾斜 3D 雷达会扫到自己的车顶,
       # 不滤掉会当成贴身的假障碍.
-      x_min: -0.36
-      x_max: 0.60
-      y_min: -0.40
-      y_max: 0.40
-      z_min: -0.30
-      z_max: 0.80
+      x_min: -0.95
+      x_max: 0.95
+      y_min: -0.95
+      y_max: 0.95
+      z_min: -0.35
+      z_max: 1.00
   # 回环: 与 default.yaml 对齐。**必须显式写在这里**: 缺这段时核心会退回代码默认值,
   # 而代码里 icp_fitness_thresh 的默认是 1.0 (MSE ~1m RMS 也放行) -> 假回环保送进后端。
   loop_closure:
@@ -112,16 +114,16 @@ mapping:
     realtime_resolution: 0.05 # 实时 /map 分辨率(m): 与最终图一致, 建图中导航/RViz 直接看到 0.05m 图
     min_height: 0.1 # 地面以上障碍最低高度(m)
     max_height: 2.0 # 地面以上障碍最高高度(m)
-    occupied_thresh: 1 # 每格最少点数判占据
+    occupied_thresh: 2 # 每格最少点数判占据
     dilate_radius: 0 # 障碍膨胀半径(格)
     close_radius: 1 # 形态学闭运算半径(格)
-    min_component_cells: 1 # 去噪最小连通域格数
+    min_component_cells: 3 # 去噪最小连通域格数
     max_range: 15.0 # 射线有效距离(m),0=不限
     ground_method: ransac # 地面提取方法 ransac|percentile
     ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
     post_pipeline: "denoise,close" # 2D后处理管道
     realtime_post_pipeline: "denoise,close"
-    realtime_min_component_cells: 1
+    realtime_min_component_cells: 3
     realtime_close_radius: 1
     realtime_skeleton_width: 0
 localization:
