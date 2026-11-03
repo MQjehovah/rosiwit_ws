@@ -177,7 +177,8 @@ TEST(RayCastingGridMapTest, TriStateFreeOccupiedUnknown) {
 }
 
 TEST(RayCastingGridMapTest, DynamicObstacleClearedByLaterFreeRays) {
-    // 人/货走过 -> x=3 处出现占据; 人走后两条自由射线穿过该格 -> 清除鬼影.
+    // 人/货走过 -> x=3 处出现占据; 人走后多帧自由观测穿过该格 -> 清除鬼影.
+    // 判据是"按帧计票": 1 帧 hit 需要 > 2*1+2 = 4 帧 miss 才清除.
     RayCastingGridMap gen;
     GridMapConfig cfg;
     cfg.resolution = 0.1;
@@ -200,21 +201,66 @@ TEST(RayCastingGridMapTest, DynamicObstacleClearedByLaterFreeRays) {
     o1.origin = Eigen::Vector3d::Zero();
     o1.cloud = makeWallScene();           // x=3 有墙(人)
     obs.push_back(o1);
-    Observation o2;
-    o2.origin = Eigen::Vector3d::Zero();
-    o2.cloud = freeScene();               // 射线穿过 x=3
-    obs.push_back(o2);
+
+    GridInfo out;
+    // 先来 3 帧自由观测: 还不够 (miss=3, hit=1, 需要 >4)
+    for (int k = 0; k < 3; ++k) {
+        Observation o;
+        o.origin = Eigen::Vector3d::Zero();
+        o.cloud = freeScene();
+        obs.push_back(o);
+    }
+    ASSERT_TRUE(gen.buildFromObservations(obs, Eigen::Vector3d::Zero(), cfg, out));
+    EXPECT_EQ(cellValue(out, 3.0, 0.0), 100);   // 3 帧 miss 还不够
+
+    // 第 4、5 帧: miss=5 > 2*1+2 -> 清除
+    for (int k = 0; k < 2; ++k) {
+        Observation o;
+        o.origin = Eigen::Vector3d::Zero();
+        o.cloud = freeScene();
+        obs.push_back(o);
+    }
+    ASSERT_TRUE(gen.buildFromObservations(obs, Eigen::Vector3d::Zero(), cfg, out));
+    EXPECT_EQ(cellValue(out, 3.0, 0.0), 0);     // 第 5 帧 -> 清除
+}
+
+TEST(RayCastingGridMapTest, StaticWallSurvivesFewFreeRays) {
+    // 静态墙被 10 帧观测确认后, 少量(5 帧)自由射线穿过不能把它删掉.
+    // 修复前 "2 条 miss 就清" 会让墙频繁消失.
+    RayCastingGridMap gen;
+    GridMapConfig cfg;
+    cfg.resolution = 0.1;
+    cfg.min_height = 0.1;
+    cfg.max_height = 2.0;
+    cfg.min_misses = 2;
+    cfg.dilate_radius = 0;
+    cfg.close_radius = 0;
+    cfg.min_component_cells = 1;
+
+    auto freeScene = []() {
+        CloudType::Ptr c(new CloudType());
+        for (double y = -2.0; y <= 2.0; y += 0.05)
+            c->push_back(PointType(5.0f, static_cast<float>(y), 0.0f));
+        return c;
+    };
+
+    std::vector<Observation> obs;
+    for (int k = 0; k < 10; ++k) {
+        Observation o;
+        o.origin = Eigen::Vector3d::Zero();
+        o.cloud = makeWallScene();
+        obs.push_back(o);
+    }
+    for (int k = 0; k < 5; ++k) {
+        Observation o;
+        o.origin = Eigen::Vector3d::Zero();
+        o.cloud = freeScene();
+        obs.push_back(o);
+    }
 
     GridInfo out;
     ASSERT_TRUE(gen.buildFromObservations(obs, Eigen::Vector3d::Zero(), cfg, out));
-    EXPECT_EQ(cellValue(out, 3.0, 0.0), 100);   // 1 条 miss 还不够
-
-    Observation o3;
-    o3.origin = Eigen::Vector3d::Zero();
-    o3.cloud = freeScene();
-    obs.push_back(o3);
-    ASSERT_TRUE(gen.buildFromObservations(obs, Eigen::Vector3d::Zero(), cfg, out));
-    EXPECT_EQ(cellValue(out, 3.0, 0.0), 0);     // 第 2 条 miss -> 清除
+    EXPECT_EQ(cellValue(out, 3.0, 0.0), 100);   // 墙保留
 }
 
 TEST(RayCastingGridMapTest, NeedsObservations) {

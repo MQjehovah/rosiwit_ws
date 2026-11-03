@@ -16,12 +16,19 @@ namespace {
 inline int cellIndex(int col, int row, int width) { return row * width + col; }
 
 // Bresenham 2D: 把 (c0,r0)->(c1,r1) 途经格标记为 free(0).
-// 对**已占据**的格做 miss 计数: 连续 min_misses 条自由射线穿过才清除,
-// 用来擦掉人/货等瞬时障碍. 端点(c1,r1)不做 miss 计数 —— 那是命中点/墙,
-// 不能被自己的射线清掉; 但端点本身是**被观测到的格**, 若非占据仍标 free
-// (地面点/非障碍高度带的点必须标 free, 否则又生 unknown 噪点).
-void traceFree(std::vector<int8_t>& data, std::vector<uint16_t>& misses,
-               int min_misses, int w, int h, int c0, int r0, int c1, int r1) {
+// 动态障碍擦除: 已占据格按**观测帧**累计 miss (同一帧多条射线只算一次),
+// 只有 miss 显著多于 hit 才清除, 避免静态墙被偶尔擦边的射线删掉.
+//   清除条件: miss >= min_misses 且 miss > 2*hit + 2
+//   (h hit 次确认的墙需要 2h+3 帧自由观测才会消失; 人/货只有几帧 hit, 很快清掉)
+// 端点(c1,r1)不做 miss 计数 —— 那是命中点/墙, 不能被自己的射线清掉; 但端点
+// 本身是**被观测到的格**, 若非占据仍标 free (地面点/非障碍高度带的点必须标
+// free, 否则又生 unknown 噪点).
+void traceFree(std::vector<int8_t>& data,
+               std::vector<uint16_t>& misses, std::vector<uint16_t>& hits,
+               std::vector<int32_t>& miss_stamp, std::vector<int32_t>& hit_stamp,
+               int min_misses, int32_t obs_idx,
+               int w, int h, int c0, int r0, int c1, int r1,
+               int& cleared_cells) {
     int dx = std::abs(c1 - c0);
     int dy = -std::abs(r1 - r0);
     int sx = c0 < c1 ? 1 : -1;
@@ -34,7 +41,18 @@ void traceFree(std::vector<int8_t>& data, std::vector<uint16_t>& misses,
             if (at_end) {
                 if (data[idx] != 100) data[idx] = 0;   // 观测到但非障碍: free
             } else if (data[idx] == 100) {
-                if (++misses[idx] >= min_misses) data[idx] = 0;   // 连续自由射线 -> 清除鬼影
+                if (miss_stamp[idx] != obs_idx) {
+                    miss_stamp[idx] = obs_idx;
+                    ++misses[idx];
+                }
+                if (misses[idx] >= min_misses &&
+                    static_cast<int>(misses[idx]) >
+                        static_cast<int>(hits[idx]) * 2 + 2) {
+                    data[idx] = 0;    // 连续多帧自由观测 -> 清除鬼影
+                    misses[idx] = 0;
+                    hits[idx] = 0;
+                    ++cleared_cells;
+                }
             } else {
                 data[idx] = 0;
             }
@@ -151,13 +169,19 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
 
     // 5. 初始化 unknown(-1), 逐帧射线投射
     std::vector<int8_t> data(static_cast<size_t>(width) * height, -1);
-    // 已占据格的"连续自由射线"计数: >= min_misses 就清除 (动态障碍擦除)
+    // 动态障碍擦除: 按**观测帧**计票 (同一帧多条射线只算一次), 静态墙受
+    // hits 保护, 瞬时障碍只有少量 hit, 会被后续自由观测清掉.
     std::vector<uint16_t> misses(static_cast<size_t>(width) * height, 0);
+    std::vector<uint16_t> hits(static_cast<size_t>(width) * height, 0);
+    std::vector<int32_t> miss_stamp(static_cast<size_t>(width) * height, -1);
+    std::vector<int32_t> hit_stamp(static_cast<size_t>(width) * height, -1);
     const int need_misses = std::max(1, cfg.min_misses);
     const double max_range2 = (cfg.max_range > 0.0) ? cfg.max_range * cfg.max_range : -1.0;
     int occupied_cells = 0;
+    int cleared_cells = 0;
     long long rays = 0;
     for (size_t i = 0; i < obs.size(); ++i) {
+        const int32_t oi = static_cast<int32_t>(i);
         const Eigen::Vector3d& o = obs[i].origin;
         int oc = static_cast<int>((o.x() - origin_x) / res);
         int orow = static_cast<int>((o.y() - origin_y) / res);
@@ -171,12 +195,16 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
             int col = static_cast<int>((pt.x - origin_x) / res);
             int row = static_cast<int>((pt.y - origin_y) / res);
             if (col < 0 || col >= width || row < 0 || row >= height) continue;
-            traceFree(data, misses, need_misses, width, height, oc, orow, col, row);
+            traceFree(data, misses, hits, miss_stamp, hit_stamp,
+                      need_misses, oi, width, height, oc, orow, col, row,
+                      cleared_cells);
             float h = grounds[i].height(pt);
             if (h >= cfg.min_height && h <= cfg.max_height) {
                 int idx = cellIndex(col, row, width);
                 if (data[idx] != 100) { data[idx] = 100; occupied_cells++; }
-                misses[idx] = 0;   // 命中 = 重新确认障碍, 清空 miss 计数
+                if (hit_stamp[idx] != oi) { hit_stamp[idx] = oi; ++hits[idx]; }
+                misses[idx] = 0;          // 命中 = 重新确认障碍
+                miss_stamp[idx] = oi;     // 同一帧内的其他射线不再计 miss
             }
             ++rays;
         }
@@ -187,6 +215,7 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
     std::cout << "[RayCast] " << width << "x" << height
               << " obs=" << obs.size() << " rays=" << rays
               << " occupied=" << occupied_cells << " free=" << free_cells
+              << " cleared=" << cleared_cells
               << " total=" << data.size()
               << " res=" << res << std::endl;
 
