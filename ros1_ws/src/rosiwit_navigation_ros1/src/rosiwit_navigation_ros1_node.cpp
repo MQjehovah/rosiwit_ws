@@ -323,6 +323,13 @@ private:
                        safety_slowdown_extra_);
     pnh_.param<double>("safety_scale_slew_rate", safety_scale_slew_rate_, 1.0);
     pnh_.param<double>("safety_scale_dt", safety_scale_dt_, 0.1);
+    // 近障碍限速 (legacy v*=d/1.8 / nav2 collision_monitor 的连续降速):
+    // 用 2D 激光在行进走廊里的最近距离直接压线速度, 避免"规划能过、控制器
+    // 却按 0.5m/s 贴过去, 安全层只能硬停" (2026-11-03 实车贴墙事故).
+    pnh_.param<bool>("clearance_speed_limit", clearance_speed_limit_, true);
+    pnh_.param<double>("clearance_brake_decel", clearance_brake_decel_, 0.8);
+    pnh_.param<double>("clearance_front_offset", clearance_front_offset_, 0.45);
+    pnh_.param<double>("clearance_stop_margin", clearance_stop_margin_, 0.15);
     // 车身轮廓外扩: 只排除轮廓内的点 (nav2 exclusion_zones.robot_body)
     pnh_.param<double>("safety_body_margin", safety_body_margin_, 0.05);
     std::vector<double> stop_poly, slow_poly, footprint;
@@ -5379,6 +5386,55 @@ private:
     return distance < goal_tolerance_xy_ && angle_diff < goal_tolerance_yaw_;
   }
 
+  // 近障碍限速: 用最新 2D 激光 (map 系) 在**行进走廊**里找最近点, 按
+  // v <= sqrt(2 * a * (d_clear)) 压线速度。d_clear = 最近距离 - 车头偏移 - 停车余量。
+  // 只压线速度, 不改 angular: 让控制器保持自己的转向, 避免 (v,w) 曲率失真。
+  geometry_msgs::Twist applyClearanceSpeedLimit(const geometry_msgs::Twist & cmd)
+  {
+    if (!clearance_speed_limit_ || std::fabs(cmd.linear.x) < 1e-3) return cmd;
+    if (current_pose_.header.frame_id.empty()) return cmd;
+
+    std::vector<geometry_msgs::Point> pts;
+    {
+      std::lock_guard<std::mutex> lk(data_mu_);
+      if (laser_points_.empty()) return cmd;
+      pts.assign(laser_points_.begin(), laser_points_.end());
+    }
+    const double yaw = yawFromQuat(current_pose_.pose.orientation);
+    const double dir = cmd.linear.x >= 0.0 ? 0.0 : M_PI;
+    const double hx = std::cos(yaw + dir);
+    const double hy = std::sin(yaw + dir);
+    const double px = current_pose_.pose.position.x;
+    const double py = current_pose_.pose.position.y;
+
+    double dmin = 1e9;
+    for (const auto & p : pts) {
+      const double dx = p.x - px;
+      const double dy = p.y - py;
+      const double along = dx * hx + dy * hy;
+      if (along < 0.05 || along > 3.0) continue;
+      const double lat = std::fabs(-dx * hy + dy * hx);
+      if (lat > 0.42) continue;   // 车半宽 0.338 + 余量; 不要把走廊侧墙算进来
+      if (along < dmin) dmin = along;
+    }
+    if (dmin > 2.9) return cmd;
+
+    const double clear = std::max(0.0, dmin - clearance_front_offset_ - clearance_stop_margin_);
+    double v_cap = std::min(max_velocity_x_,
+      std::sqrt(std::max(0.0, 2.0 * clearance_brake_decel_ * clear)));
+    // 别把车钉死在窄处: 还有 5cm 以上余量就以 0.06m/s 爬, 更近才真正为 0.
+    if (clear > 0.05) v_cap = std::max(0.06, v_cap);
+    else v_cap = 0.0;
+    geometry_msgs::Twist out = cmd;
+    if (cmd.linear.x > 0.0) out.linear.x = std::min(cmd.linear.x, v_cap);
+    else out.linear.x = std::max(cmd.linear.x, -v_cap);
+    if (std::fabs(out.linear.x - cmd.linear.x) > 0.02) {
+      ROS_WARN_THROTTLE(1.0, "[speed] clearance=%.2fm -> v %.2f->%.2f",
+                        clear, cmd.linear.x, out.linear.x);
+    }
+    return out;
+  }
+
   geometry_msgs::Twist computeVelocityCommand()
   {
     if (controller_strategy_) {
@@ -5389,7 +5445,7 @@ private:
       controller_strategy_->setVelocityLimit(
         std::max(0.05, max_velocity_x_ * safety_speed_scale_), max_velocity_theta_);
       const auto cmd = controller_strategy_->computeVelocityCommand(core_pose, core_vel);
-      return toRosTwist(cmd);
+      return applyClearanceSpeedLimit(toRosTwist(cmd));
     }
 
     geometry_msgs::Twist cmd_vel;
@@ -5404,7 +5460,7 @@ private:
     cmd_vel.angular.z = 2.0 * angle_diff;
     cmd_vel.linear.x = std::max(min_velocity_x_, std::min(max_velocity_x_, cmd_vel.linear.x));
     cmd_vel.angular.z = std::max(-max_velocity_theta_, std::min(max_velocity_theta_, cmd_vel.angular.z));
-    return cmd_vel;
+    return applyClearanceSpeedLimit(cmd_vel);
   }
 
   geometry_msgs::Twist applySpeedLimit(const geometry_msgs::Twist & cmd)
@@ -5777,7 +5833,11 @@ private:
   std::vector<core::Point2D> tracker_points_;
   std::string last_safety_state_ = "PASS";
   double last_safety_scale_ = 1.0;
-
+  // ---- 近障碍限速 (clearance speed governor) ----
+  bool clearance_speed_limit_ = true;
+  double clearance_brake_decel_ = 0.8;    // m/s^2, v<=sqrt(2*a*d)
+  double clearance_front_offset_ = 0.45;  // 激光原点到车头的近似距离
+  double clearance_stop_margin_ = 0.15;   // 车头到障碍的停车余量
   // ---- 分层代价地图 (B): 同一批层, planner/controller 两个视图 ----
   bool keepout_enabled_ = true;
   std::string virtual_obstacles_topic_ = "/virtual_obstacles";

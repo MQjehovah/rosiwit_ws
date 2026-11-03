@@ -44,6 +44,8 @@ private:
 
   size_t nearestPathIndex(const core::Pose2D& pose) const;
   size_t nearestPathIndex(const core::Pose2D& pose, size_t begin, size_t end) const;
+  /// Path index window [+begin, +max_dist] (distance based; nav2 lookahead semantics).
+  size_t pathWindowEnd(size_t begin, double max_dist) const;
   static double normAngle(double a);
   static core::Pose2D integrate(
     const core::Pose2D& pose, double v, double w, double dt);

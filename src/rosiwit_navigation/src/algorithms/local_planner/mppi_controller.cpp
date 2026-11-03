@@ -161,6 +161,20 @@ size_t MppiController::nearestPathIndex(
   return best;
 }
 
+size_t MppiController::pathWindowEnd(size_t begin, double max_dist) const {
+  if (path_.points.empty()) return 0;
+  begin = std::min(begin, path_.points.size() - 1);
+  size_t end = begin + 1;
+  double acc = 0.0;
+  while (end < path_.points.size() && acc < max_dist) {
+    const auto& a = path_.points[end - 1].pose;
+    const auto& b = path_.points[end].pose;
+    acc += std::hypot(b.x - a.x, b.y - a.y);
+    ++end;
+  }
+  return end;
+}
+
 double MppiController::normAngle(double a) {
   while (a > M_PI) a -= 2.0 * M_PI;
   while (a < -M_PI) a += 2.0 * M_PI;
@@ -187,9 +201,9 @@ core::VelocityCommand MppiController::computeVelocityCommand(
   }
 
   // 只从当前进度附近向后搜索, 防止长路径上每个采样点都全表扫描, 也防止
-  // 最近点跳到 U 型路径的另一段导致参考航向突变.
+  // 最近点跳到 U 型路径的另一段导致参考航向突变. 窗口按距离封顶 (3m).
   const size_t progress_begin = idx_ > 2 ? idx_ - 2 : 0;
-  idx_ = std::max(idx_, nearestPathIndex(pose, progress_begin, path_.points.size()));
+  idx_ = std::max(idx_, nearestPathIndex(pose, progress_begin, pathWindowEnd(progress_begin, 3.0)));
 
   // A Hybrid A* path may contain both forward and reverse segments.  Select
   // the direction of the upcoming segment rather than treating the whole path
@@ -242,7 +256,9 @@ core::VelocityCommand MppiController::computeVelocityCommand(
     std::max(vel.linear_x, last_output_v_)));
   const double base_w = std::abs(vel.angular_z) > 0.02 ?
     vel.angular_z : last_output_w_;
-  const size_t kLookaheadPoints = 80;
+  // 前瞻窗口按**距离**算 (nav2 lookahead 语义). 固定 80 点在 0.05~0.1m 重采样
+  // 下是 4~8m, 采样点会被匹配到很远的一段路径 -> 代价面失真 -> 切角/贴墙.
+  const double kLookaheadDist = 1.5;
 
   for (int k = 0; k < samples_; ++k) {
     auto& sample = sampled[static_cast<size_t>(k)];
@@ -265,7 +281,7 @@ core::VelocityCommand MppiController::computeVelocityCommand(
       p = integrate(p, v, w, dt_);
 
       ni = nearestPathIndex(
-        p, ni, std::min(path_.points.size(), ni + kLookaheadPoints));
+        p, ni, pathWindowEnd(ni, kLookaheadDist));
       const auto& ref = path_.points[ni].pose;
       const double dx = p.x - ref.x;
       const double dy = p.y - ref.y;

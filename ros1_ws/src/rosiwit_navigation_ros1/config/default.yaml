@@ -285,3 +285,9 @@ lane_max_speed: 0.18
 lane_max_omega: 0.03
 lane_freeze_max_heading: 0.25
 rotate_to_heading_min_angle: 0.10
+
+# 近障碍限速: 用 2D 激光在行进走廊里的最近距离压线速度 (v<=sqrt(2*a*d))
+clearance_speed_limit: true
+clearance_brake_decel: 0.8
+clearance_front_offset: 0.45
+clearance_stop_margin: 0.15

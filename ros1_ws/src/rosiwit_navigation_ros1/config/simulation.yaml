@@ -237,3 +237,9 @@ coverage_headland_width: 0.0
 # 门洞切分阈值 (0=关). 实测无收益, 整屋覆盖如出现跨房间来回跑再开 0.72
 coverage_doorway_width: 0.0
 coverage_report_path: ""
+
+# 近障碍限速: 用 2D 激光在行进走廊里的最近距离压线速度 (v<=sqrt(2*a*d))
+clearance_speed_limit: true
+clearance_brake_decel: 0.8
+clearance_front_offset: 0.45
+clearance_stop_margin: 0.15
