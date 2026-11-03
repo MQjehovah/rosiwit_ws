@@ -604,6 +604,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     pnh_.param<double>("nav_no_progress_timeout", no_progress_timeout_, 8.0);
     pnh_.param<double>("nav_safety_stop_timeout", safety_stop_timeout_, 2.0);
     pnh_.param<double>("slam_info_timeout", slam_info_timeout_, 2.0);
+  // odom 看门狗: 超过它就判 STOPPED_ODOM 结束任务。SLAM 后端做 Ceres 优化 /
+  // 重建栅格时 /lio_odom 会短暂停顿, 0.6s 会误杀目标(实测 7m 目标中途偶发),
+  // 仿真里放宽到 2.0s。
+  pnh_.param<double>("odom_timeout", odom_timeout_, 0.6);
     pnh_.param<std::string>("localization_state_topic", localization_state_topic_,
                             "/localization/state");
     pnh_.param<double>("slam_degrade_matching", slam_degrade_matching_, 0.65);
@@ -5253,7 +5257,7 @@ private:
     }
     if (!is_navigating_ || is_paused_) { return; }
     if (last_odom_stamp_.isZero() ||
-        (ros::Time::now() - last_odom_stamp_).toSec() > 0.6) {
+        (ros::Time::now() - last_odom_stamp_).toSec() > odom_timeout_) {
       if (task_active_) {
         failTask(movebase::RESULT_PERCEPTION_TIMEOUT, "STOPPED_ODOM");
       } else {
@@ -6150,6 +6154,7 @@ private:
   int last_slam_pipeline_mode_ = -1;   // SlamInfo.slam_state: 0=MAPPING 1=LOCALIZATION 2=ERROR
   double last_slam_matching_ = 1.0;
   double slam_info_timeout_ = 2.0;
+  double odom_timeout_ = 0.6;        // odom 停滞判死阈值 (s), 仿真配 2.0
   double slam_degrade_matching_ = 0.65;
   double slam_degrade_scale_ = 0.5;
   bool pending_allow_initial_rotate_ = true;
