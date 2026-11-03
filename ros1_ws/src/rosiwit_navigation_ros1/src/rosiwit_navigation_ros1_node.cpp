@@ -5436,25 +5436,40 @@ private:
       pts.assign(laser_points_.begin(), laser_points_.end());
     }
     const double yaw = yawFromQuat(current_pose_.pose.orientation);
-    const double dir = cmd.linear.x >= 0.0 ? 0.0 : M_PI;
-    const double hx = std::cos(yaw + dir);
-    const double hy = std::sin(yaw + dir);
+    const double cy = std::cos(yaw);
+    const double sy = std::sin(yaw);
     const double px = current_pose_.pose.position.x;
     const double py = current_pose_.pose.position.y;
-
+    // 车体包围盒 (base_link): 用实际 footprint, 避免只按"走廊中轴"漏掉
+    // 前角/侧面的障碍 (实测前右角 0.45m 处有障碍, 旧逻辑 |lat|<=0.42 把它漏了).
+    double x_min = -0.30, x_max = 0.65, y_min = -0.35, y_max = 0.35;
+    if (!configured_footprint_.empty()) {
+      x_min = 1e9; x_max = -1e9; y_min = 1e9; y_max = -1e9;
+      for (const auto & v : configured_footprint_) {
+        x_min = std::min(x_min, v.first);
+        x_max = std::max(x_max, v.first);
+        y_min = std::min(y_min, v.second);
+        y_max = std::max(y_max, v.second);
+      }
+    }
+    const bool forward = cmd.linear.x >= 0.0;
     double dmin = 1e9;
     for (const auto & p : pts) {
       const double dx = p.x - px;
       const double dy = p.y - py;
-      const double along = dx * hx + dy * hy;
-      if (along < 0.05 || along > 3.0) continue;
-      const double lat = std::fabs(-dx * hy + dy * hx);
-      if (lat > 0.42) continue;   // 车半宽 0.338 + 余量; 不要把走廊侧墙算进来
-      if (along < dmin) dmin = along;
+      const double bx = dx * cy + dy * sy;      // base_link x
+      const double by = -dx * sy + dy * cy;     // base_link y
+      if (forward ? (bx < x_min - 1.2) : (bx > x_max + 1.2)) continue;
+      if (std::fabs(by) > 1.2) continue;
+      // 点到车体矩形的距离 (在矩形内为 0)
+      const double ox = std::max(std::max(x_min - bx, 0.0), bx - x_max);
+      const double oy = std::max(std::max(y_min - by, 0.0), by - y_max);
+      const double d = std::hypot(ox, oy);
+      if (d < dmin) dmin = d;
     }
     if (dmin > 2.9) return cmd;
 
-    const double clear = std::max(0.0, dmin - clearance_front_offset_ - clearance_stop_margin_);
+    const double clear = std::max(0.0, dmin - clearance_stop_margin_);
     double v_cap = std::min(max_velocity_x_,
       std::sqrt(std::max(0.0, 2.0 * clearance_brake_decel_ * clear)));
     // 别把车钉死在窄处: 还有 5cm 以上余量就以 0.06m/s 爬, 更近才真正为 0.

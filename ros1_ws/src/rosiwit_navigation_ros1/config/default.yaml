@@ -14,7 +14,7 @@
 # docs/superpowers/specs/2026-10-21-ros1-movebase-interface-compat-design.md §9。
 # ============================================================
 # 速度限制 (实车 max_speed=0.8, speed_lim_w=0.5)
-max_velocity_x: 0.8
+max_velocity_x: 0.50
 min_velocity_x: 0.0
 max_velocity_theta: 0.5
 
@@ -28,11 +28,11 @@ mppi_dt: 0.0
 mppi_lambda: 0.8
 mppi_sigma_v: 0.18
 mppi_sigma_w: 0.35
-mppi_path_weight: 2.0
+mppi_path_weight: 4.0
 mppi_heading_weight: 0.4
-mppi_obstacle_weight: 0.03
+mppi_obstacle_weight: 0.30
 mppi_control_weight: 0.03
-mppi_speed_weight: 2.0
+mppi_speed_weight: 1.0
 mppi_goal_weight: 1.5
 
 # 加权 A* 倍率: 膨胀代价大时防搜索退化 (窄通道实测 12.8s->3.4s)
@@ -152,8 +152,8 @@ safety_slowdown_release_frames: 3
 safety_dynamic_geometry: true
 safety_brake_decel: 0.8      # m/s^2; ★必须按实车制动测试标定后再调
 safety_reaction_time: 0.2    # s
-safety_stop_margin: 0.05     # m
-safety_side_margin: 0.03     # m; 车半宽 0.33 + 0.03 = 0.36, 0.8m 巷道可过
+safety_stop_margin: 0.15
+safety_side_margin: 0.12
 safety_turn_margin: 0.05     # m; 转向时附加侧向余量
 safety_scale_slew_rate: 1.0  # 1/s; 减速比例每秒最多变化量
 safety_scale_dt: 0.1         # s
@@ -290,7 +290,7 @@ rotate_to_heading_min_angle: 0.10
 clearance_speed_limit: true
 clearance_brake_decel: 0.8
 clearance_front_offset: 0.45
-clearance_stop_margin: 0.15
+clearance_stop_margin: 0.10
 
 # Single-point nav: final yaw = path[0]->path[1] (APP protocol).
 final_yaw_from_next_point: true
