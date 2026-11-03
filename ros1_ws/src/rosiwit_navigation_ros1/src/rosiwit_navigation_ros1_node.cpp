@@ -330,6 +330,7 @@ private:
     pnh_.param<double>("clearance_brake_decel", clearance_brake_decel_, 0.8);
     pnh_.param<double>("clearance_front_offset", clearance_front_offset_, 0.45);
     pnh_.param<double>("clearance_stop_margin", clearance_stop_margin_, 0.15);
+    pnh_.param<double>("clearance_side_buffer", clearance_side_buffer_, 0.08);
     // 车身轮廓外扩: 只排除轮廓内的点 (nav2 exclusion_zones.robot_body)
     pnh_.param<double>("safety_body_margin", safety_body_margin_, 0.05);
     std::vector<double> stop_poly, slow_poly, footprint;
@@ -502,6 +503,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
     // 长方形车体的 footprint-aware 控制: 控制器按 footprint 采样点查 raw costmap.
     pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
+    pnh_.param<bool>("dwa_use_footprint", dwa_use_footprint_, true);
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
     // 负余量: 轮廓内缩后做碰撞检查. 0=严格按车体; 0.02 允许贴边 2cm,
     // 是 0.75m 车身过 0.75m 通道的必要条件 (栅格离散本身占 ~0.1m).
@@ -808,9 +810,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     if (!initController(controller_name_, controller_strategy_, true)) {
       ROS_WARN("[rosiwit_navigation_ros1] controller '%s' not found", controller_name_.c_str());
     }
-    if (footprint_aware_control_ && controller_name_ == "dwa") {
-      ROS_WARN("[rosiwit_navigation_ros1] DWA + footprint 已知会绕圈, "
-               "自动回退为圆形膨胀 (DWA 仍可用)");
+    if (footprint_aware_control_ && controller_name_ == "dwa" && !dwa_use_footprint_) {
+      ROS_WARN("[rosiwit_navigation_ros1] DWA 关闭 footprint (dwa_use_footprint=false), "
+               "回退为圆形膨胀: 车角不受保护");
     }
     // 覆盖模式的 approach 用独立 A*: 正常 planner 可能是 Hybrid A* + footprint,
     // 它会把区域边缘的目标判成 Goal in obstacle.
@@ -889,8 +891,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     out = nav_core::NavigationFactory::createController(name);
     if (!out) return false;
     // footprint-aware 只对真正实现了 footprint 代价的控制器生效.
+    // DWA 同样实现了矩形采样 (simulate() 里逐个 footprint 点算 clearance),
+    // 以前被排除, 只能看到 0.26m 的圆形膨胀: 车长 0.906m 的前角被完全忽略,
+    // 实车前右角离墙 0.10m 时 DWA 还认为有 0.26m 余量 (2026-11-03 22:20).
     controller_footprint_.clear();
-    if (footprint_aware_control_ && name != "dwa" && out->supportsFootprint()) {
+    const bool dwa_fp = (name != "dwa") || dwa_use_footprint_;
+    if (footprint_aware_control_ && dwa_fp && out->supportsFootprint()) {
       controller_footprint_ = configured_footprint_;
     }
     core::ControllerConfig cfg;
@@ -1725,18 +1731,30 @@ private:
   void buildBodyPolygon()
   {
     body_polygon_.clear();
-    if (configured_footprint_.size() < 3) { return; }
-    double x0 = configured_footprint_[0].first;
+    // 必须用 monitor 建停障区用的**同一份**轮廓 (safety_footprint_poly_, 未内缩),
+    // 不能用 configured_footprint_ (已按 footprint_shrink 内缩 2cm): 否则车身排除框
+    // 比停障框小一圈, 自身回波正好落在那条缝里 -> stop_count 恒超阈值 -> 永久 STOP
+    // (2026-11-03 实测: 37 点 @ base x=0.600 = 停障框前沿, body 框右边界只有 0.58,
+    //  结果每拍 cmd_vel 被清零, 机器人一步都不动, 恢复也永远 "spin blocked")。
+    const core::Footprint fp_from_param = toPolygon(safety_footprint_poly_);
+    const core::Footprint & bfp =
+      fp_from_param.size() >= 3 ? fp_from_param : configured_footprint_;
+    if (bfp.size() < 3) { return; }
+    double x0 = bfp[0].first;
     double x1 = x0;
-    double y0 = configured_footprint_[0].second;
+    double y0 = bfp[0].second;
     double y1 = y0;
-    for (const auto & p : configured_footprint_) {
+    for (const auto & p : bfp) {
       x0 = std::min(x0, p.first);
       x1 = std::max(x1, p.first);
       y0 = std::min(y0, p.second);
       y1 = std::max(y1, p.second);
     }
-    const double m = std::max(0.0, safety_body_margin_);
+    // 至少再放大 stop_margin/side_margin 并留 3cm 余量: 动态停障框前沿是
+    // max_x + stop_margin, 车身排除框必须**严格包含**它, 否则边界点会在
+    // "排除框内/外"之间反复跳, 表现为偶发 STOP。
+    const double m = std::max(0.0, safety_body_margin_) +
+                     std::max(std::max(safety_stop_margin_, safety_side_margin_), 0.03);
     body_polygon_ = {{x0 - m, y0 - m}, {x1 + m, y0 - m}, {x1 + m, y1 + m}, {x0 - m, y1 + m}};
     ROS_INFO("[safety] body exclusion box x[%.2f, %.2f] y[%.2f, %.2f] (margin %.2f)",
              x0 - m, x1 + m, y0 - m, y1 + m, m);
@@ -4706,6 +4724,41 @@ private:
       return true;
   }
 
+  // nav2 `BackUp` 的等价物: 反向逃逸规划不可用时, 只要车尾走廊干净就直接直线倒车。
+  // 以前这里直接 failRecovery(): 而原地转在窄通道里会被安全层挡住, 41 个候选目标
+  // 又常常一个都规划不出来 -> 一次规划失败就判死 ("下目标没反应 / FAILED_RECOVERY")。
+  bool startStraightReverseFallback(const char * why)
+  {
+    if (!recovery_controller_) { return false; }
+    const double dist = std::max(0.30, recovery_back_distance_);
+    if (!rearClearForBackoff(dist)) {
+      ROS_WARN("[recovery] straight-reverse fallback blocked (rear %.2fm, %s)",
+               dist, why);
+      return false;
+    }
+    const core::Pose2D s = toCorePose(current_pose_);
+    const int n = std::max(2, static_cast<int>(std::ceil(dist / 0.10)));
+    core::Path path;
+    path.points.reserve(static_cast<size_t>(n) + 1);
+    for (int i = 0; i <= n; ++i) {
+      const double d = dist * static_cast<double>(i) / static_cast<double>(n);
+      core::PathPoint pt;
+      pt.pose = core::Pose2D(s.x - std::cos(s.theta) * d,
+                             s.y - std::sin(s.theta) * d, s.theta);
+      pt.velocity_x = 0.0;
+      path.points.push_back(pt);
+    }
+    discardRecoveryPlan();
+    recovery_core_path_ = path;
+    current_path_ = toRosPath(recovery_core_path_, map_frame_, ros::Time::now());
+    recovery_controller_->setPath(recovery_core_path_);
+    recovery_stage_ = RecoveryStage::FOLLOW;
+    recovery_started_ = ros::Time::now();
+    ROS_WARN("[recovery] %s -> straight-reverse fallback %.2fm (%zu pts)", why, dist,
+             current_path_.poses.size());
+    return true;
+  }
+
   void failRecovery()
   {
     resetRecovery();
@@ -4760,7 +4813,10 @@ private:
         (now - recovery_started_).toSec() > recovery_timeout_) {
       ROS_WARN("[rosiwit_navigation_ros1] recovery timeout after %.1fs (stage=%d)",
                (now - recovery_started_).toSec(), static_cast<int>(recovery_stage_));
-      failRecovery();
+      if (recovery_stage_ != RecoveryStage::PLANNING ||
+          !startStraightReverseFallback("escape timeout")) {
+        failRecovery();
+      }
       return;
     }
     if (recovery_stage_ == RecoveryStage::CLEAR) {
@@ -4837,9 +4893,9 @@ private:
         return;
       }
       if (!out.ok) {
-        ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed (%s); "
-                  "task will fail", out.error.c_str());
-        failRecovery();
+        ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed (%s)",
+                  out.error.c_str());
+        if (!startStraightReverseFallback("no escape path")) { failRecovery(); }
         return;
       }
       recovery_core_path_ = out.path;
@@ -5453,16 +5509,22 @@ private:
       }
     }
     const bool forward = cmd.linear.x >= 0.0;
+    // 只把"行进走廊"里的点当作制动目标: 侧向平行的墙不该压前进速度.
+    // 实车 2026-11-03 22:20: 车在 1.52m 走廊里贴左墙 0.18m, 旧逻辑把这条
+    // 平行墙算成 clearance=0.00, 每拍 v->0, 车再也走不动 (卡死 6 分钟).
+    const double tube_lo = y_min - clearance_side_buffer_;
+    const double tube_hi = y_max + clearance_side_buffer_;
     double dmin = 1e9;
     for (const auto & p : pts) {
       const double dx = p.x - px;
       const double dy = p.y - py;
       const double bx = dx * cy + dy * sy;      // base_link x
       const double by = -dx * sy + dy * cy;     // base_link y
-      if (forward ? (bx < x_min - 1.2) : (bx > x_max + 1.2)) continue;
-      if (std::fabs(by) > 1.2) continue;
+      if (forward ? (bx < 0.0) : (bx > 0.0)) continue;   // 车后/车前的点不影响本方向
+      if (by < tube_lo || by > tube_hi) continue;        // 侧向平行墙: 不制动
       // 点到车体矩形的距离 (在矩形内为 0)
-      const double ox = std::max(std::max(x_min - bx, 0.0), bx - x_max);
+      const double ox = forward ? std::max(0.0, bx - x_max)
+                                : std::max(0.0, x_min - bx);
       const double oy = std::max(std::max(y_min - by, 0.0), by - y_max);
       const double d = std::hypot(ox, oy);
       if (d < dmin) dmin = d;
@@ -5575,30 +5637,32 @@ private:
 
     const core::SafetyResult result = safety_monitor_.filter(toCoreVelocity(cmd), points);
     if (result.scale <= 0.0 && result.state == "STOP") {
-      // 诊断: 打印落入 STOP 区的前几个点 (base 系), 确认是自身回波还是真障碍
-      const std::vector<std::pair<double, double>> * zone = nullptr;
-      const auto & cfg = safety_monitor_.config();
-      if (std::fabs(cmd.linear.x) < 0.05 && !cfg.stop_polygon_rotation.empty()) {
-        zone = &cfg.stop_polygon_rotation;
-      } else if (cmd.linear.x < 0.0 && !cfg.stop_polygon_backward.empty()) {
-        zone = &cfg.stop_polygon_backward;
-      } else {
-        zone = &cfg.stop_polygon;
-      }
+      // 诊断: 打印落入 STOP 区的前几个点 (base 系), 确认是自身回波还是真障碍。
+      // **必须**用 monitor 实际生效的那个区: 动态几何模式下它是动态多边形,
+      // 用 cfg.stop_polygon 会打出 0 个命中, 把真正的命中点藏起来。
+      const auto & zone = safety_monitor_.lastStopPolygon();
       std::ostringstream os;
       int n = 0;
       for (const auto & pt : points) {
-        if (core::pointInPolygon(pt.first, pt.second, *zone)) {
+        if (core::pointInPolygon(pt.first, pt.second, zone)) {
           // base 系 + 反算回 map 系, 判断是"刚性挂在车上"还是"换算偏移"
           const double wx = current_pose_.pose.position.x + (cy * pt.first - sy * pt.second);
           const double wy = current_pose_.pose.position.y + (sy * pt.first + cy * pt.second);
           os << " b(" << pt.first << "," << pt.second << ") w(" << wx << "," << wy << ")";
-          if (++n >= 2) { break; }
+          if (++n >= 3) { break; }
         }
       }
-      ROS_WARN_THROTTLE(1.0, "[safety] STOP hits%s pose=(%.2f,%.2f,%.1fdeg) npts=%zu",
+      ROS_WARN_THROTTLE(1.0,
+                        "[safety] STOP hits%s pose=(%.2f,%.2f,%.1fdeg) pts=%d/%zu "
+                        "dynamic=%d zone=[%.2f..%.2f]x[%.2f..%.2f]",
                         os.str().c_str(), current_pose_.pose.position.x,
-                        current_pose_.pose.position.y, yaw * 180.0 / M_PI, points.size());
+                        current_pose_.pose.position.y, yaw * 180.0 / M_PI,
+                        safety_monitor_.lastStopCount(), points.size(),
+                        static_cast<int>(safety_monitor_.lastStopIsDynamic()),
+                        zone.empty() ? 0.0 : zone[0].first,
+                        zone.empty() ? 0.0 : zone[1].first,
+                        zone.empty() ? 0.0 : zone[1].second,
+                        zone.empty() ? 0.0 : zone[3].second);
     }
     last_safety_hard_stop_ = (result.scale <= 0.0);
     if (result.scale <= 0.0) {
@@ -5888,6 +5952,10 @@ private:
   double clearance_brake_decel_ = 0.8;    // m/s^2, v<=sqrt(2*a*d)
   double clearance_front_offset_ = 0.45;  // 激光原点到车头的近似距离
   double clearance_stop_margin_ = 0.15;   // 车头到障碍的停车余量
+  // 行进走廊的侧向额外宽度: 只有落在 [y_min-buf, y_max+buf] 的点才参与制动,
+  // 侧向平行墙不再把前进速度压成 0 (走廊 1.5m 时贴墙 0.18m 也不该停).
+  double clearance_side_buffer_ = 0.08;
+
   // ---- 分层代价地图 (B): 同一批层, planner/controller 两个视图 ----
   bool keepout_enabled_ = true;
   std::string virtual_obstacles_topic_ = "/virtual_obstacles";
@@ -5942,6 +6010,8 @@ private:
   std::string rviz_goal_topic_ = "/move_base_simple/goal";
   bool rviz_goal_align_yaw_ = true;
   bool footprint_aware_control_ = false;
+  // DWA 是否使用真实矩形轮廓 (默认开). 关掉回退为圆形膨胀, 车角不受保护.
+  bool dwa_use_footprint_ = true;
   double footprint_sample_spacing_ = 0.05;
   double footprint_shrink_ = 0.0;   // 轮廓内缩(负余量), 窄道通过用
   double planner_footprint_margin_ = 0.06;   // 规划器轮廓外扩(最小离墙余量)

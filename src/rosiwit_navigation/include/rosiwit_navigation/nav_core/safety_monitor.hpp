@@ -115,6 +115,18 @@ public:
   bool stopActive() const { return stop_active_; }
   bool slowdownActive() const { return slowdown_active_; }
 
+  /// 上一次 filter() **实际使用**的 STOP 区 + 命中点数 (现场诊断用).
+  /// 动态几何模式下实际生效的是 buildDynamicStopPolygon() 生成的动态多边形,
+  /// 不是 config_.stop_polygon —— 排查时看后者会"打印 0 个命中却已经 STOP",
+  /// 把真正的命中点藏起来 (2026-11-03 就踩过这个坑).
+  const std::vector<std::pair<double, double>> & lastStopPolygon() const
+  {
+    return last_stop_poly_;
+  }
+  int lastStopCount() const { return last_stop_count_; }
+  int lastPointCount() const { return last_point_count_; }
+  bool lastStopIsDynamic() const { return last_stop_dynamic_; }
+
   SafetyResult filter(
     const VelocityCommand & cmd,
     const std::vector<std::pair<double, double>> & points) const;
@@ -129,6 +141,11 @@ private:
   mutable int slow_trigger_ = 0;
   mutable int slow_release_ = 0;
   mutable double last_scale_ = 1.0;
+  // 诊断: 上一次实际生效的 STOP 区与命中数 (见 lastStopPolygon())
+  mutable std::vector<std::pair<double, double>> last_stop_poly_;
+  mutable int last_stop_count_ = 0;
+  mutable int last_point_count_ = 0;
+  mutable bool last_stop_dynamic_ = false;
 };
 
 bool pointInPolygon(
