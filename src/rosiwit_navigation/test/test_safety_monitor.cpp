@@ -544,6 +544,32 @@ TEST(SafetyMonitor, ReverseEscapeNotBlockedByFrontMargin)
   EXPECT_GT(rev.scale, 0.0);
 }
 
+// 低速前进 + 小角度修正不能被当成"原地旋转"套用 ±0.55 旋转停区:
+// 实车 2026-11-03 21:56 在走廊里 (侧墙 0.55m) 每拍 STOP, 车被钉死.
+TEST(SafetyMonitor, SlowForwardBesideWallIsNotRotationStop)
+{
+  SafetyMonitorConfig cfg = MakeConfig();
+  cfg.dynamic_geometry = true;
+  cfg.stop_margin = 0.15;
+  cfg.side_margin = 0.12;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.approach_enabled = false;
+
+  // 右侧墙 0.54m (旋转区侧向是 ±0.55, 行进区是 0.35+0.12=0.47)
+  const std::vector<Point> wall{{0.20, -0.54}, {0.30, -0.54}, {0.40, -0.54}};
+
+  SafetyMonitor slow;
+  slow.configure(cfg);
+  const auto fwd = slow.filter(VelocityCommand(0.03, 0.0, 0.08), wall);
+  EXPECT_NE(fwd.state, "STOP");
+
+  SafetyMonitor spin;
+  spin.configure(cfg);
+  const auto rot = spin.filter(VelocityCommand(0.0, 0.0, 0.50), wall);
+  EXPECT_EQ(rot.state, "STOP");
+}
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

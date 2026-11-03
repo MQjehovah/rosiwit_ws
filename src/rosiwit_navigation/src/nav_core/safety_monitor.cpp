@@ -302,8 +302,12 @@ SafetyResult SafetyMonitor::filter(
   // "命令为 0(停车/等待/规划中)"时也按旋转区判定 —— 侧后方的墙会命中
   // 旋转矩形并锁存 STOP, 2 s 后误判 blocked 触发 recovery, 最终 FAILED_SAFETY_STOP。
   // 现在两处用同一个 predicate。
-  const bool rotating = std::fabs(cmd.linear_x) < 0.05 &&
-                        std::fabs(cmd.angular_z) > 0.05;
+  // v<0.05/w>0.05 会把"低速前进 + 小角度修正"误判成原地旋转, 套用侧向 ±0.55
+  // 的旋转停区: 走廊侧墙 0.55m 时每拍 STOP, 车被钉死 (实车 2026-11-03 21:56:
+  // cmd v=0.01 w=-0.07, 右侧墙 0.55m, 连续 STOP -> 反复 recovery/重规划).
+  // 只有"几乎不动且明显在转"才用旋转区; 慢速旋转由静态侧向余量逐拍覆盖.
+  const bool rotating = std::fabs(cmd.linear_x) < 0.02 &&
+                        std::fabs(cmd.angular_z) > 0.15;
 
   // 2) 按运动状态选 STOP 区: 原地旋转 -> 旋转区; 后退 -> 后退区; 否则前进区.
   const std::vector<std::pair<double, double>> * stop_poly = &config_.stop_polygon;
@@ -327,6 +331,11 @@ SafetyResult SafetyMonitor::filter(
                             config_.side_margin, config_.turn_margin,
                             dynamic_slow, std::max(0.0, config_.slowdown_lookahead));
   }
+  // 诊断: 记录**实际生效**的 STOP 区 (动态几何下线 322 会把它换成动态多边形).
+  last_stop_poly_ = *stop_poly;
+  last_stop_dynamic_ = (stop_poly == &dynamic_stop);
+  last_point_count_ = static_cast<int>(pts.size());
+
   int stop_count = 0;
   double stop_radius = config_.stop_radius;
   if (rotating && config_.stop_radius_rotation > 0.0) {
@@ -345,6 +354,7 @@ SafetyResult SafetyMonitor::filter(
   if (swept_hits >= 0) {
     stop_count = swept_hits;   // 可选: 更严格的扫掠区
   }
+  last_stop_count_ = stop_count;
 
   // 3) 滞回: 连续 trigger 帧才进入, 连续 release 帧才释放.
   const bool stop_hit = stop_count > config_.stop_max_points;
