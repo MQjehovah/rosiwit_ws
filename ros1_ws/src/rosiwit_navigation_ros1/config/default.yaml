@@ -14,7 +14,7 @@
 # docs/superpowers/specs/2026-10-21-ros1-movebase-interface-compat-design.md §9。
 # ============================================================
 # 速度限制 (实车 max_speed=0.8, speed_lim_w=0.5)
-max_velocity_x: 0.50
+max_velocity_x: 0.30
 min_velocity_x: 0.0
 max_velocity_theta: 0.5
 
@@ -45,7 +45,7 @@ planner_goal_tolerance: 0.50
 # 原地转向基元步长(deg)。实车先用 30 (与历史行为一致); 仿真里 15 更不容易在窄处
 # 搜不到解, 但需要更大的 planner_timeout (ARM 上 2s 不够)。
 planner_turn_step_deg: 30.0
-planner_allow_reverse: true
+planner_allow_reverse: false
 planner_max_reverse_distance: 1.0
 
 # 频率 (实车 g_control_freq=10)
@@ -290,7 +290,7 @@ rotate_to_heading_min_angle: 0.10
 clearance_speed_limit: true
 clearance_brake_decel: 0.8
 clearance_front_offset: 0.45
-clearance_stop_margin: 0.10
+clearance_stop_margin: 0.18
 
 # Single-point nav: final yaw = path[0]->path[1] (APP protocol).
 final_yaw_from_next_point: true
