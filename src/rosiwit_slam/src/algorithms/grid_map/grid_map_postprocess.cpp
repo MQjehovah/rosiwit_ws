@@ -110,6 +110,70 @@ void opFillHoles(std::vector<int8_t>& data, int w, int h, const GridPostConfig& 
               << " max_hole=" << c.max_hole_cells << std::endl;
 }
 
+// 把被 free 包围的小块 unknown 清成 free.
+// 地面 3D 点云按环采样, 环间空隙在 0.05m 栅格上没有任何自由射线经过, 会留下
+// 大量 -1 散点 (导航里是软代价, 但显示/覆盖率统计很难看). 这里只处理:
+//   - 连通域面积 <= unknown_free_max_cells
+//   - 不接触地图边界
+//   - 8 邻域里没有 occupied(100)  (贴墙的 unknown 是墙后未观测区, 保留)
+//   - 至少有一个 free(0) 邻居   (完全被 unknown 包住的是未建图区, 保留)
+void opUnknownFree(std::vector<int8_t>& data, int w, int h, const GridPostConfig& c, int8_t /*bg*/) {
+    if (c.unknown_free_max_cells <= 0) return;
+    cv::Mat unknown(h, w, CV_8UC1, cv::Scalar(0));
+    int unknown_total = 0;
+    for (size_t i = 0; i < data.size(); ++i) {
+        if (data[i] < 0) { unknown.data[i] = 255; ++unknown_total; }
+    }
+    if (unknown_total == 0) return;
+
+    cv::Mat labels, stats, centroids;
+    int n = cv::connectedComponentsWithStats(unknown, labels, stats, centroids, 8, CV_32S);
+    std::vector<uint8_t> clear_flag(n, 0);
+    for (int i = 1; i < n; ++i) {
+        const int area = stats.at<int>(i, cv::CC_STAT_AREA);
+        if (area > c.unknown_free_max_cells) continue;
+        const int lx = stats.at<int>(i, cv::CC_STAT_LEFT);
+        const int ly = stats.at<int>(i, cv::CC_STAT_TOP);
+        const int lw = stats.at<int>(i, cv::CC_STAT_WIDTH);
+        const int lh = stats.at<int>(i, cv::CC_STAT_HEIGHT);
+        if (lx == 0 || ly == 0 || lx + lw >= w || ly + lh >= h) continue;
+
+        bool touches_occ = false, touches_free = false;
+        for (int y = ly; y < ly + lh && !touches_occ; ++y) {
+            const int* lab = labels.ptr<int>(y);
+            for (int x = lx; x < lx + lw; ++x) {
+                if (lab[x] != i) continue;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        const int nx = x + dx, ny = y + dy;
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) { touches_occ = true; break; }
+                        const int8_t v = data[static_cast<size_t>(ny) * w + nx];
+                        if (v == 100) { touches_occ = true; break; }
+                        if (v == 0) touches_free = true;
+                    }
+                    if (touches_occ) break;
+                }
+                if (touches_occ) break;
+            }
+        }
+        if (!touches_occ && touches_free) clear_flag[i] = 1;
+    }
+
+    int cleared = 0;
+    for (int y = 0; y < h; ++y) {
+        const int* lab = labels.ptr<int>(y);
+        int8_t* row = data.data() + static_cast<size_t>(y) * w;
+        for (int x = 0; x < w; ++x) {
+            const int lbl = lab[x];
+            if (lbl > 0 && clear_flag[lbl]) { row[x] = 0; ++cleared; }
+        }
+    }
+    std::cout << "[Post:unknown_free] unknown=" << unknown_total
+              << " cleared=" << cleared
+              << " max_cells=" << c.unknown_free_max_cells << std::endl;
+}
+
 void opDilate(std::vector<int8_t>& data, int w, int h, const GridPostConfig& c, int8_t /*bg*/) {
     int r = c.dilate_radius;
     if (r < 0) {
@@ -208,7 +272,8 @@ void applyGridPostProcess(GridInfo& grid, const GridPostConfig& cfg) {
     const int8_t bg = has_unknown ? -1 : 0;
 
     for (const auto& name : cfg.pipeline) {
-        if      (name == "denoise")    opDenoise(grid.data, w, h, cfg, bg);
+        if      (name == "unknown_free") opUnknownFree(grid.data, w, h, cfg, bg);
+        else if (name == "denoise")    opDenoise(grid.data, w, h, cfg, bg);
         else if (name == "open")       opOpen(grid.data, w, h, cfg, bg);
         else if (name == "close")      opClose(grid.data, w, h, cfg, bg);
         else if (name == "fill_holes") opFillHoles(grid.data, w, h, cfg, bg);

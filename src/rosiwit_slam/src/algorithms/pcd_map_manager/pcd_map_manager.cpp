@@ -180,6 +180,7 @@ bool PcdMapManager::init(const std::string& config_path) {
         if (gv("close_radius")) grid_post_cfg_.close_radius = gv("close_radius").as<int>();
         if (gv("open_radius")) grid_post_cfg_.open_radius = gv("open_radius").as<int>();
         if (gv("fill_max_hole_cells")) grid_post_cfg_.max_hole_cells = gv("fill_max_hole_cells").as<int>();
+        if (gv("unknown_free_max_cells")) grid_post_cfg_.unknown_free_max_cells = gv("unknown_free_max_cells").as<int>();
         if (gv("dilate_radius")) grid_post_cfg_.dilate_radius = gv("dilate_radius").as<int>();
         if (gv("skeleton_width")) grid_post_cfg_.skeleton_width = gv("skeleton_width").as<int>();
         if (gv("line_min_len_m")) grid_post_cfg_.line_min_len_m = gv("line_min_len_m").as<double>();

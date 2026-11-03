@@ -23,6 +23,10 @@ struct GridPostConfig {
     // fill_holes: 填内部小空洞
     int  max_hole_cells = 0;           // 0 关闭; >0 填充面积<=该值且不接触边界的空洞
 
+    // unknown_free: 把被 free 包围的小块 unknown 清成 free (地面环间空隙/噪点);
+    // 接触墙体/地图边界的 unknown 保留 (未建图区域)
+    int  unknown_free_max_cells = 30;  // 0 关闭
+
     // dilate: 障碍膨胀(圆形/椭圆)
     int  dilate_radius = -1;           // <0 按 point_spacing/resolution 自动
 
