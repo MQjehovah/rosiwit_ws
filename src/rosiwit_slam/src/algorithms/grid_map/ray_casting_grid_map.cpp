@@ -3,6 +3,7 @@
 #include "algorithms/grid_map/grid_map_utils.h"
 #include "algorithms/grid_map/ground_segmentation.h"
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <algorithm>
 #include <iostream>
@@ -14,19 +15,28 @@ namespace {
 
 inline int cellIndex(int col, int row, int width) { return row * width + col; }
 
-// Bresenham 2D: 把 (c0,r0)->(c1,r1) 途经格标记为 free(0), 不覆盖 occupied(100).
-void traceFree(std::vector<int8_t>& data, int w, int h, int c0, int r0, int c1, int r1) {
+// Bresenham 2D: 把 (c0,r0)->(c1,r1) 途经格标记为 free(0).
+// 对**已占据**的格做 miss 计数: 连续 min_misses 条自由射线穿过才清除,
+// 用来擦掉人/货等瞬时障碍. 端点(c1,r1)不算 miss —— 那是命中点/墙, 不能
+// 被自己的射线清掉.
+void traceFree(std::vector<int8_t>& data, std::vector<uint16_t>& misses,
+               int min_misses, int w, int h, int c0, int r0, int c1, int r1) {
     int dx = std::abs(c1 - c0);
     int dy = -std::abs(r1 - r0);
     int sx = c0 < c1 ? 1 : -1;
     int sy = r0 < r1 ? 1 : -1;
     int err = dx + dy;
     while (true) {
-        if (c0 >= 0 && c0 < w && r0 >= 0 && r0 < h) {
-            int idx = r0 * w + c0;
-            if (data[idx] != 100) data[idx] = 0;   // occupied 优先
+        const bool at_end = (c0 == c1 && r0 == r1);
+        if (!at_end && c0 >= 0 && c0 < w && r0 >= 0 && r0 < h) {
+            const int idx = r0 * w + c0;
+            if (data[idx] == 100) {
+                if (++misses[idx] >= min_misses) data[idx] = 0;   // 连续自由射线 -> 清除鬼影
+            } else {
+                data[idx] = 0;
+            }
         }
-        if (c0 == c1 && r0 == r1) break;
+        if (at_end) break;
         int e2 = 2 * err;
         if (e2 >= dy) { err += dy; c0 += sx; }
         if (e2 <= dx) { err += dx; r0 += sy; }
@@ -138,6 +148,9 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
 
     // 5. 初始化 unknown(-1), 逐帧射线投射
     std::vector<int8_t> data(static_cast<size_t>(width) * height, -1);
+    // 已占据格的"连续自由射线"计数: >= min_misses 就清除 (动态障碍擦除)
+    std::vector<uint16_t> misses(static_cast<size_t>(width) * height, 0);
+    const int need_misses = std::max(1, cfg.min_misses);
     const double max_range2 = (cfg.max_range > 0.0) ? cfg.max_range * cfg.max_range : -1.0;
     int occupied_cells = 0;
     long long rays = 0;
@@ -155,11 +168,12 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
             int col = static_cast<int>((pt.x - origin_x) / res);
             int row = static_cast<int>((pt.y - origin_y) / res);
             if (col < 0 || col >= width || row < 0 || row >= height) continue;
-            traceFree(data, width, height, oc, orow, col, row);
+            traceFree(data, misses, need_misses, width, height, oc, orow, col, row);
             float h = grounds[i].height(pt);
             if (h >= cfg.min_height && h <= cfg.max_height) {
                 int idx = cellIndex(col, row, width);
                 if (data[idx] != 100) { data[idx] = 100; occupied_cells++; }
+                misses[idx] = 0;   // 命中 = 重新确认障碍, 清空 miss 计数
             }
             ++rays;
         }

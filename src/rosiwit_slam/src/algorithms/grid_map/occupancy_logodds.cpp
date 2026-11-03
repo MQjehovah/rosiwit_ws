@@ -175,7 +175,9 @@ bool LogOddsGridMap::buildFromObservations(const std::vector<Observation>& obs,
     std::vector<int8_t> data(static_cast<size_t>(width) * height, -1);
     int occupied_cells = 0, free_cells = 0;
     for (size_t i = 0; i < data.size(); ++i) {
-        if (hits[i] >= need_hits) { data[i] = 100; occupied_cells++; }
+        // hits 达标且**多于 misses** 才判占据: 人/货走过留下几次 hit, 后续
+        // 大量自由射线(misses)会把它清掉; 静态墙 hits 远多于误穿过的 misses, 保留.
+        if (hits[i] >= need_hits && hits[i] > misses[i]) { data[i] = 100; occupied_cells++; }
         else if (misses[i] >= cfg.min_misses) { data[i] = 0; free_cells++; }
         else data[i] = -1;
     }

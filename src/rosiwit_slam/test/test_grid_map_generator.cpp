@@ -176,6 +176,47 @@ TEST(RayCastingGridMapTest, TriStateFreeOccupiedUnknown) {
     EXPECT_EQ(cellValue(out, 3.1, 0.0), -1);   // 墙体之后: unknown
 }
 
+TEST(RayCastingGridMapTest, DynamicObstacleClearedByLaterFreeRays) {
+    // 人/货走过 -> x=3 处出现占据; 人走后两条自由射线穿过该格 -> 清除鬼影.
+    RayCastingGridMap gen;
+    GridMapConfig cfg;
+    cfg.resolution = 0.1;
+    cfg.min_height = 0.1;
+    cfg.max_height = 2.0;
+    cfg.min_misses = 2;
+    cfg.dilate_radius = 0;
+    cfg.close_radius = 0;
+    cfg.min_component_cells = 1;
+
+    auto freeScene = []() {
+        CloudType::Ptr c(new CloudType());
+        for (double y = -2.0; y <= 2.0; y += 0.05)
+            c->push_back(PointType(5.0f, static_cast<float>(y), 0.0f));
+        return c;
+    };
+
+    std::vector<Observation> obs;
+    Observation o1;
+    o1.origin = Eigen::Vector3d::Zero();
+    o1.cloud = makeWallScene();           // x=3 有墙(人)
+    obs.push_back(o1);
+    Observation o2;
+    o2.origin = Eigen::Vector3d::Zero();
+    o2.cloud = freeScene();               // 射线穿过 x=3
+    obs.push_back(o2);
+
+    GridInfo out;
+    ASSERT_TRUE(gen.buildFromObservations(obs, Eigen::Vector3d::Zero(), cfg, out));
+    EXPECT_EQ(cellValue(out, 3.0, 0.0), 100);   // 1 条 miss 还不够
+
+    Observation o3;
+    o3.origin = Eigen::Vector3d::Zero();
+    o3.cloud = freeScene();
+    obs.push_back(o3);
+    ASSERT_TRUE(gen.buildFromObservations(obs, Eigen::Vector3d::Zero(), cfg, out));
+    EXPECT_EQ(cellValue(out, 3.0, 0.0), 0);     // 第 2 条 miss -> 清除
+}
+
 TEST(RayCastingGridMapTest, NeedsObservations) {
     RayCastingGridMap gen;
     EXPECT_TRUE(gen.needsObservations());
