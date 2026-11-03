@@ -71,8 +71,8 @@ global:
 
   # ---- 话题 / 坐标系 ----
   input:
-    imu_topic: /imu  # IMU话题
-    lidar_topic: /lidar # 雷达点云话题
+    imu_topic: /vanjee_lidar_imu_packets  # IMU话题 (实车万集 722)
+    lidar_topic: /vanjee_points722 # 雷达点云话题 (实车万集 722)
     odom_topic: /odom # 轮式里程计话题
     lidar_filter_num: 3 # 雷达点抽稀倍数 (对齐 Livox)
     lidar_min_range: 0.5 # 雷达最小有效距离(m)
