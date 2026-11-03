@@ -97,9 +97,13 @@ goal_tolerance_xy: 0.20
 goal_tolerance_yaw: 0.20
 
 # ---------- 前瞻 ----------
-lookahead_distance: 0.5
+# 0.5m 在 2.3m 货架通道里太短: 0.2m 横向误差就产生满舵 w(2*v*sin(a)/L),
+# 安全层的 TTC 降速随即判定"扫掠弧会撞墙", 速度被压在 0.15m/s 地板上一路蠕动
+# (实测 6m 目标墙钟 105~126s, 且偶发 FAILED_RECOVERY)。
+# 0.8/1.0 后同样 4 个 6m 目标 4/4 SUCCEEDED, 墙钟 34~59s。
+lookahead_distance: 0.8
 min_lookahead_distance: 0.25
-max_lookahead_distance: 0.7
+max_lookahead_distance: 1.0
 
 # ---------- 车体 / 规划安全距离 ----------
 # 与实车 default.yaml 一致: footprint x -0.25..0.55, y +-0.33 (前部斜切).
