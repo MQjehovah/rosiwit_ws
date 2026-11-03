@@ -516,6 +516,34 @@ TEST(SafetyMonitor, SweptZoneLateralMarginIsSideMarginNotStopMargin)
   EXPECT_EQ(stop.state, "STOP");
 }
 
+// 倒车脱困: 前方障碍不应阻止倒车指令。
+// 2026-11-03 实车: 前方 0.16m 有墙, recovery 倒车 v=-0.03 每拍被安全层 STOP,
+// 20s 后 FAILED_NO_PROGRESS。动态停区的 stop_margin 只能加在行进方向。
+TEST(SafetyMonitor, ReverseEscapeNotBlockedByFrontMargin)
+{
+  SafetyMonitorConfig cfg = MakeConfig();
+  cfg.dynamic_geometry = true;
+  cfg.stop_margin = 0.15;
+  cfg.side_margin = 0.12;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.approach_enabled = false;
+
+  // 障碍在车头前 0.68m (footprint 前缘 0.55, 前进 margin 0.15 -> 0.70)
+  const std::vector<Point> pts{{0.68, 0.0}, {0.69, 0.02}, {0.70, -0.02}};
+
+  SafetyMonitor fwd_monitor;
+  fwd_monitor.configure(cfg);
+  const auto fwd = fwd_monitor.filter(VelocityCommand(0.30, 0.0, 0.0), pts);
+  EXPECT_EQ(fwd.state, "STOP");
+
+  SafetyMonitor rev_monitor;
+  rev_monitor.configure(cfg);
+  const auto rev = rev_monitor.filter(VelocityCommand(-0.10, 0.0, 0.0), pts);
+  EXPECT_NE(rev.state, "STOP");
+  EXPECT_GT(rev.scale, 0.0);
+}
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

@@ -102,9 +102,14 @@ void buildDynamicStopPolygon(
                                v * std::fabs(cmd.angular_z) * std::max(0.0, reaction_time));
   const double side = half_width + std::max(0.0, side_margin) + turn;
 
-  double front = max_x + std::max(0.0, stop_margin);
-  double rear = -min_x + std::max(0.0, stop_margin);
-  if (cmd.linear_x >= 0.0) {
+  // 停区余量只加在**行进方向**那一端: 倒车时车头不该再留 15cm 停区, 否则
+  // 前方障碍会让"倒车脱困"每拍被清零 (实车 2026-11-03 21:16: 前方 0.16m 有墙,
+  // recovery 倒车 v=-0.03 连续被 STOP, 20s 后 FAILED_NO_PROGRESS)。
+  const bool forward = cmd.linear_x >= 0.0;
+  const double margin = std::max(0.0, stop_margin);
+  double front = max_x + (forward ? margin : 0.0);
+  double rear = -min_x + (forward ? 0.0 : margin);
+  if (forward) {
     front += brake;
   } else {
     rear += brake;
