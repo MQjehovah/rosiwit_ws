@@ -330,7 +330,7 @@ private:
     pnh_.param<double>("clearance_brake_decel", clearance_brake_decel_, 0.8);
     pnh_.param<double>("clearance_front_offset", clearance_front_offset_, 0.45);
     pnh_.param<double>("clearance_stop_margin", clearance_stop_margin_, 0.15);
-    pnh_.param<double>("clearance_side_buffer", clearance_side_buffer_, 0.08);
+    pnh_.param<double>("clearance_side_buffer", clearance_side_buffer_, 0.02);
     // 车身轮廓外扩: 只排除轮廓内的点 (nav2 exclusion_zones.robot_body)
     pnh_.param<double>("safety_body_margin", safety_body_margin_, 0.05);
     std::vector<double> stop_poly, slow_poly, footprint;
@@ -504,6 +504,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 长方形车体的 footprint-aware 控制: 控制器按 footprint 采样点查 raw costmap.
     pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
     pnh_.param<bool>("dwa_use_footprint", dwa_use_footprint_, true);
+    pnh_.param<bool>("cusp_rotate_enabled", cusp_rotate_enabled_, true);
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
     // 负余量: 轮廓内缩后做碰撞检查. 0=严格按车体; 0.02 允许贴边 2cm,
     // 是 0.75m 车身过 0.75m 通道的必要条件 (栅格离散本身占 ~0.1m).
@@ -2057,6 +2058,65 @@ private:
                         allow_initial_rotate, start_override, action_speed_);
   }
 
+  // 清洁路径是"往返"式 (车道间距 0.46m, 尽头 180° 折返), 但 Path 里没有
+  // "同一位置连续点"的旋转段 —— executeRotationSegment() 靠这种点识别原地
+  // 旋转, 没有就永远不触发, 控制器只能自己猜掉头方向 (实车 22:42 在车道尽头
+  // 冲出路径 1.8m, 又转不回来). 这里按几何方向重算每点朝向, 并在折返点插入
+  // 一段原地旋转 (同一位置, theta 从入向渐变到出向).
+  static void insertCuspRotationSegments(std::vector<core::Pose2D> & path)
+  {
+    const size_t n = path.size();
+    if (n < 4) { return; }
+    // App 路径的 theta 不可靠, 一律按几何方向重算.
+    for (size_t i = 0; i + 1 < n; ++i) {
+      const double dx = path[i + 1].x - path[i].x;
+      const double dy = path[i + 1].y - path[i].y;
+      if (std::hypot(dx, dy) > 1e-4) { path[i].theta = std::atan2(dy, dx); }
+    }
+    path[n - 1].theta = path[n - 2].theta;
+
+    std::vector<core::Pose2D> out;
+    out.reserve(n + 16);
+    size_t i = 0;
+    while (i < n) {
+      // 前视 0.8m 的路径方向变化: 往返式路径的掉头是半径 ~0.23m 的半圆,
+      // 相邻点只转 ~10°, 单点判定抓不到, 必须按 0.8m 弧长累计.
+      size_t j = i + 1;
+      double acc = 0.0;
+      while (j + 1 < n && acc < 0.8) {
+        acc += std::hypot(path[j + 1].x - path[j].x, path[j + 1].y - path[j].y);
+        ++j;
+      }
+      const double turn = normalizeAngle(path[j].theta - path[i].theta);
+      if (j <= i + 1 || std::fabs(turn) < 2.6) {
+        out.push_back(path[i]);
+        ++i;
+        continue;
+      }
+      // 弧顶 = 离入口最远的点: 先把车开到车道尽头, 再原地掉头.
+      size_t apex = i;
+      double best = -1.0;
+      for (size_t k = i; k <= j; ++k) {
+        const double dd = std::hypot(path[k].x - path[i].x, path[k].y - path[i].y);
+        if (dd > best) { best = dd; apex = k; }
+      }
+      for (size_t k = i; k < apex; ++k) { out.push_back(path[k]); }
+      const int steps = std::max(3, static_cast<int>(std::ceil(std::fabs(turn) / 0.35)));
+      for (int k = 0; k <= steps; ++k) {
+        core::Pose2D q = path[apex];
+        q.theta = normalizeAngle(path[i].theta + turn * (static_cast<double>(k) / steps));
+        out.push_back(q);
+      }
+      ROS_INFO("[movebase_iface] 折返点 (%.2f,%.2f): 插入原地掉头 %.0f°",
+               path[apex].x, path[apex].y, std::fabs(turn) * 180.0 / M_PI);
+      i = j + 1;
+    }
+    if (out.empty() || out.back().x != path[n - 1].x || out.back().y != path[n - 1].y) {
+      out.push_back(path[n - 1]);
+    }
+    path.swap(out);
+  }
+
   void startActionFollowPath()
   {
     if (!controller_strategy_) {
@@ -2086,6 +2146,8 @@ private:
       failTask(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
       return;
     }
+    // 折返点插入原地旋转段, 交给 executeRotationSegment() 执行.
+    if (cusp_rotate_enabled_) { insertCuspRotationSegments(path); }
 
     nav_msgs::Path ros_path;
     ros_path.header.frame_id = map_frame_;
@@ -5530,8 +5592,10 @@ private:
       // 点到车体矩形的距离 (在矩形内为 0)
       const double ox = forward ? std::max(0.0, bx - x_max)
                                 : std::max(0.0, x_min - bx);
-      const double oy = std::max(std::max(y_min - by, 0.0), by - y_max);
-      const double d = std::hypot(ox, oy);
+      // 只用纵向距离: 刹车是给"前方还有多少路"用的. 侧向余量 (by 落在车宽
+      // 之外那点) 不该压速度 -- 实车 22:41 在走廊里被 b(0.66,0.39) 这种
+      // "车头侧前方 2cm、侧向 5cm" 的点把 v 压成 0, 卡了 100s.
+      const double d = ox;
       // 落在车体轮廓内的点 (自身回波/上一帧残点) 不参与限速: 它给出 d=0
       // 会把速度永久压成 0 (实车 22:20 v 恒为 0); 真正接触由安全层负责.
       if (d <= 1e-6) continue;
@@ -5962,7 +6026,7 @@ private:
   double clearance_stop_margin_ = 0.15;   // 车头到障碍的停车余量
   // 行进走廊的侧向额外宽度: 只有落在 [y_min-buf, y_max+buf] 的点才参与制动,
   // 侧向平行墙不再把前进速度压成 0 (走廊 1.5m 时贴墙 0.18m 也不该停).
-  double clearance_side_buffer_ = 0.08;
+  double clearance_side_buffer_ = 0.02;
 
   // ---- 分层代价地图 (B): 同一批层, planner/controller 两个视图 ----
   bool keepout_enabled_ = true;
@@ -6020,6 +6084,8 @@ private:
   bool footprint_aware_control_ = false;
   // DWA 是否使用真实矩形轮廓 (默认开). 关掉回退为圆形膨胀, 车角不受保护.
   bool dwa_use_footprint_ = true;
+  // 折返点插入原地旋转段 (往返式清洁路径的 180° 掉头)
+  bool cusp_rotate_enabled_ = true;
   double footprint_sample_spacing_ = 0.05;
   double footprint_shrink_ = 0.0;   // 轮廓内缩(负余量), 窄道通过用
   double planner_footprint_margin_ = 0.06;   // 规划器轮廓外扩(最小离墙余量)
