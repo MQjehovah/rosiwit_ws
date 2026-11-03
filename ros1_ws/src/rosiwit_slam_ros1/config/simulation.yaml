@@ -115,7 +115,8 @@ mapping:
     generator: ray_casting  # 2D栅格生成策略
     resolution: 0.05 # 最终 2D 栅格/PGM 分辨率(m)
     realtime_resolution: 0.05 # 实时 /map 分辨率(m): 与最终图一致, 建图中导航/RViz 直接看到 0.05m 图
-    min_height: 0.1 # 地面以上障碍最低高度(m)
+    min_height: 0.25 # 地面以上障碍最低高度(m)：0.1 时地板点会压在下边缘上，
+                     # RANSAC 地面估计比真实地面低 ~0.1m，斜射地板点就进了障碍带
     max_height: 2.0 # 地面以上障碍最高高度(m)
     occupied_thresh: 2 # 每格最少点数判占据
     dilate_radius: 0 # 障碍膨胀半径(格)
@@ -124,10 +125,9 @@ mapping:
     max_range: 15.0 # 射线有效距离(m),0=不限
     ground_method: ransac # 地面提取方法 ransac|percentile
     ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
-    post_pipeline: "unknown_free,denoise,close" # 2D后处理管道
-    unknown_free_max_cells: 30 # 被 free 包围的 <=30 格 unknown 清成 free (0=关闭)
-    realtime_post_pipeline: "unknown_free,denoise,close"
-    realtime_min_component_cells: 3
+    post_pipeline: "denoise,close" # 2D后处理管道
+    realtime_post_pipeline: "denoise,close"
+    realtime_min_component_cells: 4
     realtime_close_radius: 1
     realtime_skeleton_width: 0
 localization:
