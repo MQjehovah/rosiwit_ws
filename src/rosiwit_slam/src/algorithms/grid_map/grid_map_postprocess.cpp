@@ -112,11 +112,13 @@ void opFillHoles(std::vector<int8_t>& data, int w, int h, const GridPostConfig& 
 
 // 把被 free 包围的小块 unknown 清成 free.
 // 地面 3D 点云按环采样, 环间空隙在 0.05m 栅格上没有任何自由射线经过, 会留下
-// 大量 -1 散点 (导航里是软代价, 但显示/覆盖率统计很难看). 这里只处理:
+// 大量 -1 散点 (导航里是软代价, 但显示/覆盖率统计很难看). 清除条件:
 //   - 连通域面积 <= unknown_free_max_cells
-//   - 不接触地图边界
-//   - 8 邻域里没有 occupied(100)  (贴墙的 unknown 是墙后未观测区, 保留)
-//   - 至少有一个 free(0) 邻居   (完全被 unknown 包住的是未建图区, 保留)
+//   - 不接触地图边界                 (边界外是未建图区)
+//   - 至少有一个 free(0) 邻居        (完全被 unknown 包住的是未建图区)
+//   - 若贴 occupied(100), 还要求平均自由邻居数 >= 2
+//     (贴墙但是薄薄一条的墙后阴影 free 邻居很少, 保留; 地面散点被 free 包围,
+//      即使紧挨墙脚也至少有 2~3 个方向的 free 邻居, 清掉)
 void opUnknownFree(std::vector<int8_t>& data, int w, int h, const GridPostConfig& c, int8_t /*bg*/) {
     if (c.unknown_free_max_cells <= 0) return;
     cv::Mat unknown(h, w, CV_8UC1, cv::Scalar(0));
@@ -139,7 +141,8 @@ void opUnknownFree(std::vector<int8_t>& data, int w, int h, const GridPostConfig
         if (lx == 0 || ly == 0 || lx + lw >= w || ly + lh >= h) continue;
 
         bool touches_occ = false, touches_free = false;
-        for (int y = ly; y < ly + lh && !touches_occ; ++y) {
+        int free_nbrs = 0;
+        for (int y = ly; y < ly + lh; ++y) {
             const int* lab = labels.ptr<int>(y);
             for (int x = lx; x < lx + lw; ++x) {
                 if (lab[x] != i) continue;
@@ -147,17 +150,18 @@ void opUnknownFree(std::vector<int8_t>& data, int w, int h, const GridPostConfig
                     for (int dx = -1; dx <= 1; ++dx) {
                         if (dx == 0 && dy == 0) continue;
                         const int nx = x + dx, ny = y + dy;
-                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) { touches_occ = true; break; }
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) { touches_occ = true; continue; }
                         const int8_t v = data[static_cast<size_t>(ny) * w + nx];
-                        if (v == 100) { touches_occ = true; break; }
-                        if (v == 0) touches_free = true;
+                        if (v == 100) touches_occ = true;
+                        else if (v == 0) { touches_free = true; ++free_nbrs; }
                     }
-                    if (touches_occ) break;
                 }
-                if (touches_occ) break;
             }
         }
-        if (!touches_occ && touches_free) clear_flag[i] = 1;
+        if (!touches_free) continue;   // 被 unknown 包住: 未建图区
+        const double avg_free = static_cast<double>(free_nbrs) / std::max(1, area);
+        if (touches_occ && avg_free < 2.0) continue;   // 贴墙薄条: 墙后阴影
+        clear_flag[i] = 1;
     }
 
     int cleared = 0;
