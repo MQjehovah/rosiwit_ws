@@ -54,7 +54,7 @@ planner_frequency: 1.0
 
 # 规划器 / 控制器
 planner_name: "hybrid_astar"
-controller_name: "mppi"
+controller_name: "dwa"
 # 运动 profile: clean=只前进 (倒车仅在恢复), free=允许倒车.
 # 注意: 这两个 planner 名必须写, 否则会退回代码默认 (clean_planner=astar),
 # 真机会静默从 hybrid_astar 变成 A*.
