@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # 单次 0.75/0.80m 门洞验收 + 旁路录像 (输出 JSON 摘要 + odom/真值双口径判定)
 # 用法: door_accept_once.sh [label]
 source /opt/ros/melodic/setup.bash
