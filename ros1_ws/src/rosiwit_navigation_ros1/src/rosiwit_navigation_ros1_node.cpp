@@ -5485,7 +5485,12 @@ private:
     // 由控制器自己执行)
     if (!(controller_strategy_ && controller_strategy_->supportsInPlaceRotation())) {
       geometry_msgs::Twist rot_cmd;
-      if (executeRotationSegment(toCorePose(current_pose_), rot_cmd)) {
+      // 旋转刚完成时给 1.5s 冷却: 否则机器人还站在旋转点上, 下一拍又满足
+      // "err > tolerance" 条件 -> 反复 rotate/re-seed (实车 2026-11-04
+      // 13:18:20 一秒内出现 4 次 "rotation done -> controller re-seeded").
+      const bool rotation_cooling =
+        !rotation_cooldown_until_.isZero() && ros::Time::now() < rotation_cooldown_until_;
+      if (!rotation_cooling && executeRotationSegment(toCorePose(current_pose_), rot_cmd)) {
         rotation_active_ = true;
         publishCommand(rot_cmd);
         recordActionTraveled();
@@ -5496,6 +5501,7 @@ private:
       // 重新播种整条路径让参考点推进到旋转段之后, 否则会停在半转姿态.
       if (rotation_active_) {
         rotation_active_ = false;
+        rotation_cooldown_until_ = ros::Time::now() + ros::Duration(1.5);
         if (!current_core_path_.points.empty()) {
           controller_strategy_->setPath(current_core_path_);
         }
@@ -6159,6 +6165,7 @@ private:
   // 当前主路径 (核心坐标系): 供旋转段执行器读取 velocity_x 标记
   core::Path current_core_path_;
   bool rotation_active_ = false;
+  ros::Time rotation_cooldown_until_;
   int rot_dir_ = 0;   // 旋转方向锁存 (避免 ±π 附近左右摆)
   ros::Time last_slam_info_stamp_;
   int last_slam_status_ = -1;

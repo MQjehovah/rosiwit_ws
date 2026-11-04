@@ -345,9 +345,14 @@ SafetyResult SafetyMonitor::filter(
   std::vector<std::pair<double, double>> dynamic_stop;
   std::vector<std::pair<double, double>> dynamic_slow;
   if (config_.dynamic_geometry && !rotating && config_.footprint.size() >= 3) {
+    // STOP 区只用很小的侧向余量: STOP 应该回答"沿行进方向会不会撞上", 侧向
+    // 平行墙交给 SLOWDOWN 区和激光限速. 侧向 0.12m 会把"离墙 0.43m、前角
+    // 离墙 0.18m"的墙角判成 STOP, 而且倒车也照样被钉死 (实车 2026-11-04
+    // 13:19:45 在 (-5.91,-3.83) 卡 40s, 只能靠 recovery).
+    const double stop_side = std::min(std::max(0.0, config_.side_margin), 0.03);
     buildDynamicStopPolygon(cmd, config_.footprint, config_.brake_decel,
                             config_.reaction_time, config_.stop_margin,
-                            config_.side_margin, config_.turn_margin,
+                            stop_side, config_.turn_margin,
                             dynamic_stop);
     if (!dynamic_stop.empty()) stop_poly = &dynamic_stop;
     // nav2 的 slowdown 区就是"同一个多边形的更大版本": 车头多算
