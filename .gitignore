@@ -32,3 +32,9 @@ ros1_ws/src/xzrobot_ros_dependency/*
 !ros1_ws/src/xzrobot_ros_dependency/action/
 !ros1_ws/src/xzrobot_ros_dependency/CMakeLists.txt
 !ros1_ws/src/xzrobot_ros_dependency/package.xml
+
+# Python bytecode (scripts/sim/*.pyc)
+*.pyc
+
+# 分析输出 (规划/实际轨迹可视化, 可重新生成)
+artifacts/
