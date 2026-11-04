@@ -69,6 +69,32 @@ int countPointsInPolygon(
   return count;
 }
 
+/// 原地旋转的停车判定: **只**统计"当前朝向 + 角速度预测的旋转范围"扫过的扇形,
+/// 不是整圈. 整圈 (半径 = 车体外接圆 + 余量) 在 1.5m 走廊里永远有墙, 车根本
+/// 转不动 (实车 2026-11-04 12:53 起步原地转 20s 不动).
+/// 已经落在车体内的点仍算命中 (那是真的贴着).
+int countPointsInRotationSweep(
+  const std::vector<std::pair<double, double>> & points,
+  double radius, double angular_sweep, double sign,
+  const std::vector<std::pair<double, double>> & footprint)
+{
+  if (radius <= 0.0) return 0;
+  const double r2 = radius * radius;
+  const double total = std::fabs(angular_sweep);
+  const double s = (sign >= 0.0) ? 1.0 : -1.0;
+  int count = 0;
+  for (const auto & p : points) {
+    if (p.first * p.first + p.second * p.second > r2) continue;
+    if (pointInPolygon(p.first, p.second, footprint)) { ++count; continue; }
+    if (total < 1e-3) continue;   // 不转: 只看车体内
+    // 把旋转方向归一化到逆时针, 判断点是否落在 [0, Δθ] 扇区内.
+    double ang = std::atan2(p.second * s, p.first * s);
+    while (ang < 0.0) ang += 2.0 * M_PI;
+    if (ang <= total) ++count;
+  }
+  return count;
+}
+
 /// 按车体几何 + 制动距离生成停车区 (base 系) —— 等价于 nav2_collision_monitor 的
 /// velocity_polygon (translation_forward / translation_backward / rotation)：
 /// 前/后方向: 车体该侧外沿 + v²/(2a) + v*reaction + stop_margin;
@@ -345,11 +371,13 @@ SafetyResult SafetyMonitor::filter(
     stop_count = countPointsInPolygon(pts, *stop_poly);
   }
   if (rotating && stop_radius > 0.0) {
-    stop_count = 0;
-    const double r2 = stop_radius * stop_radius;
-    for (const auto & p : pts) {
-      if (p.first * p.first + p.second * p.second <= r2) ++stop_count;
-    }
+    // 只扫"角速度预测会转到的角度范围", 不是整圈: 窄走廊才有掉头空间.
+    const double angular_decel = 1.0;   // rad/s^2
+    const double sweep = std::fabs(cmd.angular_z) *
+      (std::max(0.0, config_.reaction_time) +
+       0.5 * std::fabs(cmd.angular_z) / angular_decel);
+    stop_count = countPointsInRotationSweep(
+      pts, stop_radius, sweep, cmd.angular_z >= 0.0 ? 1.0 : -1.0, config_.footprint);
   }
   if (swept_hits >= 0) {
     stop_count = swept_hits;   // 可选: 更严格的扫掠区

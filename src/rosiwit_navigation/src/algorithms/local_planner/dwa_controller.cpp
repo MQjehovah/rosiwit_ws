@@ -128,7 +128,15 @@ std::vector<DwaController::Sample> DwaController::search(
     // 前视点跑到车侧后方时先转再走 (nav2 rotate_to_heading):
     // 只看代价时, 180° 下"闷头往前开"反而可能更便宜, 实车就会冲出去.
     const double bear = std::atan2(cy - pose.y, cx - pose.x);
-    const bool turn_first = std::fabs(normAngle(bear - pose.theta)) > 1.40;
+    const double err0 = normAngle(bear - pose.theta);
+    // 倒车跟随: carrot 在车后 (>120°) 且控制器允许倒车 -> 保持车头倒着走.
+    // 1.52m 走廊里原地掉头需要 1.45m 外接圆, 实测被安全层永久 STOP
+    // (实车 2026-11-04 12:53 起步原地转 20s 不动). 往返式清洁路径的返程
+    // 本来就该沿原线倒车, 不需要转.
+    const bool reverse_mode = (min_vx_ < -1e-6) && std::fabs(err0) > 2.10;
+    // 前视点跑到车侧后方时先转再走 (nav2 rotate_to_heading):
+    // 只看代价时, 180° 下"闷头往前开"反而可能更便宜, 实车就会冲出去.
+    const bool turn_first = !reverse_mode && std::fabs(err0) > 1.40;
 
     for (int i = 0; i <= nv; ++i) {
         for (int j = 0; j <= nw; ++j) {
@@ -290,12 +298,29 @@ double DwaController::clearanceCost(const core::Pose2D& pose) const {
 }
 
 size_t DwaController::findClosest(const core::Pose2D& pose) const {
-    size_t best = 0; double best_d = std::numeric_limits<double>::max();
-    for (size_t i = 0; i < path_.points.size(); ++i) {
-        double dx = path_.points[i].pose.x - pose.x;
-        double dy = path_.points[i].pose.y - pose.y;
-        double d = dx * dx + dy * dy;
+    if (path_.points.empty()) return 0;
+    const size_t n = path_.points.size();
+    // 只在前向窗口里投影. 整条路径扫描时, 往返式清洁路径的"终点"常常就在
+    // 车旁边 (回到起点收尾), idx_ 会一次跳到终点 -> carrot 跑到车后 ->
+    // 车以为要掉头 -> 起步原地打转 (实车 2026-11-04 12:53).
+    const size_t begin = idx_ > 2 ? idx_ - 2 : 0;
+    const size_t end = std::min(n, idx_ + 120);
+    size_t best = begin;
+    double best_d = std::numeric_limits<double>::max();
+    for (size_t i = begin; i < end; ++i) {
+        const double dx = path_.points[i].pose.x - pose.x;
+        const double dy = path_.points[i].pose.y - pose.y;
+        const double d = dx * dx + dy * dy;
         if (d < best_d) { best_d = d; best = i; }
+    }
+    // 车被推出窗口 (>1.5m) 才回退到全路径搜索, 避免彻底跑飞.
+    if (best_d > 1.5 * 1.5) {
+        for (size_t i = 0; i < n; ++i) {
+            const double dx = path_.points[i].pose.x - pose.x;
+            const double dy = path_.points[i].pose.y - pose.y;
+            const double d = dx * dx + dy * dy;
+            if (d < best_d) { best_d = d; best = i; }
+        }
     }
     return best;
 }
