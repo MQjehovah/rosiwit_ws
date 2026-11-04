@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    只有"算法侧"：感知 + SLAM + 导航 + RViz，不含 Gazebo。
+
+    用法（WebIDE 里，仿真容器已经在跑 world_only.launch）：
+      roslaunch rosiwit_starter_ros1 algo_only.launch
+      roslaunch rosiwit_starter_ros1 algo_only.launch rviz:=false
+      roslaunch rosiwit_starter_ros1 algo_only.launch map:=/ws/maps/office
+
+    前提：同一个 ROS master（ROS_MASTER_URI 指向仿真容器），/clock、/scan、
+    /camera_01/* 由仿真侧提供；本文件只起算法节点，改代码不用重启仿真。
+  -->
+  <env name="OMP_NUM_THREADS" value="2"/>
+
+  <arg name="slam_config" default="$(find rosiwit_slam_ros1)/config/simulation.yaml"/>
+  <arg name="navigation_config" default="$(find rosiwit_navigation_ros1)/config/simulation.yaml"/>
+  <arg name="use_sim_time" default="true"/>
+
+  <!-- 定位模式：map 为空 = 纯建图；非空 = 载入地图 -->
+  <arg name="map" default=""/>
+  <arg name="initial_x" default="0.0"/>
+  <arg name="initial_y" default="0.0"/>
+  <arg name="initial_yaw" default="0.0"/>
+
+  <arg name="rviz" default="true"/>
+  <arg name="rviz_config" default="$(find rosiwit_starter_ros1)/rviz/sim_slam_nav.rviz"/>
+
+  <arg name="enable_perception" default="true"/>
+  <arg name="perception_detector" default="external"/>
+  <arg name="perception_config"
+       default="$(find rosiwit_perception_ros1)/config/sim_object_semantics.yaml"/>
+
+  <!-- 1. 3D 语义感知：吃 /camera_01/* + /perception/objects/detections_2d -->
+  <include if="$(arg enable_perception)"
+           file="$(find rosiwit_perception_ros1)/launch/object_semantics.launch">
+    <arg name="config" value="$(arg perception_config)"/>
+    <arg name="detector" value="$(arg perception_detector)"/>
+  </include>
+
+  <!-- 2. SLAM：建图模式，发布 /map + /lio_odom + /world_cloud -->
+  <include file="$(find rosiwit_slam_ros1)/launch/slam_simulation.launch">
+    <arg name="config_file" value="$(arg slam_config)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="map" value="$(arg map)"/>
+    <arg name="initial_x" value="$(arg initial_x)"/>
+    <arg name="initial_y" value="$(arg initial_y)"/>
+    <arg name="initial_yaw" value="$(arg initial_yaw)"/>
+  </include>
+
+  <!-- 3. 导航：吃 /map + /lio_odom，障碍走 /world_cloud 体素层 -->
+  <include file="$(find rosiwit_navigation_ros1)/launch/navigation_simulation.launch">
+    <arg name="config_file" value="$(arg navigation_config)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+  </include>
+
+  <!-- 4. RViz -->
+  <node if="$(arg rviz)"
+        pkg="rviz" type="rviz" name="rviz"
+        args="-d $(arg rviz_config)" output="screen">
+    <param name="use_sim_time" value="$(arg use_sim_time)"/>
+  </node>
+</launch>
