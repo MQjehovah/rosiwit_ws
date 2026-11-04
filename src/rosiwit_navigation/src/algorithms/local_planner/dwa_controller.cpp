@@ -201,7 +201,11 @@ core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const 
         py += s.v * std::sin(pt) * dt_;
         pt += s.w * dt_;
         double step_min = 5.0;
-        if (!near_obstacles_.empty()) {
+        // 有局部代价地图时用 5cm 栅格做碰撞判定 (精确); 0.5m 块的"外接圆"
+        // 在贴墙 3~6cm 时会把所有候选都判成碰撞 (实车 2026-11-04 13:08:
+        // 车离墙 0.40m, 但块的圆半径 0.35 -> 全部样本 clearance<0 -> DWA 无解,
+        // 只能输出原地转 0.2rad/s). 圆只作为没有栅格时的后备.
+        if (!has_local_costmap_ && !near_obstacles_.empty()) {
             if (footprint_samples_.empty()) {
                 for (const auto& obs : near_obstacles_) {
                     double dx = px - obs.x, dy = py - obs.y;

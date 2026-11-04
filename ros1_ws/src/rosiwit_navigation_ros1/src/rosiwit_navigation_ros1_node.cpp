@@ -5364,8 +5364,13 @@ private:
       if (!last_motion_stamp_.isZero() &&
           (now - last_motion_stamp_).toSec() > no_progress_timeout_) {
         last_motion_stamp_ = now;   // 防止重复触发
-        ROS_WARN("[rosiwit_navigation_ros1] no motion for %.1fs, start recovery",
-                 no_progress_timeout_);
+        std::string diag = "n/a";
+        if (controller_strategy_) {
+          std::lock_guard<std::mutex> cl(controller_mu_);
+          diag = controller_strategy_->getDiagnostics();
+        }
+        ROS_WARN("[rosiwit_navigation_ros1] no motion for %.1fs, start recovery (%s)",
+                 no_progress_timeout_, diag.c_str());
         if (startRecovery()) { return; }
         if (task_active_) {
           failTask(movebase::RESULT_NO_PROGRESS, "FAILED_NO_MOTION");
