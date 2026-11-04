@@ -504,7 +504,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 长方形车体的 footprint-aware 控制: 控制器按 footprint 采样点查 raw costmap.
     pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
     pnh_.param<bool>("dwa_use_footprint", dwa_use_footprint_, true);
-    pnh_.param<bool>("cusp_rotate_enabled", cusp_rotate_enabled_, true);
+    pnh_.param<bool>("cusp_rotate_enabled", cusp_rotate_enabled_, false);
     // 起步原地旋转默认关: 车头离墙 15cm 时转 30° 就把前角扫进墙里
     // (实车 2026-11-04 12:59 "起步旋转撞墙"). 直接交给控制器边走边纠向.
     pnh_.param<bool>("initial_rotate_enabled", initial_rotate_enabled_, false);
@@ -957,6 +957,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.teb_max_iterations = pnh_.param<int>("teb_max_iterations", cfg.teb_max_iterations);
     cfg.teb_max_samples = pnh_.param<int>("teb_max_samples", cfg.teb_max_samples);
     cfg.teb_dt_ref = pnh_.param<double>("teb_dt_ref", cfg.teb_dt_ref);
+    // ---- LQR 权重 (只对 lqr 控制器生效) ----
+    cfg.lqr_q_x = pnh_.param<double>("lqr_q_x", cfg.lqr_q_x);
+    cfg.lqr_q_y = pnh_.param<double>("lqr_q_y", cfg.lqr_q_y);
+    cfg.lqr_q_theta = pnh_.param<double>("lqr_q_theta", cfg.lqr_q_theta);
+    cfg.lqr_r_v = pnh_.param<double>("lqr_r_v", cfg.lqr_r_v);
+    cfg.lqr_r_w = pnh_.param<double>("lqr_r_w", cfg.lqr_r_w);
     cfg.footprint_sample_spacing = footprint_sample_spacing_;
     cfg.path_resample_step = path_resample_step_;
     cfg.allow_reverse = allow_reverse;
@@ -6105,7 +6111,7 @@ private:
   // DWA 是否使用真实矩形轮廓 (默认开). 关掉回退为圆形膨胀, 车角不受保护.
   bool dwa_use_footprint_ = true;
   // 折返点插入原地旋转段 (往返式清洁路径的 180° 掉头)
-  bool cusp_rotate_enabled_ = true;
+  bool cusp_rotate_enabled_ = false;
   bool initial_rotate_enabled_ = false;
   double footprint_sample_spacing_ = 0.05;
   double footprint_shrink_ = 0.0;   // 轮廓内缩(负余量), 窄道通过用

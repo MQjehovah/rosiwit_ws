@@ -153,6 +153,12 @@ struct ControllerConfig
   /// 航向差超过它就不冻结 (车本来就歪, 必须先转正)
   double lane_freeze_max_heading = 0.25;
   bool allow_reverse = true;
+  // ---- LQR (ignored by other controllers) ----
+  double lqr_q_x = 5.0;      // lateral error weight (x)
+  double lqr_q_y = 5.0;      // lateral error weight (y)
+  double lqr_q_theta = 1.0;  // heading error weight
+  double lqr_r_v = 1.0;      // linear velocity control weight
+  double lqr_r_w = 1.0;      // angular velocity control weight
   // MPPI tuning (ignored by other controllers).
   int mppi_horizon = 20;
   int mppi_samples = 160;
