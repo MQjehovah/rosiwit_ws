@@ -387,6 +387,11 @@ core::VelocityCommand MppiController::computeVelocityCommand(
 
 bool MppiController::isGoalReached(const core::Pose2D& pose) const {
   if (path_.points.empty()) return false;
+  // 往返式清洁路径的终点在空间上离起点只有 ~0.1m: 只看"到终点的欧氏距离"
+  // 会在起步阶段就判到达 (实车 2026-11-04 13:58:31 navi_cmd=3, 9.0m 的路径
+  // 8 秒后返回 result=1 percent=1.00, 其实一步都没走).
+  // 必须同时确认沿路径的进度已经走到末端.
+  if (idx_ + 3 < path_.points.size()) return false;
   return pose.distanceTo(path_.points.back().pose) < goal_tol_;
 }
 
