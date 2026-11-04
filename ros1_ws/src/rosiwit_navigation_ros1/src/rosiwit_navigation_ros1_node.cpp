@@ -505,6 +505,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
     pnh_.param<bool>("dwa_use_footprint", dwa_use_footprint_, true);
     pnh_.param<bool>("cusp_rotate_enabled", cusp_rotate_enabled_, true);
+    // 起步原地旋转默认关: 车头离墙 15cm 时转 30° 就把前角扫进墙里
+    // (实车 2026-11-04 12:59 "起步旋转撞墙"). 直接交给控制器边走边纠向.
+    pnh_.param<bool>("initial_rotate_enabled", initial_rotate_enabled_, false);
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
     // 负余量: 轮廓内缩后做碰撞检查. 0=严格按车体; 0.02 允许贴边 2cm,
     // 是 0.75m 车身过 0.75m 通道的必要条件 (栅格离散本身占 ~0.1m).
@@ -1063,9 +1066,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         planner_allow_reverse_ = allow_reverse;
       }
     }
-    // 控制器重建: allow_reverse 在 initialize 时固化
+    // 控制器重建: allow_reverse 在 initialize 时固化.
+    // 规划器保持单向 (clean 只前进), 但控制器必须能倒车: 车头离墙只剩
+    // 15cm 时唯一的安全动作是退, 而不是原地转 (会扫到墙).
     std::unique_ptr<core::IControllerStrategy> next_ctrl;
-    if (initController(controller_name_, next_ctrl, allow_reverse)) {
+    if (initController(controller_name_, next_ctrl, /*allow_reverse=*/true)) {
       if (!current_core_path_.points.empty()) {
         next_ctrl->setPath(current_core_path_);
       } else if (!current_path_.poses.empty()) {
@@ -4237,8 +4242,8 @@ private:
       const auto & b = planned.points.back().pose;
       path_span = std::hypot(b.x - a.x, b.y - a.y);
     }
-    if (allow_initial_rotate && planned.points.size() > 2 && !first_reverse &&
-        path_span > 0.6 && !goal_pose_.header.frame_id.empty()) {
+    if (allow_initial_rotate && initial_rotate_enabled_ && planned.points.size() > 2 &&
+        !first_reverse && path_span > 0.6 && !goal_pose_.header.frame_id.empty()) {
       const double current_yaw = yawFromQuat(current_pose_.pose.orientation);
       const double dx = planned.points[1].pose.x - planned.points[0].pose.x;
       const double dy = planned.points[1].pose.y - planned.points[0].pose.y;
@@ -6090,6 +6095,7 @@ private:
   bool dwa_use_footprint_ = true;
   // 折返点插入原地旋转段 (往返式清洁路径的 180° 掉头)
   bool cusp_rotate_enabled_ = true;
+  bool initial_rotate_enabled_ = false;
   double footprint_sample_spacing_ = 0.05;
   double footprint_shrink_ = 0.0;   // 轮廓内缩(负余量), 窄道通过用
   double planner_footprint_margin_ = 0.06;   // 规划器轮廓外扩(最小离墙余量)
