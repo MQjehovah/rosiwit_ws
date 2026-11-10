@@ -15,6 +15,7 @@ bool FastLio2Frontend::init(const std::string& config_path) {
 
     m_kf = std::make_shared<IESKF>();
     m_kf->setMaxIter(static_cast<size_t>(m_config.ieskf_max_iter));
+    m_kf->setMaxVel(m_config.max_state_velocity);   // 速度安全网 (见 IESKF::update)
     m_builder = std::make_shared<MapBuilder>(m_config, m_kf);
     m_inited = true;
     return true;
@@ -24,6 +25,7 @@ void FastLio2Frontend::onImu(const IMUSample& s) {
     if (!m_inited) return;
     IMUSample scaled = s;
     scaled.acc = s.acc * m_config.acc_scale;
+    scaled.gyro = s.gyro * m_config.gyro_scale;   // 陀螺尺度标定 (见 Config::gyro_scale)
     // 防御性上限: 正常 onLidar 会清空缓冲; 若雷达长时间不来 (或误在定位模式喂 IMU),
     // 也不能无界增长. 2000 帧 @200Hz ~= 10s, 足够覆盖任何正常帧间隔.
     constexpr size_t kMaxImuBuffer = 2000;

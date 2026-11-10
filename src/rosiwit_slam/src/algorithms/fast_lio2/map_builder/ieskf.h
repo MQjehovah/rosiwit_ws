@@ -62,6 +62,8 @@ class IESKF
 public:
     IESKF() = default;
     void setMaxIter(size_t iter) { m_max_iter = iter; }
+    // 状态速度物理上限(m/s); <=0 关闭。坏配准把速度打爆后的最后一道刹车(见 update)。
+    void setMaxVel(double v) { m_max_vel = v; }
     void setLossFunction(loss_func func) { m_loss_func = func; }
     void setStopFunction(stop_func func) { m_stop_func = func; }
 
@@ -75,6 +77,7 @@ public:
 
 private:
     size_t m_max_iter = 10;
+    double m_max_vel = 3.0;
     State m_x;
     M21D m_P;
     loss_func m_loss_func;
