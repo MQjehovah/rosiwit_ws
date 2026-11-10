@@ -46,24 +46,30 @@ void SlamAlgorithm::enqueueInput(InputItem item) {
 void SlamAlgorithm::logInputStats() {
     // 每秒一条, 打印**增量**: 丢弃/拒绝/峰值都能直接看到 (I11)。
     // 以前每 1000 帧才打一条累计值, 关停后丢帧(rejected_closed)完全不可见。
+    // 2026-11 修正: imu/lidar 入队数曾是**累计值**(排查 bag 时 200Hz IMU 显示
+    // "imu+20373/s" 误导过判断), 改为与其他字段一致的增量。
     static auto last_log = std::chrono::steady_clock::now();
     static rosiwit_common::ChannelStats prev;
+    static unsigned long prev_imu_in = 0, prev_lidar_in = 0;
     const auto now = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log).count() < 1000) {
         return;
     }
     last_log = now;
     const auto st = input_.stats();
+    const unsigned long imu_in = input_imu_in_.load();
+    const unsigned long lidar_in = input_lidar_in_.load();
     ROS_INFO("[slam_algo] input 1s: imu+%lu lidar+%lu | dropped_oldest+%lu dropped_newest+%lu "
              "cleared+%lu rejected+%lu | pending=%zu peak=%zu",
-             static_cast<unsigned long>(input_imu_in_.load()),
-             static_cast<unsigned long>(input_lidar_in_.load()),
+             imu_in - prev_imu_in, lidar_in - prev_lidar_in,
              static_cast<unsigned long>(st.dropped_oldest - prev.dropped_oldest),
              static_cast<unsigned long>(st.dropped_newest - prev.dropped_newest),
              static_cast<unsigned long>(st.cleared - prev.cleared),
              static_cast<unsigned long>(st.rejected_closed - prev.rejected_closed),
              input_.size(), st.peak);
     prev = st;
+    prev_imu_in = imu_in;
+    prev_lidar_in = lidar_in;
 }
 
 void SlamAlgorithm::processImu(const sensor_msgs::Imu::ConstPtr& msg) {

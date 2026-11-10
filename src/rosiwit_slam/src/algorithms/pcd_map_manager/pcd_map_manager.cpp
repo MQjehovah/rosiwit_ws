@@ -243,10 +243,14 @@ void PcdMapManager::trimObservations()
     }
     observations_.erase(observations_.begin(), observations_.begin() + drop);
     observations_truncated_ = true;
-    std::cout << "[PcdMapManager] observations trimmed: dropped " << drop
-              << " oldest frames (cap " << max_observation_points_
-              << " pts, " << observations_.size() << " frames left); "
-              << "保存时将跳过动态点过滤" << std::endl;
+    // 限频: 达到上限后每帧都会触发 trim, 逐帧打印会刷屏(实测长会话日志被此占满)
+    static size_t trim_log_count = 0;
+    if (++trim_log_count <= 3 || trim_log_count % 500 == 0) {
+        std::cout << "[PcdMapManager] observations trimmed: dropped " << drop
+                  << " oldest frames (cap " << max_observation_points_
+                  << " pts, " << observations_.size() << " frames left; log every 500th); "
+                  << "保存时将跳过动态点过滤" << std::endl;
+    }
 }
 
 bool PcdMapManager::saveMap(const std::string& name) {

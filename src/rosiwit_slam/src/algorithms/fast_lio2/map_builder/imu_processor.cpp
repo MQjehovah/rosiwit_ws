@@ -51,11 +51,23 @@ bool IMUProcessor::initialize(SyncPackage &package)
     // 加速度动态尺度归一化 (legacy imu_processing.cpp:209):
     // 把均值幅值标到标准重力, 补偿加速度计尺度误差 (实测本车 |a|≈9.88 -> ×0.993)。
     // 无此补偿时退化帧(纯 IMU 积分)按帧累积漂移。
-    if (acc_mean.norm() > 1e-3)
+    // ⚠ 量纲守卫: 只对 |a_mean| 落在 [5,15] m/s² 的传感器生效。若换用 g 单位 IMU
+    //    (Livox 内置, |a|≈1.0, 应由 config acc_scale=9.81 换算), 这里若照算会再放大
+    //    9.81 倍(叠乘成 96 倍)直接发散 —— 宁可跳过归一化也不能错放大。
     {
-        m_acc_scale = 9.81 / acc_mean.norm();
-        std::printf("[FLIO2] acc scale normalized: |a_mean|=%.4f -> x%.5f\n",
-                    acc_mean.norm(), m_acc_scale);
+        const double an = acc_mean.norm();
+        if (an > 5.0 && an < 15.0)
+        {
+            m_acc_scale = 9.81 / an;
+            std::printf("[FLIO2] acc scale normalized: |a_mean|=%.4f -> x%.5f\n",
+                        an, m_acc_scale);
+        }
+        else
+        {
+            m_acc_scale = 1.0;
+            std::printf("[FLIO2] WARN |a_mean|=%.3f out of [5,15] band, skip acc "
+                        "normalization (check config acc_scale / IMU units)\n", an);
+        }
     }
 
     // 自由落体/传感器异常时加速度接近 0. 若继续做重力对齐, normalized()
@@ -138,7 +150,7 @@ void IMUProcessor::undistort(SyncPackage &package)
     V3D acc_val, gyro_val;
     double dt = 0.0;
     Input inp;
-    inp.acc = m_imu_cache.back().acc;
+    inp.acc = m_imu_cache.back().acc * m_acc_scale;   // 与传播循环同一尺度(见 initialize)
     inp.gyro = m_imu_cache.back().gyro;
     // IMU 数据存在周期性的数百毫秒丢帧时, 限制单步传播时间, 避免用陈旧 IMU 长时间积分导致速度发散
     const double max_prop_dt = 0.1;
