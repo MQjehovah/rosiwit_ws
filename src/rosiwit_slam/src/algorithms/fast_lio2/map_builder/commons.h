@@ -48,6 +48,10 @@ struct Config
     int imu_init_num = 20;
     int near_search_num = 5;
     int ieskf_max_iter = 5;
+    // 有效平面点下限: 少于此数不做 EKF 更新(退化为纯预测)。
+    // legacy(mapping_interface.cpp:2292) 是 50 —— 几何退化场景(窄区/视野受限)下
+    // 只有几个有效点, 用它们做更新会让近秩亏的 H 把状态拖向不可观测方向(实测窄区漂移)。
+    int min_effective_points = 50;
     bool gravity_align = true;
     double init_z = 0.0;  // IMU body 世界 z 初值; 设成 IMU 离地高度使 footprint z=0
     bool undistort_enable = true;

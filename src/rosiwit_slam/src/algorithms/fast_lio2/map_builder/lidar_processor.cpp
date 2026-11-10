@@ -398,10 +398,12 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         m_effect_weight[effect_feat_num] = m_robust_weight[i];
         effect_feat_num++;
     }
-    if (effect_feat_num < 1)
+    if (effect_feat_num < m_config.min_effective_points)
     {
+        // 有效平面点不足 -> 本帧不做 EKF 更新(纯预测通过)。legacy 语义: <50 拒绝。
         share_data.valid = false;
-        std::cerr << "NO Effective Points!" << std::endl;
+        if (effect_feat_num == 0)
+            std::cerr << "NO Effective Points!" << std::endl;
         return;
     }
     share_data.valid = true;

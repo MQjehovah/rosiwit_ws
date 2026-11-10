@@ -119,6 +119,8 @@ mapping:
     imu_init_samples: 100 # IMU静止初始化样本数 (对齐 Livox)
     nearest_search_points: 5 # 近邻搜索点数
     iekf_max_iterations: 5 # IEKF最大迭代次数
+    min_effective_points: 50 # 有效平面点下限: 不足则本帧不做EKF更新(纯预测)。
+                             # legacy=50; 退化场景(窄区)几个点更新会拖偏状态(2026-11修复)
     scan_voxel: 0.3 # 前端扫描降采样体素(m) (对齐 Livox)
     imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
     imu_lidar_translation: [0.0, 0.0, 0.0905] # 初始IMU<-lidar平移(m)

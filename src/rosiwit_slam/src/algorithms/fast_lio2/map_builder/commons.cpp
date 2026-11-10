@@ -62,6 +62,7 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.imu_init_num     = get_alias("imu_init_samples","imu_init_num").as<int>(out_cfg.imu_init_num);
         out_cfg.near_search_num  = get_alias("nearest_search_points","near_search_num").as<int>(out_cfg.near_search_num);
         out_cfg.ieskf_max_iter   = get_alias("iekf_max_iterations","ieskf_max_iter").as<int>(out_cfg.ieskf_max_iter);
+        out_cfg.min_effective_points = get("min_effective_points").as<int>(out_cfg.min_effective_points);
         out_cfg.gravity_align    = get("gravity_align").as<bool>(out_cfg.gravity_align);
         out_cfg.init_z           = get("init_z").as<double>(out_cfg.init_z);
         out_cfg.undistort_enable = get("undistort_enable").as<bool>(out_cfg.undistort_enable);

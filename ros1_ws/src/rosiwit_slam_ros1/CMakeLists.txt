@@ -15,6 +15,7 @@ endif()
 find_package(catkin REQUIRED COMPONENTS
     roscpp sensor_msgs nav_msgs geometry_msgs std_msgs std_srvs
     tf tf2 tf2_ros pcl_conversions pcl_ros visualization_msgs
+    rosbag
     message_generation
     xzrobot_ros_dependency)
 
@@ -122,6 +123,12 @@ add_executable(map_cleanup src/tools/map_cleanup.cpp)
 target_link_libraries(map_cleanup rosiwit_slam_ros1_lib)
 add_dependencies(map_cleanup ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 install(TARGETS map_cleanup RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+# 离线拼图: 用 bag 内已知轨迹把点云拼成地图 (pcd/xzmap/pgm/yaml), 供无 SLAM 源码复建
+add_executable(bag_stitch_map src/tools/bag_stitch_map.cpp)
+target_link_libraries(bag_stitch_map rosiwit_slam_ros1_lib ${catkin_LIBRARIES} ${OpenCV_LIBS})
+add_dependencies(bag_stitch_map ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+install(TARGETS bag_stitch_map RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 # ==================== 测试 ====================
 if(CATKIN_ENABLE_TESTING)

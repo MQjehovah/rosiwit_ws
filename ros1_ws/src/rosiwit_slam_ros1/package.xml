@@ -15,6 +15,7 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>rosbag</depend>
   <depend>tf</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>

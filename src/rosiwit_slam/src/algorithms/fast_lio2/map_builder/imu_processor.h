@@ -21,4 +21,7 @@ private:
     V3D m_last_gyro;
     M12D m_Q;
     IMUData m_last_imu;
+    // 加速度动态尺度归一化 (legacy imu_processing.cpp:209 等价):
+    // 初始化时按均值幅值把加速度标到标准重力, 补偿 IMU 尺度误差。
+    double m_acc_scale = 1.0;
 };

@@ -48,6 +48,16 @@ bool IMUProcessor::initialize(SyncPackage &package)
     V3D acc_mean = acc_sum / n_static;
     V3D gyro_mean = gyro_sum / n_static;
 
+    // 加速度动态尺度归一化 (legacy imu_processing.cpp:209):
+    // 把均值幅值标到标准重力, 补偿加速度计尺度误差 (实测本车 |a|≈9.88 -> ×0.993)。
+    // 无此补偿时退化帧(纯 IMU 积分)按帧累积漂移。
+    if (acc_mean.norm() > 1e-3)
+    {
+        m_acc_scale = 9.81 / acc_mean.norm();
+        std::printf("[FLIO2] acc scale normalized: |a_mean|=%.4f -> x%.5f\n",
+                    acc_mean.norm(), m_acc_scale);
+    }
+
     // 自由落体/传感器异常时加速度接近 0. 若继续做重力对齐, normalized()
     // 会对零向量做除法并触发 SIGFPE. 丢弃本批样本, 等机器人落地后重新初始化.
     const double acc_norm = acc_mean.norm();
@@ -139,7 +149,7 @@ void IMUProcessor::undistort(SyncPackage &package)
         if (tail.time < m_last_propagate_end_time)
             continue;
         gyro_val = 0.5 * (head.gyro + tail.gyro);
-        acc_val = 0.5 * (head.acc + tail.acc);
+        acc_val = 0.5 * (head.acc + tail.acc) * m_acc_scale;   // legacy 等价: 尺度归一
 
         if (head.time < m_last_propagate_end_time)
             dt = tail.time - m_last_propagate_end_time;
