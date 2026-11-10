@@ -463,10 +463,15 @@ void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) 
 void Ros1SlamInterface::sendTransform() {
     // legacy.cpp:1899-1936 逐行:
     //   Tfo = lookupTransform("base_footprint", "odom", Time(0))     = T(base_footprint <- odom)
-    //   Tmf = (origin=(x, y, -0.07), rot=AngleAxis(-yaw, Z))         = T(map <- base_footprint)
+    //   Tmf = (origin=(x, y, z), rot=AngleAxis(-yaw, Z))             = T(map <- base_footprint)
     //        其中 yaw = atan2(R(0,1), R(0,0))  (即 xzYawFromRot)
     //   Tmo = Tmf * Tfo                                             = T(map <- odom)
     //   broadcast(map -> odom), stamp = now
+    //
+    // z 以前**写死 -0.07**（legacy 里是给地面机器人保持贴地的常数）。实测这个常数
+    // 和核心输出对不上：/lio_odom 的 z 是 -0.186（和 /world_cloud 的地板 -0.18 一致），
+    // TF 却给 -0.07，差 11.6cm —— RViz/RosView 里机器人就浮在地面上方一截。
+    // 改成用核心的真实 z：位姿话题、TF、点云三者对齐。
     geometry_msgs::TransformStamped tfo_msg;
     try {
         tfo_msg = tf_buffer_->lookupTransform("base_footprint", "odom", ros::Time(0));
@@ -487,7 +492,7 @@ void Ros1SlamInterface::sendTransform() {
         xzYawFromRot(curr_pose_.q.normalized().toRotationMatrix());
     const Eigen::Matrix3d R_f =
         Eigen::AngleAxisd(-yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-    const Eigen::Vector3d t_f(curr_pose_.x, curr_pose_.y, -0.07);
+    const Eigen::Vector3d t_f(curr_pose_.x, curr_pose_.y, curr_pose_.z);
 
     const Eigen::Quaterniond q_o(tfo_msg.transform.rotation.w, tfo_msg.transform.rotation.x,
                                  tfo_msg.transform.rotation.y, tfo_msg.transform.rotation.z);

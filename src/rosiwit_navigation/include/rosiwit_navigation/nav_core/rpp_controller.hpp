@@ -51,9 +51,17 @@ private:
   /// (1 = 整段无碰撞, 0 = 起步就撞)。只用未膨胀障碍层判定。
   double arcClearanceScale(const core::Pose2D & pose, double v, double w) const;
 
+  /// 重建"窄口车道"标记 (0=普通 1=窄口内 2=窄口前方的收敛段)。
+  /// 窄口 = 路径点两侧的净宽 < lane_width。窄口内冻结横向修正, 前方 1m 只限速。
+  void updateLaneProfile();
+
+  /// 当前进度 idx_ 落在哪个车道区 (0/1/2)
+  int laneZoneAt(size_t i) const;
+
   core::ControllerConfig cfg_;
   core::Path path_;
   std::vector<double> s_;      // 累计弧长
+  std::vector<uint8_t> lane_zone_;   // 每点车道标记, 见 updateLaneProfile()
   // 局部代价地图跨线程更新 (publishLocalCostmap 定时器写, 控制定时器读):
   // 用 shared_ptr + 原子换指针, 读侧只拷指针, 不拷贝 100KB 栅格。
   mutable std::mutex map_mu_;

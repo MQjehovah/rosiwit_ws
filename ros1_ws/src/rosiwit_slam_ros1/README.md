@@ -22,8 +22,9 @@ ros2_ws/src/rosiwit_slam_ros2   (ROS2/ament 薄接口)
 - `RosiwitInterface`：只保留不冲突的新输出（`lio_odom`/`lio_path`/`cloud_map`/`grid_map`/
   `body_cloud`/`world_cloud`）
 
-输入话题由机器人现有 `conf/slam_conf.json` + `sensor_config.json` 决定，避免与底盘驱动/launch
-配置脱节。`/odom` 由 `Ros1SlamInterface` 统一订阅并喂给核心，定位模式下的 `imu_ekf` 直接使用。
+输入话题由 `config/*.yaml`（仿真为 `config/simulation.yaml`，实机为 `config/default.yaml`）决定，
+避免与底盘驱动/launch 配置脱节。`/odom` 由 `Ros1SlamInterface` 统一订阅并喂给核心，定位模式下的
+`imu_ekf` 直接使用。
 
 ## 构建本包（ROS1）
 
@@ -61,7 +62,7 @@ roslaunch rosiwit_slam_ros1 slam_simulation.launch
 roslaunch rosiwit_starter_ros1 sim_slam_nav.launch
 ```
 
-- 参数文件：`config/simulation.yaml`（核心参数）、`conf/sim_slam_conf.json`（选择 ROS1 输入话题）
+- 参数文件：`config/simulation.yaml`（核心参数 + ROS1 输入话题）
 - 输入：`/velodyne_points` + `/imu`；输出：`/map`、`/lio_odom`、`/world_cloud`
 - TF：`map -> odom` 由本节点发布，`odom -> base_footprint` 由 Gazebo 差速插件发布
 - `use_sim_time` 默认 `true`，与 Gazebo `/clock` 对齐；脱离仿真跑 bag 时记得覆盖

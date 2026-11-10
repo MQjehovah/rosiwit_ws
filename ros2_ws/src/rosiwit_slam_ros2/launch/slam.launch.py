@@ -7,6 +7,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.actions import Node
 
 
@@ -30,6 +31,18 @@ def generate_launch_description():
         'config', default_value='default.yaml',
         description='Config file name under <pkg>/config (e.g. default.yaml, livox.yaml, sim_vlp16.yaml, vanjee722.yaml)')
 
+    # 离线播包常用: 不改 yaml, 直接覆盖话题与订阅 QoS
+    image_topic_arg = DeclareLaunchArgument(
+        'image_topic', default_value='',
+        description='Override camera image topic (empty = use config; bags often need /left/image_raw)')
+    lidar_topic_arg = DeclareLaunchArgument(
+        'lidar_topic', default_value='', description='Override lidar topic (empty = use config)')
+    imu_topic_arg = DeclareLaunchArgument(
+        'imu_topic', default_value='', description='Override IMU topic (empty = use config)')
+    qos_arg = DeclareLaunchArgument(
+        'qos_reliable', default_value='-1',
+        description='Override sensor QoS: -1 = use config, 1 = reliable (bag playback), 0 = best_effort')
+
     from ament_index_python.packages import get_package_share_directory
     from launch_ros.substitutions import FindPackageShare
     from launch.substitutions import PathJoinSubstitution
@@ -50,6 +63,10 @@ def generate_launch_description():
             'config_path': config_default,
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'use_multi_threaded': LaunchConfiguration('use_multi_threaded'),
+            'image_topic': LaunchConfiguration('image_topic'),
+            'lidar_topic': LaunchConfiguration('lidar_topic'),
+            'imu_topic': LaunchConfiguration('imu_topic'),
+            'qos_reliable': ParameterValue(LaunchConfiguration('qos_reliable'), value_type=int),
         }]
     )
 
@@ -70,6 +87,10 @@ def generate_launch_description():
         use_rviz_arg,
         use_mt_arg,
         config_arg,
+        image_topic_arg,
+        lidar_topic_arg,
+        imu_topic_arg,
+        qos_arg,
         slam_node,
         rviz_node,
     ])

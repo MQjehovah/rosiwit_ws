@@ -51,6 +51,7 @@ planner_max_iterations: 300000
 # 15° 给搜索更多可行中间姿态; 分支翻倍, 配合上面的 3s 预算。
 planner_turn_step_deg: 15.0
 planner_timeout: 3.0
+planner_goal_tolerance: 0.50
 planner_allow_reverse: true
 planner_max_reverse_distance: 1.0
 
@@ -66,6 +67,11 @@ costmap_update_rate: 5.0
 # 重活 (updateCostmap + publishLocalCostmap) 已挪到节点内 costmap_worker_ 线程,
 # 代价地图不需要再加 spinner; 见 docs/dev/nav-ros1-thread-model.md
 spinner_threads: 1
+
+# odom 看门狗 (s): SLAM 后端优化时 /lio_odom 会短暂停顿(实测 /scan 15Hz 正常,
+# 但后端 Ceres 优化/重建栅格会让 odom 断 ~0.6s), 0.6s 会误杀目标 -> FAILED 中途。
+# 旧代码是硬编码 0.6, 现在是参数。
+odom_timeout: 2.0
 
 # ---- 重规划策略 ----
 # Hybrid A* 每次重规划可能给出不同的首段机动 (前进/倒车), 控制器跟着翻转 ->
@@ -91,9 +97,13 @@ goal_tolerance_xy: 0.20
 goal_tolerance_yaw: 0.20
 
 # ---------- 前瞻 ----------
-lookahead_distance: 0.5
+# 0.5m 在 2.3m 货架通道里太短: 0.2m 横向误差就产生满舵 w(2*v*sin(a)/L),
+# 安全层的 TTC 降速随即判定"扫掠弧会撞墙", 速度被压在 0.15m/s 地板上一路蠕动
+# (实测 6m 目标墙钟 105~126s, 且偶发 FAILED_RECOVERY)。
+# 0.8/1.0 后同样 4 个 6m 目标 4/4 SUCCEEDED, 墙钟 34~59s。
+lookahead_distance: 0.8
 min_lookahead_distance: 0.25
-max_lookahead_distance: 0.7
+max_lookahead_distance: 1.0
 
 # ---------- 车体 / 规划安全距离 ----------
 # 与实车 default.yaml 一致: footprint x -0.25..0.55, y +-0.33 (前部斜切).
@@ -103,7 +113,9 @@ max_lookahead_distance: 0.7
 #   内切圆 0.250 (原点到各边最小) / 外接圆 0.585 (原点到顶点最大) / 半宽 0.330;
 #   旧的 0.39 是 xz 平台 g_min_safe 常数, 落在两者之间 —— 0.8m 门洞只剩 0.02m 余量.
 #   真实约束由 footprint + Hybrid A* / 控制器 footprint 检查保证.
-robot_radius: 0.33
+# 0.26 = 真实内切圆 0.250 + 1cm 余量。原来 0.33(半宽) 会把栅格 A* 的圆模型
+# 和二值安全半径一起放大 8cm，窄通道里直接判无路。
+robot_radius: 0.26
 footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
 # 轮廓内缩(负余量): 碰撞检查时允许贴边 2cm. 配合 0.05m 栅格, 0.75m 车身
 # 可过 ~0.85m 的地图空白通道; 安全层(2D 停障多边形)仍按实际车体兜底.
@@ -112,7 +124,23 @@ footprint_aware_control: true
 footprint_sample_spacing: 0.05
 path_resample_step: 0.08
 # g_max_safe 的等效膨胀半径 (实车 0.62)
-inflation_radius: 0.62
+#
+# inflate 必须 > inscribed(robot_radius)，否则 buildInflationField() 里
+# d<=inscribed 全给 100、循环又只到 inflation_radius，整张图退化成二值
+# (100/0，无梯度) —— 规划器就没有"走通道中线"的理由，只会贴着墙规划，
+# 车最后停在离墙 0.5m 处，恢复要原地转(扫掠 0.64m)又被安全层挡住 -> 死锁。
+# 对齐 nav2 默认量级: inscribed 0.25 / inflation 0.55~0.60 / cost_scaling 3.0
+inflation_radius: 0.60
+# exp(-k*(d-inscribed)): k 越大贴墙代价升得越快，路径越居中
+inflation_cost_scaling_factor: 3.0
+# unknown(-1) 按「高代价可通行」处理 (等价 nav2 的 track_unknown_space: false)。
+# 关闭时未建图区域=障碍: 机器人一走到地图边界, 任何跨边界的规划都失败
+# (实测 FAILED_PATH_FOOTPRINT / 原地转圈), 而本场景是边走边建图。真实障碍
+# 仍由 100 + 安全层(实时 /scan)兜底。
+# 开启后实测: 可通行面积 28.2 -> 46.8 m², 最远可达 8.0 -> 11.2m,
+# 日志里 FAILED_PATH_FOOTPRINT 归零。
+allow_unknown: true
+unknown_cost: 99
 
 # ---------- 话题 ----------
 # 用 SLAM 的 /lio_odom 而不是 Gazebo 的 /odom: nav 直接把 odom.pose 当作
@@ -160,8 +188,11 @@ safety_stop_polygon: [0.55, -0.345, 0.95, -0.345, 0.95, 0.345, 0.55, 0.345]   # 
 # 后退: 车尾后 0.35 ~ 0.75m
 safety_stop_polygon_backward: [-0.75, -0.345, -0.35, -0.345, -0.35, 0.345, -0.75, 0.345]
 # 原地旋转: 车体扫掠面 + 0.2m
-# 原地转用扫掠圆 (半径 = 车体最远顶点 0.64 + 余量); 0 = 用上面的矩形
-safety_rotation_radius_margin: 0.10
+# 原地转用扫掠圆 (半径 = 车体最远顶点 0.56 + 余量); 0 = 用上面的矩形
+# 0.10 时圆=0.66: 实测车体右侧 0.66~0.75m 的真实点就会把旋转钉死,
+# 起步 66° 的转向要在原地干等 3~5s(每个目标的 36% 时间线速度为 0)。
+# 车体真实外接圆是 0.56, 留 0.05 仍有 5cm 余量, 实测 STOP 次数 11~15 -> 0。
+safety_rotation_radius_margin: 0.05
 safety_stop_polygon_rotation: [-0.50, -0.55, 0.80, -0.55, 0.80, 0.55, -0.50, 0.55]
 # 减速: 车头前 0 ~ 0.6m
 safety_slowdown_polygon: [0.55, -0.55, 1.15, -0.55, 1.15, 0.55, 0.55, 0.55]
@@ -236,3 +267,14 @@ coverage_headland_width: 0.0
 # 门洞切分阈值 (0=关). 实测无收益, 整屋覆盖如出现跨房间来回跑再开 0.72
 coverage_doorway_width: 0.0
 coverage_report_path: ""
+
+# 近障碍限速: 用 2D 激光在行进走廊里的最近距离压线速度 (v<=sqrt(2*a*d))
+clearance_speed_limit: true
+clearance_brake_decel: 0.8
+clearance_front_offset: 0.45
+clearance_stop_margin: 0.15
+
+# Single-point nav: final yaw = path[0]->path[1] (APP protocol).
+final_yaw_from_next_point: true
+# Do not replace the goal yaw with the bearing-to-goal angle.
+plan_goal_yaw_from_bearing: false

@@ -44,6 +44,9 @@ private:
     core::ControllerConfig cfg_;
     core::Path path_;
     core::ObstacleArray obstacles_;
+    // 每拍预筛选: 只保留 DWA 一个仿真周期内可能碰到的障碍 (实车 128 个块的
+    // 三重循环把 10Hz 控制环吃满, 控制器实际只有 2~4Hz).
+    core::ObstacleArray near_obstacles_;
     core::CostmapGrid local_costmap_;
     bool has_local_costmap_ = false;
     core::Footprint footprint_;
@@ -51,17 +54,24 @@ private:
     size_t idx_;
     double max_vx_, min_vx_, max_vw_, max_accel_, max_dvw_;
     double goal_tol_, dt_, sim_time_;
+    double lookahead_;   // carrot 弧长 (goal_front critic)
     bool initialized_, goal_reached_;
     int last_samples_{0};
     double last_best_v_{0.0}, last_best_w_{0.0}, last_best_cost_{0.0};
     double last_min_clearance_{0.0};
+    double last_cross_track_{0.0};
+    double last_carrot_x_{0.0}, last_carrot_y_{0.0};
 
     std::vector<Sample> search(const core::Pose2D& pose, const core::VelocityCommand& vel);
     VelocityBounds dynamicWindow(const core::VelocityCommand& vel) const;
     core::Pose2D simulate(const core::Pose2D& pose, Sample& s) const;
     double headingCost(const core::Pose2D& pose) const;
+    // 到前向路径的横向偏差: 只奖励"贴着线走"的候选, 避免在窄走廊里
+    // 只看航向时一路切角贴墙 (实车 2026-11-03 22:20 偏出路径 0.45m).
+    double pathCrossTrack(const core::Pose2D& pose) const;
     double clearanceCost(const core::Pose2D& pose) const;
     size_t findClosest(const core::Pose2D& pose) const;
+    void filterObstacles(const core::Pose2D& pose);
     static double normAngle(double a);
 };
 

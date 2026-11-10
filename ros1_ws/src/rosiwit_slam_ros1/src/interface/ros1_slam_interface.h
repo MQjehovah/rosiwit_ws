@@ -178,7 +178,7 @@ private:
     void liftTypeCB(const std_msgs::String::ConstPtr& msg);          // 存字段 + 打日志
 
     // ---- [T7] 告警 ----
-    void loadWarningCodeTable();   // 从**本包** share 读 conf/warning_code.json (M6)
+    void loadWarningCodeTable();   // 从**本包** share 读 config/warning_code.json
     void timerPublishWarningCode(const ros::TimerEvent&);   // legacy.cpp:457-553
     void tickFreqWindow(bool is_lidar);   // 1s 窗口频率判定 (legacy.cpp:629-637/740-748)
 
@@ -272,7 +272,7 @@ private:
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图
     bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= mapping.grid.resolution)
-    double realtime_grid_resolution_ = 0.3;         // 实时 /map 分辨率 (= mapping.grid.realtime_resolution)
+    double realtime_grid_resolution_ = 0.05;        // 实时 /map 分辨率 (= mapping.grid.realtime_resolution)
     nav_msgs::OccupancyGrid global_grid_map_msg_;   // 旧 global_grid_map_ (latch 一次)
 
     // 静态/实时栅格: 主线程的 1Hz timer 与 beginMapSwitch 写, tick 线程读 (slam/info、

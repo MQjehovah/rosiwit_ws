@@ -8,7 +8,10 @@ global:
   modules:
     frontend: "fast_lio2_frontend"
     backend: "ceres_pose_graph"
-    loop_closure: "scan_context" # 回环: 建图时做 ScanContext 检索 + ICP 校验, 抑制长距离漂移
+    # 回环关闭: 仿真货架 5.8m 周期重复, ScanContext 会把不同货架认成同一处并触发
+    # 后端优化, 实测把 map 帧平移 1m+ / 旋转 28°, 导航随即 "Goal outside costmap"、
+    # 2D 地图被抹花. 20m 小场景无回环时 LIO 漂移 <5cm, 不需要后端拉回.
+    loop_closure: ""
     map_manager: "pcd_map_manager"
     localization: "localization_pipeline"
 
@@ -23,6 +26,8 @@ global:
                        # 按方位角推导的顺序/相位和 Gazebo 插件对不上, 实测反而把旋转时的
                        # 位置误差从 0.25m 放大到 0.5m). 实机 10Hz 点云带 timestamp, 不受影响.
     use_odom: false # 是否订阅并使用轮式odom
+    publish_hz: 20 # 里程计/位姿发布频率(Hz)
+    rt_grid_map_publish_hz: 1.0 # 实时栅格地图发布频率(Hz)
   frames:
     lidar_frame: lidar  # 雷达frame (与实机 xzrobot.v3.urdf 同名)
     imu_frame: imu_link # IMU frame
@@ -30,6 +35,7 @@ global:
     world_frame: map # 世界frame
     map_frame: map # 地图frame
     odom_frame: odom # 里程计frame
+    use_tf: true # 是否按 TF 自动推导雷达-IMU 外参
   map:
     voxel_resolution: 0.10 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图 (0.3 太稀, 栅格会断墙)
     save_voxel: 0.10 # 地图/点云保存降采样体素(m)
@@ -67,15 +73,17 @@ mapping:
     estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
     self_filter:
       enabled: true # 仿真启用机身过滤: 倾斜雷达会扫到自己的轮子/万向轮碰撞体
-      # base_link 系包围盒; 覆盖 gt 车体 (模型前移后 x -0.327..0.565, y +-0.359).
+      # base_link 系包围盒; 覆盖 gt 车体 + 视觉网格外沿 (实测 3D 雷达会扫到
+      # r=0.6~0.8m、z≈0.5m 的一圈机身外壳, 只按碰撞盒 x -0.327..0.565 过滤会漏,
+      # 漏掉的点在 2D 栅格上表现为贴身假障碍, 规划器直接判 "Start in obstacle".
       # z 上限抬到 0.80: 车身碰撞盒顶在 0.77, 倾斜 3D 雷达会扫到自己的车顶,
       # 不滤掉会当成贴身的假障碍.
-      x_min: -0.36
-      x_max: 0.60
-      y_min: -0.40
-      y_max: 0.40
-      z_min: -0.30
-      z_max: 0.80
+      x_min: -0.95
+      x_max: 0.95
+      y_min: -0.95
+      y_max: 0.95
+      z_min: -0.35
+      z_max: 1.00
   # 回环: 与 default.yaml 对齐。**必须显式写在这里**: 缺这段时核心会退回代码默认值,
   # 而代码里 icp_fitness_thresh 的默认是 1.0 (MSE ~1m RMS 也放行) -> 假回环保送进后端。
   loop_closure:
@@ -106,19 +114,20 @@ mapping:
   grid:
     generator: ray_casting  # 2D栅格生成策略
     resolution: 0.05 # 最终 2D 栅格/PGM 分辨率(m)
-    realtime_resolution: 0.1 # 实时 /map 分辨率(m): 0.3 太粗, 建图模式下导航只能拿到 0.3m 栅格
-    min_height: 0.1 # 地面以上障碍最低高度(m)
+    realtime_resolution: 0.05 # 实时 /map 分辨率(m): 与最终图一致, 建图中导航/RViz 直接看到 0.05m 图
+    min_height: 0.25 # 地面以上障碍最低高度(m)：0.1 时地板点会压在下边缘上，
+                     # RANSAC 地面估计比真实地面低 ~0.1m，斜射地板点就进了障碍带
     max_height: 2.0 # 地面以上障碍最高高度(m)
-    occupied_thresh: 1 # 每格最少点数判占据
+    occupied_thresh: 2 # 每格最少点数判占据
     dilate_radius: 0 # 障碍膨胀半径(格)
     close_radius: 1 # 形态学闭运算半径(格)
-    min_component_cells: 1 # 去噪最小连通域格数
+    min_component_cells: 3 # 去噪最小连通域格数
     max_range: 15.0 # 射线有效距离(m),0=不限
     ground_method: ransac # 地面提取方法 ransac|percentile
     ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
     post_pipeline: "denoise,close" # 2D后处理管道
     realtime_post_pipeline: "denoise,close"
-    realtime_min_component_cells: 1
+    realtime_min_component_cells: 4
     realtime_close_radius: 1
     realtime_skeleton_width: 0
 localization:

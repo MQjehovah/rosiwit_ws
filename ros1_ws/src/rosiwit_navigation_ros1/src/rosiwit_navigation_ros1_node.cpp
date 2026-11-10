@@ -66,6 +66,7 @@
 #include "rosiwit_navigation/nav_core/coverage_grid.hpp"
 #include "rosiwit_navigation/nav_core/footprint.hpp"
 #include "rosiwit_navigation/nav_core/localization_health.hpp"
+#include "rosiwit_navigation/nav_core/path_centering.hpp"
 #include <xzrobot_ros_dependency/SlamInfo.h>
 #include <xzrobot_ros_dependency/LocalizationState.h>
 #include <xzrobot_ros_dependency/VirtualObstacles.h>
@@ -185,7 +186,33 @@ private:
     pnh_.param<double>("lookahead_distance", lookahead_distance_, 0.6);
     pnh_.param<double>("min_lookahead_distance", min_lookahead_distance_, 0.3);
     pnh_.param<double>("max_lookahead_distance", max_lookahead_distance_, 0.9);
+    // 前瞻 = clamp(offset + gain*|v|, min, max). gain 以前写死 1.0, 于是
+    // min_lookahead_distance 在 rpp 里永远不生效 (rpp 还额外写死 0.35 硬底)。
+    pnh_.param<double>("lookahead_gain", lookahead_gain_, 0.8);
+    // nav2 RPP: 前瞻按 v*lookahead_time 缩放, 夹在 [min,max]
+    pnh_.param<bool>("use_velocity_scaled_lookahead_dist", use_velocity_scaled_lookahead_dist_, true);
+    pnh_.param<double>("lookahead_time", lookahead_time_, 1.5);
+    // nav2 rotation_shim 语义: 航向差 > rotate_to_heading_min_angle 且车没走 -> 原地转
+    pnh_.param<bool>("use_rotate_to_heading", use_rotate_to_heading_, true);
+    pnh_.param<double>("rotate_to_heading_min_angle", rotate_to_heading_min_angle_, 0.3925);
+    pnh_.param<double>("rotate_to_heading_angular_vel", rotate_to_heading_angular_vel_, 1.8);
+    // nav2 RPP 调速: 曲率 / 碰撞检测 / 末段
+    pnh_.param<double>("regulated_linear_scaling_min_radius", regulated_linear_scaling_min_radius_, 0.9);
+    pnh_.param<double>("regulated_linear_scaling_min_speed", regulated_linear_scaling_min_speed_, 0.2);
+    pnh_.param<double>("approach_velocity_scaling_dist", approach_velocity_scaling_dist_, 0.6);
+    pnh_.param<double>("min_approach_linear_velocity", min_approach_linear_velocity_, 0.05);
+    // 门区直穿 (窄口 lane / door mode)
+    pnh_.param<bool>("door_lane_enabled", door_lane_enabled_, true);
+    pnh_.param<double>("lane_width", lane_width_, 0.95);
+    pnh_.param<double>("lane_engage_dist", lane_engage_dist_, 1.0);
+    pnh_.param<double>("lane_exit_dist", lane_exit_dist_, 0.4);
+    pnh_.param<double>("lane_max_speed", lane_max_speed_, 0.20);
+    pnh_.param<double>("lane_max_omega", lane_max_omega_, 0.03);
+    pnh_.param<double>("lane_freeze_max_heading", lane_freeze_max_heading_, 0.25);
     pnh_.param<double>("inflation_radius", inflation_radius_, 0.5);
+    // nav2 inflation_layer: 膨胀代价 = 100*exp(-factor*(d - inscribed))。
+    // 越小 -> 势场越宽越"温和", 规划器越愿意走通道中轴 (窄道推荐做法)。
+    pnh_.param<double>("inflation_cost_scaling_factor", inflation_cost_scaling_factor_, 1.0);
     pnh_.param<double>("robot_radius", robot_radius_, 0.21);
     pnh_.param<int>("planner_max_iterations", planner_max_iterations_, 200000);
     pnh_.param<double>("planner_timeout", planner_timeout_, 2.0);
@@ -247,6 +274,9 @@ private:
     pnh_.param<double>("replan_lookahead", replan_lookahead_, 3.0);
     pnh_.param<double>("replan_skip_distance", replan_skip_distance_, 0.5);
     pnh_.param<int>("replan_blocked_frames", replan_blocked_frames_, 2);
+    // 目标点容错 (m): 目标压在墙脚/膨胀带/未建图边时, 规划器在半径内找
+    // 最近的 footprint-free 格. 对齐 nav2_navfn_planner 的 tolerance.
+    pnh_.param<double>("planner_goal_tolerance", planner_goal_tolerance_, 0.5);
 
     // costmap 构建节流 (scan 回调不再每个 scan 都做完整聚类)
     pnh_.param<double>("costmap_update_rate", costmap_update_rate_, 5.0);
@@ -280,14 +310,27 @@ private:
     pnh_.param<int>("safety_slowdown_release_frames", safety_slowdown_release_frames_, 2);
     // 动态安全区: 按车体几何 + 制动距离生成, 避免固定多边形与巷道宽度打架
     pnh_.param<bool>("safety_dynamic_geometry", safety_dynamic_geometry_, true);
+    pnh_.param<bool>("safety_swept_geometry", safety_swept_geometry_, false);
     pnh_.param<double>("safety_brake_decel", safety_brake_decel_, 0.8);
     pnh_.param<double>("safety_reaction_time", safety_reaction_time_, 0.2);
     pnh_.param<double>("safety_stop_margin", safety_stop_margin_, 0.05);
     pnh_.param<double>("safety_side_margin", safety_side_margin_, 0.03);
     pnh_.param<double>("safety_turn_margin", safety_turn_margin_, 0.05);
     pnh_.param<double>("safety_slowdown_extra", safety_slowdown_extra_, 0.30);
+    // 扫掠减速"看多远"(s): 以前 slowdown_extra 只写进没人读的 cfg.slowdown_extra,
+    // 扫掠分支用的是硬编码 0.8 -> 减速距离完全无法调。现在两者指向同一处。
+    pnh_.param<double>("safety_slowdown_lookahead", safety_slowdown_lookahead_,
+                       safety_slowdown_extra_);
     pnh_.param<double>("safety_scale_slew_rate", safety_scale_slew_rate_, 1.0);
     pnh_.param<double>("safety_scale_dt", safety_scale_dt_, 0.1);
+    // 近障碍限速 (legacy v*=d/1.8 / nav2 collision_monitor 的连续降速):
+    // 用 2D 激光在行进走廊里的最近距离直接压线速度, 避免"规划能过、控制器
+    // 却按 0.5m/s 贴过去, 安全层只能硬停" (2026-11-03 实车贴墙事故).
+    pnh_.param<bool>("clearance_speed_limit", clearance_speed_limit_, true);
+    pnh_.param<double>("clearance_brake_decel", clearance_brake_decel_, 0.8);
+    pnh_.param<double>("clearance_front_offset", clearance_front_offset_, 0.45);
+    pnh_.param<double>("clearance_stop_margin", clearance_stop_margin_, 0.15);
+    pnh_.param<double>("clearance_side_buffer", clearance_side_buffer_, 0.02);
     // 车身轮廓外扩: 只排除轮廓内的点 (nav2 exclusion_zones.robot_body)
     pnh_.param<double>("safety_body_margin", safety_body_margin_, 0.05);
     std::vector<double> stop_poly, slow_poly, footprint;
@@ -413,6 +456,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     pnh_.param<double>("movebase_stuck_timeout", movebase_stuck_timeout_, 60.0);
     pnh_.param<double>("movebase_goal_yaw_tolerance", movebase_goal_yaw_tolerance_,
                        goal_tolerance_yaw_);
+    // 末端对齐限时: 位置已到、但原地转被安全层拦住时, 不能无限等 (实测窄处
+    // 旋转圆 0.757m > 通道一半 -> 每拍 STOP)。超时后按"位置到达"收尾并告警。
+    pnh_.param<double>("final_rotate_timeout", final_rotate_timeout_, 3.0);
     pnh_.param<double>("movebase_rotate_tolerance", movebase_rotate_tolerance_, 0.05);
     std::vector<double> movebase_footprint;
     pnh_.param<std::vector<double>>("movebase_robot_footprint", movebase_footprint, footprint);
@@ -457,6 +503,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
 
     // 长方形车体的 footprint-aware 控制: 控制器按 footprint 采样点查 raw costmap.
     pnh_.param<bool>("footprint_aware_control", footprint_aware_control_, false);
+    pnh_.param<bool>("dwa_use_footprint", dwa_use_footprint_, true);
+    pnh_.param<bool>("cusp_rotate_enabled", cusp_rotate_enabled_, false);
+    // 起步原地旋转默认关: 车头离墙 15cm 时转 30° 就把前角扫进墙里
+    // (实车 2026-11-04 12:59 "起步旋转撞墙"). 直接交给控制器边走边纠向.
+    pnh_.param<bool>("initial_rotate_enabled", initial_rotate_enabled_, false);
     pnh_.param<double>("footprint_sample_spacing", footprint_sample_spacing_, 0.05);
     // 负余量: 轮廓内缩后做碰撞检查. 0=严格按车体; 0.02 允许贴边 2cm,
     // 是 0.75m 车身过 0.75m 通道的必要条件 (栅格离散本身占 ~0.1m).
@@ -465,6 +516,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 实时 scan)跟得上; 0.66m 车体 + 0.06m -> 0.78m 巷道仍可规划.
     pnh_.param<double>("planner_footprint_margin", planner_footprint_margin_, 0.06);
     pnh_.param<double>("path_resample_step", path_resample_step_, 0.08);
+    // 规划器只看位置, 末端航向交给 final_rotate (nav2 goal_checker 分工)
+    pnh_.param<bool>("plan_goal_yaw_from_bearing", plan_goal_yaw_from_bearing_, true);
+    // 路径 ESDF 居中: 把路径推到通道几何中轴 (窄门/窄通道决定性)。
+    // max_shift 限住单点偏移, 防止把路径推进门的另一侧。
+    pnh_.param<bool>("path_centering_enabled", path_centering_enabled_, true);
+    pnh_.param<double>("path_centering_max_shift", path_centering_max_shift_, 0.15);
     configured_footprint_.clear();
     controller_footprint_.clear();  // 实际是否启用由 setupCore 按控制器能力决定
     // 规划器/控制器统一车体轮廓；优先读显式 footprint，缺失时回退到
@@ -550,6 +607,10 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     pnh_.param<double>("nav_no_progress_timeout", no_progress_timeout_, 8.0);
     pnh_.param<double>("nav_safety_stop_timeout", safety_stop_timeout_, 2.0);
     pnh_.param<double>("slam_info_timeout", slam_info_timeout_, 2.0);
+  // odom 看门狗: 超过它就判 STOPPED_ODOM 结束任务。SLAM 后端做 Ceres 优化 /
+  // 重建栅格时 /lio_odom 会短暂停顿, 0.6s 会误杀目标(实测 7m 目标中途偶发),
+  // 仿真里放宽到 2.0s。
+  pnh_.param<double>("odom_timeout", odom_timeout_, 0.6);
     pnh_.param<std::string>("localization_state_topic", localization_state_topic_,
                             "/localization/state");
     pnh_.param<double>("slam_degrade_matching", slam_degrade_matching_, 0.65);
@@ -582,7 +643,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     pnh_.param<bool>("path_final_rotate", path_final_rotate_, false);
     // 单点导航末端朝向来源: true = 用 tracking_path[0]->[1] 的方向 (APP 常用它表示
     // "下一段延线往哪走"); false = 用 tracking_path[0].theta 原值。
-    pnh_.param<bool>("final_yaw_from_next_point", final_yaw_from_next_point_, false);
+    pnh_.param<bool>("final_yaw_from_next_point", final_yaw_from_next_point_, true);
     // cmd=1 带多个点时: 用最后一点当目标 (APP 常见的 [当前位置, 目的地] 写法)
     pnh_.param<bool>("single_point_use_last_pose", single_point_use_last_pose_, false);
 
@@ -662,6 +723,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       cfg.allow_reverse = planner_allow_reverse_;
       cfg.max_reverse_distance = planner_max_reverse_distance_;
       cfg.start_relax_radius = planning_start_relax_radius_;
+      cfg.goal_tolerance = planner_goal_tolerance_;
       planner_strategy_->initialize(cfg);
       planner_strategy_->setInflationRadius(inflation_radius_);
       planner_strategy_->setRobotRadius(robot_radius_);
@@ -689,9 +751,13 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       acfg.allow_reverse = planner_allow_reverse_;
       acfg.max_reverse_distance = planner_max_reverse_distance_;
       acfg.start_relax_radius = planning_start_relax_radius_;
+      acfg.goal_tolerance = planner_goal_tolerance_;
       async_planner_->initialize(acfg);
       async_planner_->setInflationRadius(inflation_radius_);
       async_planner_->setRobotRadius(robot_radius_);
+      // nav2 inflation_layer 语义: 内切半径内视为贴死, 外面按指数衰减 (温和势场)
+      async_planner_->setInscribedRadius(robot_radius_);
+      async_planner_->setCostScalingFactor(inflation_cost_scaling_factor_);
       if (async_planner_->supportsFootprint() && !configured_footprint_.empty()) {
         async_planner_->setRobotFootprint(planner_footprint_);
       }
@@ -710,6 +776,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       rcfg.allow_reverse = true;
       rcfg.reverse_only = true;
       rcfg.start_relax_radius = recovery_start_relax_radius_;
+      rcfg.goal_tolerance = planner_goal_tolerance_;
       ROS_INFO("[rosiwit_navigation_ros1] recovery planner config: reverse_only=%d "
                "start_relax_radius=%.2f timeout=%.2f",
                static_cast<int>(rcfg.reverse_only),
@@ -751,9 +818,9 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     if (!initController(controller_name_, controller_strategy_, true)) {
       ROS_WARN("[rosiwit_navigation_ros1] controller '%s' not found", controller_name_.c_str());
     }
-    if (footprint_aware_control_ && controller_name_ == "dwa") {
-      ROS_WARN("[rosiwit_navigation_ros1] DWA + footprint 已知会绕圈, "
-               "自动回退为圆形膨胀 (DWA 仍可用)");
+    if (footprint_aware_control_ && controller_name_ == "dwa" && !dwa_use_footprint_) {
+      ROS_WARN("[rosiwit_navigation_ros1] DWA 关闭 footprint (dwa_use_footprint=false), "
+               "回退为圆形膨胀: 车角不受保护");
     }
     // 覆盖模式的 approach 用独立 A*: 正常 planner 可能是 Hybrid A* + footprint,
     // 它会把区域边缘的目标判成 Goal in obstacle.
@@ -764,6 +831,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       pcfg.resolution = 0.05;
       pcfg.max_iterations = planner_max_iterations_;
       pcfg.timeout = planner_timeout_;
+      pcfg.goal_tolerance = planner_goal_tolerance_;
       coverage_planner_->initialize(pcfg);
       coverage_planner_->setInflationRadius(0.0);
       coverage_planner_->setRobotRadius(0.0);
@@ -779,7 +847,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
       ccfg.lookahead_distance = lookahead_distance_;
       ccfg.xy_goal_tolerance = 0.15;
       ccfg.slow_down_distance = 1.0;
-      ccfg.lookahead_gain = 1.0;
+      ccfg.lookahead_gain = lookahead_gain_;
       ccfg.max_lookahead_distance = max_lookahead_distance_;
       ccfg.min_lookahead_distance = min_lookahead_distance_;
       ccfg.max_linear_velocity = std::max(0.1, coverage_max_speed_);
@@ -831,15 +899,35 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     out = nav_core::NavigationFactory::createController(name);
     if (!out) return false;
     // footprint-aware 只对真正实现了 footprint 代价的控制器生效.
+    // DWA 同样实现了矩形采样 (simulate() 里逐个 footprint 点算 clearance),
+    // 以前被排除, 只能看到 0.26m 的圆形膨胀: 车长 0.906m 的前角被完全忽略,
+    // 实车前右角离墙 0.10m 时 DWA 还认为有 0.26m 余量 (2026-11-03 22:20).
     controller_footprint_.clear();
-    if (footprint_aware_control_ && name != "dwa" && out->supportsFootprint()) {
+    const bool dwa_fp = (name != "dwa") || dwa_use_footprint_;
+    if (footprint_aware_control_ && dwa_fp && out->supportsFootprint()) {
       controller_footprint_ = configured_footprint_;
     }
     core::ControllerConfig cfg;
     cfg.lookahead_distance = lookahead_distance_;
     cfg.xy_goal_tolerance = goal_tolerance_xy_;
     cfg.slow_down_distance = 1.5;
-    cfg.lookahead_gain = 1.0;
+    cfg.lookahead_gain = lookahead_gain_;
+    cfg.use_velocity_scaled_lookahead_dist = use_velocity_scaled_lookahead_dist_;
+    cfg.lookahead_time = lookahead_time_;
+    cfg.use_rotate_to_heading = use_rotate_to_heading_;
+    cfg.rotate_to_heading_min_angle = rotate_to_heading_min_angle_;
+    cfg.rotate_to_heading_angular_vel = rotate_to_heading_angular_vel_;
+    cfg.regulated_linear_scaling_min_radius = regulated_linear_scaling_min_radius_;
+    cfg.regulated_linear_scaling_min_speed = regulated_linear_scaling_min_speed_;
+    cfg.approach_velocity_scaling_dist = approach_velocity_scaling_dist_;
+    cfg.min_approach_linear_velocity = min_approach_linear_velocity_;
+    cfg.door_lane_enabled = door_lane_enabled_;
+    cfg.lane_width = lane_width_;
+    cfg.lane_engage_dist = lane_engage_dist_;
+    cfg.lane_exit_dist = lane_exit_dist_;
+    cfg.lane_max_speed = lane_max_speed_;
+    cfg.lane_max_omega = lane_max_omega_;
+    cfg.lane_freeze_max_heading = lane_freeze_max_heading_;
     cfg.max_lookahead_distance = max_lookahead_distance_;
     cfg.min_lookahead_distance = min_lookahead_distance_;
     cfg.max_linear_velocity = max_velocity_x_;
@@ -869,6 +957,12 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     cfg.teb_max_iterations = pnh_.param<int>("teb_max_iterations", cfg.teb_max_iterations);
     cfg.teb_max_samples = pnh_.param<int>("teb_max_samples", cfg.teb_max_samples);
     cfg.teb_dt_ref = pnh_.param<double>("teb_dt_ref", cfg.teb_dt_ref);
+    // ---- LQR 权重 (只对 lqr 控制器生效) ----
+    cfg.lqr_q_x = pnh_.param<double>("lqr_q_x", cfg.lqr_q_x);
+    cfg.lqr_q_y = pnh_.param<double>("lqr_q_y", cfg.lqr_q_y);
+    cfg.lqr_q_theta = pnh_.param<double>("lqr_q_theta", cfg.lqr_q_theta);
+    cfg.lqr_r_v = pnh_.param<double>("lqr_r_v", cfg.lqr_r_v);
+    cfg.lqr_r_w = pnh_.param<double>("lqr_r_w", cfg.lqr_r_w);
     cfg.footprint_sample_spacing = footprint_sample_spacing_;
     cfg.path_resample_step = path_resample_step_;
     cfg.allow_reverse = allow_reverse;
@@ -943,6 +1037,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         acfg.max_reverse_distance = planner_max_reverse_distance_;
         acfg.start_relax_radius = planning_start_relax_radius_;
         acfg.turn_step_deg = planner_turn_step_deg_;
+        acfg.goal_tolerance = planner_goal_tolerance_;
         next->initialize(acfg);
         next->setInflationRadius(inflation_radius_);
         next->setRobotRadius(robot_radius_);
@@ -965,6 +1060,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
             fcfg.timeout = planner_timeout_;
             fcfg.allow_reverse = false;
             fcfg.heuristic_weight = planner_heuristic_weight_;
+            fcfg.goal_tolerance = planner_goal_tolerance_;
             fb->initialize(fcfg);
             fb->setRobotRadius(robot_radius_);
             fb->setInflationRadius(inflation_radius_);
@@ -976,9 +1072,11 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
         planner_allow_reverse_ = allow_reverse;
       }
     }
-    // 控制器重建: allow_reverse 在 initialize 时固化
+    // 控制器重建: allow_reverse 在 initialize 时固化.
+    // 规划器保持单向 (clean 只前进), 但控制器必须能倒车: 车头离墙只剩
+    // 15cm 时唯一的安全动作是退, 而不是原地转 (会扫到墙).
     std::unique_ptr<core::IControllerStrategy> next_ctrl;
-    if (initController(controller_name_, next_ctrl, allow_reverse)) {
+    if (initController(controller_name_, next_ctrl, /*allow_reverse=*/true)) {
       if (!current_core_path_.points.empty()) {
         next_ctrl->setPath(current_core_path_);
       } else if (!current_path_.poses.empty()) {
@@ -1649,18 +1747,30 @@ private:
   void buildBodyPolygon()
   {
     body_polygon_.clear();
-    if (configured_footprint_.size() < 3) { return; }
-    double x0 = configured_footprint_[0].first;
+    // 必须用 monitor 建停障区用的**同一份**轮廓 (safety_footprint_poly_, 未内缩),
+    // 不能用 configured_footprint_ (已按 footprint_shrink 内缩 2cm): 否则车身排除框
+    // 比停障框小一圈, 自身回波正好落在那条缝里 -> stop_count 恒超阈值 -> 永久 STOP
+    // (2026-11-03 实测: 37 点 @ base x=0.600 = 停障框前沿, body 框右边界只有 0.58,
+    //  结果每拍 cmd_vel 被清零, 机器人一步都不动, 恢复也永远 "spin blocked")。
+    const core::Footprint fp_from_param = toPolygon(safety_footprint_poly_);
+    const core::Footprint & bfp =
+      fp_from_param.size() >= 3 ? fp_from_param : configured_footprint_;
+    if (bfp.size() < 3) { return; }
+    double x0 = bfp[0].first;
     double x1 = x0;
-    double y0 = configured_footprint_[0].second;
+    double y0 = bfp[0].second;
     double y1 = y0;
-    for (const auto & p : configured_footprint_) {
+    for (const auto & p : bfp) {
       x0 = std::min(x0, p.first);
       x1 = std::max(x1, p.first);
       y0 = std::min(y0, p.second);
       y1 = std::max(y1, p.second);
     }
-    const double m = std::max(0.0, safety_body_margin_);
+    // 至少再放大 stop_margin/side_margin 并留 3cm 余量: 动态停障框前沿是
+    // max_x + stop_margin, 车身排除框必须**严格包含**它, 否则边界点会在
+    // "排除框内/外"之间反复跳, 表现为偶发 STOP。
+    const double m = std::max(0.0, safety_body_margin_) +
+                     std::max(std::max(safety_stop_margin_, safety_side_margin_), 0.03);
     body_polygon_ = {{x0 - m, y0 - m}, {x1 + m, y0 - m}, {x1 + m, y1 + m}, {x0 - m, y1 + m}};
     ROS_INFO("[safety] body exclusion box x[%.2f, %.2f] y[%.2f, %.2f] (margin %.2f)",
              x0 - m, x1 + m, y0 - m, y1 + m, m);
@@ -1697,12 +1807,15 @@ private:
     cfg.slowdown_trigger_frames = safety_slowdown_trigger_frames_;
     cfg.slowdown_release_frames = safety_slowdown_release_frames_;
     cfg.dynamic_geometry = safety_dynamic_geometry_;
+    // 可选: 更严格的扫掠区 (nav2 collision_monitor 不做这件事, 默认关)
+    cfg.swept_geometry = safety_swept_geometry_;
     cfg.brake_decel = safety_brake_decel_;
     cfg.reaction_time = safety_reaction_time_;
     cfg.stop_margin = safety_stop_margin_;
     cfg.side_margin = safety_side_margin_;
     cfg.turn_margin = safety_turn_margin_;
     cfg.slowdown_extra = safety_slowdown_extra_;
+    cfg.slowdown_lookahead = safety_slowdown_lookahead_;
     cfg.scale_slew_rate = safety_scale_slew_rate_;
     cfg.scale_dt = safety_scale_dt_;
     safety_monitor_.configure(cfg);
@@ -1771,17 +1884,21 @@ private:
         command.kind = core::ActionKind::NAVIGATE;
         command.final_rotate = true;   // 单点导航到位后对齐目标航向
         command.final_yaw = target.theta;
-        // APP 对"单点导航"往往下发两个点: [到达点, 延线下一点]。真实意图是到位后
-        // 让车头朝向**下一段延线方向**, 而 tracking_path[0].theta 常常是 0(未填),
-        // 直接用它会让车头正好差 180°(实测 2026-10-31)。开关打开时用 p0→p1 方向。
+        // 单点导航规则 (APP 协议): 目标 = path[0]; 若存在 path[1], 目标朝向 = p0->p1.
+        // 内联两点路径的 theta 常常是 0(未填), 所以这里强制用 p0->p1 的方向;
+        // 文件路径分支在 startActionNavigation 里同样按 tail[0]->tail[1] 计算.
         if (final_yaw_from_next_point_ && action_goal_.tracking_path.size() >= 2) {
-          const core::Pose2D & a = action_goal_.tracking_path[0];
-          const core::Pose2D & b = action_goal_.tracking_path[1];
+          const size_t last_pair = action_goal_.tracking_path.size() - 2;
+          const size_t i0 = std::min<size_t>(
+            static_cast<size_t>(std::max<long>(0, action_goal_.path_index)), last_pair);
+          const core::Pose2D & a = action_goal_.tracking_path[i0];
+          const core::Pose2D & b = action_goal_.tracking_path[i0 + 1];
           const double dx = b.x - a.x;
           const double dy = b.y - a.y;
-          if (std::hypot(dx, dy) > 0.1) {
+          if (std::hypot(dx, dy) > 1e-3) {
             command.final_yaw = std::atan2(dy, dx);
-            ROS_INFO("[movebase_iface] final_yaw 取 p0->p1 方向 = %.1fdeg (app theta=%.1fdeg)",
+            ROS_INFO("[movebase_iface] final_yaw 取 p%d->p%d 方向 = %.1fdeg (app theta=%.1fdeg)",
+                     static_cast<int>(i0), static_cast<int>(i0 + 1),
                      command.final_yaw * 57.2957795, target.theta * 57.2957795);
           }
         }
@@ -1918,6 +2035,14 @@ private:
         return;
       }
       target = tail.front();
+      // 单点导航规则: 目标点 = path[0], 目标朝向 = path[0]->path[1] 的方向.
+      // 文件里每个点只有 x/y (theta 由 fillPathYaw 估算), 这里按剩余路径的
+      // 前两点再显式算一次, 保证"到点后车头沿路径前进方向".
+      if (tail.size() >= 2) {
+        const double dx = tail[1].x - tail[0].x;
+        const double dy = tail[1].y - tail[0].y;
+        if (std::hypot(dx, dy) > 1e-3) { target.theta = std::atan2(dy, dx); }
+      }
     }
 
     const core::Pose2D start = action_cmd_.has_start
@@ -1946,6 +2071,65 @@ private:
     }
     beginNavigationTask(goal, task_cmd, start,
                         allow_initial_rotate, start_override, action_speed_);
+  }
+
+  // 清洁路径是"往返"式 (车道间距 0.46m, 尽头 180° 折返), 但 Path 里没有
+  // "同一位置连续点"的旋转段 —— executeRotationSegment() 靠这种点识别原地
+  // 旋转, 没有就永远不触发, 控制器只能自己猜掉头方向 (实车 22:42 在车道尽头
+  // 冲出路径 1.8m, 又转不回来). 这里按几何方向重算每点朝向, 并在折返点插入
+  // 一段原地旋转 (同一位置, theta 从入向渐变到出向).
+  static void insertCuspRotationSegments(std::vector<core::Pose2D> & path)
+  {
+    const size_t n = path.size();
+    if (n < 4) { return; }
+    // App 路径的 theta 不可靠, 一律按几何方向重算.
+    for (size_t i = 0; i + 1 < n; ++i) {
+      const double dx = path[i + 1].x - path[i].x;
+      const double dy = path[i + 1].y - path[i].y;
+      if (std::hypot(dx, dy) > 1e-4) { path[i].theta = std::atan2(dy, dx); }
+    }
+    path[n - 1].theta = path[n - 2].theta;
+
+    std::vector<core::Pose2D> out;
+    out.reserve(n + 16);
+    size_t i = 0;
+    while (i < n) {
+      // 前视 0.8m 的路径方向变化: 往返式路径的掉头是半径 ~0.23m 的半圆,
+      // 相邻点只转 ~10°, 单点判定抓不到, 必须按 0.8m 弧长累计.
+      size_t j = i + 1;
+      double acc = 0.0;
+      while (j + 1 < n && acc < 0.8) {
+        acc += std::hypot(path[j + 1].x - path[j].x, path[j + 1].y - path[j].y);
+        ++j;
+      }
+      const double turn = normalizeAngle(path[j].theta - path[i].theta);
+      if (j <= i + 1 || std::fabs(turn) < 2.6) {
+        out.push_back(path[i]);
+        ++i;
+        continue;
+      }
+      // 弧顶 = 离入口最远的点: 先把车开到车道尽头, 再原地掉头.
+      size_t apex = i;
+      double best = -1.0;
+      for (size_t k = i; k <= j; ++k) {
+        const double dd = std::hypot(path[k].x - path[i].x, path[k].y - path[i].y);
+        if (dd > best) { best = dd; apex = k; }
+      }
+      for (size_t k = i; k < apex; ++k) { out.push_back(path[k]); }
+      const int steps = std::max(3, static_cast<int>(std::ceil(std::fabs(turn) / 0.35)));
+      for (int k = 0; k <= steps; ++k) {
+        core::Pose2D q = path[apex];
+        q.theta = normalizeAngle(path[i].theta + turn * (static_cast<double>(k) / steps));
+        out.push_back(q);
+      }
+      ROS_INFO("[movebase_iface] 折返点 (%.2f,%.2f): 插入原地掉头 %.0f°",
+               path[apex].x, path[apex].y, std::fabs(turn) * 180.0 / M_PI);
+      i = j + 1;
+    }
+    if (out.empty() || out.back().x != path[n - 1].x || out.back().y != path[n - 1].y) {
+      out.push_back(path[n - 1]);
+    }
+    path.swap(out);
   }
 
   void startActionFollowPath()
@@ -1977,6 +2161,8 @@ private:
       failTask(movebase::RESULT_POSE_ERROR, "FAILED_POSE");
       return;
     }
+    // 折返点插入原地旋转段, 交给 executeRotationSegment() 执行.
+    if (cusp_rotate_enabled_) { insertCuspRotationSegments(path); }
 
     nav_msgs::Path ros_path;
     ros_path.header.frame_id = map_frame_;
@@ -1989,8 +2175,12 @@ private:
       stamped.pose.orientation = quatFromYaw(pose.theta);
       ros_path.poses.push_back(stamped);
     }
-    // 换路径必须同时刷新 core 版本: 否则下面"优先用 current_core_path_"会拿到
-    // 上一条 NAVIGATE 的旧路径 (控制器跟着旧路径跑, 而 /global_path 发的是新路径)。
+    // 换路径必须同时刷新 ROS 与 core 两份。以前这里写的是
+    //   current_core_path_ = toCorePath(current_path_);
+    // 而 current_path_ 还是上一条 NAVIGATE 的旧路径（终点=当前位置）：
+    // 控制器收到旧路径后 isGoalReached() 立刻为真 -> navi_cmd=3 一步都不跟、
+    // 直接报 "goal reached"（实测 2026-11-03 20:34:45）。
+    current_path_ = ros_path;
     current_core_path_ = toCorePath(current_path_);
 
     core::ActionTaskCommand task_command;
@@ -3017,6 +3207,7 @@ private:
        << ",\"replan_fail\":" << replan_fail_count_
        << ",\"plan_ms\":" << last_plan_ms_
        << ",\"path_points\":" << current_path_.poses.size()
+       << ",\"path_turn_deg\":" << last_path_turn_deg_
        << ",\"planner\":\"" << planner_name_ << "\""
        << ",\"profile\":\"" << motion_profile_ << "\""
        << ",\"controller\":\"" << controller_name_ << "\""
@@ -3072,6 +3263,58 @@ private:
       }
       updateCostmap();
       publishLocalCostmap(ros::TimerEvent());
+    }
+  }
+
+  // 规划视图去孤立障碍: 占据格若 8 邻域里 <=1 个占据格, 判为建图噪点并清空.
+  // 3D 雷达斜装、原地转向和行人拖影都会在栅格上留下 1~2 格的假障碍; 规划器
+  // 按 100=碰撞判定, 一个孤立格就能让 Hybrid A* 报 "Start/Goal in obstacle",
+  // 或者把 2.3m 的货架通道切成互不连通的小块. /map 本身不做修改.
+  static void removeIsolatedObstacles(std::vector<int8_t> & data,
+                                      unsigned int w, unsigned int h)
+  {
+    if (data.size() != static_cast<size_t>(w) * h) { return; }
+    const std::vector<int8_t> src = data;
+    const auto occupied = [&](int x, int y) -> int {
+      if (x < 0 || y < 0 || x >= static_cast<int>(w) || y >= static_cast<int>(h)) { return 0; }
+      return src[static_cast<size_t>(y) * w + x] > 50 ? 1 : 0;
+    };
+    for (unsigned int y = 0; y < h; ++y) {
+      for (unsigned int x = 0; x < w; ++x) {
+        const size_t i = static_cast<size_t>(y) * w + x;
+        if (src[i] <= 50) { continue; }
+        int neighbors = 0;
+        for (int dy = -1; dy <= 1 && neighbors <= 1; ++dy) {
+          for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) { continue; }
+            neighbors += occupied(static_cast<int>(x) + dx, static_cast<int>(y) + dy);
+          }
+        }
+        if (neighbors <= 1) { data[i] = core::kCostFree; }
+      }
+    }
+  }
+
+  // 把机器人当前所在的圆盘清成自由: 机器人脚下不可能是真障碍, 但建图会把机身
+  // 和转向残影标在这里, 于是每次规划都以 "Start in obstacle" 失败.
+  static void clearRobotDisk(std::vector<int8_t> & data,
+                             unsigned int w, unsigned int h,
+                             double ox, double oy, double res,
+                             double cx, double cy, double radius)
+  {
+    if (data.size() != static_cast<size_t>(w) * h || res <= 0.0) { return; }
+    const int r = static_cast<int>(std::ceil(radius / res));
+    const int gx = static_cast<int>((cx - ox) / res);
+    const int gy = static_cast<int>((cy - oy) / res);
+    for (int dy = -r; dy <= r; ++dy) {
+      for (int dx = -r; dx <= r; ++dx) {
+        if (dx * dx + dy * dy > r * r) { continue; }
+        const int x = gx + dx;
+        const int y = gy + dy;
+        if (x < 0 || y < 0 || x >= static_cast<int>(w) || y >= static_cast<int>(h)) { continue; }
+        const size_t i = static_cast<size_t>(y) * w + x;
+        if (data[i] > 0) { data[i] = core::kCostFree; }
+      }
     }
   }
 
@@ -3134,6 +3377,31 @@ private:
         planner_layers_.configure(cfg, core::kCostFree);
         planner_layers_.update(ros::Time::now().toSec());
         semantic = planner_layers_.combined();
+      }
+
+      // 规划视图清理（只影响规划/发布的可视化，不动 /map）:
+      //   1) 去掉孤立占据格 —— 仿真里 3D 雷达斜装 + 原地转向 + 行人拖影会留下
+      //      单格假障碍，规划器按 100=碰撞处理，会判 "Start/Goal in obstacle"，
+      //      也会把 2.3m 货架通道切碎；
+      //   2) 把机器人脚下清空 —— 自身残影常驻在当前位姿，导致每次规划都
+      //      "Start in obstacle"，而机器人所在位置在物理上必然是空的。
+      // 真实近处障碍仍由 /scan 安全层（safety_*）实时兜底。
+      removeIsolatedObstacles(semantic, w, h);
+      {
+        double sx = 0.0, sy = 0.0;
+        bool have_pose = false;
+        try {
+          const geometry_msgs::TransformStamped tf = tf_buffer_.lookupTransform(
+            map_frame_, robot_frame_, ros::Time(0), ros::Duration(0.02));
+          sx = tf.transform.translation.x;
+          sy = tf.transform.translation.y;
+          have_pose = true;
+        } catch (tf2::TransformException &) {
+          have_pose = false;
+        }
+        if (have_pose) {
+          clearRobotDisk(semantic, w, h, ox, oy, res, sx, sy, robot_radius_ + 0.05);
+        }
       }
 
       auto grid = std::make_shared<core::CostmapGrid>();
@@ -3546,7 +3814,16 @@ private:
     }
     const core::Pose2D start = pending_has_start_override_
       ? pending_start_override_ : toCorePose(current_pose_);
-    const core::Pose2D goal = toCorePose(pending_goal_);
+    core::Pose2D goal = toCorePose(pending_goal_);
+    // 规划器只负责"走到位置", 目标航向由末端 final_rotate 负责 (nav2 的
+    // goal_checker + RotateToGoal 分工)。若把目标航向原样交给规划器,
+    // "沿 +y 进门却要求末端朝 +x" 会被它提前 1.5m 拐成一条大弧:
+    // 实测门前方 1.5m 处偏出 24cm, 到门平面还剩 28° 航向差 -> 0.75m 门洞必碰。
+    if (plan_goal_yaw_from_bearing_ && !pending_has_start_override_) {
+      const double dxg = goal.x - start.x;
+      const double dyg = goal.y - start.y;
+      if (std::hypot(dxg, dyg) > 0.5) { goal.theta = std::atan2(dyg, dxg); }
+    }
     const core::Costmap planning_costmap = buildStartClearedCostmap(
       start, planning_start_clear_margin_, planning_clear_start_footprint_);
     {
@@ -3581,6 +3858,7 @@ private:
     async_plan_future_ = std::async(std::launch::async,
       [this, planner, fallback, pname, start, goal, tight_fp, full_fp,
        a_star_circum, a_star_inner]() {
+      ROS_WARN("[plan-dbg] lambda begin");
       if (!planner) {
         return core::Result<core::Path>::error(
           core::ErrorCode::PLANNING_FAILED, "planner gone");
@@ -3606,9 +3884,19 @@ private:
         last_plan_used_fallback_.store(false);
         return primary;
       }
-      // 回退 A*: 先用**外接圆** (任何朝向都安全, 但窄门洞必然无解),
-      // 无解再退**内切圆** (能过窄处, 但车头可能压墙) —— 后者由上层
-      // pathFootprintClear() 用车体轮廓逐点校验, 不合格直接拒绝。
+      // 回退 A*: 先用**内切圆**(robot_radius, 能过窄处), 路径由上层
+      // pathFootprintClear() 用车体轮廓逐点复核; 内切圆也无解时再用**外接圆**
+      // (任何朝向都安全, 但需要 ~1.45m 通道, 正常 hybrid 早就成功了).
+      // 以前先试外接圆: 0.727m 的 A* 在 1.2m 通道里必然无解, 白跑一遍超时,
+      // 而且日志里 "safety=15 cells (robot=0.73m)" 会让人误判成配置错误.
+      fallback->setRobotRadius(a_star_inner);
+      auto inner = fallback->plan(start, goal);
+      if (inner.is_ok()) {
+        ROS_WARN("[plan] %s failed (%s), fallback to A* r=%.3f (内切圆, 需轮廓校验)",
+                 pname.c_str(), primary.error_message().c_str(), a_star_inner);
+        last_plan_used_fallback_.store(true);
+        return inner;
+      }
       if (a_star_circum > 1e-3) {
         fallback->setRobotRadius(a_star_circum);
         auto safe = fallback->plan(start, goal);
@@ -3618,14 +3906,11 @@ private:
           last_plan_used_fallback_.store(true);
           return safe;
         }
-        ROS_WARN("[plan] A* 外接圆 r=%.3f 无解 (窄处必然), 退内切圆 r=%.3f + 轮廓校验",
-                 a_star_circum, a_star_inner);
+        ROS_WARN("[plan] A* 内切圆/外接圆均无解 (r=%.3f/%.3f)",
+                 a_star_inner, a_star_circum);
       }
-      fallback->setRobotRadius(a_star_inner);
-      ROS_WARN("[plan] %s failed (%s), fallback to A* r=%.3f (内切圆, 需轮廓校验)",
-               pname.c_str(), primary.error_message().c_str(), a_star_inner);
       last_plan_used_fallback_.store(true);
-      return fallback->plan(start, goal);
+      return inner;
     });
   }
 
@@ -3702,6 +3987,9 @@ private:
     }
 
     if (!result.is_ok()) {
+      // plan_ms 在失败时也记录: 以前只在成功路径写, 失败永远显示 -1,
+      // 现场会误判成"规划没跑"(2026-11-01 doorway 排查踩过).
+      last_plan_ms_ = (ros::Time::now().toSec() - plan_start_time_) * 1000.0;
       ROS_ERROR("[rosiwit_navigation_ros1] planner '%s' failed: %s",
                 planner_name_.c_str(), result.error_message().c_str());
       // 周期重规划失败 != 当前路径失效。旧路径仍可安全跟踪时, 只记录并延后
@@ -3828,13 +4116,14 @@ private:
         ++plan_generation_;
         return;
       }
-      // 首版规划被拒: 若前段是干净的 (>=4 点且 >=0.40m), 截到最后一个安全点先走,
+      // 首版规划被拒: 若前段是干净的 (>=4 点且 >=1.0m), 截到最后一个安全点先走,
       // 并让 replanningCheck 立刻重规划 (plan_truncated_)。
       // 依据 (2026-11-01 仿真): hybrid 自己按 planner_footprint_ 验证过的路径,
       // 在 d_start=358cm 处被判 cost=100 -> 直接 FAILED_PATH_FOOTPRINT (3/3)。
       // 直接失败对用户没有价值: 前 3.5m 明明是清的。
-      // 但截断点必须离被拒点还有**停车余量**, 否则等于把车开到贴着障碍的地方停
-      // (评审 finding 1): 规划基元 0.1~0.3m + 半格容差, 0.5m 才够。
+      // 门槛从 0.40m 提到 1.00m: 2026-11-03 实车 7.5m 目标只剩 0.46m 清白前段,
+      // 车按这段朝墙蹭过去 (safety 连续 STOP), 还被我加的 goal 同步误判成到达。
+      // 截断点同时保留 0.5m 停车余量 (评审 finding 1)。
       if (fp_bad >= 4) {
         // 从被拒点往回退, 直到"截断点到被拒点" >= 0.5m: 留停车余量, 别把车
         // 停在贴着障碍的位置 (评审 finding 1: 规划基元 0.1~0.3m + 半格容差)。
@@ -3848,7 +4137,7 @@ private:
         const core::Pose2D & p0 = planned.points.front().pose;
         const core::Pose2D & pk = planned.points[k - 1].pose;
         const double clear_len = std::hypot(pk.x - p0.x, pk.y - p0.y);
-        if (k >= 4 && clear_len >= 0.40) {
+        if (k >= 4 && clear_len >= 1.00) {
           ROS_WARN("[plan] 轮廓检查在 %s 处失败 -> 只走清白前段 %.2fm (%zu/%zu 点), "
                    "立即重规划", fp_why.c_str(), clear_len, k, planned.points.size());
           planned.points.resize(k);
@@ -3878,7 +4167,53 @@ private:
     // plan_truncated_ 交给 replanningCheck 消费 (见那里的 due); 这里不能拨
     // last_plan_time_ —— 本函数末尾会无条件把它重置为 now (评审 finding 3)。
 
+    // ESDF 居中: 规划器只保证"不撞", 不保证"走在通道中间";
+    // 窄门/窄通道下单边余量只有几厘米, 居中能直接决定过不过得去。
+    if (path_centering_enabled_) {
+      core::CostmapGrid center_grid;
+      {
+        std::lock_guard<std::mutex> map_lk(map_mu_);
+        if (last_planning_costmap_.grid) { center_grid = *last_planning_costmap_.grid; }
+      }
+      if (center_grid.data.size() > 0) {
+        core::ObstacleDistance esdf;
+        esdf.update(center_grid);
+        core::CenteringConfig cc;
+        cc.max_shift = path_centering_max_shift_;
+        core::Path centered = planned;
+        if (core::centerPathAlongClearance(&centered, esdf, planner_footprint_, cc)) {
+          planned = centered;
+        }
+      }
+    }
+    // 诊断: 折角过大 (=路径锯齿) 是"控制器甩头 -> 安全层判撞"的直接原因,
+    // 现场只看路径点看不出锯齿, 所以把最大折角打进 /nav_diagnostics。
+    last_path_turn_deg_ = core::detail::pathMaxTurnDegrees(planned);
     current_path_ = toRosPath(planned, pending_goal_.header.frame_id, ros::Time::now());
+    // 目标容错: 规划器可能把目标吸附到 tolerance 内的 free 格 (hybrid/astar 的
+    // snapGoalToFree). 到点判定 isGoalReached() 用的是 goal_pose_, 这里必须同步,
+    // 否则车停在吸附点却永远判"没到" -> 60s 后 FAILED_STUCK.
+    if (!planned.points.empty() && !goal_pose_.header.frame_id.empty() &&
+        (!task_active_ || action_task_.kind() == core::ActionKind::NAVIGATE)) {
+      const auto & end = planned.points.back().pose;
+      const double gdx = end.x - goal_pose_.pose.position.x;
+      const double gdy = end.y - goal_pose_.pose.position.y;
+      const double gd = std::hypot(gdx, gdy);
+      // 只跟随"规划器真正吸附的那一点点" (<= goal_tolerance)。路径被轮廓检查
+      // 截断时 (plan_truncated_) 末端只是"清白前段"的末点, 把 goal_pose_ 挪过去
+      // 会让车走 0.5m 就报到达, 然后按 App 路径直接朝墙开。
+      if (!plan_truncated_ && gd <= planner_goal_tolerance_ + 0.25 &&
+          gd > std::max(0.15, goal_tolerance_xy_)) {
+        ROS_WARN("[plan] goal snapped %.2fm: (%.2f,%.2f) -> (%.2f,%.2f); "
+                 "arrival check follows snapped goal",
+                 gd, goal_pose_.pose.position.x, goal_pose_.pose.position.y,
+                 end.x, end.y);
+        goal_pose_.pose.position.x = end.x;
+        goal_pose_.pose.position.y = end.y;
+        goal_pose_.pose.orientation = quatFromYaw(end.theta);
+        pending_goal_ = goal_pose_;
+      }
+    }
     current_core_path_ = planned;   // 旋转段执行器读取 velocity_x==0 标记
 
     // 直接把核心路径交给控制器, 不能用 toCorePath(ROS Path) 转一圈: ROS
@@ -3913,15 +4248,35 @@ private:
       const auto & b = planned.points.back().pose;
       path_span = std::hypot(b.x - a.x, b.y - a.y);
     }
-    if (allow_initial_rotate && planned.points.size() > 2 && !first_reverse &&
-        path_span > 0.6) {
+    if (allow_initial_rotate && initial_rotate_enabled_ && planned.points.size() > 2 &&
+        !first_reverse && path_span > 0.6 && !goal_pose_.header.frame_id.empty()) {
       const double current_yaw = yawFromQuat(current_pose_.pose.orientation);
       const double dx = planned.points[1].pose.x - planned.points[0].pose.x;
       const double dy = planned.points[1].pose.y - planned.points[0].pose.y;
       const double path_yaw = std::atan2(dy, dx);
-      if (std::abs(normalizeAngle(path_yaw - current_yaw)) > 0.35) {
+      // 起步朝向: 取"沿路径约 1m 处"的方向, 不要用目标方位角。
+      // 目标方位角可能指向障碍: 2026-11-03 实车路径前方干净, 却按 bearing
+      // 往左转, 左侧正好有障碍 -> 安全层连续 STOP, 车被自己逼停。
+      // 路径本身是规划器验证过可走的, 沿它取前瞻方向才是安全的。
+      double target_yaw = path_yaw;
+      if (path_span > 1.0 && planned.points.size() >= 2) {
+        const auto & p0 = planned.points.front().pose;
+        double acc = 0.0;
+        size_t k = 1;
+        for (; k + 1 < planned.points.size(); ++k) {
+          const auto & a = planned.points[k].pose;
+          const auto & b = planned.points[k + 1].pose;
+          acc += std::hypot(b.x - a.x, b.y - a.y);
+          if (acc >= 1.0) break;
+        }
+        const auto & pk = planned.points[k].pose;
+        if (std::hypot(pk.x - p0.x, pk.y - p0.y) > 0.30) {
+          target_yaw = std::atan2(pk.y - p0.y, pk.x - p0.x);
+        }
+      }
+      if (std::abs(normalizeAngle(target_yaw - current_yaw)) > 0.35) {
         m_need_initial_rotate_ = true;
-        m_initial_rotate_target_ = path_yaw;
+        m_initial_rotate_target_ = target_yaw;
       }
     }
 
@@ -4446,6 +4801,41 @@ private:
       return true;
   }
 
+  // nav2 `BackUp` 的等价物: 反向逃逸规划不可用时, 只要车尾走廊干净就直接直线倒车。
+  // 以前这里直接 failRecovery(): 而原地转在窄通道里会被安全层挡住, 41 个候选目标
+  // 又常常一个都规划不出来 -> 一次规划失败就判死 ("下目标没反应 / FAILED_RECOVERY")。
+  bool startStraightReverseFallback(const char * why)
+  {
+    if (!recovery_controller_) { return false; }
+    const double dist = std::max(0.30, recovery_back_distance_);
+    if (!rearClearForBackoff(dist)) {
+      ROS_WARN("[recovery] straight-reverse fallback blocked (rear %.2fm, %s)",
+               dist, why);
+      return false;
+    }
+    const core::Pose2D s = toCorePose(current_pose_);
+    const int n = std::max(2, static_cast<int>(std::ceil(dist / 0.10)));
+    core::Path path;
+    path.points.reserve(static_cast<size_t>(n) + 1);
+    for (int i = 0; i <= n; ++i) {
+      const double d = dist * static_cast<double>(i) / static_cast<double>(n);
+      core::PathPoint pt;
+      pt.pose = core::Pose2D(s.x - std::cos(s.theta) * d,
+                             s.y - std::sin(s.theta) * d, s.theta);
+      pt.velocity_x = 0.0;
+      path.points.push_back(pt);
+    }
+    discardRecoveryPlan();
+    recovery_core_path_ = path;
+    current_path_ = toRosPath(recovery_core_path_, map_frame_, ros::Time::now());
+    recovery_controller_->setPath(recovery_core_path_);
+    recovery_stage_ = RecoveryStage::FOLLOW;
+    recovery_started_ = ros::Time::now();
+    ROS_WARN("[recovery] %s -> straight-reverse fallback %.2fm (%zu pts)", why, dist,
+             current_path_.poses.size());
+    return true;
+  }
+
   void failRecovery()
   {
     resetRecovery();
@@ -4500,7 +4890,11 @@ private:
         (now - recovery_started_).toSec() > recovery_timeout_) {
       ROS_WARN("[rosiwit_navigation_ros1] recovery timeout after %.1fs (stage=%d)",
                (now - recovery_started_).toSec(), static_cast<int>(recovery_stage_));
-      failRecovery();
+      // 任何阶段超时都先试直线倒车; 只有在执行阶段(FOLLOW)或车尾不通时才判死。
+      if (recovery_stage_ == RecoveryStage::FOLLOW ||
+          !startStraightReverseFallback("escape timeout")) {
+        failRecovery();
+      }
       return;
     }
     if (recovery_stage_ == RecoveryStage::CLEAR) {
@@ -4555,7 +4949,10 @@ private:
       return;
     }
     if (recovery_stage_ == RecoveryStage::PLANNING) {
-      if (!recovery_plan_future_.valid()) { failRecovery(); return; }
+      if (!recovery_plan_future_.valid()) {
+        if (!startStraightReverseFallback("stale escape future")) { failRecovery(); }
+        return;
+      }
       if (recovery_plan_future_.wait_for(std::chrono::seconds(0)) !=
           std::future_status::ready) {
         // 规划中: 保持停车 (不是保持上一条速度), 控制环不被阻塞
@@ -4577,9 +4974,9 @@ private:
         return;
       }
       if (!out.ok) {
-        ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed (%s); "
-                  "task will fail", out.error.c_str());
-        failRecovery();
+        ROS_ERROR("[rosiwit_navigation_ros1] reverse escape planning failed (%s)",
+                  out.error.c_str());
+        if (!startStraightReverseFallback("no escape path")) { failRecovery(); }
         return;
       }
       recovery_core_path_ = out.path;
@@ -4871,7 +5268,7 @@ private:
     }
     if (!is_navigating_ || is_paused_) { return; }
     if (last_odom_stamp_.isZero() ||
-        (ros::Time::now() - last_odom_stamp_).toSec() > 0.6) {
+        (ros::Time::now() - last_odom_stamp_).toSec() > odom_timeout_) {
       if (task_active_) {
         failTask(movebase::RESULT_PERCEPTION_TIMEOUT, "STOPPED_ODOM");
       } else {
@@ -4973,8 +5370,13 @@ private:
       if (!last_motion_stamp_.isZero() &&
           (now - last_motion_stamp_).toSec() > no_progress_timeout_) {
         last_motion_stamp_ = now;   // 防止重复触发
-        ROS_WARN("[rosiwit_navigation_ros1] no motion for %.1fs, start recovery",
-                 no_progress_timeout_);
+        std::string diag = "n/a";
+        if (controller_strategy_) {
+          std::lock_guard<std::mutex> cl(controller_mu_);
+          diag = controller_strategy_->getDiagnostics();
+        }
+        ROS_WARN("[rosiwit_navigation_ros1] no motion for %.1fs, start recovery (%s)",
+                 no_progress_timeout_, diag.c_str());
         if (startRecovery()) { return; }
         if (task_active_) {
           failTask(movebase::RESULT_NO_PROGRESS, "FAILED_NO_MOTION");
@@ -5033,9 +5435,21 @@ private:
       // 原地旋转 (navi_cmd=6 / 单点末端对齐) 与倒车 (navi_cmd=7):
       // 速度 primitive 由算法层给出, 这里只做安全过滤与发布.
       if (action_task_.rotating()) {
+        // 末端原地对齐限时: 位置已到, 但窄处旋转被安全层每拍 STOP 时不能死等.
+        const ros::Time now = ros::Time::now();
+        if (final_rotate_since_.isZero()) { final_rotate_since_ = now; }
+        if (final_rotate_timeout_ > 0.0 &&
+            (now - final_rotate_since_).toSec() > final_rotate_timeout_) {
+          ROS_WARN("[nav] final yaw rotate timeout %.1fs -> finish at current yaw "
+                   "(safety blocked in tight space)", final_rotate_timeout_);
+          final_rotate_since_ = ros::Time();
+          finishTask(movebase::RESULT_SUCCESS);
+          return;
+        }
         publishRotationStep();
         return;
       }
+      final_rotate_since_ = ros::Time();
       if (action_task_.backing()) {
         publishBackOffStep();
         return;
@@ -5051,8 +5465,16 @@ private:
       geometry_msgs::Twist rot_cmd;
       const double current_yaw = yawFromQuat(current_pose_.pose.orientation);
       const double angle_error = normalizeAngle(m_initial_rotate_target_ - current_yaw);
-      if (std::abs(angle_error) < 0.08) {
+      // 对准精度: 起步航向残差会原封不动变成"规划起点的航向", 于是整条路径
+      // 从起点就斜着 (实测残差 3.2° -> 路径斜 3.2° -> 沿路径直行 1.2m 漂 8cm ->
+      // 门前斜置 3~5°)。0.08rad(4.6°) 太松, 收到 0.02rad(1.1°)。
+      if (std::abs(angle_error) < 0.01) {
         m_need_initial_rotate_ = false;
+        // 转完必须按新朝向重规划: 否则路径还是"从旧朝向起步"的弧线, 控制器
+        // 逼近这段弧时会再次把车甩出 0.2m (等于白转)。
+        ROS_INFO("[rosiwit_navigation_ros1] initial rotate done -> replan from new heading");
+        startPlanning(goal_pose_, /*allow_initial_rotate=*/false, /*restart=*/true);
+        return;
       } else {
         rot_cmd.angular.z = std::max(-0.8, std::min(0.8, 1.5 * angle_error));
         publishCommand(rot_cmd);
@@ -5069,7 +5491,12 @@ private:
     // 由控制器自己执行)
     if (!(controller_strategy_ && controller_strategy_->supportsInPlaceRotation())) {
       geometry_msgs::Twist rot_cmd;
-      if (executeRotationSegment(toCorePose(current_pose_), rot_cmd)) {
+      // 旋转刚完成时给 1.5s 冷却: 否则机器人还站在旋转点上, 下一拍又满足
+      // "err > tolerance" 条件 -> 反复 rotate/re-seed (实车 2026-11-04
+      // 13:18:20 一秒内出现 4 次 "rotation done -> controller re-seeded").
+      const bool rotation_cooling =
+        !rotation_cooldown_until_.isZero() && ros::Time::now() < rotation_cooldown_until_;
+      if (!rotation_cooling && executeRotationSegment(toCorePose(current_pose_), rot_cmd)) {
         rotation_active_ = true;
         publishCommand(rot_cmd);
         recordActionTraveled();
@@ -5080,6 +5507,7 @@ private:
       // 重新播种整条路径让参考点推进到旋转段之后, 否则会停在半转姿态.
       if (rotation_active_) {
         rotation_active_ = false;
+        rotation_cooldown_until_ = ros::Time::now() + ros::Duration(1.5);
         if (!current_core_path_.points.empty()) {
           controller_strategy_->setPath(current_core_path_);
         }
@@ -5141,14 +5569,93 @@ private:
     return distance < goal_tolerance_xy_ && angle_diff < goal_tolerance_yaw_;
   }
 
+  // 近障碍限速: 用最新 2D 激光 (map 系) 在**行进走廊**里找最近点, 按
+  // v <= sqrt(2 * a * (d_clear)) 压线速度。d_clear = 最近距离 - 车头偏移 - 停车余量。
+  // 只压线速度, 不改 angular: 让控制器保持自己的转向, 避免 (v,w) 曲率失真。
+  geometry_msgs::Twist applyClearanceSpeedLimit(const geometry_msgs::Twist & cmd)
+  {
+    if (!clearance_speed_limit_ || std::fabs(cmd.linear.x) < 1e-3) return cmd;
+    if (current_pose_.header.frame_id.empty()) return cmd;
+
+    std::vector<geometry_msgs::Point> pts;
+    {
+      std::lock_guard<std::mutex> lk(data_mu_);
+      if (laser_points_.empty()) return cmd;
+      pts.assign(laser_points_.begin(), laser_points_.end());
+    }
+    const double yaw = yawFromQuat(current_pose_.pose.orientation);
+    const double cy = std::cos(yaw);
+    const double sy = std::sin(yaw);
+    const double px = current_pose_.pose.position.x;
+    const double py = current_pose_.pose.position.y;
+    // 车体包围盒 (base_link): 用实际 footprint, 避免只按"走廊中轴"漏掉
+    // 前角/侧面的障碍 (实测前右角 0.45m 处有障碍, 旧逻辑 |lat|<=0.42 把它漏了).
+    double x_min = -0.30, x_max = 0.65, y_min = -0.35, y_max = 0.35;
+    if (!configured_footprint_.empty()) {
+      x_min = 1e9; x_max = -1e9; y_min = 1e9; y_max = -1e9;
+      for (const auto & v : configured_footprint_) {
+        x_min = std::min(x_min, v.first);
+        x_max = std::max(x_max, v.first);
+        y_min = std::min(y_min, v.second);
+        y_max = std::max(y_max, v.second);
+      }
+    }
+    const bool forward = cmd.linear.x >= 0.0;
+    // 只把"行进走廊"里的点当作制动目标: 侧向平行的墙不该压前进速度.
+    // 实车 2026-11-03 22:20: 车在 1.52m 走廊里贴左墙 0.18m, 旧逻辑把这条
+    // 平行墙算成 clearance=0.00, 每拍 v->0, 车再也走不动 (卡死 6 分钟).
+    const double tube_lo = y_min - clearance_side_buffer_;
+    const double tube_hi = y_max + clearance_side_buffer_;
+    double dmin = 1e9;
+    double best_bx = 0.0, best_by = 0.0;
+    for (const auto & p : pts) {
+      const double dx = p.x - px;
+      const double dy = p.y - py;
+      const double bx = dx * cy + dy * sy;      // base_link x
+      const double by = -dx * sy + dy * cy;     // base_link y
+      if (forward ? (bx < 0.0) : (bx > 0.0)) continue;   // 车后/车前的点不影响本方向
+      if (by < tube_lo || by > tube_hi) continue;        // 侧向平行墙: 不制动
+      // 点到车体矩形的距离 (在矩形内为 0)
+      const double ox = forward ? std::max(0.0, bx - x_max)
+                                : std::max(0.0, x_min - bx);
+      // 只用纵向距离: 刹车是给"前方还有多少路"用的. 侧向余量 (by 落在车宽
+      // 之外那点) 不该压速度 -- 实车 22:41 在走廊里被 b(0.66,0.39) 这种
+      // "车头侧前方 2cm、侧向 5cm" 的点把 v 压成 0, 卡了 100s.
+      const double d = ox;
+      // 落在车体轮廓内的点 (自身回波/上一帧残点) 不参与限速: 它给出 d=0
+      // 会把速度永久压成 0 (实车 22:20 v 恒为 0); 真正接触由安全层负责.
+      if (d <= 1e-6) continue;
+      if (d < dmin) { dmin = d; best_bx = bx; best_by = by; }
+    }
+    if (dmin > 2.9) return cmd;
+
+    const double clear = std::max(0.0, dmin - clearance_stop_margin_);
+    double v_cap = std::min(max_velocity_x_,
+      std::sqrt(std::max(0.0, 2.0 * clearance_brake_decel_ * clear)));
+    // 别把车钉死在窄处: 还有 5cm 以上余量就以 0.06m/s 爬, 更近才真正为 0.
+    if (clear > 0.05) v_cap = std::max(0.06, v_cap);
+    else v_cap = 0.0;
+    geometry_msgs::Twist out = cmd;
+    if (cmd.linear.x > 0.0) out.linear.x = std::min(cmd.linear.x, v_cap);
+    else out.linear.x = std::max(cmd.linear.x, -v_cap);
+    if (std::fabs(out.linear.x - cmd.linear.x) > 0.02) {
+      ROS_WARN_THROTTLE(1.0, "[speed] clearance=%.2fm b(%.2f,%.2f) -> v %.2f->%.2f",
+                        clear, best_bx, best_by, cmd.linear.x, out.linear.x);
+    }
+    return out;
+  }
+
   geometry_msgs::Twist computeVelocityCommand()
   {
     if (controller_strategy_) {
       const auto core_pose = toCorePose(current_pose_);
       const auto core_vel = toCoreVelocity(current_velocity_);
       std::lock_guard<std::mutex> cl(controller_mu_);
+      // 安全层上一拍给的减速比例 -> 控制器速度上限 (它据此重算 omega)
+      controller_strategy_->setVelocityLimit(
+        std::max(0.05, max_velocity_x_ * safety_speed_scale_), max_velocity_theta_);
       const auto cmd = controller_strategy_->computeVelocityCommand(core_pose, core_vel);
-      return toRosTwist(cmd);
+      return applyClearanceSpeedLimit(toRosTwist(cmd));
     }
 
     geometry_msgs::Twist cmd_vel;
@@ -5163,7 +5670,7 @@ private:
     cmd_vel.angular.z = 2.0 * angle_diff;
     cmd_vel.linear.x = std::max(min_velocity_x_, std::min(max_velocity_x_, cmd_vel.linear.x));
     cmd_vel.angular.z = std::max(-max_velocity_theta_, std::min(max_velocity_theta_, cmd_vel.angular.z));
-    return cmd_vel;
+    return applyClearanceSpeedLimit(cmd_vel);
   }
 
   geometry_msgs::Twist applySpeedLimit(const geometry_msgs::Twist & cmd)
@@ -5228,30 +5735,32 @@ private:
 
     const core::SafetyResult result = safety_monitor_.filter(toCoreVelocity(cmd), points);
     if (result.scale <= 0.0 && result.state == "STOP") {
-      // 诊断: 打印落入 STOP 区的前几个点 (base 系), 确认是自身回波还是真障碍
-      const std::vector<std::pair<double, double>> * zone = nullptr;
-      const auto & cfg = safety_monitor_.config();
-      if (std::fabs(cmd.linear.x) < 0.05 && !cfg.stop_polygon_rotation.empty()) {
-        zone = &cfg.stop_polygon_rotation;
-      } else if (cmd.linear.x < 0.0 && !cfg.stop_polygon_backward.empty()) {
-        zone = &cfg.stop_polygon_backward;
-      } else {
-        zone = &cfg.stop_polygon;
-      }
+      // 诊断: 打印落入 STOP 区的前几个点 (base 系), 确认是自身回波还是真障碍。
+      // **必须**用 monitor 实际生效的那个区: 动态几何模式下它是动态多边形,
+      // 用 cfg.stop_polygon 会打出 0 个命中, 把真正的命中点藏起来。
+      const auto & zone = safety_monitor_.lastStopPolygon();
       std::ostringstream os;
       int n = 0;
       for (const auto & pt : points) {
-        if (core::pointInPolygon(pt.first, pt.second, *zone)) {
+        if (core::pointInPolygon(pt.first, pt.second, zone)) {
           // base 系 + 反算回 map 系, 判断是"刚性挂在车上"还是"换算偏移"
           const double wx = current_pose_.pose.position.x + (cy * pt.first - sy * pt.second);
           const double wy = current_pose_.pose.position.y + (sy * pt.first + cy * pt.second);
           os << " b(" << pt.first << "," << pt.second << ") w(" << wx << "," << wy << ")";
-          if (++n >= 2) { break; }
+          if (++n >= 3) { break; }
         }
       }
-      ROS_WARN_THROTTLE(1.0, "[safety] STOP hits%s pose=(%.2f,%.2f,%.1fdeg) npts=%zu",
+      ROS_WARN_THROTTLE(1.0,
+                        "[safety] STOP hits%s pose=(%.2f,%.2f,%.1fdeg) pts=%d/%zu "
+                        "dynamic=%d zone=[%.2f..%.2f]x[%.2f..%.2f]",
                         os.str().c_str(), current_pose_.pose.position.x,
-                        current_pose_.pose.position.y, yaw * 180.0 / M_PI, points.size());
+                        current_pose_.pose.position.y, yaw * 180.0 / M_PI,
+                        safety_monitor_.lastStopCount(), points.size(),
+                        static_cast<int>(safety_monitor_.lastStopIsDynamic()),
+                        zone.empty() ? 0.0 : zone[0].first,
+                        zone.empty() ? 0.0 : zone[1].first,
+                        zone.empty() ? 0.0 : zone[1].second,
+                        zone.empty() ? 0.0 : zone[3].second);
     }
     last_safety_hard_stop_ = (result.scale <= 0.0);
     if (result.scale <= 0.0) {
@@ -5262,17 +5771,29 @@ private:
     last_safety_state_ = result.state;
     last_safety_scale_ = result.scale;
     core::VelocityCommand out = result.command;
-    // 接近/减速档只降线速度, 角速度保持原值: 原地旋转不产生位移, 若把 w
-    // 也缩到 0.4x, 末段 120° 对位要转十几秒 (实测超过任务超时).
-    if (result.scale > 1e-3 && result.scale < 0.999 &&
-        std::fabs(cmd.angular.z) > 1e-3) {
-      out.angular_z = cmd.angular.z;
+    if (result.scale > 1e-3 && result.scale < 0.999) {
+      // 减速档: 不在输出端乘 (v,w) —— 那会破坏控制器内部 (v,w) 的曲率一致性
+      // (实测: 横漂 0.9m, min_clearance 0)。改为把这个比例反馈给控制器,
+      // 下一拍它用 v_max*scale 重新算 omega。
+      const double floor_scale = std::max(0.15, result.scale);
+      safety_speed_scale_ = floor_scale;
+      // 当拍就要压住线速度 (带 0.15 下限), omega 保持控制器原值:
+      // 否则 STOP 判定用当前指令、减速却要等下一拍 -> "停"比"减"先到, 门前一拍被锁死。
+      out = toCoreVelocity(cmd);
+      const double v_lim = max_velocity_x_ * floor_scale;
+      out.linear_x = (cmd.linear.x >= 0.0) ? std::min(cmd.linear.x, v_lim)
+                                           : std::max(cmd.linear.x, -v_lim);
+    } else {
+      safety_speed_scale_ = 1.0;
     }
     return toRosTwist(out);
   }
 
   void stopNavigation()
   {
+    ROS_WARN("[plan-dbg] stopNavigation active=%d task=%d nav=%d pending='%s'",
+             static_cast<int>(planning_active_), static_cast<int>(task_active_),
+             static_cast<int>(is_navigating_), pending_goal_.header.frame_id.c_str());
     resetRecovery();
     // 安全层滞回状态 (stop_active_/slow_active_) 不能跨任务残留:
     // 上一次停车/切图时的 STOP 会让新目标前几拍继续零速, 表现为"起步一顿"。
@@ -5398,12 +5919,31 @@ private:
   double goal_tolerance_yaw_ = 0.1;
   double lookahead_distance_ = 0.6;
   double min_lookahead_distance_ = 0.3;
+  double lookahead_gain_ = 0.8;
+  bool use_velocity_scaled_lookahead_dist_ = true;
+  double lookahead_time_ = 1.5;
+  bool use_rotate_to_heading_ = true;
+  double rotate_to_heading_min_angle_ = 0.3925;
+  double rotate_to_heading_angular_vel_ = 1.8;
+  double regulated_linear_scaling_min_radius_ = 0.9;
+  double regulated_linear_scaling_min_speed_ = 0.2;
+  double approach_velocity_scaling_dist_ = 0.6;
+  double min_approach_linear_velocity_ = 0.05;
+  bool door_lane_enabled_ = true;
+  double lane_width_ = 0.95;
+  double lane_engage_dist_ = 1.0;
+  double lane_exit_dist_ = 0.4;
+  double lane_max_speed_ = 0.20;
+  double lane_max_omega_ = 0.03;
+  double lane_freeze_max_heading_ = 0.25;
   double max_lookahead_distance_ = 0.9;
   double inflation_radius_ = 0.5;
+  double inflation_cost_scaling_factor_ = 1.0;
   double robot_radius_ = 0.21;
   int planner_max_iterations_ = 200000;
   double planner_heuristic_weight_ = 2.0;
   double planner_timeout_ = 2.0;
+  double planner_goal_tolerance_ = 0.5;
   bool planner_allow_reverse_ = true;
   double planner_max_reverse_distance_ = 1.0;
   double max_accel_x_ = 0.4;
@@ -5440,12 +5980,14 @@ private:
   int safety_slowdown_release_frames_ = 2;
   // 动态安全区 (车体+制动距离)
   bool safety_dynamic_geometry_ = true;
+  bool safety_swept_geometry_ = false;
   double safety_brake_decel_ = 0.8;
   double safety_reaction_time_ = 0.2;
   double safety_stop_margin_ = 0.05;
   double safety_side_margin_ = 0.03;
   double safety_turn_margin_ = 0.05;
   double safety_slowdown_extra_ = 0.30;
+  double safety_slowdown_lookahead_ = 0.8;
   double safety_scale_slew_rate_ = 1.0;
   double safety_scale_dt_ = 0.1;
 
@@ -5479,6 +6021,8 @@ private:
   double safety_slowdown_ratio_ = 0.5;
   bool safety_approach_enabled_ = true;
   double safety_time_before_collision_ = 2.0;
+  /// 安全层减速 -> 下一拍控制器速度上限的比例 (1.0 = 不限)
+  double safety_speed_scale_ = 1.0;
   /// 控制器内部调试打印 ([RPPProbe]/[RPPClr]) 开关, 默认关.
   bool controller_debug_probe_ = false;
   core::SafetyMonitor safety_monitor_;
@@ -5501,6 +6045,14 @@ private:
   std::vector<core::Point2D> tracker_points_;
   std::string last_safety_state_ = "PASS";
   double last_safety_scale_ = 1.0;
+  // ---- 近障碍限速 (clearance speed governor) ----
+  bool clearance_speed_limit_ = true;
+  double clearance_brake_decel_ = 0.8;    // m/s^2, v<=sqrt(2*a*d)
+  double clearance_front_offset_ = 0.45;  // 激光原点到车头的近似距离
+  double clearance_stop_margin_ = 0.15;   // 车头到障碍的停车余量
+  // 行进走廊的侧向额外宽度: 只有落在 [y_min-buf, y_max+buf] 的点才参与制动,
+  // 侧向平行墙不再把前进速度压成 0 (走廊 1.5m 时贴墙 0.18m 也不该停).
+  double clearance_side_buffer_ = 0.02;
 
   // ---- 分层代价地图 (B): 同一批层, planner/controller 两个视图 ----
   bool keepout_enabled_ = true;
@@ -5556,11 +6108,21 @@ private:
   std::string rviz_goal_topic_ = "/move_base_simple/goal";
   bool rviz_goal_align_yaw_ = true;
   bool footprint_aware_control_ = false;
+  // DWA 是否使用真实矩形轮廓 (默认开). 关掉回退为圆形膨胀, 车角不受保护.
+  bool dwa_use_footprint_ = true;
+  // 折返点插入原地旋转段 (往返式清洁路径的 180° 掉头)
+  bool cusp_rotate_enabled_ = false;
+  bool initial_rotate_enabled_ = false;
   double footprint_sample_spacing_ = 0.05;
   double footprint_shrink_ = 0.0;   // 轮廓内缩(负余量), 窄道通过用
   double planner_footprint_margin_ = 0.06;   // 规划器轮廓外扩(最小离墙余量)
   core::Footprint planner_footprint_;        // 规划用轮廓 = 车体 + margin
   double path_resample_step_ = 0.08;
+  bool plan_goal_yaw_from_bearing_ = true;
+  bool path_centering_enabled_ = true;
+  double path_centering_max_shift_ = 0.15;
+  /// 最近一条发布路径的最大折角 (度): 诊断"路径锯齿 -> 控制器甩头"
+  double last_path_turn_deg_ = 0.0;
   core::Footprint configured_footprint_;
   core::Footprint controller_footprint_;
 
@@ -5609,12 +6171,14 @@ private:
   // 当前主路径 (核心坐标系): 供旋转段执行器读取 velocity_x 标记
   core::Path current_core_path_;
   bool rotation_active_ = false;
+  ros::Time rotation_cooldown_until_;
   int rot_dir_ = 0;   // 旋转方向锁存 (避免 ±π 附近左右摆)
   ros::Time last_slam_info_stamp_;
   int last_slam_status_ = -1;
   int last_slam_pipeline_mode_ = -1;   // SlamInfo.slam_state: 0=MAPPING 1=LOCALIZATION 2=ERROR
   double last_slam_matching_ = 1.0;
   double slam_info_timeout_ = 2.0;
+  double odom_timeout_ = 0.6;        // odom 停滞判死阈值 (s), 仿真配 2.0
   double slam_degrade_matching_ = 0.65;
   double slam_degrade_scale_ = 0.5;
   bool pending_allow_initial_rotate_ = true;
@@ -5685,6 +6249,8 @@ private:
   double movebase_rotate_speed_ = 0.6;
   double movebase_stuck_timeout_ = 60.0;
   double movebase_goal_yaw_tolerance_ = 0.1;
+  double final_rotate_timeout_ = 3.0;
+  ros::Time final_rotate_since_;
   double movebase_rotate_tolerance_ = 0.05;
   std::vector<geometry_msgs::Point> movebase_footprint_;
 

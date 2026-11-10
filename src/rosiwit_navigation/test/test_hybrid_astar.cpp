@@ -92,6 +92,7 @@ TEST(HybridAStar, RejectsGoalInObstacle)
   core::PlannerConfig cfg;
   cfg.name = "hybrid_astar";
   cfg.resolution = 0.05;
+  cfg.goal_tolerance = 0.0;   // 关闭容错, 验证"目标在障碍里且不容错"仍失败
   ASSERT_TRUE(planner->initialize(cfg));
   auto cm = makeMap(100, 100, 0.05);
   cm.grid->data[50 * 100 + 50] = 100;
@@ -99,6 +100,40 @@ TEST(HybridAStar, RejectsGoalInObstacle)
   planner->setCostmap(cm);
   const auto result = planner->plan({0.5, 0.5, 0.0}, {2.5, 2.5, 0.0});
   EXPECT_TRUE(result.is_error());
+}
+
+TEST(HybridAStar, SnapsGoalOutOfObstacle)
+{
+  // nav2_navfn_planner 的 tolerance 语义: 目标格被占 -> 在 0.5m 内吸附到
+  // 最近的 footprint-free 格, 而不是整条规划直接失败.
+  auto planner = nav_core::NavigationFactory::createPlanner("hybrid_astar");
+  ASSERT_NE(planner, nullptr);
+  core::PlannerConfig cfg;
+  cfg.name = "hybrid_astar";
+  cfg.resolution = 0.05;
+  cfg.max_iterations = 100000;
+  cfg.timeout = 3.0;
+  cfg.goal_tolerance = 0.5;
+  ASSERT_TRUE(planner->initialize(cfg));
+
+  auto cm = makeMap(200, 200, 0.05);
+  // 2x2 的障碍块, 目标点正好落在里面
+  for (int y = 98; y <= 100; ++y)
+    for (int x = 98; x <= 100; ++x) {
+      cm.grid->data[static_cast<size_t>(y) * 200 + x] = 100;
+      cm.data[static_cast<size_t>(y) * 200 + x] = 100;
+    }
+  planner->setCostmap(cm);
+  planner->setRobotRadius(0.20);
+
+  const core::Pose2D goal{4.95, 4.95, 0.0};
+  const auto result = planner->plan({0.5, 0.5, 0.0}, goal);
+  ASSERT_TRUE(result.is_ok()) << result.error_message();
+  const auto & end = result.value().points.back().pose;
+  const double d = std::hypot(end.x - goal.x, end.y - goal.y);
+  EXPECT_LE(d, 0.5 + 0.06);          // 吸附距离不超过 tolerance (+1 格)
+  EXPECT_GT(d, 0.05);                // 确实挪开了
+  EXPECT_NEAR(end.theta, goal.theta, 1e-6);   // 保持目标朝向
 }
 
 TEST(HybridAStar, ReverseOnlyPathMarksReverseVelocity)
@@ -176,6 +211,7 @@ TEST(HybridAStar, FootprintRejectsGoalTooCloseToWall)
   cfg.resolution = 0.05;
   cfg.max_iterations = 50000;
   cfg.timeout = 2.0;
+  cfg.goal_tolerance = 0.0;   // 本用例验证"不容错时足迹压墙必须拒绝"
   ASSERT_TRUE(planner->initialize(cfg));
 
   auto cm = makeMap(200, 200, 0.05);

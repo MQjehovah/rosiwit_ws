@@ -195,6 +195,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     if (gc) {
         m_global_cfg.min_score          = getv<double>(gc, "min_score", m_global_cfg.min_score);
         m_global_cfg.top_k              = getv<int>(gc, "top_k", m_global_cfg.top_k);
+        m_global_cfg.reloc_submap_radius =
+            getv<double>(gc, "reloc_submap_radius", m_global_cfg.reloc_submap_radius);
         m_global_cfg.reloc_accept_score =
             getv<double>(gc, "reloc_accept_score", m_global_cfg.reloc_accept_score);
         m_global_cfg.seed_max_drift =
@@ -1068,8 +1070,18 @@ void LocalizationPipeline::globalRelocWorker() {
         double best_fit = -1.0;
         double second_fit = -1.0;
         if (m_global_matcher && global_map && !global_map->empty()) {
-            m_global_matcher->setTarget(global_map);
+            // 二级精配: 按候选裁局部子图 (整图 GICP x N 候选 = 重定位的主要耗时)
+            pcl::KdTreeFLANN<PointType> gt_kdtree;
+            const bool crop_target = m_global_cfg.reloc_submap_radius > 0.0;
+            if (crop_target) gt_kdtree.setInputCloud(global_map);
             for (const auto& cand : cands) {
+                CloudType::Ptr target = global_map;
+                if (crop_target) {
+                    CloudType::Ptr sub = cropRadius(
+                        gt_kdtree, global_map, cand.pose.trans, m_global_cfg.reloc_submap_radius);
+                    if (sub && sub->size() >= 100) target = sub;
+                }
+                m_global_matcher->setTarget(target);
                 MatchResult r;
                 if (!m_global_matcher->match(scan, cand.pose, r) || !r.converged)
                     continue;

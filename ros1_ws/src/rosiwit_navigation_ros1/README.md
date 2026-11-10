@@ -16,7 +16,7 @@
 
 ## 长方形车体 / footprint-aware 控制
 
-实车 footprint 从 `config/movebase_compat.yaml` 读取，默认用于安全层与全局规划膨胀。
+实车 footprint 从 `config/default.yaml` 读取，默认用于安全层与全局规划膨胀。
 当 `footprint_aware_control=true` 且控制器是 `dwa`/`mppi` 时，控制器会对候选轨迹的
 footprint 采样点查**未膨胀**的局部 costmap（由车体形状负责碰撞，而不是再用 0.62m 圆形膨胀）。
 
@@ -71,7 +71,7 @@ roslaunch rosiwit_navigation_ros1 navigation_simulation.launch
 roslaunch rosiwit_starter_ros1 sim_slam_nav.launch
 ```
 
-`config/simulation.yaml` 与实车 `default.yaml` / `movebase_compat.yaml` 分离：
+`config/simulation.yaml` 与实车 `default.yaml` 分离：
 
 - 位姿/里程计用 SLAM 的 `/lio_odom`（pose 已在 `map` 系），不用 Gazebo 的 `/odom`
 - 仿真车只有 3D 雷达、没有 `/scan`：`require_scan=false`，障碍走 `/world_cloud` 体素层

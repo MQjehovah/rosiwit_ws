@@ -1,6 +1,6 @@
 # ============================================================================
-# 实机唯一配置源 (2026-10-30 起)
-#   所有调参只改这个文件; movebase_compat.yaml 只保留兼容层专属键。
+# 实机唯一配置源 (2026-10-30 起; 2026-11-03 合并兼容层 overlay)
+#   所有调参只改这个文件; 原 movebase_compat.yaml 的键已全部合并到这里并删除。
 #   数值已与实机 2026-10-23 生效配置对齐 (robot_radius 0.39 /
 #   hybrid_astar + mppi / footprint_aware=true / planner_timeout 2.0)。
 # 仿真请用 simulation.yaml。
@@ -9,12 +9,12 @@
 # rosiwit_navigation_ros1 默认参数
 #
 # ⚠ 车体/安全参数取自实车 192.168.21.166 的 /robot_move_base/*，
-#   不是仿真值。robot_movebase 兼容接口请用 config/movebase_compat.yaml。
+#   不是仿真值。robot_movebase 兼容接口也读这一份 (原 movebase_compat.yaml 已合并删除)。
 # 速度/加速度/容差/前瞻/安全距离的实车依据见
 # docs/superpowers/specs/2026-10-21-ros1-movebase-interface-compat-design.md §9。
 # ============================================================
 # 速度限制 (实车 max_speed=0.8, speed_lim_w=0.5)
-max_velocity_x: 0.8
+max_velocity_x: 0.30
 min_velocity_x: 0.0
 max_velocity_theta: 0.5
 
@@ -28,21 +28,24 @@ mppi_dt: 0.0
 mppi_lambda: 0.8
 mppi_sigma_v: 0.18
 mppi_sigma_w: 0.35
-mppi_path_weight: 2.0
+mppi_path_weight: 4.0
 mppi_heading_weight: 0.4
-mppi_obstacle_weight: 0.03
+mppi_obstacle_weight: 0.30
 mppi_control_weight: 0.03
-mppi_speed_weight: 2.0
+mppi_speed_weight: 1.0
 mppi_goal_weight: 1.5
 
 # 加权 A* 倍率: 膨胀代价大时防搜索退化 (窄通道实测 12.8s->3.4s)
 planner_heuristic_weight: 2.0
 planner_max_iterations: 200000
 planner_timeout: 2.0   # hybrid 主规划预算 (实车 2s; 仿真 3s, 因为 15° 基元分支翻倍)
+# 目标点容错 (m): 目标压在墙脚/膨胀带/未建图边时, 在半径内吸附到最近的
+# footprint-free 格 (对齐 nav2_navfn_planner 的 tolerance 语义); 0 = 关闭.
+planner_goal_tolerance: 0.50
 # 原地转向基元步长(deg)。实车先用 30 (与历史行为一致); 仿真里 15 更不容易在窄处
 # 搜不到解, 但需要更大的 planner_timeout (ARM 上 2s 不够)。
 planner_turn_step_deg: 30.0
-planner_allow_reverse: true
+planner_allow_reverse: false
 planner_max_reverse_distance: 1.0
 
 # 频率 (实车 g_control_freq=10)
@@ -51,7 +54,7 @@ planner_frequency: 1.0
 
 # 规划器 / 控制器
 planner_name: "hybrid_astar"
-controller_name: "mppi"
+controller_name: "lqr"
 # 运动 profile: clean=只前进 (倒车仅在恢复), free=允许倒车.
 # 注意: 这两个 planner 名必须写, 否则会退回代码默认 (clean_planner=astar),
 # 真机会静默从 hybrid_astar 变成 A*.
@@ -81,9 +84,9 @@ max_lookahead_distance: 0.9
 #   真实约束由 footprint + Hybrid A* / 控制器 footprint 检查保证;
 #   实车取 0.39 (与实机 2026-10-23 配置一致); A* 兜底只用这个圆模型,
 # inflation_radius = g_max_safe 的等效膨胀.
-robot_radius: 0.39
+robot_radius: 0.262      # 真内切 = min(0.262 后, 0.644 前, 0.338 侧)
 # 规划器/控制器共用车体轮廓; Hybrid A* 使用它, A* 只使用 robot_radius.
-footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+footprint: [-0.262, -0.338, 0.644, -0.338, 0.644, 0.338, -0.262, 0.338]
 # 长方形车体: 控制器按 footprint 采样点查 raw costmap, 而不是只看中心点.
 # 默认关闭: A/B 实测 DWA+footprint 会绕圈, 建议按下面组合验证后再打开:
 #   controller_name: mppi
@@ -95,7 +98,11 @@ footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.2
 footprint_aware_control: true
 footprint_sample_spacing: 0.05
 path_resample_step: 0.08
-inflation_radius: 0.62
+inflation_radius: 0.32   # 原 0.62 把 <1.24m 通道整段判成内切; 0.32 = 车体 + 6cm
+# unknown(-1) 语义: true -> 折成 unknown_cost(99) 软代价, 规划器尽量规避但可穿越;
+# false -> 保持 -1, pathFootprintClear 会把它当死障碍 (与规划器只挡 100 不一致).
+allow_unknown: true
+unknown_cost: 99
 
 # 里程计话题
 odom_topic: "/odom"
@@ -119,14 +126,14 @@ safety_source_timeout: 0.5
 # 车身内的点由 body_polygon 排除 (footprint 包围盒 + safety_body_margin),
 # 所以下面三个 STOP 区都从车体边缘之外开始. 以前用 "包围盒内不判定 + 大矩形自过滤"
 # 的组合, 结果 safety_stop_polygon 整个落在自过滤框里, STOP 永远进不去.
-safety_body_margin: 0.05
+safety_body_margin: 0.02
 # 前进: 实车标定 -0.37 ~ +0.67m (含车体), 侧 ±0.45
 safety_stop_polygon: [-0.37, -0.45, 0.67, -0.45, 0.67, 0.45, -0.37, 0.45]   # 实车标定: 前 0.67 / 后 -0.37 / 侧 ±0.45
 # 后退: 车尾后 0.35 ~ 0.75m, 侧 ±0.45 (与前进区同宽; 实机 yaml 原先未设, 走代码默认 ±0.345)
 safety_stop_polygon_backward: [-0.75, -0.45, -0.35, -0.45, -0.35, 0.45, -0.75, 0.45]
 # 原地旋转: 车体扫掠面 + 0.2m
 # 原地转用扫掠圆 (半径 = 车体最远顶点 0.64 + 余量); 0 = 用上面的矩形
-safety_rotation_radius_margin: 0.10
+safety_rotation_radius_margin: 0.03   # 原地旋转圆的额外余量: 0.727+0.03=0.757m; 0.10 会把 0.8m 外的点也判停, 表现为"一顿一顿"转不动
 safety_stop_polygon_rotation: [-0.50, -0.55, 0.80, -0.55, 0.80, 0.55, -0.50, 0.55]
 # 减速: 实车标定 -0.55 ~ +0.85m, 侧 ±0.63
 safety_slowdown_polygon: [-0.55, -0.63, 0.85, -0.63, 0.85, 0.63, -0.55, 0.63]
@@ -145,8 +152,8 @@ safety_slowdown_release_frames: 3
 safety_dynamic_geometry: true
 safety_brake_decel: 0.8      # m/s^2; ★必须按实车制动测试标定后再调
 safety_reaction_time: 0.2    # s
-safety_stop_margin: 0.05     # m
-safety_side_margin: 0.03     # m; 车半宽 0.33 + 0.03 = 0.36, 0.8m 巷道可过
+safety_stop_margin: 0.15
+safety_side_margin: 0.12
 safety_turn_margin: 0.05     # m; 转向时附加侧向余量
 safety_scale_slew_rate: 1.0  # 1/s; 减速比例每秒最多变化量
 safety_scale_dt: 0.1         # s
@@ -163,7 +170,7 @@ safety_slowdown_ratio: 0.5
 safety_approach_enabled: true
 safety_time_before_collision: 2.0
 # 实车 footprint
-safety_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+safety_footprint: [-0.262, -0.338, 0.644, -0.338, 0.644, 0.338, -0.262, 0.338]
 
 # 动态障碍跟踪
 tracking_enabled: false
@@ -255,11 +262,39 @@ planning_start_relax_radius: 0.0
 movebase_compat_enabled: true
 cmd_vel_topic: "/cmd_vel"
 movebase_cmd_vel_topic: "/movebase_cmd_vel"
-movebase_robot_footprint: [-0.25, -0.33, 0.45, -0.33, 0.55, -0.20, 0.55, 0.20, 0.45, 0.33, -0.25, 0.33]
+movebase_robot_footprint: [-0.262, -0.338, 0.644, -0.338, 0.644, 0.338, -0.262, 0.338]
 movebase_default_speed: 0.8
 movebase_back_speed: 0.1
 movebase_rotate_speed: 0.5
 movebase_stuck_timeout: 60.0
-movebase_goal_yaw_tolerance: 0.1
+movebase_goal_yaw_tolerance: 0.30
+                                    # 原地转不开的窄处, 0.1 会让车一直转、被安全层清零 -> App 超时.
+                                    # 航向交给后续路径跟踪/下一段修正.
+# App 的 "Navi To Path Start Point" 发的是 [路径起点, 路径末端]; 目标应取第一点.
+# true 时取最后一点 -> 会从干净的起点一路开向 7m 外的路径末端/墙.
+single_point_use_last_pose: false
 movebase_rotate_tolerance: 0.05
 movebase_prediction_horizon: 1.0
+
+inflation_cost_scaling_factor: 0.0
+door_lane_enabled: true
+lane_width: 0.85
+lane_engage_dist: 1.6
+lane_exit_dist: 0.4
+lane_max_speed: 0.18
+lane_max_omega: 0.03
+lane_freeze_max_heading: 0.25
+rotate_to_heading_min_angle: 0.10
+
+# 近障碍限速: 用 2D 激光在行进走廊里的最近距离压线速度 (v<=sqrt(2*a*d))
+clearance_speed_limit: true
+clearance_brake_decel: 0.8
+clearance_front_offset: 0.45
+clearance_stop_margin: 0.18
+
+# Single-point nav: final yaw = path[0]->path[1] (APP protocol).
+final_yaw_from_next_point: true
+# Do not replace the goal yaw with the bearing-to-goal angle.
+plan_goal_yaw_from_bearing: true
+
+final_rotate_timeout: 3.0  # 末端对齐超时: 窄处转不动时按位置到达收尾

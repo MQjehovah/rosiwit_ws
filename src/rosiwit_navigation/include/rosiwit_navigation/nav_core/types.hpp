@@ -79,6 +79,10 @@ struct PlannerConfig
   /// Hybrid A*: 原地转向基元的步长 (deg). 30° 时窄处"转不动"会直接搜不到解,
   /// 15° 给搜索更多可行中间姿态; 代价是分支数翻倍 (配合 timeout 调大)。
   double turn_step_deg = 30.0;
+  /// 目标点容错半径 (m): 目标落在障碍/膨胀区时, 在半径内搜索最近的
+  /// footprint-free 格作为实际规划目标 (对齐 nav2_navfn_planner 的 tolerance 语义)。
+  /// 0 = 关闭 (保持旧的"目标在障碍里直接失败")。
+  double goal_tolerance = 0.5;
 };
 
 struct KinematicsLimits
@@ -109,7 +113,52 @@ struct ControllerConfig
   double footprint_sample_spacing = 0.10;  // 多边形边采样间距 (m)
   /// 外部路径跟踪时把稀疏 waypoint 插值到最大间距(m); 0=关闭.
   double path_resample_step = 0.08;
+  // ---- 以下对齐 nav2_regulated_pure_pursuit_controller 的参数语义 ----
+  bool use_velocity_scaled_lookahead_dist = true;
+  double lookahead_time = 1.5;
+  /// 航向差超过它且车没在走 -> 原地转到路径朝向。
+  /// 取 nav2 rotation_shim 的 angular_disengage_threshold = 0.3925 (22.5°):
+  /// 只转到这个窗口就交给跟踪, 但残余的 20°+ 航向差在窄门里会把车体斜置
+  /// 带进扫掠区, 所以门洞场景建议再小一些 (见 cfg_door_test.yaml)。
+  bool use_rotate_to_heading = true;
+  double rotate_to_heading_min_angle = 0.3925;
+  double rotate_to_heading_angular_vel = 1.8;
+  /// 曲率调速: 转弯半径小于它时降速
+  bool use_regulated_linear_velocity_scaling = true;
+  double regulated_linear_scaling_min_radius = 0.9;
+  /// 任何调速的下限 (nav2 要求 > 0.1, 防止把车压死)
+  double regulated_linear_scaling_min_speed = 0.2;
+  /// 碰撞检测调速: 沿指令弧 max_allowed_time_to_collision_up_to_carrot 内
+  /// 会撞到真实障碍就降速 (v,ω 同比例缩放, 曲率不变)
+  bool use_collision_detection = true;
+  double max_allowed_time_to_collision_up_to_carrot = 1.0;
+  /// 末段调速 (nav2 approach_velocity_scaling_dist / min_approach_linear_velocity)
+  double approach_velocity_scaling_dist = 0.6;
+  double min_approach_linear_velocity = 0.05;
+  // ---- 门区直穿 (窄口 lane): 行业里的 "door mode" ----
+  // 窄口内可用横向余量只有几厘米, 而"边转边走"会把车体斜置撑宽扫掠区;
+  // 同时高角速度会让雷达点云与位姿的时间偏斜放大 (实测 ω=0.8rad/s + 120ms
+  // 时延 ≈ 5.5°, 在 0.6m 处把门框点"转"进门洞 7cm -> 幻影障碍 -> 停车)。
+  // 所以: 窄口前 lane_engage_dist 内先限速把偏差收敛掉, 窄口内冻结 ω 直穿。
+  bool door_lane_enabled = true;
+  /// 净宽低于它就算窄口 (m)
+  double lane_width = 0.95;
+  /// 窄口前方的收敛段长度 (m): 只限速, 允许转向
+  double lane_engage_dist = 1.0;
+  /// 窄口后继续直穿的长度 (m)
+  double lane_exit_dist = 0.4;
+  double lane_max_speed = 0.20;
+  /// 窄口内允许的角速度上限 (rad/s); 0 = 不冻结
+  double lane_max_omega = 0.03;
+  /// 航向差超过它就不冻结 (车本来就歪, 必须先转正)
+  double lane_freeze_max_heading = 0.25;
   bool allow_reverse = true;
+  // ---- LQR (ignored by other controllers) ----
+  double lqr_q_x = 5.0;      // lateral error weight (x)
+  double lqr_q_y = 5.0;      // lateral error weight (y)
+  double lqr_q_theta = 1.0;  // heading error weight
+  double lqr_r_v = 1.0;      // linear velocity control weight
+  double lqr_r_w = 1.0;      // angular velocity control weight
   // MPPI tuning (ignored by other controllers).
   int mppi_horizon = 20;
   int mppi_samples = 160;

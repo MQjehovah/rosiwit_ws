@@ -43,6 +43,7 @@ class Run(object):
         self.gc_first = None
         self.gc_last = None
         self.path = None
+        self.clearance_samples = []
         self.track_errs = []
         self.t_start = None
 
@@ -53,6 +54,28 @@ class Run(object):
         rospy.Subscriber('/global_costmap', OccupancyGrid, self.on_global, queue_size=5)
         rospy.Subscriber('/global_path', Path, self.on_path, queue_size=2)
         self.goal_pub = rospy.Publisher('/goal_pose', PoseStamped, queue_size=1)
+
+    def nearest_lethal(self, pose):
+        # distance from robot to nearest lethal cell (local window search)
+        if self.map_msg is None:
+            return None
+        info = self.map_msg.info
+        res = info.resolution
+        cx, cy = self.to_cell(pose[0], pose[1])
+        best = 1e9
+        # 窗口按分辨率换算 (±1.0m): 以前写死 ±20 格, 地图换成 0.02 时只剩 ±0.4m,
+        # 于是 min_clearance 变成 1e9 (假的"很空")
+        win = max(20, int(round(1.0 / max(1e-6, res))))
+        for dy in range(-win, win + 1):
+            for dx in range(-win, win + 1):
+                gx, gy = cx + dx, cy + dy
+                if gx < 0 or gy < 0 or gx >= info.width or gy >= info.height:
+                    continue
+                if self.map_msg.data[gy * info.width + gx] >= 100:
+                    d = math.hypot(dx * res, dy * res)
+                    if d < best:
+                        best = d
+        return None if best > 1e9 else best
 
     def on_path(self, msg):
         if msg.poses:
@@ -215,6 +238,12 @@ def main():
     if len(sys.argv) > 3 and ',' in sys.argv[3]:
         a, b = sys.argv[3].split(',')
         goal_band = (float(a), float(b))
+    # fixed goal: argv[4] = "x,y[,yaw]" (repeatable scenes)
+    fixed_goal = None
+    if len(sys.argv) > 4 and ',' in sys.argv[4]:
+        parts = [float(v) for v in sys.argv[4].split(',')]
+        if len(parts) >= 2:
+            fixed_goal = parts
     rospy.init_node('nav_sim_driver', anonymous=True)
     run = Run(timeout)
     run.goal_band = goal_band
@@ -227,7 +256,13 @@ def main():
         time.sleep(0.2)
 
     pose = pose_from_diag(run.diag)
-    goal = run.pick_goal(pose)
+    if fixed_goal is not None:
+        gx0, gy0 = fixed_goal[0], fixed_goal[1]
+        gyaw0 = (fixed_goal[2] if len(fixed_goal) > 2
+                 else math.atan2(gy0 - pose[1], gx0 - pose[0]))
+        goal = (gx0, gy0, gyaw0, math.hypot(gx0 - pose[0], gy0 - pose[1]))
+    else:
+        goal = run.pick_goal(pose)
     if goal is None:
         info = run.map_msg.info
         print(json.dumps({'label': label, 'error': 'no reachable goal',
@@ -236,6 +271,11 @@ def main():
         return 1
 
     gx, gy, gyaw, bfs_len = goal
+    # publisher 连接建立前的 publish 会被直接丢弃 (queue_size=1 且非 latched),
+    # 整轮 goal_status 就会一直停在 IDLE —— 先等真有订阅者再发。
+    t_conn = time.time()
+    while run.goal_pub.get_num_connections() == 0 and time.time() - t_conn < 15.0:
+        time.sleep(0.1)
     msg = PoseStamped()
     msg.header.frame_id = 'map'
     msg.header.stamp = rospy.Time.now()
@@ -258,8 +298,11 @@ def main():
     replan_fail_max = 0
     replan_count_max = 0
     plan_ms_max = -1.0
+    safety_states = []
+    slow_scale_min = 1.0
     status = 'TIMEOUT'
-    resent = False
+    sends = 1
+    last_send = time.time()
     while not rospy.is_shutdown():
         if time.time() - t0 > 60 + timeout:
             status = 'TIMEOUT'
@@ -272,6 +315,9 @@ def main():
         if st not in seen_states:
             seen_states.append(st)
         if st == 'NAVIGATING':
+            _c = run.nearest_lethal(pose_from_diag(d))
+            if _c is not None:
+                run.clearance_samples.append(_c)
             _e = run.track_err()
             if _e is not None:
                 run.track_errs.append(_e)
@@ -279,6 +325,15 @@ def main():
             safety_min = min(safety_min, float(d.get('safety_scale', 1.0)))
         except (TypeError, ValueError):
             pass
+        # 安全层到底有没有进 SLOWDOWN/APPROACH (只看 safety_scale_min 会被 STOP 的 0 掩盖)
+        _s = d.get('safety')
+        if _s and _s not in safety_states:
+            safety_states.append(_s)
+        if _s in ('SLOWDOWN', 'APPROACH'):
+            try:
+                slow_scale_min = min(slow_scale_min, float(d.get('safety_scale', 1.0)))
+            except (TypeError, ValueError):
+                pass
         try:
             health_min = min(health_min, float(d.get('health_scale', 1.0)))
         except (TypeError, ValueError):
@@ -286,15 +341,34 @@ def main():
         replan_fail_max = max(replan_fail_max, int(d.get('replan_fail', 0)))
         replan_count_max = max(replan_count_max, int(d.get('replan_count', 0)))
         plan_ms_max = max(plan_ms_max, float(d.get('plan_ms', -1)))
-        if gs in terminal:
+        # 终态判定用前缀: FAILED_* / STOPPED_* 都是终态
+        # (之前穷举列表漏了 FAILED_RECOVERY, 导致 harness 白等 210s)
+        # FAILED_POSE 是启动瞬态 (TF 还没起来), 不立刻判终态: 交给下面的重发
+        if gs == 'FAILED_POSE' and sends < 6:
+            pass
+        elif (gs == 'SUCCEEDED' or gs == 'CANCELED'
+                or (gs and gs.startswith('FAILED'))
+                or (gs and gs.startswith('STOPPED'))):
             status = gs
             break
-        # 单次发布(RViz/App 语义); 若 ACCEPTED 但一直 IDLE, 补发一次
-        if (not resent and gs == 'ACCEPTED' and st == 'IDLE'
-                and time.time() - t0 > 66):
+        # 重发 (最多 6 次): 单次 publish 一旦丢失, 整轮就会干等到超时。
+        #   IDLE            -> 首包丢失 / 连接未建立 (节点根本没收到)
+        #   FAILED_POSE     -> 启动瞬态 (TF/位姿还没起来) —— 立刻重发, 不要等到 62s
+        #   ACCEPTED+IDLE   -> 受理了但一直没动
+        need = False
+        if gs in (None, '', 'IDLE') and time.time() - last_send > 5.0:
+            need = True
+        elif gs == 'FAILED_POSE' and time.time() - last_send > 2.0:
+            need = True
+        elif gs == 'ACCEPTED' and st == 'IDLE' and time.time() - t0 > 66:
+            need = True
+        if need and sends < 6:
+            rospy.logwarn('goal not running (status=%s state=%s) -> resend #%d',
+                          gs, st, sends)
             msg.header.stamp = rospy.Time.now()
             run.goal_pub.publish(msg)
-            resent = True
+            sends += 1
+            last_send = time.time()
         time.sleep(0.1)
 
     p = pose_from_diag(run.diag)
@@ -312,6 +386,8 @@ def main():
         'label': label,
         'status': status,
         'states_seen': seen_states,
+        'min_clearance_m': (round(min(run.clearance_samples), 3)
+                            if run.clearance_samples else None),
         'xtrack_rms_m': (round(math.sqrt(sum(e * e for e in run.track_errs) / len(run.track_errs)), 3)
                          if run.track_errs else None),
         'xtrack_max_m': round(max(run.track_errs), 3) if run.track_errs else None,
@@ -332,11 +408,13 @@ def main():
         'local_map_hz': round(lm_hz, 2),
         'global_costmap_hz': round(gc_hz, 2),
         'safety_scale_min': round(safety_min, 3),
+        'safety_states': safety_states,
+        'slow_scale_min': round(slow_scale_min, 3),
         'health_scale_min': round(health_min, 3),
         'replan_count': replan_count_max,
         'replan_fail': replan_fail_max,
         'plan_ms_max': round(plan_ms_max, 1),
-        'goal_resent': resent,
+        'goal_resent': sends > 1,
         'wall_s': round(time.time() - t0, 1),
     }
     print(json.dumps(out))

@@ -6,7 +6,11 @@ global:
   pipeline: "rosiwit_slam" # 管线名称
   pipeline_mode: mapping # 启动模式 mapping|localization|idle
   modules:
-    frontend: "fast_lio2_frontend"
+    # 前端: fast_lio2_frontend (纯 LiDAR+IMU) | fast_livo2_frontend (LiDAR+IMU+相机)
+    # 切 LIVO 只改这一行; 两者共用下面的 camera / extrin_calib / fast_livo2 参数块.
+    #   - 纯激光 (/无相机) 用 fast_lio2_frontend, 并把 mapping.fast_livo2.img_en 设 false
+    #   - 有相机用 fast_livo2_frontend (node 会自动关闭接口层预滤波, 由前端自己滤波)
+    frontend: "fast_livo2_frontend"
     backend: "ceres_pose_graph" # 无 GTSAM 的机器也能启动; 需要 gtsam_isam2 时显式改
     loop_closure: "scan_context"
     map_manager: "pcd_map_manager"
@@ -20,6 +24,9 @@ global:
     lidar_min_range: 0.5 # 雷达最小有效距离(m)
     lidar_max_range: 100.0 # 雷达最大有效距离(m)
     scan_period_ms: 100.0 # 单帧扫描周期(ms)
+    image_topic: camera/image_raw # 相机图像话题(LIVO 用); 离线播包用 launch 参数覆盖
+    qos_reliable: false # 传感器订阅 QoS. 真机驱动多为 best_effort -> false;
+                        # 离线播包(bag 发布 reliable)设为 true, 否则 best_effort 读端会静默丢 ~1/3 点云帧
     use_odom: false # 是否订阅并使用轮式odom
   frames:
     lidar_frame: lidar  # 雷达frame
@@ -73,6 +80,87 @@ mapping:
       y_max: 0.55
       z_min: 0.05
       z_max: 1.40
+  # ==================== 相机与 LIVO 外参 (frontend: fast_livo2_frontend 时生效) ====================
+  # 相机内参与外参是**每台机器各不相同**的, 下面是 NTU VIRAL eee_03 的示例值:
+  #   上线前必须用实际标定结果替换 (内参 + 畸变 + camera<-lidar 外参), 否则 LIVO 精度会明显退化.
+  camera:
+    model: Pinhole          # Pinhole | Equidistant(鱼眼)
+    width: 752
+    height: 480
+    scale: 1.0
+    fx: 4.250258563372763e+02
+    fy: 4.267976260903337e+02
+    cx: 3.860151866550880e+02
+    cy: 2.419130336743440e+02
+    d0: -0.288105327549552
+    d1: 0.074578284234601
+    d2: 7.784489598138802e-04
+    d3: -2.277853975035461e-04
+
+  extrin_calib:
+    # 雷达 -> IMU (与 mapping.frontend.imu_lidar_* 保持一致; 有 TF 时 ROS 层会覆盖)
+    lidar_imu_t: [0.0, 0.0, 0.0905]
+    lidar_imu_r: [1.0, 0.0, 0.0,
+                  0.0, 1.0, 0.0,
+                  0.0, 0.0, 1.0]
+    # 相机 -> 雷达 (行优先 3x3 旋转 + 平移 m), FAST-LIVO2 约定
+    camera_lidar_r: [0.0218308, 0.99976, -0.00201407,
+                     -0.0131205, 0.00230088, 0.999911,
+                     0.999676, -0.0218025, 0.0131676]
+    camera_lidar_t: [0.122993, 0.0398643, -0.0577101]
+
+  fast_livo2:
+    img_en: true            # 纯激光时设 false (此时可不配 camera)
+    lidar_en: true
+    imu_en: true
+    lidar_type: 8           # 8 = 通用 sensor_msgs/PointCloud2
+    point_filter_num: 3
+    scan_line: 16
+    blind: 1.0
+    filter_size_surf: 0.1
+
+    imu_int_frame: 30
+    acc_cov: 0.5
+    gyr_cov: 0.3
+    b_acc_cov: 0.0001
+    b_gyr_cov: 0.0001
+
+    lio_max_iterations: 5
+    dept_err: 0.02
+    beam_err: 0.01
+    min_eigen_value: 0.0025
+    voxel_size: 0.5
+    max_layer: 2
+    max_points_num: 50
+
+    vio_max_iterations: 5
+    outlier_threshold: 1000
+    img_point_cov: 100
+    patch_size: 8
+    patch_pyrimid_level: 3
+    normal_en: true
+    raycast_en: false
+    inverse_composition_en: false
+    exposure_estimate_en: true
+    inv_expo_cov: 0.1
+
+    dense_map_en: true
+    pub_scan_num: 1
+    blind_rgb_points: 0.0
+    pub_effect_point_en: false
+    pub_plane_en: false
+    map_sliding_en: false   # 长序列实时化时打开 (见 README TODO #7)
+    half_map_size: 100.0
+    sliding_thresh: 8.0
+
+    keyframe_trans_thresh: 1.0
+    keyframe_rot_thresh: 0.17
+
+    time_offset:
+      lidar: 0.0
+      img: 0.0
+      imu: 0.0
+
   loop_closure:
     icp_fitness_thresh: 0.5 # 回环ICP适应度阈值 (配合几何门控)
     icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)
@@ -130,6 +218,10 @@ localization:
   pipeline:
     # fpfh_ransac 是 3D 特征匹配, 不依赖 base<-lidar 投影; BBS 需要 bbs_mount_r,
     # 在 ROS2 薄层未注入安装旋转时会按雷达系投影 (俯装/侧装雷达下候选会偏).
+    # 提速结论 (2026-11, tools/reloc_bench, NTU 251k 点地图 / 20 场景):
+    #   scan_context + 两级精配 p95 1.7 s / 召回 100% / 误锁 0%;
+    #   fpfh_ransac 同一地图 p95 数十秒. 有 .scdb 时优先 scan_context:
+    #     relocalizer: scan_context
     relocalizer: fpfh_ransac
     motion_prior: imu
     local_map: keyframe_submap
@@ -210,6 +302,10 @@ localization:
     icp_max_corr_dist: 2.0
     icp_fitness_thresh: 1.0
     icp_max_iter: 32
+    # 精配准局部子图半径(m): 全局重定位只需要候选附近的结构.
+    # 全图上给每个候选跑 GICP 是重定位 20~45 s 的主要来源; 30 m + 两级精配实测 p95 < 2 s.
+    # 0 = 不裁剪 (旧行为, 地图很大时会退化成几十秒).
+    reloc_submap_radius: 30.0
     sc_num_rings: 20
     sc_num_sectors: 60
     sc_max_radius: 80.0

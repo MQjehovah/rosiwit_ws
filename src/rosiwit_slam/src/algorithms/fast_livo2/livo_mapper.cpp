@@ -190,6 +190,15 @@ void LivoMapper::gravityAlignment() {
 
 void LivoMapper::processImu() {
     p_imu_->Process2(LidarMeasures_, state_, feats_undistort_);
+    // PCL 的 width/height 必须满足 width*height == points.size():
+    // 点云是用 push_back 拼出来的, 宽高常常还是 0, 下游 pcl::transformPointCloud /
+    // pcl::toROSMsg 会按宽高算线程数或点数 —— 宽高为 0 时整数除零直接 SIGFPE,
+    // 或发布出 0 点的空云。这里统一归一化。
+    if (feats_undistort_) {
+        feats_undistort_->width = static_cast<uint32_t>(feats_undistort_->size());
+        feats_undistort_->height = 1;
+        feats_undistort_->is_dense = false;
+    }
     state_propagat_ = state_;
     voxelmap_manager_->state_ = state_;
     voxelmap_manager_->feats_undistort_ = feats_undistort_;
@@ -318,6 +327,13 @@ void LivoMapper::buildOutputs() {
     CloudType::Ptr world(new CloudType());
     if (feats_undistort_) *body = *feats_undistort_;
     if (pcl_w_wait_pub_) *world = *pcl_w_wait_pub_;
+    // 同 processImu(): 宽高必须与点数一致, 否则下游 PCL 运算会除零/发空云.
+    body->width = static_cast<uint32_t>(body->size());
+    body->height = 1;
+    body->is_dense = false;
+    world->width = static_cast<uint32_t>(world->size());
+    world->height = 1;
+    world->is_dense = false;
 
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr rgb(new pcl::PointCloud<pcl::PointXYZRGB>());
     bool has_rgb = false;
@@ -376,6 +392,10 @@ void LivoMapper::buildOutputs() {
             PointCloudXYZI().swap(*pcl_w_wait_pub_);
         }
     }
+
+    rgb->width = static_cast<uint32_t>(rgb->size());
+    rgb->height = 1;
+    rgb->is_dense = false;
 
     std::lock_guard<std::mutex> lock(mtx_output_);
     out_body_ = body;

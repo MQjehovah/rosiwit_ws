@@ -18,6 +18,8 @@ TOLERANCE=""
 BAND=""
 CONFIG=""
 SPAWN=""
+GOAL=""
+MAPFILE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -29,6 +31,8 @@ while [ $# -gt 0 ]; do
     --band) BAND=$2; shift 2 ;;
     --config) CONFIG=$2; shift 2 ;;
     --spawn) SPAWN=$2; shift 2 ;;
+    --goal) GOAL=$2; shift 2 ;;
+    --map) MAPFILE=$2; shift 2 ;;
     *) echo "unknown arg: $1"; exit 2 ;;
   esac
 done
@@ -69,6 +73,7 @@ if [ -z "$CFG" ] && [ -n "$TOLERANCE" ]; then
   echo "config override: $CFG (tolerance=$TOLERANCE)"
 fi
 if [ -n "$CFG" ]; then EXTRA="$EXTRA navigation_config:=$CFG"; fi
+if [ -n "$MAPFILE" ]; then EXTRA="$EXTRA map:=$MAPFILE"; fi
 if [ -n "$SPAWN" ]; then
   SX=$(echo "$SPAWN" | cut -d, -f1)
   SY=$(echo "$SPAWN" | cut -d, -f2)
@@ -107,7 +112,7 @@ fi
 echo "nav node pid=$PID threads=$(ls /proc/$PID/task | wc -l)"
 
 echo "=== nav test ($DRIVER) ==="
-timeout 600 python2 "$SCRIPT" "$LABEL" 150 "$BAND" 2>&1 | tee "$OUT/run_${LABEL}.log" \
+timeout 600 python2 "$SCRIPT" "$LABEL" 150 "$BAND" "$GOAL" 2>&1 | tee "$OUT/run_${LABEL}.log" \
   | grep -E '^\{' | tee -a "$OUT/results.jsonl"
 
 echo "=== post-run health ==="

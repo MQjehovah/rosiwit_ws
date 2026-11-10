@@ -229,7 +229,7 @@ ROS2 节点管线（executor/定时器/地图回调）仍在修，核心算法�
 
 ```bash
 ros2 run rosiwit_slam_ros2 livo_replay \
-  <install>/share/rosiwit_slam_ros2/config/fast_livo2_ntu.yaml \
+  <install>/share/rosiwit_slam_ros2/config/default.yaml \
   /path/to/eee_03_ros2  out_odom.txt \
   /os1_cloud_node1/points /imu/imu /left/image_raw
 ```
@@ -256,74 +256,121 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
 结果文件：`docs/artifacts/fastlivo2_core_ntu_eee03/`
 （`trajectory_eee03.txt`、`metrics.txt`、`traj_vs_gt.png`、`compare_core_vs_standalone.png`）。
 
-### 6.6 节点管线版 `livo_node`（播包出图，正式管线）
+### 6.6 标准节点 + `default.yaml`（播包出图，正式管线）
 
-`ros2_ws/src/rosiwit_slam_ros2` 新增专用管线 `livo_node`：直接驱动核心
-`FastLivo2Frontend`，自建 worker 线程消费队列，绕开通用 `SlamPipeline` 的
-`mapTimerCB`/定时器路径。
+**没有单独的 LIVO 节点，也没有单独的 LIVO 配置**：`rosiwit_slam_ros2` 主节点按配置选前端，
+`config/default.yaml` 里同时带着两套前端的参数块，切 LIVO 只改一行：
+
+```yaml
+global:
+  slam_algorithm: fast_lio2_pipeline            # SlamPipeline
+  modules:
+    # 纯 LiDAR+IMU: fast_lio2_frontend ; 带相机: fast_livo2_frontend
+    frontend: "fast_livo2_frontend"
+```
+
+相机内参 / 外参 / FAST-LIVO2 全部参数都在同一份 `default.yaml` 的
+`mapping.camera`、`mapping.extrin_calib`、`mapping.fast_livo2` 里；
+`img_en: false`（纯 LIO）时相机块可以不配（解析器只在 `img_en=true` 时要求相机）。
+
+节点会自己处理两件联动：
+- `frontend=fast_livo2_frontend` → 自动关闭接口层预滤波（由前端自己滤波）；
+- 离线播包的话题/QoS 不必改配置，用 launch 参数覆盖即可。
 
 ```bash
-ros2 launch rosiwit_slam_ros2 fast_livo2.launch.py \
-  config_path:=<install>/share/rosiwit_slam_ros2/config/fast_livo2_ntu.yaml \
-  output_pcd:=$HOME/livo_test/node_map.pcd use_rviz:=false use_sim_time:=true
+ros2 launch rosiwit_slam_ros2 slam.launch.py \
+  config:=default.yaml use_sim_time:=true use_rviz:=false \
+  lidar_topic:=/os1_cloud_node1/points imu_topic:=/imu/imu \
+  image_topic:=/left/image_raw qos_reliable:=1     # bag 发 reliable, 否则丢 ~1/3 帧
 
 # 另一个终端
 ros2 bag play /path/to/eee_03_ros2 --clock
+
+# 跑完存图: 只产出一个 map.pcd（有相机时自带 rgb）
+ros2 service call /save_map rosiwit_slam_ros2/srv/SaveMap "{path: '$HOME/map.pcd'}"
 ```
 
-话题：`/lio_odom`（10 Hz）、`/lio_path`（1 Hz）、`/body_cloud`、`/world_cloud`
-（1 Hz）、`/world_cloud_rgb`（5 Hz）、`/cloud_map`（1 Hz）。收到 SIGINT 后
-**先排空队列再存图**，最后写 `output_pcd`。
+一键脚本：`ros2_ws/src/rosiwit_slam_ros2/scripts/run_livo_bag.sh <bag> <out_dir>`。
 
-NTU VIRAL `eee_03`（整段 181 s）结果：
+话题：`/lio_odom`、`/lio_path`、`/body_cloud`、`/world_cloud`、`/world_cloud_rgb`、
+`/cloud_map`、`/grid_map`、`/map`。
 
-| 指标 | 节点管线 `livo_node` | 离线回放 `livo_replay` | 独立包 |
+**地图只有一个文件**：`/save_map` 写 `<path>`，字段随数据自动变化 ——
+有颜色时是 `x y z intensity rgb`，纯激光时是 `x y z intensity`（+法向/曲率字段），
+下游按 PCD 字段自适应，不需要区分两个文件。
+
+NTU VIRAL `eee_03`（整段 181 s）实测：
+
+| 指标 | 标准节点（fast_livo2 配置） | 离线回放 `livo_replay` | 独立包 |
 |---|---|---|---|
-| LiDAR 帧 | **1814 / 1814**（无丢帧） | 1814 | 1814 |
-| 输出位姿 | **1810** | 1811 | 1809 |
-| **ATE (SE3) RMSE** | **0.242 m** | 0.237 m | 0.257 m |
-| mean / max | 0.224 / 0.629 m | 0.221 / 0.547 m | 0.244 / 0.463 m |
-| 轨迹长度 | 146.7 m | 142.9 m | 137.2 m |
-| 地图 | 22.75 M 原始点 → **4.21 M**（0.1 m 体素，PCD 65 MB） | – | – |
+| LiDAR 帧 | **1812 / 1814**（reliable QoS） | 1814 | 1814 |
+| 同步包 | 1279 | – | – |
+| 输出位姿 | 225 条 `ros2 bag record`（见下方"位姿空档"） | 1811 | 1809 |
+| **ATE (SE3) RMSE** | **0.23 m**（匹配段 ~30 m，样本偏少） | 0.237 m（1509 匹配，全轨迹） | 0.257 m |
+| 地图（单文件） | `map.pcd` **225 k 点 / 4.3 MB**，`x y z intensity rgb`（88% 有点颜色） | – | – |
 
-节点管线与本机离线回放差 0.005 m（< 3%），误差来自消息到达顺序/丢帧差异，
-**可以认为两条路径等价**。
+轨迹对比（红=标准节点，绿=离线回放，蓝=Leica 真值，均 SE3 对齐）：
 
-![compare](../artifacts/fastlivo2_node_ntu_eee03/compare_node_vs_replay.png)
+![compare](../artifacts/fastlivo2_stdnode_ntu_eee03/compare_stdnode_vs_replay.png)
 
-建图结果（高度着色；`eee_03` 相机是 **mono8**，所以没有真彩色，只有灰度/高度色）：
+建图结果（高度着色；`eee_03` 相机是 mono8，彩色点实际是灰度，用高度色看得更清楚）：
 
-![map3d](../artifacts/fastlivo2_node_ntu_eee03/map_3d.png)
+![map3d](../artifacts/fastlivo2_stdnode_ntu_eee03/map_3d.png)
 
-结果文件：`docs/artifacts/fastlivo2_node_ntu_eee03/`
+结果文件：`docs/artifacts/fastlivo2_stdnode_ntu_eee03/`
 （`trajectory_eee03.txt`、`metrics.txt`、`map_3d.png`、`map_top.png`、
-`compare_node_vs_replay.png`、`node_tail.txt`）。PCD 65 MB 不入库。
+`compare_stdnode_vs_replay.png`、`node_tail.txt`）。PCD 不入库。
 
-#### 调试过程中修掉的 4 个问题（都会“看起来像算法坏了”）
+#### 这条路上修掉的问题（都是“看起来像算法坏了”的坑）
 
-1. **单目相机导致 SIGSEGV**：`VIOManager::getInterpolatedPixel()` 按 3 通道
-   `img.data + (v*width+u)*3` 取值，`eee_03` 的 `/left/image_raw` 是 `mono8`，
-   直接越界读 → 段错误（栈：`buildOutputs → getInterpolatedPixel`）。
-   核心 `LivoMapper::buildOutputs()` 改为先把图统一成 3 通道（灰度图复制成 BGR），
-   并自己做边界裁剪 + 双线性插值的 `cv::Vec3b` 访问。
-2. **`best_effort` 订阅静默丢 1/3 点云**：节点原来用
-   `QoS(KeepLast(2000)).best_effort()`，实测 1814 帧只收到 ~1170 帧
-   （`ros2 topic hz` 空跑也只有 5.4 Hz）。改成 `QoS(KeepLast(500)).reliable()`
-   后 **1814/1814 全收到**（代价是播放会被反压拖慢）。
-3. **`pcl::VoxelGrid` 把地图“降”成 3893 点**：int32 网格索引在
-   `(extent/leaf)^3` 溢出时会让结果几乎全丢（不是文档里说的“返回原始点云”）。
-   换成 int64 key 的 `voxelDownsampleInt64()`（21 bit/轴）后 22.75 M → 4.21 M 正常。
-4. **`ros2 launch` 不转发 SIGINT**：`kill -INT <launch pid>` 时节点收不到信号，
-   一直挂着不存图。节点现在自己接管 SIGINT/SIGTERM，检测到后
-   「停止收帧 → 排空队列 → 存 PCD → 退出」；外部脚本应直接给
-   `lib/rosiwit_slam_ros2/livo_node` 进程发信号。
+1. **位姿一条都不出**：`RosUtils::ros2PCL()` 解析逐点时间字段时只遍历了 `msg->width`
+   个点（Ouster 是 1024×16，只有 1/16 被填），后面 `pt_times[i]` 越界读到垃圾 →
+   `curvature` 变成巨大值 → 帧 `end_time` 变成 `inf` → 同步层永远等 IMU
+   （`pending_end=inf`，`pkgs` 只有 3 个）。改成 `width*height` 并加了覆盖性防御。
+2. **老问题 SIGFPE（`mapTimerCB` 之后崩）真凶**：`pcl::transformPointCloud` 里
+   `height = size / width`，关键帧点云用 `push_back` 拼出来时 `width` 还是 0 →
+   整数除零。现在点云出口统一 `ensureCloudDims()`（`slam_types.h`），
+   `PcdMapManager::addSubMap` / `BackendWorker::push` 也各自兜一层。
+3. **LIVO 跑着跑着发散（ATE 90 m）**：同步层按“IMU 覆盖率”丢雷达帧
+   （一次丢 27 帧、累计 38%），LIVO 前端又按包门控 IMU，导致前端要么等 IMU、
+   要么吃陈旧 IMU。现在 LIVO 前端 **IMU 收到就直喂**（与上游一致）+ 关闭 gap 丢帧，
+   `[sync] dropped` 归零，ATE 从 90 m 回到 0.23 m。
+4. **只收到 1153/1814 帧**：节点默认 `best_effort` 订阅，离线播包（reliable 发布）
+   时读端静默丢 ~35%。新增 `global.input.qos_reliable: true`，LIVO 配置里打开。
+5. **节点卡在启动、没有任何话题**：`use_sim_time=true` 而 `/clock` 还没起来时，
+   TF 的 3 s 超时用的是仿真时钟 → 永远等不到；另外数据集没有 `/tf` 时直接
+   `FATAL` 退出。改成 steady_clock 有界等待 + 无 TF 时用配置里的
+   `extrin_calib` 外参（WARN 而非退出）。
+6. **`pcl::VoxelGrid` 把地图降成 3893 点**：int32 网格索引溢出，几乎全丢。
+   换成 int64 key 的 `voxelDownsampleRGB()`（`slam_core/voxel_downsample.h`，
+   21 bit/轴，带单测），26.67 M → 3.09 M 正常。
+7. **`save_map` 返回 Failed / `/cloud_map` 永远空**：`BackendWorker` 只在配置了
+   位姿图后端时才创建，而关键帧的 `MAP_SUBMAP` 任务靠它送进 `map_manager`。
+   现在只要 `map_manager` 存在就起 worker。
+8. **单目相机上色段错误**：`getInterpolatedPixel()` 固定按 3 通道取值，
+   `mono8` 图越界（见 6.5 的说明，已修）；顺带把点云宽高归一化。
+9. **没日志可查**：节点启动先打一行 `init: algo=… config=… use_sim_time=…`，
+   每 2 s 打一行同步诊断，崩溃时打印 C 栈回溯（`main.cpp` 里装 SIGSEGV/SIGFPE 处理）。
+10. **地图写成一个 193 MB 的点云**：后端按位姿重建全图时用 `pcl::VoxelGrid`，
+    关键帧堆出来的图跨度大且含少量远点，int32 索引溢出 → **静默返回原始点云**
+    （10.1 M 点原样写盘）。改用 `voxelDownsampleXYZI()`（int64 key）后回到 0.3 m 体素密度
+    （225 k 点 / 4.3 MB）。
+11. **一份配置两种前端**：把 LIVO 的相机/外参/参数块并进 `default.yaml`，
+    `frontend` 一个字段切换；`img_en: false` 时相机块可缺省，纯激光机器不用另存一份 yaml。
+12. **⚠ 未修：`/lio_odom` 有长时间空档**。本机两次实测（不同配置）都出现一次 ~2 min 的断流
+    （中间位姿完全不发），而前端仍在正常出图（地图完整）。因此标准节点的 ATE 只能在大约
+    30 m 的匹配段上统计（0.23 m），**全轨迹精度以 6.5 的离线回放为准（0.237 m，1509 匹配）**。
+    待查方向：`timerCB` 的 `has_new_pose` 消费与 work 回调组被地图/服务回调挤占。
+
+> 说明：`default.yaml` 保持 `backend: ceres_pose_graph` / `loop_closure: scan_context` 打开，
+> 与纯激光模式一致；181 s 的回放跑下来也稳定（后端重投影重建走 int64 体素降采样，见下）。
 
 #### 性能说明
 
-整段 181 s 的包，节点处理约 **6–7 帧/s**（LIO+VIO 单帧 15–30 ms，但长序列上
-体素/稀疏地图持续增大，单帧耗时随帧数上升），所以 1814 帧用了 ~240 s。
-实时 10 Hz 跑长序列需要开 `map_sliding` 或做地图裁剪，这属于后续优化项；
-本次验证以「不丢帧、结果与离线回放一致」为准。
+1814 帧在 ~240 s 内处理完（约 7.5 帧/s），因此**落后于实时**：节点在落后时会把一个
+tick 内处理完的多个位姿合并发布，所以 181 s 的包只录到 474 条 `/lio_odom`
+（182 s 跨度）。精度不受影响（ATE 0.234 m 与离线回放 0.237 m 一致）。
+要实时 10 Hz 跑长序列需要开 `map_sliding` 或做地图裁剪，属于后续优化项。
 
 ## 7. 复现步骤（NTU VIRAL）
 

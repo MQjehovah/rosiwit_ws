@@ -91,6 +91,11 @@ bool FastLivo2Frontend::getKeyFrame(KeyFrame& out) {
 
     out.pose = pose;
     out.cloud = m_mapper->bodyCloud();
+    if (out.cloud) {
+        out.cloud->width = static_cast<uint32_t>(out.cloud->size());
+        out.cloud->height = 1;
+        out.cloud->is_dense = false;
+    }
     out.timestamp = static_cast<int64_t>(pose.time * 1e9);
     std::lock_guard<std::mutex> lock(m_mtx);
     out.id = std::to_string(++m_keyframe_counter);

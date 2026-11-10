@@ -193,17 +193,28 @@ bool BbsGlobalLocalizer::projectScan(const CloudType::Ptr& scan) {
     return m_scan2d.size() >= 10;
 }
 
-double BbsGlobalLocalizer::scoreNode(const Level& lv, int xi, int yi, int theta) const {
+size_t BbsGlobalLocalizer::scorePointsForLevel(int /*level*/) const {
+    // 曾尝试"粗层用 1/10 的点打分"把搜索提速 1.6x, 但召回从 100% 掉到 12.5%:
+    // 粗层分数变成噪声后分支定界会把正确分支剪掉 —— 保留全量点, 提速另找别的路.
+    return m_scan2d.size();
+}
+
+double BbsGlobalLocalizer::scoreNode(const Level& lv, int level, int xi, int yi, int theta) const {
     const double tx = m_ox + xi * lv.res;
     const double ty = m_oy + yi * lv.res;
     const double ang = theta * m_theta_res;
     const double c = std::cos(ang), s = std::sin(ang);
+    const double inv = 1.0 / lv.res;
+    const size_t n = scorePointsForLevel(level);
+    // 等间隔抽样: 不同层看到的是同一批点的一部分, 结果稳定可复现
+    const size_t step = (n == 0) ? 1 : std::max<size_t>(1, m_scan2d.size() / n);
     double sum = 0.0;
-    for (const auto& p : m_scan2d) {
+    for (size_t i = 0; i < m_scan2d.size(); i += step) {
+        const auto& p = m_scan2d[i];
         const double x = c * p.x() - s * p.y() + tx;
         const double y = s * p.x() + c * p.y() + ty;
-        const int col = static_cast<int>(std::floor((x - m_ox) / lv.res));
-        const int row = static_cast<int>(std::floor((y - m_oy) / lv.res));
+        const int col = static_cast<int>(std::floor((x - m_ox) * inv));
+        const int row = static_cast<int>(std::floor((y - m_oy) * inv));
         sum += lv.at(col, row);
     }
     return sum;
@@ -219,7 +230,7 @@ void BbsGlobalLocalizer::searchLeaves(int max_k, std::vector<Node>& out) {
     for (int theta = 0; theta < m_theta_bins; ++theta)
         for (int x = 0; x < coarse.w; ++x)
             for (int y = 0; y < coarse.h; ++y) {
-                const double s = scoreNode(coarse, x, y, theta);
+                const double s = scoreNode(coarse, top, x, y, theta);
                 if (s > 0.0) q.push({s, top, x, y, theta});
             }
     if (q.empty()) return;
@@ -235,7 +246,7 @@ void BbsGlobalLocalizer::searchLeaves(int max_k, std::vector<Node>& out) {
             for (int dy = 0; dy < 2; ++dy) {
                 const int cx = 2 * n.x + dx, cy = 2 * n.y + dy;
                 if (cx >= child.w || cy >= child.h) continue;
-                const double s = scoreNode(child, cx, cy, n.theta);
+                const double s = scoreNode(child, n.level - 1, cx, cy, n.theta);
                 if (s > 0.0) q.push({s, n.level - 1, cx, cy, n.theta});
             }
     }
@@ -248,8 +259,13 @@ bool BbsGlobalLocalizer::refineCandidate(const Node& n, const CloudType::Ptr& sc
     guess.trans = V3D(m_ox + n.x * m_res, m_oy + n.y * m_res, 0.0);
     guess.rot = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix();
 
+    // 只裁候选附近的结构做精配: 2D 搜索已给出 (x,y,yaw), 全图 GICP 没必要
+    CloudType::Ptr target = m_cfg.reloc_submap_radius > 0.0
+        ? cropRadius(m_kdtree, m_map_down, guess.trans, m_cfg.reloc_submap_radius)
+        : m_map_down;
+    if (!target || target->size() < 100) target = m_map_down;
     m_gicp.setInputSource(scan_down);
-    m_gicp.setInputTarget(m_map_down);
+    m_gicp.setInputTarget(target);
     CloudType aligned;
     m_gicp.align(aligned, poseToMatrix(guess).cast<float>());
 

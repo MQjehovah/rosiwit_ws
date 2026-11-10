@@ -14,6 +14,20 @@ namespace core
 
 struct SafetyMonitorConfig
 {
+  /// 直行时只按沿运动方向的扫掠走廊判定 STOP (左右两侧不参与)
+  bool heading_aware = true;
+  /// 旧的可选模式: 把 footprint 沿预测轨迹扫掠, 并把"制动期间继续以当前 ω 旋转"
+  /// 也算进横向占用。比 nav2_collision_monitor 更保守; **会让 0.75m 门洞判停**
+  /// (0.66m 车体只剩 2~3cm 侧向余量, 任何 ω 在 0.4s 内转 5° 都超宽)。默认关。
+  bool swept_geometry = false;
+  /// 扫掠区采样数 (当前 footprint 沿未来运动采样多少个位姿)
+  int sweep_samples = 8;
+  /// 角加速度上限, 用于算"转多久停下"; <=0 时用 brake_decel
+  double heading_brake_decel = 0.8;
+  /// 扫掠时间上限 (s), 防止低速时扫掠区过长
+  double sweep_max_time = 1.0;
+  /// SLOWDOWN 扫掠区比 STOP 多扫多久 (s): 一样的 footprint, 只是看得更远
+  double slowdown_lookahead = 0.8;
   bool enabled = true;
   std::vector<std::pair<double, double>> stop_polygon;
   double stop_radius = 0.0;  // >0: 用圆形安全区, 优先于 polygon
@@ -21,6 +35,8 @@ struct SafetyMonitorConfig
   std::vector<std::pair<double, double>> slowdown_polygon;
   int slowdown_max_points = 2;
   double slowdown_ratio = 0.35;
+  /// 减速档线速度下限 (m/s): 压太狠会让 v*e_y 横向修正消失 -> 漂移
+  double slowdown_min_speed = 0.15;
   bool approach_enabled = true;
   double time_before_collision = 2.0;
   double simulation_time_step = 0.1;
@@ -99,6 +115,18 @@ public:
   bool stopActive() const { return stop_active_; }
   bool slowdownActive() const { return slowdown_active_; }
 
+  /// 上一次 filter() **实际使用**的 STOP 区 + 命中点数 (现场诊断用).
+  /// 动态几何模式下实际生效的是 buildDynamicStopPolygon() 生成的动态多边形,
+  /// 不是 config_.stop_polygon —— 排查时看后者会"打印 0 个命中却已经 STOP",
+  /// 把真正的命中点藏起来 (2026-11-03 就踩过这个坑).
+  const std::vector<std::pair<double, double>> & lastStopPolygon() const
+  {
+    return last_stop_poly_;
+  }
+  int lastStopCount() const { return last_stop_count_; }
+  int lastPointCount() const { return last_point_count_; }
+  bool lastStopIsDynamic() const { return last_stop_dynamic_; }
+
   SafetyResult filter(
     const VelocityCommand & cmd,
     const std::vector<std::pair<double, double>> & points) const;
@@ -113,6 +141,11 @@ private:
   mutable int slow_trigger_ = 0;
   mutable int slow_release_ = 0;
   mutable double last_scale_ = 1.0;
+  // 诊断: 上一次实际生效的 STOP 区与命中数 (见 lastStopPolygon())
+  mutable std::vector<std::pair<double, double>> last_stop_poly_;
+  mutable int last_stop_count_ = 0;
+  mutable int last_point_count_ = 0;
+  mutable bool last_stop_dynamic_ = false;
 };
 
 bool pointInPolygon(

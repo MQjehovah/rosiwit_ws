@@ -105,7 +105,7 @@ TEST(LegacyConvert, SlamInfoCarriesMatchingDegree) {
 
 // 5
 TEST(LegacyConvert, WarningJsonShape) {
-    // 用 T1 抄进来的那份 warning_code.json 里的真值 (20003504 = pose lost)
+    // 用 config/warning_code.json 里的真值 (20003504 = pose lost)
     const std::string j = buildWarningJson("20003504", "FAULT", "pose lost",
                                            "slam localization lost post!");
     const YAML::Node n = YAML::Load(j);

@@ -11,7 +11,7 @@ DwaController::DwaController()
     : name_("dwa"), logger_("dwa"), idx_(0),
       max_vx_(0.25), min_vx_(0.0), max_vw_(0.5),
       max_accel_(1.0), max_dvw_(2.0),
-      goal_tol_(0.1), dt_(0.1), sim_time_(1.0),
+      goal_tol_(0.1), dt_(0.1), sim_time_(1.0), lookahead_(0.8),
       initialized_(false), goal_reached_(false) {}
 
 DwaController::~DwaController() = default;
@@ -26,6 +26,8 @@ bool DwaController::initialize(const core::ControllerConfig& config) {
       (config.kinematics.max_velocity_x > 0 ? config.kinematics.max_velocity_x : 0.5);
     max_dvw_ = config.max_accel_theta > 0 ? config.max_accel_theta : 1.0;
     goal_tol_ = config.xy_goal_tolerance > 0 ? config.xy_goal_tolerance : 0.1;
+    lookahead_ = config.lookahead_distance > 0 ?
+      std::max(0.6, config.lookahead_distance) : 0.8;
     footprint_ = config.footprint;
     footprint_samples_ = core::sampleFootprint(footprint_, config.footprint_sample_spacing);
     initialized_ = true;
@@ -49,9 +51,18 @@ core::VelocityCommand DwaController::computeVelocityCommand(
     // 路径重规划后 idx_ 可能停在旧路径位置; 用当前位姿校正, 但绝不倒退.
     idx_ = std::max(idx_, findClosest(pose));
 
+    filterObstacles(pose);
     auto samples = search(pose, vel);
     last_samples_ = static_cast<int>(samples.size());
-    if (samples.empty()) return {0, 0, vel.angular_z};
+    if (samples.empty()) {
+        // 没有可行样本 (全被障碍/转向互斥掉): 朝前视点原地转, 不要盲目前进.
+        const double bear = std::atan2(last_carrot_y_ - pose.y, last_carrot_x_ - pose.x);
+        const double err = normAngle(bear - pose.theta);
+        if (std::fabs(err) > 0.15) {
+            return {0.0, 0.0, (err > 0.0 ? 1.0 : -1.0) * 0.4 * max_vw_};
+        }
+        return {0, 0, 0};
+    }
 
     // Pick best
     auto best = std::min_element(samples.begin(), samples.end(),
@@ -60,6 +71,7 @@ core::VelocityCommand DwaController::computeVelocityCommand(
     last_best_w_ = best->w;
     last_best_cost_ = best->cost;
     last_min_clearance_ = best->clearance;
+    last_cross_track_ = pathCrossTrack(pose);
 
     // 平滑推进 idx_，最多 +2 防止前视点跳变
     double px = pose.x, py = pose.y, pt = pose.theta;
@@ -89,31 +101,81 @@ std::vector<DwaController::Sample> DwaController::search(
     const core::Pose2D& pose, const core::VelocityCommand& vel) {
     auto bounds = dynamicWindow(vel);
     std::vector<Sample> samples;
-    int nv = 10, nw = 10;
-    double dv = (bounds.max_vx - bounds.min_vx) / nv;
-    double dw_ = (bounds.max_vw - bounds.min_vw) / nw;
+    const int nv = 10, nw = 10;
+    const double dv = (bounds.max_vx - bounds.min_vx) / nv;
+    const double dw_ = (bounds.max_vw - bounds.min_vw) / nw;
+
+    // 前视 carrot: 沿路径弧长 lookahead_ 的点 (nav2/base_local_planner DWA 的
+    // goal_front critic). 代价用"到前方路径点的距离"而不是"到整条路径的欧氏
+    // 距离": 往返式清洁路径两条车道只差 0.46m, 欧氏距离分不清去程/回程,
+    // 车会在折返点附近来回摆 (实车 2026-11-03 22:42 转 45s 不走).
+    double cx = pose.x + lookahead_ * std::cos(pose.theta);
+    double cy = pose.y + lookahead_ * std::sin(pose.theta);
+    if (!path_.points.empty()) {
+        size_t k = idx_;
+        double acc = 0.0;
+        while (k + 1 < path_.points.size() && acc < lookahead_) {
+            acc += std::hypot(path_.points[k + 1].pose.x - path_.points[k].pose.x,
+                              path_.points[k + 1].pose.y - path_.points[k].pose.y);
+            ++k;
+        }
+        cx = path_.points[k].pose.x;
+        cy = path_.points[k].pose.y;
+    }
+    const double d0 = std::max(0.30, std::hypot(cx - pose.x, cy - pose.y));
+    last_carrot_x_ = cx;
+    last_carrot_y_ = cy;
+    // 前视点跑到车侧后方时先转再走 (nav2 rotate_to_heading):
+    // 只看代价时, 180° 下"闷头往前开"反而可能更便宜, 实车就会冲出去.
+    const double bear = std::atan2(cy - pose.y, cx - pose.x);
+    const double err0 = normAngle(bear - pose.theta);
+    // 倒车跟随: carrot 在车后 (>120°) 且控制器允许倒车 -> 保持车头倒着走.
+    // 1.52m 走廊里原地掉头需要 1.45m 外接圆, 实测被安全层永久 STOP
+    // (实车 2026-11-04 12:53 起步原地转 20s 不动). 往返式清洁路径的返程
+    // 本来就该沿原线倒车, 不需要转.
+    const bool reverse_mode = (min_vx_ < -1e-6) && std::fabs(err0) > 2.10;
+    // 前视点跑到车侧后方时先转再走 (nav2 rotate_to_heading):
+    // 只看代价时, 180° 下"闷头往前开"反而可能更便宜, 实车就会冲出去.
+    const bool turn_first = !reverse_mode && std::fabs(err0) > 1.40;
 
     for (int i = 0; i <= nv; ++i) {
         for (int j = 0; j <= nw; ++j) {
             Sample s;
             s.v = bounds.min_vx + i * dv;
             s.w = bounds.min_vw + j * dw_;
-            core::Pose2D end_pose = simulate(pose, s);
-            s.heading = headingCost(end_pose);
-            double h = 1.0 - s.heading;
-            double c = (s.clearance < 0.15) ? 1.0 - s.clearance / 0.15 : 0.0;
-            double v = 1.0 - (std::abs(s.v) / max_vx_ + std::abs(s.w) / max_vw_) * 0.5;
-            // 平滑度：惩罚与当前速度差异大的轨迹，防止左右来回跳
-            double dv_cmd = std::abs(s.v - vel.linear_x) / max_vx_;
-            double dw_cmd = std::abs(s.w - vel.angular_z) / max_vw_;
-            double smooth = (dv_cmd + dw_cmd) * 0.5;
-            // 碰撞轨迹直接丢弃; 内切圆带 (cost>=99 -> clearance<=0.005) 也算碰撞:
-            // 以前只拒 <=0.0, 整条轨迹落在 0.25m 内切带里也能通过 (只损失 0.097 代价).
-            if (s.clearance < 0.01) {
-                continue;
+            const core::Pose2D end_pose = simulate(pose, s);
+            if (s.clearance < 0.01) { continue; }   // 碰撞轨迹直接丢弃
+            if (turn_first && std::fabs(s.v) > 0.06) { continue; }  // 先原地转
+
+            const double dxc = cx - end_pose.x;
+            const double dyc = cy - end_pose.y;
+            const double d_carrot = std::hypot(dxc, dyc);
+            // 车头朝向前视点 (goal_front / alignment)
+            const double want = std::atan2(dyc, dxc);
+            const double herr = std::fabs(normAngle(want - end_pose.theta)) / M_PI;
+            // 横向偏差, 把候选拉回路径中心线
+            const double cross = std::min(1.0, pathCrossTrack(end_pose) / 0.4);
+            const double car = std::min(1.0, d_carrot / d0);
+            const double twirl = std::fabs(s.w) / std::max(1e-6, max_vw_);
+            const double dv_cmd = std::fabs(s.v - vel.linear_x) / std::max(1e-6, max_vx_);
+            const double dw_cmd = std::fabs(s.w - vel.angular_z) / std::max(1e-6, max_vw_);
+            const double smooth = 0.5 * (dv_cmd + dw_cmd);
+            const double speed_reward =
+                std::min(1.0, std::fabs(s.v) / std::max(1e-6, max_vx_));
+            const double clearance_violation =
+                (s.clearance < 0.25) ? 1.0 - s.clearance / 0.25 : 0.0;
+            // 原地来回摆头 (oscillation critic): 车没走却在反向转 -> 重罚.
+            double osc = 0.0;
+            if (std::fabs(vel.linear_x) < 0.03 && std::fabs(vel.angular_z) > 0.05 &&
+                s.w * vel.angular_z < 0.0) {
+                osc = 0.80;
             }
-            // 权重偏向航向和角速度连续性; 速度项不再压过平滑项.
-            s.cost = 0.45 * h + 0.10 * c + 0.30 * v + 0.15 * smooth;
+            s.heading = 1.0 - herr;
+            // 归一化 critic 组合: goal_front / heading / path / obstacle /
+            // twirling / oscillation / 速度奖励.
+            s.cost = 1.00 * car + 0.60 * herr + 0.80 * cross +
+                     0.50 * clearance_violation + 0.15 * twirl +
+                     0.15 * smooth - 0.20 * speed_reward + osc;
             samples.push_back(s);
         }
     }
@@ -139,9 +201,13 @@ core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const 
         py += s.v * std::sin(pt) * dt_;
         pt += s.w * dt_;
         double step_min = 5.0;
-        if (!obstacles_.empty()) {
+        // 有局部代价地图时用 5cm 栅格做碰撞判定 (精确); 0.5m 块的"外接圆"
+        // 在贴墙 3~6cm 时会把所有候选都判成碰撞 (实车 2026-11-04 13:08:
+        // 车离墙 0.40m, 但块的圆半径 0.35 -> 全部样本 clearance<0 -> DWA 无解,
+        // 只能输出原地转 0.2rad/s). 圆只作为没有栅格时的后备.
+        if (!has_local_costmap_ && !near_obstacles_.empty()) {
             if (footprint_samples_.empty()) {
-                for (const auto& obs : obstacles_) {
+                for (const auto& obs : near_obstacles_) {
                     double dx = px - obs.x, dy = py - obs.y;
                     double d = std::sqrt(dx * dx + dy * dy) - obs.radius;
                     if (d < step_min) step_min = d;
@@ -152,7 +218,7 @@ core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const 
                 for (const auto& sample : footprint_samples_) {
                     const double wx = px + c * sample.first - sn * sample.second;
                     const double wy = py + sn * sample.first + c * sample.second;
-                    for (const auto& obs : obstacles_) {
+                    for (const auto& obs : near_obstacles_) {
                         double dx = wx - obs.x, dy = wy - obs.y;
                         double d = std::sqrt(dx * dx + dy * dy) - obs.radius;
                         if (d < step_min) step_min = d;
@@ -174,8 +240,22 @@ core::Pose2D DwaController::simulate(const core::Pose2D& pose, Sample& s) const 
                     (100.0 - static_cast<double>(v)) / 100.0 * 0.5);
             }
         }
+        // 已判定碰撞: 这条候选必然被丢弃, 不必再算完整个仿真周期.
+        if (s.clearance < 0.005) { break; }
     }
     return {px, py, pt};
+}
+
+// 只保留一个仿真周期内可能碰到的障碍: 车最多跑 sim_time*max_vx (0.3m),
+// 加上车体外接半径 0.73m 和余量, 1.2m 以外的不可能撞上.
+void DwaController::filterObstacles(const core::Pose2D& pose) {
+    near_obstacles_.clear();
+    const double reach = sim_time_ * max_vx_ + 1.20;
+    near_obstacles_.reserve(obstacles_.size());
+    for (const auto& o : obstacles_) {
+        const double d = std::hypot(o.x - pose.x, o.y - pose.y) - o.radius;
+        if (d < reach) { near_obstacles_.push_back(o); }
+    }
 }
 
 double DwaController::headingCost(const core::Pose2D& pose) const {
@@ -195,6 +275,22 @@ double DwaController::headingCost(const core::Pose2D& pose) const {
     return 1.0 - std::abs(normAngle(goal_angle - pose.theta)) / M_PI;
 }
 
+double DwaController::pathCrossTrack(const core::Pose2D& pose) const {
+    if (path_.points.empty()) return 0.0;
+    const size_t n = path_.points.size();
+    // 只统计 idx_ 之后的前向路径 (至少给 40 个点/约 3m 的窗口):
+    // 路径含折返时, 用整条路径会把"回程"当成横向偏差 0.
+    const size_t end = std::min(n, idx_ + 40);
+    double best = std::numeric_limits<double>::max();
+    for (size_t i = idx_; i < end; ++i) {
+        const double dx = path_.points[i].pose.x - pose.x;
+        const double dy = path_.points[i].pose.y - pose.y;
+        const double d = dx * dx + dy * dy;
+        if (d < best) best = d;
+    }
+    return std::sqrt(best == std::numeric_limits<double>::max() ? 0.0 : best);
+}
+
 double DwaController::clearanceCost(const core::Pose2D& pose) const {
     double min_d = std::numeric_limits<double>::max();
     for (const auto& obs : obstacles_) {
@@ -206,12 +302,29 @@ double DwaController::clearanceCost(const core::Pose2D& pose) const {
 }
 
 size_t DwaController::findClosest(const core::Pose2D& pose) const {
-    size_t best = 0; double best_d = std::numeric_limits<double>::max();
-    for (size_t i = 0; i < path_.points.size(); ++i) {
-        double dx = path_.points[i].pose.x - pose.x;
-        double dy = path_.points[i].pose.y - pose.y;
-        double d = dx * dx + dy * dy;
+    if (path_.points.empty()) return 0;
+    const size_t n = path_.points.size();
+    // 只在前向窗口里投影. 整条路径扫描时, 往返式清洁路径的"终点"常常就在
+    // 车旁边 (回到起点收尾), idx_ 会一次跳到终点 -> carrot 跑到车后 ->
+    // 车以为要掉头 -> 起步原地打转 (实车 2026-11-04 12:53).
+    const size_t begin = idx_ > 2 ? idx_ - 2 : 0;
+    const size_t end = std::min(n, idx_ + 120);
+    size_t best = begin;
+    double best_d = std::numeric_limits<double>::max();
+    for (size_t i = begin; i < end; ++i) {
+        const double dx = path_.points[i].pose.x - pose.x;
+        const double dy = path_.points[i].pose.y - pose.y;
+        const double d = dx * dx + dy * dy;
         if (d < best_d) { best_d = d; best = i; }
+    }
+    // 车被推出窗口 (>1.5m) 才回退到全路径搜索, 避免彻底跑飞.
+    if (best_d > 1.5 * 1.5) {
+        for (size_t i = 0; i < n; ++i) {
+            const double dx = path_.points[i].pose.x - pose.x;
+            const double dy = path_.points[i].pose.y - pose.y;
+            const double d = dx * dx + dy * dy;
+            if (d < best_d) { best_d = d; best = i; }
+        }
     }
     return best;
 }
@@ -233,14 +346,17 @@ void DwaController::reset() { idx_ = 0; goal_reached_ = false; path_.points.clea
 void DwaController::setVelocityLimit(double vx, double vw) { max_vx_ = vx; max_vw_ = vw; }
 std::string DwaController::getName() const { return name_; }
 std::string DwaController::getVersion() const { return "1.0.0"; }
-void DwaController::setObstacles(const core::ObstacleArray& obs) { obstacles_ = obs; }
+void DwaController::setObstacles(const core::ObstacleArray& obs) {
+    obstacles_ = obs;
+    near_obstacles_ = obs;
+}
 
 std::string DwaController::getDiagnostics() const {
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-        "controller=dwa samples=%d best_v=%.3f best_w=%.3f cost=%.3f clearance=%.3f idx=%zu",
+        "controller=dwa samples=%d best_v=%.3f best_w=%.3f cost=%.3f clearance=%.3f cross=%.3f idx=%zu",
         last_samples_, last_best_v_, last_best_w_, last_best_cost_,
-        last_min_clearance_, idx_);
+        last_min_clearance_, last_cross_track_, idx_);
     return std::string(buf);
 }
 

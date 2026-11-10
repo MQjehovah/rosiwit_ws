@@ -46,9 +46,9 @@ for _ in $(seq 1 40); do
     sleep 0.5
 done
 
-# 用真实部署配置 (movebase_compat.yaml) 跑, 只把两个输出话题改到 /navtest,
+# 用真实部署配置 (default.yaml) 跑, 只把两个输出话题改到 /navtest,
 # 避免碰到实车 (私有 master 本身也不会影响实车).
-CONFIG="$(rospack find rosiwit_navigation_ros1)/config/movebase_compat.yaml"
+CONFIG="$(rospack find rosiwit_navigation_ros1)/config/default.yaml"
 rosparam load "$CONFIG" /navtest/navtest
 rosparam set /navtest/navtest/cmd_vel_topic /navtest/cmd_vel
 rosparam set /navtest/navtest/movebase_cmd_vel_topic /navtest/movebase_cmd_vel

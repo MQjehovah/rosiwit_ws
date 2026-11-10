@@ -50,6 +50,10 @@ private:
         std::string image_topic = "";          // 空 = 不订阅图像 (LIVO 时填写)
         bool   enable_image_processing = false;  // true = 订阅 CompressedImage
         bool   disable_prefilter = false;        // LIVO 前端自己滤波时置 true
+        /// 传感器订阅用 reliable QoS. 真机驱动多为 best_effort, 默认 false 保持兼容;
+        /// 离线播包 (ros2 bag play 发布的是 reliable) 建议 true: best_effort 读端会静默
+        /// 丢 ~1/3 点云帧 (实测 1814 帧只收到 1153).
+        bool   sensor_reliable = false;
         std::string lidar_frame = "lidar";
         std::string imu_frame   = "lidar";     // 核心 body frame (FAST-LIO2 估计 IMU body)
         std::string body_frame  = "base_link";

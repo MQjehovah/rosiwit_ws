@@ -1,0 +1,4 @@
+[rosiwit_slam_ros2-1] [INFO] [1793518852.807991200] [rosiwit_slam]: sync: imu_rx=70475 lidar_rx=1814 pkgs=1696 | buf imu=20 lidar=1 pushed=1 | t_imu=1609060516.105 t_lidar_end=1609060516.154 pending_end=1609060516.154 (imu-pending=-0.049)
+[rosiwit_slam_ros2-1] [INFO] [1793518854.826739726] [rosiwit_slam]: sync: imu_rx=70475 lidar_rx=1814 pkgs=1696 | buf imu=20 lidar=1 pushed=1 | t_imu=1609060516.105 t_lidar_end=1609060516.154 pending_end=1609060516.154 (imu-pending=-0.049)
+[rosiwit_slam_ros2-1] [INFO] [1793518856.830276008] [rosiwit_slam]: sync: imu_rx=70475 lidar_rx=1814 pkgs=1696 | buf imu=20 lidar=1 pushed=1 | t_imu=1609060516.105 t_lidar_end=1609060516.154 pending_end=1609060516.154 (imu-pending=-0.049)
+[rosiwit_slam_ros2-1] [INFO] [1793518858.848834596] [rosiwit_slam]: sync: imu_rx=70475 lidar_rx=1814 pkgs=1696 | buf imu=20 lidar=1 pushed=1 | t_imu=1609060516.105 t_lidar_end=1609060516.154 pending_end=1609060516.154 (imu-pending=-0.049)

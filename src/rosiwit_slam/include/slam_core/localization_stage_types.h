@@ -186,6 +186,9 @@ struct GlobalLocalizeConfig {
     double icp_max_corr_dist = 2.0;
     double icp_fitness_thresh = 1.0;
     int    icp_max_iter = 32;
+    // 精配准局部子图半径(m): 全局重定位只需要候选附近的结构.
+    // 全图上给每个候选跑 GICP 是重定位 20~45 s 的主要来源; 0 = 不裁剪(旧行为).
+    double reloc_submap_radius = 30.0;
     // seed 帧防漂门限: 种子帧的 ICP 结果相对种子位姿的允许漂移.
     // 超过就判 seed 失败, 保持 INIT, 而不是"滑过去当成定位成功".
     // (2026-10-25: 之前硬编码 1.0m/15°, 实测拉偏 1m 后 ICP 能滑 0.84m
@@ -216,8 +219,11 @@ struct GlobalLocalizeConfig {
     // FPFH-RANSAC 6DoF 全局重定位
     double fpfh_normal_radius = 2.0;  // 法向估计半径(m)
     double fpfh_feature_radius = 8.0; // FPFH 特征半径(m)
-    int    fpfh_max_iter = 50000;     // RANSAC 最大迭代
+    int    fpfh_max_iter = 5000;      // RANSAC 最大迭代 (50000 在 25 万点地图上单场景 >10 min;
+                                       // 有 .scdb 时优先用 scan_context, FPFH 只做无库兜底)
     double fpfh_inlier_fraction = 0.25;
+    // 全局重定位单次预算(ms): 超了就带着已有候选返回, 不能无限跑
+    int    reloc_budget_ms = 5000;
     double fpfh_similarity = 0.9;     // 预拒绝相似度阈值
 };
 

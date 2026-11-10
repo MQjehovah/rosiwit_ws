@@ -84,6 +84,8 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
         if (grid && grid["realtime_resolution"]) {
             realtime_grid_resolution_ = grid["realtime_resolution"].as<double>();
         }
+        std::cout << "[ros1_slam] grid: save_res=" << grid_resolution_
+                  << " realtime_res=" << realtime_grid_resolution_ << std::endl;
         // C2b: 2D 平面约束开关 (localization.planar_constraint.enabled).
         if (yc["localization"] && yc["localization"]["planar_constraint"]) {
             const YAML::Node pc = yc["localization"]["planar_constraint"];

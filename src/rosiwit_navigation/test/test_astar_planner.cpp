@@ -239,4 +239,65 @@ TEST(AStarPlanner, AppliesConfiguredIterationLimit)
   ASSERT_TRUE(normal.is_ok()) << normal.error_message();
 }
 
+TEST(AStarPlanner, SnapsGoalOutOfObstacleWithinTolerance)
+{
+  // nav2_navfn_planner 的 tolerance 语义: 目标格被占时在 0.5m 内吸附,
+  // 而不是整条规划直接失败.
+  const unsigned int width = 200;
+  const unsigned int height = 200;
+  std::vector<unsigned char> cells(width * height, 0);
+  for (int y = 98; y <= 100; ++y)
+    for (int x = 98; x <= 100; ++x) cells[y * width + x] = 100;
+  const Costmap costmap = makeCostmap(width, height, 0.05, cells);
+
+  AStarPlanner planner;
+  rosiwit_navigation::core::PlannerConfig config;
+  config.name = "astar_snap_test";
+  config.resolution = 0.05;
+  config.max_iterations = 100000;
+  config.timeout = 4.0;
+  config.goal_tolerance = 0.5;
+  ASSERT_TRUE(planner.initialize(config));
+  planner.setInflationRadius(0.0);
+  planner.setRobotRadius(0.0);
+  planner.setCostmap(costmap);
+
+  const auto result = planner.plan(
+    Pose2D(0.5, 0.5, 0.0), Pose2D(4.95, 4.95, 0.0));
+  ASSERT_TRUE(result.is_ok()) << result.error_message();
+  const auto & end = result.value().points.back().pose;
+  EXPECT_LE(std::hypot(end.x - 4.95, end.y - 4.95), 0.5 + 0.06);
+}
+
+TEST(AStarPlanner, GoalInObstacleFailsWhenToleranceDisabled)
+{
+  const unsigned int width = 100;
+  const unsigned int height = 100;
+  std::vector<unsigned char> cells(width * height, 0);
+  // 2.5/0.05 在浮点下可能落在 49 或 50, 两个格都堵上
+  cells[49 * width + 49] = 100;
+  cells[49 * width + 50] = 100;
+  cells[50 * width + 49] = 100;
+  cells[50 * width + 50] = 100;
+  const Costmap costmap = makeCostmap(width, height, 0.05, cells);
+
+  AStarPlanner planner;
+  rosiwit_navigation::core::PlannerConfig config;
+  config.name = "astar_no_snap_test";
+  config.resolution = 0.05;
+  config.max_iterations = 50000;
+  config.timeout = 2.0;
+  config.goal_tolerance = 0.0;
+  ASSERT_TRUE(planner.initialize(config));
+  planner.setInflationRadius(0.0);
+  planner.setRobotRadius(0.0);
+  planner.setCostmap(costmap);
+
+  const auto result = planner.plan(
+    Pose2D(0.5, 0.5, 0.0), Pose2D(2.5, 2.5, 0.0));
+  EXPECT_FALSE(result.is_ok());
+  EXPECT_EQ(result.error_code(),
+            rosiwit_navigation::core::ErrorCode::GOAL_IN_OBSTACLE);
+}
+
 }  // namespace

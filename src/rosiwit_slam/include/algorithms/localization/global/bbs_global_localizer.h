@@ -36,7 +36,11 @@ private:
     struct Node { double score; int level; int x; int y; int theta; };
     struct NodeCmp { bool operator()(const Node& a, const Node& b) const { return a.score < b.score; } };
 
-    double scoreNode(const Level& lv, int x, int y, int theta) const;
+    /// level = 金字塔层号 (0=最细). 粗层只用少量点打分: 打分代价是
+    /// O(扫描点数), 而粗层要做 theta_bins x cells 次, 用全量点是重定位主要的 CPU 开销.
+    double scoreNode(const Level& lv, int level, int x, int y, int theta) const;
+    /// 该层参与打分的 2D 点数上限
+    size_t scorePointsForLevel(int level) const;
     bool projectScan(const CloudType::Ptr& scan);
     bool rebuild(const CloudType::Ptr& src);
     void searchLeaves(int max_k, std::vector<Node>& out);

@@ -373,6 +373,203 @@ TEST(SafetyMonitor, RotationCircleStillStopsRealObstacle)
   EXPECT_EQ(r.state, "STOP");
 }
 
+
+TEST(SafetyMonitor, SweptSlowdownZoneSlowsBeforeStop)
+{
+  // 同样的 footprint, SLOWDOWN 扫掠更久: 障碍在"减速区但不在停止区"时应减速不停车
+  SafetyMonitorConfig cfg;
+  cfg.enabled = true;
+  cfg.dynamic_geometry = true;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.stop_margin = 0.05;
+  cfg.side_margin = 0.03;
+  cfg.footprint = {{-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}};
+  cfg.stop_max_points = 2;
+  cfg.slowdown_max_points = 2;
+  cfg.slowdown_ratio = 0.5;
+  cfg.slowdown_lookahead = 0.8;
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_release_frames = 1;
+  cfg.slowdown_trigger_frames = 1;
+  cfg.slowdown_release_frames = 1;
+  cfg.approach_enabled = false;
+
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  // v=0.5: stop 扫掠到车头+0.51m (0.55+0.41); slow 扫掠再多 0.4m
+  const std::vector<Point> far_points{{1.05, 0.0}, {1.06, 0.05}, {1.04, -0.05}};
+  const auto slow = monitor.filter(VelocityCommand(0.5, 0.0, 0.0), far_points);
+  EXPECT_NE(slow.state, "STOP");
+  EXPECT_LT(slow.scale, 1.0) << slow.state;
+
+  // 换成 0.5m 处: 落进 STOP 扫掠区 -> 停
+  monitor.reset();
+  const std::vector<Point> near_points{{0.70, 0.0}, {0.71, 0.05}, {0.69, -0.05}};
+  const auto stop = monitor.filter(VelocityCommand(0.5, 0.0, 0.0), near_points);
+  EXPECT_EQ(stop.state, "STOP");
+}
+
+
+TEST(SafetyMonitor, SlowdownKeepsMinimumSpeed)
+{
+  // 减速比 0.1 会把 0.6 m/s 压到 0.06 -> 低于下限, 应抬到 slowdown_min_speed
+  SafetyMonitorConfig cfg;
+  cfg.enabled = true;
+  cfg.dynamic_geometry = true;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.stop_margin = 0.05;
+  cfg.side_margin = 0.03;
+  cfg.footprint = {{-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}};
+  cfg.stop_max_points = 2;
+  cfg.slowdown_max_points = 2;
+  cfg.slowdown_ratio = 0.1;
+  cfg.slowdown_min_speed = 0.15;
+  cfg.slowdown_lookahead = 0.8;
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_release_frames = 1;
+  cfg.slowdown_trigger_frames = 1;
+  cfg.slowdown_release_frames = 1;
+  cfg.approach_enabled = false;
+
+  SafetyMonitor monitor;
+  monitor.configure(cfg);
+  // v=0.6: stop 扫掠到 1.12m, slow 扫掠到 1.60m -> 1.30m 只落在减速区
+  const std::vector<Point> pts{{1.30, 0.0}, {1.31, 0.05}, {1.29, -0.05}};
+  const auto r = monitor.filter(VelocityCommand(0.6, 0.0, 0.0), pts);
+  EXPECT_NE(r.state, "STOP");
+  EXPECT_GE(std::fabs(r.command.linear_x), 0.15 - 1e-6);
+}
+
+// ============================================================================
+// 硬指标回归: 0.66m 车体过 0.75m 门洞 (门框内表面 x = ±0.375)
+//
+// 这些测试锁住"安全层几何不能把窄门算窄"这条契约:
+//   * 余量必须各向异性: 前/后 stop_margin, 左右 side_margin
+//   * 侧向余量一旦被 stop_margin(0.05) 污染, 侧向半宽 0.38 > 0.375 -> 永远停
+// ============================================================================
+SafetyMonitorConfig DoorConfig(double side_margin)
+{
+  SafetyMonitorConfig cfg;
+  cfg.enabled = true;
+  cfg.dynamic_geometry = true;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.stop_margin = 0.05;
+  cfg.side_margin = side_margin;
+  cfg.footprint = {{-0.25, -0.33}, {0.55, -0.33}, {0.55, 0.33}, {-0.25, 0.33}};
+  cfg.stop_max_points = 4;
+  cfg.slowdown_max_points = 1000;   // 只看 STOP, 避免减速干扰结论
+  cfg.stop_trigger_frames = 1;
+  cfg.stop_release_frames = 1;
+  cfg.slowdown_trigger_frames = 1;
+  cfg.slowdown_release_frames = 1;
+  cfg.approach_enabled = false;
+  return cfg;
+}
+
+// 门框: 两片墙在 y = ±half，x 从 0.30 到 1.60 (base 系, 车在原点朝 +x)
+std::vector<Point> DoorFrame(double half, double shift_y)
+{
+  std::vector<Point> pts;
+  for (double x = 0.30; x <= 1.60; x += 0.05) {
+    pts.push_back({x, shift_y + half});
+    pts.push_back({x, shift_y - half});
+  }
+  return pts;
+}
+
+TEST(SafetyMonitor, SweptZonePasses075DoorWhenCentered)
+{
+  // 0.75m 门洞、车体 0.66m、居中 -> 必须放行 (以前必停: 径向外扩 0.05 把侧向
+  // 撑到 0.38 > 0.375)
+  SafetyMonitor monitor;
+  monitor.configure(DoorConfig(0.02));
+  const auto r = monitor.filter(VelocityCommand(0.2, 0.0, 0.0), DoorFrame(0.375, 0.0));
+  EXPECT_NE(r.state, "STOP");
+}
+
+TEST(SafetyMonitor, SweptZoneStopsWhenDoorOffsetExceedsSideMargin)
+{
+  // 同一个门, 但车体横向偏 6cm: 0.33 + 0.02 = 0.35 的侧向边界已经越过门框
+  // (0.375 - 0.06 = 0.315) -> 必须停
+  SafetyMonitor monitor;
+  monitor.configure(DoorConfig(0.02));
+  const auto r = monitor.filter(VelocityCommand(0.2, 0.0, 0.0), DoorFrame(0.375, -0.06));
+  EXPECT_EQ(r.state, "STOP");
+}
+
+TEST(SafetyMonitor, SweptZoneLateralMarginIsSideMarginNotStopMargin)
+{
+  // 侧墙 0.365: 侧向边界 0.33+0.02=0.35 < 0.365 -> 放行。
+  // 若侧向误用 stop_margin(0.05) -> 0.38 > 0.365 -> 会被判停 (这个测试就是防回归)。
+  SafetyMonitor monitor;
+  monitor.configure(DoorConfig(0.02));
+  const auto pass = monitor.filter(VelocityCommand(0.2, 0.0, 0.0), DoorFrame(0.365, 0.0));
+  EXPECT_NE(pass.state, "STOP");
+
+  // 侧墙 0.34 -> 进入 0.35 侧向边界 -> 停
+  SafetyMonitor monitor2;
+  monitor2.configure(DoorConfig(0.02));
+  const auto stop = monitor2.filter(VelocityCommand(0.2, 0.0, 0.0), DoorFrame(0.34, 0.0));
+  EXPECT_EQ(stop.state, "STOP");
+}
+
+// 倒车脱困: 前方障碍不应阻止倒车指令。
+// 2026-11-03 实车: 前方 0.16m 有墙, recovery 倒车 v=-0.03 每拍被安全层 STOP,
+// 20s 后 FAILED_NO_PROGRESS。动态停区的 stop_margin 只能加在行进方向。
+TEST(SafetyMonitor, ReverseEscapeNotBlockedByFrontMargin)
+{
+  SafetyMonitorConfig cfg = MakeConfig();
+  cfg.dynamic_geometry = true;
+  cfg.stop_margin = 0.15;
+  cfg.side_margin = 0.12;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.approach_enabled = false;
+
+  // 障碍在车头前 0.68m (footprint 前缘 0.55, 前进 margin 0.15 -> 0.70)
+  const std::vector<Point> pts{{0.68, 0.0}, {0.69, 0.02}, {0.70, -0.02}};
+
+  SafetyMonitor fwd_monitor;
+  fwd_monitor.configure(cfg);
+  const auto fwd = fwd_monitor.filter(VelocityCommand(0.30, 0.0, 0.0), pts);
+  EXPECT_EQ(fwd.state, "STOP");
+
+  SafetyMonitor rev_monitor;
+  rev_monitor.configure(cfg);
+  const auto rev = rev_monitor.filter(VelocityCommand(-0.10, 0.0, 0.0), pts);
+  EXPECT_NE(rev.state, "STOP");
+  EXPECT_GT(rev.scale, 0.0);
+}
+
+// 低速前进 + 小角度修正不能被当成"原地旋转"套用 ±0.55 旋转停区:
+// 实车 2026-11-03 21:56 在走廊里 (侧墙 0.55m) 每拍 STOP, 车被钉死.
+TEST(SafetyMonitor, SlowForwardBesideWallIsNotRotationStop)
+{
+  SafetyMonitorConfig cfg = MakeConfig();
+  cfg.dynamic_geometry = true;
+  cfg.stop_margin = 0.15;
+  cfg.side_margin = 0.12;
+  cfg.brake_decel = 0.8;
+  cfg.reaction_time = 0.2;
+  cfg.approach_enabled = false;
+
+  // 右侧墙 0.54m (旋转区侧向是 ±0.55, 行进区是 0.35+0.12=0.47)
+  const std::vector<Point> wall{{0.20, -0.54}, {0.30, -0.54}, {0.40, -0.54}};
+
+  SafetyMonitor slow;
+  slow.configure(cfg);
+  const auto fwd = slow.filter(VelocityCommand(0.03, 0.0, 0.08), wall);
+  EXPECT_NE(fwd.state, "STOP");
+
+  SafetyMonitor spin;
+  spin.configure(cfg);
+  const auto rot = spin.filter(VelocityCommand(0.0, 0.0, 0.50), wall);
+  EXPECT_EQ(rot.state, "STOP");
+}
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

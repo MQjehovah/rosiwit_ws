@@ -1,0 +1,19 @@
+reloc_bench - NTU VIRAL eee_03 map (251,878 pts) + 474-pose trajectory, 20 synthetic cold-start scenes
+scene: 25 m synthetic scan cut from the map at a trajectory pose, 2 cm noise, 20% points dropped
+hit: |dt| <= 0.5 m and |dyaw| <= 5 deg ; false_lock: reported but |dt| > 2 m
+
+# baseline binaries (default threads) - pre-change behaviour (--submap 0)
+bbs          20 scenes: recall 95%  false_lock 0%  p50 38200 ms  p95 42700 ms  max 60900 ms
+scan_context 20 scenes: recall 100% false_lock 0%  p50 19569 ms  p95 55104 ms  max 57926 ms
+fpfh_ransac  old defaults (50000 iter x 15 attempts): 2 scenes did not finish in 15 min
+
+# after the speed-up (OMP_NUM_THREADS=4, conservative)
+bbs (submap 30)          6 scenes: recall 100% false_lock 0% p50 29179 ms p95 31294 ms
+scan_context + submap   20 scenes: recall 100% false_lock 0% p50 10667 ms p95 37631 ms
+scan_context cascade    20 scenes: recall 100% false_lock 0% p50  1024 ms p95  1667 ms
+scan_context + gate     20 scenes: recall 100% false_lock 0% p50  1253 ms p95 10269 ms
+scan_context final      20 scenes: recall 100% false_lock 0% p50   952 ms p95  3383 ms max 3927 ms
+  per-scene ms: 952 1125 1054 992 818 840 722 682 628 667 604 706 1232 687 1745 842 3927 1681 1839 3383
+
+command:
+  reloc_bench map.pcd odom.txt --localizer scan_context --scenarios 20 --submap 30 --build-sc-db 200

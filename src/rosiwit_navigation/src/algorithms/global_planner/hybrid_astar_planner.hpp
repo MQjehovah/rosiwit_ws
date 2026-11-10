@@ -37,6 +37,12 @@ public:
   bool initialize(const core::PlannerConfig & config) override;
   void setCostmap(const core::Costmap & costmap) override;
   void setInflationRadius(double radius_meters) override;
+  /// nav2 inflation_layer 的 cost_scaling_factor: 膨胀代价按
+  /// 100*exp(-factor*(d - inscribed)) 衰减。越小 -> 势场越"温和"、越宽,
+  /// 规划器越愿意走通道中轴 (nav2 tuning guide 推荐的窄道做法)。
+  void setCostScalingFactor(double factor) override;
+  /// 内切半径 (m): d < inscribed 视为"贴死" (代价 100)。
+  void setInscribedRadius(double radius) override { inscribed_radius_ = std::max(0.0, radius); }
   void setRobotRadius(double radius) override { robot_radius_ = radius; }
   void setRobotFootprint(const core::Footprint & footprint) override;
   bool supportsFootprint() const override { return true; }
@@ -80,6 +86,9 @@ private:
   };
 
   bool worldToGrid(double x, double y, int & ix, int & iy) const;
+  /// 目标在障碍/膨胀区时, 在 config_.goal_tolerance 内找最近的 footprint-free 位姿.
+  /// 对齐 nav2_navfn_planner 的 tolerance 语义; 找不到返回 false.
+  bool snapGoalToFree(const core::Pose2D & goal, core::Pose2D & snapped) const;
   int headingIndex(double theta) const;
   int stateKey(int ix, int iy, int itheta) const;
   bool isObstacle(int ix, int iy) const;
@@ -107,6 +116,10 @@ private:
   double origin_y_ = 0.0;
   double robot_radius_ = 0.21;
   double inflation_radius_ = 0.5;
+  /// nav2 cost_scaling_factor (1/m); <=0 时退回旧的线性势场
+  double cost_scaling_factor_ = 1.0;
+  /// 内切半径 (m): 只在建场时用
+  double inscribed_radius_ = 0.0;
   double step_length_ = 0.35;
   double max_curvature_ = 1.5;
   double heuristic_weight_ = 1.0;
