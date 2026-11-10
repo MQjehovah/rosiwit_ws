@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 <?xml version="1.0"?>
 <launch>
     <!--
@@ -51,57 +50,3 @@
                 -x $(arg spawn_x) -y $(arg spawn_y) -z $(arg spawn_z) -Y $(arg spawn_yaw)"
           output="screen"/>
 </launch>
-=======
-<?xml version="1.0"?>
-<launch>
-    <!--
-        ROS1 equivalent of rosiwit_simulation_ros2/launch/simulator_gazebo.launch.py
-        Starts Gazebo, publishes the mbot robot description and spawns it.
-    -->
-
-    <arg name="world_name" default="$(find rosiwit_simulation_ros1)/world/house.world"/>
-    <arg name="gui" default="true"/>
-    <arg name="paused" default="false"/>
-    <arg name="debug" default="false"/>
-    <arg name="use_sim_time" default="true"/>
-    <arg name="spawn_x" default="0.0"/>
-    <arg name="spawn_y" default="0.0"/>
-    <arg name="spawn_z" default="0.1"/>
-    <arg name="spawn_yaw" default="0.0"/>
-    <arg name="robot_name" default="mrobot"/>
-    <!-- 3D 雷达插件: block = gazebo_plugins 自带 (无需额外 apt 包);
-         velodyne = velodyne_gazebo_plugins (需 ros-melodic-velodyne-gazebo-plugins)。 -->
-    <arg name="lidar_plugin" default="velodyne"/>
-
-    <!-- Gazebo media/model paths. ROS setup scripts do not source
-         /usr/share/gazebo-<N>/setup.sh, so set a distro-appropriate default.
-         Melodic (18.04) ships Gazebo 9; override externally for Noetic/Gazebo 11. -->
-    <env name="GAZEBO_RESOURCE_PATH"
-         value="$(optenv GAZEBO_RESOURCE_PATH /usr/share/gazebo-9)"/>
-    <env name="GAZEBO_MODEL_PATH"
-         value="$(find rosiwit_simulation_ros1)/models_perception:$(find rosiwit_simulation_ros1)/../../../ros2_ws/src/rosiwit_simulation_ros2/models:$(find rosiwit_simulation_ros1)/models:$(optenv GAZEBO_MODEL_PATH /usr/share/gazebo-9/models)"/>
-    <env name="GAZEBO_PLUGIN_PATH"
-         value="$(find rosiwit_simulation_ros1)/plugins:/opt/ros/$(env ROS_DISTRO)/lib:$(optenv GAZEBO_PLUGIN_PATH)"/>
-
-    <include file="$(find gazebo_ros)/launch/empty_world.launch">
-        <arg name="world_name" value="$(arg world_name)"/>
-        <arg name="gui" value="$(arg gui)"/>
-        <arg name="paused" value="$(arg paused)"/>
-        <arg name="debug" value="$(arg debug)"/>
-        <arg name="use_sim_time" value="$(arg use_sim_time)"/>
-    </include>
-
-    <param name="robot_description"
-           command="$(find xacro)/xacro '$(find rosiwit_simulation_ros1)/urdf/xacro/gazebo/robot_gazebo.xacro' lidar_plugin:=$(arg lidar_plugin)"/>
-
-    <node pkg="joint_state_publisher" type="joint_state_publisher"
-          name="joint_state_publisher" output="screen"/>
-    <node pkg="robot_state_publisher" type="robot_state_publisher"
-          name="robot_state_publisher" output="screen"/>
-
-    <node pkg="gazebo_ros" type="spawn_model" name="spawn_$(arg robot_name)"
-          args="-urdf -param robot_description -model $(arg robot_name)
-                -x $(arg spawn_x) -y $(arg spawn_y) -z $(arg spawn_z) -Y $(arg spawn_yaw)"
-          output="screen"/>
-</launch>
->>>>>>> 7e2c12bf970691e0114d0426be38e0991ab688ea
