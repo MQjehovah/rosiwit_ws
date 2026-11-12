@@ -14,6 +14,8 @@ global:
   modules:
     frontend: "fast_lio2_frontend"
     backend: "ceres_pose_graph" # 机器人无 gtsam; 需要 gtsam_isam2 时显式改
+    # 长航时 45min 必须开回环; DDS QoS 已改为 reliable+深队列, 不再有 2~5s
+    # 的播放丢包, 回环线程不会再把 IMU 空洞放大.
     loop_closure: "scan_context"
     map_manager: "pcd_map_manager"
     localization: "gicp_localization"
@@ -21,11 +23,27 @@ global:
   input:
     imu_topic: /vanjee_lidar_imu_packets  # IMU话题
     lidar_topic: /vanjee_points722 # 雷达点云话题
+    # 离线播包必须 reliable: bag 发布 reliable, best_effort 读端会静默丢 ~1/4 点云帧
+    # (日志 lidar_rx 约 7.3Hz 而不是 10Hz). 真机驱动若是 best_effort 再改回 false.
+    qos_reliable: true
+    # 全局开关: 是否订阅 /odom. 怎么用由 mapping.odom_mode / localization.odom_mode 决定.
+    use_odom: true
+    odom_topic: /odom
     lidar_filter_num: 1 # 雷达点抽稀倍数
     lidar_min_range: 0.5 # 雷达最小有效距离(m)
     lidar_max_range: 60.0 # 雷达最大有效距离(m)
     scan_period_ms: 100.0 # 单帧扫描周期(ms)
     acc_scale: 1.0 # IMU加速度单位换算
+    # IMU 冲击保护: 过坎/撞击时 Vanjee 内置 IMU 会出现 2~3g 尖峰甚至瞬时掉零,
+    # 直接进 EKF 会把位姿打飞并导致前端 "NO Effective Points" 失锁.
+    # 超限样本丢弃, SlamBase 会对 >30ms 的空洞做线性插值.
+    imu_filter_enabled: true
+    imu_acc_min: 5.0   # m/s^2, 低于此视为掉零/异常
+    imu_acc_max: 20.0  # m/s^2, 高于此视为冲击尖峰
+    imu_gyro_max: 3.0  # rad/s, 高于此视为陀螺异常
+    # 陀螺刻度: 与轮式 /odom 对比实测约 +3.4%, 但写死后轨迹误差未下降, 暂保持 1.0.
+    # 需要时再用 imu_gyro_scale 单独标定.
+    imu_gyro_scale: 1.0
   frames:
     lidar_frame: lidar  # 雷达frame
     imu_frame: lidar # IMU frame
@@ -41,7 +59,12 @@ global:
     dist_thresh: 0.4 # ScanContext距离阈值
     candidate_ratio: 0.3 # 候选比例
 mapping:
+  # 建图链路怎么用 /odom: none(不用) | gate(只做更新门限) | fuse(水平速度+yaw率)
+  odom_mode: none
   frontend:
+    # 地面跟随: 不锁 z/roll/pitch, 用地面法向把 v.z 软约束到坡面分量.
+    ground_follow_z: true
+    ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态
     lidar_cov_inv: 5000.0 # 激光观测信息矩阵权重
     robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
@@ -54,10 +77,10 @@ mapping:
     local_map_size: 300          # 局部地图立方体边长(m)
     detection_range: 60          # 雷达有效检测距离(m)
     map_move_threshold: 1.5      # 局部地图滑动窗口阈值比例
-    acc_noise: 0.01              # 加速度计白噪声
-    gyro_noise: 0.01             # 陀螺白噪声
-    acc_bias_random_walk: 0.0001 # 加速度计零偏随机游走
-    gyro_bias_random_walk: 0.0001 # 陀螺零偏随机游走
+    acc_noise: 0.05              # 加速度计白噪声 (过坎冲击多, 不宜过小)
+    gyro_noise: 0.05             # 陀螺白噪声
+    acc_bias_random_walk: 0.001  # 加速度计零偏随机游走
+    gyro_bias_random_walk: 0.001 # 陀螺零偏随机游走
     imu_init_samples: 400        # IMU静止初始化样本数
     nearest_search_points: 5     # 近邻搜索点数
     iekf_max_iterations: 5       # IEKF最大迭代次数
@@ -87,6 +110,11 @@ mapping:
   map_manager:
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
+    # 长时建图内存上限: submaps 存每个关键帧点云, observations 存射线栅格用的逐帧点云.
+    # 45min 全量约 985 个关键帧、~30M 点; 20M 会在 44min 前截断,
+    # 一旦截断 onBackendOptimized 就跳过整图重建, 回环修正无法落到 PCD.
+    max_submap_points: 40000000  # ~1.9GB (48B/pt), 15GB 机器可承受
+    max_observation_points: 4000000  # 超限丢最旧观测; 动态点过滤仍可覆盖全图
   backend:
     loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m)
     max_optimization_trans_m: 20 # 含新约束的单次优化最大平移修正
@@ -118,7 +146,23 @@ mapping:
     realtime_skeleton_width: 0
     line_min_len_m: 0.0 # Hough线段最小长度(m)
     axis_snap: false # Hough线段吸附水平/垂直
+ros2:
+  # /odom 是外部轮式里程计输入; 节点不能同时发布同名 /odom。
+  odom_tf_publisher: wheel
+
 localization:
+  # 定位链路怎么用 /odom: none | fuse (与建图独立)
+  odom_mode: none
+  # pose 模式: 2D SLAM 发布 map->base_link 的 PoseWithCovarianceStamped.
+  # 前端自动估计 map->lio 的固定对齐, 不需要手填 datum (保持 0).
+  absolute:
+    # /odom 作为 pose 先验时不再需要外部绝对位姿; 保留该段给 GNSS/UWB 等.
+    enabled: false
+    topic: /slam_pose
+    datum_x: 0.0
+    datum_y: 0.0
+    datum_z: 0.0
+    datum_yaw_deg: 0.0
   output:
     smoothing_alpha: 0.3  # 输出平滑系数
   global:

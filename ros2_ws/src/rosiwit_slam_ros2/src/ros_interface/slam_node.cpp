@@ -272,6 +272,28 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                 m_cfg.self_z_max = sf["z_max"].as<double>(m_cfg.self_z_max);
             }
             m_cfg.scan_period_ms   = gi("scan_period_ms").as<float>(m_cfg.scan_period_ms);
+            m_cfg.odom_gate = gi("odom_gate").as<bool>(m_cfg.odom_gate);
+            {
+                // 建图链路: mapping.odom_mode；定位链路: localization.odom_mode。
+                const YAML::Node mapn = cfg["mapping"];
+                std::string om;
+                if (mapn && mapn["odom_mode"]) om = mapn["odom_mode"].as<std::string>();
+                else om = gi("odom_mode").as<std::string>("");
+                m_cfg.odom_mode = (om == "gate" || om == "fuse") ? om : std::string("none");
+                m_cfg.odom_gate = (om == "gate");
+                m_cfg.odom_fuse = (om == "fuse");
+
+                const YAML::Node locn = cfg["localization"];
+                m_cfg.loc_odom_mode =
+                    (locn && locn["odom_mode"]) ? locn["odom_mode"].as<std::string>() : "none";
+                if (m_cfg.loc_odom_mode != "fuse") m_cfg.loc_odom_mode = "none";
+            }
+            m_cfg.imu_filter_enabled =
+                gi("imu_filter_enabled").as<bool>(m_cfg.imu_filter_enabled);
+            m_cfg.imu_acc_min = gi("imu_acc_min").as<double>(m_cfg.imu_acc_min);
+            m_cfg.imu_acc_max = gi("imu_acc_max").as<double>(m_cfg.imu_acc_max);
+            m_cfg.imu_gyro_max = gi("imu_gyro_max").as<double>(m_cfg.imu_gyro_max);
+            m_cfg.imu_gyro_scale = gi("imu_gyro_scale").as<double>(m_cfg.imu_gyro_scale);
             if (gin && gin["use_odom"]) {
                 m_cfg.use_wheel_odom = gin["use_odom"].as<bool>(m_cfg.use_wheel_odom);
             } else if (cfg["use_wheel_odom"]) {
@@ -418,10 +440,17 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     // reliable 发布者可以被 best-effort 订阅者接收, 仿真/实机都兼容.
     // 默认 best_effort 保证与真机驱动兼容; 离线播包 (ros2 bag play 发 reliable) 配
     // qos_reliable: true, 否则 best_effort 读端会静默丢 ~1/3 点云帧.
-    const auto sensor_qos = m_cfg.sensor_reliable
-        ? rclcpp::QoS(rclcpp::KeepLast(500)).reliable()
-        : rclcpp::QoS(rclcpp::KeepLast(500)).best_effort();
-    m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, sensor_qos, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
+    auto make_sensor_qos = [&](int depth) {
+        return m_cfg.sensor_reliable
+            ? rclcpp::QoS(rclcpp::KeepLast(depth)).reliable()
+            : rclcpp::QoS(rclcpp::KeepLast(depth)).best_effort();
+    };
+    const auto sensor_qos = make_sensor_qos(500);
+    // IMU 200Hz: 一次播放/执行器卡顿 1~5s 就会丢掉 200~1000 条。
+    // KeepLast(500) 只覆盖 2.5s，服务器实测在 3min 处出现 5s 空洞；
+    // 单独给 IMU 5000 深度 (25s)，点云仍用 500。
+    const auto imu_qos = make_sensor_qos(5000);
+    m_imu_sub  = create_subscription<sensor_msgs::msg::Imu>(m_cfg.imu_topic, imu_qos, std::bind(&SlamNode::imuCB, this, _1), sensor_sub_opts);
     m_lidar_sub= create_subscription<sensor_msgs::msg::PointCloud2>(m_cfg.lidar_topic, sensor_qos, std::bind(&SlamNode::lidarCB, this, _1), sensor_sub_opts);
     if (!m_cfg.image_topic.empty()) {
         if (m_cfg.enable_image_processing) {
@@ -457,7 +486,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.world_frame.c_str(), m_cfg.map_frame.c_str());
         m_cfg.world_frame = m_cfg.map_frame;
     }
-    if (m_cfg.use_wheel_odom) {
+    if (m_cfg.use_wheel_odom || m_cfg.odom_gate) {
         m_odom_sub = create_subscription<nav_msgs::msg::Odometry>(
             m_cfg.odom_topic, 100, std::bind(&SlamNode::odomCB, this, _1), sensor_sub_opts);
     }
@@ -519,6 +548,14 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_srv_set_slam_mode = create_service<rosiwit_slam_ros2::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
 
     std::string mode_str = m_algo_raw->getPipelineMode();
+    if (m_cfg.imu_filter_enabled) {
+        RCLCPP_INFO(get_logger(),
+                    "IMU outlier filter: |a| in [%.1f, %.1f] m/s^2, |w| <= %.1f rad/s, gyro_scale=%.4f",
+                    m_cfg.imu_acc_min, m_cfg.imu_acc_max, m_cfg.imu_gyro_max,
+                    m_cfg.imu_gyro_scale);
+    }
+    RCLCPP_INFO(get_logger(), "odom gate: %s topic=%s",
+                m_cfg.odom_gate ? "on" : "off", m_cfg.odom_topic.c_str());
     RCLCPP_INFO(get_logger(), "SlamNode ready: algo=%s mode=%s imu=%s lidar=%s",
                 algo_name.c_str(), mode_str.c_str(), m_cfg.imu_topic.c_str(), m_cfg.lidar_topic.c_str());
     if (m_cfg.vision_enabled)
@@ -526,9 +563,35 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
 }
 
 void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {
+    const double ax = msg->linear_acceleration.x;
+    const double ay = msg->linear_acceleration.y;
+    const double az = msg->linear_acceleration.z;
+    const double gx = msg->angular_velocity.x;
+    const double gy = msg->angular_velocity.y;
+    const double gz = msg->angular_velocity.z;
+
+    // 冲击/掉零保护: 这个机器人的 Vanjee 内置 IMU 在过坎时会出现 2~3g 尖峰,
+    // 甚至瞬时掉到 ~0g. 这种样本进 EKF 会直接污染速度和位姿, 后续点云匹配
+    // 全部落到有效点=0; 超限样本直接丢弃, 由 SlamBase::onImu 对空洞插值.
+    if (m_cfg.imu_filter_enabled) {
+        const double an = std::sqrt(ax * ax + ay * ay + az * az);
+        const double gn = std::sqrt(gx * gx + gy * gy + gz * gz);
+        if (!std::isfinite(an) || !std::isfinite(gn) ||
+            an < m_cfg.imu_acc_min || an > m_cfg.imu_acc_max ||
+            gn > m_cfg.imu_gyro_max) {
+            const uint64_t n =
+                m_imu_outliers.fetch_add(1, std::memory_order_relaxed) + 1;
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                "drop IMU outlier |a|=%.1f m/s^2 |w|=%.2f rad/s (total=%llu)",
+                an, gn, static_cast<unsigned long long>(n));
+            return;
+        }
+    }
+
     IMUSample s;
-    s.acc = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
-    s.gyro = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
+    s.acc = V3D(ax, ay, az);
+    const double gs = m_cfg.imu_gyro_scale;
+    s.gyro = V3D(gx * gs, gy * gs, gz * gs);
     const double raw_time = RosUtils::getSec(msg->header);
     s.time = raw_time + m_imu_time_offset.load();
     {
@@ -589,9 +652,22 @@ void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     f.cloud = RosUtils::ros2PCL(msg, filter_num, min_range, max_range, m_cfg.scan_period_ms);
     applySelfFilter(*f.cloud);
     if (f.cloud->empty()) return;
+    // 个别点云的点内时间(curvature)会异常大(实测 1500ms), 直接把帧 end_time
+    // 推到 1.5s 之后; 同步层随后会把这一段正常雷达帧全判成 IMU 空洞丢掉.
+    // 限制在 1.5 个扫描周期内, 既保留正常运动补偿, 又不会让帧时间跳变.
+    const double scan_ms = std::max(20.0, static_cast<double>(m_cfg.scan_period_ms));
+    const double max_point_ms = scan_ms * 1.5;
+    for (auto& p : f.cloud->points) {
+        if (!std::isfinite(p.curvature) || p.curvature < 0.0) p.curvature = 0.0;
+        else if (p.curvature > max_point_ms) p.curvature = max_point_ms;
+    }
     std::sort(f.cloud->points.begin(), f.cloud->points.end(), [](const PointType& a, const PointType& b){ return a.curvature < b.curvature; });
     f.start_time = RosUtils::getSec(msg->header);
-    f.end_time = f.start_time + (f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0);
+    double scan_dt = f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0;
+    if (!std::isfinite(scan_dt) || scan_dt < 0.0 || scan_dt > max_point_ms / 1000.0) {
+        scan_dt = scan_ms / 1000.0;
+    }
+    f.end_time = f.start_time + scan_dt;
     m_algo->onLidar(f);
     // 只入队, 重处理交给 work 分组定时器, 保证本回调尽快返回、不阻塞后续收包
 }
@@ -662,6 +738,8 @@ void SlamNode::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
     p.trans = V3D(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
     const auto& q = msg->pose.pose.orientation;
     p.rot = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
+    // 把 twist 带进 PoseStamped.vel: x=前进速度, y=yaw 角速度 (建图 odom 融合用).
+    p.vel = V3D(msg->twist.twist.linear.x, msg->twist.twist.angular.z, 0.0);
     // wheel_odom 模式: 保存 odom->body, 用于计算 map->odom.
     if (m_cfg.odom_tf_publisher == "wheel" && msg->child_frame_id == m_cfg.body_frame) {
         std::lock_guard<std::mutex> lk(m_wheel_odom_mutex);
@@ -672,6 +750,12 @@ void SlamNode::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
             "wheel odom child '%s' != body_frame '%s'; cannot compute map->odom",
             msg->child_frame_id.c_str(), m_cfg.body_frame.c_str());
+    }
+    if (m_cfg.odom_gate) {
+        // 建图门限用原始 odom->base_footprint 位姿; 前端只取相对速度/yaw,
+        // 不需要 TF 外参, 也不影响 lio 的 TF 输出.
+        m_algo->onOdom(p);
+        return;
     }
     RigidTransform imu_child;
     if (!imuFromChild(msg->child_frame_id, imu_child)) return;

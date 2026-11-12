@@ -49,6 +49,10 @@ struct State
 
     void operator+=(const V21D &delta);
 
+    /// 物理限幅: 每次 EKF 迭代/预测后都调用, 防止一次坏匹配把 v/z/ba/bg
+    /// 推到 1e30, 进而让 PCL VoxelGrid 整数索引溢出并破坏堆 (服务器实测).
+    void clampPhysical();
+
     V21D operator-(const State &other) const;
 
     friend std::ostream &operator<<(std::ostream &os, const State &state);
@@ -68,6 +72,23 @@ public:
     void predict(const Input &inp, double dt, const M12D &Q);
 
     void update();
+    /// 轮式 odom 量测: 速度模长 + 世界系 yaw 角速度, 标准 EKF 更新 (2x21).
+    void updateOdom(double speed, double yaw_rate, const V3D &gyro,
+                    double sigma_v, double sigma_w);
+    /// 垂直速度软约束: 车体在坡上 v.z 仍然是小量, 长时间累积会变成 z 漂移.
+    /// 每帧把 v.z 轻拉向 0, sigma 取 0.5m/s, 不影响正常爬坡分量.
+    void updateVerticalVelocity(double target_vz, double sigma);
+    /// 地面 3-DoF 量测 (LeGO-LOAM 式): 用地平面法向约束 roll/pitch, 用地面高度约束 z.
+    /// n_world 是世界系地面法向; z_target 是传感器高度期望 (地面 + h0).
+    void updateGround(const V3D &n_world, double z_target, double sigma_tilt, double sigma_z);
+
+    /// 位置级 z 弱先验: 把 t_wi.z 软拉向 z_target (sigma 米), 不动 roll/pitch/yaw.
+    /// 用于地面高度里程计兜住 z 的慢漂, 避免自由积分.
+    void updateZ(double z_target, double sigma);
+
+    /// 平面约束 (平地假设): z 锁到 z_ref, v.z=0; lock_roll_pitch 时把 roll/pitch
+    /// 对齐到 r_flat 但保留当前 yaw. 与 odom 模式无关, 坡道上由调用方按坡度解锁.
+    void updatePlanar(double z_ref, const M3D &r_flat, bool lock_roll_pitch);
 
     State &x() { return m_x; }
 

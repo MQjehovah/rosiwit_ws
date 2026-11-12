@@ -59,6 +59,22 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.nba              = get_alias("acc_bias_random_walk","nba").as<double>(out_cfg.nba);
         out_cfg.nbg              = get_alias("gyro_bias_random_walk","nbg").as<double>(out_cfg.nbg);
         out_cfg.acc_scale        = get_input("acc_scale","acc_scale").as<double>(out_cfg.acc_scale);
+        {
+            // odom_mode 属于建图链路, 从 mapping 节点读; 兼容旧位置 global.input.
+            const YAML::Node gmap_node = config["mapping"];
+            std::string om = "";
+            if (gmap_node && gmap_node["odom_mode"])
+                om = gmap_node["odom_mode"].as<std::string>();
+            else
+                om = get_input("odom_mode", "odom_mode").as<std::string>("");
+            out_cfg.odom_fuse = (om == "fuse");
+            if (om != "gate" && om != "fuse") om = "none";
+            out_cfg.odom_gate = (om == "gate");
+            out_cfg.ground_follow_z =
+                get_input("ground_follow_z", "ground_follow_z").as<bool>(out_cfg.ground_follow_z);
+            out_cfg.ground_vz_sigma =
+                get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
+        }
         out_cfg.imu_init_num     = get_alias("imu_init_samples","imu_init_num").as<int>(out_cfg.imu_init_num);
         out_cfg.near_search_num  = get_alias("nearest_search_points","near_search_num").as<int>(out_cfg.near_search_num);
         out_cfg.ieskf_max_iter   = get_alias("iekf_max_iterations","ieskf_max_iter").as<int>(out_cfg.ieskf_max_iter);

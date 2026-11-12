@@ -56,6 +56,16 @@ struct Config
     double init_z = 0.0;  // IMU body 世界 z 初值; 设成 IMU 离地高度使 footprint z=0
     bool undistort_enable = true;
     bool esti_il = false;
+    // 建图 odom 使用方式: none | gate | fuse (来自 mapping.odom_mode)
+    bool odom_fuse = false;
+    bool odom_gate = false;
+    // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
+    bool ground_follow_z = true;
+    double ground_vz_sigma = 0.30;   // v.z 软约束标准差 (m/s)
+    // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
+    bool convergence_check = true;
+    double pos_std_threshold = 0.01;   // m
+    double rot_std_threshold = 0.05;   // deg
     M3D r_il = M3D::Identity();
     V3D t_il = V3D::Zero();
 

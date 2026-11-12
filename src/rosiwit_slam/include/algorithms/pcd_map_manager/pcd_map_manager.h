@@ -58,6 +58,12 @@ private:
     double m_grid_ox = 0, m_grid_oy = 0;
 
     std::vector<Submap> submaps_;        // addSubMap 顺序保存的关键帧(原始位姿)
+    // 长时建图内存上限: 每个关键帧点云都留在 submaps_ 供后端重建, 45min/2km 路线会
+    // 线性涨到数 GB. 超过上限后丢最旧关键帧; 一旦截断, 后端重建只覆盖最近窗口,
+    // 为安全起见 onBackendOptimized 直接跳过重建 (保留增量 global_map_).
+    size_t max_submap_points_ = 5000000;   // yaml: map_manager.max_submap_points
+    bool submaps_truncated_ = false;
+    void trimSubmaps();
     PoseStamped m_frontier_anchor_;      // 前沿锚点 A = G_last*P_last^{-1}, 新位姿经 A∘R 转到修正系
     mutable std::mutex m_mutex_;         // 保护 global_map_ / submaps_ / anchor; const 查询也加锁
     std::atomic<uint64_t> m_revision_{0}; // 地图内容版本号

@@ -11,6 +11,8 @@ public:
     virtual bool init(const std::string& config_path) = 0;
     virtual void onImu(const IMUSample& s) = 0;
     virtual void onLidar(const LidarFrame& f) = 0;
+    /// 轮式里程计 (建图时作为水平运动先验/门限; 默认空实现).
+    virtual void onWheelOdom(const PoseStamped& /*odom*/) {}
     /// 图像输入（LIVO 前端使用；默认空实现，不影响纯 LIO 前端）。
     virtual void onImage(const ImageFrame& /*f*/) {}
     virtual bool getOdometry(PoseStamped& out) = 0;

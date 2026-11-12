@@ -7,6 +7,8 @@
 #include <queue>
 #include <deque>
 #include <memory>
+#include <string>
+#include <chrono>
 #include "rosiwit_common/channel.hpp"
 #include "rosiwit_common/thread.hpp"
 #include "slam_core/i_slam_algorithm.h"
@@ -56,6 +58,12 @@ public:
     int inflight() const { return m_inflight.load(); }
     /// 置停止并 detach; 正在执行的 optimize 会自然结束, 不阻塞调用线程.
     void stopAsync();
+    /// 周期 checkpoint (PCD)。长航时即使进程被杀, 也不会一张图都不留.
+    void setAutosave(double interval_s, std::string path) {
+        m_autosave_interval_s = interval_s;
+        m_autosave_path = std::move(path);
+        m_last_autosave = std::chrono::steady_clock::now();
+    }
 
 private:
     void run(rosiwit_common::CancelToken token);
@@ -81,6 +89,10 @@ private:
     // 避免"后端优化被 queue full 静默吞掉".
     std::atomic<bool> m_optimize_requested{false};
     std::atomic<int> m_inflight{0};     // 两条线程的存活计数 (abandon 后仍可观测)
+
+    double m_autosave_interval_s = 0.0;
+    std::string m_autosave_path;
+    std::chrono::steady_clock::time_point m_last_autosave;
 };
 
 class SlamPipeline : public SlamBase {
@@ -138,6 +150,9 @@ public:
 
     std::string m_pipeline_name;
     int m_frame_count = 0;
+    bool m_rgb_enabled = true;
+    PoseStamped m_last_map_kf;
+    bool m_have_map_kf = false;
 
     ~SlamPipeline() override;
 

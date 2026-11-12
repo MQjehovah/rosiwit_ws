@@ -53,7 +53,7 @@ if(NOT TARGET rosiwit_common)
 endif()
 
 # ---- 源文件 ----
-file(GLOB_RECURSE CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+file(GLOB_RECURSE CORE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 if(NOT octomap_FOUND)
     list(FILTER CORE_SOURCES EXCLUDE REGEX "octomap_grid_map\\.cpp$")
 endif()

@@ -18,10 +18,14 @@ LidarProcessor::LidarProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_co
 
     m_kf->setLossFunction([&](State &s, SharedState &d)
                           { updateLossFunc(s, d); });
-    m_kf->setStopFunction([&](const V21D &delta) -> bool
-                          { V3D rot_delta = delta.block<3, 1>(0, 0);
-                            V3D t_delta = delta.block<3, 1>(3, 0);
-                            return (rot_delta.norm() * 57.3 < 0.01) && (t_delta.norm() * 100 < 0.015); });
+    m_kf->setStopFunction([this](const V21D &delta) -> bool {
+        if (!m_config.convergence_check) return false;
+        const V3D rot_delta = delta.block<3, 1>(0, 0);
+        const V3D t_delta = delta.block<3, 1>(3, 0);
+        const double rot_deg = rot_delta.norm() * 57.29577951308232;
+        return rot_deg < m_config.rot_std_threshold &&
+               t_delta.norm() < m_config.pos_std_threshold;
+    });
 }
 
 void LidarProcessor::trimCloudMap()
@@ -271,14 +275,28 @@ void LidarProcessor::process(SyncPackage &package)
     //                       { V3D rot_delta = delta.block<3, 1>(0, 0);
     //                         V3D t_delta = delta.block<3, 1>(3, 0);
     //                         return (rot_delta.norm() * 57.3 < 0.01) && (t_delta.norm() * 100 < 0.015); });
+    // 先剔除 NaN/Inf/超大坐标, 再进 PCL VoxelGrid。坏点会让 VoxelGrid
+    // 的整数索引溢出并破坏堆 (服务器实测 free(): unaligned chunk)。
+    CloudType::Ptr finite(new CloudType);
+    if (package.cloud) {
+        finite->reserve(package.cloud->size());
+        for (const auto& p : package.cloud->points) {
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+            if (std::fabs(p.x) > 1e4 || std::fabs(p.y) > 1e4 || std::fabs(p.z) > 1e4) continue;
+            finite->push_back(p);
+        }
+    }
+    finite->width = static_cast<uint32_t>(finite->size());
+    finite->height = 1;
+    finite->is_dense = false;
     if (m_config.scan_resolution > 0.0)
     {
-        m_scan_filter.setInputCloud(package.cloud);
+        m_scan_filter.setInputCloud(finite);
         m_scan_filter.filter(*m_cloud_down_lidar);
     }
     else
     {
-        pcl::copyPointCloud(*package.cloud, *m_cloud_down_lidar);
+        pcl::copyPointCloud(*finite, *m_cloud_down_lidar);
     }
 
     // 根据实际点云大小动态调整缓冲区，避免硬编码 10000 点限制导致的越界
@@ -305,7 +323,89 @@ void LidarProcessor::process(SyncPackage &package)
     }
 
     trimCloudMap();
+
+    // 单帧更新门限: 空地/重复走廊里点到面最近邻可能关联到错误平面,
+    // 一次 IEKF 更新就能把 v 从 0.5m/s 推到 10m/s (实测 430s 转角处).
+    // 单帧位置/速度/姿态修正超过物理可能范围时, 丢弃本次更新, 保留 IMU 预测,
+    // 等下一帧重新关联, 避免一次误匹配把整张图带飞.
+    const State before = m_kf->x();
+    const M21D P_before = m_kf->P();
     m_kf->update();
+    {
+        const State &after = m_kf->x();
+        // 门限只看水平: 垂直修正不能因为 z 误差大就被拒, 否则 z 永远回不来。
+        const double dv = std::hypot(after.v.x() - before.v.x(),
+                                     after.v.y() - before.v.y());
+        const double dt = std::hypot(after.t_wi.x() - before.t_wi.x(),
+                                     after.t_wi.y() - before.t_wi.y());
+        const double dz = std::fabs(after.t_wi.z() - before.t_wi.z());
+        const double dvz = std::fabs(after.v.z() - before.v.z());
+        const double dr = Sophus::SO3d(after.r_wi * before.r_wi.transpose()).log().norm();
+        const double dba = (after.ba - before.ba).norm();
+        const double dbg = (after.bg - before.bg).norm();
+        // 有轮式 odom 时用它的速度/yaw 速度收紧门限; 没有时退回固定门限.
+        double kMaxDv = m_odom_prior ? std::max(0.7, 3.0 * m_odom_speed + 0.4) : 2.0;
+        double kMaxDt = m_odom_prior ? std::max(0.25, 2.0 * m_odom_speed * 0.1 + 0.15) : 0.5;
+        double kMaxDr = m_odom_prior ? std::max(0.15, 2.0 * m_odom_yaw_rate * 0.1 + 0.1) : 0.35;
+        // 偏置门控不能只在轮式 odom 模式生效; 阈值放宽, 避免把正常
+        // 空洞后重新收敛的 LiDAR 更新全部拒掉, 只拦真正的坏帧。
+        const bool bad_bias = (dba > 0.50 || dbg > 0.10);
+        if (dv > kMaxDv || dt > kMaxDt || dz > 1.0 || dvz > 1.0 ||
+            dr > kMaxDr || bad_bias) {
+            m_kf->x() = before;
+            m_kf->P() = P_before;
+            static int reject_cnt = 0;
+            if (++reject_cnt <= 20 || reject_cnt % 20 == 0) {
+                std::cout << "[FLIO2] reject update dv=" << dv << " dt=" << dt
+                          << " dz=" << dz << " dvz=" << dvz
+                          << " dr=" << dr << " dba=" << dba << " dbg=" << dbg
+                          << " (total=" << reject_cnt << ")" << std::endl;
+            }
+        }
+        // 无论门控是否通过, 都对状态做物理限幅。正常帧几乎不触发;
+        // 坏帧/空洞帧即使漏过门控也不会把 v/ba/bg/z 带到发散区。
+        m_kf->x().clampPhysical();
+    }
+    // 坡道感知的垂直速度软先验: 轮速沿车体 x, 世界 z 分量 = R(2,0)*v_fwd.
+    // 没有这个约束时, IMU z 零偏会以 0.8m/s 上限把 z 积分到 -100;
+    // 有了它, 平地 v.z≈0, 坡道 v.z≈speed*sin(pitch), 坡度仍然保留.
+    // 地面 3-DoF 量测: roll/pitch 由地面法向约束, z 由地面高度约束.
+    // 不再直接写状态, 也不再积分 vz; 地面丢失时只用很松的 z 先验兜底.
+    if (m_ground_follow) {
+        const auto &xs = m_kf->x();
+        if (m_ground_valid && m_ground_normal.z() > 0.85) {
+            m_kf->updateGround(m_ground_normal, m_ground_z_target, 0.02, 0.10);
+            const double nz = m_ground_normal.z();
+            const double vz = std::max(-1.0, std::min(1.0,
+                -(m_ground_normal.x() * xs.v.x() +
+                  m_ground_normal.y() * xs.v.y()) / nz));
+            m_kf->updateVerticalVelocity(vz, 0.30);
+            m_ground_z_ref = m_ground_z_target;
+            m_ground_z_init = true;
+        } else if (m_ground_z_init) {
+            m_kf->updateZ(m_ground_z_ref, 0.40);
+        }
+        m_kf->x().clampPhysical();
+    }
+
+    // 轮式 odom 紧耦合: 速度模长 + 世界系 yaw 角速度作为 2 维量测.
+    if (m_odom_fuse && m_odom_prior) {
+        V3D gyro_mean = V3D::Zero();
+        int n = 0;
+        for (const auto &imu : package.imus) { gyro_mean += imu.gyro; ++n; }
+        if (n > 0) {
+            gyro_mean /= static_cast<double>(n);
+            m_kf->updateOdom(m_odom_speed, m_odom_yaw_rate, gyro_mean, 0.2, 0.05);
+            static int fuse_log = 0;
+            if (++fuse_log % 50 == 0) {
+                std::cout << "[FLIO2] odom fuse speed=" << m_odom_speed
+                          << " yaw_rate=" << m_odom_yaw_rate
+                          << " v=" << m_kf->x().v.transpose()
+                          << " bg=" << m_kf->x().bg.transpose() << std::endl;
+            }
+        }
+    }
+    m_last_cloud_end = package.cloud_end_time;
     incrCloudMap();
 }
 
@@ -397,6 +497,21 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         m_effect_norm_vec->points[effect_feat_num] = m_norm_vec->points[i];
         m_effect_weight[effect_feat_num] = m_robust_weight[i];
         effect_feat_num++;
+    }
+    // 诊断: 有效平面点数 + IEKF 状态, 每 ~1s 一行. 用于定位长航时/转弯发散.
+    {
+        static int diag_cnt = 0;
+        if (++diag_cnt % 50 == 0) {
+            const State &xs = m_kf->x();
+            Eigen::Vector3d rpy = xs.r_wi.eulerAngles(2, 1, 0);
+            std::cout << "[FLIO2] eff=" << effect_feat_num << "/" << size
+                      << " min=" << m_config.min_effective_points
+                      << " v=" << xs.v.transpose()
+                      << " bg=" << xs.bg.transpose()
+                      << " ba=" << xs.ba.transpose()
+                      << " t=" << xs.t_wi.transpose()
+                      << " rpy=" << rpy.transpose() << std::endl;
+        }
     }
     if (effect_feat_num < m_config.min_effective_points)
     {

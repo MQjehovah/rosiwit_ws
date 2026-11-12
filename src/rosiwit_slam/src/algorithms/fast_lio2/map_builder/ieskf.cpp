@@ -134,6 +134,24 @@ void State::operator+=(const V21D &delta)
     ba += delta.segment<3>(18);
 }
 
+void State::clampPhysical()
+{
+    if (!t_wi.allFinite()) { t_wi.setZero(); v.setZero(); }
+    if (!v.allFinite()) v.setZero();
+    if (!bg.allFinite()) bg.setZero();
+    if (!ba.allFinite()) ba.setZero();
+    if (!r_wi.allFinite()) r_wi = M3D::Identity();
+    if (std::fabs(t_wi.z()) > 100.0) {
+        t_wi.z() = std::copysign(100.0, t_wi.z());
+        v.z() = 0.0;
+    }
+    const double vn = v.norm();
+    if (vn > 3.0) v *= 3.0 / vn;
+    v.z() = std::max(-0.8, std::min(0.8, v.z()));
+    bg = bg.cwiseMax(-0.10).cwiseMin(0.10);
+    ba = ba.cwiseMax(-1.0).cwiseMin(1.0);
+}
+
 V21D State::operator-(const State &other) const
 {
     V21D delta = V21D::Zero();
@@ -184,7 +202,134 @@ void IESKF::predict(const Input &inp, double dt, const M12D &Q)
     m_G.block<3, 3>(18, 9) = Eigen::Matrix3d::Identity() * dt;
 
     m_x += delta;
+    m_x.clampPhysical();
     m_P = m_F * m_P * m_F.transpose() + m_G * Q * m_G.transpose();
+}
+
+void IESKF::updateOdom(double speed, double yaw_rate, const V3D &gyro,
+                       double sigma_v, double sigma_w)
+{
+    Eigen::Matrix<double, 2, 21> A = Eigen::Matrix<double, 2, 21>::Zero();
+    Eigen::Vector2d r = Eigen::Vector2d::Zero();
+    Eigen::Matrix2d R = Eigen::Matrix2d::Identity();
+
+    // 只用水平速度模长; 轮式 odom 不约束 z 方向速度.
+    const double vh = std::hypot(m_x.v.x(), m_x.v.y());
+    if (vh > 0.2) {
+        A(0, 12) = m_x.v.x() / vh;
+        A(0, 13) = m_x.v.y() / vh;
+        r(0) = speed - vh;
+        R(0, 0) = sigma_v * sigma_v;
+    } else {
+        R(0, 0) = 1.0;   // 静止/低速: 不约束速度模长
+    }
+
+    const V3D w = gyro - m_x.bg;
+    A.block<1, 3>(1, 0) = -(m_x.r_wi * Sophus::SO3d::hat(w)).row(2);
+    A.block<1, 3>(1, 15) = -m_x.r_wi.row(2);
+    r(1) = yaw_rate - (m_x.r_wi * w).z();
+    R(1, 1) = sigma_w * sigma_w;
+
+    const Eigen::Matrix2d S = A * m_P * A.transpose() + R;
+    const Eigen::Matrix<double, 21, 2> K = m_P * A.transpose() * S.inverse();
+    const V21D dx = K * r;
+    m_x += dx;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKA = I - K * A;
+    m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
+}
+
+void IESKF::updateVerticalVelocity(double target_vz, double sigma)
+{
+    // 软约束 v.z 到 target_vz: 平地 target=0, 坡道 target=轮速*sin(pitch).
+    // 只抑制 z 零偏长期积分, 不会把真实坡道压平.
+    Eigen::Matrix<double, 1, 21> H = Eigen::Matrix<double, 1, 21>::Zero();
+    H(0, 14) = 1.0;
+    const Eigen::Matrix<double, 1, 1> R =
+        Eigen::Matrix<double, 1, 1>::Identity() * (sigma * sigma);
+    const Eigen::Matrix<double, 1, 1> r =
+        Eigen::Matrix<double, 1, 1>::Identity() * (target_vz - m_x.v.z());
+    const Eigen::Matrix<double, 1, 1> S = H * m_P * H.transpose() + R;
+    const Eigen::Matrix<double, 21, 1> K = m_P * H.transpose() * S.inverse();
+    m_x += K * r(0, 0);
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKH = I - K * H;
+    m_P = IKH * m_P * IKH.transpose() + K * R * K.transpose();
+}
+
+void IESKF::updateGround(const V3D &n_world, double z_target,
+                        double sigma_tilt, double sigma_z)
+{
+    // 3 维量测: 绕 x/y 的姿态误差 (把地面法向拉回竖直) + z 位置误差.
+    // 不做位姿硬写, 走标准 EKF (H/K/P 更新), 与 FAST-LIO 的其它量测同构.
+    Eigen::Matrix<double, 3, 21> H = Eigen::Matrix<double, 3, 21>::Zero();
+    Eigen::Vector3d r = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d R = Eigen::Matrix3d::Zero();
+    R(0, 0) = sigma_tilt * sigma_tilt;
+    R(1, 1) = sigma_tilt * sigma_tilt;
+    R(2, 2) = sigma_z * sigma_z;
+
+    // 世界系下把 n 转到 +z 的小角度旋转向量
+    const V3D e_w = V3D(n_world.y(), -n_world.x(), 0.0);
+    const V3D e_b = m_x.r_wi.transpose() * e_w;   // 转到 body 系
+    r(0) = e_b.x();
+    r(1) = e_b.y();
+    H(0, 0) = 1.0;
+    H(1, 1) = 1.0;
+    r(2) = z_target - m_x.t_wi.z();
+    H(2, 5) = 1.0;
+
+    const Eigen::Matrix3d S = H * m_P * H.transpose() + R;
+    const Eigen::Matrix<double, 21, 3> K = m_P * H.transpose() * S.inverse();
+    const V21D dx = K * r;
+    m_x += dx;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKH = I - K * H;
+    m_P = IKH * m_P * IKH.transpose() + K * R * K.transpose();
+}
+
+void IESKF::updateZ(double z_target, double sigma)
+{
+    // 1 维软量测, 只作用于 t_wi.z (索引 5).
+    Eigen::Matrix<double, 1, 21> H = Eigen::Matrix<double, 1, 21>::Zero();
+    H(0, 5) = 1.0;
+    const double R = std::max(sigma * sigma, 1e-6);
+    const double r = z_target - m_x.t_wi.z();
+    const double S = (H * m_P * H.transpose())(0, 0) + R;
+    const Eigen::Matrix<double, 21, 1> K = m_P * H.transpose() / S;
+    m_x += K * r;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKH = I - K * H;
+    m_P = IKH * m_P * IKH.transpose() + K * (K.transpose() * R);
+}
+
+void IESKF::updatePlanar(double z_ref, const M3D &r_flat, bool lock_roll_pitch)
+{
+    // 平面约束: 平地假设下 z 不变、v.z=0、roll/pitch 不变化. 与 odom 模式无关,
+    // 也不引入任何绝对坐标 —— z_ref 由调用方给 (建图起始高度或回锁时的高度).
+    m_x.t_wi.z() = z_ref;
+    m_x.v.z() = 0.0;
+
+    if (lock_roll_pitch)
+    {
+        // 保留当前 yaw, 只把 roll/pitch 换回平地参考姿态.
+        const double yaw_cur = std::atan2(m_x.r_wi(1, 0), m_x.r_wi(0, 0));
+        const double yaw_flat = std::atan2(r_flat(1, 0), r_flat(0, 0));
+        const M3D rz = Eigen::AngleAxisd(yaw_cur - yaw_flat, V3D::UnitZ()).toRotationMatrix();
+        m_x.r_wi = rz * r_flat;
+        // roll / pitch 是强假设: 收紧到极小协方差, yaw (索引 2) 不动.
+        m_P(0, 0) = std::min(m_P(0, 0), 1e-6);
+        m_P(1, 1) = std::min(m_P(1, 1), 1e-6);
+        m_P(0, 1) = m_P(1, 0) = 0.0;
+    }
+    // z 与 v.z 收紧 (索引 5 = t_wi.z, 14 = v.z).
+    m_P(5, 5) = std::min(m_P(5, 5), 1e-4);
+    m_P(14, 14) = std::min(m_P(14, 14), 1e-4);
+    m_x.clampPhysical();
 }
 
 void IESKF::update()
@@ -219,6 +364,7 @@ void IESKF::update()
         delta = -H.ldlt().solve(b);
 
         m_x += delta;
+        m_x.clampPhysical();
         shared_data.iter_num += 1;
 
         if (m_stop_func(delta))

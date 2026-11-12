@@ -49,6 +49,9 @@ struct LidarFrame {
     CloudType::Ptr cloud;
     double start_time = -1.0;
     double end_time   = -1.0;
+    // 本帧 IMU 覆盖窗内存在大空洞 (>100~120ms). 前端应跳过该帧,
+    // 不能拿空洞前后的陈旧 IMU 速度/零偏强行传播 (长航时发散根因).
+    bool imu_gap = false;
 };
 
 /// 相机图像帧（核心不依赖 ROS；接口层负责把 sensor_msgs 转成 cv::Mat）。
@@ -72,6 +75,7 @@ struct CameraIntrinsics {
 enum class SlamState { INITIALIZING, READY, RUNNING, LOST };
 
 struct PoseStamped {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     double time  = -1.0;
     M3D rot      = M3D::Identity();   // r_wi: world <- imu body
     V3D trans    = V3D::Zero();       // t_wi

@@ -11,7 +11,7 @@ namespace rosiwit_slam {
 
 // SLAM 层的同步包:基于 IMUSample(算法无关)
 struct SyncPackage {
-    std::vector<IMUSample> imus;
+    std::vector<IMUSample, Eigen::aligned_allocator<IMUSample>> imus;
     LidarFrame frame;                 // cloud + start/end_time
 };
 
@@ -58,7 +58,7 @@ protected:
 private:
     bool popSyncedPackage(SyncPackage& out);
 
-    std::deque<IMUSample>  m_imu_buf;
+    std::vector<IMUSample, Eigen::aligned_allocator<IMUSample>> m_imu_buf;
     std::deque<LidarFrame> m_lidar_buf;
     mutable std::mutex     m_buf_mutex;
     bool   m_lidar_pushed = false;

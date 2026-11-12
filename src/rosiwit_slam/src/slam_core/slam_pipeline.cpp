@@ -109,6 +109,21 @@ void BackendWorker::run(rosiwit_common::CancelToken token) {
     auto last_stats_log = std::chrono::steady_clock::now();
     rosiwit_common::ChannelStats prev_stats;
     while (!token.cancelled()) {
+        // 5 分钟 checkpoint: 长航时/发散被杀时至少留下最近一段可恢复的地图。
+        // 只在后端线程做, 不阻塞前端; saveMap 内部持地图锁, 与 addSubMap 串行。
+        if (m_autosave_interval_s > 0.0 && m_map_mgr &&
+            m_map_mgr->getRevision() > 0 && !m_autosave_path.empty()) {
+            const auto now = std::chrono::steady_clock::now();
+            const double elapsed =
+                std::chrono::duration<double>(now - m_last_autosave).count();
+            if (elapsed >= m_autosave_interval_s) {
+                m_last_autosave = now;
+                const bool ok = m_map_mgr->saveMap(m_autosave_path);
+                std::cout << "[BackendWorker] autosave " << (ok ? "ok" : "FAILED")
+                          << ": " << m_autosave_path
+                          << " (interval=" << m_autosave_interval_s << "s)" << std::endl;
+            }
+        }
         auto item = m_queue.pop_for(std::chrono::milliseconds(10));
         if (item.has_value()) {
             if (item->task == BackendTask::ADD_KF && m_backend) {
@@ -268,6 +283,10 @@ bool SlamPipeline::init(const std::string& config_path) {
         return cfg[key];
     };
     m_pipeline_name = g("pipeline").as<std::string>("custom_pipeline");
+    {
+        const YAML::Node mapcfg = (glob && glob["map"]) ? glob["map"] : cfg["map"];
+        if (mapcfg && mapcfg["enable_rgb"]) m_rgb_enabled = mapcfg["enable_rgb"].as<bool>(true);
+    }
 
     std::string mode_str = g("pipeline_mode").as<std::string>("idle");
     if (mode_str == "mapping")          m_mode = PipelineMode::MAPPING;
@@ -365,6 +384,12 @@ bool SlamPipeline::init(const std::string& config_path) {
         m_anchor = std::make_shared<AnchorState>();
         m_backend_worker = std::make_shared<BackendWorker>(m_backend, m_map_mgr, m_loop, m_anchor);
         m_backend_worker->start();
+    }
+
+    // 建图模式: 每 5 分钟落一次 PCD checkpoint。路径固定覆盖, 不产生大量文件;
+    // 最终仍由 save_map 写正式地图。进程被 OOM/kill 时至少保留最近 checkpoint。
+    if (m_backend_worker && m_mode == PipelineMode::MAPPING) {
+        m_backend_worker->setAutosave(0.0, "/tmp/rosiwit_slam_autosave_map.pcd");
     }
 
     if (!module_errors.empty()) {
@@ -504,6 +529,7 @@ void SlamPipeline::onVisualOdometry(double time, const PoseStamped& vo_pose) {
 
 void SlamPipeline::onOdom(const PoseStamped& odom) {
     if (m_mode.load() == PipelineMode::LOCALIZATION && m_localization) m_localization->onOdom(odom);
+    if (m_mode.load() == PipelineMode::MAPPING && m_frontend) m_frontend->onWheelOdom(odom);
 }
 
 void SlamPipeline::onRelative(const PoseStamped& pose,
@@ -524,7 +550,9 @@ bool SlamPipeline::getPoseCov(PoseStamped& out, Eigen::Matrix<double, 6, 6>& cov
 }
 
 void SlamPipeline::onAbsolute(const PoseStamped& pose, const Eigen::Matrix<double, 6, 6>& cov) {
-    if (m_mode.load() == PipelineMode::LOCALIZATION && m_localization) m_localization->onAbsolute(pose, cov);
+    if (m_mode.load() == PipelineMode::LOCALIZATION && m_localization) {
+        m_localization->onAbsolute(pose, cov);
+    }
 }
 
 void SlamPipeline::onVisualLoop(const std::string& from_id, const std::string& to_id,
@@ -770,33 +798,50 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
 
     KeyFrame kf;
     if (m_frontend->getKeyFrame(kf)) {
-        ++m_frame_count;
-        // 后端: 异步入队, 不阻塞前端
-        if (m_backend) pushBackendTask(BackendTask::ADD_KF, kf);
-        // 地图管理 + ScanContext/ICP 全部移到 backend worker:
-        // 前端 work 组只负责传感器/前端/TF, 不能被地图锁或 ICP 拖住.
-        if (m_map_mgr) pushBackendTask(BackendTask::MAP_SUBMAP, kf);
-        // 视觉松耦合: 关键帧注册 + 相邻关键帧 VO between 因子入图
-        if (m_visual) {
-            m_visual->addKeyframe(kf.id, kf.timestamp);
-            std::vector<Constraint> vcs = m_visual->popBetweenConstraints();
-            if (!vcs.empty() && m_backend) m_backend->addConstraints(vcs);
+        // 长航时/末端积压时, 极少数关键帧会带明显发散的位姿; 一帧就能把
+        // 地图拉出几千米. 入后端/地图前做一次物理门限过滤.
+        bool kf_ok = kf.pose.trans.allFinite() && kf.pose.rot.allFinite() &&
+                     std::fabs(kf.pose.trans.z()) <= 50.0;
+        if (kf_ok && m_have_map_kf) {
+            const double dp = (kf.pose.trans - m_last_map_kf.trans).norm();
+            const double dr = Eigen::AngleAxisd(
+                kf.pose.rot * m_last_map_kf.rot.transpose()).angle();
+            if (dp > 5.0 || dr > 1.2) kf_ok = false;
         }
+        if (!kf_ok) {
+            static int skip_log = 0;
+            if (++skip_log <= 10 || skip_log % 50 == 0) {
+                std::cerr << "[Map] skip divergent keyframe z=" << kf.pose.trans.z()
+                          << " p=" << kf.pose.trans.transpose()
+                          << " (total=" << skip_log << ")" << std::endl;
+            }
+        } else {
+            m_last_map_kf = kf.pose;
+            m_have_map_kf = true;
+            ++m_frame_count;
+            // 后端: 异步入队, 不阻塞前端
+            if (m_backend) pushBackendTask(BackendTask::ADD_KF, kf);
+            // 地图管理 + ScanContext/ICP 全部移到 backend worker:
+            // 前端 work 组只负责传感器/前端/TF, 不能被地图锁或 ICP 拖住.
+            if (m_map_mgr) pushBackendTask(BackendTask::MAP_SUBMAP, kf);
+            // 视觉松耦合: 关键帧注册 + 相邻关键帧 VO between 因子入图
+            if (m_visual) {
+                m_visual->addKeyframe(kf.id, kf.timestamp);
+                std::vector<Constraint> vcs = m_visual->popBetweenConstraints();
+                if (!vcs.empty() && m_backend) m_backend->addConstraints(vcs);
+            }
 
-        // 回环检测 + ICP 在 backend worker 中异步执行, 每 30 个关键帧检测一次.
-        if (m_loop) pushBackendTask(BackendTask::LOOP_CLOSURE, kf);
+            // 回环检测 + ICP 在 backend worker 中异步执行, 每 30 个关键帧检测一次.
+            if (m_loop) pushBackendTask(BackendTask::LOOP_CLOSURE, kf);
+        }
     }
 
-    // 定期触发后端优化 (每 50 关键帧)。
-    // ⚠ 这段在**每帧**都会执行, 而 m_frame_count 只在"新关键帧"时递增;
-    //   以前没有 m_last_optimize_kf_ 守卫, 一旦计数停在 50/100/... (例如车被安全层
-    //   停住、或关键帧间隔变大), 就会**每一帧都请求一次优化** —— Ceres + 全图重建
-    //   每秒跑 10 次, 日志里 `optimize N=50 loop=0 new=0` 连刷。
-    if (m_backend && m_frame_count > 0 && m_frame_count % 50 == 0 &&
-        m_frame_count != m_last_optimize_kf_) {
-        m_last_optimize_kf_ = m_frame_count;
-        pushBackendTask(BackendTask::OPTIMIZE);
-    }
+    // 不再按关键帧数周期性触发后端优化/整图重建。
+    // 无回环时 Ceres 优化不会改变任何位姿 (loop=0, cost≈0, max_dt=0), 但
+    // PcdMapManager::onBackendOptimized 会用全部 submaps_ 重建整张地图
+    // (O(N)、持地图锁), 长图到 300+ 关键帧时会卡住前端, 在空地导致失锁。
+    // 回环线程检测到真实回环时会自己 requestOptimize() (见 BackendWorker::runLoop)。
+    // 关键帧点云仍由 MAP_SUBMAP 任务增量并入 global_map_, 不影响 save_map。
 
     out.body_cloud = out.world_cloud = nullptr;
     out.rgb_world_cloud.reset();
@@ -845,8 +890,16 @@ bool SlamPipeline::handleMapping(const SyncPackage& pkg, SlamOutput& out) {
 
 void SlamPipeline::accumulateRgbMap(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr & rgb,
                                     const CloudType::Ptr & world) {
+    if (!m_rgb_enabled) return;
     constexpr float kMaxAbs = 1000.0f;   // 丢弃明显跑飞的点 (发散早期)
+    // 彩色图只用于 /world_cloud_rgb 和 PCD 上色, 不是位姿/地图主链路.
+    // 不能每帧累积并对整图做 VoxelGrid: 长航时 RGB 图到几千万点后,
+    // 每帧一次全图降采样会把前端工作线程拖死 (实测 6.5GB, pkgs 停在 7065).
+    // 这里限频到 2Hz, 超过 12M 点直接停止累积; 降采样最多每 10s 一次.
+    static int rgb_call = 0;
+    if (++rgb_call % 20 != 0) return;   // 0.5Hz
     std::lock_guard<std::mutex> lock(m_rgb_map_mu);
+    if (m_rgb_map && m_rgb_map->size() >= 2 * kRgbMapDownsampleAbove) return;
     if (!m_rgb_map) {
         m_rgb_map = pcl::PointCloud<pcl::PointXYZRGB>::Ptr(
             new pcl::PointCloud<pcl::PointXYZRGB>());
@@ -882,11 +935,14 @@ void SlamPipeline::accumulateRgbMap(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr
     m_rgb_map->width = static_cast<uint32_t>(m_rgb_map->size());
     m_rgb_map->height = 1;
     m_rgb_map->is_dense = false;
-    // 长序列上稠密累积会到几千万点, 现场降一次密度避免内存与存盘时间失控.
+    // 长序列上稠密累积会到几千万点; 降采样限频, 且失败时保留硬上限.
     if (m_rgb_map->size() > kRgbMapDownsampleAbove) {
-        pcl::PointCloud<pcl::PointXYZRGB> dense;
-        voxelDownsampleRGB(*m_rgb_map, kRgbMapLeaf, dense);
-        m_rgb_map->swap(dense);
+        static int rgb_ds = 0;
+        if (++rgb_ds % 20 == 0) {
+            pcl::PointCloud<pcl::PointXYZRGB> dense;
+            voxelDownsampleRGB(*m_rgb_map, kRgbMapLeaf, dense);
+            if (!dense.empty()) m_rgb_map->swap(dense);
+        }
     }
 }
 

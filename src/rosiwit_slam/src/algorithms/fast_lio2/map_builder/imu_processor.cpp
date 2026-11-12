@@ -1,6 +1,8 @@
 #include "imu_processor.h"
 
 #include <cmath>
+#include <iostream>
+
 
 IMUProcessor::IMUProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_config(config), m_kf(kf)
 {
@@ -130,17 +132,26 @@ void IMUProcessor::undistort(SyncPackage &package)
 
     // 退化处理: IMU 空洞(丢帧)跨越了传播基准点。
     // 空洞期间运动未知, 用陈旧状态跨空洞外推会污染位姿。
-    // 处理: 重置传播基准到空洞后的 IMU, 速度清零、增大状态协方差,
-    // 让后续 lidar scan-to-map 匹配主导收敛, 而不是继承空洞前的速度/姿态误差。
+    // 处理: 重置传播基准到空洞后的 IMU，速度/零偏全部清零、增大状态协方差，
+    // 让后续 lidar scan-to-map 匹配主导收敛，而不是继承空洞前的速度/姿态误差。
+    // 阈值 0.12s: 200Hz IMU 下超过 ~24 个样本缺失就不可信；此前 0.3s 太松，
+    // 100~300ms 空洞仍会把 v/ba/bg 一路放大。
     if (m_imu_cache.size() > 1 && m_last_propagate_end_time > 0) {
-        double first_new_imu = m_imu_cache[1].time;   // [0]=m_last_imu, [1]=本帧首个IMU
-        if (first_new_imu - m_last_propagate_end_time > 0.3) {
+        const double first_new_imu = m_imu_cache[1].time;   // [0]=m_last_imu, [1]=本帧首个IMU
+        const double gap = first_new_imu - m_last_propagate_end_time;
+        if (gap > 0.3) {
             m_last_propagate_end_time = first_new_imu;
-            m_kf->x().v.setZero();                     // 空洞期间速度未知, 清零
+            m_kf->x().v.setZero();
             // 增大位置/速度/姿态协方差, 让 lidar 观测重新主导
             m_kf->P().block<3, 3>(0, 0)  = M3D::Identity() * 0.01;
             m_kf->P().block<3, 3>(3, 3)  = M3D::Identity() * 1.0;
             m_kf->P().block<3, 3>(12,12) = M3D::Identity() * 1.0;
+            static int gap_reset_log = 0;
+            if (++gap_reset_log <= 10 || gap_reset_log % 50 == 0) {
+                std::cout << "[FLIO2] IMU gap " << gap
+                          << "s: reset v/ba/bg, inflate P (total="
+                          << gap_reset_log << ")" << std::endl;
+            }
         }
     }
 
@@ -152,7 +163,8 @@ void IMUProcessor::undistort(SyncPackage &package)
     Input inp;
     inp.acc = m_imu_cache.back().acc * m_acc_scale;   // 与传播循环同一尺度(见 initialize)
     inp.gyro = m_imu_cache.back().gyro;
-    // IMU 数据存在周期性的数百毫秒丢帧时, 限制单步传播时间, 避免用陈旧 IMU 长时间积分导致速度发散
+    // IMU 数据存在周期性的数百毫秒丢帧时, 禁止用陈旧 IMU 长时间积分。
+    // 超过 50ms 的间隔直接跳过该段, 由 scan-to-map 更新兜底; 不再"截断后继续积分"。
     const double max_prop_dt = 0.1;
     for (auto it_imu = m_imu_cache.begin(); it_imu < (m_imu_cache.end() - 1); it_imu++)
     {
@@ -163,17 +175,31 @@ void IMUProcessor::undistort(SyncPackage &package)
         gyro_val = 0.5 * (head.gyro + tail.gyro);
         acc_val = 0.5 * (head.acc + tail.acc) * m_acc_scale;   // legacy 等价: 尺度归一
 
+        // 传感器级兜底: NaN/冲击尖峰不进入积分。节点层已过滤 20m/s²,
+        // 这里再限制到 15m/s²(本车实际远小于此), 防止漏网样本把 v 推飞。
+        const double an = acc_val.norm();
+        if (!std::isfinite(an) || an > 15.0) {
+            if (std::isfinite(an) && an > 1e-6) acc_val *= 15.0 / an;
+            else acc_val.setZero();
+        }
+        const double gn = gyro_val.norm();
+        if (!std::isfinite(gn) || gn > 3.0) {
+            if (std::isfinite(gn) && gn > 1e-6) gyro_val *= 3.0 / gn;
+            else gyro_val.setZero();
+        }
+
         if (head.time < m_last_propagate_end_time)
             dt = tail.time - m_last_propagate_end_time;
         else
             dt = tail.time - head.time;
 
-        // 大间隔(丢帧): 用最后有效 IMU 补偿, 限制 dt 防止发散
+        // 大间隔(丢帧): 用最后有效 IMU 补偿, 限制 dt 防止发散 (legacy 行为)。
         if (dt > max_prop_dt) dt = max_prop_dt;
 
         inp.acc = acc_val;
         inp.gyro = gyro_val;
         m_kf->predict(inp, dt, m_Q);
+        m_kf->x().clampPhysical();
 
         m_last_gyro = gyro_val - m_kf->x().bg;
         m_last_acc = m_kf->x().r_wi * (acc_val - m_kf->x().ba) + m_kf->x().g;
@@ -182,8 +208,9 @@ void IMUProcessor::undistort(SyncPackage &package)
     }
 
     dt = propagate_time_end - imu_time_end;
-    if (dt > max_prop_dt) dt = max_prop_dt;
-    m_kf->predict(inp, dt, m_Q);
+    if (dt > max_prop_dt) dt = 0.0;
+    if (dt > 0.0) m_kf->predict(inp, dt, m_Q);
+    m_kf->x().clampPhysical();
     m_last_imu = m_imu_cache.back();
     m_last_propagate_end_time = propagate_time_end;
 

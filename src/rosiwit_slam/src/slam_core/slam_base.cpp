@@ -16,9 +16,15 @@ void SlamBase::clearBuffers()
 void SlamBase::onImu(const IMUSample& s) {
     m_imu_rx.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(m_buf_mutex);
-    if (s.time >= 0) m_last_imu_time = s.time;
+    if (s.time >= 0) m_last_imu_time = std::max(m_last_imu_time, s.time);
     if (s.time >= 0 && !m_imu_buf.empty() && s.time < m_imu_buf.back().time) {
-        m_imu_buf.clear();   // 乱序,重置
+        // 乱序样本: 不能清空整段历史, 否则后续雷达帧会因 IMU 覆盖不足被整批丢弃.
+        // 太旧的直接忽略, 否则按时间插入到有序位置.
+        if (s.time <= m_imu_buf.front().time) return;
+        auto it = std::upper_bound(m_imu_buf.begin(), m_imu_buf.end(), s.time,
+            [](double t, const IMUSample& a) { return t < a.time; });
+        m_imu_buf.insert(it, s);
+        return;
     }
     // IMU 丢帧插值: 相邻样本间隔 >30ms(录包丢帧)时, 线性插值填满到 ~5ms,
     // 让 EKF 传播连续。长空洞插值不精确但保持姿态连续, 避免位姿跳变。
@@ -110,10 +116,36 @@ bool SlamBase::popSyncedPackage(SyncPackage& out) {
     if (dropped > 0)
         std::cerr << "[sync] dropped " << dropped << " lidar frame(s) due to IMU gap" << std::endl;
 
+    // 标记本帧 IMU 窗内的最大空洞。覆盖度检查只看"窗内有没有样本",
+    // 但 100~200ms 的空洞仍可能让速度/零偏在传播时被放大；前端看到
+    // imu_gap 后直接跳过该帧，并清空 IMU 缓存，绝不在空洞上积分。
+    m_pending.frame.imu_gap = false;
+    {
+        const double frame_begin = m_pending.frame.start_time;
+        const double frame_end   = m_pending.frame.end_time;
+        double prev = -1.0;
+        double max_gap = 0.0;
+        double last_before = -1.0;
+        for (const auto& imu : m_imu_buf) {
+            if (imu.time > frame_end) break;
+            if (imu.time < frame_begin) {
+                last_before = imu.time;
+                prev = imu.time;
+                continue;
+            }
+            if (prev > 0.0) max_gap = std::max(max_gap, imu.time - prev);
+            prev = imu.time;
+        }
+        const double pre_gap = (last_before > 0.0 && frame_begin > last_before)
+                                   ? (frame_begin - last_before) : 0.0;
+        constexpr double kGapMark = 0.12;   // 120ms: 超过即视为不可靠传播
+        m_pending.frame.imu_gap = (max_gap > kGapMark || pre_gap > kGapMark);
+    }
+
     m_pending.imus.clear();
     while (!m_imu_buf.empty() && m_imu_buf.front().time < m_pending.frame.end_time) {
         m_pending.imus.push_back(std::move(m_imu_buf.front()));
-        m_imu_buf.pop_front();
+        m_imu_buf.erase(m_imu_buf.begin());
     }
     // 前瞻一个样本 (不弹出): FAST-LIVO2/LIO 的 IMU 预积分要求"最新 IMU 时刻 >= 雷达帧
     // 结束时刻"(否则整帧被跳过, 前端永远等 IMU, 表现为 [ LIO ]: No point!!! 之后不再出位姿)。

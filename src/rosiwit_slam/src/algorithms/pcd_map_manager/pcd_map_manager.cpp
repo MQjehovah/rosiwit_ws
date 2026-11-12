@@ -149,6 +149,10 @@ bool PcdMapManager::init(const std::string& config_path) {
             const int v = mv("max_observation_points").as<int>();
             if (v > 0) max_observation_points_ = static_cast<size_t>(v);
         }
+        if (mv("max_submap_points")) {
+            const int v = mv("max_submap_points").as<int>();
+            if (v > 0) max_submap_points_ = static_cast<size_t>(v);
+        }
         std::cout << "[PcdMapManager] correction limits: trans=" << m_max_correction_trans_m
                   << "m rot=" << m_max_correction_rot_rad * 180.0 / M_PI << "deg" << std::endl;
         if (config["map_directory"])
@@ -225,6 +229,28 @@ bool PcdMapManager::init(const std::string& config_path) {
     if (map_dir_.empty()) map_dir_ = ".";
     initialized_ = true;
     return true;
+}
+
+void PcdMapManager::trimSubmaps()
+{
+    if (max_submap_points_ == 0 || submaps_.empty()) return;
+    size_t total = 0;
+    for (const auto& sm : submaps_) total += sm.cloud ? sm.cloud->size() : 0;
+    if (total <= max_submap_points_) return;
+
+    size_t drop = 0;
+    while (drop + 1 < submaps_.size() && total > max_submap_points_) {
+        total -= submaps_[drop].cloud ? submaps_[drop].cloud->size() : 0;
+        ++drop;
+    }
+    submaps_.erase(submaps_.begin(), submaps_.begin() + drop);
+    submaps_truncated_ = true;
+    static size_t trim_log_count = 0;
+    if (++trim_log_count <= 3 || trim_log_count % 100 == 0) {
+        std::cout << "[PcdMapManager] submaps trimmed: dropped " << drop
+                  << " oldest keyframes (cap " << max_submap_points_
+                  << " pts, " << submaps_.size() << " left)" << std::endl;
+    }
 }
 
 void PcdMapManager::trimObservations()
@@ -478,6 +504,7 @@ bool PcdMapManager::addSubMap(const KeyFrame& kf) {
     ob.origin = eff_pose.trans;
     ob.cloud = transformed;
     observations_.push_back(ob);
+    trimSubmaps();
     trimObservations();
 
     ++m_revision_;
@@ -489,6 +516,11 @@ void PcdMapManager::onBackendOptimized(const std::vector<PoseStamped>& corrected
 
     std::lock_guard<std::mutex> lock(m_mutex_);
     if (submaps_.empty()) return;
+    if (submaps_truncated_) {
+        std::cout << "[PcdMapManager] WARN submaps 已截断, 跳过后端重建 "
+                     "(保留增量 global_map_, 避免用不完整关键帧重建丢图)" << std::endl;
+        return;
+    }
 
     // ⚠ **必须按帧对齐, 不能按下标**: 后端是异步的、可能只消化了前 k 个关键帧,
     // 而 submaps_ 是本地全部关键帧。按下标配对会把"第 i 个后端位姿"套到"第 i 个本地点云"上,

@@ -70,9 +70,25 @@ private:
         double self_y_min = -0.55, self_y_max = 0.55;
         double self_z_min = 0.05, self_z_max = 1.40;
         float  scan_period_ms   = 100.0f;   // LiDAR 扫描周期 (毫秒), 用于点时间戳
+        // IMU 异常值保护: 过坎/撞击时 Vanjee 内置 IMU 会出现 2~3g 尖峰甚至掉零,
+        // 直接进 EKF 会把速度/位姿打飞, 随后前端 "NO Effective Points" 失锁.
+        // 超限样本直接丢弃; SlamBase::onImu 会对 >30ms 的空洞做线性插值.
+        bool   imu_filter_enabled = true;
+        double imu_acc_min = 5.0;            // m/s^2, 低于此视为掉零/异常
+        double imu_acc_max = 20.0;           // m/s^2, 高于此视为冲击尖峰
+        double imu_gyro_max = 3.0;           // rad/s, 高于此视为陀螺异常
+        // Vanjee 内置陀螺刻度校准: 实测积分 yaw 比轮式 odom 小约 3.4%,
+        // 长距离多转弯会累积成几十度航向漂移. 1.0 = 不校准.
+        double imu_gyro_scale = 1.0;
         bool   vision_enabled    = false;    // 视觉松耦合开关
         std::string vo_topic     = "visual_odometry";  // VO 库发布的里程计话题
         bool   use_wheel_odom    = false;    // 是否使用轮式 odom 数据参与计算
+        // 建图时把轮式 odom 作为水平运动先验, 只用于 frontend 的更新门限/一致性检查,
+        // 不影响 TF 输出. yaml: global.input.odom_gate
+        bool   odom_gate = false;
+        bool   odom_fuse = false;    // odom_mode=fuse: 融合 /odom 速度/yaw rate
+        std::string odom_mode;       // 建图: none|gate|fuse (mapping.odom_mode)
+        std::string loc_odom_mode;   // 定位: none|fuse (localization.odom_mode)
         std::string odom_topic   = "wheel_odom";  // 轮式里程计话题
         double output_rate_hz    = 100.0;    // 定位高频输出频率(Hz); <=0 关闭(用扫描帧)
         double output_filter_alpha = 0.5;    // 输出 alpha-beta 滤波 alpha
@@ -153,6 +169,7 @@ private:
     YawExtrinsicCalibrator m_yaw_calib;
     CalibrationController m_calib_controller;
     std::atomic<double> m_imu_time_offset{0.0};
+    std::atomic<uint64_t> m_imu_outliers{0};   // 被 IMU 异常值保护丢弃的样本数
     double m_last_imu_yaw = 0.0;
     double m_last_imu_stamp = -1.0;
     bool m_have_imu_yaw = false;
