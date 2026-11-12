@@ -52,6 +52,11 @@ struct Config
     // legacy(mapping_interface.cpp:2292) 是 50 —— 几何退化场景(窄区/视野受限)下
     // 只有几个有效点, 用它们做更新会让近秩亏的 H 把状态拖向不可观测方向(实测窄区漂移)。
     int min_effective_points = 50;
+    // 退化检测: 有效平面点过少 / 占比过低 / 信息矩阵条件数过差时, 本帧跳过 LiDAR 更新
+    // (只走 IMU 预测), 避免在开阔/走廊场景把位姿拉偏 (实测急转段厚墙)。
+    int degenerate_min_effective_points = 300;
+    double degenerate_ratio = 0.10;      // eff / 输入点数 下限
+    double degenerate_eigen_ratio = 1e-4; // 平移块最小/最大特征值 下限
     bool gravity_align = true;
     double init_z = 0.0;  // IMU body 世界 z 初值; 设成 IMU 离地高度使 footprint z=0
     bool undistort_enable = true;

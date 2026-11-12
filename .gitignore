@@ -39,3 +39,4 @@ ros1_ws/src/xzrobot_ros_dependency/*
 # 分析输出 (规划/实际轨迹可视化, 可重新生成)
 artifacts/
 .superpowers/
+src/FASTLIO2_ROS2/

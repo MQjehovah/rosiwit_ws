@@ -77,6 +77,7 @@ private:
     std::unordered_map<long, int> m_voxel_free;   // L3a: 体素"被穿过"计数
     long m_frame_idx = 0;
     double m_last_cloud_end = -1.0;   // 上一帧已处理点云结束时间, 用于识别空洞后首帧
+    int m_degenerate_count = 0;   // 连续退化帧数
     bool m_odom_prior = false;
     double m_odom_speed = 0.0;
     double m_odom_yaw_rate = 0.0;

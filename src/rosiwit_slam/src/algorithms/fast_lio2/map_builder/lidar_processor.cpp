@@ -521,6 +521,29 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
             std::cerr << "NO Effective Points!" << std::endl;
         return;
     }
+    // 退化检测 (LIO-SAM/FAST-LIO 常见做法): 有效点太少或占比太低时, 点面匹配
+    // 只剩下少数方向约束, 强行更新会把 yaw/平移拉偏 (实测急转+开阔段厚墙).
+    {
+        const double ratio = size > 0 ? static_cast<double>(effect_feat_num) / size : 0.0;
+        const bool few = effect_feat_num < m_config.degenerate_min_effective_points;
+        const bool low_ratio = ratio < m_config.degenerate_ratio;
+        if (few || low_ratio) {
+            ++m_degenerate_count;
+            share_data.valid = false;
+            if (m_degenerate_count > 10) {
+                // 连续退化: 放宽协方差, 让恢复后的第一帧能较大幅度修正
+                m_kf->P() *= 1.10;
+            }
+            static int deg_log = 0;
+            if (++deg_log % 20 == 0) {
+                std::cout << "[FLIO2] degenerate skip eff=" << effect_feat_num
+                          << " (" << ratio * 100.0 << "%) consecutive="
+                          << m_degenerate_count << std::endl;
+            }
+            return;
+        }
+    }
+    m_degenerate_count = 0;
     share_data.valid = true;
     share_data.H.setZero();
     share_data.b.setZero();
