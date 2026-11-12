@@ -322,11 +322,13 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         }
         if (desc_d >= m_dist_thresh) continue;
 
-        // === 里程计门控 ===
-        // 前端里程计说这两帧相距 m_odom_gate_m 以上, 就不可能是同一个地方。
-        // 以前所有候选都要跑 GICP, 既浪费 (aarch64 上一次检测几十次 ICP) 又增加假回环机会。
+        // === 里程计门控 (可选) ===
+        // 说明: 这个门控用"前端里程计估的两帧距离"判断是否同一地点。它在有绝对位姿时
+        // 有意义, 但在**纯 LIO + 已漂移**的场景里会自相矛盾: 同一地点被估成 >10m 就永远
+        // 不会回环, 而回环本来正是用来纠这个漂移的。因此 odom_gate_m <= 0 表示关闭。
         const double odom_gap = (latest.pose.trans - cand_rec.pose.trans).norm();
-        if (odom_gap > m_odom_gate_m) {
+        if (m_odom_gate_m > 0.0 && odom_gap > m_odom_gate_m) {
+            ++m_gate_skipped;
             continue;
         }
 

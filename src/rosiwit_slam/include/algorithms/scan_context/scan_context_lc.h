@@ -78,7 +78,8 @@ private:
     double m_max_consistency_rot_deg = 30.0;
     /// 里程计门控: 前端里程计说两帧相距超过这个距离时, 不可能是回环。
     /// 以前没有这道门, 每个候选都要跑 GICP (还带 2~3 个初值), 既慢又给了假回环机会。
-    double m_odom_gate_m = 10.0;
+    double m_odom_gate_m = 10.0;   // <=0 表示关闭里程计门控
+    mutable int m_gate_skipped = 0;
 
     std::vector<std::pair<size_t, size_t>> m_detected_loops;
 };
