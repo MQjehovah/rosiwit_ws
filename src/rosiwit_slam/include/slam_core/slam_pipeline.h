@@ -88,6 +88,9 @@ private:
     // OPTIMIZE 不占队列: 合并成 pending 标志, 等主队列排空后必跑一次,
     // 避免"后端优化被 queue full 静默吞掉".
     std::atomic<bool> m_optimize_requested{false};
+    // 轮速因子开启时的周期优化计数 (原来只有回环接受才优化)
+    int kf_since_optimize_ = 0;
+    static constexpr int optimize_period_kf_ = 20;
     std::atomic<int> m_inflight{0};     // 两条线程的存活计数 (abandon 后仍可观测)
 
     double m_autosave_interval_s = 0.0;

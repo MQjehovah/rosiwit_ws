@@ -283,6 +283,29 @@ bool FastLio2Frontend::getKeyFrame(KeyFrame& out) {
     out.timestamp   = static_cast<int64_t>(m_last_lidar_time * 1e6);
 
     m_last_kf_pose = out.pose;
+
+    // 附带关键帧时刻的轮速位姿: 前后两帧线性插值. 后端用它构造相邻关键帧的
+    // 3-DoF 相对因子 (Δx, Δy, Δyaw), 只取相对量, 与 odom 的绝对坐标无关.
+    {
+        std::lock_guard<std::mutex> lk(m_odom_mu);
+        const PoseStamped* a = nullptr;
+        const PoseStamped* b = nullptr;
+        for (const auto& o : m_odom_buffer) {
+            if (o.time <= m_last_lidar_time) a = &o;
+            else { b = &o; break; }
+        }
+        if (a && b && (b->time - a->time) > 1e-4) {
+            const double alpha = (m_last_lidar_time - a->time) / (b->time - a->time);
+            out.wheel_pose.time = m_last_lidar_time;
+            out.wheel_pose.trans = a->trans + alpha * (b->trans - a->trans);
+            const Eigen::Quaterniond qa(a->rot), qb(b->rot);
+            out.wheel_pose.rot = qa.slerp(alpha, qb).normalized().toRotationMatrix();
+            out.has_wheel_pose = true;
+        } else if (a && !b && (m_last_lidar_time - a->time) < 0.5) {
+            out.wheel_pose = *a;
+            out.has_wheel_pose = true;
+        }
+    }
     m_has_last_kf = true;
     return true;
 }

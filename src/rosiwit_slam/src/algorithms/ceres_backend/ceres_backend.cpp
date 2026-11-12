@@ -9,6 +9,42 @@
 
 namespace rosiwit_slam {
 
+/// 轮速相对位姿因子: 只约束 Δx, Δy, Δyaw (轮速里程计无 z/roll/pitch 信息).
+struct RelativePose2DError {
+    RelativePose2DError(double dx, double dy, double dyaw,
+                        double sigma_xy, double sigma_yaw)
+        : dx_(dx), dy_(dy), dyaw_(dyaw),
+          inv_xy_(1.0 / std::max(sigma_xy, 0.05)),
+          inv_yaw_(1.0 / std::max(sigma_yaw, 0.02)) {}
+
+    template<typename T>
+    bool operator()(const T* const from_t, const T* const from_r,
+                    const T* const to_t, const T* const to_r,
+                    T* residuals) const {
+        T diff_t[3] = { to_t[0] - from_t[0], to_t[1] - from_t[1], to_t[2] - from_t[2] };
+        T from_r_inv[4] = { from_r[0], -from_r[1], -from_r[2], -from_r[3] };
+        T rotated_t[3];
+        ceres::UnitQuaternionRotatePoint(from_r_inv, diff_t, rotated_t);
+
+        // yaw 差: q_rel = from_r^-1 * to_r, 取其绕 z 的分量
+        T rel_R[4];
+        ceres::QuaternionProduct(from_r_inv, to_r, rel_R);
+        T dyaw = T(2.0) * ceres::atan2(rel_R[3], rel_R[0]);   // z 分量角度
+        // 归一化到 (-pi, pi]
+        T two_pi = T(2.0 * M_PI);
+        T d = dyaw - T(dyaw_);
+        d = d - two_pi * ceres::floor((d + T(M_PI)) / two_pi);
+
+        residuals[0] = (rotated_t[0] - T(dx_)) * T(inv_xy_);
+        residuals[1] = (rotated_t[1] - T(dy_)) * T(inv_xy_);
+        residuals[2] = d * T(inv_yaw_);
+        return true;
+    }
+
+    double dx_, dy_, dyaw_, inv_xy_, inv_yaw_;
+};
+
+
 struct RelativePoseError {
     RelativePoseError(const Eigen::Vector3d& t_rel, const Eigen::Quaterniond& q_rel)
         : t_rel_(t_rel), q_rel_(q_rel) {}
@@ -88,6 +124,9 @@ bool CeresBackend::init(const std::string& config_path) {
                 backend["loop_residual_trans_m"].as<double>(loop_residual_trans_m_);
             loop_residual_rot_deg_ =
                 backend["loop_residual_rot_deg"].as<double>(loop_residual_rot_deg_);
+            use_wheel_factor_ = backend["use_wheel_factor"].as<bool>(use_wheel_factor_);
+            wheel_sigma_xy_ = backend["wheel_sigma_xy"].as<double>(wheel_sigma_xy_);
+            wheel_sigma_yaw_ = backend["wheel_sigma_yaw"].as<double>(wheel_sigma_yaw_);
         }
     } catch (const std::exception& e) {
         std::cerr << "[CeresBackend] Failed to parse config: " << e.what() << std::endl;
@@ -112,6 +151,8 @@ void CeresBackend::addKeyFrame(const KeyFrame& kf) {
     node.id = kf.id;
     node.pose = kf.pose;
     node.timestamp = kf.timestamp;
+    node.wheel_pose = kf.wheel_pose;
+    node.has_wheel_pose = kf.has_wheel_pose;
     if (!keyframes_.empty()) {
         const PoseStamped& prev = keyframes_.back().pose;
         node.odom_relative.time = kf.pose.time;
@@ -183,6 +224,7 @@ bool CeresBackend::optimize() {
             problem.SetParameterBlockConstant(param_blocks[1]);
         }
         addOdometryConstraints(problem, param_blocks);
+        addWheelConstraints(problem, param_blocks);
         addLoopConstraints(problem, param_blocks);
         ceres::Solver::Options options;
         options.max_num_iterations = max_iterations_;
@@ -335,6 +377,43 @@ void CeresBackend::addOdometryConstraints(ceres::Problem& problem, std::vector<d
         problem.AddResidualBlock(cost_fn, new ceres::HuberLoss(huber_loss_),
                                   param_blocks[from_i], param_blocks[from_i + 1],
                                   param_blocks[to_i], param_blocks[to_i + 1]);
+    }
+}
+
+void CeresBackend::addWheelConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks) {
+    if (!use_wheel_factor_) return;
+    int added = 0;
+    for (size_t i = 1; i < keyframes_.size(); ++i) {
+        const auto& from = keyframes_[i - 1];
+        const auto& to = keyframes_[i];
+        if (!from.has_wheel_pose || !to.has_wheel_pose) continue;
+        // 时间差过大 (关键帧稀疏段) 或轮速位移离谱 -> 不加边
+        const double dt = to.wheel_pose.time - from.wheel_pose.time;
+        if (dt <= 0.0 || dt > 5.0) continue;
+        const Eigen::Vector3d d_odom = to.wheel_pose.trans - from.wheel_pose.trans;
+        if (d_odom.norm() > 10.0) continue;
+
+        const Eigen::Matrix3d Rf = from.wheel_pose.rot;
+        const Eigen::Vector3d rel_t = Rf.transpose() * d_odom;
+        const double yaw_f = std::atan2(Rf(1, 0), Rf(0, 0));
+        const double yaw_t = std::atan2(to.wheel_pose.rot(1, 0), to.wheel_pose.rot(0, 0));
+        double dyaw = yaw_t - yaw_f;
+        while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+        while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+
+        auto* cost = new ceres::AutoDiffCostFunction<
+            RelativePose2DError, 3, 3, 4, 3, 4>(
+            new RelativePose2DError(rel_t.x(), rel_t.y(), dyaw,
+                                     wheel_sigma_xy_, wheel_sigma_yaw_));
+        problem.AddResidualBlock(cost, new ceres::HuberLoss(1.0),
+                                 param_blocks[(i - 1) * 2], param_blocks[(i - 1) * 2 + 1],
+                                 param_blocks[i * 2], param_blocks[i * 2 + 1]);
+        ++added;
+    }
+    if (added > 0) {
+        static int w_log = 0;
+        if (++w_log % 20 == 0)
+            std::cout << "[CeresBackend] wheel factor edges=" << added << std::endl;
     }
 }
 

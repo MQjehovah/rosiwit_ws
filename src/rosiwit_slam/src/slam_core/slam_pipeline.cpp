@@ -128,6 +128,13 @@ void BackendWorker::run(rosiwit_common::CancelToken token) {
         if (item.has_value()) {
             if (item->task == BackendTask::ADD_KF && m_backend) {
                 m_backend->addKeyFrame(item->kf);
+                // 轮速因子开启时周期性优化: 原来只有回环接受才 requestOptimize,
+                // 回环一关整个 pose graph (含轮速因子) 从不执行.
+                if (m_backend->wantsPeriodicOptimize() &&
+                    ++kf_since_optimize_ >= optimize_period_kf_) {
+                    kf_since_optimize_ = 0;
+                    m_optimize_requested.store(true);
+                }
             } else if (item->task == BackendTask::MAP_SUBMAP && m_map_mgr) {
                 m_map_mgr->addSubMap(item->kf);
             } else if (item->task == BackendTask::OPTIMIZE) {

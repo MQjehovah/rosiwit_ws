@@ -19,6 +19,9 @@ struct KeyFrameNode {
     // 位姿重新推导, 否则上一次修正会变成新的观测.
     PoseStamped odom_relative;
     bool has_odom_relative = false;
+    // 轮速 /odom 在关键帧时刻的位姿 (odom 自身系), 用于 3-DoF 相对因子
+    PoseStamped wheel_pose;
+    bool has_wheel_pose = false;
 };
 
 struct RelPoseConstraint {
@@ -37,11 +40,14 @@ public:
     void addKeyFrame(const KeyFrame& kf) override;
     void addConstraints(const std::vector<Constraint>& constraints) override;
     bool optimize() override;
+    /// 轮速因子开启时需要周期性优化 (不再依赖回环触发)
+    bool wantsPeriodicOptimize() const { return use_wheel_factor_; }
     bool getUpdatedPoses(std::vector<PoseStamped>& poses) override;
 
 private:
     void addOdometryConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks);
     void addLoopConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks);
+    void addWheelConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks);
     void updatePoses(const std::vector<double*>& param_blocks);
 
     std::vector<KeyFrameNode> keyframes_;
@@ -63,6 +69,10 @@ private:
     // 里程计边把整条轨迹匀着拉歪, 地图就"被回环改得更差"。直接剔除并重解。
     double loop_residual_trans_m_ = 0.40;   // 回环残差(平移)上限 m
     double loop_residual_rot_deg_ = 5.0;    // 回环残差(旋转)上限 deg
+    // 轮速相对位姿因子 (相邻关键帧, 3-DoF)
+    bool use_wheel_factor_ = false;
+    double wheel_sigma_xy_ = 0.49;   // m
+    double wheel_sigma_yaw_ = 0.154; // rad
     /// 剔除残差超限的回环约束, 返回剔除数量
     size_t dropInconsistentLoops(const std::vector<std::array<double, 3>> & trans,
                                  const std::vector<std::array<double, 4>> & rot);
