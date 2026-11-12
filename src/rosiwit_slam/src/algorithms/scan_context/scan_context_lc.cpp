@@ -158,16 +158,39 @@ bool ScanContextLoopClosure::icpVerifyDownsampled(
     gicp.setInputTarget(tgt_down);
     gicp.setMaxCorrespondenceDistance(m_icp_max_corr_dist);
     gicp.setMaximumIterations(m_icp_max_iter);
-    gicp.setTransformationEpsilon(1e-8);
-    gicp.setEuclideanFitnessEpsilon(1e-6);
+    // 注意: 原来用 1e-8 / 1e-6 这种极严阈值, 32 次内几乎必然 hasConverged()==false,
+    // 结果 497 次回环验证全部 fitness=inf (实测)。放宽到常规量级。
+    gicp.setTransformationEpsilon(1e-6);
+    gicp.setEuclideanFitnessEpsilon(1e-4);
 
     CloudType aligned;
     gicp.align(aligned, init_guess);
 
-    if (!gicp.hasConverged()) return false;
+    // hasConverged() 在"迭代用尽但结果可用"时也是 false, 不能作为唯一判据:
+    // 只要 fitness 是有限值就接受, 由调用方的阈值/重叠率把关。
+    const double fit_coarse = gicp.getFitnessScore();
+    if (!std::isfinite(fit_coarse)) return false;
 
-    out_fitness = gicp.getFitnessScore();
-    out_delta = gicp.getFinalTransformation();
+    // 两级验证: 粗配 (m_icp_max_corr_dist) 只负责把点云拉进收敛域, 判定必须在
+    // **紧半径**下做 —— 否则 3m 对应距离下"任何重复走廊"都能对上 (实测 overlap=1,
+    // 把 60m 外的不同地点判成回环)。细配半径固定 0.3m。
+    constexpr float kFineCorr = 0.30f;
+    constexpr float kOverlapDist = 0.40f;
+    pcl::GeneralizedIterativeClosestPoint<PointType, PointType> fine;
+    fine.setInputSource(src_down);
+    fine.setInputTarget(tgt_down);
+    fine.setMaxCorrespondenceDistance(kFineCorr);
+    fine.setMaximumIterations(m_icp_max_iter);
+    fine.setTransformationEpsilon(1e-6);
+    fine.setEuclideanFitnessEpsilon(1e-4);
+    CloudType aligned_fine;
+    fine.align(aligned_fine, gicp.getFinalTransformation());
+    const double fit_fine = fine.getFitnessScore();
+    if (!std::isfinite(fit_fine)) return false;
+
+    out_fitness = static_cast<float>(fit_fine);
+    out_delta = fine.getFinalTransformation();
+    const CloudType& aligned_ref = aligned_fine;
 
     // 重叠率: 配准后源点云有多少点能在目标点云中找到近邻.
     pcl::KdTreeFLANN<PointType> tree;
@@ -175,13 +198,14 @@ bool ScanContextLoopClosure::icpVerifyDownsampled(
     int hit = 0;
     std::vector<int> idx(1);
     std::vector<float> d2(1);
-    const float ov_dist2 = m_icp_max_corr_dist * m_icp_max_corr_dist;
-    for (const auto& p : aligned.points) {
+    // 重叠率也用紧半径 (与细配一致), 不再用 3m 对应距离 —— 那会让每个点都"命中".
+    const float ov_dist2 = kOverlapDist * kOverlapDist;
+    for (const auto& p : aligned_ref.points) {
         if (!pcl::isFinite(p)) continue;
         if (tree.nearestKSearch(p, 1, idx, d2) > 0 && d2[0] <= ov_dist2) ++hit;
     }
-    out_overlap = aligned.empty() ? 0.0f
-                                  : static_cast<float>(hit) / aligned.size();
+    out_overlap = aligned_ref.empty() ? 0.0f
+                                      : static_cast<float>(hit) / aligned_ref.size();
     return out_fitness < m_icp_fitness_thresh && out_overlap >= m_min_overlap;
 }
 
@@ -350,18 +374,19 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
                  (latest.pose.trans - cand_rec.pose.trans)).cast<float>();
             inits.emplace_back("odom", odom_prior);
         }
+        // ScanContext 的列偏移只用来**修正旋转**, 平移一律沿用里程计先验.
+        // 之前把 sc_yaw 当成独立初值 (平移取单位阵 = 把源点云摆到候选关键帧上),
+        // 会人为制造误匹配: 候选本来就是"长得像"的地方, GICP 必然收敛到好 fitness,
+        // 于是 60m 外的重复走廊也会被判成回环 (实测 odom_gap=63m, fitness=0.27, overlap=1).
         const double yaw_diff = 2.0 * M_PI * col_shift / m_cfg_num_sectors;
         {
-            Eigen::Matrix4f sc = Eigen::Matrix4f::Identity();
-            sc.block<3,3>(0,0) =
-                Eigen::AngleAxisf(yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
-            inits.emplace_back("sc_yaw", sc);
-            Eigen::Matrix4f sc_flip = Eigen::Matrix4f::Identity();
-            sc_flip.block<3,3>(0,0) =
-                Eigen::AngleAxisf(-yaw_diff, Eigen::Vector3f::UnitZ()).matrix();
-            inits.emplace_back("sc_yaw_flip", sc_flip);
-            if (cand.idx < 20) {
-                inits.emplace_back("identity", Eigen::Matrix4f::Identity());
+            Eigen::Matrix4f base = inits.front().second;
+            for (double sign : {1.0, -1.0}) {
+                Eigen::Matrix4f sc = base;
+                const Eigen::Matrix3f rot = Eigen::AngleAxisf(static_cast<float>(sign * yaw_diff),
+                                                  Eigen::Vector3f::UnitZ()).matrix();
+                sc.block<3,3>(0,0) = rot * base.block<3,3>(0,0);
+                inits.emplace_back(sign > 0 ? "odom+sc_yaw" : "odom-sc_yaw", sc);
             }
         }
 
@@ -388,7 +413,10 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         if (!icp_ok) {
             std::cout << "[ScanContextLC] ICP failed: desc=" << desc_d
                       << ", fitness=" << fitness
-                      << ", overlap=" << overlap << std::endl;
+                      << ", overlap=" << overlap
+                      << ", src=" << (latest_down ? latest_down->size() : 0)
+                      << ", tgt=" << (cand_down ? cand_down->size() : 0)
+                      << ", odom_gap=" << odom_gap << std::endl;
             continue;
         }
         std::cout << "[ScanContextLC] ICP passed: desc=" << desc_d
