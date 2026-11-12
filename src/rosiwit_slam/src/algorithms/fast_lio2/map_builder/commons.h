@@ -69,6 +69,9 @@ struct Config
     bool odom_gate = false;
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = true;
+    // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,
+    // 默认关闭; 保留给'轮速可信但 LIO 会滑'的场合.
+    bool odom_consistency_gate = false;
     double ground_vz_sigma = 0.30;   // v.z 软约束标准差 (m/s)
     // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
     bool convergence_check = true;

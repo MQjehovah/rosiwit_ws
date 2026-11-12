@@ -135,6 +135,7 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
     }
     m_skip_output = false;
 
+    if (m_config.odom_consistency_gate) {
     // 轮速一致性检查: 每 0.5s 比较 LIO 与 /odom 的水平位移. 窄道里 LiDAR 沿轴滑移时
     // 实测 LIO 位移是轮速的 4~6 倍 (428s/446s). 超过 2 倍 + 0.5m 就暂停 LiDAR 更新
     // 1.5s, 让 IMU + fuse 顶住, 出了坏窗口再恢复.
@@ -186,6 +187,9 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
             m_consist_odom = odom_now;
         }
         m_builder->lidar_processor()->setOdomConsistency(f.end_time > m_consist_bad_until);
+    }
+    } else {
+        m_builder->lidar_processor()->setOdomConsistency(true);
     }
 
     ::Vec<::IMUData> fast_imus;
