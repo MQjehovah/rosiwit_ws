@@ -50,6 +50,10 @@ private:
     V3D m_consist_lio = V3D::Zero();
     V3D m_consist_odom = V3D::Zero();
     double m_consist_bad_until = -1.0;
+    // 10s 累计漂移判据 (防慢滑: 每 0.5s 都不超阈值但一直累积)
+    double m_consist_cum_t = -1.0;
+    double m_consist_sum_lio = 0.0;
+    double m_consist_sum_odom = 0.0;
     bool m_ground_h0_valid = false;
     double m_ground_z_target = 0.0;
     double m_ground_z_anchor = 0.0;

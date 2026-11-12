@@ -162,7 +162,24 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
                               << "m odom=" << dodo << "m in 0.5s -> pause lidar 1.5s"
                               << std::endl;
                 }
-                m_consist_bad_until = f.end_time + 1.5;
+                m_consist_bad_until = f.end_time + 3.0;
+            }
+            // 10s 累计: 每 0.5s 的比值都合规但长期偏移, 同样判异常
+            if (m_consist_cum_t < 0.0) m_consist_cum_t = f.end_time;
+            m_consist_sum_lio += dl;
+            m_consist_sum_odom += dodo;
+            if (f.end_time - m_consist_cum_t >= 10.0) {
+                if (m_consist_sum_odom > 3.0 &&
+                    std::fabs(m_consist_sum_lio - m_consist_sum_odom) >
+                        2.5 + 0.5 * m_consist_sum_odom) {
+                    std::cout << "[FLIO2] odom cumulative drift: lio=" << m_consist_sum_lio
+                              << "m odom=" << m_consist_sum_odom
+                              << "m in 10s -> pause lidar 3s" << std::endl;
+                    m_consist_bad_until = f.end_time + 3.0;
+                }
+                m_consist_cum_t = f.end_time;
+                m_consist_sum_lio = 0.0;
+                m_consist_sum_odom = 0.0;
             }
             m_consist_t = f.end_time;
             m_consist_lio = m_kf->x().t_wi;

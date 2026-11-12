@@ -407,8 +407,11 @@ void LidarProcessor::process(SyncPackage &package)
         for (const auto &imu : package.imus) { gyro_mean += imu.gyro; ++n; }
         if (n > 0) {
             gyro_mean /= static_cast<double>(n);
+            // 一致性异常期间收紧轮速融合: 该段几乎只听轮速, 不让 IMU 把位姿带走.
+            const bool tight = !m_odom_consistency_ok;
             m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat, m_odom_yaw_rate, gyro_mean,
-                             0.2, 0.10, 0.05);
+                             tight ? 0.05 : 0.2, tight ? 0.03 : 0.10,
+                             tight ? 0.02 : 0.05);
             static int fuse_log = 0;
             if (++fuse_log % 50 == 0) {
                 std::cout << "[FLIO2] odom fuse speed=" << m_odom_speed
