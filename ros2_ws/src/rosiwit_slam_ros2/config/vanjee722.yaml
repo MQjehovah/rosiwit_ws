@@ -63,6 +63,9 @@ mapping:
   odom_mode: none
   frontend:
     # 地面跟随: 不锁 z/roll/pitch, 用地面法向把 v.z 软约束到坡面分量.
+    use_point_timestamp: true
+    odom_position_clamp: false   # 实测会把正常段也钳弯 (300-435m 偏差 16.9->22.2)
+    odom_consistency_gate: false
     ground_follow_z: true
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态

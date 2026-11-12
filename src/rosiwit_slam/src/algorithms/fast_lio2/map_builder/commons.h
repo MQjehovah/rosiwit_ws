@@ -72,6 +72,10 @@ struct Config
     // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,
     // 默认关闭; 保留给'轮速可信但 LIO 会滑'的场合.
     bool odom_consistency_gate = false;
+    // 轮速位置硬钳位: 0.5s 窗口内 LIO 位移 > 1.5x轮速+0.3m 时把位置钳回,
+    // 并同步压速度. 实测窄道 7s 内滑 22m, 暂停 LiDAR 无效, 必须钳位置.
+    bool odom_position_clamp = false;
+    double odom_scale_xy = 0.98;   // 轮速尺度 (可信段实测 0.975~0.989)
     double ground_vz_sigma = 0.30;   // v.z 软约束标准差 (m/s)
     // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
     bool convergence_check = true;

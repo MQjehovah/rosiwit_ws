@@ -75,6 +75,11 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.odom_consistency_gate =
                 get_input("odom_consistency_gate", "odom_consistency_gate")
                     .as<bool>(out_cfg.odom_consistency_gate);
+            out_cfg.odom_position_clamp =
+                get_input("odom_position_clamp", "odom_position_clamp")
+                    .as<bool>(out_cfg.odom_position_clamp);
+            out_cfg.odom_scale_xy =
+                get_input("odom_scale_xy", "odom_scale_xy").as<double>(out_cfg.odom_scale_xy);
             out_cfg.ground_vz_sigma =
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
         }
