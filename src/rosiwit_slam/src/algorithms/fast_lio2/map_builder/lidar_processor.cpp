@@ -344,9 +344,21 @@ void LidarProcessor::process(SyncPackage &package)
         const double dba = (after.ba - before.ba).norm();
         const double dbg = (after.bg - before.bg).norm();
         // 有轮式 odom 时用它的速度/yaw 速度收紧门限; 没有时退回固定门限.
-        double kMaxDv = m_odom_prior ? std::max(0.7, 3.0 * m_odom_speed + 0.4) : 2.0;
-        double kMaxDt = m_odom_prior ? std::max(0.25, 2.0 * m_odom_speed * 0.1 + 0.15) : 0.5;
-        double kMaxDr = m_odom_prior ? std::max(0.15, 2.0 * m_odom_yaw_rate * 0.1 + 0.1) : 0.35;
+        // 门限按**实际帧间隔**收紧: 旧实现按固定 0.1s 且系数 2.0, 在 1m/s 时允许
+        // 0.35m/帧 (=3.5m/s), 窄道沿轴滑移每帧 0.3m 全部合规, 累计 0.5s 就 6.8m
+        // (实测 428s LIO 位移是轮速的 6.8 倍). 这里用实测 dt 和 1.5 倍余量.
+        const double frame_dt = (m_last_cloud_end > 0.0)
+                                    ? std::max(0.02, std::min(0.3, package.cloud_end_time - m_last_cloud_end))
+                                    : 0.1;
+        // 速度门限同样收紧: 旧值在 0.5m/s 时允许 1.4m/s 误差, IMU 按错速度积分
+        // 2s 就是 3m (实测 436-450s LIO 位移是轮速的 5 倍).
+        double kMaxDv = m_odom_prior ? std::max(0.35, 1.2 * m_odom_speed + 0.25) : 2.0;
+        double kMaxDt = m_odom_prior
+                            ? std::max(0.06, 1.5 * m_odom_speed * frame_dt + 0.04)
+                            : 0.5;
+        double kMaxDr = m_odom_prior
+                            ? std::max(0.12, 1.5 * m_odom_yaw_rate * frame_dt + 0.06)
+                            : 0.35;
         // 偏置门控不能只在轮式 odom 模式生效; 阈值放宽, 避免把正常
         // 空洞后重新收敛的 LiDAR 更新全部拒掉, 只拦真正的坏帧。
         const bool bad_bias = (dba > 0.50 || dbg > 0.10);
@@ -487,6 +499,12 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
                 m_robust_weight[i] = robustWeight(pd2);
             }
         }
+    }
+
+    // 轮速一致性门控: LIO 短窗口位移远超轮速 -> 本帧不更新 (只保留 IMU 预测).
+    if (!m_odom_consistency_ok) {
+        share_data.valid = false;
+        return;
     }
 
     int effect_feat_num = 0;

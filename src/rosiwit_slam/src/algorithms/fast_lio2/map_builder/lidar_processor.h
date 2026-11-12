@@ -27,6 +27,9 @@ public:
         m_odom_yaw_rate = yaw_rate;
     }
     void setOdomFuse(bool fuse) { m_odom_fuse = fuse; }
+    /// 轮速一致性: false 时本帧不做 LiDAR 更新 (位姿交给 IMU + fuse 顶住),
+    /// 用于窄道里 LiDAR 沿轴滑移 (实测位移是轮速的 4~6 倍) 的时刻.
+    void setOdomConsistency(bool ok) { m_odom_consistency_ok = ok; }
     /// 地面跟随: n_world 是**世界系**地面法向 (朝上). 用它把 v.z 软约束到
     /// v_h 在坡面上的垂直分量, 从而 z 真实跟随坡面而不积分漂移.
     void setGroundPlane(bool valid, const V3D &n_world, bool enabled = true,
@@ -82,6 +85,7 @@ private:
     long m_frame_idx = 0;
     double m_last_cloud_end = -1.0;   // 上一帧已处理点云结束时间, 用于识别空洞后首帧
     int m_degenerate_count = 0;   // 连续退化帧数
+    bool m_odom_consistency_ok = true;
     bool m_odom_prior = false;
     double m_odom_speed = 0.0;
     double m_odom_v_fwd = 0.0;

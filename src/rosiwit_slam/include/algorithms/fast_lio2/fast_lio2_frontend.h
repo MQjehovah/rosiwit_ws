@@ -45,6 +45,11 @@ private:
     V3D m_ground_normal_w = V3D::UnitZ();
     double m_ground_last_ok = -1.0;
     double m_ground_h0 = 0.0;      // 传感器离地高度 (起始标定)
+    // 轮速一致性检查 (每 0.5s 比较一次 LIO 与 /odom 的位移)
+    double m_consist_t = -1.0;
+    V3D m_consist_lio = V3D::Zero();
+    V3D m_consist_odom = V3D::Zero();
+    double m_consist_bad_until = -1.0;
     bool m_ground_h0_valid = false;
     double m_ground_z_target = 0.0;
     double m_ground_z_anchor = 0.0;

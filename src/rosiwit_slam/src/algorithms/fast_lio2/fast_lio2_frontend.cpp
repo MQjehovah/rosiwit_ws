@@ -135,6 +135,42 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
     }
     m_skip_output = false;
 
+    // 轮速一致性检查: 每 0.5s 比较 LIO 与 /odom 的水平位移. 窄道里 LiDAR 沿轴滑移时
+    // 实测 LIO 位移是轮速的 4~6 倍 (428s/446s). 超过 2 倍 + 0.5m 就暂停 LiDAR 更新
+    // 1.5s, 让 IMU + fuse 顶住, 出了坏窗口再恢复.
+    {
+        if (m_consist_t < 0.0) {
+            m_consist_t = f.end_time;
+            m_consist_lio = m_kf->x().t_wi;
+            std::lock_guard<std::mutex> lk(m_odom_mu);
+            if (!m_odom_buffer.empty()) m_consist_odom = m_odom_buffer.back().trans;
+        } else if (f.end_time - m_consist_t >= 0.5) {
+            V3D odom_now = m_consist_odom;
+            {
+                std::lock_guard<std::mutex> lk(m_odom_mu);
+                for (const auto& o : m_odom_buffer) {
+                    if (o.time <= f.end_time) odom_now = o.trans;
+                }
+            }
+            const V3D d_lio = m_kf->x().t_wi - m_consist_lio;
+            const V3D d_odom = odom_now - m_consist_odom;
+            const double dl = std::hypot(d_lio.x(), d_lio.y());
+            const double dodo = std::hypot(d_odom.x(), d_odom.y());
+            if (dodo > 0.3 && dl > 2.0 * dodo + 0.5) {
+                if (f.end_time > m_consist_bad_until) {
+                    std::cout << "[FLIO2] odom inconsistency: lio=" << dl
+                              << "m odom=" << dodo << "m in 0.5s -> pause lidar 1.5s"
+                              << std::endl;
+                }
+                m_consist_bad_until = f.end_time + 1.5;
+            }
+            m_consist_t = f.end_time;
+            m_consist_lio = m_kf->x().t_wi;
+            m_consist_odom = odom_now;
+        }
+        m_builder->lidar_processor()->setOdomConsistency(f.end_time > m_consist_bad_until);
+    }
+
     ::Vec<::IMUData> fast_imus;
     fast_imus.reserve(m_imu_buffer.size());
     while (!m_imu_buffer.empty()) {
