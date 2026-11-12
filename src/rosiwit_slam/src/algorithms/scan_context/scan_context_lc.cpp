@@ -40,6 +40,9 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                                         ? common["candidate_ratio"].as<double>(m_candidate_ratio)
                                         : lc["sc_candidate_ratio"].as<double>(m_candidate_ratio);
                 m_icp_fitness_thresh = lc["icp_fitness_thresh"].as<float>(m_icp_fitness_thresh);
+                if (lc["icp_coarse_corr_dist"])
+                    m_icp_coarse_corr_dist =
+                        lc["icp_coarse_corr_dist"].as<float>(m_icp_coarse_corr_dist);
                 m_icp_max_corr_dist  = lc["icp_max_corr_dist"].as<float>(m_icp_max_corr_dist);
                 m_icp_voxel_res      = lc["icp_voxel_res"].as<float>(m_icp_voxel_res);
                 m_max_relative_trans_m = lc["max_relative_trans_m"].as<double>(m_max_relative_trans_m);
@@ -153,44 +156,37 @@ bool ScanContextLoopClosure::icpVerifyDownsampled(
     if (!src_down || !tgt_down) return false;
     if (src_down->size() < 10 || tgt_down->size() < 10) return false;
 
-    pcl::GeneralizedIterativeClosestPoint<PointType, PointType> gicp;
-    gicp.setInputSource(src_down);
-    gicp.setInputTarget(tgt_down);
-    gicp.setMaxCorrespondenceDistance(m_icp_max_corr_dist);
-    gicp.setMaximumIterations(m_icp_max_iter);
-    // 注意: 原来用 1e-8 / 1e-6 这种极严阈值, 32 次内几乎必然 hasConverged()==false,
-    // 结果 497 次回环验证全部 fitness=inf (实测)。放宽到常规量级。
-    gicp.setTransformationEpsilon(1e-6);
-    gicp.setEuclideanFitnessEpsilon(1e-4);
-
-    CloudType aligned;
-    gicp.align(aligned, init_guess);
-
-    // hasConverged() 在"迭代用尽但结果可用"时也是 false, 不能作为唯一判据:
-    // 只要 fitness 是有限值就接受, 由调用方的阈值/重叠率把关。
-    const double fit_coarse = gicp.getFitnessScore();
-    if (!std::isfinite(fit_coarse)) return false;
-
-    // 两级验证: 粗配 (m_icp_max_corr_dist) 只负责把点云拉进收敛域, 判定必须在
-    // **紧半径**下做 —— 否则 3m 对应距离下"任何重复走廊"都能对上 (实测 overlap=1,
-    // 把 60m 外的不同地点判成回环)。细配半径固定 0.3m。
+    // 多尺度粗配 -> 细配: 判定必须在紧半径下做 (否则重复走廊任何地方都能对上),
+    // 但大漂移时紧半径根本进不了收敛域。用 6.0 -> 1.5 -> 0.3 逐级收紧,
+    // 平移始终从 init_guess (里程计先验) 出发, 不会凭空搬运点云。
     constexpr float kFineCorr = 0.30f;
     constexpr float kOverlapDist = 0.40f;
-    pcl::GeneralizedIterativeClosestPoint<PointType, PointType> fine;
-    fine.setInputSource(src_down);
-    fine.setInputTarget(tgt_down);
-    fine.setMaxCorrespondenceDistance(kFineCorr);
-    fine.setMaximumIterations(m_icp_max_iter);
-    fine.setTransformationEpsilon(1e-6);
-    fine.setEuclideanFitnessEpsilon(1e-4);
-    CloudType aligned_fine;
-    fine.align(aligned_fine, gicp.getFinalTransformation());
-    const double fit_fine = fine.getFitnessScore();
-    if (!std::isfinite(fit_fine)) return false;
+    const float stages[] = {m_icp_coarse_corr_dist, 1.5f, kFineCorr};
 
-    out_fitness = static_cast<float>(fit_fine);
-    out_delta = fine.getFinalTransformation();
-    const CloudType& aligned_ref = aligned_fine;
+    Eigen::Matrix4f T = init_guess;
+    double fit = std::numeric_limits<double>::infinity();
+    CloudType aligned;
+    for (float corr : stages) {
+        if (corr < kFineCorr) continue;
+        pcl::GeneralizedIterativeClosestPoint<PointType, PointType> gicp;
+        gicp.setInputSource(src_down);
+        gicp.setInputTarget(tgt_down);
+        gicp.setMaxCorrespondenceDistance(corr);
+        gicp.setMaximumIterations(m_icp_max_iter);
+        gicp.setTransformationEpsilon(1e-6);
+        gicp.setEuclideanFitnessEpsilon(1e-4);
+        CloudType out;
+        gicp.align(out, T);
+        // hasConverged() 在"迭代用尽但结果可用"时也是 false, 只要 fitness 有限就继续。
+        fit = gicp.getFitnessScore();
+        if (!std::isfinite(fit)) return false;
+        T = gicp.getFinalTransformation();
+        if (std::fabs(corr - kFineCorr) < 1e-6f) aligned = out;
+    }
+
+    out_fitness = static_cast<float>(fit);
+    out_delta = T;
+    const CloudType& aligned_ref = aligned;
 
     // 重叠率: 配准后源点云有多少点能在目标点云中找到近邻.
     pcl::KdTreeFLANN<PointType> tree;

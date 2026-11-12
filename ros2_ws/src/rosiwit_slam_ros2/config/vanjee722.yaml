@@ -100,6 +100,7 @@ mapping:
     odom_gate_m: 20
     icp_fitness_thresh: 0.5 # 回环ICP适应度阈值 (配合几何门控)
     icp_max_corr_dist: 3.0 # 回环ICP最大对应距离(m)
+    icp_coarse_corr_dist: 1.5 # 多尺度粗配第一级(m); 6.0 实测会把点云带进错误极小
     icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
     min_keyframe_gap: 30 # 回环最小关键帧间隔
     max_relative_trans_m: 8.0 # 进入后端的回环相对平移上限(m)

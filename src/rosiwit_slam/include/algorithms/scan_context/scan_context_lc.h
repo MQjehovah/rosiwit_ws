@@ -65,6 +65,7 @@ private:
 
     // ICP 验证参数
     float m_icp_max_corr_dist = 2.0f;
+    float m_icp_coarse_corr_dist = 6.0f;   // 多尺度粗配第一级对应距离
     float m_icp_fitness_thresh = 1.0f;
     int m_icp_max_iter = 32;
     float m_icp_voxel_res = 0.3f;
