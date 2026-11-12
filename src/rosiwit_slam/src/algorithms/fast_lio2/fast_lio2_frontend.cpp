@@ -149,7 +149,7 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
 
     // 轮式 odom 先验: 只用相邻两帧的相对位移/yaw 速度, 不依赖 TF 外参.
     if (m_builder && m_builder->lidar_processor()) {
-        bool ok = false; double speed = 0.0, yaw_rate = 0.0;
+        bool ok = false; double speed = 0.0, yaw_rate = 0.0, lat = 0.0;
         {
             std::lock_guard<std::mutex> lk(m_odom_mu);
             if (m_odom_buffer.size() >= 2) {
@@ -162,14 +162,15 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
                 };
                 const PoseStamped* b = pick(f.end_time);
                 if (b && std::abs(b->time - f.end_time) < 0.5) {
-                    speed = std::abs(b->vel.x());
+                    speed = b->vel.x();        // 带符号: 倒车不再丢失
                     yaw_rate = b->vel.y();
+                    lat = b->vel.z();          // twist.linear.y -> 侧向速度
                     ok = true;
                 }
             }
         }
         m_builder->lidar_processor()->setOdomFuse(m_config.odom_fuse);
-        m_builder->lidar_processor()->setOdomPrior(ok && (m_config.odom_fuse || m_config.odom_gate), speed, yaw_rate);
+        m_builder->lidar_processor()->setOdomPrior(ok && (m_config.odom_fuse || m_config.odom_gate), speed, yaw_rate, lat);
     }
 
     // 地面跟随: 世界系地面平面 (法向 + d). z 用"传感器正下方地面高度"这个绝对量测,

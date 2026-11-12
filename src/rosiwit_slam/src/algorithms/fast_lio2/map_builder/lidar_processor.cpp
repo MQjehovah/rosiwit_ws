@@ -395,7 +395,8 @@ void LidarProcessor::process(SyncPackage &package)
         for (const auto &imu : package.imus) { gyro_mean += imu.gyro; ++n; }
         if (n > 0) {
             gyro_mean /= static_cast<double>(n);
-            m_kf->updateOdom(m_odom_speed, m_odom_yaw_rate, gyro_mean, 0.2, 0.05);
+            m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat, m_odom_yaw_rate, gyro_mean,
+                             0.2, 0.10, 0.05);
             static int fuse_log = 0;
             if (++fuse_log % 50 == 0) {
                 std::cout << "[FLIO2] odom fuse speed=" << m_odom_speed

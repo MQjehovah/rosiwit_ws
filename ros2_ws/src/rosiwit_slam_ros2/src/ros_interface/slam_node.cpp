@@ -272,6 +272,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                 m_cfg.self_z_max = sf["z_max"].as<double>(m_cfg.self_z_max);
             }
             m_cfg.scan_period_ms   = gi("scan_period_ms").as<float>(m_cfg.scan_period_ms);
+            RosUtils::s_use_point_timestamp =
+                gi("use_point_timestamp").as<bool>(RosUtils::s_use_point_timestamp);
             m_cfg.odom_gate = gi("odom_gate").as<bool>(m_cfg.odom_gate);
             {
                 // 建图链路: mapping.odom_mode；定位链路: localization.odom_mode。
@@ -739,7 +741,8 @@ void SlamNode::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
     const auto& q = msg->pose.pose.orientation;
     p.rot = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
     // 把 twist 带进 PoseStamped.vel: x=前进速度, y=yaw 角速度 (建图 odom 融合用).
-    p.vel = V3D(msg->twist.twist.linear.x, msg->twist.twist.angular.z, 0.0);
+    p.vel = V3D(msg->twist.twist.linear.x, msg->twist.twist.angular.z,
+               msg->twist.twist.linear.y);
     // wheel_odom 模式: 保存 odom->body, 用于计算 map->odom.
     if (m_cfg.odom_tf_publisher == "wheel" && msg->child_frame_id == m_cfg.body_frame) {
         std::lock_guard<std::mutex> lk(m_wheel_odom_mutex);

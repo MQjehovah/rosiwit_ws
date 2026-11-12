@@ -5,6 +5,8 @@
 #include <cmath>
 #include <algorithm>
 
+bool RosUtils::s_use_point_timestamp = true;
+
 pcl::PointCloud<pcl::PointXYZINormal>::Ptr RosUtils::ros2PCL(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg, int filter_num,
     double min_range, double max_range, float scan_period_ms)
@@ -45,6 +47,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr RosUtils::ros2PCL(
             break;
         }
     }
+    if (!RosUtils::s_use_point_timestamp) have_time = false;
     if (have_time) {
         double lo = *std::min_element(pt_times.begin(), pt_times.end());
         double hi = *std::max_element(pt_times.begin(), pt_times.end());

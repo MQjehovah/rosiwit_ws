@@ -72,9 +72,10 @@ public:
     void predict(const Input &inp, double dt, const M12D &Q);
 
     void update();
-    /// 轮式 odom 量测: 速度模长 + 世界系 yaw 角速度, 标准 EKF 更新 (2x21).
-    void updateOdom(double speed, double yaw_rate, const V3D &gyro,
-                    double sigma_v, double sigma_w);
+    /// 轮式 odom 量测 (fuse): 车体 x 前进速度(带符号) + 车体 y 侧向速度(≈0) +
+    /// 世界系 yaw 角速度, 3 维标准 EKF 更新. 比原来只用速度模长多利用了符号与侧向约束.
+    void updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &gyro,
+                    double sigma_v, double sigma_lat, double sigma_w);
     /// 垂直速度软约束: 车体在坡上 v.z 仍然是小量, 长时间累积会变成 z 漂移.
     /// 每帧把 v.z 轻拉向 0, sigma 取 0.5m/s, 不影响正常爬坡分量.
     void updateVerticalVelocity(double target_vz, double sigma);

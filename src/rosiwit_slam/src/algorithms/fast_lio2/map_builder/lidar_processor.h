@@ -19,8 +19,12 @@ class LidarProcessor
 public:
     LidarProcessor(Config &config, std::shared_ptr<IESKF> kf);
 
-    void setOdomPrior(bool valid, double speed, double yaw_rate) {
-        m_odom_prior = valid; m_odom_speed = speed; m_odom_yaw_rate = yaw_rate;
+    void setOdomPrior(bool valid, double v_fwd, double yaw_rate, double v_lat = 0.0) {
+        m_odom_prior = valid;
+        m_odom_speed = std::fabs(v_fwd);   // 门限用速度模长
+        m_odom_v_fwd = v_fwd;
+        m_odom_v_lat = v_lat;
+        m_odom_yaw_rate = yaw_rate;
     }
     void setOdomFuse(bool fuse) { m_odom_fuse = fuse; }
     /// 地面跟随: n_world 是**世界系**地面法向 (朝上). 用它把 v.z 软约束到
@@ -80,6 +84,8 @@ private:
     int m_degenerate_count = 0;   // 连续退化帧数
     bool m_odom_prior = false;
     double m_odom_speed = 0.0;
+    double m_odom_v_fwd = 0.0;
+    double m_odom_v_lat = 0.0;
     double m_odom_yaw_rate = 0.0;
     bool m_odom_fuse = false;
     // 坡地 z 安全先验: 2D SLAM 的 base z 是平地基准, 只作为"防跑飞"参考,

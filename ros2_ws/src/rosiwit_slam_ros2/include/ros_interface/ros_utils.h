@@ -11,6 +11,8 @@
 // 从而算法层与 rclcpp/sensor_msgs 解耦。
 class RosUtils {
 public:
+    /// 是否用逐点时间做去畸变 (Vanjee 相对秒时间戳实测收益为负, 可关)
+    static bool s_use_point_timestamp;
     static double getSec(std_msgs::msg::Header &header);
     /// 将 ROS PointCloud2 转换为 PCL 点云, 支持降采样和距离滤波。
     /// @param scan_period_ms LiDAR 扫描周期 (ms), 用于计算各点时间戳 (写入 curvature)

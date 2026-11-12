@@ -206,32 +206,38 @@ void IESKF::predict(const Input &inp, double dt, const M12D &Q)
     m_P = m_F * m_P * m_F.transpose() + m_G * Q * m_G.transpose();
 }
 
-void IESKF::updateOdom(double speed, double yaw_rate, const V3D &gyro,
-                       double sigma_v, double sigma_w)
+void IESKF::updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &gyro,
+                       double sigma_v, double sigma_lat, double sigma_w)
 {
-    Eigen::Matrix<double, 2, 21> A = Eigen::Matrix<double, 2, 21>::Zero();
-    Eigen::Vector2d r = Eigen::Vector2d::Zero();
-    Eigen::Matrix2d R = Eigen::Matrix2d::Identity();
+    // 3 维: 车体 x 速度 (带符号) / 车体 y 速度 (非完整约束, 期望 0) / 世界 yaw 角速度.
+    // 轮式 odom 不约束 z 方向速度, 这里也不碰 v.z.
+    Eigen::Matrix<double, 3, 21> A = Eigen::Matrix<double, 3, 21>::Zero();
+    Eigen::Vector3d r = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
 
-    // 只用水平速度模长; 轮式 odom 不约束 z 方向速度.
-    const double vh = std::hypot(m_x.v.x(), m_x.v.y());
-    if (vh > 0.2) {
-        A(0, 12) = m_x.v.x() / vh;
-        A(0, 13) = m_x.v.y() / vh;
-        r(0) = speed - vh;
+    const M3D Rt = m_x.r_wi.transpose();
+    const V3D v_body = Rt * m_x.v;
+    // 低速: 速度观测退化为不约束 (避免静止时把 v 钉死)
+    if (std::fabs(v_fwd) > 0.05 || v_body.head<2>().norm() > 0.2) {
+        A(0, 12) = Rt(0, 0); A(0, 13) = Rt(0, 1); A(0, 14) = Rt(0, 2);
+        r(0) = v_fwd - v_body.x();
         R(0, 0) = sigma_v * sigma_v;
+        A(1, 12) = Rt(1, 0); A(1, 13) = Rt(1, 1); A(1, 14) = Rt(1, 2);
+        r(1) = v_lat - v_body.y();
+        R(1, 1) = sigma_lat * sigma_lat;
     } else {
-        R(0, 0) = 1.0;   // 静止/低速: 不约束速度模长
+        R(0, 0) = 1.0;
+        R(1, 1) = 1.0;
     }
 
     const V3D w = gyro - m_x.bg;
-    A.block<1, 3>(1, 0) = -(m_x.r_wi * Sophus::SO3d::hat(w)).row(2);
-    A.block<1, 3>(1, 15) = -m_x.r_wi.row(2);
-    r(1) = yaw_rate - (m_x.r_wi * w).z();
-    R(1, 1) = sigma_w * sigma_w;
+    A.block<1, 3>(2, 0) = -(m_x.r_wi * Sophus::SO3d::hat(w)).row(2);
+    A.block<1, 3>(2, 15) = -m_x.r_wi.row(2);
+    r(2) = yaw_rate - (m_x.r_wi * w).z();
+    R(2, 2) = sigma_w * sigma_w;
 
-    const Eigen::Matrix2d S = A * m_P * A.transpose() + R;
-    const Eigen::Matrix<double, 21, 2> K = m_P * A.transpose() * S.inverse();
+    const Eigen::Matrix3d S = A * m_P * A.transpose() + R;
+    const Eigen::Matrix<double, 21, 3> K = m_P * A.transpose() * S.inverse();
     const V21D dx = K * r;
     m_x += dx;
     m_x.clampPhysical();
