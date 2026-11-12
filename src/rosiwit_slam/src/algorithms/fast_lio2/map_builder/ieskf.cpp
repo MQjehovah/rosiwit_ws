@@ -367,6 +367,44 @@ void IESKF::update()
         H.block<12, 12>(0, 0) += shared_data.H;
         b.block<12, 1>(0, 0) += shared_data.b;
 
+        // 窄通道方向性退化 (430s 场景): 沿走廊方向的信息量趋近 0, 直接求解会让位姿
+        // 沿轴滑动. 处理方式 (LOAM 做法): 把弱方向的**量测信息移除**, 该方向回落到
+        // 先验 (IMU/odom) —— 绝不能像第一版那样给弱方向加信息 (等于宣称量得很准,
+        // 实测把滤波焊死, z 掉到 -101).
+        // 只处理"水平平移主导"的弱方向: z/roll/pitch 对这个 42deg 斜装雷达本来就弱
+        // (ratio 常年 0.0002~0.002), 由地面因子负责, 不在这里动.
+        if (m_degenerate_remove_weak) {
+            Eigen::Matrix<double, 6, 6> Hpose = shared_data.H.block<6, 6>(0, 0);
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> es(Hpose);
+            if (es.info() == Eigen::Success) {
+                const Eigen::Matrix<double, 6, 6> V = es.eigenvectors();
+                const Eigen::Matrix<double, 6, 1> ev = es.eigenvalues();
+                const double ev_max = std::max(ev(5), 1e-9);
+                Eigen::Matrix<double, 6, 6> weak = Eigen::Matrix<double, 6, 6>::Zero();
+                int n_deg = 0;
+                Eigen::Matrix<double, 6, 1> d0 = Eigen::Matrix<double, 6, 1>::Zero();
+                for (int k = 0; k < 6; ++k) {
+                    if (ev(k) >= 0.01 * ev_max) continue;
+                    const Eigen::Matrix<double, 6, 1> d = V.col(k);
+                    const double horiz = std::hypot(d(3), d(4));
+                    if (horiz < 0.5 || std::fabs(d(5)) > 0.5) continue;   // 只管水平滑动
+                    weak += ev(k) * d * d.transpose();
+                    if (n_deg == 0) d0 = d;
+                    ++n_deg;
+                }
+                if (n_deg > 0) {
+                    H.block<6, 6>(0, 0) -= weak;
+                    static int deg_log = 0;
+                    if (++deg_log % 500 == 0) {
+                        std::cout << "[FLIO2] degen corridor n=" << n_deg
+                                  << " ratio=" << (ev(0) / ev_max)
+                                  << " t=(" << d0(3) << "," << d0(4) << "," << d0(5) << ")"
+                                  << std::endl;
+                    }
+                }
+            }
+        }
+
         delta = -H.ldlt().solve(b);
 
         m_x += delta;

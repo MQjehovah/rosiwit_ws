@@ -56,7 +56,10 @@ struct Config
     // (只走 IMU 预测), 避免在开阔/走廊场景把位姿拉偏 (实测急转段厚墙)。
     int degenerate_min_effective_points = 300;
     double degenerate_ratio = 0.10;      // eff / 输入点数 下限
-    double degenerate_eigen_ratio = 1e-4; // 平移块最小/最大特征值 下限
+    double degenerate_eigen_ratio = 0.02; // 信息矩阵 λmin/λmax 低于此值的方向按退化处理
+    // 实验性: 移除弱方向量测信息 (LOAM 式). 本场地处处走廊, 移除后全程削弱 LiDAR,
+    // 三版实测均为负结果 (z -37~-101), 默认关闭, 保留待更细的门控设计.
+    bool degenerate_remove_weak = false;
     bool gravity_align = true;
     double init_z = 0.0;  // IMU body 世界 z 初值; 设成 IMU 离地高度使 footprint z=0
     bool undistort_enable = true;

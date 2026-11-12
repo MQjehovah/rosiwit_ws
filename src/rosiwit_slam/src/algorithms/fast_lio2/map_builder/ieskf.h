@@ -66,6 +66,10 @@ class IESKF
 public:
     IESKF() = default;
     void setMaxIter(size_t iter) { m_max_iter = iter; }
+    /// 方向性退化阈值: LiDAR 信息矩阵 λ_min/λ_max 低于它的方向被视为退化,
+    /// 注入正则让该方向回落到 IMU/odom 先验 (窄通道沿轴无约束的场景).
+    void setDegenerateEigenRatio(double r) { m_degenerate_eigen_ratio = std::max(1e-6, r); }
+    void setDegenerateRemoveWeak(bool on) { m_degenerate_remove_weak = on; }
     void setLossFunction(loss_func func) { m_loss_func = func; }
     void setStopFunction(stop_func func) { m_stop_func = func; }
 
@@ -97,6 +101,8 @@ public:
 
 private:
     size_t m_max_iter = 10;
+    double m_degenerate_eigen_ratio = 0.02;
+    bool m_degenerate_remove_weak = false;
     State m_x;
     M21D m_P;
     loss_func m_loss_func;

@@ -49,6 +49,19 @@ bool IMUProcessor::initialize(SyncPackage &package)
     }
     V3D acc_mean = acc_sum / n_static;
     V3D gyro_mean = gyro_sum / n_static;
+    // 初始化诊断: ba 长期饱和 (实测 0.7~1.7 m/s^2) 的第一嫌疑是重力方向被运动样本污染.
+    // 打印静止样本数、是否退化成全样本、重力方向相对雷达 -z 的夹角、陀螺零偏.
+    {
+        const bool fallback = (n_static < 3);
+        const V3D g_dir = (-acc_mean).normalized();
+        const double tilt_deg = std::acos(std::max(-1.0, std::min(1.0, -g_dir.z()))) * 180.0 / M_PI;
+        const double yaw_deg = std::atan2(g_dir.y(), g_dir.x()) * 180.0 / M_PI;
+        std::printf("[FLIO2] init diag: static=%d/%zu fallback=%d |a|=%.3f "
+                    "g_tilt=%.2fdeg g_yaw=%.1fdeg gyro_bias=(%.4f,%.4f,%.4f)\n",
+                    fallback ? 0 : n_static, m_imu_cache.size(), fallback ? 1 : 0,
+                    acc_mean.norm(), tilt_deg, yaw_deg,
+                    gyro_mean.x(), gyro_mean.y(), gyro_mean.z());
+    }
 
     // 加速度动态尺度归一化 (legacy imu_processing.cpp:209):
     // 把均值幅值标到标准重力, 补偿加速度计尺度误差 (实测本车 |a|≈9.88 -> ×0.993)。

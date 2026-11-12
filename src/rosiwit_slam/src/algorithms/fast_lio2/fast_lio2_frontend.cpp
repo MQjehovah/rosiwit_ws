@@ -16,6 +16,8 @@ bool FastLio2Frontend::init(const std::string& config_path) {
 
     m_kf = std::make_shared<IESKF>();
     m_kf->setMaxIter(static_cast<size_t>(m_config.ieskf_max_iter));
+    m_kf->setDegenerateEigenRatio(m_config.degenerate_eigen_ratio);
+    m_kf->setDegenerateRemoveWeak(m_config.degenerate_remove_weak);
     m_builder = std::make_shared<MapBuilder>(m_config, m_kf);
     m_inited = true;
     return true;
