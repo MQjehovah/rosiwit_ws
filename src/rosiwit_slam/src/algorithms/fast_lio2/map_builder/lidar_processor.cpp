@@ -530,10 +530,8 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         if (few || low_ratio) {
             ++m_degenerate_count;
             share_data.valid = false;
-            if (m_degenerate_count > 10) {
-                // 连续退化: 放宽协方差, 让恢复后的第一帧能较大幅度修正
-                m_kf->P() *= 1.10;
-            }
+            // 注意: 不做 P *= 1.1 这类逐帧放大的操作 —— 连续退化时会指数放大协方差,
+            // 恢复后第一帧就能把状态拉飞 (实测 z 掉到 -66m)。退化期间只跳过更新。
             static int deg_log = 0;
             if (++deg_log % 20 == 0) {
                 std::cout << "[FLIO2] degenerate skip eff=" << effect_feat_num
