@@ -70,6 +70,8 @@ public:
     /// 注入正则让该方向回落到 IMU/odom 先验 (窄通道沿轴无约束的场景).
     void setDegenerateEigenRatio(double r) { m_degenerate_eigen_ratio = std::max(1e-6, r); }
     void setDegenerateRemoveWeak(bool on) { m_degenerate_remove_weak = on; }
+    // 状态速度物理上限(m/s); <=0 关闭。坏配准把速度打爆后的最后一道刹车(见 update)。
+    void setMaxVel(double v) { m_max_vel = v; }
     void setLossFunction(loss_func func) { m_loss_func = func; }
     void setStopFunction(stop_func func) { m_stop_func = func; }
 
@@ -103,6 +105,7 @@ private:
     size_t m_max_iter = 10;
     double m_degenerate_eigen_ratio = 0.02;
     bool m_degenerate_remove_weak = false;
+    double m_max_vel = 3.0;
     State m_x;
     M21D m_P;
     loss_func m_loss_func;

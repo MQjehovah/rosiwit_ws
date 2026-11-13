@@ -83,6 +83,9 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.ground_vz_sigma =
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
         }
+        out_cfg.gyro_scale       = get_input("gyro_scale","gyro_scale").as<double>(out_cfg.gyro_scale);
+        out_cfg.max_state_velocity =
+            get_alias("max_state_velocity","max_state_velocity").as<double>(out_cfg.max_state_velocity);
         out_cfg.imu_init_num     = get_alias("imu_init_samples","imu_init_num").as<int>(out_cfg.imu_init_num);
         out_cfg.near_search_num  = get_alias("nearest_search_points","near_search_num").as<int>(out_cfg.near_search_num);
         out_cfg.ieskf_max_iter   = get_alias("iekf_max_iterations","ieskf_max_iter").as<int>(out_cfg.ieskf_max_iter);

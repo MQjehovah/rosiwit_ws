@@ -79,6 +79,9 @@ global:
     lidar_max_range: 100.0 # 雷达最大有效距离(m)
     scan_period_ms: 100.0 # 单帧扫描周期(ms)
     acc_scale: 1.0 # IMU加速度单位换算
+    gyro_scale: 1.0 # 陀螺尺度标定: 实测本车万集 IMU 偏航角速度低估 3.5% -> 设 1.036
+                    # (2026-11: 掉头/绕圈累计旋转时航向误差放大的关键; 1.0=不校准)
+    max_state_velocity: 3.0 # 状态速度物理上限(m/s, <=0关闭): 坏配准把速度打爆后的刹车
     use_odom: true # 是否订阅并使用轮式odom（legacy 由接口订阅；非 legacy 由引擎订阅）
     publish_hz: 20 # 里程计/位姿发布频率(Hz)
     rt_grid_map_publish_hz: 1.0 # 实时栅格地图发布频率(Hz)

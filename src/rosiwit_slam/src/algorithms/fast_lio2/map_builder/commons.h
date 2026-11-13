@@ -45,6 +45,13 @@ struct Config
     double nba = 0.0001;
     double nbg = 0.0001;
     double acc_scale = 1.0; // 加速度单位转换: 传感器若以 g 为单位(如 Livox 内置 IMU), 设 9.81
+    // 陀螺尺度因子: 校准 IMU 角速度标度误差 (实测本车万集 IMU 偏航角速度低估 3.5%,
+    // 即实测/真值≈0.965 -> gyro_scale=1.036)。大角度累计旋转(掉头/绕圈)时航向误差
+    // 随累计转角逐帧放大, 是窄区"转过就发散"的关键因素。1.0 = 不校准。
+    double gyro_scale = 1.0;
+    // 状态速度物理上限(m/s): 坏配准把速度打爆后的最后一道刹车(IEKF 内部限幅)。
+    // 清洁机器人实际 ~1m/s, 默认 3.0 留 3 倍余量。<=0 关闭。
+    double max_state_velocity = 3.0;
     int imu_init_num = 20;
     int near_search_num = 5;
     int ieskf_max_iter = 5;

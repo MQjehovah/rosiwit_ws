@@ -424,4 +424,12 @@ void IESKF::update()
     L.block<3, 3>(0, 0) = Jr(delta.segment<3>(0));
     L.block<3, 3>(6, 6) = Jr(delta.segment<3>(6));
     m_P = L * H.ldlt().solve(M21D::Identity()) * L.transpose();
+
+    // 物理速度限幅 (安全网): 状态速度超物理上限(清洁机器人 ~1m/s, 默认 3m/s 留余量)
+    // 视为被坏更新污染 -> 截断。防止一次错配把速度打爆后位姿狂奔
+    // (2026-11 窄区事故形态: 位姿 5-10m/s 且持续加速)。
+    if (m_max_vel > 0.0) {
+        const double vn = m_x.v.norm();
+        if (vn > m_max_vel) m_x.v *= (m_max_vel / vn);
+    }
 }
