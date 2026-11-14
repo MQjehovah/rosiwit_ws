@@ -115,6 +115,8 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         get("degenerate_eigen_ratio").as<double>(out_cfg.degenerate_eigen_ratio);
     out_cfg.degenerate_remove_weak =
         get("degenerate_remove_weak").as<bool>(out_cfg.degenerate_remove_weak);
+    out_cfg.degenerate_soft_floor =
+        get("degenerate_soft_floor").as<double>(out_cfg.degenerate_soft_floor);
         out_cfg.gravity_align    = get("gravity_align").as<bool>(out_cfg.gravity_align);
         out_cfg.init_z           = get("init_z").as<double>(out_cfg.init_z);
         out_cfg.undistort_enable = get("undistort_enable").as<bool>(out_cfg.undistort_enable);

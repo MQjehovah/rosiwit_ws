@@ -67,6 +67,9 @@ struct Config
     // 实验性: 移除弱方向量测信息 (LOAM 式). 本场地处处走廊, 移除后全程削弱 LiDAR,
     // 三版实测均为负结果 (z -37~-101), 默认关闭, 保留待更细的门控设计.
     bool degenerate_remove_weak = false;
+    /// 软降权下限 (0 = 关闭). >0 时改用软降权: gain = max(floor, r/(r+thr)),
+    /// 对弱方向按 gain 衰减信息量而_不_置零, 避免沿走廊轴完全失去约束.
+    double degenerate_soft_floor = 0.0;
     bool gravity_align = true;
     double init_z = 0.0;  // IMU body 世界 z 初值; 设成 IMU 离地高度使 footprint z=0
     bool undistort_enable = true;

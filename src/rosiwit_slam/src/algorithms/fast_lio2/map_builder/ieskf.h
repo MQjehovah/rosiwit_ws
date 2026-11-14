@@ -70,6 +70,8 @@ public:
     /// 注入正则让该方向回落到 IMU/odom 先验 (窄通道沿轴无约束的场景).
     void setDegenerateEigenRatio(double r) { m_degenerate_eigen_ratio = std::max(1e-6, r); }
     void setDegenerateRemoveWeak(bool on) { m_degenerate_remove_weak = on; }
+    /// 软降权下限 (0 = 关闭). 见 m_degenerate_soft_floor.
+    void setDegenerateSoftFloor(double f) { m_degenerate_soft_floor = std::max(0.0, f); }
     // 状态速度物理上限(m/s); <=0 关闭。坏配准把速度打爆后的最后一道刹车(见 update)。
     void setMaxVel(double v) { m_max_vel = v; }
     void setLossFunction(loss_func func) { m_loss_func = func; }
@@ -111,6 +113,10 @@ private:
     size_t m_max_iter = 10;
     double m_degenerate_eigen_ratio = 0.02;
     bool m_degenerate_remove_weak = false;
+    /// 软降权下限: >0 时启用"软降权" (gain = max(floor, r/(r+thr)), r=λ/λmax),
+    /// 对检测出的弱方向按 gain 衰减信息量与 b, 而不是像 remove_weak 那样置零.
+    /// 保留一个下限可避免"沿走廊轴完全无约束"导致的沿轴自由漂移.
+    double m_degenerate_soft_floor = 0.0;
     double m_max_vel = 3.0;
     double m_last_dt = 0.1;          // 上次 predict 的 dt (s), 供单帧位姿限幅使用
     double m_max_step_factor = 2.0;  // 单帧位移上限 = factor * max_vel * dt

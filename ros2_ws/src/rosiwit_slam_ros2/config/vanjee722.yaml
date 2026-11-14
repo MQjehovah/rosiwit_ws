@@ -80,6 +80,10 @@ mapping:
     # 退化处理策略: false = 只检测不处理; true = 把弱方向的量测信息
     # 从 H 里移除, 该方向回落到 IMU/odom 先验 (切忌反过来加信息).
     degenerate_remove_weak: false
+    # 软降权下限 (0 = 关闭). >0 时改用软降权: gain = max(floor, r/(r+thr)),
+    # r=λ/λmax; 对弱方向按 gain 衰减信息量而_不_置零, 避免沿走廊轴完全失去
+    # 约束 (实测硬删除会沿轴漂移).
+    degenerate_soft_floor: 0.0
     robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
     robust_scale: 0.5 # 鲁棒核尺度
     robust_floor: 0.1 # 鲁棒权重下限

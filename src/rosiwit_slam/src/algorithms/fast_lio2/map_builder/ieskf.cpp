@@ -403,15 +403,17 @@ void IESKF::update()
                 const Eigen::Matrix<double, 6, 6> V = es.eigenvectors();
                 const Eigen::Matrix<double, 6, 1> ev = es.eigenvalues();
                 const double ev_max = std::max(ev(5), 1e-9);
-                Eigen::Matrix<double, 6, 6> weak = Eigen::Matrix<double, 6, 6>::Zero();
                 int n_deg = 0;
                 Eigen::Matrix<double, 6, 1> d0 = Eigen::Matrix<double, 6, 1>::Zero();
+                Eigen::Matrix<double, 6, 6> weak_dirs = Eigen::Matrix<double, 6, 6>::Zero();
+                Eigen::Matrix<double, 6, 1> weak_lam = Eigen::Matrix<double, 6, 1>::Zero();
                 for (int k = 0; k < 6; ++k) {
                     if (ev(k) >= m_degenerate_eigen_ratio * ev_max) continue;
                     const Eigen::Matrix<double, 6, 1> d = V.col(k);
                     const double horiz = std::hypot(d(3), d(4));
                     if (horiz < 0.5 || std::fabs(d(5)) > 0.5) continue;   // 只管水平滑动
-                    weak += ev(k) * d * d.transpose();
+                    weak_dirs.col(n_deg) = d;
+                    weak_lam(n_deg) = ev(k);
                     if (n_deg == 0) d0 = d;
                     ++n_deg;
                 }
@@ -421,12 +423,33 @@ void IESKF::update()
                     std::cout << "[FLIO2] degen probe ratio=" << (ev(0) / ev_max)
                               << " thr=" << m_degenerate_eigen_ratio
                               << " n_weak=" << n_deg
-                              << " remove=" << (m_degenerate_remove_weak ? 1 : 0)
+                              << " mode="
+                              << (m_degenerate_soft_floor > 0.0 ? "soft"
+                                  : (m_degenerate_remove_weak ? "remove" : "none"))
+                              << " floor=" << m_degenerate_soft_floor
                               << " axis=(" << d0(3) << "," << d0(4) << "," << d0(5) << ")"
                               << std::endl;
                 }
-                if (m_degenerate_remove_weak && n_deg > 0) {
-                    H.block<6, 6>(0, 0) -= weak;
+                // 处理: 软降权优先(保留 floor), 否则硬删除(gain=0).
+                // 两者都按"沿该方向衰减信息量与 b"实现, 保证更新一致 (否则 H/b 不匹配).
+                if (n_deg > 0 && (m_degenerate_soft_floor > 0.0 || m_degenerate_remove_weak)) {
+                    const Eigen::Matrix<double, 6, 1> bpose = b.segment<6>(0);
+                    for (int j = 0; j < n_deg; ++j) {
+                        const Eigen::Matrix<double, 6, 1> d = weak_dirs.col(j);
+                        const double lam = weak_lam(j);
+                        double gain = 0.0;                                  // 硬删除
+                        if (m_degenerate_soft_floor > 0.0) {
+                            const double r = lam / ev_max;
+                            const double thr =
+                                std::max(m_degenerate_eigen_ratio, 1e-9);
+                            gain = r / (r + thr);                           // 软降权
+                            gain = std::max(gain, m_degenerate_soft_floor); // 下限, 不置零
+                            gain = std::min(gain, 1.0);
+                        }
+                        const double a = 1.0 - gain;
+                        H.block<6, 6>(0, 0) -= a * lam * d * d.transpose();
+                        b.segment<6>(0) -= a * d.dot(bpose) * d;
+                    }
                 }
             }
         }
