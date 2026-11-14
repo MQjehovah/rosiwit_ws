@@ -45,6 +45,10 @@ private:
     V3D m_ground_normal_w = V3D::UnitZ();
     double m_ground_last_ok = -1.0;
     double m_ground_h0 = 0.0;      // 传感器离地高度 (起始标定)
+    // 地面估计诊断: 失败原因 / 选点数 / 法向 z (用于判断"地面跟随"为什么没生效)
+    const char* m_ground_diag = "init";
+    size_t m_ground_npts = 0;
+    double m_ground_nz = 0.0;
     // 轮速一致性检查 (每 0.5s 比较一次 LIO 与 /odom 的位移)
     double m_consist_t = -1.0;
     V3D m_consist_lio = V3D::Zero();

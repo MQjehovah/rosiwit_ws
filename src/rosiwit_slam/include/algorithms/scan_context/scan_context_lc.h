@@ -59,6 +59,7 @@ private:
     int m_min_keyframe_gap = 30;
     double m_dist_thresh = 0.4;
     double m_candidate_ratio = 0.3;
+    int m_max_candidates = 10;          // 每轮最多 ICP 验证的候选数 (上限, 防止运行时间随地图线性增长)
     int m_cfg_num_rings = 20;
     int m_cfg_num_sectors = 60;
     double m_cfg_max_radius = 80.0;

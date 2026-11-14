@@ -127,6 +127,7 @@ mapping:
     icp_coarse_corr_dist: 1.5 # 多尺度粗配第一级(m); 6.0 实测会把点云带进错误极小
     icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
     min_keyframe_gap: 30 # 回环最小关键帧间隔
+    max_candidates: 10 # 每轮最多 ICP 验证的候选数 (top-N); 0 = 不限制
     max_relative_trans_m: 8.0 # 进入后端的回环相对平移上限(m)
     max_relative_rot_deg: 30.0 # 进入后端的回环相对旋转上限(deg)
     max_consistency_trans_m: 8.0 # 一致性软尺度(m); 实际超过 2.5 倍(20m)的明显假回环才拒绝

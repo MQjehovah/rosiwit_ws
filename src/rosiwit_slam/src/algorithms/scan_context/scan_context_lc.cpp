@@ -52,6 +52,9 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                 m_submap_half_window = lc["submap_half_window"].as<int>(m_submap_half_window);
                 m_min_overlap = lc["min_overlap"].as<float>(m_min_overlap);
                 m_odom_gate_m = lc["odom_gate_m"].as<double>(m_odom_gate_m);
+                m_max_candidates = lc["max_candidates"]
+                                       ? lc["max_candidates"].as<int>(m_max_candidates)
+                                       : m_max_candidates;
 
                 ScanContext::Config sc_cfg;
                 sc_cfg.num_rings   = common && common["num_rings"]
@@ -316,6 +319,13 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
     size_t num_candidates = std::max(1, static_cast<int>(
         candidates.size() * m_candidate_ratio));
     num_candidates = std::min(num_candidates, candidates.size());
+    // 上限: 候选数按比例随地图规模线性增长, 但每轮都做多初值多尺度 GICP 代价很高,
+    // 而且 RingKey 排序靠后的候选命中率极低 (实测 53 个候选里真正的回环只有 0~1 个).
+    // 标准做法是只验 top-N.
+    if (m_max_candidates > 0) {
+        num_candidates = std::min(num_candidates,
+                                  static_cast<size_t>(m_max_candidates));
+    }
 
     // === 2. 精确描述符匹配 + ICP 验证 ===
     std::cout << "[ScanContextLC] " << candidates.size() << " candidates, top "
@@ -467,6 +477,14 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
             best_desc_dist = desc_d;
             best_idx = static_cast<int>(cand.idx);
             best_delta = delta;
+        }
+        // 早停: 已经拿到一个"足够好"的解就不再验其它候选 (与初值集合的早停同一判据).
+        // 只在几何门控也通过时早停, 否则继续找, 避免因为最好那个被拒而丢掉回环.
+        if (best_fitness <= 0.35f * m_icp_fitness_thresh && best_overlap >= 0.6f) {
+            const Eigen::AngleAxisd best_aa(best_delta.block<3, 3>(0, 0).cast<double>());
+            const double best_t = best_delta.block<3, 1>(0, 3).cast<double>().norm();
+            const double best_r = std::abs(best_aa.angle()) * 180.0 / M_PI;
+            if (best_t <= m_max_relative_trans_m && best_r <= m_max_relative_rot_deg) break;
         }
     }
 

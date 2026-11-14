@@ -598,14 +598,21 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         static int diag_cnt = 0;
         if (++diag_cnt % 50 == 0) {
             const State &xs = m_kf->x();
-            Eigen::Vector3d rpy = xs.r_wi.eulerAngles(2, 1, 0);
+            // 显式分解 rpy (度). 不用 Eigen::eulerAngles(2,1,0): 它返回的顺序是
+            // (yaw,pitch,roll), 且在中角分支点上会给出 pitch=±180° 的等价解,
+            // 日志看起来像姿态发散, 实际姿态正常 (雷达斜装 42° 时尤其明显).
+            const M3D &Rw = xs.r_wi;
+            const double yaw_d   = std::atan2(Rw(1, 0), Rw(0, 0)) * 180.0 / M_PI;
+            const double pitch_d = std::asin(std::max(-1.0, std::min(1.0, -Rw(2, 0)))) * 180.0 / M_PI;
+            const double roll_d  = std::atan2(Rw(2, 1), Rw(2, 2)) * 180.0 / M_PI;
             std::cout << "[FLIO2] eff=" << effect_feat_num << "/" << size
                       << " min=" << m_config.min_effective_points
                       << " v=" << xs.v.transpose()
                       << " bg=" << xs.bg.transpose()
                       << " ba=" << xs.ba.transpose()
                       << " t=" << xs.t_wi.transpose()
-                      << " rpy=" << rpy.transpose() << std::endl;
+                      << " rpy_deg=" << roll_d << " " << pitch_d << " " << yaw_d
+                      << std::endl;
         }
     }
     if (effect_feat_num < m_config.min_effective_points)

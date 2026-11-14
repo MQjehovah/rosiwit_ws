@@ -26,7 +26,7 @@ bool FastLio2Frontend::init(const std::string& config_path) {
 
 bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& normal_world,
                                             double& plane_d) {
-    if (!cloud || cloud->size() < 100) return false;
+    if (!cloud || cloud->size() < 100) { m_ground_diag = "no-cloud"; return false; }
 
     // 选点用**重力方向**而不是位姿: 重力只随姿态变化, 不随位置漂移, 因此不会出现
     // "位姿掉了 -> 选点带跟着掉 -> 地面估计跟着掉" 的正反馈.
@@ -43,13 +43,17 @@ bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& no
         const V3D pb(p.x, p.y, p.z);
         const double rng = pb.norm();
         if (rng < 1.0 || rng > 18.0) continue;
-        const double depress = pb.dot(down_b) / rng;   // 相对"正下方"的余弦
-        // 下视角 6~30deg: 既排除车体/近处地面噪声, 也排除墙与远处结构
-        if (depress < std::cos(30.0 * M_PI / 180.0) ||
-            depress > std::cos(6.0 * M_PI / 180.0)) continue;
+        const double depress = pb.dot(down_b) / rng;   // 与**天底**方向的余弦
+        // 地面环取"地平线以下 6~30deg": 距天底 60~84deg, 即 cos84 <= depress <= cos60.
+        // 注意这里曾经写成 cos(30)~cos(6), 选的是天底正下方 0.1~0.5m 那一小圈 ——
+        // 永远被车体自身挡住. 实测每帧选中 0 个点 (日志 ground why=few-points npts=0),
+        // 地面跟随从上线起就没生效过, z 实际上一直没有约束.
+        if (depress < std::cos(84.0 * M_PI / 180.0) ||
+            depress > std::cos(60.0 * M_PI / 180.0)) continue;
         coarse.push_back(R * pb + t);
     }
-    if (coarse.size() < 80) return false;
+    if (coarse.size() < 80) { m_ground_npts = coarse.size(); m_ground_diag = "few-points"; return false; }
+    m_ground_npts = coarse.size();
 
     auto fit = [](const std::vector<V3D>& pts, V3D& n_out) -> bool {
         if (pts.size() < 50) return false;
@@ -68,7 +72,7 @@ bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& no
     };
 
     V3D n0;
-    if (!fit(coarse, n0)) return false;
+    if (!fit(coarse, n0)) { m_ground_diag = "not-planar"; return false; }
     V3D mean = V3D::Zero();
     for (const auto& p : coarse) mean += p;
     mean /= static_cast<double>(coarse.size());
@@ -88,11 +92,17 @@ bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& no
     plane_d = -normal_world.dot(m2);
 
     if (std::acos(std::max(-1.0, std::min(1.0, normal_world.z()))) > 40.0 * M_PI / 180.0)
+    {
+        m_ground_nz = normal_world.z();
+        m_ground_diag = "too-tilted";
         return false;
+    }
     if (!m_ground_z_anchor_valid) {
         m_ground_z_anchor = m_kf->x().t_wi.z() - 0.9;
         m_ground_z_anchor_valid = true;
     }
+    m_ground_nz = normal_world.z();
+    m_ground_diag = "ok";
     return true;
 }
 
@@ -294,9 +304,12 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
                                                      m_config.ground_follow_z,
                                                      m_ground_z_target);
         static int gp_log = 0;
-        if (++gp_log % 200 == 0) {
+        if (++gp_log % 100 == 0) {
             const double slope = std::acos(std::max(-1.0, std::min(1.0, m_ground_normal_w.z())));
             std::cout << "[FLIO2] ground " << (m_ground_valid ? "ok" : "hold")
+                      << " why=" << m_ground_diag
+                      << " npts=" << m_ground_npts
+                      << " nz=" << m_ground_nz
                       << " slope=" << slope * 180.0 / M_PI
                       << "deg z=" << m_kf->x().t_wi.z()
                       << " z_target=" << m_ground_z_target << std::endl;
