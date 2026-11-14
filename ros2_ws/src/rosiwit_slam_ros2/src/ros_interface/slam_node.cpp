@@ -1034,19 +1034,28 @@ void SlamNode::publishOdomTf(const PoseStamped& pose,
         PoseStamped wheel;
         bool wheel_valid = false;
         if (m_tf_buffer) {
-            try {
-                const auto tr = m_tf_buffer->lookupTransform(
-                    m_cfg.odom_frame, m_cfg.body_frame,
-                    tf2::TimePointZero, tf2::durationFromSec(0.05));
-                const auto& t = tr.transform.translation;
-                const auto& qm = tr.transform.rotation;
-                wheel.trans = Eigen::Vector3d(t.x, t.y, t.z);
-                wheel.rot = Eigen::Quaterniond(qm.w, qm.x, qm.y, qm.z)
-                    .normalized().toRotationMatrix();
-                wheel_valid = true;
-            } catch (const tf2::TransformException&) {
-                // fall through to optional /odom fallback below
-            }
+            // 必须在**位姿自己的时间戳**上查 odom<-base.
+            // 用 TimePointZero(最新) 会把"位姿那一时刻的轮速"和"当前最新轮速"混起来:
+            // 离线回放有 1~2s 处理延迟时两者差 1~2m, map->odom 就会每帧来回跳
+            // (实测 p50 步长 1.5m). 查不到时再退回最新那次.
+            auto grab = [&](const tf2::TimePoint& tq) -> bool {
+                try {
+                    const auto tr = m_tf_buffer->lookupTransform(
+                        m_cfg.odom_frame, m_cfg.body_frame, tq,
+                        tf2::durationFromSec(0.05));
+                    const auto& t = tr.transform.translation;
+                    const auto& qm = tr.transform.rotation;
+                    wheel.trans = Eigen::Vector3d(t.x, t.y, t.z);
+                    wheel.rot = Eigen::Quaterniond(qm.w, qm.x, qm.y, qm.z)
+                        .normalized().toRotationMatrix();
+                    return true;
+                } catch (const tf2::TransformException&) {
+                    return false;
+                }
+            };
+            const tf2::TimePoint t_pose(std::chrono::nanoseconds(
+                static_cast<int64_t>(stamp_sec * 1e9)));
+            wheel_valid = grab(t_pose) || grab(tf2::TimePointZero);
         }
         if (!wheel_valid && m_cfg.use_wheel_odom) {
             std::lock_guard<std::mutex> lk(m_wheel_odom_mutex);
