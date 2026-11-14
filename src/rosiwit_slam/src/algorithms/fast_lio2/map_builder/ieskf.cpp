@@ -247,8 +247,26 @@ void IESKF::updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &g
     m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
 }
 
-void IESKF::updateYawRate(double yaw_rate, const V3D &gyro, double sigma_w,
-                          bool update_bias)
+void IESKF::updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma)
+{
+    // 2 维量测: 窗口内水平位移应与 odom 一致. 只约束相对量, 无绝对位置约束.
+    Eigen::Matrix<double, 2, 21> A = Eigen::Matrix<double, 2, 21>::Zero();
+    A(0, 3) = 1.0;   // t_wi.x
+    A(1, 4) = 1.0;   // t_wi.y
+    Eigen::Vector2d r;
+    r(0) = d_meas.x() - (m_x.t_wi.x() - p_ref.x());
+    r(1) = d_meas.y() - (m_x.t_wi.y() - p_ref.y());
+    Eigen::Matrix2d R = Eigen::Matrix2d::Identity() * (sigma * sigma);
+    const Eigen::Matrix2d S = A * m_P * A.transpose() + R;
+    const Eigen::Matrix<double, 21, 2> K = m_P * A.transpose() * S.inverse();
+    m_x += K * r;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKA = I - K * A;
+    m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
+}
+
+void IESKF::updateYawRate(double yaw_rate, const V3D &gyro, double sigma_w,                          bool update_bias)
 {
     // 1 维量测: 世界系 yaw 角速度. 预测值 = (r_wi * (w - bg)).z
     Eigen::Matrix<double, 1, 21> A = Eigen::Matrix<double, 1, 21>::Zero();

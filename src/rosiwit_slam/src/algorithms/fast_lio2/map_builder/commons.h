@@ -90,6 +90,23 @@ struct Config
     double odom_yaw_gate_rel = 0.10;   // 一致性容差相对项: gate = abs + rel*|yaw_rate|
     bool odom_yaw_update_bias = false; // 是否允许该证据更新陀螺零偏 (默认否)
 
+    // ---- 轮速融合权重 (可配) ----
+    // updateOdom 的三维量测噪声: 前向速度 / 侧向速度 / 世界系 yaw 率.
+    // 原先是硬编码 0.2 / 0.10 / 0.05; 权重 = 1/sigma^2.
+    double odom_sigma_v = 0.2;          // m/s
+    double odom_sigma_lat = 0.10;       // m/s
+    double odom_sigma_w = 0.05;         // rad/s
+    // 一致性异常期间(odom_consistency_gate 触发)把上面三个 sigma 乘以该系数.
+    // 1.0 = 不收紧; 0.3 接近原先硬编码的 0.05/0.03/0.02.
+    double odom_sigma_tight_scale = 0.3;
+
+    // ---- 轮速相对位移约束 (窗口内 Δp 与 odom 一致) ----
+    // 不需要 map<->odom 对齐: 只约束"这段时间内走了多少", 不约束绝对位置,
+    // 因此 odom 的慢漂不会被灌进地图, 但能压住沿走廊轴的滑移.
+    bool   odom_pos_enable = false;
+    double odom_pos_sigma = 0.10;       // m, 每窗口的位移噪声
+    double odom_pos_window = 1.0;       // s, 滑窗长度
+
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = true;
     // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,

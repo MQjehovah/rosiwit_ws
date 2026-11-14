@@ -101,6 +101,23 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                 get_input("odom_yaw_update_bias", "odom_yaw_update_bias")
                     .as<bool>(out_cfg.odom_yaw_update_bias);
         }
+        // 轮速融合权重 (可配; 默认值等于原先的硬编码 0.2/0.10/0.05)
+        out_cfg.odom_sigma_v =
+            get_input("odom_sigma_v", "odom_sigma_v").as<double>(out_cfg.odom_sigma_v);
+        out_cfg.odom_sigma_lat =
+            get_input("odom_sigma_lat", "odom_sigma_lat").as<double>(out_cfg.odom_sigma_lat);
+        out_cfg.odom_sigma_w =
+            get_input("odom_sigma_w", "odom_sigma_w").as<double>(out_cfg.odom_sigma_w);
+        out_cfg.odom_sigma_tight_scale =
+            get_input("odom_sigma_tight_scale", "odom_sigma_tight_scale")
+                .as<double>(out_cfg.odom_sigma_tight_scale);
+        // 轮速相对位移约束
+        out_cfg.odom_pos_enable =
+            get_input("odom_pos_enable", "odom_pos_enable").as<bool>(out_cfg.odom_pos_enable);
+        out_cfg.odom_pos_sigma =
+            get_input("odom_pos_sigma", "odom_pos_sigma").as<double>(out_cfg.odom_pos_sigma);
+        out_cfg.odom_pos_window =
+            get_input("odom_pos_window", "odom_pos_window").as<double>(out_cfg.odom_pos_window);
         out_cfg.gyro_scale       = get_input("gyro_scale","gyro_scale").as<double>(out_cfg.gyro_scale);
         out_cfg.max_state_velocity =
             get_alias("max_state_velocity","max_state_velocity").as<double>(out_cfg.max_state_velocity);

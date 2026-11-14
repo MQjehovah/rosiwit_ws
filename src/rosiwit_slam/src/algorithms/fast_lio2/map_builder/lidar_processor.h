@@ -19,12 +19,16 @@ class LidarProcessor
 public:
     LidarProcessor(Config &config, std::shared_ptr<IESKF> kf);
 
-    void setOdomPrior(bool valid, double v_fwd, double yaw_rate, double v_lat = 0.0) {
+    void setOdomPrior(bool valid, double v_fwd, double yaw_rate, double v_lat = 0.0,
+                      double pos_x = 0.0, double pos_y = 0.0, double yaw_odom = 0.0) {
         m_odom_prior = valid;
         m_odom_speed = std::fabs(v_fwd);   // 门限用速度模长
         m_odom_v_fwd = v_fwd;
         m_odom_v_lat = v_lat;
         m_odom_yaw_rate = yaw_rate;
+        m_odom_pos_x = pos_x;
+        m_odom_pos_y = pos_y;
+        m_odom_yaw_abs = yaw_odom;
     }
     void setOdomFuse(bool fuse) { m_odom_fuse = fuse; }
     /// odom_mode=yaw: 只融合轮速 yaw 率 (1 维), 不碰速度/侧向.
@@ -95,6 +99,15 @@ private:
     double m_odom_yaw_rate = 0.0;
     bool m_odom_fuse = false;
     bool m_odom_yaw_fuse = false;
+    // 轮速相对位移约束的滑窗状态
+    double m_odom_pos_x = 0.0;
+    double m_odom_pos_y = 0.0;
+    double m_odom_yaw_abs = 0.0;   // odom 位姿的绝对 yaw (用于换算到世界系)
+    double m_yaw_off = 0.0;        // 窗口起点: yaw_ekf - yaw_odom
+    bool   m_pos_init = false;
+    double m_pos_t0 = -1.0;
+    V2D    m_odom_pos0 = V2D::Zero();
+    V2D    m_ekf_pos0 = V2D::Zero();
     // 坡地 z 安全先验: 2D SLAM 的 base z 是平地基准, 只作为"防跑飞"参考,
     // 用 50m 死区, 正常坡道 (实测 450s 内 z 约 -6..13m) 完全不受影响。
     bool m_z_ref_valid = false;

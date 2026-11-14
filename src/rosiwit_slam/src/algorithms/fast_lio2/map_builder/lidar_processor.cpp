@@ -409,9 +409,11 @@ void LidarProcessor::process(SyncPackage &package)
             gyro_mean /= static_cast<double>(n);
             // 一致性异常期间收紧轮速融合: 该段几乎只听轮速, 不让 IMU 把位姿带走.
             const bool tight = !m_odom_consistency_ok;
+            const double sc = tight ? m_config.odom_sigma_tight_scale : 1.0;
             m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat, m_odom_yaw_rate, gyro_mean,
-                             tight ? 0.05 : 0.2, tight ? 0.03 : 0.10,
-                             tight ? 0.02 : 0.05);
+                             m_config.odom_sigma_v * sc,
+                             m_config.odom_sigma_lat * sc,
+                             m_config.odom_sigma_w * sc);
             static int fuse_log = 0;
             if (++fuse_log % 50 == 0) {
                 std::cout << "[FLIO2] odom fuse speed=" << m_odom_speed
@@ -421,6 +423,46 @@ void LidarProcessor::process(SyncPackage &package)
             }
         }
     }
+    // 轮速相对位移约束 (窗口内 Δp 与 odom 一致).
+    // 只约束相对量: 不需要 map<->odom 的平移对齐, odom 的慢漂不会进地图.
+    // 但两系的 **yaw** 不同 (EKF 世界系由 IMU 初始化, odom 系来自轮速), 所以每个
+    // 窗口起点记 psi = yaw_ekf - yaw_odom, 施加前把 Δp_odom 旋到世界系再比.
+    if (m_config.odom_pos_enable && m_odom_prior) {
+        const double t = package.cloud_end_time;
+        const M3D &Rk = m_kf->x().r_wi;
+        const double yaw_ekf = std::atan2(Rk(1, 0), Rk(0, 0));
+        if (!m_pos_init) {
+            m_pos_init = true;
+            m_pos_t0 = t;
+            m_odom_pos0 = V2D(m_odom_pos_x, m_odom_pos_y);
+            m_ekf_pos0 = V2D(m_kf->x().t_wi.x(), m_kf->x().t_wi.y());
+            m_yaw_off = std::atan2(std::sin(yaw_ekf - m_odom_yaw_abs),
+                                   std::cos(yaw_ekf - m_odom_yaw_abs));
+        } else if (t - m_pos_t0 >= m_config.odom_pos_window) {
+            const V2D d_raw(m_odom_pos_x - m_odom_pos0.x(),
+                            m_odom_pos_y - m_odom_pos0.y());
+            const double c = std::cos(m_yaw_off), s = std::sin(m_yaw_off);
+            const V2D d_meas(c * d_raw.x() - s * d_raw.y(),
+                             s * d_raw.x() + c * d_raw.y());
+            const V2D d_ekf(m_kf->x().t_wi.x() - m_ekf_pos0.x(),
+                            m_kf->x().t_wi.y() - m_ekf_pos0.y());
+            m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_pos_sigma);
+            static int pos_log = 0;
+            if (++pos_log % 20 == 0) {
+                std::cout << "[FLIO2] odom pos |d_odom|=" << d_meas.norm()
+                          << " |d_ekf|=" << d_ekf.norm()
+                          << " dt=" << (t - m_pos_t0)
+                          << " yaw_off=" << m_yaw_off
+                          << " sigma=" << m_config.odom_pos_sigma << std::endl;
+            }
+            m_pos_t0 = t;
+            m_odom_pos0 = V2D(m_odom_pos_x, m_odom_pos_y);
+            m_ekf_pos0 = V2D(m_kf->x().t_wi.x(), m_kf->x().t_wi.y());
+            m_yaw_off = std::atan2(std::sin(yaw_ekf - m_odom_yaw_abs),
+                                   std::cos(yaw_ekf - m_odom_yaw_abs));
+        }
+    }
+
     // 轮速 yaw 率单维量测 (odom_mode=yaw): 只给姿态一个外部约束.
     // sigma 随 |yaw_rate| 放大: 轮速差分的角速度误差大致正比于转速.
     if (m_config.odom_yaw_fuse && m_odom_prior) {

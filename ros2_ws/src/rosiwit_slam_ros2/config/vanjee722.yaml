@@ -69,6 +69,17 @@ mapping:
     use_point_timestamp: true
     odom_position_clamp: false   # 实测会把正常段也钳弯 (300-435m 偏差 16.9->22.2)
     odom_consistency_gate: false
+    # ---- 轮速融合权重 (fuse / yaw 生效; 权重 = 1/sigma^2) ----
+    odom_sigma_v: 0.2            # m/s,   前向速度量测噪声
+    odom_sigma_lat: 0.10         # m/s,   侧向速度量测噪声
+    odom_sigma_w: 0.05           # rad/s, 世界系 yaw 率量测噪声
+    odom_sigma_tight_scale: 0.3  # 一致性异常期间(odom_consistency_gate)把上面三个 sigma 乘以该系数
+    # ---- 轮速相对位移约束 (窗口内 Δp_ekf 与 Δp_odom 一致) ----
+    # 只约束相对位移: 无需 map<->odom 平移对齐, odom 的慢漂不进地图;
+    # 两系 yaw 不同, 每个窗口起点估计 psi=yaw_ekf-yaw_odom 后把 Δp 旋到世界系.
+    odom_pos_enable: false
+    odom_pos_sigma: 0.10         # m, 每窗口位移噪声
+    odom_pos_window: 1.0         # s, 滑窗长度
     ground_follow_z: true
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态

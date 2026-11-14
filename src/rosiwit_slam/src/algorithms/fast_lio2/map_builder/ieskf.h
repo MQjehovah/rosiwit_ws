@@ -84,6 +84,11 @@ public:
     /// 世界系 yaw 角速度, 3 维标准 EKF 更新. 比原来只用速度模长多利用了符号与侧向约束.
     void updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &gyro,
                     double sigma_v, double sigma_lat, double sigma_w);
+    /// 轮速相对位移约束: 使"窗口内 EKF 位移"与"odom 位移"一致.
+    /// 只约束相对量, 不需要 map<->odom 对齐, 因此不会把 odom 的慢漂灌进地图.
+    /// @param d_meas odom 在该窗口内的水平位移
+    /// @param p_ref  窗口起点的 EKF 水平位置
+    void updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma);
     /// 垂直速度软约束: 车体在坡上 v.z 仍然是小量, 长时间累积会变成 z 漂移.
     /// 每帧把 v.z 轻拉向 0, sigma 取 0.5m/s, 不影响正常爬坡分量.
     /// 轮速 yaw 率单维量测: 只约束世界系 yaw 角速度, 不动速度/侧向.
