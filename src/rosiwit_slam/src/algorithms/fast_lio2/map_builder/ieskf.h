@@ -80,10 +80,6 @@ public:
     void predict(const Input &inp, double dt, const M12D &Q);
 
     void update();
-    /// 轮式 odom 量测 (fuse): 车体 x 前进速度(带符号) + 车体 y 侧向速度(≈0), 2 维 EKF.
-    /// 不融 yaw 角速度: 轮速 odom 的 twist 是位姿微分的噪声 (实测 50Hz 上抖 ±8deg/s),
-    /// 角速度改由窗口内相对转角 (updateYawDelta) 提供.
-    void updateOdom(double v_fwd, double v_lat, double sigma_v, double sigma_lat);
     /// 轮速相对位移约束: 使"窗口内 EKF 位移"与"odom 位移"一致.
     /// 只约束相对量, 不需要 map<->odom 对齐, 因此不会把 odom 的慢漂灌进地图.
     /// @param d_meas odom 在该窗口内的水平位移

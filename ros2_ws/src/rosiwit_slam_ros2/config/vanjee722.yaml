@@ -62,33 +62,23 @@ global:
     dist_thresh: 0.4 # ScanContext距离阈值
     candidate_ratio: 0.3 # 候选比例
 mapping:
-  # 建图链路怎么用 /odom: none(不用) | gate(只做更新门限) | fuse(水平速度)
+  # 建图链路怎么用 /odom: none(不用) | gate(只做更新门限) | fuse(位姿: 相对位移+相对转角)
   odom_mode: none
   frontend:
     # 地面跟随: 不锁 z/roll/pitch, 用地面法向把 v.z 软约束到坡面分量.
     use_point_timestamp: true
     odom_consistency_gate: false
     # =====================================================================
-    # 轮速 odom (全部键按用途分组)
-    #   /odom 的位姿是编码器累计量(可信), twist 是位姿微分(噪声大), 所以:
-    #   位置/角度用"窗口内相对量测", 速度只当弱先验.
+    # 轮速 odom (odom_mode=fuse 时生效): 只用位姿, 即"窗口内相对位移 + 相对转角"
+    # 不用 twist 的速度/角速度 —— 它们是位姿微分的产物, 噪声远大于位姿本身.
     # =====================================================================
-    # ---- 1) 瞬时量测权重 (odom_mode=fuse; 权重 = 1/sigma^2) ----
-    odom_sigma_v: 0.2             # m/s,   前向速度
-    odom_sigma_lat: 0.10          # m/s,   侧向速度
-    odom_sigma_tight_scale: 0.3   # 一致性门控触发期间, 上面三个 sigma 乘以该系数
-    # ---- 2) 窗口约束 (每 odom_win_len 秒一次; 只用位姿) ----
-    odom_win_len: 1.0             # s, 窗口长度
-    odom_win_pos_enable: false    # 窗口内位移 Δp_ekf ≡ Δp_odom
-    odom_win_pos_sigma: 0.10      # m, 窗口位移噪声
-    odom_win_pos_p_floor: 0.0     # m, 位置协方差下限 (0=不抬; 抬到 0.05 才有实际增益)
-    odom_win_yaw_enable: false    # 窗口内转角 Δyaw_ekf ≡ Δyaw_odom
-    odom_win_yaw_sigma: 0.01      # rad, 窗口转角噪声 (~0.6 deg)
-    # 姿态协方差下限 (rad): 实测 P_yaw≈5e-9 (sigma=0.004deg), 角度量测同样进不来.
-    odom_win_yaw_p_floor: 0.0
-    # ---- 3) 轮速标定 (默认 1.0 = 不改动) ----
-    odom_calib_yaw_scale: 1.0     # 陀螺积分净转角 / 轮速净转角
-    odom_calib_dist_scale: 1.0    # 已知长度直线段 / 该段轮速位移
+    odom_win_len: 1.0             # s,   窗口长度 (位移/转角共用)
+    odom_win_pos_sigma: 0.10      # m,   相对位移噪声
+    odom_win_pos_p_floor: 0.05    # m,   位置协方差下限 (不抬则增益只有 1e-4)
+    odom_win_yaw_sigma: 0.01      # rad, 相对转角噪声 (~0.6 deg)
+    odom_win_yaw_p_floor: 0.01    # rad, 姿态协方差下限
+    odom_calib_yaw_scale: 1.0     # 陀螺净转角 / 轮速净转角
+    odom_calib_dist_scale: 1.0    # 已知长度 / 该段轮速位移
     ground_follow_z: true
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态

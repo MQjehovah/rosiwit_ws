@@ -207,39 +207,6 @@ void IESKF::predict(const Input &inp, double dt, const M12D &Q)
     m_P = m_F * m_P * m_F.transpose() + m_G * Q * m_G.transpose();
 }
 
-void IESKF::updateOdom(double v_fwd, double v_lat, double sigma_v, double sigma_lat)
-{
-    // 2 维: 车体 x 速度 (带符号) / 车体 y 速度 (非完整约束, 期望 0).
-    // 轮式 odom 不约束 z 方向速度, 这里也不碰 v.z; yaw 角速度也不再从 twist 取.
-    Eigen::Matrix<double, 2, 21> A = Eigen::Matrix<double, 2, 21>::Zero();
-    Eigen::Vector2d r = Eigen::Vector2d::Zero();
-    Eigen::Matrix2d R = Eigen::Matrix2d::Identity();
-
-    const M3D Rt = m_x.r_wi.transpose();
-    const V3D v_body = Rt * m_x.v;
-    // 低速: 速度观测退化为不约束 (避免静止时把 v 钉死)
-    if (std::fabs(v_fwd) > 0.05 || v_body.head<2>().norm() > 0.2) {
-        A(0, 12) = Rt(0, 0); A(0, 13) = Rt(0, 1); A(0, 14) = Rt(0, 2);
-        r(0) = v_fwd - v_body.x();
-        R(0, 0) = sigma_v * sigma_v;
-        A(1, 12) = Rt(1, 0); A(1, 13) = Rt(1, 1); A(1, 14) = Rt(1, 2);
-        r(1) = v_lat - v_body.y();
-        R(1, 1) = sigma_lat * sigma_lat;
-    } else {
-        R(0, 0) = 1.0;
-        R(1, 1) = 1.0;
-    }
-
-    const Eigen::Matrix2d S = A * m_P * A.transpose() + R;
-    const Eigen::Matrix<double, 21, 2> K = m_P * A.transpose() * S.inverse();
-    const V21D dx = K * r;
-    m_x += dx;
-    m_x.clampPhysical();
-    const M21D I = M21D::Identity();
-    const M21D IKA = I - K * A;
-    m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
-}
-
 void IESKF::updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma,
                           double p_floor)
 {

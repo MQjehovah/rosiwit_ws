@@ -78,25 +78,16 @@ struct Config
     bool odom_fuse = false;
     bool odom_gate = false;
 
-    // ---- 轮速速度量测 (fuse): 只用车体前向/侧向速度, 2 维 ----
-    // 不融 yaw 角速度: /odom 的 twist 是位姿微分的噪声 (实测 50Hz 抖 ±8deg/s),
-    // 角度改由下面的"窗口内相对转角"提供.
-    double odom_sigma_v = 0.2;          // m/s
-    double odom_sigma_lat = 0.10;       // m/s
-    // 一致性异常期间(odom_consistency_gate 触发)把上面两个 sigma 乘以该系数.
-    double odom_sigma_tight_scale = 0.3;
-
-    // ---- 窗口约束 (每 odom_win_len 秒一次, 只用位姿) ----
+    // ---- 轮速 odom 量测 (odom_mode=fuse): 只用位姿, 即"窗口内相对位移 + 相对转角" ----
+    // 不用 twist 的速度/角速度: 它们是位姿微分的产物, 50Hz 上逐帧抖 ±8deg/s,
+    // 精度远低于累计位姿 (位姿 yaw 的 1s 增量与陀螺积分相关 0.999).
     double odom_win_len = 1.0;              // s, 窗口长度 (位移/转角共用)
-    bool   odom_win_pos_enable = false;     // 窗口内位移 Δp_ekf ≡ Δp_odom
     double odom_win_pos_sigma = 0.10;       // m, 位移噪声
-    // 位置协方差下限 (m). FAST-LIO 的位置协方差会被点面约束压到亚毫米级
-    // (实测 Pxx≈1.4e-7), 1Hz 位移量测的增益只有 1e-4 -> 位置约束形同虚设.
-    double odom_win_pos_p_floor = 0.0;
-    bool   odom_win_yaw_enable = false;     // 窗口内转角 Δyaw_ekf ≡ Δyaw_odom
+    // 协方差下限: 雷达会把 P 压到亚毫米/0.004deg 级, 不抬的话量测增益只有 1e-4~5e-5,
+    // 等于没融合. 实测 pos floor 0.05m / yaw floor 0.01rad 才真正起作用.
+    double odom_win_pos_p_floor = 0.05;     // m
     double odom_win_yaw_sigma = 0.01;       // rad, 转角噪声 (~0.6deg)
-    // 姿态协方差下限 (rad): 实测 P_yaw≈5e-9 (sigma=0.004deg), 角度量测同样进不来.
-    double odom_win_yaw_p_floor = 0.0;
+    double odom_win_yaw_p_floor = 0.01;     // rad
 
     // ---- 轮速标定 (尺度, 默认 1.0 = 不改动) ----
     double odom_calib_yaw_scale = 1.0;      // 陀螺净转角 / 轮速净转角

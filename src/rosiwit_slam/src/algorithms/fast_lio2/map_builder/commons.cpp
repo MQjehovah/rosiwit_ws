@@ -79,21 +79,12 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
         }
         // 轮速融合权重 (可配; 默认值等于原先的硬编码 0.2/0.10/0.05)
-        // ---- 轮速速度量测 (fuse, 2 维: 前向/侧向) ----
-        out_cfg.odom_sigma_v = get("odom_sigma_v").as<double>(out_cfg.odom_sigma_v);
-        out_cfg.odom_sigma_lat = get("odom_sigma_lat").as<double>(out_cfg.odom_sigma_lat);
-        out_cfg.odom_sigma_tight_scale =
-            get("odom_sigma_tight_scale").as<double>(out_cfg.odom_sigma_tight_scale);
-        // ---- 窗口约束 (只用位姿) ----
+        // ---- 轮速 odom 量测 (fuse = 窗口内相对位移 + 相对转角) ----
         out_cfg.odom_win_len = get("odom_win_len").as<double>(out_cfg.odom_win_len);
-        out_cfg.odom_win_pos_enable =
-            get("odom_win_pos_enable").as<bool>(out_cfg.odom_win_pos_enable);
         out_cfg.odom_win_pos_sigma =
             get("odom_win_pos_sigma").as<double>(out_cfg.odom_win_pos_sigma);
         out_cfg.odom_win_pos_p_floor =
             get("odom_win_pos_p_floor").as<double>(out_cfg.odom_win_pos_p_floor);
-        out_cfg.odom_win_yaw_enable =
-            get("odom_win_yaw_enable").as<bool>(out_cfg.odom_win_yaw_enable);
         out_cfg.odom_win_yaw_sigma =
             get("odom_win_yaw_sigma").as<double>(out_cfg.odom_win_yaw_sigma);
         out_cfg.odom_win_yaw_p_floor =

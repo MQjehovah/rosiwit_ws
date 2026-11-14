@@ -400,32 +400,12 @@ void LidarProcessor::process(SyncPackage &package)
         m_kf->x().clampPhysical();
     }
 
-    // 轮式 odom 紧耦合: 速度模长 + 世界系 yaw 角速度作为 2 维量测.
+    // 轮式 odom 紧耦合: 只用**位姿**, 即"窗口内位移 + 转角".
+    // 不用 twist 的速度/角速度 —— 它们是位姿微分出来的 (实测 50Hz 的
+    // twist.angular.z 逐帧抖 ±8deg/s, 速度同样毛刺), 精度远低于累计位姿.
+    // 两系 yaw 不同, 每个窗口起点记 psi = yaw_ekf - yaw_odom, 施加前把 Δp_odom
+    // 旋到世界系; 转角本身与坐标系无关, 不需要 psi.
     if (m_odom_fuse && m_odom_prior) {
-        V3D gyro_mean = V3D::Zero();
-        int n = 0;
-        for (const auto &imu : package.imus) { gyro_mean += imu.gyro; ++n; }
-        if (n > 0) {
-            gyro_mean /= static_cast<double>(n);
-            // 一致性异常期间收紧轮速融合: 该段几乎只听轮速, 不让 IMU 把位姿带走.
-            const bool tight = !m_odom_consistency_ok;
-            const double sc = tight ? m_config.odom_sigma_tight_scale : 1.0;
-            m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat,
-                             m_config.odom_sigma_v * sc,
-                             m_config.odom_sigma_lat * sc);
-            static int fuse_log = 0;
-            if (++fuse_log % 50 == 0) {
-                std::cout << "[FLIO2] odom fuse speed=" << m_odom_speed
-                          << " v=" << m_kf->x().v.transpose()
-                          << " bg=" << m_kf->x().bg.transpose() << std::endl;
-            }
-        }
-    }
-    // 轮速相对位移约束 (窗口内 Δp 与 odom 一致).
-    // 只约束相对量: 不需要 map<->odom 的平移对齐, odom 的慢漂不会进地图.
-    // 但两系的 **yaw** 不同 (EKF 世界系由 IMU 初始化, odom 系来自轮速), 所以每个
-    // 窗口起点记 psi = yaw_ekf - yaw_odom, 施加前把 Δp_odom 旋到世界系再比.
-    if ((m_config.odom_win_pos_enable || m_config.odom_win_yaw_enable) && m_odom_prior) {
         const double t = package.cloud_end_time;
         const M3D &Rk = m_kf->x().r_wi;
         const double yaw_ekf = std::atan2(Rk(1, 0), Rk(0, 0));
@@ -451,23 +431,19 @@ void LidarProcessor::process(SyncPackage &package)
                              ds * (s * d_raw.x() + c * d_raw.y()));
             const V2D d_ekf(m_kf->x().t_wi.x() - m_ekf_pos0.x(),
                             m_kf->x().t_wi.y() - m_ekf_pos0.y());
-            if (m_config.odom_win_pos_enable) {
-                m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_win_pos_sigma,
-                                    m_config.odom_win_pos_p_floor);
-            }
-            if (m_config.odom_win_yaw_enable) {
-                m_kf->updateYawDelta(dpsi * m_config.odom_calib_yaw_scale,
-                                     m_ekf_yaw0, m_config.odom_win_yaw_sigma,
-                                     m_config.odom_win_yaw_p_floor);
-            }
+            // 相对位移: 旋到世界系 + 尺度标定
+            m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_win_pos_sigma,
+                                m_config.odom_win_pos_p_floor);
+            // 相对转角: 与坐标系无关
+            m_kf->updateYawDelta(dpsi * m_config.odom_calib_yaw_scale,
+                                 m_ekf_yaw0, m_config.odom_win_yaw_sigma,
+                                 m_config.odom_win_yaw_p_floor);
             static int pos_log = 0;
             if (++pos_log % 20 == 0) {
-                std::cout << "[FLIO2] odom pos |d_odom|=" << d_meas.norm()
-                          << " |d_ekf|=" << d_ekf.norm()
-                          << " dt=" << (t - m_pos_t0)
+                std::cout << "[FLIO2] odom fuse dpos_odom=" << d_meas.norm()
+                          << " dpos_ekf=" << d_ekf.norm()
                           << " dyaw_odom=" << dpsi * 180.0 / M_PI
-                          << " yaw_off=" << m_yaw_off
-                          << " sigma=" << m_config.odom_win_pos_sigma << std::endl;
+                          << " dt=" << (t - m_pos_t0) << std::endl;
             }
             m_pos_t0 = t;
             m_odom_pos0 = V2D(m_odom_pos_x, m_odom_pos_y);
