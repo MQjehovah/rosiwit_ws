@@ -95,7 +95,7 @@ struct Config
     // 原先是硬编码 0.2 / 0.10 / 0.05; 权重 = 1/sigma^2.
     double odom_sigma_v = 0.2;          // m/s
     double odom_sigma_lat = 0.10;       // m/s
-    double odom_sigma_w = 0.05;         // rad/s
+    double odom_sigma_yaw_rate = 0.05;         // rad/s
     // 一致性异常期间(odom_consistency_gate 触发)把上面三个 sigma 乘以该系数.
     // 1.0 = 不收紧; 0.3 接近原先硬编码的 0.05/0.03/0.02.
     double odom_sigma_tight_scale = 0.3;
@@ -103,28 +103,28 @@ struct Config
     // ---- 轮速相对位移约束 (窗口内 Δp 与 odom 一致) ----
     // 不需要 map<->odom 对齐: 只约束"这段时间内走了多少", 不约束绝对位置,
     // 因此 odom 的慢漂不会被灌进地图, 但能压住沿走廊轴的滑移.
-    bool   odom_pos_enable = false;
-    double odom_pos_sigma = 0.10;       // m, 每窗口的位移噪声
-    double odom_pos_window = 1.0;       // s, 滑窗长度
+    bool   odom_win_pos_enable = false;
+    double odom_win_pos_sigma = 0.10;       // m, 每窗口的位移噪声
+    double odom_win_len = 1.0;       // s, 滑窗长度
 
     // ---- 轮速标定 (尺度) ----
     // 轮速 odom 的 yaw 与位移尺度常因轮径/轮距标定不准而系统性偏差
     // (本数据集实测: 100s 内轮速净转角 134 deg, 而 IMU 陀螺积分 210 deg,
     //  即 yaw 只有真值的约 0.64 倍; 距离上轮速 99m vs 2D 参考 44m 也差一倍量级).
     // 这里只做线性尺度修正, 默认 1.0 = 不改动.
-    //   odom_yaw_scale  乘到 yaw 率量测上
-    //   odom_dist_scale 乘到位置约束里的位移模长上
-    double odom_yaw_scale = 1.0;
-    double odom_dist_scale = 1.0;
+    //   odom_calib_yaw_scale  乘到 yaw 率量测上
+    //   odom_calib_dist_scale 乘到位置约束里的位移模长上
+    double odom_calib_yaw_scale = 1.0;
+    double odom_calib_dist_scale = 1.0;
     // 用"窗口内 odom 相对转角"代替"瞬时 yaw 率" (默认关).
     // 轮速 odom 的 twist.angular.z 在 50Hz 上抖 ±8deg/s, 但位姿 yaw 的 1s 窗口
     // 增量与陀螺积分相关系数 0.999 (实测 300 窗口), 所以用角度更稳.
-    bool   odom_yaw_window_enable = false;
-    double odom_yaw_window_sigma = 0.01;   // rad, 每窗口转角噪声 (~0.6deg)
+    bool   odom_win_yaw_enable = false;
+    double odom_win_yaw_sigma = 0.01;   // rad, 每窗口转角噪声 (~0.6deg)
     // 位置协方差下限 (m). FAST-LIO 的位置协方差会被点面约束压到亚毫米级
     // (实测 Pxx≈1.4e-7), 1Hz 位移量测的增益只有 1e-4 -> 位置约束形同虚设.
     // 抬到 p_floor^2 之后轮速位移才真正能拉; 0 = 不抬 (原行为).
-    double odom_pos_p_floor = 0.0;
+    double odom_win_pos_p_floor = 0.0;
 
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = true;
@@ -133,8 +133,8 @@ struct Config
     bool odom_consistency_gate = false;
     // 轮速位置硬钳位: 0.5s 窗口内 LIO 位移 > 1.5x轮速+0.3m 时把位置钳回,
     // 并同步压速度. 实测窄道 7s 内滑 22m, 暂停 LiDAR 无效, 必须钳位置.
-    bool odom_position_clamp = false;
-    double odom_scale_xy = 0.98;   // 轮速尺度 (可信段实测 0.975~0.989)
+    // 注: 旧的 odom_position_clamp / odom_scale_xy 已删除 —— 硬钳位实测会把正常段
+    // 也钳弯 (300-435m 偏差 16.9->22.2), 现在的 odom_win_pos_* 窗口位移约束是它的替代.
     double ground_vz_sigma = 0.30;   // v.z 软约束标准差 (m/s)
     // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
     bool convergence_check = true;

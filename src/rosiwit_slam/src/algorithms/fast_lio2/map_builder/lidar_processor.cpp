@@ -410,12 +410,12 @@ void LidarProcessor::process(SyncPackage &package)
             // 一致性异常期间收紧轮速融合: 该段几乎只听轮速, 不让 IMU 把位姿带走.
             const bool tight = !m_odom_consistency_ok;
             const double sc = tight ? m_config.odom_sigma_tight_scale : 1.0;
-            // 轮速 yaw 率按标定尺度修正 (默认 1.0). 见 Config::odom_yaw_scale.
-            const double yaw_rate = m_odom_yaw_rate * m_config.odom_yaw_scale;
+            // 轮速 yaw 率按标定尺度修正 (默认 1.0). 见 Config::odom_calib_yaw_scale.
+            const double yaw_rate = m_odom_yaw_rate * m_config.odom_calib_yaw_scale;
             // 慢转时轮速 yaw 有死区 (实测 0.5~1 deg/s 段几乎为 0), 低于阈值就不听它,
             // 只保留速度项: 把 yaw 的量测噪声放大到等效"关闭".
             const bool yaw_ok = std::fabs(yaw_rate) >= m_config.odom_yaw_min_rate;
-            const double sigma_w = yaw_ok ? m_config.odom_sigma_w * sc : 1.0e3;
+            const double sigma_w = yaw_ok ? m_config.odom_sigma_yaw_rate * sc : 1.0e3;
             m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat, yaw_rate, gyro_mean,
                              m_config.odom_sigma_v * sc,
                              m_config.odom_sigma_lat * sc,
@@ -433,7 +433,7 @@ void LidarProcessor::process(SyncPackage &package)
     // 只约束相对量: 不需要 map<->odom 的平移对齐, odom 的慢漂不会进地图.
     // 但两系的 **yaw** 不同 (EKF 世界系由 IMU 初始化, odom 系来自轮速), 所以每个
     // 窗口起点记 psi = yaw_ekf - yaw_odom, 施加前把 Δp_odom 旋到世界系再比.
-    if ((m_config.odom_pos_enable || m_config.odom_yaw_window_enable) && m_odom_prior) {
+    if ((m_config.odom_win_pos_enable || m_config.odom_win_yaw_enable) && m_odom_prior) {
         const double t = package.cloud_end_time;
         const M3D &Rk = m_kf->x().r_wi;
         const double yaw_ekf = std::atan2(Rk(1, 0), Rk(0, 0));
@@ -446,7 +446,7 @@ void LidarProcessor::process(SyncPackage &package)
             m_ekf_yaw0 = yaw_ekf;
             m_yaw_off = std::atan2(std::sin(yaw_ekf - m_odom_yaw_abs),
                                    std::cos(yaw_ekf - m_odom_yaw_abs));
-        } else if (t - m_pos_t0 >= m_config.odom_pos_window) {
+        } else if (t - m_pos_t0 >= m_config.odom_win_len) {
             // 窗口内 odom 相对转角 (与坐标系无关, 两系 yaw 偏移会被抵消)
             const double dpsi = std::atan2(std::sin(m_odom_yaw_abs - m_odom_yaw0),
                                            std::cos(m_odom_yaw_abs - m_odom_yaw0));
@@ -454,18 +454,18 @@ void LidarProcessor::process(SyncPackage &package)
                             m_odom_pos_y - m_odom_pos0.y());
             const double c = std::cos(m_yaw_off), s = std::sin(m_yaw_off);
             // 轮速位移按标定尺度缩放 (默认 1.0); 方向由 psi 旋到世界系.
-            const double ds = m_config.odom_dist_scale;
+            const double ds = m_config.odom_calib_dist_scale;
             const V2D d_meas(ds * (c * d_raw.x() - s * d_raw.y()),
                              ds * (s * d_raw.x() + c * d_raw.y()));
             const V2D d_ekf(m_kf->x().t_wi.x() - m_ekf_pos0.x(),
                             m_kf->x().t_wi.y() - m_ekf_pos0.y());
-            if (m_config.odom_pos_enable) {
-                m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_pos_sigma,
-                                    m_config.odom_pos_p_floor);
+            if (m_config.odom_win_pos_enable) {
+                m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_win_pos_sigma,
+                                    m_config.odom_win_pos_p_floor);
             }
-            if (m_config.odom_yaw_window_enable) {
-                m_kf->updateYawDelta(dpsi * m_config.odom_yaw_scale,
-                                     m_ekf_yaw0, m_config.odom_yaw_window_sigma);
+            if (m_config.odom_win_yaw_enable) {
+                m_kf->updateYawDelta(dpsi * m_config.odom_calib_yaw_scale,
+                                     m_ekf_yaw0, m_config.odom_win_yaw_sigma);
             }
             static int pos_log = 0;
             if (++pos_log % 20 == 0) {
@@ -474,7 +474,7 @@ void LidarProcessor::process(SyncPackage &package)
                           << " dt=" << (t - m_pos_t0)
                           << " dyaw_odom=" << dpsi * 180.0 / M_PI
                           << " yaw_off=" << m_yaw_off
-                          << " sigma=" << m_config.odom_pos_sigma << std::endl;
+                          << " sigma=" << m_config.odom_win_pos_sigma << std::endl;
             }
             m_pos_t0 = t;
             m_odom_pos0 = V2D(m_odom_pos_x, m_odom_pos_y);

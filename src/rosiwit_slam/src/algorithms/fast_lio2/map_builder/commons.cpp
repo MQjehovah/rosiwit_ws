@@ -76,11 +76,6 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.odom_consistency_gate =
                 get_input("odom_consistency_gate", "odom_consistency_gate")
                     .as<bool>(out_cfg.odom_consistency_gate);
-            out_cfg.odom_position_clamp =
-                get_input("odom_position_clamp", "odom_position_clamp")
-                    .as<bool>(out_cfg.odom_position_clamp);
-            out_cfg.odom_scale_xy =
-                get_input("odom_scale_xy", "odom_scale_xy").as<double>(out_cfg.odom_scale_xy);
             out_cfg.ground_vz_sigma =
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
             out_cfg.odom_yaw_sigma =
@@ -106,32 +101,32 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             get_input("odom_sigma_v", "odom_sigma_v").as<double>(out_cfg.odom_sigma_v);
         out_cfg.odom_sigma_lat =
             get_input("odom_sigma_lat", "odom_sigma_lat").as<double>(out_cfg.odom_sigma_lat);
-        out_cfg.odom_sigma_w =
-            get_input("odom_sigma_w", "odom_sigma_w").as<double>(out_cfg.odom_sigma_w);
+        out_cfg.odom_sigma_yaw_rate =
+            get_input("odom_sigma_yaw_rate", "odom_sigma_w").as<double>(out_cfg.odom_sigma_yaw_rate);
         out_cfg.odom_sigma_tight_scale =
             get_input("odom_sigma_tight_scale", "odom_sigma_tight_scale")
                 .as<double>(out_cfg.odom_sigma_tight_scale);
         // 轮速相对位移约束
-        out_cfg.odom_pos_enable =
-            get_input("odom_pos_enable", "odom_pos_enable").as<bool>(out_cfg.odom_pos_enable);
-        out_cfg.odom_pos_sigma =
-            get_input("odom_pos_sigma", "odom_pos_sigma").as<double>(out_cfg.odom_pos_sigma);
-        out_cfg.odom_pos_window =
-            get_input("odom_pos_window", "odom_pos_window").as<double>(out_cfg.odom_pos_window);
+        out_cfg.odom_win_pos_enable =
+            get_input("odom_win_pos_enable", "odom_pos_enable").as<bool>(out_cfg.odom_win_pos_enable);
+        out_cfg.odom_win_pos_sigma =
+            get_input("odom_win_pos_sigma", "odom_pos_sigma").as<double>(out_cfg.odom_win_pos_sigma);
+        out_cfg.odom_win_len =
+            get_input("odom_win_len", "odom_pos_window").as<double>(out_cfg.odom_win_len);
         // 轮速尺度标定 (默认 1.0 = 不改动)
-        out_cfg.odom_yaw_scale =
-            get_input("odom_yaw_scale", "odom_yaw_scale").as<double>(out_cfg.odom_yaw_scale);
-        out_cfg.odom_dist_scale =
-            get_input("odom_dist_scale", "odom_dist_scale").as<double>(out_cfg.odom_dist_scale);
-        out_cfg.odom_yaw_window_enable =
-            get_input("odom_yaw_window_enable", "odom_yaw_window_enable")
-                .as<bool>(out_cfg.odom_yaw_window_enable);
-        out_cfg.odom_yaw_window_sigma =
-            get_input("odom_yaw_window_sigma", "odom_yaw_window_sigma")
-                .as<double>(out_cfg.odom_yaw_window_sigma);
-        out_cfg.odom_pos_p_floor =
-            get_input("odom_pos_p_floor", "odom_pos_p_floor")
-                .as<double>(out_cfg.odom_pos_p_floor);
+        out_cfg.odom_calib_yaw_scale =
+            get_input("odom_calib_yaw_scale", "odom_yaw_scale").as<double>(out_cfg.odom_calib_yaw_scale);
+        out_cfg.odom_calib_dist_scale =
+            get_input("odom_calib_dist_scale", "odom_dist_scale").as<double>(out_cfg.odom_calib_dist_scale);
+        out_cfg.odom_win_yaw_enable =
+            get_input("odom_win_yaw_enable", "odom_yaw_window_enable")
+                .as<bool>(out_cfg.odom_win_yaw_enable);
+        out_cfg.odom_win_yaw_sigma =
+            get_input("odom_win_yaw_sigma", "odom_yaw_window_sigma")
+                .as<double>(out_cfg.odom_win_yaw_sigma);
+        out_cfg.odom_win_pos_p_floor =
+            get_input("odom_win_pos_p_floor", "odom_pos_p_floor")
+                .as<double>(out_cfg.odom_win_pos_p_floor);
         out_cfg.gyro_scale       = get_input("gyro_scale","gyro_scale").as<double>(out_cfg.gyro_scale);
         out_cfg.max_state_velocity =
             get_alias("max_state_velocity","max_state_velocity").as<double>(out_cfg.max_state_velocity);
