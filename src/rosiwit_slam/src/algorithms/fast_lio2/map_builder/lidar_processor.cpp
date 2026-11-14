@@ -412,10 +412,14 @@ void LidarProcessor::process(SyncPackage &package)
             const double sc = tight ? m_config.odom_sigma_tight_scale : 1.0;
             // 轮速 yaw 率按标定尺度修正 (默认 1.0). 见 Config::odom_yaw_scale.
             const double yaw_rate = m_odom_yaw_rate * m_config.odom_yaw_scale;
+            // 慢转时轮速 yaw 有死区 (实测 0.5~1 deg/s 段几乎为 0), 低于阈值就不听它,
+            // 只保留速度项: 把 yaw 的量测噪声放大到等效"关闭".
+            const bool yaw_ok = std::fabs(yaw_rate) >= m_config.odom_yaw_min_rate;
+            const double sigma_w = yaw_ok ? m_config.odom_sigma_w * sc : 1.0e3;
             m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat, yaw_rate, gyro_mean,
                              m_config.odom_sigma_v * sc,
                              m_config.odom_sigma_lat * sc,
-                             m_config.odom_sigma_w * sc);
+                             sigma_w);
             static int fuse_log = 0;
             if (++fuse_log % 50 == 0) {
                 std::cout << "[FLIO2] odom fuse speed=" << m_odom_speed

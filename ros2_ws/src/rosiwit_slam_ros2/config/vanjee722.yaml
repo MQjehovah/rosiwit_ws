@@ -62,30 +62,33 @@ global:
     dist_thresh: 0.4 # ScanContext距离阈值
     candidate_ratio: 0.3 # 候选比例
 mapping:
-  # 建图链路怎么用 /odom: none(不用) | gate(只做更新门限) | fuse(水平速度+yaw率)
-  odom_mode: none
+  # 建图链路怎么用 /odom: none(不用) | gate(只做更新门限) | fuse(水平速度+yaw率) | yaw(只融 yaw 率)
+  odom_mode: fuse
   frontend:
     # 地面跟随: 不锁 z/roll/pitch, 用地面法向把 v.z 软约束到坡面分量.
     use_point_timestamp: true
     odom_position_clamp: false   # 实测会把正常段也钳弯 (300-435m 偏差 16.9->22.2)
     odom_consistency_gate: false
     # ---- 轮速融合权重 (fuse / yaw 生效; 权重 = 1/sigma^2) ----
-    odom_sigma_v: 0.2            # m/s,   前向速度量测噪声
-    odom_sigma_lat: 0.10         # m/s,   侧向速度量测噪声
-    odom_sigma_w: 0.05           # rad/s, 世界系 yaw 率量测噪声
-    odom_sigma_tight_scale: 0.3  # 一致性异常期间(odom_consistency_gate)把上面三个 sigma 乘以该系数
-    # ---- 轮速相对位移约束 (窗口内 Δp_ekf 与 Δp_odom 一致) ----
-    # 只约束相对位移: 无需 map<->odom 平移对齐, odom 的慢漂不进地图;
-    # 两系 yaw 不同, 每个窗口起点估计 psi=yaw_ekf-yaw_odom 后把 Δp 旋到世界系.
-    odom_pos_enable: false
+    odom_sigma_v: 0.2            # m/s,   前向速度量测噪声 (原硬编码 0.2)
+    odom_sigma_lat: 0.10         # m/s,   侧向速度量测噪声 (原硬编码 0.10)
+    odom_sigma_w: 0.05           # rad/s, 世界系 yaw 率量测噪声 (原硬编码 0.05)
+    odom_sigma_tight_scale: 0.3  # 一致性异常期间把上面三个 sigma 乘以该系数
+    # ---- 轮速相对位移约束 (窗口内 Δp 与 odom 一致) ----
+    # 只约束相对位移, 不需要 map<->odom 对齐, odom 的慢漂不会进地图.
+    odom_pos_enable: true
     odom_pos_sigma: 0.10         # m, 每窗口位移噪声
     odom_pos_window: 1.0         # s, 滑窗长度
     # ---- 轮速标定 (尺度; 默认 1.0 = 不改动) ----
     # 轮径/轮距标定不准会让轮速 odom 的 yaw 与位移系统性偏大或偏小.
-    # odom_yaw_scale  = (IMU 陀螺积分得到的净转角) / (轮速 odom 净转角)
-    # odom_dist_scale = 已知长度的直线段 / 该段轮速 odom 位移
+    # 标定方法: odom_yaw_scale = (IMU 陀螺积分得到的净转角) / (轮速 odom 净转角);
+    #           odom_dist_scale 用已知长度的直线段或可信参考轨迹.
     odom_yaw_scale: 1.0
     odom_dist_scale: 1.0
+    # 轮速 yaw 死区门控 (rad/s): |yaw_rate| 低于此值时只融速度、不融 yaw.
+    # 本数据集实测轮速慢转时 yaw 几乎为 0 (陀螺 0.5~1 deg/s 时轮速只给 0.1 deg/s,
+    # 1~2 deg/s 给 0.46 倍, 5 deg/s 以上才 0.9 倍), 所以慢转必须不听它.
+    odom_yaw_min_rate: 0.10
     ground_follow_z: true
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态
@@ -107,13 +110,13 @@ mapping:
     local_map_size: 300          # 局部地图立方体边长(m)
     detection_range: 60          # 雷达有效检测距离(m)
     map_move_threshold: 1.5      # 局部地图滑动窗口阈值比例
-    acc_noise: 0.05              # 加速度计白噪声 (过坎冲击多, 不宜过小)
-    gyro_noise: 0.05             # 陀螺白噪声
-    acc_bias_random_walk: 0.001  # 加速度计零偏随机游走
-    gyro_bias_random_walk: 0.001 # 陀螺零偏随机游走
+    acc_noise: 0.5               # 加速度计白噪声 (过坎冲击多, 不宜过小)
+    gyro_noise: 0.5             # 陀螺白噪声
+    acc_bias_random_walk: 0.0001  # 加速度计零偏随机游走
+    gyro_bias_random_walk: 0.0001 # 陀螺零偏随机游走
     imu_init_samples: 400        # IMU静止初始化样本数
     nearest_search_points: 5     # 近邻搜索点数
-    iekf_max_iterations: 5       # IEKF最大迭代次数
+    iekf_max_iterations: 8       # IEKF最大迭代次数
     scan_voxel: 0.2              # 前端扫描降采样体素(m)
     imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
     imu_lidar_translation: [0.0, 0.0, 0.0] # 初始IMU<-lidar平移(m)
