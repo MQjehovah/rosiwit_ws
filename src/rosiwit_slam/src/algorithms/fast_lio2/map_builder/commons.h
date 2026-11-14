@@ -64,12 +64,12 @@ struct Config
     int degenerate_min_effective_points = 300;
     double degenerate_ratio = 0.10;      // eff / 输入点数 下限
     double degenerate_eigen_ratio = 0.02; // 信息矩阵 λmin/λmax 低于此值的方向按退化处理
-    // 实验性: 移除弱方向量测信息 (LOAM 式). 本场地处处走廊, 移除后全程削弱 LiDAR,
-    // 三版实测均为负结果 (z -37~-101), 默认关闭, 保留待更细的门控设计.
-    bool degenerate_remove_weak = false;
-    /// 软降权下限 (0 = 关闭). >0 时改用软降权: gain = max(floor, r/(r+thr)),
-    /// 对弱方向按 gain 衰减信息量而_不_置零, 避免沿走廊轴完全失去约束.
-    double degenerate_soft_floor = 0.0;
+    /// 弱方向自适应降权增益 (0 = 关闭, 只检测):
+    ///   gain_k = clamp((r_k/thr)^0.25, degenerate_gain, 1), r_k=λ_k/λmax, thr=degenerate_eigen_ratio
+    ///   = 0 时不做任何处理; (0,1] 时按下限降权, 该方向的信息量按 gain_k 保留.
+    /// 说明: 没有"删除/置零"路径, 该方向永远保留至少 degenerate_gain 的信息,
+    ///       避免沿走廊轴完全失去约束而自由漂移.
+    double degenerate_gain = 0.0;
     bool gravity_align = true;
     double init_z = 0.0;  // IMU body 世界 z 初值; 设成 IMU 离地高度使 footprint z=0
     bool undistort_enable = true;

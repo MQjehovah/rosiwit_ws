@@ -417,36 +417,42 @@ void IESKF::update()
                     if (n_deg == 0) d0 = d;
                     ++n_deg;
                 }
-                // 观测日志: 与是否处理无关, 始终上报 (每 500 次迭代)
+                // 观测日志: 与是否处理无关, 始终上报 (每 500 次迭代).
+                // gmin 记录本帧实际施加的最小增益, 便于确认自适应是否在起作用.
+                const double kShapeP = 0.25;   // 自适应指数 (固定): gain_k = (r_k/thr)^p
+                double gmin = -1.0;
+                if (n_deg > 0 && m_degenerate_gain > 0.0) {
+                    const double thr = std::max(m_degenerate_eigen_ratio, 1e-12);
+                    for (int j = 0; j < n_deg; ++j) {
+                        const double rr = std::max(weak_lam(j) / ev_max, 1e-30);
+                        double g = std::pow(rr / thr, kShapeP);
+                        g = std::min(std::max(g, m_degenerate_gain), 1.0);
+                        if (gmin < 0.0 || g < gmin) gmin = g;
+                    }
+                }
                 static int deg_probe_log = 0;
                 if (++deg_probe_log % 500 == 0) {
                     std::cout << "[FLIO2] degen probe ratio=" << (ev(0) / ev_max)
                               << " thr=" << m_degenerate_eigen_ratio
                               << " n_weak=" << n_deg
-                              << " mode="
-                              << (m_degenerate_soft_floor > 0.0 ? "soft"
-                                  : (m_degenerate_remove_weak ? "remove" : "none"))
-                              << " floor=" << m_degenerate_soft_floor
+                              << " gain=" << m_degenerate_gain
+                              << " gmin=" << gmin
                               << " axis=(" << d0(3) << "," << d0(4) << "," << d0(5) << ")"
                               << std::endl;
                 }
-                // 处理: 软降权优先(保留 floor), 否则硬删除(gain=0).
-                // 两者都按"沿该方向衰减信息量与 b"实现, 保证更新一致 (否则 H/b 不匹配).
-                if (n_deg > 0 && (m_degenerate_soft_floor > 0.0 || m_degenerate_remove_weak)) {
+                // 处理: 只做自适应降权 (无删除路径). 沿该方向从 H 与 b 各扣掉 (1-gain).
+                // gain 有下限 m_degenerate_gain>0, 所以该方向永远保留部分约束.
+                if (n_deg > 0 && m_degenerate_gain > 0.0) {
+                    const double thr = std::max(m_degenerate_eigen_ratio, 1e-12);
                     const Eigen::Matrix<double, 6, 1> bpose = b.segment<6>(0);
                     for (int j = 0; j < n_deg; ++j) {
                         const Eigen::Matrix<double, 6, 1> d = weak_dirs.col(j);
                         const double lam = weak_lam(j);
-                        double gain = 0.0;                                  // 硬删除
-                        if (m_degenerate_soft_floor > 0.0) {
-                            const double r = lam / ev_max;
-                            const double thr =
-                                std::max(m_degenerate_eigen_ratio, 1e-9);
-                            gain = r / (r + thr);                           // 软降权
-                            gain = std::max(gain, m_degenerate_soft_floor); // 下限, 不置零
-                            gain = std::min(gain, 1.0);
-                        }
-                        const double a = 1.0 - gain;
+                        const double rr = std::max(lam / ev_max, 1e-30);
+                        double g = std::pow(rr / thr, kShapeP);
+                        g = std::min(std::max(g, m_degenerate_gain), 1.0);
+                        const double a = 1.0 - g;
+                        if (a <= 0.0) continue;
                         H.block<6, 6>(0, 0) -= a * lam * d * d.transpose();
                         b.segment<6>(0) -= a * d.dot(bpose) * d;
                     }

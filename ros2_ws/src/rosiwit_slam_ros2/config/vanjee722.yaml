@@ -74,16 +74,12 @@ mapping:
     gravity_align: true # 是否用重力方向初始化姿态
     lidar_cov_inv: 5000.0 # 激光观测信息矩阵权重
     # 方向性退化检测阈值: H 位姿块 λmin/λmax 低于此值的方向视为退化
-    # (走廊沿轴最常见). 检测始终执行并打 [FLIO2] degen probe 日志,
-    # 便于先量化现场退化程度, 再决定处理策略.
+    # (走廊沿轴最常见). 检测始终执行并打 [FLIO2] degen probe 日志.
     degenerate_eigen_ratio: 0.02
-    # 退化处理策略: false = 只检测不处理; true = 把弱方向的量测信息
-    # 从 H 里移除, 该方向回落到 IMU/odom 先验 (切忌反过来加信息).
-    degenerate_remove_weak: false
-    # 软降权下限 (0 = 关闭). >0 时改用软降权: gain = max(floor, r/(r+thr)),
-    # r=λ/λmax; 对弱方向按 gain 衰减信息量而_不_置零, 避免沿走廊轴完全失去
-    # 约束 (实测硬删除会沿轴漂移).
-    degenerate_soft_floor: 0.0
+    # 弱方向自适应降权 (0 = 关闭, 只检测):
+    #   gain_k = clamp((r_k / thr)^0.25, degenerate_gain, 1), r_k = λ_k/λmax
+    #   (0,1] = 降权下限; 该方向始终保留至少该比例的信息量 (没有删除路径).
+    degenerate_gain: 0.0
     robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
     robust_scale: 0.5 # 鲁棒核尺度
     robust_floor: 0.1 # 鲁棒权重下限
