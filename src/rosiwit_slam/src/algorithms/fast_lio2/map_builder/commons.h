@@ -116,6 +116,11 @@ struct Config
     //   odom_dist_scale 乘到位置约束里的位移模长上
     double odom_yaw_scale = 1.0;
     double odom_dist_scale = 1.0;
+    // 用"窗口内 odom 相对转角"代替"瞬时 yaw 率" (默认关).
+    // 轮速 odom 的 twist.angular.z 在 50Hz 上抖 ±8deg/s, 但位姿 yaw 的 1s 窗口
+    // 增量与陀螺积分相关系数 0.999 (实测 300 窗口), 所以用角度更稳.
+    bool   odom_yaw_window_enable = false;
+    double odom_yaw_window_sigma = 0.01;   // rad, 每窗口转角噪声 (~0.6deg)
 
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = true;

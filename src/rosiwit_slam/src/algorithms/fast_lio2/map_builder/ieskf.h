@@ -97,6 +97,12 @@ public:
     ///        会被吸收成零偏 (实测把 bg 从 0.002 推到 0.016 rad/s), 建议 false.
     void updateYawRate(double yaw_rate, const V3D &gyro, double sigma_w,
                        bool update_bias = true);
+    /// 窗口内相对转角约束: yaw(now) - yaw(窗口起点) 应等于 dpsi.
+    /// 比"用瞬时 yaw 率"稳得多: 轮速 odom 的 twist.angular.z 在 50Hz 上抖动 ±8 deg/s,
+    /// 但它的**位姿 yaw** 在 1s 窗口上与陀螺积分相关系数 0.999 (实测 300 个窗口).
+    /// @param dpsi    轮速 odom 在窗口内的转角 (rad, 已去 wrap)
+    /// @param yaw_ref 窗口起点的 EKF yaw (rad)
+    void updateYawDelta(double dpsi, double yaw_ref, double sigma);
     void updateVerticalVelocity(double target_vz, double sigma);
     /// 地面 3-DoF 量测 (LeGO-LOAM 式): 用地平面法向约束 roll/pitch, 用地面高度约束 z.
     /// n_world 是世界系地面法向; z_target 是传感器高度期望 (地面 + h0).

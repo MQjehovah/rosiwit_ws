@@ -108,6 +108,9 @@ private:
     double m_pos_t0 = -1.0;
     V2D    m_odom_pos0 = V2D::Zero();
     V2D    m_ekf_pos0 = V2D::Zero();
+    // 窗口内相对转角约束用的起点
+    double m_odom_yaw0 = 0.0;
+    double m_ekf_yaw0 = 0.0;
     // 坡地 z 安全先验: 2D SLAM 的 base z 是平地基准, 只作为"防跑飞"参考,
     // 用 50m 死区, 正常坡道 (实测 450s 内 z 约 -6..13m) 完全不受影响。
     bool m_z_ref_valid = false;

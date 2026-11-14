@@ -284,6 +284,28 @@ void IESKF::updateYawRate(double yaw_rate, const V3D &gyro, double sigma_w,     
     m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
 }
 
+void IESKF::updateYawDelta(double dpsi, double yaw_ref, double sigma)
+{
+    // 1 维: (yaw_now - yaw_ref) 应等于 dpsi. 姿态扰动的世界系 z 分量对 yaw 的
+    // 雅可比为 1 (小角度), 所以 A 只在旋转块的第 3 个分量上取 1.
+    const M3D &R = m_x.r_wi;
+    const double yaw_now = std::atan2(R(1, 0), R(0, 0));
+    const double d_now = std::atan2(std::sin(yaw_now - yaw_ref),
+                                    std::cos(yaw_now - yaw_ref));
+    Eigen::Matrix<double, 1, 21> A = Eigen::Matrix<double, 1, 21>::Zero();
+    A(0, 2) = 1.0;
+    const double r = dpsi - d_now;
+    if (std::fabs(r) > 1.0) return;      // 超过 57deg 视为野值, 直接丢
+    const double Rm = sigma * sigma;
+    const double S = (A * m_P * A.transpose())(0, 0) + Rm;
+    const Eigen::Matrix<double, 21, 1> K = m_P * A.transpose() / S;
+    m_x += K * r;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKA = I - K * A;
+    m_P = IKA * m_P * IKA.transpose() + K * Rm * K.transpose();
+}
+
 void IESKF::updateVerticalVelocity(double target_vz, double sigma)
 {
     // 软约束 v.z 到 target_vz: 平地 target=0, 坡道 target=轮速*sin(pitch).

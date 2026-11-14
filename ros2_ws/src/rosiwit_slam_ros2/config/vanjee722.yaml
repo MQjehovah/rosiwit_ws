@@ -89,6 +89,11 @@ mapping:
     # 本数据集实测轮速慢转时 yaw 几乎为 0 (陀螺 0.5~1 deg/s 时轮速只给 0.1 deg/s,
     # 1~2 deg/s 给 0.46 倍, 5 deg/s 以上才 0.9 倍), 所以慢转必须不听它.
     odom_yaw_min_rate: 0.10
+    # 用"窗口内 odom 相对转角"代替瞬时 yaw 率 (默认关).
+    # 轮速 twist.angular.z 在 50Hz 上抖 ±8deg/s, 但位姿 yaw 的 1s 增量与陀螺积分
+    # 相关 0.999 (实测 300 窗口), 所以用角度更稳. 开启后每 odom_pos_window 施加一次.
+    odom_yaw_window_enable: false
+    odom_yaw_window_sigma: 0.01   # rad, 每窗口转角噪声 (~0.6deg)
     ground_follow_z: true
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态

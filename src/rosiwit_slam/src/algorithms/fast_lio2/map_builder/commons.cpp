@@ -123,6 +123,12 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             get_input("odom_yaw_scale", "odom_yaw_scale").as<double>(out_cfg.odom_yaw_scale);
         out_cfg.odom_dist_scale =
             get_input("odom_dist_scale", "odom_dist_scale").as<double>(out_cfg.odom_dist_scale);
+        out_cfg.odom_yaw_window_enable =
+            get_input("odom_yaw_window_enable", "odom_yaw_window_enable")
+                .as<bool>(out_cfg.odom_yaw_window_enable);
+        out_cfg.odom_yaw_window_sigma =
+            get_input("odom_yaw_window_sigma", "odom_yaw_window_sigma")
+                .as<double>(out_cfg.odom_yaw_window_sigma);
         out_cfg.gyro_scale       = get_input("gyro_scale","gyro_scale").as<double>(out_cfg.gyro_scale);
         out_cfg.max_state_velocity =
             get_alias("max_state_velocity","max_state_velocity").as<double>(out_cfg.max_state_velocity);
