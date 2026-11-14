@@ -80,10 +80,10 @@ public:
     void predict(const Input &inp, double dt, const M12D &Q);
 
     void update();
-    /// 轮式 odom 量测 (fuse): 车体 x 前进速度(带符号) + 车体 y 侧向速度(≈0) +
-    /// 世界系 yaw 角速度, 3 维标准 EKF 更新. 比原来只用速度模长多利用了符号与侧向约束.
-    void updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &gyro,
-                    double sigma_v, double sigma_lat, double sigma_w);
+    /// 轮式 odom 量测 (fuse): 车体 x 前进速度(带符号) + 车体 y 侧向速度(≈0), 2 维 EKF.
+    /// 不融 yaw 角速度: 轮速 odom 的 twist 是位姿微分的噪声 (实测 50Hz 上抖 ±8deg/s),
+    /// 角速度改由窗口内相对转角 (updateYawDelta) 提供.
+    void updateOdom(double v_fwd, double v_lat, double sigma_v, double sigma_lat);
     /// 轮速相对位移约束: 使"窗口内 EKF 位移"与"odom 位移"一致.
     /// 只约束相对量, 不需要 map<->odom 对齐, 因此不会把 odom 的慢漂灌进地图.
     /// @param d_meas odom 在该窗口内的水平位移
@@ -92,12 +92,6 @@ public:
                        double p_floor = 0.0);
     /// 垂直速度软约束: 车体在坡上 v.z 仍然是小量, 长时间累积会变成 z 漂移.
     /// 每帧把 v.z 轻拉向 0, sigma 取 0.5m/s, 不影响正常爬坡分量.
-    /// 轮速 yaw 率单维量测: 只约束世界系 yaw 角速度, 不动速度/侧向.
-    /// 急转段姿态需要外部约束, 而同时约束速度会与地面/竖直模型冲突.
-    /// @param update_bias 是否允许该量测更新陀螺零偏. 轮速 yaw 率有尺度误差时
-    ///        会被吸收成零偏 (实测把 bg 从 0.002 推到 0.016 rad/s), 建议 false.
-    void updateYawRate(double yaw_rate, const V3D &gyro, double sigma_w,
-                       bool update_bias = true);
     /// 窗口内相对转角约束: yaw(now) - yaw(窗口起点) 应等于 dpsi.
     /// 比"用瞬时 yaw 率"稳得多: 轮速 odom 的 twist.angular.z 在 50Hz 上抖动 ±8 deg/s,
     /// 但它的**位姿 yaw** 在 1s 窗口上与陀螺积分相关系数 0.999 (实测 300 个窗口).

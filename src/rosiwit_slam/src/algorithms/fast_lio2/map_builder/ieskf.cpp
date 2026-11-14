@@ -207,14 +207,13 @@ void IESKF::predict(const Input &inp, double dt, const M12D &Q)
     m_P = m_F * m_P * m_F.transpose() + m_G * Q * m_G.transpose();
 }
 
-void IESKF::updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &gyro,
-                       double sigma_v, double sigma_lat, double sigma_w)
+void IESKF::updateOdom(double v_fwd, double v_lat, double sigma_v, double sigma_lat)
 {
-    // 3 维: 车体 x 速度 (带符号) / 车体 y 速度 (非完整约束, 期望 0) / 世界 yaw 角速度.
-    // 轮式 odom 不约束 z 方向速度, 这里也不碰 v.z.
-    Eigen::Matrix<double, 3, 21> A = Eigen::Matrix<double, 3, 21>::Zero();
-    Eigen::Vector3d r = Eigen::Vector3d::Zero();
-    Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+    // 2 维: 车体 x 速度 (带符号) / 车体 y 速度 (非完整约束, 期望 0).
+    // 轮式 odom 不约束 z 方向速度, 这里也不碰 v.z; yaw 角速度也不再从 twist 取.
+    Eigen::Matrix<double, 2, 21> A = Eigen::Matrix<double, 2, 21>::Zero();
+    Eigen::Vector2d r = Eigen::Vector2d::Zero();
+    Eigen::Matrix2d R = Eigen::Matrix2d::Identity();
 
     const M3D Rt = m_x.r_wi.transpose();
     const V3D v_body = Rt * m_x.v;
@@ -231,14 +230,8 @@ void IESKF::updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &g
         R(1, 1) = 1.0;
     }
 
-    const V3D w = gyro - m_x.bg;
-    A.block<1, 3>(2, 0) = -(m_x.r_wi * Sophus::SO3d::hat(w)).row(2);
-    A.block<1, 3>(2, 15) = -m_x.r_wi.row(2);
-    r(2) = yaw_rate - (m_x.r_wi * w).z();
-    R(2, 2) = sigma_w * sigma_w;
-
-    const Eigen::Matrix3d S = A * m_P * A.transpose() + R;
-    const Eigen::Matrix<double, 21, 3> K = m_P * A.transpose() * S.inverse();
+    const Eigen::Matrix2d S = A * m_P * A.transpose() + R;
+    const Eigen::Matrix<double, 21, 2> K = m_P * A.transpose() * S.inverse();
     const V21D dx = K * r;
     m_x += dx;
     m_x.clampPhysical();
@@ -268,24 +261,6 @@ void IESKF::updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma,
     }
     const Eigen::Matrix2d S = A * m_P * A.transpose() + R;
     const Eigen::Matrix<double, 21, 2> K = m_P * A.transpose() * S.inverse();
-    m_x += K * r;
-    m_x.clampPhysical();
-    const M21D I = M21D::Identity();
-    const M21D IKA = I - K * A;
-    m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
-}
-
-void IESKF::updateYawRate(double yaw_rate, const V3D &gyro, double sigma_w,                          bool update_bias)
-{
-    // 1 维量测: 世界系 yaw 角速度. 预测值 = (r_wi * (w - bg)).z
-    Eigen::Matrix<double, 1, 21> A = Eigen::Matrix<double, 1, 21>::Zero();
-    const V3D w = gyro - m_x.bg;
-    A.block<1, 3>(0, 0) = -(m_x.r_wi * Sophus::SO3d::hat(w)).row(2);
-    if (update_bias) A.block<1, 3>(0, 15) = -m_x.r_wi.row(2);  // 否则不碰零偏
-    const double r = yaw_rate - (m_x.r_wi * w).z();
-    const double R = sigma_w * sigma_w;
-    const double S = (A * m_P * A.transpose())(0, 0) + R;
-    const Eigen::Matrix<double, 21, 1> K = m_P * A.transpose() / S;
     m_x += K * r;
     m_x.clampPhysical();
     const M21D I = M21D::Identity();

@@ -77,54 +77,28 @@ struct Config
     // 建图 odom 使用方式: none | gate | fuse (来自 mapping.odom_mode)
     bool odom_fuse = false;
     bool odom_gate = false;
-    // 轮速 yaw 率单维融合 (mapping.odom_mode=yaw): 只钉世界系 yaw 角速度,
-    // 不碰速度/侧向. 急转段(一帧 0.1s 扫内可转十几度)姿态主要靠 IMU 与去畸变,
-    // 这里补一个外部 yaw 率约束; 速度那一路会与地面/竖直模型冲突(实测 z 崩到 -26m).
-    bool odom_yaw_fuse = false;
-    double odom_yaw_sigma = 0.02;      // rad/s, 基础 sigma
-    double odom_yaw_sigma_rel = 0.05;  // 相对项: sigma += rel*|yaw_rate|
-    // 门控: 只在"真实转向"(|yaw_rate| 够大) 且 与 IMU 预测一致(差值在容差内) 时才用该证据.
-    // 轮速 yaw 率有约 2.4% 尺度误差与未知零偏, 不一致时若强行融合会把零偏带歪 (实测 z 崩到 -20m).
-    double odom_yaw_min_rate = 0.10;   // rad/s, 低于此视为直行/静止, 不融合
-    double odom_yaw_gate_abs = 0.05;   // rad/s, 一致性容差绝对值
-    double odom_yaw_gate_rel = 0.10;   // 一致性容差相对项: gate = abs + rel*|yaw_rate|
-    bool odom_yaw_update_bias = false; // 是否允许该证据更新陀螺零偏 (默认否)
 
-    // ---- 轮速融合权重 (可配) ----
-    // updateOdom 的三维量测噪声: 前向速度 / 侧向速度 / 世界系 yaw 率.
-    // 原先是硬编码 0.2 / 0.10 / 0.05; 权重 = 1/sigma^2.
+    // ---- 轮速速度量测 (fuse): 只用车体前向/侧向速度, 2 维 ----
+    // 不融 yaw 角速度: /odom 的 twist 是位姿微分的噪声 (实测 50Hz 抖 ±8deg/s),
+    // 角度改由下面的"窗口内相对转角"提供.
     double odom_sigma_v = 0.2;          // m/s
     double odom_sigma_lat = 0.10;       // m/s
-    double odom_sigma_yaw_rate = 0.05;         // rad/s
-    // 一致性异常期间(odom_consistency_gate 触发)把上面三个 sigma 乘以该系数.
-    // 1.0 = 不收紧; 0.3 接近原先硬编码的 0.05/0.03/0.02.
+    // 一致性异常期间(odom_consistency_gate 触发)把上面两个 sigma 乘以该系数.
     double odom_sigma_tight_scale = 0.3;
 
-    // ---- 轮速相对位移约束 (窗口内 Δp 与 odom 一致) ----
-    // 不需要 map<->odom 对齐: 只约束"这段时间内走了多少", 不约束绝对位置,
-    // 因此 odom 的慢漂不会被灌进地图, 但能压住沿走廊轴的滑移.
-    bool   odom_win_pos_enable = false;
-    double odom_win_pos_sigma = 0.10;       // m, 每窗口的位移噪声
-    double odom_win_len = 1.0;       // s, 滑窗长度
-
-    // ---- 轮速标定 (尺度) ----
-    // 轮速 odom 的 yaw 与位移尺度常因轮径/轮距标定不准而系统性偏差
-    // (本数据集实测: 100s 内轮速净转角 134 deg, 而 IMU 陀螺积分 210 deg,
-    //  即 yaw 只有真值的约 0.64 倍; 距离上轮速 99m vs 2D 参考 44m 也差一倍量级).
-    // 这里只做线性尺度修正, 默认 1.0 = 不改动.
-    //   odom_calib_yaw_scale  乘到 yaw 率量测上
-    //   odom_calib_dist_scale 乘到位置约束里的位移模长上
-    double odom_calib_yaw_scale = 1.0;
-    double odom_calib_dist_scale = 1.0;
-    // 用"窗口内 odom 相对转角"代替"瞬时 yaw 率" (默认关).
-    // 轮速 odom 的 twist.angular.z 在 50Hz 上抖 ±8deg/s, 但位姿 yaw 的 1s 窗口
-    // 增量与陀螺积分相关系数 0.999 (实测 300 窗口), 所以用角度更稳.
-    bool   odom_win_yaw_enable = false;
-    double odom_win_yaw_sigma = 0.01;   // rad, 每窗口转角噪声 (~0.6deg)
+    // ---- 窗口约束 (每 odom_win_len 秒一次, 只用位姿) ----
+    double odom_win_len = 1.0;              // s, 窗口长度 (位移/转角共用)
+    bool   odom_win_pos_enable = false;     // 窗口内位移 Δp_ekf ≡ Δp_odom
+    double odom_win_pos_sigma = 0.10;       // m, 位移噪声
     // 位置协方差下限 (m). FAST-LIO 的位置协方差会被点面约束压到亚毫米级
     // (实测 Pxx≈1.4e-7), 1Hz 位移量测的增益只有 1e-4 -> 位置约束形同虚设.
-    // 抬到 p_floor^2 之后轮速位移才真正能拉; 0 = 不抬 (原行为).
     double odom_win_pos_p_floor = 0.0;
+    bool   odom_win_yaw_enable = false;     // 窗口内转角 Δyaw_ekf ≡ Δyaw_odom
+    double odom_win_yaw_sigma = 0.01;       // rad, 转角噪声 (~0.6deg)
+
+    // ---- 轮速标定 (尺度, 默认 1.0 = 不改动) ----
+    double odom_calib_yaw_scale = 1.0;      // 陀螺净转角 / 轮速净转角
+    double odom_calib_dist_scale = 1.0;     // 已知长度 / 该段轮速位移
 
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = true;

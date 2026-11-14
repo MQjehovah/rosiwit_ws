@@ -410,20 +410,12 @@ void LidarProcessor::process(SyncPackage &package)
             // 一致性异常期间收紧轮速融合: 该段几乎只听轮速, 不让 IMU 把位姿带走.
             const bool tight = !m_odom_consistency_ok;
             const double sc = tight ? m_config.odom_sigma_tight_scale : 1.0;
-            // 轮速 yaw 率按标定尺度修正 (默认 1.0). 见 Config::odom_calib_yaw_scale.
-            const double yaw_rate = m_odom_yaw_rate * m_config.odom_calib_yaw_scale;
-            // 慢转时轮速 yaw 有死区 (实测 0.5~1 deg/s 段几乎为 0), 低于阈值就不听它,
-            // 只保留速度项: 把 yaw 的量测噪声放大到等效"关闭".
-            const bool yaw_ok = std::fabs(yaw_rate) >= m_config.odom_yaw_min_rate;
-            const double sigma_w = yaw_ok ? m_config.odom_sigma_yaw_rate * sc : 1.0e3;
-            m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat, yaw_rate, gyro_mean,
+            m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat,
                              m_config.odom_sigma_v * sc,
-                             m_config.odom_sigma_lat * sc,
-                             sigma_w);
+                             m_config.odom_sigma_lat * sc);
             static int fuse_log = 0;
             if (++fuse_log % 50 == 0) {
                 std::cout << "[FLIO2] odom fuse speed=" << m_odom_speed
-                          << " yaw_rate=" << m_odom_yaw_rate
                           << " v=" << m_kf->x().v.transpose()
                           << " bg=" << m_kf->x().bg.transpose() << std::endl;
             }
@@ -486,37 +478,6 @@ void LidarProcessor::process(SyncPackage &package)
         }
     }
 
-    // 轮速 yaw 率单维量测 (odom_mode=yaw): 只给姿态一个外部约束.
-    // sigma 随 |yaw_rate| 放大: 轮速差分的角速度误差大致正比于转速.
-    if (m_config.odom_yaw_fuse && m_odom_prior) {
-        V3D gyro_mean = V3D::Zero();
-        int n = 0;
-        for (const auto &imu : package.imus) { gyro_mean += imu.gyro; ++n; }
-        if (n > 0) {
-            gyro_mean /= static_cast<double>(n);
-            // 门控 1: 只在真实转向时使用 (直行/静止时轮速 yaw 率以噪声为主)
-            // 门控 2: 与 IMU 预测差异必须在容差内 (不一致说明轮速打滑/尺度偏差大)
-            const double pred = (m_kf->x().r_wi * (gyro_mean - m_kf->x().bg)).z();
-            const double diff = std::fabs(m_odom_yaw_rate - pred);
-            const double gate = m_config.odom_yaw_gate_abs +
-                                m_config.odom_yaw_gate_rel * std::fabs(m_odom_yaw_rate);
-            const bool active = (std::fabs(m_odom_yaw_rate) > m_config.odom_yaw_min_rate) &&
-                                (diff <= gate);
-            if (active) {
-                const double sig = m_config.odom_yaw_sigma +
-                                   m_config.odom_yaw_sigma_rel * std::fabs(m_odom_yaw_rate);
-                m_kf->updateYawRate(m_odom_yaw_rate, gyro_mean, sig,
-                                    m_config.odom_yaw_update_bias);
-            }
-            static int yawf_log = 0;
-            if (++yawf_log % 100 == 0) {
-                std::cout << "[FLIO2] odom yaw gate " << (active ? "on" : "off")
-                          << " rate=" << m_odom_yaw_rate << " pred=" << pred
-                          << " diff=" << diff << " gate=" << gate
-                          << " bg=" << m_kf->x().bg.transpose() << std::endl;
-            }
-        }
-    }
     m_last_cloud_end = package.cloud_end_time;
     incrCloudMap();
 }

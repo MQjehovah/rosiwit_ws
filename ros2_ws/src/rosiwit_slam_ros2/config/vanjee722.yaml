@@ -62,7 +62,7 @@ global:
     dist_thresh: 0.4 # ScanContext距离阈值
     candidate_ratio: 0.3 # 候选比例
 mapping:
-  # 建图链路怎么用 /odom: none(不用) | gate(只做更新门限) | fuse(水平速度+yaw率) | yaw(只融 yaw 率)
+  # 建图链路怎么用 /odom: none(不用) | gate(只做更新门限) | fuse(水平速度)
   odom_mode: none
   frontend:
     # 地面跟随: 不锁 z/roll/pitch, 用地面法向把 v.z 软约束到坡面分量.
@@ -76,7 +76,6 @@ mapping:
     # ---- 1) 瞬时量测权重 (odom_mode=fuse; 权重 = 1/sigma^2) ----
     odom_sigma_v: 0.2             # m/s,   前向速度
     odom_sigma_lat: 0.10          # m/s,   侧向速度
-    odom_sigma_yaw_rate: 0.05     # rad/s, 世界系 yaw 角速度 (放大到 10 等于关掉)
     odom_sigma_tight_scale: 0.3   # 一致性门控触发期间, 上面三个 sigma 乘以该系数
     # ---- 2) 窗口约束 (每 odom_win_len 秒一次; 只用位姿) ----
     odom_win_len: 1.0             # s, 窗口长度
@@ -88,8 +87,6 @@ mapping:
     # ---- 3) 轮速标定 (默认 1.0 = 不改动) ----
     odom_calib_yaw_scale: 1.0     # 陀螺积分净转角 / 轮速净转角
     odom_calib_dist_scale: 1.0    # 已知长度直线段 / 该段轮速位移
-    # ---- 4) odom_mode=yaw 专用 ----
-    odom_yaw_min_rate: 0.10       # rad/s, 低于此视为直行, 不融合
     ground_follow_z: true
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态

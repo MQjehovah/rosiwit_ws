@@ -246,10 +246,9 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
             }
         }
         m_builder->lidar_processor()->setOdomFuse(m_config.odom_fuse);
-        m_builder->lidar_processor()->setOdomYawFuse(m_config.odom_yaw_fuse);
         m_builder->lidar_processor()->setOdomPrior(
-            ok && (m_config.odom_fuse || m_config.odom_gate || m_config.odom_yaw_fuse ||
-                   m_config.odom_win_pos_enable),
+            ok && (m_config.odom_fuse || m_config.odom_gate ||
+                   m_config.odom_win_pos_enable || m_config.odom_win_yaw_enable),
             speed, yaw_rate, lat, px, py, yaw_odom);
     }
 

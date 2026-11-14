@@ -31,8 +31,6 @@ public:
         m_odom_yaw_abs = yaw_odom;
     }
     void setOdomFuse(bool fuse) { m_odom_fuse = fuse; }
-    /// odom_mode=yaw: 只融合轮速 yaw 率 (1 维), 不碰速度/侧向.
-    void setOdomYawFuse(bool on) { m_odom_yaw_fuse = on; }
     /// 轮速一致性: false 时本帧不做 LiDAR 更新 (位姿交给 IMU + fuse 顶住),
     /// 用于窄道里 LiDAR 沿轴滑移 (实测位移是轮速的 4~6 倍) 的时刻.
     void setOdomConsistency(bool ok) { m_odom_consistency_ok = ok; }
@@ -98,7 +96,6 @@ private:
     double m_odom_v_lat = 0.0;
     double m_odom_yaw_rate = 0.0;
     bool m_odom_fuse = false;
-    bool m_odom_yaw_fuse = false;
     // 轮速相对位移约束的滑窗状态
     double m_odom_pos_x = 0.0;
     double m_odom_pos_y = 0.0;

@@ -284,8 +284,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                 if (mapn && mapn["odom_mode"]) om = mapn["odom_mode"].as<std::string>();
                 else om = gi("odom_mode").as<std::string>("");
                 m_cfg.odom_mode =
-                    (om == "gate" || om == "fuse" || om == "yaw") ? om
-                                                                     : std::string("none");
+                    (om == "gate" || om == "fuse") ? om : std::string("none");
                 m_cfg.odom_gate = (om == "gate");
                 m_cfg.odom_fuse = (om == "fuse");
 
@@ -492,8 +491,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.world_frame.c_str(), m_cfg.map_frame.c_str());
         m_cfg.world_frame = m_cfg.map_frame;
     }
-    if (m_cfg.use_wheel_odom || m_cfg.odom_gate || m_cfg.odom_fuse ||
-        m_cfg.odom_mode == "yaw") {
+    if (m_cfg.use_wheel_odom || m_cfg.odom_gate || m_cfg.odom_fuse) {
         m_odom_sub = create_subscription<nav_msgs::msg::Odometry>(
             m_cfg.odom_topic, 100, std::bind(&SlamNode::odomCB, this, _1), sensor_sub_opts);
     }

@@ -68,8 +68,7 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             else
                 om = get_input("odom_mode", "odom_mode").as<std::string>("");
             out_cfg.odom_fuse = (om == "fuse");
-            out_cfg.odom_yaw_fuse = (om == "yaw");
-            if (om != "gate" && om != "fuse" && om != "yaw") om = "none";
+            if (om != "gate" && om != "fuse") om = "none";
             out_cfg.odom_gate = (om == "gate");
             out_cfg.ground_follow_z =
                 get_input("ground_follow_z", "ground_follow_z").as<bool>(out_cfg.ground_follow_z);
@@ -78,55 +77,30 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                     .as<bool>(out_cfg.odom_consistency_gate);
             out_cfg.ground_vz_sigma =
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
-            out_cfg.odom_yaw_sigma =
-                get_input("odom_yaw_sigma", "odom_yaw_sigma").as<double>(out_cfg.odom_yaw_sigma);
-            out_cfg.odom_yaw_sigma_rel =
-                get_input("odom_yaw_sigma_rel", "odom_yaw_sigma_rel")
-                    .as<double>(out_cfg.odom_yaw_sigma_rel);
-            out_cfg.odom_yaw_min_rate =
-                get_input("odom_yaw_min_rate", "odom_yaw_min_rate")
-                    .as<double>(out_cfg.odom_yaw_min_rate);
-            out_cfg.odom_yaw_gate_abs =
-                get_input("odom_yaw_gate_abs", "odom_yaw_gate_abs")
-                    .as<double>(out_cfg.odom_yaw_gate_abs);
-            out_cfg.odom_yaw_gate_rel =
-                get_input("odom_yaw_gate_rel", "odom_yaw_gate_rel")
-                    .as<double>(out_cfg.odom_yaw_gate_rel);
-            out_cfg.odom_yaw_update_bias =
-                get_input("odom_yaw_update_bias", "odom_yaw_update_bias")
-                    .as<bool>(out_cfg.odom_yaw_update_bias);
         }
         // 轮速融合权重 (可配; 默认值等于原先的硬编码 0.2/0.10/0.05)
-        out_cfg.odom_sigma_v =
-            get_input("odom_sigma_v", "odom_sigma_v").as<double>(out_cfg.odom_sigma_v);
-        out_cfg.odom_sigma_lat =
-            get_input("odom_sigma_lat", "odom_sigma_lat").as<double>(out_cfg.odom_sigma_lat);
-        out_cfg.odom_sigma_yaw_rate =
-            get_input("odom_sigma_yaw_rate", "odom_sigma_w").as<double>(out_cfg.odom_sigma_yaw_rate);
+        // ---- 轮速速度量测 (fuse, 2 维: 前向/侧向) ----
+        out_cfg.odom_sigma_v = get("odom_sigma_v").as<double>(out_cfg.odom_sigma_v);
+        out_cfg.odom_sigma_lat = get("odom_sigma_lat").as<double>(out_cfg.odom_sigma_lat);
         out_cfg.odom_sigma_tight_scale =
-            get_input("odom_sigma_tight_scale", "odom_sigma_tight_scale")
-                .as<double>(out_cfg.odom_sigma_tight_scale);
-        // 轮速相对位移约束
+            get("odom_sigma_tight_scale").as<double>(out_cfg.odom_sigma_tight_scale);
+        // ---- 窗口约束 (只用位姿) ----
+        out_cfg.odom_win_len = get("odom_win_len").as<double>(out_cfg.odom_win_len);
         out_cfg.odom_win_pos_enable =
-            get_input("odom_win_pos_enable", "odom_pos_enable").as<bool>(out_cfg.odom_win_pos_enable);
+            get("odom_win_pos_enable").as<bool>(out_cfg.odom_win_pos_enable);
         out_cfg.odom_win_pos_sigma =
-            get_input("odom_win_pos_sigma", "odom_pos_sigma").as<double>(out_cfg.odom_win_pos_sigma);
-        out_cfg.odom_win_len =
-            get_input("odom_win_len", "odom_pos_window").as<double>(out_cfg.odom_win_len);
-        // 轮速尺度标定 (默认 1.0 = 不改动)
-        out_cfg.odom_calib_yaw_scale =
-            get_input("odom_calib_yaw_scale", "odom_yaw_scale").as<double>(out_cfg.odom_calib_yaw_scale);
-        out_cfg.odom_calib_dist_scale =
-            get_input("odom_calib_dist_scale", "odom_dist_scale").as<double>(out_cfg.odom_calib_dist_scale);
-        out_cfg.odom_win_yaw_enable =
-            get_input("odom_win_yaw_enable", "odom_yaw_window_enable")
-                .as<bool>(out_cfg.odom_win_yaw_enable);
-        out_cfg.odom_win_yaw_sigma =
-            get_input("odom_win_yaw_sigma", "odom_yaw_window_sigma")
-                .as<double>(out_cfg.odom_win_yaw_sigma);
+            get("odom_win_pos_sigma").as<double>(out_cfg.odom_win_pos_sigma);
         out_cfg.odom_win_pos_p_floor =
-            get_input("odom_win_pos_p_floor", "odom_pos_p_floor")
-                .as<double>(out_cfg.odom_win_pos_p_floor);
+            get("odom_win_pos_p_floor").as<double>(out_cfg.odom_win_pos_p_floor);
+        out_cfg.odom_win_yaw_enable =
+            get("odom_win_yaw_enable").as<bool>(out_cfg.odom_win_yaw_enable);
+        out_cfg.odom_win_yaw_sigma =
+            get("odom_win_yaw_sigma").as<double>(out_cfg.odom_win_yaw_sigma);
+        // ---- 轮速标定 (尺度) ----
+        out_cfg.odom_calib_yaw_scale =
+            get("odom_calib_yaw_scale").as<double>(out_cfg.odom_calib_yaw_scale);
+        out_cfg.odom_calib_dist_scale =
+            get("odom_calib_dist_scale").as<double>(out_cfg.odom_calib_dist_scale);
         out_cfg.gyro_scale       = get_input("gyro_scale","gyro_scale").as<double>(out_cfg.gyro_scale);
         out_cfg.max_state_velocity =
             get_alias("max_state_velocity","max_state_velocity").as<double>(out_cfg.max_state_velocity);
