@@ -63,7 +63,7 @@ global:
     candidate_ratio: 0.3 # 候选比例
 mapping:
   # 建图链路怎么用 /odom: none(不用) | gate(只做更新门限) | fuse(水平速度+yaw率) | yaw(只融 yaw 率)
-  odom_mode: fuse
+  odom_mode: none
   frontend:
     # 地面跟随: 不锁 z/roll/pitch, 用地面法向把 v.z 软约束到坡面分量.
     use_point_timestamp: true
@@ -76,7 +76,7 @@ mapping:
     odom_sigma_tight_scale: 0.3  # 一致性异常期间把上面三个 sigma 乘以该系数
     # ---- 轮速相对位移约束 (窗口内 Δp 与 odom 一致) ----
     # 只约束相对位移, 不需要 map<->odom 对齐, odom 的慢漂不会进地图.
-    odom_pos_enable: true
+    odom_pos_enable: false
     odom_pos_sigma: 0.10         # m, 每窗口位移噪声
     odom_pos_window: 1.0         # s, 滑窗长度
     # ---- 轮速标定 (尺度; 默认 1.0 = 不改动) ----
