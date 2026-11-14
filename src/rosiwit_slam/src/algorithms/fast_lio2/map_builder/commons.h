@@ -107,6 +107,16 @@ struct Config
     double odom_pos_sigma = 0.10;       // m, 每窗口的位移噪声
     double odom_pos_window = 1.0;       // s, 滑窗长度
 
+    // ---- 轮速标定 (尺度) ----
+    // 轮速 odom 的 yaw 与位移尺度常因轮径/轮距标定不准而系统性偏差
+    // (本数据集实测: 100s 内轮速净转角 134 deg, 而 IMU 陀螺积分 210 deg,
+    //  即 yaw 只有真值的约 0.64 倍; 距离上轮速 99m vs 2D 参考 44m 也差一倍量级).
+    // 这里只做线性尺度修正, 默认 1.0 = 不改动.
+    //   odom_yaw_scale  乘到 yaw 率量测上
+    //   odom_dist_scale 乘到位置约束里的位移模长上
+    double odom_yaw_scale = 1.0;
+    double odom_dist_scale = 1.0;
+
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = true;
     // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,

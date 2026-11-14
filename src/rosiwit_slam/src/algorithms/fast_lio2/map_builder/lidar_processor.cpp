@@ -410,7 +410,9 @@ void LidarProcessor::process(SyncPackage &package)
             // 一致性异常期间收紧轮速融合: 该段几乎只听轮速, 不让 IMU 把位姿带走.
             const bool tight = !m_odom_consistency_ok;
             const double sc = tight ? m_config.odom_sigma_tight_scale : 1.0;
-            m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat, m_odom_yaw_rate, gyro_mean,
+            // 轮速 yaw 率按标定尺度修正 (默认 1.0). 见 Config::odom_yaw_scale.
+            const double yaw_rate = m_odom_yaw_rate * m_config.odom_yaw_scale;
+            m_kf->updateOdom(m_odom_v_fwd, m_odom_v_lat, yaw_rate, gyro_mean,
                              m_config.odom_sigma_v * sc,
                              m_config.odom_sigma_lat * sc,
                              m_config.odom_sigma_w * sc);
@@ -442,8 +444,10 @@ void LidarProcessor::process(SyncPackage &package)
             const V2D d_raw(m_odom_pos_x - m_odom_pos0.x(),
                             m_odom_pos_y - m_odom_pos0.y());
             const double c = std::cos(m_yaw_off), s = std::sin(m_yaw_off);
-            const V2D d_meas(c * d_raw.x() - s * d_raw.y(),
-                             s * d_raw.x() + c * d_raw.y());
+            // 轮速位移按标定尺度缩放 (默认 1.0); 方向由 psi 旋到世界系.
+            const double ds = m_config.odom_dist_scale;
+            const V2D d_meas(ds * (c * d_raw.x() - s * d_raw.y()),
+                             ds * (s * d_raw.x() + c * d_raw.y()));
             const V2D d_ekf(m_kf->x().t_wi.x() - m_ekf_pos0.x(),
                             m_kf->x().t_wi.y() - m_ekf_pos0.y());
             m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_pos_sigma);

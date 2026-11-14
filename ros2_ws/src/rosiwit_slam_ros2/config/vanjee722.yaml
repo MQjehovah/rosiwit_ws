@@ -80,6 +80,12 @@ mapping:
     odom_pos_enable: false
     odom_pos_sigma: 0.10         # m, 每窗口位移噪声
     odom_pos_window: 1.0         # s, 滑窗长度
+    # ---- 轮速标定 (尺度; 默认 1.0 = 不改动) ----
+    # 轮径/轮距标定不准会让轮速 odom 的 yaw 与位移系统性偏大或偏小.
+    # odom_yaw_scale  = (IMU 陀螺积分得到的净转角) / (轮速 odom 净转角)
+    # odom_dist_scale = 已知长度的直线段 / 该段轮速 odom 位移
+    odom_yaw_scale: 1.0
+    odom_dist_scale: 1.0
     ground_follow_z: true
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态
