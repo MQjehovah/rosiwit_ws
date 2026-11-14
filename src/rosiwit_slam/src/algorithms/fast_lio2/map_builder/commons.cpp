@@ -96,6 +96,8 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             get("odom_win_yaw_enable").as<bool>(out_cfg.odom_win_yaw_enable);
         out_cfg.odom_win_yaw_sigma =
             get("odom_win_yaw_sigma").as<double>(out_cfg.odom_win_yaw_sigma);
+        out_cfg.odom_win_yaw_p_floor =
+            get("odom_win_yaw_p_floor").as<double>(out_cfg.odom_win_yaw_p_floor);
         // ---- 轮速标定 (尺度) ----
         out_cfg.odom_calib_yaw_scale =
             get("odom_calib_yaw_scale").as<double>(out_cfg.odom_calib_yaw_scale);

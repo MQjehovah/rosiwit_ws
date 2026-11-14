@@ -97,7 +97,8 @@ public:
     /// 但它的**位姿 yaw** 在 1s 窗口上与陀螺积分相关系数 0.999 (实测 300 个窗口).
     /// @param dpsi    轮速 odom 在窗口内的转角 (rad, 已去 wrap)
     /// @param yaw_ref 窗口起点的 EKF yaw (rad)
-    void updateYawDelta(double dpsi, double yaw_ref, double sigma);
+    void updateYawDelta(double dpsi, double yaw_ref, double sigma,
+                        double p_floor = 0.0);
     void updateVerticalVelocity(double target_vz, double sigma);
     /// 地面 3-DoF 量测 (LeGO-LOAM 式): 用地平面法向约束 roll/pitch, 用地面高度约束 z.
     /// n_world 是世界系地面法向; z_target 是传感器高度期望 (地面 + h0).

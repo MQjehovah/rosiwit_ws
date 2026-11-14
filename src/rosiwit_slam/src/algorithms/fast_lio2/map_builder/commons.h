@@ -95,6 +95,8 @@ struct Config
     double odom_win_pos_p_floor = 0.0;
     bool   odom_win_yaw_enable = false;     // 窗口内转角 Δyaw_ekf ≡ Δyaw_odom
     double odom_win_yaw_sigma = 0.01;       // rad, 转角噪声 (~0.6deg)
+    // 姿态协方差下限 (rad): 实测 P_yaw≈5e-9 (sigma=0.004deg), 角度量测同样进不来.
+    double odom_win_yaw_p_floor = 0.0;
 
     // ---- 轮速标定 (尺度, 默认 1.0 = 不改动) ----
     double odom_calib_yaw_scale = 1.0;      // 陀螺净转角 / 轮速净转角

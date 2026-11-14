@@ -457,7 +457,8 @@ void LidarProcessor::process(SyncPackage &package)
             }
             if (m_config.odom_win_yaw_enable) {
                 m_kf->updateYawDelta(dpsi * m_config.odom_calib_yaw_scale,
-                                     m_ekf_yaw0, m_config.odom_win_yaw_sigma);
+                                     m_ekf_yaw0, m_config.odom_win_yaw_sigma,
+                                     m_config.odom_win_yaw_p_floor);
             }
             static int pos_log = 0;
             if (++pos_log % 20 == 0) {

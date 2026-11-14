@@ -268,7 +268,8 @@ void IESKF::updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma,
     m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
 }
 
-void IESKF::updateYawDelta(double dpsi, double yaw_ref, double sigma)
+void IESKF::updateYawDelta(double dpsi, double yaw_ref, double sigma,
+                           double p_floor)
 {
     // 1 维: (yaw_now - yaw_ref) 应等于 dpsi. 姿态扰动的世界系 z 分量对 yaw 的
     // 雅可比为 1 (小角度), 所以 A 只在旋转块的第 3 个分量上取 1.
@@ -280,6 +281,12 @@ void IESKF::updateYawDelta(double dpsi, double yaw_ref, double sigma)
     A(0, 2) = 1.0;
     const double r = dpsi - d_now;
     if (std::fabs(r) > 1.0) return;      // 超过 57deg 视为野值, 直接丢
+    // 协方差下限: 与位置同理, FAST-LIO 的姿态协方差也被雷达压到极小
+    // (实测 P_yaw≈5e-9, 即 sigma=0.004deg), 量测增益只有 5e-5, 角度约束进不来.
+    if (p_floor > 0.0) {
+        const double f2 = p_floor * p_floor;
+        if (m_P(2, 2) < f2) m_P(2, 2) = f2;
+    }
     const double Rm = sigma * sigma;
     const double S = (A * m_P * A.transpose())(0, 0) + Rm;
     const Eigen::Matrix<double, 21, 1> K = m_P * A.transpose() / S;

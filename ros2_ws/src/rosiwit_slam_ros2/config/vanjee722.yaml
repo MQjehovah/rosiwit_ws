@@ -84,6 +84,8 @@ mapping:
     odom_win_pos_p_floor: 0.0     # m, 位置协方差下限 (0=不抬; 抬到 0.05 才有实际增益)
     odom_win_yaw_enable: false    # 窗口内转角 Δyaw_ekf ≡ Δyaw_odom
     odom_win_yaw_sigma: 0.01      # rad, 窗口转角噪声 (~0.6 deg)
+    # 姿态协方差下限 (rad): 实测 P_yaw≈5e-9 (sigma=0.004deg), 角度量测同样进不来.
+    odom_win_yaw_p_floor: 0.0
     # ---- 3) 轮速标定 (默认 1.0 = 不改动) ----
     odom_calib_yaw_scale: 1.0     # 陀螺积分净转角 / 轮速净转角
     odom_calib_dist_scale: 1.0    # 已知长度直线段 / 该段轮速位移
