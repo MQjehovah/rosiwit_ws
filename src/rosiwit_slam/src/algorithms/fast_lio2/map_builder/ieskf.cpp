@@ -247,7 +247,8 @@ void IESKF::updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &g
     m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
 }
 
-void IESKF::updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma)
+void IESKF::updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma,
+                          double p_floor)
 {
     // 2 维量测: 窗口内水平位移应与 odom 一致. 只约束相对量, 无绝对位置约束.
     Eigen::Matrix<double, 2, 21> A = Eigen::Matrix<double, 2, 21>::Zero();
@@ -257,6 +258,14 @@ void IESKF::updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma)
     r(0) = d_meas.x() - (m_x.t_wi.x() - p_ref.x());
     r(1) = d_meas.y() - (m_x.t_wi.y() - p_ref.y());
     Eigen::Matrix2d R = Eigen::Matrix2d::Identity() * (sigma * sigma);
+    // 协方差下限: FAST-LIO 每帧被上千个点面约束压到亚毫米级 (实测 Pxx≈1.4e-7),
+    // 此时任何 1Hz 的位移量测增益只有 1e-4 量级, 等于没约束. 先把位置协方差
+    // 抬到不低于 p_floor^2, 轮速位移才真正能拉住 (常见做法: covariance flooring).
+    if (p_floor > 0.0) {
+        const double f2 = p_floor * p_floor;
+        if (m_P(3, 3) < f2) m_P(3, 3) = f2;
+        if (m_P(4, 4) < f2) m_P(4, 4) = f2;
+    }
     const Eigen::Matrix2d S = A * m_P * A.transpose() + R;
     const Eigen::Matrix<double, 21, 2> K = m_P * A.transpose() * S.inverse();
     m_x += K * r;

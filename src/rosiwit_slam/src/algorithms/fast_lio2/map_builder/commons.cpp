@@ -129,6 +129,9 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.odom_yaw_window_sigma =
             get_input("odom_yaw_window_sigma", "odom_yaw_window_sigma")
                 .as<double>(out_cfg.odom_yaw_window_sigma);
+        out_cfg.odom_pos_p_floor =
+            get_input("odom_pos_p_floor", "odom_pos_p_floor")
+                .as<double>(out_cfg.odom_pos_p_floor);
         out_cfg.gyro_scale       = get_input("gyro_scale","gyro_scale").as<double>(out_cfg.gyro_scale);
         out_cfg.max_state_velocity =
             get_alias("max_state_velocity","max_state_velocity").as<double>(out_cfg.max_state_velocity);

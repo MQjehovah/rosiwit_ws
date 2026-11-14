@@ -460,7 +460,8 @@ void LidarProcessor::process(SyncPackage &package)
             const V2D d_ekf(m_kf->x().t_wi.x() - m_ekf_pos0.x(),
                             m_kf->x().t_wi.y() - m_ekf_pos0.y());
             if (m_config.odom_pos_enable) {
-                m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_pos_sigma);
+                m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_pos_sigma,
+                                    m_config.odom_pos_p_floor);
             }
             if (m_config.odom_yaw_window_enable) {
                 m_kf->updateYawDelta(dpsi * m_config.odom_yaw_scale,

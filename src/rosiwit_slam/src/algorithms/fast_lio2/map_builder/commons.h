@@ -121,6 +121,10 @@ struct Config
     // 增量与陀螺积分相关系数 0.999 (实测 300 窗口), 所以用角度更稳.
     bool   odom_yaw_window_enable = false;
     double odom_yaw_window_sigma = 0.01;   // rad, 每窗口转角噪声 (~0.6deg)
+    // 位置协方差下限 (m). FAST-LIO 的位置协方差会被点面约束压到亚毫米级
+    // (实测 Pxx≈1.4e-7), 1Hz 位移量测的增益只有 1e-4 -> 位置约束形同虚设.
+    // 抬到 p_floor^2 之后轮速位移才真正能拉; 0 = 不抬 (原行为).
+    double odom_pos_p_floor = 0.0;
 
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = true;

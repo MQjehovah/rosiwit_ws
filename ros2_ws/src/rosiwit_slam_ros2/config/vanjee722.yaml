@@ -94,6 +94,9 @@ mapping:
     # 相关 0.999 (实测 300 窗口), 所以用角度更稳. 开启后每 odom_pos_window 施加一次.
     odom_yaw_window_enable: false
     odom_yaw_window_sigma: 0.01   # rad, 每窗口转角噪声 (~0.6deg)
+    # 位置协方差下限 (m). FAST-LIO 的位置协方差被点面约束压到亚毫米级 (实测 Pxx=1.4e-7),
+    # 1Hz 位移量测的增益只有 ~1e-4, 位置约束等于没有. 抬到该值后才真正起作用 (建议 0.05).
+    odom_pos_p_floor: 0.0
     ground_follow_z: true
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态

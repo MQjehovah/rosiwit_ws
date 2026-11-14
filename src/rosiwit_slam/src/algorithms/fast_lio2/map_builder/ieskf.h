@@ -88,7 +88,8 @@ public:
     /// 只约束相对量, 不需要 map<->odom 对齐, 因此不会把 odom 的慢漂灌进地图.
     /// @param d_meas odom 在该窗口内的水平位移
     /// @param p_ref  窗口起点的 EKF 水平位置
-    void updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma);
+    void updateOdomPos(const V2D &d_meas, const V2D &p_ref, double sigma,
+                       double p_floor = 0.0);
     /// 垂直速度软约束: 车体在坡上 v.z 仍然是小量, 长时间累积会变成 z 漂移.
     /// 每帧把 v.z 轻拉向 0, sigma 取 0.5m/s, 不影响正常爬坡分量.
     /// 轮速 yaw 率单维量测: 只约束世界系 yaw 角速度, 不动速度/侧向.
