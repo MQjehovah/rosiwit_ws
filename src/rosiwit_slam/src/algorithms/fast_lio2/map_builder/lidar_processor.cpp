@@ -421,6 +421,37 @@ void LidarProcessor::process(SyncPackage &package)
             }
         }
     }
+    // 轮速 yaw 率单维量测 (odom_mode=yaw): 只给姿态一个外部约束.
+    // sigma 随 |yaw_rate| 放大: 轮速差分的角速度误差大致正比于转速.
+    if (m_config.odom_yaw_fuse && m_odom_prior) {
+        V3D gyro_mean = V3D::Zero();
+        int n = 0;
+        for (const auto &imu : package.imus) { gyro_mean += imu.gyro; ++n; }
+        if (n > 0) {
+            gyro_mean /= static_cast<double>(n);
+            // 门控 1: 只在真实转向时使用 (直行/静止时轮速 yaw 率以噪声为主)
+            // 门控 2: 与 IMU 预测差异必须在容差内 (不一致说明轮速打滑/尺度偏差大)
+            const double pred = (m_kf->x().r_wi * (gyro_mean - m_kf->x().bg)).z();
+            const double diff = std::fabs(m_odom_yaw_rate - pred);
+            const double gate = m_config.odom_yaw_gate_abs +
+                                m_config.odom_yaw_gate_rel * std::fabs(m_odom_yaw_rate);
+            const bool active = (std::fabs(m_odom_yaw_rate) > m_config.odom_yaw_min_rate) &&
+                                (diff <= gate);
+            if (active) {
+                const double sig = m_config.odom_yaw_sigma +
+                                   m_config.odom_yaw_sigma_rel * std::fabs(m_odom_yaw_rate);
+                m_kf->updateYawRate(m_odom_yaw_rate, gyro_mean, sig,
+                                    m_config.odom_yaw_update_bias);
+            }
+            static int yawf_log = 0;
+            if (++yawf_log % 100 == 0) {
+                std::cout << "[FLIO2] odom yaw gate " << (active ? "on" : "off")
+                          << " rate=" << m_odom_yaw_rate << " pred=" << pred
+                          << " diff=" << diff << " gate=" << gate
+                          << " bg=" << m_kf->x().bg.transpose() << std::endl;
+            }
+        }
+    }
     m_last_cloud_end = package.cloud_end_time;
     incrCloudMap();
 }

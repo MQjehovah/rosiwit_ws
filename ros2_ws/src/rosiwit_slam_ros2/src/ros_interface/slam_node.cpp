@@ -272,6 +272,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                 m_cfg.self_z_max = sf["z_max"].as<double>(m_cfg.self_z_max);
             }
             m_cfg.scan_period_ms   = gi("scan_period_ms").as<float>(m_cfg.scan_period_ms);
+            m_cfg.lidar_time_offset =
+                gi("lidar_time_offset").as<double>(m_cfg.lidar_time_offset);
             RosUtils::s_use_point_timestamp =
                 gi("use_point_timestamp").as<bool>(RosUtils::s_use_point_timestamp);
             m_cfg.odom_gate = gi("odom_gate").as<bool>(m_cfg.odom_gate);
@@ -281,7 +283,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                 std::string om;
                 if (mapn && mapn["odom_mode"]) om = mapn["odom_mode"].as<std::string>();
                 else om = gi("odom_mode").as<std::string>("");
-                m_cfg.odom_mode = (om == "gate" || om == "fuse") ? om : std::string("none");
+                m_cfg.odom_mode =
+                    (om == "gate" || om == "fuse" || om == "yaw") ? om
+                                                                     : std::string("none");
                 m_cfg.odom_gate = (om == "gate");
                 m_cfg.odom_fuse = (om == "fuse");
 
@@ -488,7 +492,8 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.world_frame.c_str(), m_cfg.map_frame.c_str());
         m_cfg.world_frame = m_cfg.map_frame;
     }
-    if (m_cfg.use_wheel_odom || m_cfg.odom_gate) {
+    if (m_cfg.use_wheel_odom || m_cfg.odom_gate || m_cfg.odom_fuse ||
+        m_cfg.odom_mode == "yaw") {
         m_odom_sub = create_subscription<nav_msgs::msg::Odometry>(
             m_cfg.odom_topic, 100, std::bind(&SlamNode::odomCB, this, _1), sensor_sub_opts);
     }
@@ -664,7 +669,7 @@ void SlamNode::lidarCB(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
         else if (p.curvature > max_point_ms) p.curvature = max_point_ms;
     }
     std::sort(f.cloud->points.begin(), f.cloud->points.end(), [](const PointType& a, const PointType& b){ return a.curvature < b.curvature; });
-    f.start_time = RosUtils::getSec(msg->header);
+    f.start_time = RosUtils::getSec(msg->header) + m_cfg.lidar_time_offset;
     double scan_dt = f.cloud->points.empty() ? 0.0 : f.cloud->points.back().curvature / 1000.0;
     if (!std::isfinite(scan_dt) || scan_dt < 0.0 || scan_dt > max_point_ms / 1000.0) {
         scan_dt = scan_ms / 1000.0;

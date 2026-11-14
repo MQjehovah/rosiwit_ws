@@ -68,7 +68,8 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             else
                 om = get_input("odom_mode", "odom_mode").as<std::string>("");
             out_cfg.odom_fuse = (om == "fuse");
-            if (om != "gate" && om != "fuse") om = "none";
+            out_cfg.odom_yaw_fuse = (om == "yaw");
+            if (om != "gate" && om != "fuse" && om != "yaw") om = "none";
             out_cfg.odom_gate = (om == "gate");
             out_cfg.ground_follow_z =
                 get_input("ground_follow_z", "ground_follow_z").as<bool>(out_cfg.ground_follow_z);
@@ -82,6 +83,23 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                 get_input("odom_scale_xy", "odom_scale_xy").as<double>(out_cfg.odom_scale_xy);
             out_cfg.ground_vz_sigma =
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
+            out_cfg.odom_yaw_sigma =
+                get_input("odom_yaw_sigma", "odom_yaw_sigma").as<double>(out_cfg.odom_yaw_sigma);
+            out_cfg.odom_yaw_sigma_rel =
+                get_input("odom_yaw_sigma_rel", "odom_yaw_sigma_rel")
+                    .as<double>(out_cfg.odom_yaw_sigma_rel);
+            out_cfg.odom_yaw_min_rate =
+                get_input("odom_yaw_min_rate", "odom_yaw_min_rate")
+                    .as<double>(out_cfg.odom_yaw_min_rate);
+            out_cfg.odom_yaw_gate_abs =
+                get_input("odom_yaw_gate_abs", "odom_yaw_gate_abs")
+                    .as<double>(out_cfg.odom_yaw_gate_abs);
+            out_cfg.odom_yaw_gate_rel =
+                get_input("odom_yaw_gate_rel", "odom_yaw_gate_rel")
+                    .as<double>(out_cfg.odom_yaw_gate_rel);
+            out_cfg.odom_yaw_update_bias =
+                get_input("odom_yaw_update_bias", "odom_yaw_update_bias")
+                    .as<bool>(out_cfg.odom_yaw_update_bias);
         }
         out_cfg.gyro_scale       = get_input("gyro_scale","gyro_scale").as<double>(out_cfg.gyro_scale);
         out_cfg.max_state_velocity =

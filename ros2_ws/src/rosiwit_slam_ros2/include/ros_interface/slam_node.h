@@ -70,6 +70,9 @@ private:
         double self_y_min = -0.55, self_y_max = 0.55;
         double self_z_min = 0.05, self_z_max = 1.40;
         float  scan_period_ms   = 100.0f;   // LiDAR 扫描周期 (毫秒), 用于点时间戳
+        // LiDAR 帧时间相对 IMU 的偏移(s), 标定用. 正值 = 认为帧时间偏晚.
+        // 标定方法: 取含转弯的片段, 扫描该值, 选建图墙面最薄者 (时延错 -> 运动补偿错 -> 墙变厚).
+        double lidar_time_offset = 0.0;
         // IMU 异常值保护: 过坎/撞击时 Vanjee 内置 IMU 会出现 2~3g 尖峰甚至掉零,
         // 直接进 EKF 会把速度/位姿打飞, 随后前端 "NO Effective Points" 失锁.
         // 超限样本直接丢弃; SlamBase::onImu 会对 >30ms 的空洞做线性插值.

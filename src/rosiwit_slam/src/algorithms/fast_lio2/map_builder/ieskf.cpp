@@ -183,6 +183,7 @@ std::ostream &operator<<(std::ostream &os, const State &state)
 
 void IESKF::predict(const Input &inp, double dt, const M12D &Q)
 {
+    m_last_dt = dt;   // 供 update() 里的单帧位姿限幅使用
     V21D delta = V21D::Zero();
     delta.segment<3>(0) = (inp.gyro - m_x.bg) * dt;
     delta.segment<3>(3) = m_x.v * dt;
@@ -240,6 +241,25 @@ void IESKF::updateOdom(double v_fwd, double v_lat, double yaw_rate, const V3D &g
     const Eigen::Matrix<double, 21, 3> K = m_P * A.transpose() * S.inverse();
     const V21D dx = K * r;
     m_x += dx;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKA = I - K * A;
+    m_P = IKA * m_P * IKA.transpose() + K * R * K.transpose();
+}
+
+void IESKF::updateYawRate(double yaw_rate, const V3D &gyro, double sigma_w,
+                          bool update_bias)
+{
+    // 1 维量测: 世界系 yaw 角速度. 预测值 = (r_wi * (w - bg)).z
+    Eigen::Matrix<double, 1, 21> A = Eigen::Matrix<double, 1, 21>::Zero();
+    const V3D w = gyro - m_x.bg;
+    A.block<1, 3>(0, 0) = -(m_x.r_wi * Sophus::SO3d::hat(w)).row(2);
+    if (update_bias) A.block<1, 3>(0, 15) = -m_x.r_wi.row(2);  // 否则不碰零偏
+    const double r = yaw_rate - (m_x.r_wi * w).z();
+    const double R = sigma_w * sigma_w;
+    const double S = (A * m_P * A.transpose())(0, 0) + R;
+    const Eigen::Matrix<double, 21, 1> K = m_P * A.transpose() / S;
+    m_x += K * r;
     m_x.clampPhysical();
     const M21D I = M21D::Identity();
     const M21D IKA = I - K * A;
@@ -367,13 +387,16 @@ void IESKF::update()
         H.block<12, 12>(0, 0) += shared_data.H;
         b.block<12, 1>(0, 0) += shared_data.b;
 
-        // 窄通道方向性退化 (430s 场景): 沿走廊方向的信息量趋近 0, 直接求解会让位姿
-        // 沿轴滑动. 处理方式 (LOAM 做法): 把弱方向的**量测信息移除**, 该方向回落到
-        // 先验 (IMU/odom) —— 绝不能像第一版那样给弱方向加信息 (等于宣称量得很准,
-        // 实测把滤波焊死, z 掉到 -101).
+        // 方向性退化 (窄通道/走廊): 沿走廊轴向的信息量趋近 0, 直接求解会让位姿沿轴滑动.
+        // 这里把"检测"和"处理"分开:
+        //   检测: 对 H 的 6x6 位姿块做特征分解, λ/λmax < degenerate_eigen_ratio 的方向
+        //         记为退化. 无论是否处理都执行, 便于用它来定量观测现场退化程度.
+        //   处理: degenerate_remove_weak=true 时, 把弱方向的量测信息从 H 里**移除**,
+        //         该方向回落到先验 (IMU/odom). 绝不能反过来给弱方向加信息(等于宣称量得
+        //         很准, 实测把滤波焊死, z 掉到 -101).
         // 只处理"水平平移主导"的弱方向: z/roll/pitch 对这个 42deg 斜装雷达本来就弱
         // (ratio 常年 0.0002~0.002), 由地面因子负责, 不在这里动.
-        if (m_degenerate_remove_weak) {
+        {
             Eigen::Matrix<double, 6, 6> Hpose = shared_data.H.block<6, 6>(0, 0);
             Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> es(Hpose);
             if (es.info() == Eigen::Success) {
@@ -384,7 +407,7 @@ void IESKF::update()
                 int n_deg = 0;
                 Eigen::Matrix<double, 6, 1> d0 = Eigen::Matrix<double, 6, 1>::Zero();
                 for (int k = 0; k < 6; ++k) {
-                    if (ev(k) >= 0.01 * ev_max) continue;
+                    if (ev(k) >= m_degenerate_eigen_ratio * ev_max) continue;
                     const Eigen::Matrix<double, 6, 1> d = V.col(k);
                     const double horiz = std::hypot(d(3), d(4));
                     if (horiz < 0.5 || std::fabs(d(5)) > 0.5) continue;   // 只管水平滑动
@@ -392,15 +415,18 @@ void IESKF::update()
                     if (n_deg == 0) d0 = d;
                     ++n_deg;
                 }
-                if (n_deg > 0) {
+                // 观测日志: 与是否处理无关, 始终上报 (每 500 次迭代)
+                static int deg_probe_log = 0;
+                if (++deg_probe_log % 500 == 0) {
+                    std::cout << "[FLIO2] degen probe ratio=" << (ev(0) / ev_max)
+                              << " thr=" << m_degenerate_eigen_ratio
+                              << " n_weak=" << n_deg
+                              << " remove=" << (m_degenerate_remove_weak ? 1 : 0)
+                              << " axis=(" << d0(3) << "," << d0(4) << "," << d0(5) << ")"
+                              << std::endl;
+                }
+                if (m_degenerate_remove_weak && n_deg > 0) {
                     H.block<6, 6>(0, 0) -= weak;
-                    static int deg_log = 0;
-                    if (++deg_log % 500 == 0) {
-                        std::cout << "[FLIO2] degen corridor n=" << n_deg
-                                  << " ratio=" << (ev(0) / ev_max)
-                                  << " t=(" << d0(3) << "," << d0(4) << "," << d0(5) << ")"
-                                  << std::endl;
-                    }
                 }
             }
         }
@@ -431,5 +457,26 @@ void IESKF::update()
     if (m_max_vel > 0.0) {
         const double vn = m_x.v.norm();
         if (vn > m_max_vel) m_x.v *= (m_max_vel / vn);
+    }
+
+    // 单帧位姿增量限幅 (位置安全网):
+    //   速度限幅只管状态速度; 位置是量测更新直接改的, 一次坏匹配能在单帧里把位置
+    //   整块拉走 (实测整包里有单帧跳 68m / 140m 的情况, 直接撕开地图).
+    //   这里把「本次更新相对预测值的增量」按物理上限回缩: 位移 ≤ factor*max_vel*dt,
+    //   转角 ≤ max_rot_step_deg. 正常运动 (≤2.5m/s, ≤15°/帧) 不会被触发.
+    if (m_max_vel > 0.0 && m_last_dt > 0.0) {
+        const double max_step = m_max_step_factor * m_max_vel * m_last_dt;
+        const V3D dp = m_x.t_wi - predict_x.t_wi;
+        const double dn = dp.norm();
+        if (dn > max_step && dn > 1e-9) {
+            m_x.t_wi = predict_x.t_wi + dp * (max_step / dn);
+        }
+        const M3D dR = predict_x.r_wi.transpose() * m_x.r_wi;
+        const Eigen::AngleAxisd aa(dR);
+        const double max_ang = m_max_rot_step_deg * std::acos(-1.0) / 180.0;
+        if (aa.angle() > max_ang) {
+            m_x.r_wi = predict_x.r_wi *
+                       Eigen::AngleAxisd(max_ang, aa.axis()).toRotationMatrix();
+        }
     }
 }

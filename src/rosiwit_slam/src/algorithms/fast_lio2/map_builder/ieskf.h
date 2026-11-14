@@ -84,6 +84,12 @@ public:
                     double sigma_v, double sigma_lat, double sigma_w);
     /// 垂直速度软约束: 车体在坡上 v.z 仍然是小量, 长时间累积会变成 z 漂移.
     /// 每帧把 v.z 轻拉向 0, sigma 取 0.5m/s, 不影响正常爬坡分量.
+    /// 轮速 yaw 率单维量测: 只约束世界系 yaw 角速度, 不动速度/侧向.
+    /// 急转段姿态需要外部约束, 而同时约束速度会与地面/竖直模型冲突.
+    /// @param update_bias 是否允许该量测更新陀螺零偏. 轮速 yaw 率有尺度误差时
+    ///        会被吸收成零偏 (实测把 bg 从 0.002 推到 0.016 rad/s), 建议 false.
+    void updateYawRate(double yaw_rate, const V3D &gyro, double sigma_w,
+                       bool update_bias = true);
     void updateVerticalVelocity(double target_vz, double sigma);
     /// 地面 3-DoF 量测 (LeGO-LOAM 式): 用地平面法向约束 roll/pitch, 用地面高度约束 z.
     /// n_world 是世界系地面法向; z_target 是传感器高度期望 (地面 + h0).
@@ -106,6 +112,9 @@ private:
     double m_degenerate_eigen_ratio = 0.02;
     bool m_degenerate_remove_weak = false;
     double m_max_vel = 3.0;
+    double m_last_dt = 0.1;          // 上次 predict 的 dt (s), 供单帧位姿限幅使用
+    double m_max_step_factor = 2.0;  // 单帧位移上限 = factor * max_vel * dt
+    double m_max_rot_step_deg = 30.0; // 单帧转角上限 (deg)
     State m_x;
     M21D m_P;
     loss_func m_loss_func;

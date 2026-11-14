@@ -249,7 +249,10 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
             }
         }
         m_builder->lidar_processor()->setOdomFuse(m_config.odom_fuse);
-        m_builder->lidar_processor()->setOdomPrior(ok && (m_config.odom_fuse || m_config.odom_gate), speed, yaw_rate, lat);
+        m_builder->lidar_processor()->setOdomYawFuse(m_config.odom_yaw_fuse);
+        m_builder->lidar_processor()->setOdomPrior(
+            ok && (m_config.odom_fuse || m_config.odom_gate || m_config.odom_yaw_fuse),
+            speed, yaw_rate, lat);
     }
 
     // 地面跟随: 世界系地面平面 (法向 + d). z 用"传感器正下方地面高度"这个绝对量测,

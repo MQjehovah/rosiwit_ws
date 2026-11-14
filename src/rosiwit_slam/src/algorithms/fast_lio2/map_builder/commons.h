@@ -74,6 +74,19 @@ struct Config
     // 建图 odom 使用方式: none | gate | fuse (来自 mapping.odom_mode)
     bool odom_fuse = false;
     bool odom_gate = false;
+    // 轮速 yaw 率单维融合 (mapping.odom_mode=yaw): 只钉世界系 yaw 角速度,
+    // 不碰速度/侧向. 急转段(一帧 0.1s 扫内可转十几度)姿态主要靠 IMU 与去畸变,
+    // 这里补一个外部 yaw 率约束; 速度那一路会与地面/竖直模型冲突(实测 z 崩到 -26m).
+    bool odom_yaw_fuse = false;
+    double odom_yaw_sigma = 0.02;      // rad/s, 基础 sigma
+    double odom_yaw_sigma_rel = 0.05;  // 相对项: sigma += rel*|yaw_rate|
+    // 门控: 只在"真实转向"(|yaw_rate| 够大) 且 与 IMU 预测一致(差值在容差内) 时才用该证据.
+    // 轮速 yaw 率有约 2.4% 尺度误差与未知零偏, 不一致时若强行融合会把零偏带歪 (实测 z 崩到 -20m).
+    double odom_yaw_min_rate = 0.10;   // rad/s, 低于此视为直行/静止, 不融合
+    double odom_yaw_gate_abs = 0.05;   // rad/s, 一致性容差绝对值
+    double odom_yaw_gate_rel = 0.10;   // 一致性容差相对项: gate = abs + rel*|yaw_rate|
+    bool odom_yaw_update_bias = false; // 是否允许该证据更新陀螺零偏 (默认否)
+
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = true;
     // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,

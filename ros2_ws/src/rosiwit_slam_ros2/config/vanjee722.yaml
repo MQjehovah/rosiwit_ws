@@ -33,6 +33,9 @@ global:
     lidar_min_range: 0.5 # 雷达最小有效距离(m)
     lidar_max_range: 60.0 # 雷达最大有效距离(m)
     scan_period_ms: 100.0 # 单帧扫描周期(ms)
+    # LiDAR 帧时间相对 IMU 的偏移(s), 标定用; 0 = 不偏移.
+    # 标定方法: 取含转弯的片段, 扫描该值, 选建图墙面最薄的那个.
+    lidar_time_offset: 0.0
     acc_scale: 1.0 # IMU加速度单位换算
     # IMU 冲击保护: 过坎/撞击时 Vanjee 内置 IMU 会出现 2~3g 尖峰甚至瞬时掉零,
     # 直接进 EKF 会把位姿打飞并导致前端 "NO Effective Points" 失锁.
@@ -70,6 +73,13 @@ mapping:
     ground_vz_sigma: 0.30
     gravity_align: true # 是否用重力方向初始化姿态
     lidar_cov_inv: 5000.0 # 激光观测信息矩阵权重
+    # 方向性退化检测阈值: H 位姿块 λmin/λmax 低于此值的方向视为退化
+    # (走廊沿轴最常见). 检测始终执行并打 [FLIO2] degen probe 日志,
+    # 便于先量化现场退化程度, 再决定处理策略.
+    degenerate_eigen_ratio: 0.02
+    # 退化处理策略: false = 只检测不处理; true = 把弱方向的量测信息
+    # 从 H 里移除, 该方向回落到 IMU/odom 先验 (切忌反过来加信息).
+    degenerate_remove_weak: false
     robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
     robust_scale: 0.5 # 鲁棒核尺度
     robust_floor: 0.1 # 鲁棒权重下限
