@@ -78,16 +78,13 @@ struct Config
     bool odom_fuse = false;
     bool odom_gate = false;
 
-    // ---- 轮速 odom 量测 (odom_mode=fuse): 只用位姿, 即"窗口内相对位移 + 相对转角" ----
-    // 不用 twist 的速度/角速度: 它们是位姿微分的产物, 50Hz 上逐帧抖 ±8deg/s,
-    // 精度远低于累计位姿 (位姿 yaw 的 1s 增量与陀螺积分相关 0.999).
-    double odom_win_len = 1.0;              // s, 窗口长度 (位移/转角共用)
-    double odom_win_pos_sigma = 0.10;       // m, 位移噪声
-    // 协方差下限: 雷达会把 P 压到亚毫米/0.004deg 级, 不抬的话量测增益只有 1e-4~5e-5,
-    // 等于没融合. 实测 pos floor 0.05m / yaw floor 0.01rad 才真正起作用.
-    double odom_win_pos_p_floor = 0.05;     // m
-    double odom_win_yaw_sigma = 0.01;       // rad, 转角噪声 (~0.6deg)
-    double odom_win_yaw_p_floor = 0.01;     // rad
+    // ---- 轮速 odom 量测 (odom_mode=fuse): 每帧更新, 和 IMU 一样 ----
+    // 用"上一帧到本帧"的位姿增量: Δp_ekf ≡ Δp_odom, Δyaw_ekf ≡ Δyaw_odom.
+    // 不用 twist (位姿微分噪声), 不用窗口 (窗口会把 10Hz 的约束降成 1Hz).
+    double odom_sigma_pos = 0.02;        // m, 每帧位移噪声
+    double odom_sigma_pos_p_floor = 0.05;  // m, 位置协方差下限 (否则增益只有 1e-4)
+    double odom_sigma_yaw = 0.002;       // rad, 每帧转角噪声 (~0.11deg)
+    double odom_sigma_yaw_p_floor = 0.01;  // rad, 姿态协方差下限
 
     // ---- 轮速标定 (尺度, 默认 1.0 = 不改动) ----
     double odom_calib_yaw_scale = 1.0;      // 陀螺净转角 / 轮速净转角
@@ -103,6 +100,14 @@ struct Config
     // 注: 旧的 odom_position_clamp / odom_scale_xy 已删除 —— 硬钳位实测会把正常段
     // 也钳弯 (300-435m 偏差 16.9->22.2), 现在的 odom_win_pos_* 窗口位移约束是它的替代.
     double ground_vz_sigma = 0.30;   // v.z 软约束标准差 (m/s)
+    // z 的绝对软保持 (m, 0=关): 把 z 轻拉向初始值 0. 现场大多平地, 用它防
+    // 长时间漂移; sigma 给大(如 1.0)时坡道几乎不受影响 (vz 约束权重高两个量级).
+    double ground_z_hold_sigma = 0.0;
+    // 地面 z 约束改成"锚定平面"(历史平面参数): 平面在锚点时刻冻结, 本帧 z 目标由
+    // 旧平面 + 传感器离地高度推出. 若用本帧现拟合的平面, 点云与平面随位姿一起平移,
+    // 残差恒等于标定误差 (实测全程 -0.29..-0.59m), 约束退化成一个只往下推的棘轮.
+    double ground_anchor_dt = 1.0;    // 重锚间隔 (s), <=0 表示只在首次/门控时锚定
+    double ground_drift_max = 0.15;   // 平面一致性门控 (m): 偏离超过即判为坡度/地形变化
     // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
     bool convergence_check = true;
     double pos_std_threshold = 0.01;   // m

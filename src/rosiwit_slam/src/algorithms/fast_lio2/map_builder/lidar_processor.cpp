@@ -362,7 +362,15 @@ void LidarProcessor::process(SyncPackage &package)
         // 偏置门控不能只在轮式 odom 模式生效; 阈值放宽, 避免把正常
         // 空洞后重新收敛的 LiDAR 更新全部拒掉, 只拦真正的坏帧。
         const bool bad_bias = (dba > 0.50 || dbg > 0.10);
-        if (dv > kMaxDv || dt > kMaxDt || dz > 1.0 || dvz > 1.0 ||
+        // 速度门控: 只拒绝"把速度推得更离谱"的更新.
+        // 原来是无条件 |dv| > 门限就拒, 于是当速度已经跑飞(实测 430s 附近
+        // |v|=2.5~3.0m/s, 真值 ~0.9)时, 想把它拉回 0.9 的正确更新 (dv≈2.0~3.6)
+        // 反而被当成坏帧整帧丢弃 -> 速度永远回不来, 位姿只靠 IMU 积分,
+        // x 从 -100 一路跑到 -125 (1.8 m/s), 这就是"430s 必飘"的机制.
+        const double v_before = std::hypot(before.v.x(), before.v.y());
+        const double v_after = std::hypot(after.v.x(), after.v.y());
+        const bool dv_worse = (dv > kMaxDv) && (v_after > v_before + 0.05);
+        if (dv_worse || dt > kMaxDt || dz > 1.0 || dvz > 1.0 ||
             dr > kMaxDr || bad_bias) {
             m_kf->x() = before;
             m_kf->P() = P_before;
@@ -370,6 +378,7 @@ void LidarProcessor::process(SyncPackage &package)
             if (++reject_cnt <= 20 || reject_cnt % 20 == 0) {
                 std::cout << "[FLIO2] reject update dv=" << dv << " dt=" << dt
                           << " dz=" << dz << " dvz=" << dvz
+                          << " vbefore=" << v_before << " vafter=" << v_after
                           << " dr=" << dr << " dba=" << dba << " dbg=" << dbg
                           << " (total=" << reject_cnt << ")" << std::endl;
             }
@@ -391,7 +400,9 @@ void LidarProcessor::process(SyncPackage &package)
             const double vz = std::max(-1.0, std::min(1.0,
                 -(m_ground_normal.x() * xs.v.x() +
                   m_ground_normal.y() * xs.v.y()) / nz));
-            m_kf->updateVerticalVelocity(vz, 0.30);
+            m_kf->updateVerticalVelocity(vz, m_config.ground_vz_sigma);
+            if (m_config.ground_z_hold_sigma > 0.0)
+                m_kf->updateZ(0.0, m_config.ground_z_hold_sigma);
             m_ground_z_ref = m_ground_z_target;
             m_ground_z_init = true;
         } else if (m_ground_z_init) {
@@ -400,58 +411,63 @@ void LidarProcessor::process(SyncPackage &package)
         m_kf->x().clampPhysical();
     }
 
-    // 轮式 odom 紧耦合: 只用**位姿**, 即"窗口内位移 + 转角".
-    // 不用 twist 的速度/角速度 —— 它们是位姿微分出来的 (实测 50Hz 的
-    // twist.angular.z 逐帧抖 ±8deg/s, 速度同样毛刺), 精度远低于累计位姿.
-    // 两系 yaw 不同, 每个窗口起点记 psi = yaw_ekf - yaw_odom, 施加前把 Δp_odom
-    // 旋到世界系; 转角本身与坐标系无关, 不需要 psi.
+    // 轮式 odom 紧耦合 (每帧, 和 IMU 一样): 用"上一帧->本帧"的位姿增量
+    //   Δp_ekf ≡ Δp_odom   (旋到世界系后可标定尺度)
+    //   Δyaw_ekf ≡ Δyaw_odom
+    // 不用 twist (它是位姿微分出来的, 50Hz 抖 ±8deg/s), 也不用窗口
+    // (窗口会把 10Hz 的约束降成 1Hz, 打不过 10Hz 的雷达更新).
     if (m_odom_fuse && m_odom_prior) {
         const double t = package.cloud_end_time;
-        const M3D &Rk = m_kf->x().r_wi;
-        const double yaw_ekf = std::atan2(Rk(1, 0), Rk(0, 0));
+        const auto &xs = m_kf->x();
+        const double yaw_ekf = std::atan2(xs.r_wi(1, 0), xs.r_wi(0, 0));
+        const V2D p_ekf(xs.t_wi.x(), xs.t_wi.y());
         if (!m_pos_init) {
             m_pos_init = true;
-            m_pos_t0 = t;
-            m_odom_pos0 = V2D(m_odom_pos_x, m_odom_pos_y);
-            m_ekf_pos0 = V2D(m_kf->x().t_wi.x(), m_kf->x().t_wi.y());
-            m_odom_yaw0 = m_odom_yaw_abs;
-            m_ekf_yaw0 = yaw_ekf;
-            m_yaw_off = std::atan2(std::sin(yaw_ekf - m_odom_yaw_abs),
-                                   std::cos(yaw_ekf - m_odom_yaw_abs));
-        } else if (t - m_pos_t0 >= m_config.odom_win_len) {
-            // 窗口内 odom 相对转角 (与坐标系无关, 两系 yaw 偏移会被抵消)
-            const double dpsi = std::atan2(std::sin(m_odom_yaw_abs - m_odom_yaw0),
-                                           std::cos(m_odom_yaw_abs - m_odom_yaw0));
-            const V2D d_raw(m_odom_pos_x - m_odom_pos0.x(),
-                            m_odom_pos_y - m_odom_pos0.y());
-            const double c = std::cos(m_yaw_off), s = std::sin(m_yaw_off);
-            // 轮速位移按标定尺度缩放 (默认 1.0); 方向由 psi 旋到世界系.
-            const double ds = m_config.odom_calib_dist_scale;
-            const V2D d_meas(ds * (c * d_raw.x() - s * d_raw.y()),
-                             ds * (s * d_raw.x() + c * d_raw.y()));
-            const V2D d_ekf(m_kf->x().t_wi.x() - m_ekf_pos0.x(),
-                            m_kf->x().t_wi.y() - m_ekf_pos0.y());
-            // 相对位移: 旋到世界系 + 尺度标定
-            m_kf->updateOdomPos(d_meas, m_ekf_pos0, m_config.odom_win_pos_sigma,
-                                m_config.odom_win_pos_p_floor);
-            // 相对转角: 与坐标系无关
-            m_kf->updateYawDelta(dpsi * m_config.odom_calib_yaw_scale,
-                                 m_ekf_yaw0, m_config.odom_win_yaw_sigma,
-                                 m_config.odom_win_yaw_p_floor);
-            static int pos_log = 0;
-            if (++pos_log % 20 == 0) {
-                std::cout << "[FLIO2] odom fuse dpos_odom=" << d_meas.norm()
-                          << " dpos_ekf=" << d_ekf.norm()
-                          << " dyaw_odom=" << dpsi * 180.0 / M_PI
-                          << " dt=" << (t - m_pos_t0) << std::endl;
+            m_odom_t_prev = t;
+            m_odom_pos_prev = V2D(m_odom_pos_x, m_odom_pos_y);
+            m_ekf_pos_prev = p_ekf;
+            m_odom_yaw_prev = m_odom_yaw_abs;
+            m_ekf_yaw_prev = yaw_ekf;
+        } else {
+            const double dt = t - m_odom_t_prev;
+            if (dt > 1e-3 && dt < 1.0) {
+                // 两系 yaw 偏置 (每帧重估, 跟随缓慢漂移)
+                const double psi = std::atan2(std::sin(yaw_ekf - m_odom_yaw_abs),
+                                              std::cos(yaw_ekf - m_odom_yaw_abs));
+                const double dpsi = std::atan2(
+                    std::sin(m_odom_yaw_abs - m_odom_yaw_prev),
+                    std::cos(m_odom_yaw_abs - m_odom_yaw_prev));
+                const V2D d_raw(m_odom_pos_x - m_odom_pos_prev.x(),
+                                m_odom_pos_y - m_odom_pos_prev.y());
+                // odom 源可能比雷达慢 (如 /laser_odom 6Hz vs 雷达 10Hz):
+                // 位姿没变就跳过本帧, 否则会被误当成"这一帧没有位移"而把位姿钉住.
+                if (d_raw.norm() > 1e-9 || std::fabs(dpsi) > 1e-12) {
+                    const double c = std::cos(psi), s = std::sin(psi);
+                    const double ds = m_config.odom_calib_dist_scale;
+                    const V2D d_meas(ds * (c * d_raw.x() - s * d_raw.y()),
+                                     ds * (s * d_raw.x() + c * d_raw.y()));
+                    m_kf->updateOdomPos(d_meas, m_ekf_pos_prev,
+                                        m_config.odom_sigma_pos,
+                                        m_config.odom_sigma_pos_p_floor);
+                    m_kf->updateYawDelta(dpsi * m_config.odom_calib_yaw_scale,
+                                         m_ekf_yaw_prev, m_config.odom_sigma_yaw,
+                                         m_config.odom_sigma_yaw_p_floor);
+                    static int fuse_log = 0;
+                    if (++fuse_log % 100 == 0) {
+                        const V2D d_ekf(m_kf->x().t_wi.x() - m_ekf_pos_prev.x(),
+                                        m_kf->x().t_wi.y() - m_ekf_pos_prev.y());
+                        std::cout << "[FLIO2] odom fuse |d_odom|=" << d_meas.norm()
+                                  << " |d_ekf|=" << d_ekf.norm()
+                                  << " dyaw=" << dpsi * 180.0 / M_PI
+                                  << " dt=" << dt << std::endl;
+                    }
+                }
             }
-            m_pos_t0 = t;
-            m_odom_pos0 = V2D(m_odom_pos_x, m_odom_pos_y);
-            m_ekf_pos0 = V2D(m_kf->x().t_wi.x(), m_kf->x().t_wi.y());
-            m_odom_yaw0 = m_odom_yaw_abs;
-            m_ekf_yaw0 = std::atan2(m_kf->x().r_wi(1, 0), m_kf->x().r_wi(0, 0));
-            m_yaw_off = std::atan2(std::sin(m_ekf_yaw0 - m_odom_yaw_abs),
-                                   std::cos(m_ekf_yaw0 - m_odom_yaw_abs));
+            m_odom_t_prev = t;
+            m_odom_pos_prev = V2D(m_odom_pos_x, m_odom_pos_y);
+            m_odom_yaw_prev = m_odom_yaw_abs;
+            m_ekf_pos_prev = V2D(m_kf->x().t_wi.x(), m_kf->x().t_wi.y());
+            m_ekf_yaw_prev = std::atan2(m_kf->x().r_wi(1, 0), m_kf->x().r_wi(0, 0));
         }
     }
 

@@ -77,18 +77,24 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                     .as<bool>(out_cfg.odom_consistency_gate);
             out_cfg.ground_vz_sigma =
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
+            out_cfg.ground_z_hold_sigma =
+                get_input("ground_z_hold_sigma", "ground_z_hold_sigma")
+                    .as<double>(out_cfg.ground_z_hold_sigma);
+            out_cfg.ground_anchor_dt =
+                get_input("ground_anchor_dt", "ground_anchor_dt")
+                    .as<double>(out_cfg.ground_anchor_dt);
+            out_cfg.ground_drift_max =
+                get_input("ground_drift_max", "ground_drift_max")
+                    .as<double>(out_cfg.ground_drift_max);
         }
         // 轮速融合权重 (可配; 默认值等于原先的硬编码 0.2/0.10/0.05)
-        // ---- 轮速 odom 量测 (fuse = 窗口内相对位移 + 相对转角) ----
-        out_cfg.odom_win_len = get("odom_win_len").as<double>(out_cfg.odom_win_len);
-        out_cfg.odom_win_pos_sigma =
-            get("odom_win_pos_sigma").as<double>(out_cfg.odom_win_pos_sigma);
-        out_cfg.odom_win_pos_p_floor =
-            get("odom_win_pos_p_floor").as<double>(out_cfg.odom_win_pos_p_floor);
-        out_cfg.odom_win_yaw_sigma =
-            get("odom_win_yaw_sigma").as<double>(out_cfg.odom_win_yaw_sigma);
-        out_cfg.odom_win_yaw_p_floor =
-            get("odom_win_yaw_p_floor").as<double>(out_cfg.odom_win_yaw_p_floor);
+        // ---- 轮速 odom 量测 (fuse, 每帧) ----
+        out_cfg.odom_sigma_pos = get("odom_sigma_pos").as<double>(out_cfg.odom_sigma_pos);
+        out_cfg.odom_sigma_pos_p_floor =
+            get("odom_sigma_pos_p_floor").as<double>(out_cfg.odom_sigma_pos_p_floor);
+        out_cfg.odom_sigma_yaw = get("odom_sigma_yaw").as<double>(out_cfg.odom_sigma_yaw);
+        out_cfg.odom_sigma_yaw_p_floor =
+            get("odom_sigma_yaw_p_floor").as<double>(out_cfg.odom_sigma_yaw_p_floor);
         // ---- 轮速标定 (尺度) ----
         out_cfg.odom_calib_yaw_scale =
             get("odom_calib_yaw_scale").as<double>(out_cfg.odom_calib_yaw_scale);

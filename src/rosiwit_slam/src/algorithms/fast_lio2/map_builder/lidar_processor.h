@@ -96,18 +96,16 @@ private:
     double m_odom_v_lat = 0.0;
     double m_odom_yaw_rate = 0.0;
     bool m_odom_fuse = false;
-    // 轮速相对位移约束的滑窗状态
+    // 轮速 odom 每帧增量约束: 记住上一帧的 odom 位姿与 EKF 位姿
     double m_odom_pos_x = 0.0;
     double m_odom_pos_y = 0.0;
     double m_odom_yaw_abs = 0.0;   // odom 位姿的绝对 yaw (用于换算到世界系)
-    double m_yaw_off = 0.0;        // 窗口起点: yaw_ekf - yaw_odom
     bool   m_pos_init = false;
-    double m_pos_t0 = -1.0;
-    V2D    m_odom_pos0 = V2D::Zero();
-    V2D    m_ekf_pos0 = V2D::Zero();
-    // 窗口内相对转角约束用的起点
-    double m_odom_yaw0 = 0.0;
-    double m_ekf_yaw0 = 0.0;
+    V2D    m_odom_pos_prev = V2D::Zero();
+    V2D    m_ekf_pos_prev = V2D::Zero();
+    double m_odom_yaw_prev = 0.0;
+    double m_ekf_yaw_prev = 0.0;
+    double m_odom_t_prev = -1.0;
     // 坡地 z 安全先验: 2D SLAM 的 base z 是平地基准, 只作为"防跑飞"参考,
     // 用 50m 死区, 正常坡道 (实测 450s 内 z 约 -6..13m) 完全不受影响。
     bool m_z_ref_valid = false;
