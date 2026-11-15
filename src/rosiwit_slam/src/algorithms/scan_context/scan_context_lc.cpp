@@ -51,6 +51,7 @@ bool ScanContextLoopClosure::init(const std::string& config_path) {
                 m_max_consistency_rot_deg = lc["max_consistency_rot_deg"].as<double>(m_max_consistency_rot_deg);
                 m_submap_half_window = lc["submap_half_window"].as<int>(m_submap_half_window);
                 m_min_overlap = lc["min_overlap"].as<float>(m_min_overlap);
+                m_lc_gate_scale = lc["lc_gate_scale"].as<double>(m_lc_gate_scale);
                 m_odom_gate_m = lc["odom_gate_m"].as<double>(m_odom_gate_m);
                 m_max_candidates = lc["max_candidates"]
                                        ? lc["max_candidates"].as<int>(m_max_candidates)
@@ -153,7 +154,8 @@ bool ScanContextLoopClosure::icpVerify(
 bool ScanContextLoopClosure::icpVerifyDownsampled(
     const CloudType::Ptr& src_down, const CloudType::Ptr& tgt_down,
     const Eigen::Matrix4f& init_guess,
-    Eigen::Matrix4f& out_delta, float& out_fitness, float& out_overlap) const
+    Eigen::Matrix4f& out_delta, float& out_fitness, float& out_overlap,
+    float coarse_dist) const
 {
     out_overlap = 0.0f;
     if (!src_down || !tgt_down) return false;
@@ -164,7 +166,8 @@ bool ScanContextLoopClosure::icpVerifyDownsampled(
     // 平移始终从 init_guess (里程计先验) 出发, 不会凭空搬运点云。
     constexpr float kFineCorr = 0.30f;
     constexpr float kOverlapDist = 0.40f;
-    const float stages[] = {m_icp_coarse_corr_dist, 1.5f, kFineCorr};
+    const float coarse0 = (coarse_dist > 0.0f) ? coarse_dist : m_icp_coarse_corr_dist;
+    const float stages[] = {coarse0, 1.5f, kFineCorr};
 
     Eigen::Matrix4f T = init_guess;
     double fit = std::numeric_limits<double>::infinity();
@@ -405,7 +408,14 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
             Eigen::Matrix4f d;
             float f = std::numeric_limits<float>::infinity();
             float ov = 0.0f;
-            if (!icpVerifyDownsampled(latest_down, cand_down, init.second, d, f, ov)) continue;
+            float coarse_use = -1.0f;
+            if (m_lc_gate_scale > 0.0) {
+                coarse_use = static_cast<float>(std::min(25.0,
+                    std::max(static_cast<double>(m_icp_coarse_corr_dist),
+                             m_lc_gate_scale * odom_gap)));
+            }
+            if (!icpVerifyDownsampled(latest_down, cand_down, init.second, d, f, ov,
+                                      coarse_use)) continue;
             if (!icp_ok || f < fitness) {
                 icp_ok = true;
                 delta = d;
@@ -437,7 +447,10 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         const double rel_trans = cand_rel.trans.norm();
         const Eigen::AngleAxisd rel_aa(cand_rel.rot);
         const double rel_rot_deg = std::abs(rel_aa.angle()) * 180.0 / M_PI;
-        if (rel_trans > m_max_relative_trans_m || rel_rot_deg > m_max_relative_rot_deg) {
+        double allow_trans = m_max_relative_trans_m;
+        if (m_lc_gate_scale > 0.0)
+            allow_trans = std::max(allow_trans, m_lc_gate_scale * odom_gap);
+        if (rel_trans > allow_trans || rel_rot_deg > m_max_relative_rot_deg) {
             std::cout << "[ScanContextLC] reject relative loop: kf_" << cand.idx
                       << " <-> kf_" << latest_idx
                       << " d_trans=" << rel_trans << "m"

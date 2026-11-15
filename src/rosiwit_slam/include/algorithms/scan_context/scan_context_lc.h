@@ -45,7 +45,8 @@ private:
                               const Eigen::Matrix4f& init_guess,
                               Eigen::Matrix4f& out_delta,
                               float& out_fitness,
-                              float& out_overlap) const;
+                              float& out_overlap,
+                              float coarse_dist = -1.0f) const;
     static CloudType::Ptr downsampleCloud(const CloudType::Ptr& in, float leaf);
     /// 以 center 关键帧为参考，把邻近关键帧拼成局部子图；单帧 ICP 太容易受视角/稀疏影响.
     CloudType::Ptr buildSubmap(size_t center_idx, int half_window) const;
@@ -72,6 +73,8 @@ private:
     float m_icp_voxel_res = 0.3f;
     int m_submap_half_window = 3;       // 局部回环子图: 左右各取几个关键帧
     float m_min_overlap = 0.35f;        // ICP 后最近邻命中率下限
+    // 回环门限的自适应尺度 (0=关, 保持原行为): 允许的修正量与粗配半径按 odom_gap 放大.
+    double m_lc_gate_scale = 0.0;
     // 回环约束进入后端前的相对位姿门控: 拒绝几十米/上百度的假回环.
     double m_max_relative_trans_m = 8.0;
     double m_max_relative_rot_deg = 30.0;
