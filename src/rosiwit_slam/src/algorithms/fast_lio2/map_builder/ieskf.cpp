@@ -265,6 +265,26 @@ void IESKF::updateYawDelta(double dpsi, double yaw_ref, double sigma,
     m_P = IKA * m_P * IKA.transpose() + K * Rm * K.transpose();
 }
 
+void IESKF::updateForwardSpeed(double v_meas, double sigma)
+{
+    // 1 维量测: 车头方向的水平速度. ĥ 取当前 yaw, 只对 v_x/v_y 求导
+    // (yaw 本身的误差由姿态通道负责, 这里不引入 yaw 量测).
+    const double psi = std::atan2(m_x.r_wi(1, 0), m_x.r_wi(0, 0));
+    const double c = std::cos(psi), s = std::sin(psi);
+    Eigen::Matrix<double, 1, 21> H = Eigen::Matrix<double, 1, 21>::Zero();
+    H(0, 12) = c;
+    H(0, 13) = s;
+    const double R = std::max(sigma * sigma, 1e-6);
+    const double r = v_meas - (c * m_x.v.x() + s * m_x.v.y());
+    const double S = (H * m_P * H.transpose())(0, 0) + R;
+    const Eigen::Matrix<double, 21, 1> K = m_P * H.transpose() / S;
+    m_x += K * r;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKH = I - K * H;
+    m_P = IKH * m_P * IKH.transpose() + K * (K.transpose() * R);
+}
+
 void IESKF::updateVerticalVelocity(double target_vz, double sigma)
 {
     // 软约束 v.z 到 target_vz: 平地 target=0, 坡道 target=轮速*sin(pitch).

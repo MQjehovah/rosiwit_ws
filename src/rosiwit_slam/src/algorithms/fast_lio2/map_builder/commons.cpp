@@ -89,6 +89,9 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.accel_bias_max =
                 get_input("accel_bias_max", "accel_bias_max")
                     .as<double>(out_cfg.accel_bias_max);
+            out_cfg.odom_speed_sigma =
+                get_input("odom_speed_sigma", "odom_speed_sigma")
+                    .as<double>(out_cfg.odom_speed_sigma);
         }
         // 轮速融合权重 (可配; 默认值等于原先的硬编码 0.2/0.10/0.05)
         // ---- 轮速 odom 量测 (fuse, 每帧) ----

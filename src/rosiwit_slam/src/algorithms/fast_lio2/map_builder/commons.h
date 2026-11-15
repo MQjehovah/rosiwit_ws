@@ -112,6 +112,9 @@ struct Config
     // 误差吸收器 (实测 450-550s |ba| 顶到 1.0, 同时速度虚报 1.5~1.9 m/s).
     // 默认 1.0 = 保持原有行为, 收紧需显式配置.
     double accel_bias_max = 1.0;
+    // 沿车头速度标量约束 (m/s, 0=关): v·ĥ = 轮速里程/Δt.
+    // 只用 odom 的里程, 不用它的 yaw. 针对长走廊沿轴无观测的滑行.
+    double odom_speed_sigma = 0.0;
     // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
     bool convergence_check = true;
     double pos_std_threshold = 0.01;   // m

@@ -98,6 +98,10 @@ public:
     void updateYawDelta(double dpsi, double yaw_ref, double sigma,
                         double p_floor = 0.0);
     void updateVerticalVelocity(double target_vz, double sigma);
+    /// 沿车头方向的速度标量约束: (cosψ,sinψ)·v_xy = v_meas.
+    /// 只用轮速 odom 的**里程**, 不用它的 yaw (实测 yaw 只有真值 0.64 倍).
+    /// 用于压制长走廊沿轴无观测导致的"静止滑行".
+    void updateForwardSpeed(double v_meas, double sigma);
     /// 地面 3-DoF 量测 (LeGO-LOAM 式): 用地平面法向约束 roll/pitch, 用地面高度约束 z.
     /// n_world 是世界系地面法向; z_target 是传感器高度期望 (地面 + h0).
     void updateGround(const V3D &n_world, double z_target, double sigma_tilt, double sigma_z);

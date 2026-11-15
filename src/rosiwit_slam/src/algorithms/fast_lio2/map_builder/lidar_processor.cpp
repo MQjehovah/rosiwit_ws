@@ -394,6 +394,13 @@ void LidarProcessor::process(SyncPackage &package)
         // 坏帧/空洞帧即使漏过门控也不会把 v/ba/bg/z 带到发散区。
         m_kf->x().clampPhysical();
     }
+    // 沿车头速度标量约束: 只钉"车头方向走了多快", 用轮速的里程, 不用它的 yaw.
+    // 长走廊沿轴无观测时位姿会沿走廊滑 (实测静止段仍以 0.3m/s 前滑).
+    if (m_config.odom_speed_sigma > 0.0 && m_odom_prior) {
+        m_kf->updateForwardSpeed(m_odom_v_fwd, m_config.odom_speed_sigma);
+        m_kf->x().clampPhysical();
+    }
+
     // 坡道感知的垂直速度软先验: 轮速沿车体 x, 世界 z 分量 = R(2,0)*v_fwd.
     // 没有这个约束时, IMU z 零偏会以 0.8m/s 上限把 z 积分到 -100;
     // 有了它, 平地 v.z≈0, 坡道 v.z≈speed*sin(pitch), 坡度仍然保留.
