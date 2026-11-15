@@ -263,18 +263,64 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
             if (!m_ground_h0_valid) {
                 m_ground_h0 = xs.t_wi.z() - ground_z;
                 m_ground_h0_valid = true;
-                std::cout << "[FLIO2] ground h0=" << m_ground_h0 << std::endl;
+                std::cout << "[FLIO2] ground h0=" << m_ground_h0
+                          << " anchor_dt=" << m_config.ground_anchor_dt
+                          << " drift_max=" << m_config.ground_drift_max << std::endl;
             }
             m_ground_normal_w = n_world;
+
+            // ---- 锚定平面 (历史平面参数) ----
+            // 原先 zt 由"本帧现拟合的平面"给出: 点云和平面随位姿一起平移, 残差恒等于
+            // h0 的标定误差 (实测 -0.29..-0.59m 全程不变), 于是地面 z 约束变成一个只
+            // 往下推的棘轮, 且 K_z 随 P_zz 增长 (1e-4 -> 1.8e-2), 推力越跑越大.
+            // 现在: 平面在锚点时刻冻结, 本帧 z 目标由旧平面推出 -> z 一漂残差立刻非零.
+            const double anchor_age = f.end_time - m_plane_anchor_t;
+            const bool anchor_due =
+                (!m_plane_anchor_valid) ||
+                (m_config.ground_anchor_dt > 0.0 && anchor_age >= m_config.ground_anchor_dt);
             double zt = ground_z + m_ground_h0;
-            // 限速: 单帧跳变 >0.3m 视为坏估计, 直接丢弃本帧
-            if (m_ground_valid && std::fabs(zt - m_ground_z_target) > 0.3) {
-                m_ground_last_ok = f.end_time;
-            } else {
-                m_ground_z_target = zt;
+            bool gate = false;
+            if (m_plane_anchor_valid && !anchor_due) {
+                const V3D &na = m_plane_anchor_n;
+                const V3D &pa = m_plane_anchor_p;
+                zt = pa.z() + (na.x() * (pa.x() - xs.t_wi.x()) +
+                               na.y() * (pa.y() - xs.t_wi.y())) / na.z();
+                const double drift = zt - xs.t_wi.z();
+                if (std::fabs(drift) > m_config.ground_drift_max) {
+                    gate = true;
+                    ++m_ground_gate_hits;
+                    if (m_ground_gate_hits <= 10 || m_ground_gate_hits % 50 == 0) {
+                        std::cout << "[FLIO2] ground gate drift=" << drift
+                                  << " thr=" << m_config.ground_drift_max
+                                  << " z=" << xs.t_wi.z() << " ztarget=" << zt
+                                  << " (total=" << m_ground_gate_hits << ")" << std::endl;
+                    }
+                }
             }
-            m_ground_valid = true;
-            m_ground_last_ok = f.end_time;
+            if (gate) {
+                // 平面假设被破坏 (坡度/地形变化, 或 z 已经大幅偏离): 本帧不施加 z 约束,
+                // 立即重锚, 交给 vz 软约束 + LiDAR 自己跟 (GR-LIO 式回退).
+                m_ground_valid = false;
+                m_plane_anchor_p = xs.t_wi;
+                m_plane_anchor_n = n_world;
+                m_plane_anchor_t = f.end_time;
+                m_plane_anchor_valid = true;
+            } else {
+                // 限速: 单帧跳变 >0.3m 视为坏估计, 直接丢弃本帧
+                if (m_ground_valid && std::fabs(zt - m_ground_z_target) > 0.3) {
+                    m_ground_last_ok = f.end_time;
+                } else {
+                    m_ground_z_target = zt;
+                }
+                m_ground_valid = true;
+                m_ground_last_ok = f.end_time;
+                if (!m_plane_anchor_valid || anchor_due) {
+                    m_plane_anchor_p = xs.t_wi;
+                    m_plane_anchor_n = n_world;
+                    m_plane_anchor_t = f.end_time;
+                    m_plane_anchor_valid = true;
+                }
+            }
         } else if (m_ground_valid && (f.end_time - m_ground_last_ok) < 1.0) {
             // hold: 沿用上一帧地面高度
         } else {

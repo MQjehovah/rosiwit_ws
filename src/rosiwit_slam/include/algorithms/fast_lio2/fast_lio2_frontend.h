@@ -62,6 +62,14 @@ private:
     double m_ground_z_target = 0.0;
     double m_ground_z_anchor = 0.0;
     bool m_ground_z_anchor_valid = false;
+    // 锚定平面 (历史平面参数): 锚点时刻的位姿 + 该帧拟合出的法向.
+    // 本帧的 z 目标 = 锚定平面在 (x,y) 处的高度, 与本帧位姿无关 —— 这样 z 漂移
+    // 才会产生非零残差, 而不是像"现拟合现用"那样残差恒为常数.
+    V3D m_plane_anchor_p = V3D::Zero();
+    V3D m_plane_anchor_n = V3D::UnitZ();
+    double m_plane_anchor_t = -1.0;
+    bool m_plane_anchor_valid = false;
+    int m_ground_gate_hits = 0;   // 平面一致性门控触发次数
     bool estimateGroundNormal(const CloudType::Ptr& cloud, V3D& normal, double& plane_d);
     CloudType::Ptr m_current_cloud;
     bool m_skip_output = false;   // 本帧因 IMU 空洞被跳过, 不产出 odom/keyframe
