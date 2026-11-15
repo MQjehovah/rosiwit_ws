@@ -18,6 +18,7 @@ bool FastLio2Frontend::init(const std::string& config_path) {
     m_kf->setMaxIter(static_cast<size_t>(m_config.ieskf_max_iter));
     m_kf->setDegenerateEigenRatio(m_config.degenerate_eigen_ratio);
     m_kf->setDegenerateGain(m_config.degenerate_gain);
+    m_kf->setAccelBiasMax(m_config.accel_bias_max);
     m_kf->setMaxVel(m_config.max_state_velocity);   // 速度安全网 (见 IESKF::update)
     m_builder = std::make_shared<MapBuilder>(m_config, m_kf);
     m_inited = true;

@@ -36,6 +36,7 @@ public:
 struct State
 {
     static double gravity;
+    static double accel_bias_max;   // 加计零偏限幅 (m/s^2), 由配置设置
     M3D r_wi = M3D::Identity();
     V3D t_wi = V3D::Zero();
     M3D r_il = M3D::Identity();
@@ -72,6 +73,7 @@ public:
     /// 弱方向自适应降权 (0 = 关闭): gain_k = clamp((r_k/thr)^0.25, gain, 1).
     /// 没有删除路径, 该方向至少保留 gain 的信息量.
     void setDegenerateGain(double g) { m_degenerate_gain = g; }
+    void setAccelBiasMax(double v) { State::accel_bias_max = std::max(0.01, v); }
     // 状态速度物理上限(m/s); <=0 关闭。坏配准把速度打爆后的最后一道刹车(见 update)。
     void setMaxVel(double v) { m_max_vel = v; }
     void setLossFunction(loss_func func) { m_loss_func = func; }

@@ -6,6 +6,7 @@
 #include <Eigen/Geometry>
 
 double State::gravity = 9.81;
+double State::accel_bias_max = 1.0;
 
 namespace
 {
@@ -149,7 +150,7 @@ void State::clampPhysical()
     if (vn > 3.0) v *= 3.0 / vn;
     v.z() = std::max(-0.8, std::min(0.8, v.z()));
     bg = bg.cwiseMax(-0.10).cwiseMin(0.10);
-    ba = ba.cwiseMax(-1.0).cwiseMin(1.0);
+    ba = ba.cwiseMax(-accel_bias_max).cwiseMin(accel_bias_max);
 }
 
 V21D State::operator-(const State &other) const

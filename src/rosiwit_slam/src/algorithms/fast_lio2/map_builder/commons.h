@@ -108,6 +108,10 @@ struct Config
     // 残差恒等于标定误差 (实测全程 -0.29..-0.59m), 约束退化成一个只往下推的棘轮.
     double ground_anchor_dt = 1.0;    // 重锚间隔 (s), <=0 表示只在首次/门控时锚定
     double ground_drift_max = 0.15;   // 平面一致性门控 (m): 偏离超过即判为坡度/地形变化
+    // 加计零偏限幅 (m/s^2). MEMS 实测零偏在 0.02~0.1 量级; 放到 1.0 会让它变成
+    // 误差吸收器 (实测 450-550s |ba| 顶到 1.0, 同时速度虚报 1.5~1.9 m/s).
+    // 默认 1.0 = 保持原有行为, 收紧需显式配置.
+    double accel_bias_max = 1.0;
     // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
     bool convergence_check = true;
     double pos_std_threshold = 0.01;   // m

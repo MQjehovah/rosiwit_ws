@@ -361,7 +361,11 @@ void LidarProcessor::process(SyncPackage &package)
                             : 0.35;
         // 偏置门控不能只在轮式 odom 模式生效; 阈值放宽, 避免把正常
         // 空洞后重新收敛的 LiDAR 更新全部拒掉, 只拦真正的坏帧。
-        const bool bad_bias = (dba > 0.50 || dbg > 0.10);
+        // 偏置门控同样改成"只有把偏置推得更大才拒": 偏置已经跑偏时, 想把它拉回
+        // 的更新 (dba 必然大) 不能被当成坏帧丢掉, 否则和旧的 dv 门控一样死锁.
+        const bool bad_bias =
+            (dba > 0.50 && after.ba.norm() > before.ba.norm() + 0.01) ||
+            (dbg > 0.10 && after.bg.norm() > before.bg.norm() + 0.005);
         // 速度门控: 只拒绝"把速度推得更离谱"的更新.
         // 原来是无条件 |dv| > 门限就拒, 于是当速度已经跑飞(实测 430s 附近
         // |v|=2.5~3.0m/s, 真值 ~0.9)时, 想把它拉回 0.9 的正确更新 (dv≈2.0~3.6)
@@ -370,7 +374,10 @@ void LidarProcessor::process(SyncPackage &package)
         const double v_before = std::hypot(before.v.x(), before.v.y());
         const double v_after = std::hypot(after.v.x(), after.v.y());
         const bool dv_worse = (dv > kMaxDv) && (v_after > v_before + 0.05);
-        if (dv_worse || dt > kMaxDt || dz > 1.0 || dvz > 1.0 ||
+        // 竖直速度同理: 只拒"把 |v.z| 推得更大"的更新.
+        const bool dvz_worse =
+            (dvz > 1.0) && (std::fabs(after.v.z()) > std::fabs(before.v.z()) + 0.05);
+        if (dv_worse || dt > kMaxDt || dz > 1.0 || dvz_worse ||
             dr > kMaxDr || bad_bias) {
             m_kf->x() = before;
             m_kf->P() = P_before;
