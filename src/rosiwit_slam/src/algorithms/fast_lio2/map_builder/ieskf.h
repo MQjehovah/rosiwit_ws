@@ -102,6 +102,10 @@ public:
     /// 只用轮速 odom 的**里程**, 不用它的 yaw (实测 yaw 只有真值 0.64 倍).
     /// 用于压制长走廊沿轴无观测导致的"静止滑行".
     void updateForwardSpeed(double v_meas, double sigma);
+    /// 重力方向倾斜约束 (2 维, 只作用于 roll/pitch).
+    /// up_world 由**车体系**加速度计方向经当前姿态旋到世界系; 与点云无关,
+    /// 因此不会像地面法向那样自指.
+    void updateTilt(const V3D &up_world, double sigma);
     /// 地面 3-DoF 量测 (LeGO-LOAM 式): 用地平面法向约束 roll/pitch, 用地面高度约束 z.
     /// n_world 是世界系地面法向; z_target 是传感器高度期望 (地面 + h0).
     void updateGround(const V3D &n_world, double z_target, double sigma_tilt, double sigma_z);

@@ -70,6 +70,10 @@ private:
     double m_plane_anchor_t = -1.0;
     bool m_plane_anchor_valid = false;
     int m_ground_gate_hits = 0;   // 平面一致性门控触发次数
+    // 加速度低通 (重力方向估计)
+    V3D m_acc_lp = V3D::Zero();
+    double m_acc_lp_t = -1.0;
+    bool m_acc_lp_valid = false;
     bool estimateGroundNormal(const CloudType::Ptr& cloud, V3D& normal, double& plane_d);
     CloudType::Ptr m_current_cloud;
     bool m_skip_output = false;   // 本帧因 IMU 空洞被跳过, 不产出 odom/keyframe

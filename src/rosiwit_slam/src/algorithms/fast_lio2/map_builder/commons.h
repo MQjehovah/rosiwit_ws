@@ -115,6 +115,10 @@ struct Config
     // 沿车头速度标量约束 (m/s, 0=关): v·ĥ = 轮速里程/Δt.
     // 只用 odom 的里程, 不用它的 yaw. 针对长走廊沿轴无观测的滑行.
     double odom_speed_sigma = 0.0;
+    // 重力方向倾斜约束 (rad, 0=关). 用加速度计低通后的方向约束 roll/pitch;
+    // 地面法向对姿态是自指的 (点云随位姿一起转), 无法提供绝对参考.
+    double gravity_tilt_sigma = 0.0;
+    double gravity_tilt_tau = 1.0;      // s, 加速度低通时间常数
     // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
     bool convergence_check = true;
     double pos_std_threshold = 0.01;   // m

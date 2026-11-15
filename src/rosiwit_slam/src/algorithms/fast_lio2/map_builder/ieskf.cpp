@@ -265,6 +265,28 @@ void IESKF::updateYawDelta(double dpsi, double yaw_ref, double sigma,
     m_P = IKA * m_P * IKA.transpose() + K * Rm * K.transpose();
 }
 
+void IESKF::updateTilt(const V3D &up_world, double sigma)
+{
+    // 与 updateGround 的姿态部分同构, 但 up_world 来自加速度计, 不含位姿信息.
+    const V3D n = up_world.normalized();
+    Eigen::Matrix<double, 2, 21> H = Eigen::Matrix<double, 2, 21>::Zero();
+    Eigen::Vector2d r = Eigen::Vector2d::Zero();
+    const V3D e_w(n.y(), -n.x(), 0.0);
+    const V3D e_b = m_x.r_wi.transpose() * e_w;
+    r(0) = e_b.x();
+    r(1) = e_b.y();
+    H(0, 0) = 1.0;
+    H(1, 1) = 1.0;
+    const Eigen::Matrix2d Rm = Eigen::Matrix2d::Identity() * std::max(sigma * sigma, 1e-8);
+    const Eigen::Matrix2d S = H * m_P * H.transpose() + Rm;
+    const Eigen::Matrix<double, 21, 2> K = m_P * H.transpose() * S.inverse();
+    m_x += K * r;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKH = I - K * H;
+    m_P = IKH * m_P * IKH.transpose() + K * Rm * K.transpose();
+}
+
 void IESKF::updateForwardSpeed(double v_meas, double sigma)
 {
     // 1 维量测: 车头方向的水平速度. ĥ 取当前 yaw, 只对 v_x/v_y 求导

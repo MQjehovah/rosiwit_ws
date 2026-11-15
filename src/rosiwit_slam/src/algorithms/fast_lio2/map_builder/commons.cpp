@@ -92,6 +92,12 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.odom_speed_sigma =
                 get_input("odom_speed_sigma", "odom_speed_sigma")
                     .as<double>(out_cfg.odom_speed_sigma);
+            out_cfg.gravity_tilt_sigma =
+                get_input("gravity_tilt_sigma", "gravity_tilt_sigma")
+                    .as<double>(out_cfg.gravity_tilt_sigma);
+            out_cfg.gravity_tilt_tau =
+                get_input("gravity_tilt_tau", "gravity_tilt_tau")
+                    .as<double>(out_cfg.gravity_tilt_tau);
         }
         // 轮速融合权重 (可配; 默认值等于原先的硬编码 0.2/0.10/0.05)
         // ---- 轮速 odom 量测 (fuse, 每帧) ----

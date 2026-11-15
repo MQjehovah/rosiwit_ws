@@ -213,6 +213,38 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
         m_imu_buffer.erase(m_imu_buffer.begin());
     }
 
+    // 重力方向倾斜约束: 加速度计在**车体系**测重力, 与位姿估计无关.
+    // 地面法向做不到这件事 (点云随位姿一起转, 残差恒为 0), 所以 roll/pitch 只有
+    // 这一个绝对参考. 准静态 (|a| 接近 g) 时才用.
+    if (m_config.gravity_tilt_sigma > 0.0 && !fast_imus.empty()) {
+        V3D mean_a = V3D::Zero();
+        for (const auto &im : fast_imus)
+            mean_a += V3D(im.acc.x(), im.acc.y(), im.acc.z());
+        mean_a /= static_cast<double>(fast_imus.size());
+        const double an = mean_a.norm();
+        if (an > 1e-3) {
+            const V3D ahat = mean_a / an;
+            const double dt_a = (m_acc_lp_t > 0.0)
+                                    ? std::max(1e-3, f.end_time - m_acc_lp_t)
+                                    : 0.1;
+            if (!m_acc_lp_valid) {
+                m_acc_lp = ahat;
+                m_acc_lp_valid = true;
+            } else {
+                const double tau = std::max(1e-3, m_config.gravity_tilt_tau);
+                const double a = 1.0 - std::exp(-dt_a / tau);
+                V3D b = m_acc_lp * (1.0 - a) + ahat * a;
+                if (b.norm() > 1e-6) m_acc_lp = b.normalized();
+            }
+            m_acc_lp_t = f.end_time;
+            if (std::fabs(an - State::gravity) < 1.5) {
+                const V3D up_w = m_kf->x().r_wi * m_acc_lp;
+                m_kf->updateTilt(up_w, m_config.gravity_tilt_sigma);
+                m_kf->x().clampPhysical();
+            }
+        }
+    }
+
     ::SyncPackage fast_pkg;
     fast_pkg.cloud = f.cloud;
     fast_pkg.cloud_start_time = f.start_time;
