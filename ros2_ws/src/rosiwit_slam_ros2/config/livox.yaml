@@ -25,7 +25,9 @@ global:
     lidar_frame: livox_frame  # 雷达frame
     imu_frame: livox_frame # IMU frame
     body_frame: base_link # 车体frame
-    world_frame: odom # 世界frame
+    world_frame: map # 世界frame (代码要求与 map_frame 一致)
+    map_frame: map # 地图frame
+    odom_frame: odom # 里程计frame
   map:
     voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
     save_voxel: 0.3 # 地图/点云保存降采样体素(m)
@@ -68,6 +70,9 @@ mapping:
       y_max: 0.55
       z_min: 0.05
       z_max: 1.40
+    free_space_carving: false # 自由空间雕刻, 默认关
+    carve_stride: 10 # 每 N 个点做一次射线
+    carve_free_thresh: 3 # 同一体素被 N 帧判空才清空
   loop_closure:
     icp_fitness_thresh: 0.5 # 回环ICP适应度阈值 (实测起点回环 fitness≈0.39)
     icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)

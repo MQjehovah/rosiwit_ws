@@ -207,6 +207,12 @@ mapping:
     line_min_len_m: 0.0 # Hough线段最小长度(m)
     axis_snap: false # Hough线段吸附水平/垂直
 localization:
+  # 定位链路的 odom 用法: none | fuse. 单一开关, 同时决定:
+  #   - motion_prior 是否吸收 /odom (预测量测)
+  #   - pose_fusion=eskf 是否吸收 /odom (速度观测, 带打滑门控)
+  # 只对 modules.localization=localization_pipeline 有效; gicp_localization 无此阶段.
+  # 仍需 global.input.use_odom 打开订阅 (或由本键自动触发订阅).
+  odom_mode: none
   # ==================== 可编排定位流水线 (localization_pipeline) ====================
   # 各阶段按名选择算法, 便于对同一阶段的不同算法做横向性能验证.
   # 可用实现 (见 algorithms/localization/localization_factory.cpp):
@@ -279,7 +285,8 @@ localization:
   motion_prior:
     max_dt: 0.2
     max_vel: 10.0
-    use_odom: false           # 融合轮式里程计(洗地机打滑: 默认关, 朝向始终用 IMU)
+    use_odom: false           # [已废弃] 统一由 localization.odom_mode: fuse 控制;
+                              # 仅在旧配置(没有 odom_mode)时作为兼容回落保留
     slip_yaw_thresh: 0.3      # |odom_yaw_rate - imu_yaw_rate| 超此值判打滑并丢弃 odom(rad/s)
     # IMU 零偏在线估计 (L11)
     imu_calib_samples: 200    # 静止标定窗口样本数
