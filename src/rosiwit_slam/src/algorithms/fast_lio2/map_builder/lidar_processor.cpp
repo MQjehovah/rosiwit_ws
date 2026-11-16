@@ -107,6 +107,18 @@ void LidarProcessor::incrCloudMap()
     int size = m_cloud_down_lidar->size();
     PointVec point_to_add;
     PointVec point_no_need_downsample;
+
+    // 入图距离上限: 自转/低速时收紧, 避免远端点被角度误差扫成扇形
+    double insert_range = 0.0;
+    if (m_config.map_insert_max_range > 0.0) {
+        const double spd = std::hypot(state.v.x(), state.v.y());
+        const bool spinning = (m_cur_yaw_rate_dps > m_config.map_insert_spin_yaw_rate) ||
+                              (spd < m_config.map_insert_spin_speed);
+        insert_range = m_config.map_insert_max_range;
+        if (spinning && m_config.map_insert_spin_range > 0.0)
+            insert_range = std::min(insert_range, m_config.map_insert_spin_range);
+    }
+
     for (int i = 0; i < size; i++)
     {
         const PointType &p = m_cloud_down_lidar->points[i];
@@ -116,6 +128,11 @@ void LidarProcessor::incrCloudMap()
         m_cloud_down_world->points[i].y = point(1);
         m_cloud_down_world->points[i].z = point(2);
         m_cloud_down_world->points[i].intensity = m_cloud_down_lidar->points[i].intensity;
+
+        if (insert_range > 0.0) {
+            const Eigen::Vector3d d = point - state.t_wi;
+            if (d.norm() > insert_range) continue;   // 超距离不入图 (仍参与匹配)
+        }
 
         // 动态一致性门控：与地图重叠但未被稳定观测的点视为动态，不入图
         if (m_config.dynamic_removal && m_config.persist_thresh > 1)
@@ -328,6 +345,21 @@ void LidarProcessor::process(SyncPackage &package)
     // 一次 IEKF 更新就能把 v 从 0.5m/s 推到 10m/s (实测 430s 转角处).
     // 单帧位置/速度/姿态修正超过物理可能范围时, 丢弃本次更新, 保留 IMU 预测,
     // 等下一帧重新关联, 避免一次误匹配把整张图带飞.
+    // 帧间角速度 (deg/s), 供入图距离限制判断"是否在自转"
+    {
+        const double yaw_now = std::atan2(m_kf->x().r_wi(1, 0), m_kf->x().r_wi(0, 0));
+        const double t_now = package.cloud_end_time;
+        if (m_prev_yaw_valid && t_now > m_prev_yaw_t + 1e-4) {
+            double dy = yaw_now - m_prev_yaw;
+            while (dy > M_PI) dy -= 2.0 * M_PI;
+            while (dy < -M_PI) dy += 2.0 * M_PI;
+            m_cur_yaw_rate_dps = std::fabs(dy) * 180.0 / M_PI / (t_now - m_prev_yaw_t);
+        }
+        m_prev_yaw = yaw_now;
+        m_prev_yaw_t = t_now;
+        m_prev_yaw_valid = true;
+    }
+
     const State before = m_kf->x();
     const M21D P_before = m_kf->P();
     m_kf->update();
@@ -399,6 +431,34 @@ void LidarProcessor::process(SyncPackage &package)
     if (m_config.odom_speed_sigma > 0.0 && m_odom_prior) {
         m_kf->updateForwardSpeed(m_odom_v_fwd, m_config.odom_speed_sigma);
         m_kf->x().clampPhysical();
+    }
+
+    // ---- 行进方向 (世界系) + 沿行进方向的标量速度约束 ----
+    {
+        const V2D p_now(m_kf->x().t_wi.x(), m_kf->x().t_wi.y());
+        if (m_prev_pos_valid) {
+            const V2D dp = p_now - m_prev_pos;
+            const double n = dp.norm();
+            if (n > 0.03) {
+                const V2D u = dp / n;
+                if (!m_travel_valid) { m_travel_dir = u; m_travel_valid = true; }
+                else {
+                    V2D b = m_travel_dir * 0.7 + u * 0.3;
+                    if (b.norm() > 1e-6) m_travel_dir = b / b.norm();
+                }
+            }
+        }
+        m_prev_pos = p_now;
+        m_prev_pos_valid = true;
+    }
+    if (m_config.odom_travel_sigma > 0.0 && m_odom_prior && m_travel_valid) {
+        const double v = m_odom_v_fwd;   // 外部标量速度 (如 2D 建图速度)
+        if (std::fabs(v) > 0.10) {
+            const V2D h = (v >= 0.0) ? m_travel_dir
+                                     : V2D(-m_travel_dir.x(), -m_travel_dir.y());
+            m_kf->updateSpeedAlong(h, std::fabs(v), m_config.odom_travel_sigma);
+            m_kf->x().clampPhysical();
+        }
     }
 
     // 坡道感知的垂直速度软先验: 轮速沿车体 x, 世界 z 分量 = R(2,0)*v_fwd.

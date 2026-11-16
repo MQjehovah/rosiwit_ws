@@ -93,6 +93,16 @@ private:
     bool m_odom_prior = false;
     double m_odom_speed = 0.0;
     double m_odom_v_fwd = 0.0;
+    // 行进方向 (世界系单位向量, 由 LIO 位移低通) —— 用于标量速度约束
+    V2D m_travel_dir = V2D(1.0, 0.0);
+    bool m_travel_valid = false;
+    V2D m_prev_pos = V2D::Zero();
+    bool m_prev_pos_valid = false;
+    // 帧间角速度 (deg/s), 供入图距离限制判断是否在自转
+    double m_prev_yaw = 0.0;
+    double m_prev_yaw_t = -1.0;
+    bool m_prev_yaw_valid = false;
+    double m_cur_yaw_rate_dps = 0.0;
     double m_odom_v_lat = 0.0;
     double m_odom_yaw_rate = 0.0;
     bool m_odom_fuse = false;

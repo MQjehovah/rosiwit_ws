@@ -284,7 +284,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                 if (mapn && mapn["odom_mode"]) om = mapn["odom_mode"].as<std::string>();
                 else om = gi("odom_mode").as<std::string>("");
                 m_cfg.odom_mode =
-                    (om == "gate" || om == "fuse") ? om : std::string("none");
+                    (om == "gate" || om == "fuse" || om == "factor") ? om : std::string("none");
                 m_cfg.odom_gate = (om == "gate");
                 m_cfg.odom_fuse = (om == "fuse");
 
@@ -491,7 +491,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.world_frame.c_str(), m_cfg.map_frame.c_str());
         m_cfg.world_frame = m_cfg.map_frame;
     }
-    if (m_cfg.use_wheel_odom || m_cfg.odom_gate || m_cfg.odom_fuse) {
+    // 定位链路: odom_mode=fuse 也要求订阅; 不能只靠 global.input.use_odom,
+    // 否则只写 localization.odom_mode: fuse 会静默不生效.
+    const bool loc_odom_fuse = (m_cfg.loc_odom_mode == "fuse");
+    if (m_cfg.use_wheel_odom || m_cfg.odom_gate || m_cfg.odom_fuse || loc_odom_fuse) {
         m_odom_sub = create_subscription<nav_msgs::msg::Odometry>(
             m_cfg.odom_topic, 100, std::bind(&SlamNode::odomCB, this, _1), sensor_sub_opts);
     }
@@ -559,8 +562,10 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
                     m_cfg.imu_acc_min, m_cfg.imu_acc_max, m_cfg.imu_gyro_max,
                     m_cfg.imu_gyro_scale);
     }
-    RCLCPP_INFO(get_logger(), "odom gate: %s topic=%s",
-                m_cfg.odom_gate ? "on" : "off", m_cfg.odom_topic.c_str());
+    RCLCPP_INFO(get_logger(), "odom mode: mapping=%s localization=%s topic=%s",
+                m_cfg.odom_mode.empty() ? "none" : m_cfg.odom_mode.c_str(),
+                m_cfg.loc_odom_mode.empty() ? "none" : m_cfg.loc_odom_mode.c_str(),
+                m_cfg.odom_topic.c_str());
     RCLCPP_INFO(get_logger(), "SlamNode ready: algo=%s mode=%s imu=%s lidar=%s",
                 algo_name.c_str(), mode_str.c_str(), m_cfg.imu_topic.c_str(), m_cfg.lidar_topic.c_str());
     if (m_cfg.vision_enabled)

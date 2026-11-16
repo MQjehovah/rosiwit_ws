@@ -68,7 +68,7 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             else
                 om = get_input("odom_mode", "odom_mode").as<std::string>("");
             out_cfg.odom_fuse = (om == "fuse");
-            if (om != "gate" && om != "fuse") om = "none";
+            if (om != "gate" && om != "fuse" && om != "factor") om = "none";
             out_cfg.odom_gate = (om == "gate");
             out_cfg.ground_follow_z =
                 get_input("ground_follow_z", "ground_follow_z").as<bool>(out_cfg.ground_follow_z);
@@ -92,6 +92,28 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.odom_speed_sigma =
                 get_input("odom_speed_sigma", "odom_speed_sigma")
                     .as<double>(out_cfg.odom_speed_sigma);
+            out_cfg.odom_travel_sigma =
+                get_input("odom_travel_sigma", "odom_travel_sigma")
+                    .as<double>(out_cfg.odom_travel_sigma);
+            out_cfg.map_insert_max_range =
+                get_input("map_insert_max_range", "map_insert_max_range")
+                    .as<double>(out_cfg.map_insert_max_range);
+            out_cfg.map_insert_spin_range =
+                get_input("map_insert_spin_range", "map_insert_spin_range")
+                    .as<double>(out_cfg.map_insert_spin_range);
+            out_cfg.map_insert_spin_speed =
+                get_input("map_insert_spin_speed", "map_insert_spin_speed")
+                    .as<double>(out_cfg.map_insert_spin_speed);
+            out_cfg.map_insert_spin_yaw_rate =
+                get_input("map_insert_spin_yaw_rate", "map_insert_spin_yaw_rate")
+                    .as<double>(out_cfg.map_insert_spin_yaw_rate);
+            out_cfg.zupt_speed_thresh =
+                get_input("zupt_speed_thresh", "zupt_speed_thresh")
+                    .as<double>(out_cfg.zupt_speed_thresh);
+            out_cfg.zupt_frames =
+                get_input("zupt_frames", "zupt_frames").as<int>(out_cfg.zupt_frames);
+            out_cfg.zupt_sigma =
+                get_input("zupt_sigma", "zupt_sigma").as<double>(out_cfg.zupt_sigma);
             out_cfg.gravity_tilt_sigma =
                 get_input("gravity_tilt_sigma", "gravity_tilt_sigma")
                     .as<double>(out_cfg.gravity_tilt_sigma);

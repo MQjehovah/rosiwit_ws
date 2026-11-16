@@ -41,13 +41,16 @@ public:
     void addConstraints(const std::vector<Constraint>& constraints) override;
     bool optimize() override;
     /// 轮速因子开启时需要周期性优化 (不再依赖回环触发)
-    bool wantsPeriodicOptimize() const { return use_wheel_factor_; }
+    // 2D 先验/轮速因子都需要周期优化, 否则后端只在有回环时才跑, 因子永不生效.
+    bool wantsPeriodicOptimize() const { return use_wheel_factor_ || use_odom2d_prior_; }
     bool getUpdatedPoses(std::vector<PoseStamped>& poses) override;
 
 private:
     void addOdometryConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks);
     void addLoopConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks);
     void addWheelConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks);
+    void addOdom2dConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks);
+    void ensureOdom2dAlign();
     void updatePoses(const std::vector<double*>& param_blocks);
 
     std::vector<KeyFrameNode> keyframes_;
@@ -71,6 +74,14 @@ private:
     double loop_residual_rot_deg_ = 5.0;    // 回环残差(旋转)上限 deg
     // 轮速相对位姿因子 (相邻关键帧, 3-DoF)
     bool use_wheel_factor_ = false;
+    // 2D 位姿的绝对 x/y 先验 (松耦合后端约束)
+    bool use_odom2d_prior_ = false;
+    double odom2d_sigma_xy_ = 0.30;   // m
+    double odom2d_sigma_yaw_ = 0.0;   // rad, 0 = 不加 yaw
+    int odom2d_align_num_ = 30;       // 用于一次性对齐的关键帧数
+    bool odom2d_align_ok_ = false;
+    double odom2d_yaw_ = 0.0;         // 2D 系 -> 世界系 的旋转
+    double odom2d_tx_ = 0.0, odom2d_ty_ = 0.0;
     double wheel_sigma_xy_ = 0.49;   // m
     double wheel_sigma_yaw_ = 0.154; // rad
     /// 剔除残差超限的回环约束, 返回剔除数量

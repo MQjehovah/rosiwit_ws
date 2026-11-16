@@ -102,6 +102,10 @@ public:
     /// 只用轮速 odom 的**里程**, 不用它的 yaw (实测 yaw 只有真值 0.64 倍).
     /// 用于压制长走廊沿轴无观测导致的"静止滑行".
     void updateForwardSpeed(double v_meas, double sigma);
+    /// 沿给定世界方向 ĥ 的速度标量约束: ĥ·v_xy = v_meas (只作用速度, 1 维).
+    void updateSpeedAlong(const V2D &h, double v_meas, double sigma);
+    /// 水平速度零约束 (静止检测/ZUPT): v_x = v_y = 0.
+    void updateHorizontalVelocityZero(double sigma);
     /// 重力方向倾斜约束 (2 维, 只作用于 roll/pitch).
     /// up_world 由**车体系**加速度计方向经当前姿态旋到世界系; 与点云无关,
     /// 因此不会像地面法向那样自指.

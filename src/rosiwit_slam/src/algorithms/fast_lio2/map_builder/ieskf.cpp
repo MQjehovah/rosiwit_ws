@@ -287,6 +287,41 @@ void IESKF::updateTilt(const V3D &up_world, double sigma)
     m_P = IKH * m_P * IKH.transpose() + K * Rm * K.transpose();
 }
 
+void IESKF::updateSpeedAlong(const V2D &h, double v_meas, double sigma)
+{
+    const double n = h.norm();
+    if (n < 1e-9) return;
+    const double cx = h.x() / n, cy = h.y() / n;
+    Eigen::Matrix<double, 1, 21> H = Eigen::Matrix<double, 1, 21>::Zero();
+    H(0, 12) = cx;
+    H(0, 13) = cy;
+    const double Rm = std::max(sigma * sigma, 1e-6);
+    const double r = v_meas - (cx * m_x.v.x() + cy * m_x.v.y());
+    const double S = (H * m_P * H.transpose())(0, 0) + Rm;
+    const Eigen::Matrix<double, 21, 1> K = m_P * H.transpose() / S;
+    m_x += K * r;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKH = I - K * H;
+    m_P = IKH * m_P * IKH.transpose() + K * (K.transpose() * Rm);
+}
+
+void IESKF::updateHorizontalVelocityZero(double sigma)
+{
+    Eigen::Matrix<double, 2, 21> H = Eigen::Matrix<double, 2, 21>::Zero();
+    H(0, 12) = 1.0;
+    H(1, 13) = 1.0;
+    Eigen::Vector2d r(-m_x.v.x(), -m_x.v.y());
+    const Eigen::Matrix2d Rm = Eigen::Matrix2d::Identity() * std::max(sigma * sigma, 1e-8);
+    const Eigen::Matrix2d S = H * m_P * H.transpose() + Rm;
+    const Eigen::Matrix<double, 21, 2> K = m_P * H.transpose() * S.inverse();
+    m_x += K * r;
+    m_x.clampPhysical();
+    const M21D I = M21D::Identity();
+    const M21D IKH = I - K * H;
+    m_P = IKH * m_P * IKH.transpose() + K * Rm * K.transpose();
+}
+
 void IESKF::updateForwardSpeed(double v_meas, double sigma)
 {
     // 1 维量测: 车头方向的水平速度. ĥ 取当前 yaw, 只对 v_x/v_y 求导

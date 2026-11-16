@@ -115,6 +115,19 @@ struct Config
     // 沿车头速度标量约束 (m/s, 0=关): v·ĥ = 轮速里程/Δt.
     // 只用 odom 的里程, 不用它的 yaw. 针对长走廊沿轴无观测的滑行.
     double odom_speed_sigma = 0.0;
+    // 沿"行进方向"的速度标量约束 (m/s, 0=关). 行进方向由 LIO 自身位移的低通给出,
+    // 不用车体轴(安装外参未标定), 也不用轮速 yaw; 只取轮速的标量速度(里程可信).
+    double odom_travel_sigma = 0.0;
+    // 入图距离限制 (m, 0=不限制). 自转/低速时只把近处点入图, 避免远端点被角度
+    // 误差扫成扇形 (实测原地自转 |w|~60deg/s 时 60m 外扫出大片拖影).
+    double map_insert_max_range = 0.0;        // 正常行驶时的入图距离上限 (0=不限)
+    double map_insert_spin_range = 0.0;       // 自转/低速时的入图距离上限 (0=同 max)
+    double map_insert_spin_speed = 0.20;      // m/s, 低于此视为"低速"
+    double map_insert_spin_yaw_rate = 15.0;   // deg/s, 高于此视为"自转"
+    // 静止检测 (ZUPT): 轮速速度低于阈值连续 zupt_frames 帧后, 约束水平速度=0.
+    double zupt_speed_thresh = 0.0;   // m/s, 0=关
+    int    zupt_frames = 5;
+    double zupt_sigma = 0.03;         // m/s
     // 重力方向倾斜约束 (rad, 0=关). 用加速度计低通后的方向约束 roll/pitch;
     // 地面法向对姿态是自指的 (点云随位姿一起转), 无法提供绝对参考.
     double gravity_tilt_sigma = 0.0;

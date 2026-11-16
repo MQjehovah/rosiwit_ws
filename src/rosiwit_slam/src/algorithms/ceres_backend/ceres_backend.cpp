@@ -10,6 +10,27 @@
 namespace rosiwit_slam {
 
 /// 轮速相对位姿因子: 只约束 Δx, Δy, Δyaw (轮速里程计无 z/roll/pitch 信息).
+// 绝对 x/y(/yaw) 先验: sigma_yaw<=0 时退化为纯 x/y, 与 z/roll/pitch 完全解耦.
+struct AbsoluteXYError {
+    AbsoluteXYError(double x, double y, double sigma_xy, double yaw, double sigma_yaw)
+        : x_(x), y_(y), s_(1.0 / std::max(1e-6, sigma_xy)),
+          yaw_(yaw), sy_(sigma_yaw > 0.0 ? 1.0 / sigma_yaw : 0.0) {}
+    template <typename T>
+    bool operator()(const T* const t, const T* const q, T* residual) const {
+        residual[0] = (t[0] - T(x_)) * T(s_);
+        residual[1] = (t[1] - T(y_)) * T(s_);
+        // 本工程四元数块顺序为 (w,x,y,z)
+        const T psi = ceres::atan2(T(2.0) * (q[0] * q[3] + q[1] * q[2]),
+                                   T(1.0) - T(2.0) * (q[2] * q[2] + q[3] * q[3]));
+        T d = psi - T(yaw_);
+        while (d > T(M_PI)) d -= T(2.0 * M_PI);
+        while (d < -T(M_PI)) d += T(2.0 * M_PI);
+        residual[2] = d * T(sy_);
+        return true;
+    }
+    double x_, y_, s_, yaw_, sy_;
+};
+
 struct RelativePose2DError {
     RelativePose2DError(double dx, double dy, double dyaw,
                         double sigma_xy, double sigma_yaw)
@@ -127,6 +148,20 @@ bool CeresBackend::init(const std::string& config_path) {
             use_wheel_factor_ = backend["use_wheel_factor"].as<bool>(use_wheel_factor_);
             wheel_sigma_xy_ = backend["wheel_sigma_xy"].as<double>(wheel_sigma_xy_);
             wheel_sigma_yaw_ = backend["wheel_sigma_yaw"].as<double>(wheel_sigma_yaw_);
+            use_odom2d_prior_ = backend["use_odom2d_prior"].as<bool>(use_odom2d_prior_);
+            // odom_mode: factor = 松耦合后端约束 (与 fuse 的紧耦合对偶)
+            try {
+                YAML::Node cfg = YAML::LoadFile(config_path);
+                const YAML::Node mapn = cfg["mapping"];
+                if (mapn && mapn["odom_mode"] &&
+                    mapn["odom_mode"].as<std::string>() == "factor") {
+                    use_odom2d_prior_ = true;
+                }
+            } catch (...) {
+            }
+            odom2d_sigma_xy_ = backend["odom2d_sigma_xy"].as<double>(odom2d_sigma_xy_);
+            odom2d_align_num_ = backend["odom2d_align_num"].as<int>(odom2d_align_num_);
+            odom2d_sigma_yaw_ = backend["odom2d_sigma_yaw"].as<double>(odom2d_sigma_yaw_);
         }
     } catch (const std::exception& e) {
         std::cerr << "[CeresBackend] Failed to parse config: " << e.what() << std::endl;
@@ -225,6 +260,7 @@ bool CeresBackend::optimize() {
         }
         addOdometryConstraints(problem, param_blocks);
         addWheelConstraints(problem, param_blocks);
+        addOdom2dConstraints(problem, param_blocks);
         addLoopConstraints(problem, param_blocks);
         ceres::Solver::Options options;
         options.max_num_iterations = max_iterations_;
@@ -414,6 +450,78 @@ void CeresBackend::addWheelConstraints(ceres::Problem& problem, std::vector<doub
         static int w_log = 0;
         if (++w_log % 20 == 0)
             std::cout << "[CeresBackend] wheel factor edges=" << added << std::endl;
+    }
+}
+
+void CeresBackend::ensureOdom2dAlign() {
+    // 用前 N 个"有位姿对"的关键帧, 求 2D 系 -> 世界系 的刚体变换 (无尺度).
+    if (odom2d_align_ok_) return;
+    std::vector<Eigen::Vector2d> a, b;
+    for (const auto& kf : keyframes_) {
+        if (!kf.has_wheel_pose) continue;
+        a.emplace_back(kf.wheel_pose.trans.x(), kf.wheel_pose.trans.y());
+        b.emplace_back(kf.pose.trans.x(), kf.pose.trans.y());
+        if (static_cast<int>(a.size()) >= std::max(5, odom2d_align_num_)) break;
+    }
+    if (a.size() < 5) return;
+    Eigen::Vector2d ma = Eigen::Vector2d::Zero(), mb = Eigen::Vector2d::Zero();
+    for (size_t i = 0; i < a.size(); ++i) { ma += a[i]; mb += b[i]; }
+    ma /= static_cast<double>(a.size());
+    mb /= static_cast<double>(a.size());
+    double sxx = 0.0, sxy = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const Eigen::Vector2d da = a[i] - ma, db = b[i] - mb;
+        sxx += da.x() * db.y() - da.y() * db.x();   // cross
+        sxy += da.x() * db.x() + da.y() * db.y();   // dot
+    }
+    odom2d_yaw_ = std::atan2(sxx, sxy);
+    const double c = std::cos(odom2d_yaw_), s2 = std::sin(odom2d_yaw_);
+    odom2d_tx_ = mb.x() - (c * ma.x() - s2 * ma.y());
+    odom2d_ty_ = mb.y() - (s2 * ma.x() + c * ma.y());
+    odom2d_align_ok_ = true;
+    // 对齐残差: 前 N 帧在原位姿下离 2D 位姿有多远 (越小说明初始对齐越可信)
+    double rms = 0.0, worst = 0.0;
+    {
+        const double c0 = std::cos(odom2d_yaw_), s0 = std::sin(odom2d_yaw_);
+        for (size_t i = 0; i < a.size(); ++i) {
+            const double px = c0 * a[i].x() - s0 * a[i].y() + odom2d_tx_;
+            const double py = s0 * a[i].x() + c0 * a[i].y() + odom2d_ty_;
+            const double e = std::hypot(px - b[i].x(), py - b[i].y());
+            rms += e * e;
+            worst = std::max(worst, e);
+        }
+        rms = std::sqrt(rms / static_cast<double>(a.size()));
+    }
+    std::cout << "[CeresBackend] odom2d align: yaw=" << odom2d_yaw_ * 180.0 / M_PI
+              << "deg t=(" << odom2d_tx_ << "," << odom2d_ty_ << ") n=" << a.size()
+              << " rms=" << rms << "m worst=" << worst << "m" << std::endl;
+}
+
+void CeresBackend::addOdom2dConstraints(ceres::Problem& problem, std::vector<double*>& param_blocks) {
+    if (!use_odom2d_prior_) return;
+    ensureOdom2dAlign();
+    if (!odom2d_align_ok_) return;
+    const double c = std::cos(odom2d_yaw_), s2 = std::sin(odom2d_yaw_);
+    int added = 0;
+    for (size_t i = 1; i < keyframes_.size(); ++i) {
+        const auto& kf = keyframes_[i];
+        if (!kf.has_wheel_pose) continue;
+        const double x2 = c * kf.wheel_pose.trans.x() - s2 * kf.wheel_pose.trans.y() + odom2d_tx_;
+        const double y2 = s2 * kf.wheel_pose.trans.x() + c * kf.wheel_pose.trans.y() + odom2d_ty_;
+        const double yaw2d = odom2d_yaw_ +
+                             std::atan2(kf.wheel_pose.rot(1, 0), kf.wheel_pose.rot(0, 0));
+        auto* cost = new ceres::AutoDiffCostFunction<AbsoluteXYError, 3, 3, 4>(
+            new AbsoluteXYError(x2, y2, odom2d_sigma_xy_, yaw2d, odom2d_sigma_yaw_));
+        problem.AddResidualBlock(cost, new ceres::HuberLoss(1.0),
+                                 param_blocks[i * 2], param_blocks[i * 2 + 1]);
+        ++added;
+    }
+    if (added > 0) {
+        static int log2d = 0;
+        if (++log2d % 10 == 0)
+            std::cout << "[CeresBackend] odom2d prior edges=" << added
+                      << " sigma_xy=" << odom2d_sigma_xy_
+                      << " sigma_yaw=" << odom2d_sigma_yaw_ << std::endl;
     }
 }
 

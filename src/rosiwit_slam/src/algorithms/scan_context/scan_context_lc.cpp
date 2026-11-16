@@ -355,6 +355,13 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         }
         if (desc_d >= m_dist_thresh) continue;
 
+        // [LCERR] 运行时一致性指标: 同一地点两帧的当前位姿差 (重影量)
+        {
+            const double gap = (latest.pose.trans - cand_rec.pose.trans).norm();
+            std::cout << "[LCERR] desc=" << desc_d << " gap3d=" << gap
+                      << " kf_a=" << cand.idx << " kf_b=" << latest_idx << std::endl;
+        }
+
         // === 里程计门控 (可选) ===
         // 说明: 这个门控用"前端里程计估的两帧距离"判断是否同一地点。它在有绝对位姿时
         // 有意义, 但在**纯 LIO + 已漂移**的场景里会自相矛盾: 同一地点被估成 >10m 就永远
