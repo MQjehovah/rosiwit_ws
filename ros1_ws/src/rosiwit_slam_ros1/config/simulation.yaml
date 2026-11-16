@@ -292,6 +292,5 @@ localization:
     filter_alpha: 0.6
     filter_beta: 0.2
     extrap_max_s: 0.3
-ros2:
-  odom_tf_publisher: wheel  # odom->base TF发布方式
-  map_publish_period: 1.0 # 地图发布周期(s)
+
+# ROS1 的 TF: 本节点固定发布 map->odom, odom->base 由轮速驱动发布.

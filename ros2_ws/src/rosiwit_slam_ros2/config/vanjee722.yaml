@@ -52,6 +52,11 @@ global:
     world_frame: map # 世界frame (代码要求与 map_frame 一致)
     map_frame: map # 地图frame
     odom_frame: odom # 里程计frame
+  tf:
+    # none | lio | wheel.
+    # wheel = 轮速驱动拥有 odom->base, 本节点只发 map->odom;
+    # lio   = 本节点同时发 odom->base 和 map->odom.
+    odom_publisher: wheel
   map:
     voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
     save_voxel: 0.2 # 地图/点云保存降采样体素(m)
@@ -175,9 +180,6 @@ mapping:
     realtime_skeleton_width: 0
     line_min_len_m: 0.0 # Hough线段最小长度(m)
     axis_snap: false # Hough线段吸附水平/垂直
-ros2:
-  # /odom 是外部轮式里程计输入; 节点不能同时发布同名 /odom。
-  odom_tf_publisher: wheel
 
 localization:
   # 定位链路怎么用 /odom: none | fuse (与建图独立)

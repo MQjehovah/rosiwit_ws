@@ -26,6 +26,10 @@ global:
     world_frame: map # 世界frame
     map_frame: map # 地图frame
     odom_frame: odom # 里程计frame
+  tf:
+    odom_publisher: wheel
+  publish:
+    map_period: 1.0
   map:
     voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
     save_voxel: 0.3 # 地图/点云保存降采样体素(m)
@@ -217,7 +221,3 @@ init_pose:
   x: 0.0
   y: 0.0
   z: 0.0
-
-ros2:
-  odom_tf_publisher: wheel  # odom->base TF发布方式
-  map_publish_period: 1.0 # 地图发布周期(s)

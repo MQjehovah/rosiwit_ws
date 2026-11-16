@@ -247,11 +247,22 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.world_frame      = gf_node("world_frame").as<std::string>(m_cfg.world_frame);
             m_cfg.map_frame        = gf_node("map_frame").as<std::string>(m_cfg.map_frame);
             m_cfg.odom_frame       = gf_node("odom_frame").as<std::string>(m_cfg.odom_frame);
-            const YAML::Node r2 = cfg["ros2"];
-            if (r2 && r2["odom_tf_publisher"]) {
-                m_cfg.odom_tf_publisher = r2["odom_tf_publisher"].as<std::string>(m_cfg.odom_tf_publisher);
+            const YAML::Node gtf = (glob && glob["tf"]) ? glob["tf"] : YAML::Node();
+            if (gtf && gtf["odom_publisher"]) {
+                m_cfg.odom_tf_publisher =
+                    gtf["odom_publisher"].as<std::string>(m_cfg.odom_tf_publisher);
+            } else if (cfg["ros2"] && cfg["ros2"]["odom_tf_publisher"]) {
+                m_cfg.odom_tf_publisher = cfg["ros2"]["odom_tf_publisher"]
+                                              .as<std::string>(m_cfg.odom_tf_publisher);
+                RCLCPP_WARN(get_logger(),
+                            "config: ros2.odom_tf_publisher is deprecated; "
+                            "use global.tf.odom_publisher");
             } else if (cfg["odom_tf_publisher"]) {
-                m_cfg.odom_tf_publisher = cfg["odom_tf_publisher"].as<std::string>(m_cfg.odom_tf_publisher);
+                m_cfg.odom_tf_publisher =
+                    cfg["odom_tf_publisher"].as<std::string>(m_cfg.odom_tf_publisher);
+                RCLCPP_WARN(get_logger(),
+                            "config: top-level odom_tf_publisher is deprecated; "
+                            "use global.tf.odom_publisher");
             } else if (cfg["odom_mode"]) {
                 const std::string old = cfg["odom_mode"].as<std::string>("unified");
                 m_cfg.odom_tf_publisher = (old == "wheel") ? "wheel" : "lio";
@@ -320,9 +331,21 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             m_cfg.grid_map_resolution = grid["resolution"].as<double>(m_cfg.grid_map_resolution);
             m_cfg.realtime_grid_resolution =
                 grid["realtime_resolution"].as<double>(m_cfg.realtime_grid_resolution);
-            m_cfg.map_publish_period = (cfg["ros2"] && cfg["ros2"]["map_publish_period"])
-                                           ? cfg["ros2"]["map_publish_period"].as<double>(m_cfg.map_publish_period)
-                                           : cfg["map_publish_period"].as<double>(m_cfg.map_publish_period);
+            const YAML::Node gpub =
+                (glob && glob["publish"]) ? glob["publish"] : YAML::Node();
+            if (gpub && gpub["map_period"]) {
+                m_cfg.map_publish_period =
+                    gpub["map_period"].as<double>(m_cfg.map_publish_period);
+            } else if (cfg["ros2"] && cfg["ros2"]["map_publish_period"]) {
+                m_cfg.map_publish_period = cfg["ros2"]["map_publish_period"]
+                                               .as<double>(m_cfg.map_publish_period);
+                RCLCPP_WARN(get_logger(),
+                            "config: ros2.map_publish_period is deprecated; "
+                            "use global.publish.map_period");
+            } else {
+                m_cfg.map_publish_period =
+                    cfg["map_publish_period"].as<double>(m_cfg.map_publish_period);
+            }
             m_cfg.absolute_enabled = abs["enabled"].as<bool>(m_cfg.absolute_enabled);
             m_cfg.absolute_topic   = abs["topic"].as<std::string>(m_cfg.absolute_topic);
             m_cfg.datum_x = abs["datum_x"].as<double>(m_cfg.datum_x);

@@ -33,6 +33,8 @@ global:
     world_frame: map # 世界frame
     map_frame: map # 地图frame
     odom_frame: odom # 里程计frame
+  tf:
+    odom_publisher: lio   # none | lio | wheel
   map:
     voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
     save_voxel: 0.3 # 地图/点云保存降采样体素(m)
@@ -442,8 +444,6 @@ vision:
   vo_rot_noise: 0.02        # VO between 旋转噪声(std)
 
 # 在线标定闭环（默认只估计、不自动应用）
-ros2:
-  odom_tf_publisher: lio  # odom->base TF发布方式
 calibration:
   apply: false  # 在线标定是否自动应用
   min_confidence: 0.60 # 标定最低置信度
