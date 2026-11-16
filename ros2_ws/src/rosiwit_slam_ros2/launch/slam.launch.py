@@ -1,5 +1,5 @@
 # rosiwit_slam Launch File
-# slam_algorithm 参数选择算法 (SlamFactory 按名创建)
+# 顶层算法当前只有 fast_lio2_pipeline; 子模块组合见 config 的 modules
 #   当前可用: fast_lio2_pipeline
 
 import os
@@ -12,10 +12,6 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    slam_algorithm_arg = DeclareLaunchArgument(
-        'slam_algorithm', default_value='fast_lio2_pipeline',
-        description='SLAM algorithm name, resolved by SlamFactory at runtime')
-
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time', default_value='false')
 
@@ -59,7 +55,6 @@ def generate_launch_description():
         name='rosiwit_slam',
         output='screen',
         parameters=[{
-            'slam_algorithm': LaunchConfiguration('slam_algorithm'),
             'config_path': config_default,
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'use_multi_threaded': LaunchConfiguration('use_multi_threaded'),
@@ -82,7 +77,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        slam_algorithm_arg,
         use_sim_time_arg,
         use_rviz_arg,
         use_mt_arg,

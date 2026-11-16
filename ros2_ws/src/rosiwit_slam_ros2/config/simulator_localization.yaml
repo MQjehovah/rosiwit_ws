@@ -2,9 +2,7 @@
 # 用于 Gazebo 仿真环境中的 VLP-16 激光雷达 + IMU
 
 global:
-  slam_algorithm: fast_lio2_pipeline  # 核心算法名
-  pipeline: "rosiwit_slam" # 管线名称
-  pipeline_mode: localization # 启动模式 mapping|localization|idle
+  startup_mode: localization # 启动模式 mapping|localization|idle
   modules:
     frontend: "fast_lio2_frontend"
     backend: "ceres_pose_graph"

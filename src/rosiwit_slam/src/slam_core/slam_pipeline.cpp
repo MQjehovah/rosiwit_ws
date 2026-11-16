@@ -295,7 +295,13 @@ bool SlamPipeline::init(const std::string& config_path) {
         if (mapcfg && mapcfg["enable_rgb"]) m_rgb_enabled = mapcfg["enable_rgb"].as<bool>(true);
     }
 
-    std::string mode_str = g("pipeline_mode").as<std::string>("idle");
+    const YAML::Node startup = g("startup_mode");
+    const YAML::Node legacy_mode = g("pipeline_mode");
+    std::string mode_str = (startup ? startup : legacy_mode).as<std::string>("idle");
+    if (!startup && legacy_mode) {
+        std::cerr << "[SlamPipeline] DEPRECATED: global.pipeline_mode; "
+                     "use global.startup_mode" << std::endl;
+    }
     if (mode_str == "mapping")          m_mode = PipelineMode::MAPPING;
     else if (mode_str == "localization") m_mode = PipelineMode::LOCALIZATION;
     else                                m_mode = PipelineMode::IDLE;
@@ -385,7 +391,7 @@ bool SlamPipeline::init(const std::string& config_path) {
     createLocalization("localization");
     // odom 单一开关只对带 motion_prior / pose_fusion 的实现有意义。
     // gicp_localization 只有 IMU 航迹推算, 配了 fuse 也不会生效 -> 明确告警
-    // (不限定 pipeline_mode: 运行时 set_slam_mode 也能切到定位).
+    // (不限定 startup_mode: 运行时 set_slam_mode 也能切到定位).
     if (m_localization && lc &&
         lc["odom_mode"] &&
         lc["odom_mode"].as<std::string>("none") == "fuse" &&

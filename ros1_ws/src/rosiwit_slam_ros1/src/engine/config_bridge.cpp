@@ -233,8 +233,18 @@ void SlamAlgorithm::loadInputConfig(bool& vo_enabled, bool& odom_enabled,
                 cfg_.publish_hz = gi("publish_hz").as<int>(cfg_.publish_hz);
                 if (glob && glob["debug_publish"]) cfg_.debug_publish = glob["debug_publish"].as<bool>();
                 if (glob && glob["is_debug"])      cfg_.is_debug = glob["is_debug"].as<bool>();
-                if (glob && glob["pipeline_mode"]) {
-                    cfg_.slam_init_type = glob["pipeline_mode"].as<std::string>(cfg_.slam_init_type);
+                if (glob) {
+                    const YAML::Node startup = glob["startup_mode"];
+                    const YAML::Node legacy = glob["pipeline_mode"];
+                    if (startup) {
+                        cfg_.slam_init_type =
+                            startup.as<std::string>(cfg_.slam_init_type);
+                    } else if (legacy) {
+                        cfg_.slam_init_type =
+                            legacy.as<std::string>(cfg_.slam_init_type);
+                        ROS_WARN("[rosiwit_slam_ros1] global.pipeline_mode is deprecated; "
+                                 "use global.startup_mode");
+                    }
                 }
                 if (frames && frames["use_tf"]) cfg_.use_tf = frames["use_tf"].as<bool>();
                 cfg_.lidar_filter_num = gi("lidar_filter_num").as<int>(cfg_.lidar_filter_num);

@@ -21,7 +21,6 @@
                                     路径时同目录优先读 map.yaml
       - initial_x/y/yaw            map 系初始位姿 (base_footprint, yaw 弧度)
   -->
-  <arg name="slam_algorithm" default="fast_lio2_pipeline"/>
   <arg name="config_file" default="$(find rosiwit_slam_ros1)/config/simulation.yaml"/>
   <arg name="lidar_frame" default="lidar"/>
   <arg name="imu_frame" default="imu_link"/>
@@ -36,7 +35,6 @@
   <arg name="initial_yaw" default="0.0"/>
 
   <node pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" name="rosiwit_slam" output="screen">
-    <param name="slam_algorithm" value="$(arg slam_algorithm)"/>
     <param name="config_file" value="$(arg config_file)"/>
     <param name="lidar_frame" value="$(arg lidar_frame)"/>
     <param name="imu_frame" value="$(arg imu_frame)"/>

@@ -271,7 +271,7 @@ private:
         // ---- 以下原本在 legacy JSON, 现在只从 YAML 读 ----
         double rt_grid_map_publish_hz = 1.0;    // mapping.rt_grid_map_publish_hz
         int publish_hz = 20;                    // mapping.publish_hz (仅日志)
-        std::string slam_init_type = "mapping"; // global.pipeline_mode
+        std::string slam_init_type = "mapping"; // global.startup_mode
         bool debug_publish = false;             // global.debug_publish
         bool is_debug = false;                  // global.is_debug
         bool use_tf = true;                     // frames.use_tf

@@ -58,9 +58,7 @@
 # ############################################################################
 
 global:
-  slam_algorithm: fast_lio2_pipeline  # 核心算法名
-  pipeline: "rosiwit_slam" # 管线名称
-  pipeline_mode: mapping # 启动模式 mapping|localization|idle
+  startup_mode: mapping # 启动模式 mapping|localization|idle
   is_debug: false # 调试日志开关
   debug_publish: false # 发布调试话题 (world_cloud/body_cloud 等)
   modules:

@@ -263,7 +263,6 @@ NTU VIRAL `eee_03`（整段 181 s）结果：
 
 ```yaml
 global:
-  slam_algorithm: fast_lio2_pipeline            # SlamPipeline
   modules:
     # 纯 LiDAR+IMU: fast_lio2_frontend ; 带相机: fast_livo2_frontend
     frontend: "fast_livo2_frontend"

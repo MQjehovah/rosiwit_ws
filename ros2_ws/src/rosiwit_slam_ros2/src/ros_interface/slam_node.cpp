@@ -179,10 +179,13 @@ void SlamNode::resetPublishState() {
 }
 
 SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_slam", options) {
-    std::string algo_name = "fast_lio2";
-    this->declare_parameter<std::string>("slam_algorithm", algo_name);
-    this->get_parameter("slam_algorithm", algo_name);
-    if (algo_name.empty()) algo_name = "fast_lio2_pipeline";
+    // 顶层算法由 SlamFactory 注册表决定; 目前只有一个实现, 不再用 ROS 参数选择.
+    const auto algo_names = SlamFactory::listNames();
+    const std::string algo_name = algo_names.empty() ? std::string() : algo_names.front();
+    if (algo_name.empty()) {
+        RCLCPP_FATAL(get_logger(), "SlamFactory has no registered algorithm");
+        throw std::runtime_error("no slam algorithm");
+    }
 
     std::string config_path;
     this->declare_parameter<std::string>("config_file", "");

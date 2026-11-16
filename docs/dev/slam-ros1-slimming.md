@@ -125,7 +125,7 @@ global:
   input:   { imu_topic, lidar_topic, use_odom, publish_hz, rt_grid_map_publish_hz, ... }
   is_debug: false
   debug_publish: false
-  pipeline_mode: mapping        # 决定初始模式
+  startup_mode: mapping         # 决定初始模式
   frames:
     body_frame / world_frame
     use_tf: true                # 原来在 legacy JSON

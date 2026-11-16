@@ -454,7 +454,7 @@ modules:
 
 **已知环境部署**:
 ```yaml
-pipeline_mode: localization
+startup_mode: localization
 modules:
   frontend: ""
   backend: ""
@@ -545,7 +545,7 @@ source install/setup.bash
 ros2 launch rosiwit_slam slam.launch.py
 ```
 
-> 通过 `slam_algorithm` 参数选择顶层算法，目前仅 "fast_lio2_pipeline"。子模块组合通过 `config/default.yaml` 的 `modules` 配置。
+> 顶层算法当前只有一个实现 `fast_lio2_pipeline`，由 `SlamFactory` 注册表决定，不再通过 ROS 参数选择。子模块组合通过 `config/default.yaml` 的 `modules` 配置。
 
 ---
 

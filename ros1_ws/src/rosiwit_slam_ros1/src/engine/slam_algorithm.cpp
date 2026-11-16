@@ -50,7 +50,12 @@ SlamAlgorithm::SlamAlgorithm(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     : nh_(nh), pnh_(pnh), executor_(executor) {
 
     std::string algo_name = "fast_lio2_pipeline";
-    pnh_.param<std::string>("slam_algorithm", algo_name, algo_name);
+    // 顶层算法由 SlamFactory 注册表决定; 目前只有一个实现, 不再用 ROS 参数选择.
+    {
+        const auto names = SlamFactory::listNames();
+        algo_name = names.empty() ? std::string() : names.front();
+    }
+    if (algo_name.empty()) { ROS_FATAL("no SLAM algorithm registered"); ros::shutdown(); return; }
 
     // 配置装配拆到 config_bridge.cpp (S1): 校准 / 输入 / 核心注入 三段各自独立,
     // 构造函数只负责"按顺序装配 + 建核心"。

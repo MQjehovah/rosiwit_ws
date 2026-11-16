@@ -2,9 +2,7 @@
 # 默认 mapping 模式, 可通过 service (set_slam_mode) 切换到 localization / idle
 
 global:
-  slam_algorithm: fast_lio2_pipeline  # 核心算法名
-  pipeline: "rosiwit_slam" # 管线名称
-  pipeline_mode: mapping # 启动模式 mapping|localization|idle
+  startup_mode: mapping # 启动模式 mapping|localization|idle
   modules:
     # 前端: fast_lio2_frontend (纯 LiDAR+IMU) | fast_livo2_frontend (LiDAR+IMU+相机)
     # 切 LIVO 只改这一行; 两者共用下面的 camera / extrin_calib / fast_livo2 参数块.
