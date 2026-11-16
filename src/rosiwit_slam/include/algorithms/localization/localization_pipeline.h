@@ -40,6 +40,9 @@ public:
                     const Eigen::Matrix<double, 6, 6>& cov) override;
     void resetRelativeAnchor() override;
     std::string poseFusionName() const override { return m_fusion_name; }
+    /// 定位链路支持 odom: localization.odom_mode: fuse 时同时喂 motion_prior 和
+    /// pose_fusion(eskf); 具体开关见 init() 里的 m_odom_fuse.
+    bool supportsOdom() const override { return true; }
     void onLidar(const LidarFrame& f) override;
     /// 按需触发全局重定位: 置 LOST 并清冷却, 下一次 onLidar 进入冷启动/重定位分支
     void requestRelocalization() override;
@@ -137,6 +140,9 @@ private:
     CloudType::Ptr m_map;
     std::string m_map_path;
     PoseStamped m_pose;
+    /// localization.odom_mode: fuse 时为 true. 单一开关: 同时决定运动先验
+    /// (motion_prior.use_odom) 与位姿融合层是否接收 odom.
+    bool m_odom_fuse = false;
     /// 逸出保护: 最后一次**被接受**的匹配位姿。位姿跑出地图(局部地图为空)时回退到这里,
     /// 避免运动先验在无修正情况下一直积分, 越漂越远(实机曾漂到离图 96m, 从此再也匹配不上)。
     PoseStamped m_last_accepted;

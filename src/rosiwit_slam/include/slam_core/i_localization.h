@@ -33,6 +33,11 @@ public:
 
     /// 当前融合实现名 ("direct" | "eskf"), 供上层判断 LIO 是否会被使用
     virtual std::string poseFusionName() const { return "direct"; }
+
+    /// 是否支持轮式 odom (运动先验 / 位姿融合). 默认 false.
+    /// 上层据此在 localization.odom_mode=fuse 但模块没有相应阶段时报警,
+    /// 避免配置了 fuse 却静默不生效.
+    virtual bool supportsOdom() const { return false; }
     virtual Status getStatus() = 0;
     virtual bool getPose(PoseStamped& out) = 0;
 

@@ -181,6 +181,43 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_motion_cfg.gravity = getv<double>(mpc, "gravity", m_motion_cfg.gravity);
         m_motion_cfg.gravity_gain = getv<double>(mpc, "gravity_gain", m_motion_cfg.gravity_gain);
     }
+    // ---- 定位 odom: 单一开关 localization.odom_mode (none | fuse) ----
+    // fuse 同时打开两处 odom 输入, 不再需要单独配 motion_prior.use_odom:
+    //   1) motion_prior: 平移/朝向预测 (imu / imu_ekf)
+    //   2) pose_fusion=eskf: odom 速度观测 (打滑门控后连续降权)
+    // 没有 odom_mode 的旧配置仍按 motion_prior.use_odom 兼容.
+    {
+        const bool legacy_use_odom = m_motion_cfg.use_odom;
+        const YAML::Node om_node = loc["odom_mode"];
+        if (om_node) {
+            const std::string om = om_node.as<std::string>("none");
+            if (om == "fuse") {
+                m_odom_fuse = true;
+            } else if (om == "none" || om.empty()) {
+                m_odom_fuse = false;
+            } else {
+                std::cerr << "[LocPipeline] unknown localization.odom_mode '" << om
+                          << "' (none|fuse); using none" << std::endl;
+                m_odom_fuse = false;
+            }
+        } else {
+            m_odom_fuse = legacy_use_odom;
+            if (legacy_use_odom) {
+                std::cout << "[LocPipeline] DEPRECATED: localization.motion_prior.use_odom=true; "
+                             "use localization.odom_mode: fuse" << std::endl;
+            }
+        }
+        // 先验内部也走同一个开关, 避免"pipeline 关了、先验还在用"的双开关状态.
+        m_motion_cfg.use_odom = m_odom_fuse;
+        std::cout << "[LocPipeline] odom_mode=" << (m_odom_fuse ? "fuse" : "none")
+                  << " (motion_prior.use_odom=" << m_motion_cfg.use_odom
+                  << ", pose_fusion=" << m_fusion_name << ")";
+        if (m_odom_fuse && m_fusion_name == "direct") {
+            std::cout << " -> odom feeds motion_prior only "
+                         "(pose_fusion=direct ignores it)";
+        }
+        std::cout << std::endl;
+    }
     const YAML::Node common_sc =
         (root["global"] && root["global"]["scan_context"])
             ? root["global"]["scan_context"] : root["scan_context"];
@@ -447,6 +484,7 @@ std::string LocalizationPipeline::describe() const {
            " monitor=" + m_monitor_name +
            " map_maintainer=" + m_maintainer_name +
            " pose_fusion=" + m_fusion_name +
+           " odom_mode=" + (m_odom_fuse ? std::string("fuse") : std::string("none")) +
            " accept_mode=" + std::to_string(m_accept_cfg.mode);
 }
 
@@ -719,6 +757,8 @@ void LocalizationPipeline::requestRelocalization() {
 }
 
 void LocalizationPipeline::onOdom(const PoseStamped& odom) {
+    // 单一开关: localization.odom_mode: fuse. none 时既不给运动先验, 也不给融合层.
+    if (!m_odom_fuse) return;
     {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
         if (m_prior) m_prior->onOdom(odom);

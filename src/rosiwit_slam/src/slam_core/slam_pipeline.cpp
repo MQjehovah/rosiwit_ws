@@ -383,6 +383,18 @@ bool SlamPipeline::init(const std::string& config_path) {
     }
     createLoopClosure("loop_closure");
     createLocalization("localization");
+    // odom 单一开关只对带 motion_prior / pose_fusion 的实现有意义。
+    // gicp_localization 只有 IMU 航迹推算, 配了 fuse 也不会生效 -> 明确告警
+    // (不限定 pipeline_mode: 运行时 set_slam_mode 也能切到定位).
+    if (m_localization && lc &&
+        lc["odom_mode"] &&
+        lc["odom_mode"].as<std::string>("none") == "fuse" &&
+        !m_localization->supportsOdom()) {
+        std::cerr << "[SlamPipeline] WARN: localization.odom_mode=fuse but the configured "
+                     "localization module has no motion_prior/pose_fusion stage; use "
+                     "modules.localization: localization_pipeline (or set odom_mode: none)"
+                  << std::endl;
+    }
     createBackend("backend");
 
     // 没有位姿图后端(例如数据集回放只开 map_manager)也要起 worker:

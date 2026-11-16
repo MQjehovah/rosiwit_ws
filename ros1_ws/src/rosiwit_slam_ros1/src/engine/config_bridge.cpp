@@ -269,6 +269,13 @@ void SlamAlgorithm::loadInputConfig(bool& vo_enabled, bool& odom_enabled,
                 odom_enabled = (inp && inp["use_odom"])
                                    ? inp["use_odom"].as<bool>(false)
                                    : c["enable_odom"].as<bool>(false);
+                // 定位链路 odom 单一开关: localization.odom_mode=fuse 也要求订阅,
+                // 否则只写 odom_mode 会静默没有数据 (与 ROS2 薄层一致).
+                if (!odom_enabled && c["localization"] && c["localization"]["odom_mode"]) {
+                    const std::string om =
+                        c["localization"]["odom_mode"].as<std::string>("none");
+                    odom_enabled = (om == "fuse");
+                }
             }
         } catch (const std::exception& e) {
             ROS_WARN("[rosiwit_slam_ros1] config parse error: %s", e.what());
