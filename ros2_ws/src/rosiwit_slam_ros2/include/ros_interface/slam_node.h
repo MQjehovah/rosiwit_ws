@@ -54,6 +54,9 @@ private:
         /// 离线播包 (ros2 bag play 发布的是 reliable) 建议 true: best_effort 读端会静默
         /// 丢 ~1/3 点云帧 (实测 1814 帧只收到 1153).
         bool   sensor_reliable = false;
+        // IMU 加速度单位换算（Livox 内置 IMU 为 g, 需 9.81）；
+        // IMU 异常过滤的阈值按 m/s^2 解释，靠它统一量纲
+        double acc_scale = 1.0;
         std::string lidar_frame = "lidar";
         std::string imu_frame   = "lidar";     // 核心 body frame (FAST-LIO2 估计 IMU body)
         std::string body_frame  = "base_link";

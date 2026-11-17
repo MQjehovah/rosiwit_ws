@@ -309,6 +309,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             }
             m_cfg.imu_filter_enabled =
                 gi("imu_filter_enabled").as<bool>(m_cfg.imu_filter_enabled);
+            m_cfg.acc_scale = gi("acc_scale").as<double>(m_cfg.acc_scale);
             m_cfg.imu_acc_min = gi("imu_acc_min").as<double>(m_cfg.imu_acc_min);
             m_cfg.imu_acc_max = gi("imu_acc_max").as<double>(m_cfg.imu_acc_max);
             m_cfg.imu_gyro_max = gi("imu_gyro_max").as<double>(m_cfg.imu_gyro_max);
@@ -584,9 +585,9 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     std::string mode_str = m_algo_raw->getPipelineMode();
     if (m_cfg.imu_filter_enabled) {
         RCLCPP_INFO(get_logger(),
-                    "IMU outlier filter: |a| in [%.1f, %.1f] m/s^2, |w| <= %.1f rad/s, gyro_scale=%.4f",
-                    m_cfg.imu_acc_min, m_cfg.imu_acc_max, m_cfg.imu_gyro_max,
-                    m_cfg.imu_gyro_scale);
+                    "IMU outlier filter: |a| in [%.1f, %.1f] m/s^2 (acc_scale=%.2f), |w| <= %.1f rad/s, gyro_scale=%.4f",
+                    m_cfg.imu_acc_min, m_cfg.imu_acc_max, m_cfg.acc_scale,
+                    m_cfg.imu_gyro_max, m_cfg.imu_gyro_scale);
     }
     RCLCPP_INFO(get_logger(), "odom mode: mapping=%s localization=%s topic=%s",
                 m_cfg.odom_mode.empty() ? "none" : m_cfg.odom_mode.c_str(),
@@ -610,7 +611,9 @@ void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {
     // 甚至瞬时掉到 ~0g. 这种样本进 EKF 会直接污染速度和位姿, 后续点云匹配
     // 全部落到有效点=0; 超限样本直接丢弃, 由 SlamBase::onImu 对空洞插值.
     if (m_cfg.imu_filter_enabled) {
-        const double an = std::sqrt(ax * ax + ay * ay + az * az);
+        // [修复] 阈值 imu_acc_min/max 按 m/s^2 解释；g 单位 IMU(Livox) 必须先乘 acc_scale，
+        // 否则 |a|≈1 会被当成"掉零"全部丢弃（实测 imu_rx=0，完全不出图）。
+        const double an = std::sqrt(ax * ax + ay * ay + az * az) * m_cfg.acc_scale;
         const double gn = std::sqrt(gx * gx + gy * gy + gz * gz);
         if (!std::isfinite(an) || !std::isfinite(gn) ||
             an < m_cfg.imu_acc_min || an > m_cfg.imu_acc_max ||
@@ -618,8 +621,8 @@ void SlamNode::imuCB(const sensor_msgs::msg::Imu::SharedPtr msg) {
             const uint64_t n =
                 m_imu_outliers.fetch_add(1, std::memory_order_relaxed) + 1;
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                "drop IMU outlier |a|=%.1f m/s^2 |w|=%.2f rad/s (total=%llu)",
-                an, gn, static_cast<unsigned long long>(n));
+                "drop IMU outlier |a|=%.2f m/s^2 (acc_scale=%.2f) |w|=%.2f rad/s (total=%llu)",
+                an, m_cfg.acc_scale, gn, static_cast<unsigned long long>(n));
             return;
         }
     }
@@ -875,13 +878,17 @@ void SlamNode::timerCB() {
             const auto st = base->syncStats();
             RCLCPP_INFO(get_logger(),
                         "sync: imu_rx=%llu lidar_rx=%llu pkgs=%llu | buf imu=%zu lidar=%zu pushed=%d "
-                        "| t_imu=%.3f t_lidar_end=%.3f pending_end=%.3f (imu-pending=%.3f)",
+                        "| t_imu=%.3f t_lidar_end=%.3f pending_end=%.3f (imu-pending=%.3f) "
+                        "| drop_overflow=%llu drop_gap=%llu drop_oob=%llu",
                         static_cast<unsigned long long>(st.imu_rx),
                         static_cast<unsigned long long>(st.lidar_rx),
                         static_cast<unsigned long long>(st.pkg_rx),
                         st.imu_buf, st.lidar_buf, st.lidar_pushed ? 1 : 0,
                         st.last_imu_time, st.last_lidar_end, st.pending_end,
-                        st.last_imu_time - st.pending_end);
+                        st.last_imu_time - st.pending_end,
+                        static_cast<unsigned long long>(st.drop_overflow),
+                        static_cast<unsigned long long>(st.drop_gap),
+                        static_cast<unsigned long long>(st.drop_oob));
         }
     }
     // 定位模式的 LiDAR 由 SlamPipeline 内部 worker 处理，避免重定位阻塞 spinner。

@@ -59,11 +59,27 @@ void SlamBase::onLidar(const LidarFrame& f) {
     std::lock_guard<std::mutex> lock(m_buf_mutex);
     if (f.end_time > 0) m_last_lidar_end = f.end_time;
     if (!m_lidar_buf.empty() && f.start_time < m_lidar_buf.back().start_time) {
+        const uint64_t n = m_lidar_buf.size();
+        m_drop_oob.fetch_add(n, std::memory_order_relaxed);
+        std::cerr << "[sync] lidar out-of-order (" << f.start_time << " < "
+                  << m_lidar_buf.back().start_time << "): clearing " << n
+                  << " buffered frame(s)" << std::endl;
         m_lidar_buf.clear();
     }
     m_lidar_buf.push_back(f);
-    constexpr size_t kMaxLidarBuf = 50;
+    // 队列上限 = 处理滞后容差。原来是 50 帧(5 s): 后端建图/回环忙时 20ms 处理定时器
+    // 追不上, 队列一满就静默丢最旧帧, 而丢哪几帧取决于当时的 CPU 时序 —— 同一份包
+    // 两次运行会在"第一次丢帧"处开始分叉(实测 0-600s 在 250s 分叉, 整包 320s 发散)。
+    // 放大到 600 帧(60 s): 离线播包遇到短暂卡顿只是滞后, 不再丢数据。
+    constexpr size_t kMaxLidarBuf = 600;
     if (m_lidar_buf.size() > kMaxLidarBuf) {
+        static size_t overflow_logs = 0;
+        ++overflow_logs;
+        m_drop_overflow.fetch_add(1, std::memory_order_relaxed);
+        if (overflow_logs <= 20 || overflow_logs % 100 == 0)
+            std::cerr << "[sync] lidar buffer overflow: drop oldest frame (total="
+                      << overflow_logs << ", buf=" << m_lidar_buf.size() << ")"
+                      << std::endl;
         m_lidar_buf.pop_front();
     }
     // fix(b): 不在此触发同步,避免持锁递归 lock 同一 m_buf_mutex 导致死锁
@@ -113,8 +129,10 @@ bool SlamBase::popSyncedPackage(SyncPackage& out) {
         m_pending.frame = m_lidar_buf.front();
         m_lidar_pushed = true;
     }
-    if (dropped > 0)
+    if (dropped > 0) {
+        m_drop_gap.fetch_add(static_cast<uint64_t>(dropped), std::memory_order_relaxed);
         std::cerr << "[sync] dropped " << dropped << " lidar frame(s) due to IMU gap" << std::endl;
+    }
 
     // 标记本帧 IMU 窗内的最大空洞。覆盖度检查只看"窗内有没有样本",
     // 但 100~200ms 的空洞仍可能让速度/零偏在传播时被放大；前端看到
@@ -165,6 +183,9 @@ SlamBase::SyncStats SlamBase::syncStats() const {
     s.imu_rx = m_imu_rx.load(std::memory_order_relaxed);
     s.lidar_rx = m_lidar_rx.load(std::memory_order_relaxed);
     s.pkg_rx = m_pkg_rx.load(std::memory_order_relaxed);
+    s.drop_overflow = m_drop_overflow.load(std::memory_order_relaxed);
+    s.drop_gap = m_drop_gap.load(std::memory_order_relaxed);
+    s.drop_oob = m_drop_oob.load(std::memory_order_relaxed);
     s.imu_buf = m_imu_buf.size();
     s.lidar_buf = m_lidar_buf.size();
     s.lidar_pushed = m_lidar_pushed;

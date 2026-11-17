@@ -42,6 +42,10 @@ public:
         double   last_imu_time = -1.0;      // 最新收到 IMU 的时刻
         double   last_lidar_end = -1.0;     // 最新收到雷达帧的结束时刻
         double   pending_end = -1.0;        // 正在等 IMU 的那一帧的结束时刻
+        // 丢帧归因（收帧数 - 出包数 的全部来源，便于定位“帧去哪了”）
+        uint64_t drop_overflow = 0;         // 队列超上限，丢最旧
+        uint64_t drop_gap = 0;              // IMU 覆盖不足，整帧跳过
+        uint64_t drop_oob = 0;              // 时间戳乱序，清空队列
     };
     SyncStats syncStats() const;
 
@@ -71,6 +75,9 @@ private:
     std::atomic<uint64_t> m_imu_rx{0};
     std::atomic<uint64_t> m_lidar_rx{0};
     std::atomic<uint64_t> m_pkg_rx{0};
+    std::atomic<uint64_t> m_drop_overflow{0};
+    std::atomic<uint64_t> m_drop_gap{0};
+    std::atomic<uint64_t> m_drop_oob{0};
 };
 
 } // namespace rosiwit_slam

@@ -71,7 +71,13 @@ bool IMUProcessor::initialize(SyncPackage &package)
     //    9.81 倍(叠乘成 96 倍)直接发散 —— 宁可跳过归一化也不能错放大。
     {
         const double an = acc_mean.norm();
-        if (an > 5.0 && an < 15.0)
+        // [修复] 归一化只在"初始化窗口足够静止"时可信: acc_mean 由低角速度子集求得,
+        // 边走边起跑时子集仍含线加速度. 实测分段起点 static=10/103 时 |a|=8.09 ->
+        // 尺度被放大 1.21 倍, 整段从第 1 秒开始掉 z (分段 990-1253 就是这样崩的).
+        // 静止样本不过半时不做归一化, 直接信任配置里的 acc_scale(g 单位 IMU 已在此换算).
+        const bool init_static_enough =
+            (n_static * 2 >= static_cast<int>(m_imu_cache.size()));
+        if (init_static_enough && an > 5.0 && an < 15.0)
         {
             m_acc_scale = 9.81 / an;
             std::printf("[FLIO2] acc scale normalized: |a_mean|=%.4f -> x%.5f\n",
@@ -80,8 +86,9 @@ bool IMUProcessor::initialize(SyncPackage &package)
         else
         {
             m_acc_scale = 1.0;
-            std::printf("[FLIO2] WARN |a_mean|=%.3f out of [5,15] band, skip acc "
-                        "normalization (check config acc_scale / IMU units)\n", an);
+            std::printf("[FLIO2] skip acc normalization: static=%d/%zu |a_mean|=%.3f "
+                        "(init not static enough, trust config acc_scale)\n",
+                        n_static, m_imu_cache.size(), an);
         }
     }
 
@@ -169,7 +176,16 @@ void IMUProcessor::undistort(SyncPackage &package)
     }
 
     m_poses_cache.clear();
-    m_poses_cache.emplace_back(0.0, m_last_acc, m_last_gyro, m_kf->x().v, m_kf->x().t_wi, m_kf->x().r_wi);
+    // [移植] 首项 offset 不能写死 0：
+    //   丢帧后本帧点云起点晚于上一帧的传播结束时刻，首项应取
+    //   (上一帧结束时刻 - 本帧点云起始时刻)，为负值，这样早于首个 IMU 的
+    //   那些点仍能用外推量补偿；只有真正的首帧（无上一帧）才用 0。
+    const double first_pose_offset =
+        (m_last_propagate_end_time > 1e-6)
+            ? (m_last_propagate_end_time - cloud_time_begin)
+            : 0.0;
+    m_poses_cache.emplace_back(first_pose_offset, m_last_acc, m_last_gyro,
+                               m_kf->x().v, m_kf->x().t_wi, m_kf->x().r_wi);
 
     V3D acc_val, gyro_val;
     double dt = 0.0;
