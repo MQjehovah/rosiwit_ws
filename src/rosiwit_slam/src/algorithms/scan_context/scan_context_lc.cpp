@@ -14,6 +14,31 @@
 
 namespace rosiwit_slam {
 
+namespace {
+struct CloudDiag {
+    size_t finite = 0;
+    size_t bad = 0;
+    float xmin = 1e9f, ymin = 1e9f, zmin = 1e9f;
+    float xmax = -1e9f, ymax = -1e9f, zmax = -1e9f;
+};
+CloudDiag diagCloud(const rosiwit_slam::CloudType::Ptr& c) {
+    CloudDiag d;
+    if (!c) return d;
+    for (const auto& p : c->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
+            ++d.bad;
+            continue;
+        }
+        ++d.finite;
+        d.xmin = std::min(d.xmin, p.x); d.xmax = std::max(d.xmax, p.x);
+        d.ymin = std::min(d.ymin, p.y); d.ymax = std::max(d.ymax, p.y);
+        d.zmin = std::min(d.zmin, p.z); d.zmax = std::max(d.zmax, p.z);
+    }
+    return d;
+}
+}  // namespace
+
+
 bool ScanContextLoopClosure::init(const std::string& config_path) {
     std::ifstream fin(config_path);
     if (!fin.good()) {
@@ -185,7 +210,15 @@ bool ScanContextLoopClosure::icpVerifyDownsampled(
         gicp.align(out, T);
         // hasConverged() 在"迭代用尽但结果可用"时也是 false, 只要 fitness 有限就继续。
         fit = gicp.getFitnessScore();
-        if (!std::isfinite(fit)) return false;
+        if (!std::isfinite(fit)) {
+            const Eigen::Matrix4f Tf = gicp.getFinalTransformation();
+            std::cout << "[ScanContextLC]   stage corr=" << corr
+                      << " fitness=inf, T_finite=" << (Tf.allFinite() ? 1 : 0)
+                      << ", converged=" << (gicp.hasConverged() ? 1 : 0)
+                      << ", src=" << src_down->size()
+                      << ", tgt=" << tgt_down->size() << std::endl;
+            return false;
+        }
         T = gicp.getFinalTransformation();
         if (std::fabs(corr - kFineCorr) < 1e-6f) aligned = out;
     }
@@ -411,6 +444,9 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
         float overlap = 0.0f;
         bool icp_ok = false;
         const char* used_init = "none";
+        float best_try_f = std::numeric_limits<float>::infinity();
+        float best_try_ov = 0.0f;
+        const char* best_try_init = "none";
         for (const auto& init : inits) {
             Eigen::Matrix4f d;
             float f = std::numeric_limits<float>::infinity();
@@ -422,7 +458,10 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
                              m_lc_gate_scale * odom_gap)));
             }
             if (!icpVerifyDownsampled(latest_down, cand_down, init.second, d, f, ov,
-                                      coarse_use)) continue;
+                                      coarse_use)) {
+                if (f < best_try_f) { best_try_f = f; best_try_ov = ov; best_try_init = init.first; }
+                continue;
+            }
             if (!icp_ok || f < fitness) {
                 icp_ok = true;
                 delta = d;
@@ -434,12 +473,28 @@ bool ScanContextLoopClosure::detect(PoseStamped& relative_pose, double& cov,
             }
         }
         if (!icp_ok) {
+            const CloudDiag ds = diagCloud(latest_down);
+            const CloudDiag dt = diagCloud(cand_down);
+            const Eigen::Matrix4f &ig = inits.front().second;
             std::cout << "[ScanContextLC] ICP failed: desc=" << desc_d
                       << ", fitness=" << fitness
                       << ", overlap=" << overlap
                       << ", src=" << (latest_down ? latest_down->size() : 0)
                       << ", tgt=" << (cand_down ? cand_down->size() : 0)
-                      << ", odom_gap=" << odom_gap << std::endl;
+                      << ", odom_gap=" << odom_gap
+                      << " | src finite=" << ds.finite << " bad=" << ds.bad
+                      << " bbox=(" << ds.xmin << "," << ds.ymin << "," << ds.zmin
+                      << ")-(" << ds.xmax << "," << ds.ymax << "," << ds.zmax << ")"
+                      << " | tgt finite=" << dt.finite << " bad=" << dt.bad
+                      << " bbox=(" << dt.xmin << "," << dt.ymin << "," << dt.zmin
+                      << ")-(" << dt.xmax << "," << dt.ymax << "," << dt.zmax << ")"
+                      << " | init_t=(" << ig(0, 3) << "," << ig(1, 3) << ","
+                      << ig(2, 3) << ")"
+                      << " | GICP best: fitness=" << best_try_f
+                      << " overlap=" << best_try_ov
+                      << " init=" << best_try_init
+                      << " (thr fitness<" << m_icp_fitness_thresh
+                      << ", overlap>=" << m_min_overlap << ")" << std::endl;
             continue;
         }
         std::cout << "[ScanContextLC] ICP passed: desc=" << desc_d

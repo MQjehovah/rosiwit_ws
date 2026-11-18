@@ -490,6 +490,12 @@ void LidarProcessor::process(SyncPackage &package)
         m_kf->x().clampPhysical();
     }
 
+    // [新增] 平地 vz 软约束: 与地面提取是否成功无关, 每帧抑制 v.z 积分漂移.
+    if (m_config.flat_vz_sigma > 0.0) {
+        m_kf->updateVerticalVelocity(0.0, m_config.flat_vz_sigma);
+        m_kf->x().clampPhysical();
+    }
+
     // 轮式 odom 紧耦合 (每帧, 和 IMU 一样): 用"上一帧->本帧"的位姿增量
     //   Δp_ekf ≡ Δp_odom   (旋到世界系后可标定尺度)
     //   Δyaw_ekf ≡ Δyaw_odom

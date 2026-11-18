@@ -107,6 +107,8 @@ bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& no
     return true;
 }
 
+static long g_imu_reorder = 0;
+
 void FastLio2Frontend::onImu(const IMUSample& s) {
     if (!m_inited) return;
     IMUSample scaled = s;
@@ -115,8 +117,18 @@ void FastLio2Frontend::onImu(const IMUSample& s) {
     // 防御性上限: 正常 onLidar 会清空缓冲; 若雷达长时间不来 (或误在定位模式喂 IMU),
     // 也不能无界增长. 2000 帧 @200Hz ~= 10s, 足够覆盖任何正常帧间隔.
     constexpr size_t kMaxImuBuffer = 2000;
+    std::lock_guard<std::mutex> lk(m_imu_mu);
     if (m_imu_buffer.size() >= kMaxImuBuffer) m_imu_buffer.erase(m_imu_buffer.begin());
-    m_imu_buffer.push_back(scaled);
+    // [修复] Reentrant sensor 组下多条 IMU 回调可能乱序进入 (SlamBase 已按时间插入).
+    // 前端以前直接 push_back, 乱序样本会让积分出现负 dt/顺序错位, 且结果取决于线程时序.
+    if (!m_imu_buffer.empty() && scaled.time < m_imu_buffer.back().time) {
+        auto it = std::upper_bound(m_imu_buffer.begin(), m_imu_buffer.end(), scaled.time,
+            [](double t, const IMUSample& a) { return t < a.time; });
+        m_imu_buffer.insert(it, scaled);
+        ++g_imu_reorder;
+    } else {
+        m_imu_buffer.push_back(scaled);
+    }
 }
 
 void FastLio2Frontend::onWheelOdom(const PoseStamped& odom) {
@@ -206,11 +218,40 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
     }
 
     ::Vec<::IMUData> fast_imus;
-    fast_imus.reserve(m_imu_buffer.size());
-    while (!m_imu_buffer.empty()) {
-        auto& s = m_imu_buffer.front();
-        fast_imus.emplace_back(std::move(s.acc), std::move(s.gyro), s.time);
-        m_imu_buffer.erase(m_imu_buffer.begin());
+    {
+        std::lock_guard<std::mutex> lk(m_imu_mu);
+        // [修复] 只消费时间 <= 本帧结束时刻的 IMU, 其余留给下一帧.
+        // 旧实现把缓冲区里"未来的" IMU 也一起积分, 会让滤波器传播到帧结束之后;
+        // 多消费多少完全取决于线程时序 (200Hz IMU vs 10Hz 帧), 既是同包两次结果
+        // 分叉的来源, 也等效于给每帧一个随机的 IMU-雷达时间偏移.
+        fast_imus.reserve(m_imu_buffer.size());
+        // 注意: 这里要消费整个包. SlamBase 的同步包特意多带 1 个 >= 帧结束时刻的
+        // 前瞻样本, 保证 IMU 预积分覆盖到 cloud_end_time; 只吃到 end_time 会把它丢掉.
+        while (!m_imu_buffer.empty()) {
+            auto& s = m_imu_buffer.front();
+            fast_imus.emplace_back(std::move(s.acc), std::move(s.gyro), s.time);
+            m_imu_buffer.erase(m_imu_buffer.begin());
+        }
+        // [诊断] 旧实现会把这些"未来"IMU也一起积分; 量化其样本数与时间跨度.
+        static int imu_dbg = 0;
+        if (++imu_dbg % 200 == 1) {
+            const double fut_span = m_imu_buffer.empty()
+                ? 0.0 : (m_imu_buffer.back().time - f.end_time) * 1000.0;
+            const double front_ahead = m_imu_buffer.empty()
+                ? 0.0 : (m_imu_buffer.front().time - f.end_time) * 1000.0;
+            const double last_used = fast_imus.empty()
+                ? 0.0 : (f.end_time - fast_imus.back().time) * 1000.0;
+            const double first_used = fast_imus.empty()
+                ? 0.0 : (fast_imus.front().time - f.start_time) * 1000.0;
+            std::cout << "[IMUDBG] t=" << f.end_time
+                      << " used=" << fast_imus.size()
+                      << " last_before_end=" << last_used << "ms"
+                      << " first_minus_start=" << first_used << "ms"
+                      << " future=" << m_imu_buffer.size()
+                      << " future_span=" << fut_span << "ms"
+                      << " front_ahead=" << front_ahead << "ms"
+                      << " imu_reorder_total=" << g_imu_reorder << std::endl;
+        }
     }
 
     // 重力方向倾斜约束: 加速度计在**车体系**测重力, 与位姿估计无关.

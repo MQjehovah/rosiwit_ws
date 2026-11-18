@@ -77,6 +77,8 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                     .as<bool>(out_cfg.odom_consistency_gate);
             out_cfg.ground_vz_sigma =
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
+            out_cfg.flat_vz_sigma =
+                get_input("flat_vz_sigma", "flat_vz_sigma").as<double>(out_cfg.flat_vz_sigma);
             out_cfg.ground_z_hold_sigma =
                 get_input("ground_z_hold_sigma", "ground_z_hold_sigma")
                     .as<double>(out_cfg.ground_z_hold_sigma);

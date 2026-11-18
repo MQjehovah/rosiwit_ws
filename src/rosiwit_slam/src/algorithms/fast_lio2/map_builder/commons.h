@@ -100,6 +100,9 @@ struct Config
     // 注: 旧的 odom_position_clamp / odom_scale_xy 已删除 —— 硬钳位实测会把正常段
     // 也钳弯 (300-435m 偏差 16.9->22.2), 现在的 odom_win_pos_* 窗口位移约束是它的替代.
     double ground_vz_sigma = 0.30;   // v.z 软约束标准差 (m/s)
+    // [新增] 平地假设的 v.z 软约束 (m/s), 0=关. 每帧把 v.z 拉向 0, 与地面是否
+    // 有效无关; 用于长航时 z 通道无绝对观测时的漂移抑制 (现场基本平地).
+    double flat_vz_sigma = 0.0;
     // z 的绝对软保持 (m, 0=关): 把 z 轻拉向初始值 0. 现场大多平地, 用它防
     // 长时间漂移; sigma 给大(如 1.0)时坡道几乎不受影响 (vz 约束权重高两个量级).
     double ground_z_hold_sigma = 0.0;

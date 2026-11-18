@@ -30,6 +30,9 @@ private:
     bool m_first_after_mapping = false;
 
     std::vector<IMUSample, Eigen::aligned_allocator<IMUSample>> m_imu_buffer;
+    // [修复] onImu 在 ROS sensor 回调线程, onLidar 在 work 线程: 两个线程同时
+    // push_back/erase 同一个 vector 会造成数据竞争 (丢样本/堆损坏/同包两次结果分叉).
+    std::mutex m_imu_mu;
     std::mutex m_odom_mu;
     std::vector<PoseStamped, Eigen::aligned_allocator<PoseStamped>> m_odom_buffer;   // 轮式 odom (建图门限用)
     bool m_z_lock_valid = false;
