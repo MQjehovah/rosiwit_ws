@@ -322,7 +322,12 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
                 zt = pa.z() + (na.x() * (pa.x() - xs.t_wi.x()) +
                                na.y() * (pa.y() - xs.t_wi.y())) / na.z();
                 const double drift = zt - xs.t_wi.z();
-                if (std::fabs(drift) > m_config.ground_drift_max) {
+                // [试验] 只有"法向明显变化(坡度/地形)"才重锚; 纯 z 漂移应由地面 z 约束修正,
+                // 不能一到 0.3m 就重锚, 否则 z 目标永远跟着漂移走.
+                const double cang = std::max(-1.0, std::min(1.0,
+                    na.dot(n_world) / std::max(1e-9, na.norm() * n_world.norm())));
+                const double ang = std::acos(cang);
+                if (std::fabs(drift) > m_config.ground_drift_max && ang > 0.0873) {
                     gate = true;
                     ++m_ground_gate_hits;
                     if (m_ground_gate_hits <= 10 || m_ground_gate_hits % 50 == 0) {

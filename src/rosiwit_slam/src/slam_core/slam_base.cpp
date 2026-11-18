@@ -1,6 +1,7 @@
 // src/slam_core/slam_base.cpp
 #include "slam_core/slam_base.h"
 #include <algorithm>
+#include <iomanip>
 
 namespace rosiwit_slam {
 
@@ -58,15 +59,28 @@ void SlamBase::onLidar(const LidarFrame& f) {
     m_lidar_rx.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(m_buf_mutex);
     if (f.end_time > 0) m_last_lidar_end = f.end_time;
-    if (!m_lidar_buf.empty() && f.start_time < m_lidar_buf.back().start_time) {
-        const uint64_t n = m_lidar_buf.size();
-        m_drop_oob.fetch_add(n, std::memory_order_relaxed);
-        std::cerr << "[sync] lidar out-of-order (" << f.start_time << " < "
-                  << m_lidar_buf.back().start_time << "): clearing " << n
-                  << " buffered frame(s)" << std::endl;
-        m_lidar_buf.clear();
+    // [修复] 旧逻辑: 只要新帧比队尾旧就 clear() 整个队列。sensor 回调是 Reentrant
+    // (lidar/IMU 并发), 两帧 lidar 回调可能反序进入本函数, 于是整队待处理帧被清掉
+    // —— 实测整包触发 42 次、丢掉 151 帧, 表现为 lidar_rx 与 pkgs 差 160.
+    // 新逻辑: 比队首还旧的单帧直接丢(已处理进度不回退); 其余按时间插入有序位置。
+    bool skip_frame = false;
+    if (!m_lidar_buf.empty() && f.start_time < m_lidar_buf.front().start_time) {
+        m_drop_oob.fetch_add(1, std::memory_order_relaxed);
+        skip_frame = true;
+        std::cerr << "[sync] stale lidar frame dropped: " << std::fixed
+                  << std::setprecision(6) << f.start_time << " < front "
+                  << m_lidar_buf.front().start_time << std::endl;
     }
-    m_lidar_buf.push_back(f);
+    if (skip_frame) return;
+    if (!m_lidar_buf.empty() && f.start_time < m_lidar_buf.back().start_time) {
+        m_reorder.fetch_add(1, std::memory_order_relaxed);
+        auto it = std::upper_bound(
+            m_lidar_buf.begin(), m_lidar_buf.end(), f.start_time,
+            [](double t, const LidarFrame &a) { return t < a.start_time; });
+        m_lidar_buf.insert(it, f);
+    } else {
+        m_lidar_buf.push_back(f);
+    }
     // 队列上限 = 处理滞后容差。原来是 50 帧(5 s): 后端建图/回环忙时 20ms 处理定时器
     // 追不上, 队列一满就静默丢最旧帧, 而丢哪几帧取决于当时的 CPU 时序 —— 同一份包
     // 两次运行会在"第一次丢帧"处开始分叉(实测 0-600s 在 250s 分叉, 整包 320s 发散)。
@@ -186,6 +200,7 @@ SlamBase::SyncStats SlamBase::syncStats() const {
     s.drop_overflow = m_drop_overflow.load(std::memory_order_relaxed);
     s.drop_gap = m_drop_gap.load(std::memory_order_relaxed);
     s.drop_oob = m_drop_oob.load(std::memory_order_relaxed);
+    s.reorder = m_reorder.load(std::memory_order_relaxed);
     s.imu_buf = m_imu_buf.size();
     s.lidar_buf = m_lidar_buf.size();
     s.lidar_pushed = m_lidar_pushed;

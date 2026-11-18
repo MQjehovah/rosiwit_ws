@@ -45,7 +45,8 @@ public:
         // 丢帧归因（收帧数 - 出包数 的全部来源，便于定位“帧去哪了”）
         uint64_t drop_overflow = 0;         // 队列超上限，丢最旧
         uint64_t drop_gap = 0;              // IMU 覆盖不足，整帧跳过
-        uint64_t drop_oob = 0;              // 时间戳乱序，清空队列
+        uint64_t drop_oob = 0;              // 比队首还旧，单帧丢弃
+        uint64_t reorder = 0;               // 轻微乱序，按时间插入（不丢）
     };
     SyncStats syncStats() const;
 
@@ -78,6 +79,7 @@ private:
     std::atomic<uint64_t> m_drop_overflow{0};
     std::atomic<uint64_t> m_drop_gap{0};
     std::atomic<uint64_t> m_drop_oob{0};
+    std::atomic<uint64_t> m_reorder{0};
 };
 
 } // namespace rosiwit_slam

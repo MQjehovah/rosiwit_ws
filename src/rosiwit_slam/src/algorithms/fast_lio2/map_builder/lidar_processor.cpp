@@ -484,6 +484,11 @@ void LidarProcessor::process(SyncPackage &package)
         }
         m_kf->x().clampPhysical();
     }
+    else if (m_ground_valid && m_ground_normal.z() > 0.85) {
+        // [试验] ground_follow_z=false: 仍用地面对 roll/pitch 做约束, 不做 z/vz 跟随
+        m_kf->updateTilt(m_ground_normal, 0.02);
+        m_kf->x().clampPhysical();
+    }
 
     // 轮式 odom 紧耦合 (每帧, 和 IMU 一样): 用"上一帧->本帧"的位姿增量
     //   Δp_ekf ≡ Δp_odom   (旋到世界系后可标定尺度)

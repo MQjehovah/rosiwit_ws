@@ -879,7 +879,7 @@ void SlamNode::timerCB() {
             RCLCPP_INFO(get_logger(),
                         "sync: imu_rx=%llu lidar_rx=%llu pkgs=%llu | buf imu=%zu lidar=%zu pushed=%d "
                         "| t_imu=%.3f t_lidar_end=%.3f pending_end=%.3f (imu-pending=%.3f) "
-                        "| drop_overflow=%llu drop_gap=%llu drop_oob=%llu",
+                        "| drop_overflow=%llu drop_gap=%llu drop_oob=%llu reorder=%llu",
                         static_cast<unsigned long long>(st.imu_rx),
                         static_cast<unsigned long long>(st.lidar_rx),
                         static_cast<unsigned long long>(st.pkg_rx),
@@ -888,7 +888,8 @@ void SlamNode::timerCB() {
                         st.last_imu_time - st.pending_end,
                         static_cast<unsigned long long>(st.drop_overflow),
                         static_cast<unsigned long long>(st.drop_gap),
-                        static_cast<unsigned long long>(st.drop_oob));
+                        static_cast<unsigned long long>(st.drop_oob),
+                        static_cast<unsigned long long>(st.reorder));
         }
     }
     // 定位模式的 LiDAR 由 SlamPipeline 内部 worker 处理，避免重定位阻塞 spinner。
