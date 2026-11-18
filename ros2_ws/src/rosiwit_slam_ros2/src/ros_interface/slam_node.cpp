@@ -16,6 +16,7 @@
 #include <cmath>
 #include <thread>
 #include "ros_interface/ros_utils.h"
+#include "io/robot_map_export.h"
 
 using namespace std::chrono_literals;
 using namespace std::placeholders;
@@ -580,6 +581,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_srv_load_map = create_service<rosiwit_slam_ros2::srv::LoadMap>("load_map", std::bind(&SlamNode::handleLoadMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_merge_map = create_service<rosiwit_slam_ros2::srv::LoadMap>("merge_map", std::bind(&SlamNode::handleMergeMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_save_grid_map = create_service<rosiwit_slam_ros2::srv::SaveGridMap>("save_grid_map", std::bind(&SlamNode::handleSaveGridMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_save_robot_map = create_service<rosiwit_slam_ros2::srv::SaveRobotMap>("save_robot_map", std::bind(&SlamNode::handleSaveRobotMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_set_slam_mode = create_service<rosiwit_slam_ros2::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
 
     std::string mode_str = m_algo_raw->getPipelineMode();
@@ -837,6 +839,18 @@ void SlamNode::onOutput(const SlamOutput& out) {
     const Eigen::Quaterniond q(out.pose.rot);
     const double yaw = std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
                                   1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
+    // 记录轨迹，供导出机器人 xzmap（接口层格式适配，不参与核心计算）
+    {
+      std::lock_guard<std::mutex> tl(m_track_mu);
+      if (m_pose_track.size() < 200000) {
+        rosiwit_slam::io::RobotKfSample smp;
+        smp.x = out.pose.trans.x();
+        smp.y = out.pose.trans.y();
+        smp.z = out.pose.trans.z();
+        smp.yaw = yaw;
+        m_pose_track.push_back(smp);
+      }
+    }
     std::lock_guard<std::mutex> lk(m_calib_mutex);
     m_time_calib.addLioPose(out.pose.time, yaw);
     if (m_have_imu_yaw && std::abs(out.pose.time - m_last_imu_stamp) < 0.15) {
@@ -1335,6 +1349,61 @@ void SlamNode::handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const 
     }
     res->success = m_algo_raw->saveGridMap(req->pgm_path, req->yaml_path, req->resolution);
     res->message = res->success ? "Saved" : "Failed";
+}
+
+// 一次导出机器人可直接导入的地图包: pcd + pgm + yaml + xzmap
+// xzmap 的约定（关键帧局部点 / 毫弧度 / 扁平位姿 / 地面 z=0）见 PcdMapManager::saveXzmap。
+void SlamNode::handleSaveRobotMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveRobotMap::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::SaveRobotMap::Response> res) {
+    if (!req->generator.empty() && !m_algo_raw->setGridMapGenerator(req->generator)) {
+        res->success = false;
+        res->message = "Unknown generator: " + req->generator;
+        return;
+    }
+    const std::string dir = req->dir;
+    const std::string name = req->name.empty() ? "map" : req->name;
+    const double res_m = req->resolution > 0.0 ? req->resolution : 0.05;
+    const double kf_step = req->kf_step > 0.0 ? req->kf_step : 1.0;
+
+    bool ok_pcd = m_algo_raw->saveMap(dir + "/" + name + ".pcd");
+    bool ok_pgm = m_algo_raw->saveGridMap(dir + "/" + name + ".pgm",
+                                          dir + "/" + name + ".yaml", res_m);
+    bool ok_xz = saveRobotXzMap(dir + "/" + name + ".xzmap",
+                                req->name.empty() ? "map" : req->name, kf_step);
+    res->success = ok_pcd && ok_pgm && ok_xz;
+    res->message = std::string("pcd=") + (ok_pcd ? "ok" : "fail") +
+                   " pgm=" + (ok_pgm ? "ok" : "fail") +
+                   " xzmap=" + (ok_xz ? "ok" : "fail");
+}
+
+// xzmap 导出（接口层格式适配）：全局点云 + 轨迹 → 机器人可直接定位的关键帧地图
+bool SlamNode::saveRobotXzMap(const std::string& path, const std::string& map_name,
+                              double kf_step) {
+    rosiwit_slam::PointVec pts;
+    if (!m_algo_raw || !m_algo_raw->getGlobalMap(pts) || pts.empty()) {
+        RCLCPP_WARN(get_logger(), "save_robot_map: 全局点云为空，无法导出 xzmap");
+        return false;
+    }
+    std::vector<Eigen::Vector3f> world;
+    world.reserve(pts.size());
+    for (const auto& p : pts) {
+        world.emplace_back(p.x, p.y, p.z);
+    }
+    std::vector<rosiwit_slam::io::RobotKfSample> track;
+    {
+        std::lock_guard<std::mutex> lk(m_track_mu);
+        track = m_pose_track;
+    }
+    if (track.size() < 2) {
+        RCLCPP_WARN(get_logger(), "save_robot_map: 轨迹点不足(%zu)，无法导出 xzmap", track.size());
+        return false;
+    }
+    size_t kf = 0, npts = 0;
+    const bool ok = rosiwit_slam::io::exportRobotXzMap(path, map_name, track, world,
+                                                       kf_step, &kf, &npts);
+    if (ok) {
+        RCLCPP_INFO(get_logger(), "xzmap saved: %s (kf=%zu, pts=%zu)", path.c_str(), kf, npts);
+    }
+    return ok;
 }
 
 void SlamNode::handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Response> res) {

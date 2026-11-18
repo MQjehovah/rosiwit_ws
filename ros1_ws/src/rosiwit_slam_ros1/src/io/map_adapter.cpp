@@ -140,22 +140,67 @@ bool saveMapData(const rosiwit_slam::MapData& data, const std::string& path, int
         return false;
     }
     const std::string base = mapBase(path);
+
+    // ---- 先把所有关键帧点转到世界系，统计地面高度（设备端约定：地面 z=0）----
+    std::vector<rosiwit_slam::CloudType::Ptr> worlds;
+    worlds.reserve(data.keyframes.size());
+    double zmin = 1e9, zmax = -1e9;
+    for (const auto& kf : data.keyframes) {
+        if (!kf.cloud || kf.cloud->empty()) { worlds.emplace_back(nullptr); continue; }
+        Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+        T.block<3, 3>(0, 0) = kf.pose.rot.cast<float>();
+        T.block<3, 1>(0, 3) = kf.pose.trans.cast<float>();
+        rosiwit_slam::CloudType::Ptr w(new rosiwit_slam::CloudType());
+        pcl::transformPointCloud(*kf.cloud, *w, T);
+        for (const auto& q : w->points) {
+            if (!std::isfinite(q.z)) continue;
+            zmin = std::min(zmin, (double)q.z);
+            zmax = std::max(zmax, (double)q.z);
+        }
+        worlds.push_back(w);
+    }
+    double floor_z = 0.0;
+    if (zmax > zmin) {
+        constexpr int NB = 60;
+        std::vector<int> hist(NB, 0);
+        for (const auto& w : worlds) {
+            if (!w) continue;
+            for (const auto& q : w->points) {
+                if (!std::isfinite(q.z)) continue;
+                int i = (int)((q.z - zmin) / (zmax - zmin) * NB);
+                if (i >= 0 && i < NB) hist[i]++;
+            }
+        }
+        const int mx = *std::max_element(hist.begin(), hist.end());
+        for (int i = 0; i < NB; ++i) {
+            if (hist[i] > 0.35 * mx) { floor_z = zmin + (i + 0.5) * (zmax - zmin) / NB; break; }
+        }
+    }
+
     std::vector<rosiwit_slam::io::XzMapKeyframe> kfs;
     kfs.reserve(data.keyframes.size());
-    for (const auto& kf : data.keyframes) {
-        if (!kf.cloud || kf.cloud->empty()) continue;
+    for (size_t idx = 0; idx < data.keyframes.size(); ++idx) {
+        const auto& kf = data.keyframes[idx];
+        if (!kf.cloud || kf.cloud->empty() || !worlds[idx]) continue;
+        const double yaw = std::atan2(kf.pose.rot(1, 0), kf.pose.rot(0, 0));
+        const double cy = std::cos(yaw), sy = std::sin(yaw);
         rosiwit_slam::io::XzMapKeyframe xk;
+        // 位姿扁平化：z=0, roll=pitch=0，只保留 yaw（mapping_conf: fix_z/fix_rotation）
         xk.pose.x = kf.pose.trans.x();
         xk.pose.y = kf.pose.trans.y();
-        xk.pose.z = kf.pose.trans.z();
-        const Eigen::Vector3d rpy =
-            kf.pose.rot.eulerAngles(2, 1, 0);   // yaw, pitch, roll (ZYX)
-        xk.pose.yaw = rpy.x();
-        xk.pose.pitch = rpy.y();
-        xk.pose.roll = rpy.z();
-        xk.points.reserve(kf.cloud->size());
-        for (const auto& p : kf.cloud->points) {
-            xk.points.emplace_back(p.x, p.y, p.z);
+        xk.pose.z = 0.0;
+        xk.pose.roll = 0.0;
+        xk.pose.pitch = 0.0;
+        xk.pose.yaw = yaw;
+        xk.points.reserve(worlds[idx]->size());
+        for (const auto& q : worlds[idx]->points) {
+            if (!std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z)) continue;
+            const double dx = (double)q.x - xk.pose.x;
+            const double dy = (double)q.y - xk.pose.y;
+            // 局部坐标（只按 yaw 旋转），z 以地面为 0
+            xk.points.emplace_back((float)(cy * dx + sy * dy),
+                                   (float)(-sy * dx + cy * dy),
+                                   (float)((double)q.z - floor_z));
         }
         kfs.push_back(std::move(xk));
     }

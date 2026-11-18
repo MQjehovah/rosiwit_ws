@@ -23,6 +23,7 @@
 #include "ros_interface/frame_utils.h"
 #include "slam_core/i_slam_algorithm.h"
 #include "slam_core/slam_types.h"
+#include "io/robot_map_export.h"
 #include "slam_core/pose_filter.h"
 #include "slam_core/online_calibrator.h"
 #include "slam_core/calibration_controller.h"
@@ -30,6 +31,7 @@
 #include "rosiwit_slam_ros2/srv/save_map.hpp"
 #include "rosiwit_slam_ros2/srv/load_map.hpp"
 #include "rosiwit_slam_ros2/srv/save_grid_map.hpp"
+#include "rosiwit_slam_ros2/srv/save_robot_map.hpp"
 #include "rosiwit_slam_ros2/srv/set_slam_mode.hpp"
 
 namespace rosiwit_slam {
@@ -153,6 +155,10 @@ private:
     void handleLoadMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Response>);
     void handleMergeMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::LoadMap::Response>);
     void handleSaveGridMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SaveGridMap::Response>);
+    /// 导出机器人 xzmap（接口层格式适配，见 io/robot_map_export.h）
+    bool saveRobotXzMap(const std::string& path, const std::string& map_name,
+                        double kf_step);
+    void handleSaveRobotMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveRobotMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SaveRobotMap::Response>);
     void handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Response>);
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr          m_imu_sub;
@@ -201,6 +207,7 @@ private:
     rclcpp::Service<rosiwit_slam_ros2::srv::LoadMap>::SharedPtr       m_srv_load_map;
     rclcpp::Service<rosiwit_slam_ros2::srv::LoadMap>::SharedPtr       m_srv_merge_map;
     rclcpp::Service<rosiwit_slam_ros2::srv::SaveGridMap>::SharedPtr   m_srv_save_grid_map;
+    rclcpp::Service<rosiwit_slam_ros2::srv::SaveRobotMap>::SharedPtr  m_srv_save_robot_map;
     rclcpp::Service<rosiwit_slam_ros2::srv::SetSlamMode>::SharedPtr   m_srv_set_slam_mode;
     NodeConfig m_cfg;
     std::mutex m_out_mutex;
@@ -210,6 +217,9 @@ private:
     double m_wheel_odom_sec = -1.0;
     mutable std::mutex m_wheel_odom_mutex;
     SlamOutput m_latest;
+    // 导出 xzmap 用的轨迹（接口层只读记录，不参与核心）
+    mutable std::mutex m_track_mu;
+    std::vector<rosiwit_slam::io::RobotKfSample> m_pose_track;
     bool m_have_output = false;
     nav_msgs::msg::Path m_path;
     bool m_grid_map_published = false;

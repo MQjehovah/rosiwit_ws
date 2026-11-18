@@ -1,0 +1,8 @@
+string dir          # 输出目录, 例如 /opt/xzrobot/maps/<uuid>
+string name         # 文件名前缀, 默认 map
+float64 resolution  # PGM 分辨率, 默认 0.05
+float64 kf_step     # xzmap 关键帧间距(m), 默认 1.0
+string generator    # 栅格生成器, 空=用配置
+---
+bool success
+string message

@@ -31,6 +31,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     "srv/SaveMap.srv"
     "srv/LoadMap.srv"
     "srv/SaveGridMap.srv"
+    "srv/SaveRobotMap.srv"
     "srv/SetSlamMode.srv"
     DEPENDENCIES builtin_interfaces
 )
@@ -44,7 +45,9 @@ set(NODE_NAME slam_node)
 add_executable(${NODE_NAME}
     src/main.cpp
     src/ros_interface/ros_utils.cpp
-    src/ros_interface/slam_node.cpp)
+    src/ros_interface/slam_node.cpp
+    src/io/xzmap_writer.cpp
+    src/io/robot_map_export.cpp)
 set_target_properties(${NODE_NAME} PROPERTIES OUTPUT_NAME "rosiwit_slam_ros2")
 target_include_directories(${NODE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
