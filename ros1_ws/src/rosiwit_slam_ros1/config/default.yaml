@@ -12,10 +12,15 @@
 # ★ 参数联动关系表 (改一个必须想一圈; 不变量由 LocPipeline 启动时校验并告警)
 # ============================================================================
 #  [fitness 阈值链 —— 2026-10-17 僵尸带事故的教训]
-#   accept.min_coverage(0.35) < monitor.lost_fitness(0.75)
-#     < monitor.credible_fitness(0.88) ≤ global.reloc_accept_score(0.88)   必须保持此序!
-#   2026-11-19: credible 0.85->0.88, reloc_accept 0.85->0.88 (向厂家 0.89 靠);
-#   min_coverage 试过 0.85 造成"位姿冻结", 已回滚 0.35 (见 accept 段注释)。
+#   accept.min_coverage(0.85) < monitor.credible_fitness(0.88) ≤ reloc_accept_score(0.88)
+#   monitor.lost_fitness = 0.75
+#   2026-11-19 (现场决定): min_coverage 强收紧到 0.85 —— 只采纳高重叠帧。
+#     注意顺序相对历史**有意改变**: min_coverage(0.85) 高于 lost_fitness(0.75),
+#     即 coverage 落在 0.75~0.85 的帧"不采纳位姿、也不判丢"(位姿靠 odom/预测顶)。
+#     历史实测覆盖率典型 0.43(范围 0.43~0.99), 所以这条非常激进:
+#     若出现"位姿冻结/贴墙不走/越走越偏", 回滚 min_coverage=0.35。
+#     观察: grep 'LocProbe' <log> | grep -i reject
+#   credible 0.85->0.88, reloc_accept 0.85->0.88 (向厂家 th_fitness_relocalization 0.89 靠)。
 #   - min_coverage: 单帧匹配被接受的最低覆盖率。过高 -> 有效匹配被拒, 位姿冻结;
 #     过低 -> 错位姿被放行"散步"(事故: 0.35 放行 0.6 的垃圾匹配走了 18m)。
 #   - credible_fitness: 健康线。低于它连续 lost_patience 帧 -> 判丢重定位
@@ -406,13 +411,12 @@ localization:
     #   coverage = 扫描点中"离地图最近点 <= matcher.inlier_dist(0.3m)"的比例
     #   （registration_metrics: evaluateCoverage, 最多采样 3000 点）
     #   低于它 -> 本帧配准结果**不采纳**，位姿靠 odom/预测顶（不报丢失，但也不更新）
-    # 历史实测: 万集 + 那张图 覆盖率典型 0.43（范围 0.43~0.99）。
-    # 2026-11-19: 曾试改到 0.85（想"只接受高置信匹配"），但 0.85 是典型值的 2 倍，
-    #   会把大多数有效帧拒掉 -> 位姿冻结/漂走。已回滚 0.35。
-    #   若确实要收紧: 先跑一次看 coverage 分布（LocProbe），再取 p10 附近的值。
-    #   "只接受高置信重定位"应该改的是 localization.global.reloc_accept_score(0.88)，
+    # 2026-11-19 (现场决定): 设为 0.85, 只采纳高重叠帧。
+    #   历史实测覆盖率典型 0.43（范围 0.43~0.99），0.85 属激进值；
+    #   症状是"位姿冻结/贴墙不走/越走越偏", 回滚值 0.35。
+    #   "只接受高置信重定位"另有开关: localization.global.reloc_accept_score(0.88),
     #   对应厂家 xz_3d_slam 的 th_fitness_relocalization(0.89) —— 口径不同, 别混用。
-    min_coverage: 0.35   # ★联动(阈值链): 见文件头; 必须 < credible_fitness(0.88)
+    min_coverage: 0.85   # ★联动(阈值链): 见文件头; 必须 < credible_fitness(0.88)
     residual_margin: 0.10
     consistent_frames: 2
     mahalanobis_gate: true    # 用匹配协方差做 Mahalanobis 门控
