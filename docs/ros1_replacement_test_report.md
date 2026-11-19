@@ -104,3 +104,16 @@ localization_lost 0 次（>0.75 就不算丢）→ 位姿在漂但界面不报�
 **需要重启 opencode 才生效**；备份 `remote_terminal.py.bak_prompt`。
 
 > 注：session 是**复用**的（每 SN 一条常驻 WebSocket + 单后台 reader），不是每次新建连接。
+
+### 6.1 会话管理（同批提交，已独立进程验证）
+
+| 能力 | 实现 | 验证结果 |
+|---|---|---|
+| 会话复用 | `connect_terminal` 命中已登录会话直接返回并刷新 `last_used` | 两次 connect 返回同一 `sid` |
+| 空闲回收 | 后台 janitor 扫 `sessions`，`now-last_used > TERM_MCP_IDLE_SEC`（默认 **1800 s**）即断开并移除；扫描间隔 `TERM_MCP_JANITOR_SEC`（默认 60 s）；跳过 `busy`/持锁会话 | 设 10 s/2 s 时：+5 s、+10 s 仍在，**+15 s 已回收**（1 → 0） |
+| 并发串行 | 每会话一把 `cmd_lock`，`send_command` 拆为 `_send_command_inner` + 薄包装 | 3 条并发各自输出完整、无串台 |
+| 可观测 | 新增 `list_sessions`（sn/sid/uptime/idle/busy/buffer_lines/idle_close_s） | 正常返回 |
+| 异常兜底 | `send_command` 捕获异常返回 `{success:false,error}`，不再让 MCP 调用挂死 | — |
+
+> 提示：连接后若长时间不操作，会话会被 janitor 回收；下次调用 `send_command` 会提示
+> "终端未连接，请先调用 connect_terminal"（此时重新 connect 即可，~8 s）。
