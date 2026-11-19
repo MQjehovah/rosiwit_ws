@@ -161,7 +161,6 @@ private:
     void publishStaticMapFallback();
     void publishLocationInfo();      // legacy.cpp:1823-1897
     /// LocalizationServer 对外契约: /localization/state (位姿+协方差+健康等级).
-    void publishLocalizationState(int8_t health, float matching);
     /// C2b: 2D 激光约束. 只在 DEGRADED/LOST 且曾定位成功过时介入,
     /// 连续两次匹配一致才纠偏 (防止单帧误匹配把位姿拉飞).
     void planarConstraintStep();
@@ -337,7 +336,6 @@ private:
     ros::Publisher path_puber_;               // mapping_path      Path         10
     ros::Publisher loop_constraint_puber_;    // loop_constraint   MarkerArray  10 (D2 不发)
     ros::Publisher slam_info_puber_;          // slam/info         SlamInfo     10
-    ros::Publisher localization_state_puber_;  // /localization/state LocalizationState 10
     double loc_sigma_xy_ = 0.05;               // 兜底位姿不确定度 (无 2D 匹配时)
     double loc_sigma_yaw_ = 0.03;
     float loc_degrade_matching_ = 0.65f;       // 低于此匹配度进入 DEGRADED

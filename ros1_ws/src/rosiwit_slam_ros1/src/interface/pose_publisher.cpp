@@ -25,7 +25,6 @@
 #include "convert.h"
 #include "internal.h"
 #include "map_adapter.h"
-#include "xzrobot_ros_dependency/LocalizationState.h"
 
 using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
@@ -278,9 +277,6 @@ void Ros1SlamInterface::publishZeroPoseInfo() {
         buildSlamInfo(/*slam_state=*/1, /*location_status=*/1, mapName(),
                       0.0, 0.0, 0.0,
                       static_cast<float>(realtime_grid_map_area_), 0.0f));
-    // 切图后到定位成功之前一律 INIT: 位姿不可信, 消费端不得据此导航.
-    publishLocalizationState(
-        xzrobot_ros_dependency::LocalizationState::HEALTH_INIT, 0.0f);
     // 新地图上还没定位成功过: 2D 纠偏不能用旧图的"曾经锁定"状态.
     planar_ever_locked_ = false;
     planar_field_.clear();
@@ -355,27 +351,22 @@ void Ros1SlamInterface::publishLocationInfo() {
         buildSlamInfo(slam_state, location_status, curr_map_name_, p.x, p.y, p.yaw, map_area,
                       matching_degree));
 
-    // ---- LocalizationServer 契约: /localization/state ----
-    // 状态语义: INIT(不可信) -> TRACKING <-> DEGRADED(质量下降) -> LOST(必须停车).
-    using LocState = xzrobot_ros_dependency::LocalizationState;
-    int8_t health = LocState::HEALTH_LOST;
+    // ---- 定位健康等级 (仅用于日志) ----
+    // 0=INIT 1=TRACKING 2=DEGRADED 3=LOST
+    // 注: /localization/state 用的是自建消息 LocalizationState, 本机型厂商包没有该消息
+    //     定义、也没有消费者, 已移除发布 (需要时再在本地 msg/ 里定义并恢复)。
+    int8_t health = 3;
     if (slam_mode_ == SlamMode::LOCALIZATION) {
         if (location_status == 0) {          // LOCALIZED
-            health = (matching_degree >= loc_degrade_matching_)
-                         ? LocState::HEALTH_TRACKING
-                         : LocState::HEALTH_DEGRADED;
+            health = (matching_degree >= loc_degrade_matching_) ? 1 : 2;
         } else if (location_status == 1) {   // INIT / 重定位中
-            health = LocState::HEALTH_INIT;
-        } else {                             // LOST
-            health = LocState::HEALTH_LOST;
+            health = 0;
         }
     } else if (slam_mode_ == SlamMode::MAPPING) {
-        // 建图没有地图匹配度, 但有连续位姿; 对外按 TRACKING 处理.
-        health = LocState::HEALTH_TRACKING;
+        health = 1;
     } else if (slam_mode_ == SlamMode::FREE) {
-        health = LocState::HEALTH_INIT;
+        health = 0;
     }
-    publishLocalizationState(health, matching_degree);
     double prior_xy = 0.0, prior_yaw = 0.0;
     const bool has_prior = engine_.priorUncertainty(prior_xy, prior_yaw);
     ROS_INFO_THROTTLE(2.0,
@@ -405,59 +396,7 @@ void Ros1SlamInterface::publishLocationInfo() {
     }
 }
 
-void Ros1SlamInterface::publishLocalizationState(int8_t health, float matching) {
-    using LocState = xzrobot_ros_dependency::LocalizationState;
-    LocState msg;
-    msg.header.stamp = ros::Time::now();
-    msg.header.frame_id = kMapFrame;
-    const Xz3dPose p = curr_pose_;
-    const bool finite = std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.yaw) &&
-                        std::isfinite(p.q.w());
-    msg.pose.pose.position.x = finite ? p.x : 0.0;
-    msg.pose.pose.position.y = finite ? p.y : 0.0;
-    msg.pose.pose.position.z = finite ? p.z : 0.0;
-    msg.pose.pose.orientation.x = finite ? p.q.x() : 0.0;
-    msg.pose.pose.orientation.y = finite ? p.q.y() : 0.0;
-    msg.pose.pose.orientation.z = finite ? p.q.z() : 0.0;
-    msg.pose.pose.orientation.w = finite ? p.q.w() : 1.0;
 
-    // C1: 不确定度来自 2D 平面匹配 (C2) 或质量分档值.
-    // 明确"不可用"时给大值, 避免消费端把 0 协方差当成"绝对准确".
-    std::fill(msg.pose.covariance.begin(), msg.pose.covariance.end(), 0.0);
-    const bool planar_fresh = !planar_cov_stamp_.isZero() &&
-        (ros::Time::now() - planar_cov_stamp_).toSec() < 1.0;
-    if (health == LocState::HEALTH_DEGRADED && planar_fresh) {
-        // 真实可观性: 退化方向的方差自然大, 交叉项按对角处理.
-        msg.pose.covariance[0] = planar_cov_xx_;
-        msg.pose.covariance[7] = planar_cov_yy_;
-        msg.pose.covariance[35] = planar_cov_yaw_;
-    } else {
-        double sxy = loc_sigma_xy_;
-        double syaw = loc_sigma_yaw_;
-        // 估计器给的运动先验不确定度 (打滑时为 odom 降权后膨胀的值).
-        // 与分档值取大: 先验越不确定, 对外协方差越保守.
-        double prior_xy = 0.0, prior_yaw = 0.0;
-        if (engine_.priorUncertainty(prior_xy, prior_yaw)) {
-            sxy = std::max(sxy, prior_xy);
-            syaw = std::max(syaw, prior_yaw);
-        }
-        if (health == LocState::HEALTH_DEGRADED) { sxy *= 3.0; syaw *= 3.0; }
-        if (health == LocState::HEALTH_LOST || health == LocState::HEALTH_INIT) {
-            sxy = 1.0e3;
-            syaw = 1.0e3;
-        }
-        msg.pose.covariance[0] = sxy * sxy;
-        msg.pose.covariance[7] = sxy * sxy;
-        msg.pose.covariance[35] = syaw * syaw;
-    }
-
-    msg.health = health;
-    msg.matching = health == LocState::HEALTH_LOST ? 0.0f : matching;
-    msg.map_id = mapName();
-    msg.map_valid = hasStaticMap();
-    msg.relocalize_count = engine_.poseJumpSeq();   // 单源: SlamAlgorithm 的跳变序号
-    localization_state_puber_.publish(msg);
-}
 
 // ---------------------------------------------------------------- [T7] 告警
 void Ros1SlamInterface::sendTransform() {

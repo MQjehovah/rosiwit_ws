@@ -5,7 +5,6 @@
 // 运行期的模式状态机 (mode_state.cpp) 与具体发布实现 (pose/cloud/services) 都不在这里。
 // ============================================================================
 #include "ros1_slam_interface.h"
-#include "xzrobot_ros_dependency/LocalizationState.h"
 
 #include <algorithm>
 #include <chrono>
@@ -148,9 +147,6 @@ void Ros1SlamInterface::initPub() {
     path_puber_ = nh_.advertise<nav_msgs::Path>("mapping_path", 10);
     loop_constraint_puber_ = nh_.advertise<visualization_msgs::MarkerArray>("loop_constraint", 10);
     slam_info_puber_ = nh_.advertise<xzrobot_ros_dependency::SlamInfo>("slam/info", 10);
-    // LocalizationServer 契约: 一个话题带齐位姿/协方差/健康等级/匹配度/地图标识.
-    localization_state_puber_ =
-        nh_.advertise<xzrobot_ros_dependency::LocalizationState>("/localization/state", 10);
     // C2b 2D 约束开关: 由 simulation.yaml 的 localization.planar_constraint 控制.
     // (不改变默认行为; 打开前需要 seed_max_drift 收紧, 否则核心会假定位.)
     scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);

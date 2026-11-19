@@ -70,7 +70,6 @@ add_message_files(
   LocationInfo.msg
   VirtualForm.msg
   VirtualObstacles.msg
-  LocalizationState.msg
   NaviState.msg
   CovPath.msg
   WallFollow.msg
