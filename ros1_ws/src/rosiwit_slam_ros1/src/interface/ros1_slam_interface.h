@@ -413,6 +413,9 @@ private:
     double map_quality_free_min_m2_ = 1.0;
     double map_quality_unknown_max_ = 0.60;    // 旧 curr_map_path_
     std::atomic<uint64_t> map_switch_generation_{0};  // 最后一次切图请求胜出
+    // /switch_map 就绪信号 (后台加载任务写, 服务线程读)
+    std::atomic<uint64_t> map_load_done_gen_{0};      // 已完成加载的 generation
+    std::atomic<bool>     map_load_ok_{false};        // 该次加载是否成功
     // ROS 层兼容：大图 xzmap 解析/关键帧重建在 aarch64 上可达 25s，
     // 不能让 /switch_map 服务线程被拖到 App 超时。PGM 先同步发布，
     // 完整定位地图在后台串行加载。

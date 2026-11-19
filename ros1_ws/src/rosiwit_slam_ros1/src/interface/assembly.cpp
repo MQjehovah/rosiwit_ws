@@ -139,7 +139,9 @@ void Ros1SlamInterface::initPub() {
     // legacy.cpp:282-297 逐字: 名字 / 类型 / queue / latch 都不改
     point_map_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("global_map", 1, true);
     grip_map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("global_grid_map", 1, true);
-    realtime_grid_map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("/map", 10);
+    // [偏离 legacy] 这里加 latching: 厂商原版是非 latched, 靠 1Hz 重发兜底,
+    // 但 App/导航在两次重发之间启动会短暂"地图空白"。latching 对消费端无副作用。
+    realtime_grid_map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("/map", 1, true);
     pointcloud_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("curr_scan_point", 10);
     ros1_pointcloud_puber_ = nh_.advertise<sensor_msgs::PointCloud>("scan_f_map", 10);
     submap_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("curr_submap_point", 10);
@@ -152,7 +154,8 @@ void Ros1SlamInterface::initPub() {
     // C2b 2D 约束开关: 由 simulation.yaml 的 localization.planar_constraint 控制.
     // (不改变默认行为; 打开前需要 seed_max_drift 收紧, 否则核心会假定位.)
     scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
-    warning_code_puber_ = nh_.advertise<std_msgs::String>("slam_warning_code", 10);
+    // [偏离 legacy] latched: 瞬时故障码不会因订阅端晚到而漏掉
+    warning_code_puber_ = nh_.advertise<std_msgs::String>("slam_warning_code", 1, true);
     // 位姿融合诊断 (JSON, 1Hz): 用于 direct / eskf 两种方案的现场 A/B 与回归
     fusion_diag_puber_ = nh_.advertise<std_msgs::String>("slam/fusion_diag", 2);
     point_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("origin_point", 10);

@@ -194,6 +194,11 @@ void Ros1SlamInterface::startMapLoadJob(
     // 所以析构的等待一定能结束 (I4)。任务体里不再自己收尾。
     const bool accepted = engine_.runOnLaneWithDone("disk_read", "switch_map_load",
         [this, base, init_pose, gen](rosiwit_common::CancelToken token) {
+            // 每个退出路径都必须写 done/ok, 否则 /switch_map 要一直等到超时
+            auto mark_done = [this, gen](bool ok) {
+                map_load_ok_.store(ok);
+                map_load_done_gen_.store(gen);
+            };
             map_switch_busy_.store(true);
             rosiwit_slam::MapData map_data;
             // 解析 25s 期间核心可能被模式切换重建: 抓解析前的 generation, 装载时校验
@@ -204,6 +209,7 @@ void Ros1SlamInterface::startMapLoadJob(
                           << base << std::endl;
                 map_switch_busy_.store(false);
                 relocating_ = false;
+                mark_done(false);
                 return;
             }
             const bool loaded = parsed && engine_.loadLocalizationMapData(map_data, core_gen);
@@ -211,6 +217,7 @@ void Ros1SlamInterface::startMapLoadJob(
                 std::cout << "[ros1_slam] /switch_map: discard stale map load: "
                           << base << std::endl;
                 map_switch_busy_.store(false);
+                mark_done(false);
                 return;
             }
             if (!loaded) {
@@ -218,6 +225,7 @@ void Ros1SlamInterface::startMapLoadJob(
                                  << base);
                 relocating_ = false;
                 map_switch_busy_.store(false);
+                mark_done(false);
                 return;
             }
             if (!engine_.setCorePipelineMode("localization", /*wait_ms=*/1000)) {
@@ -229,12 +237,15 @@ void Ros1SlamInterface::startMapLoadJob(
             map_switch_busy_.store(false);
             std::cout << "[ros1_slam] /switch_map background localization map ready: "
                       << base << std::endl;
+            mark_done(true);
         },
-        [this](bool ok) {
+        [this, gen](bool ok) {
             if (!ok) {
-                // 被取消/丢弃/异常: 别把"切图中"和"重定位中"标志留下来
+                // 被取消/丢弃/异常: 别把"切图中"/"重定位中"标志留下来, 并解除等待
                 map_switch_busy_.store(false);
                 relocating_ = false;
+                map_load_ok_.store(false);
+                map_load_done_gen_.store(gen);
             }
             finishMapLoadJob();
         });
@@ -284,7 +295,26 @@ bool Ros1SlamInterface::handleSwitchMap(
     }
     MapSwitchContext ctx = beginMapSwitch(xzMapBase(req.map_dir), req);
     startMapLoadJob(ctx, req.initial_pose);
-    res.success = ctx.detect_ok || ctx.pgm_ok;
+
+    // 等后台加载完成再回答 (aarch64 上大图解析可达 25s, 这里最多等 kWaitSec)。
+    // done  -> 返回**真实**结果 (App 可以立刻给位姿, 不会再被"图未就绪"拒)
+    // 超时  -> 仍按"已受理"返回 true (与旧行为一致), 只打 WARN
+    constexpr double kWaitSec = 12.0;
+    const ros::Time deadline = ros::Time::now() + ros::Duration(kWaitSec);
+    while (map_load_done_gen_.load() < ctx.generation && ros::Time::now() < deadline) {
+        ros::Duration(0.02).sleep();
+    }
+    const bool load_done = map_load_done_gen_.load() >= ctx.generation;
+    if (load_done) {
+        res.success = map_load_ok_.load();
+        if (!res.success) {
+            ROS_ERROR_STREAM("[ros1_slam] /switch_map: map load FAILED: " << ctx.base);
+        }
+    } else {
+        ROS_WARN_STREAM("[ros1_slam] /switch_map: still loading after " << kWaitSec
+                        << "s, returning accepted: " << ctx.base);
+        res.success = true;
+    }
     return true;
 }
 
