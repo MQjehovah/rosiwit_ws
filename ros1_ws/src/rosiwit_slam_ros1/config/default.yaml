@@ -93,7 +93,9 @@ global:
     flat_z_sigma: 0.0    # >0 时启用"地面=0"的平坦约束 (0=关)
     flat_z_max: 0.0      # 平坦约束的 z 允许范围
     ground_tilt_only: false # 只用地面法向约束 roll/pitch
-    gyro_scale: 1.0 # 陀螺尺度标定: 实测本车万集 IMU 偏航角速度低估 3.5% -> 设 1.036
+    gyro_scale: 1.036 # 陀螺尺度标定: 实测本车万集 IMU 偏航角速度低估 3.5% -> 1.036
+                      # 2026-11-19 打开: 之前 1.0 时转弯航向振荡 ±20°
+                      # (correction 米级, fitness 0.83), 打开后应消除
                     # (2026-11: 掉头/绕圈累计旋转时航向误差放大的关键; 1.0=不校准)
     max_state_velocity: 3.0 # 状态速度物理上限(m/s, <=0关闭): 坏配准把速度打爆后的刹车
     use_odom: true # 是否订阅并使用轮式odom（legacy 由接口订阅；非 legacy 由引擎订阅）
@@ -270,7 +272,10 @@ localization:
     #        PCL 1.8 GICP computeCovariances(点数<k_correspondences=20) 段错误(单测复现 exit 139)。
     # 调小 -> 更容易进 GICP(有崩溃风险); 调大 -> 更保守(稀疏但有效帧可能被拒)。
     min_match_points: 50
-    max_correspondence_dist: 2.5   # ★联动: 必须 > 2×dynamic_dist, 否则滤波螺旋无捕获余量
+    max_correspondence_dist: 1.2   # ★联动: 必须 > 2×dynamic_dist(0.8), 否则滤波螺旋无捕获余量
+                                   # 2026-11-19: 2.5 -> 1.2。实测长廊里 2.5m 允许把点配到几米外
+                                   # "长得一样"的位置, 单帧修正被拉到 2.5~5.8m 还判 accepted。
+                                   # 重定位仍有 1.2m 捕获余量(实测初始误差 <=1.3m)。
     transformation_epsilon: 0.000001
     inlier_dist: 0.3
     # pp_icp 专用
@@ -344,7 +349,7 @@ localization:
   # ---- 全局重定位 (relocalizer: scan_context | bbs | fpfh_ransac) ----
   global:
     min_score: 0.5
-    reloc_accept_score: 0.85  # ★联动(阈值链): ≥ credible_fitness(0.85); 低于此值保持
+    reloc_accept_score: 0.80  # ★联动(阈值链): ≥ credible_fitness(0.80); 低于此值保持
                               # LOST(诚实), 不接受弱重定位进僵尸态
     top_k: 5                    # 全局重定位多候选数 (按分数降序精配, 命中 0.95+ 即停)
     # 丢失后重定位尝试间隔(帧, 节流)。30 帧(~2s)太密: 每次尝试含多起点 GICP
@@ -386,7 +391,9 @@ localization:
     min_radius: 2.0 # 重定位候选最小半径(m)
   monitor:
     enabled: true
-    credible_fitness: 0.85   # 健康线: ≥ 此为健康帧; 有界恢复达标线
+    credible_fitness: 0.80   # 健康线: ≥ 此为健康帧; 有界恢复达标线
+                             # 2026-11-19: 0.85->0.80。本车+本图实测稳态 fitness
+                             # 0.81~0.87, 0.85 会让状态在 INIT/TRACKING 间抖动。
     lost_fitness: 0.75        # 低于此值直接判为不健康帧
     localized_patience: 3     # 连续健康帧数达到此值 -> LOCALIZED
     lost_patience: 30         # 连续不健康帧数达到此值 -> LOST (约3s, 避免LOST后HMI仍显示成功10s)
@@ -415,6 +422,11 @@ localization:
     mahalanobis_chi2: 16.81   # 6DoF 99% 卡方阈值
     mahalanobis_trans_floor: 0.20  # m; GICP 残差协方差的平移下限
     mahalanobis_rot_floor: 0.05    # rad; GICP 残差协方差的旋转下限
+    # ★退化方向部分更新 (2026-11-19 打开): 用 JtJ 特征分解按可观测度缩放修正量,
+    # 弱观测方向(长廊的沿墙方向)增益趋 0 => 只信先验, 不再让"沿长墙滑动"整体生效。
+    # 实测未开时: 转弯单帧修正 2.5~5.8m 仍被判 accepted, fitness 0.75~0.87。
+    degeneracy_partial_update: true
+    degeneracy_ratio_soft: 0.05   # 特征值比低于此值逐步忽略该方向
 
   # ---- 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane ----
   planar:

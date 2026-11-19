@@ -7,6 +7,7 @@
 // 不在这里做的事: 2D 平面约束算法 (planar_constraint.cpp, 它只产出修正量)。
 // ============================================================================
 #include "ros1_slam_interface.h"
+#include "xzrobot_ros_dependency/LocationInfo.h"
 
 #include <algorithm>
 #include <chrono>

@@ -5,6 +5,7 @@
 // 运行期的模式状态机 (mode_state.cpp) 与具体发布实现 (pose/cloud/services) 都不在这里。
 // ============================================================================
 #include "ros1_slam_interface.h"
+#include "xzrobot_ros_dependency/LocationInfo.h"
 
 #include <algorithm>
 #include <chrono>
