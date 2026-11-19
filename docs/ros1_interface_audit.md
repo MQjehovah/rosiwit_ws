@@ -132,4 +132,44 @@ cd /ws/ros1_ws && catkin_make -j4 -DCATKIN_ENABLE_TESTING=OFF \
 | `include/slam_core/ground_posegraph.h` | `Eigen::SimplicialLDLT` 依赖 `<Eigen/SparseCholesky>`；而 PCL 定义了 `EIGEN_MPL2_ONLY`，该模块直接 `#error` | 改用 `Eigen::ConjugateGradient`（`<Eigen/IterativeLinearSolvers>`，MPL2 可用） |
 | `xzrobot_ros_dependency/{CMakeLists,package.xml}`（**我们的快照**） | 厂家原版 `package.xml` 只声明 `actionlib*`，但消息用了 std/geometry/sensor/nav/tf2/visualization；`msg/` 已含 action 展开消息，再 `add_action_files` 会出现同名 target | 补 6 个 `<depend>`；CMakeLists 按原版文件清单生成且**不加** `add_action_files` |
 
+## 9. ARM64 构建 + deb 打包（可装到设备）
+
+**镜像**：`docker-release-local.xzrobot.com/xzrobot/ros1-build:0.1.3` —— **arm64 / 2.79 GB**，
+Ubuntu 18.04.6 + melodic + Ceres 1.13 + PCL 1.8.1 + OpenCV 3.2 + Eigen 3.3.4 + gcc 7.5。
+（不含 `xzrobot_ros_dependency` 与 Sophus，需挂载提供。）
+
+x86 宿主机上跑 arm64 容器需要 qemu（宿主机重启后 binfmt 会丢）：
+
+```bash
+sudo apt-get install -y qemu-user-static      # 装完自动注册 /proc/sys/fs/binfmt_misc/qemu-aarch64
+```
+
+构建 + 出包（实测 **~50 分钟**，-j8 仿真）：
+
+```bash
+docker run --rm -v /tmp/arm_build:/ws -w /ws \
+  docker-release-local.xzrobot.com/xzrobot/ros1-build:0.1.3 bash -lc '
+    cp -r /ws/third_party/sophus /opt/ros/melodic/include/
+    source /opt/ros/melodic/setup.bash
+    cd /ws/ros1_ws && catkin_make -j8 -DCATKIN_ENABLE_TESTING=OFF \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_DISABLE_FIND_PACKAGE_GTSAM=ON'
+```
+
+> 注意：**不要**用 `catkin_make install` 出包 —— 它会重新 configure/增量编译，而新容器里
+> 没有 Sophus 副本，会在 `fast_lio2_frontend.cpp` 处失败。直接从 `devel/` 打包即可。
+
+打包内容（`dpkg-deb --build`）：
+
+```
+/opt/ros/melodic/lib/rosiwit_slam_ros1/{rosiwit_slam_ros1_node, bag_stitch_map, map_cleanup, repair_map_grid}
+/opt/ros/melodic/lib/{librosiwit_slam.so, librosiwit_common.so, librosiwit_slam_ros1_lib.so}
+/opt/ros/melodic/share/rosiwit_slam_ros1/{launch, config, package.xml}
+```
+
+**踩点**：第一版只打了 `rosiwit_slam_ros1_lib.so`，设备上 `ldd` 报 `librosiwit_slam.so` /
+`librosiwit_common.so` 缺失 —— 核心的两个 .so 必须一起打进包。
+
+**结果**：`rosiwit-slam-ros1_0.1.1_arm64.deb`（1.3 MB，`Architecture: arm64`），
+设备 `dpkg -i` 成功、`ldd` **零缺失**；不覆盖厂商 `xz_3d_slam`，`dpkg -r rosiwit-slam-ros1` 可卸载。
+
 <!-- 执行状态见提交信息 -->
