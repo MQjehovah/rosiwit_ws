@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include "slam_core/i_map_manager.h"
 #include "slam_core/i_grid_map_generator.h"
+#include "slam_core/ground_posegraph.h"
 #include "algorithms/grid_map/grid_map_postprocess.h"
 
 namespace rosiwit_slam {
@@ -104,6 +105,8 @@ private:
     // 视野, saveMap 会**跳过**该过滤并告警 (否则老静态点会被误删)。
     size_t max_observation_points_ = 2000000;   // yaml: map_manager.max_observation_points
     bool observations_truncated_ = false;
+    bool ground_posegraph_enable_ = false;   // yaml: map_manager.ground_posegraph_enable
+    bool ground_posegraph_applied_ = false;  // 保存前只应用一次
     void trimObservations();
 };
 

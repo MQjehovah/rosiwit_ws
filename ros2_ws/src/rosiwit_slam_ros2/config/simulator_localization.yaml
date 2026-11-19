@@ -101,6 +101,7 @@ mapping:
     free_space_carving: false
     odom_consistency_gate: false
   map_manager:
+    ground_posegraph_enable: false   # 手持建图设 true: 保存前把地面锁到 z=0
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
   backend:
