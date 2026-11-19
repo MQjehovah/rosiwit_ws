@@ -491,6 +491,17 @@ void LidarProcessor::process(SyncPackage &package)
         m_kf->x().clampPhysical();
     }
 
+    // [开关] 地面高度锁定: 用当前帧地面目标约束 z (默认 0=关).
+    // 必须给 P_zz 一个 floor, 否则 LiDAR 把 z 协方差压到极小后增益接近 0,
+    // updateZ 几乎不动 (之前锁不住的根因).
+    if (m_config.ground_lock_z_sigma > 0.0 && m_ground_valid) {
+        auto &P = m_kf->P();
+        const double f2 = m_config.flat_z_p_floor * m_config.flat_z_p_floor;
+        if (P(5, 5) < f2) P(5, 5) = f2;
+        m_kf->updateZ(m_ground_z_target, m_config.ground_lock_z_sigma);
+        m_kf->x().clampPhysical();
+    }
+
     // [新增] z 死区软边界: 死区内不干预(保留真实 1m 高差); 出界才拉回边界.
     if (m_config.flat_z_sigma > 0.0) {
         auto &P = m_kf->P();

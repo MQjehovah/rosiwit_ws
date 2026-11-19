@@ -99,6 +99,7 @@ bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& no
         normal_world = -normal_world; plane_d = -plane_d;
         n_body = -n_body; d_body = -d_body;
     }
+    m_ground_h_body = d_body;   // 传感器到地面的 body 系距离
 
     if (std::acos(std::max(-1.0, std::min(1.0, normal_world.z()))) > 40.0 * M_PI / 180.0)
     {
@@ -383,6 +384,15 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
             // hold: 沿用上一帧地面高度
         } else {
             m_ground_valid = false;
+        }
+        // [开关] ground_zero_lock: 用当前帧 body 地面距离把地面直接锁到 z=0.
+        // target 只用当前帧的 d_body / nz, 不依赖历史锚定平面, 不会被 z 漂移带跑.
+        if (m_config.ground_zero_lock && m_ground_h_body > 0.05 && n_world.z() > 0.85) {
+            const double nz = std::max(0.2, std::min(0.999, n_world.z()));
+            m_ground_z_target = m_ground_h_body / nz;
+            m_ground_valid = true;
+            m_ground_last_ok = f.end_time;
+            m_ground_normal_w = n_world;
         }
         m_builder->lidar_processor()->setGroundPlane(m_ground_valid, m_ground_normal_w,
                                                      m_config.ground_follow_z,

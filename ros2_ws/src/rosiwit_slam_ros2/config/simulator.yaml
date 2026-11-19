@@ -40,6 +40,8 @@ global:
     imu_gap_reset: false
     imu_max_prop_dt: 0.0
     ground_tilt_only: false
+    ground_lock_z_sigma: 0.0
+    ground_zero_lock: false
   frames:
     lidar_frame: lidar_link  # 雷达frame
     imu_frame: imu_link # IMU frame

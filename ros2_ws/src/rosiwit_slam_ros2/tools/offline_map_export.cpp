@@ -17,6 +17,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <Eigen/Geometry>
@@ -44,6 +45,59 @@ static std::vector<double> splitCsv(const std::string& s) {
     return v;
 }
 
+// 地面归一化: 5m 分块取 z 的 2% 分位作为局部地面, 把所有点和轨迹减去它.
+// 这样地面在 z=0, 墙/台阶保留相对高度; 不依赖 SLAM 的 z 约束.
+static void normalizeGround(CloudType::Ptr& cloud, std::vector<io::RobotKfSample>& track) {
+    constexpr double B = 5.0;
+    auto key = [](int bx, int by) -> long long {
+        return (static_cast<long long>(bx) << 32) ^ static_cast<unsigned int>(by);
+    };
+    std::unordered_map<long long, std::vector<float>> zs;
+    zs.reserve(cloud->size() / 8 + 1);
+    for (const auto& p : cloud->points) {
+        const int bx = static_cast<int>(std::floor(p.x / B));
+        const int by = static_cast<int>(std::floor(p.y / B));
+        zs[key(bx, by)].push_back(p.z);
+    }
+    std::unordered_map<long long, float> ground;
+    ground.reserve(zs.size());
+    auto zmin0 = cloud->points.empty() ? 0.0f : cloud->points[0].z;
+    auto zmax0 = zmin0;
+    for (const auto& p : cloud->points) {
+        zmin0 = std::min(zmin0, p.z);
+        zmax0 = std::max(zmax0, p.z);
+    }
+    for (auto& kv : zs) {
+        auto& v = kv.second;
+        std::sort(v.begin(), v.end());
+        ground[kv.first] = v[std::min(v.size() - 1, static_cast<size_t>(0.02 * v.size()))];
+    }
+    auto getg = [&](double x, double y) -> float {
+        const int bx = static_cast<int>(std::floor(x / B));
+        const int by = static_cast<int>(std::floor(y / B));
+        for (int r = 0; r <= 8; ++r) {
+            for (int dx = -r; dx <= r; ++dx) {
+                for (int dy = -r; dy <= r; ++dy) {
+                    if (r > 0 && std::abs(dx) != r && std::abs(dy) != r) continue;
+                    auto it = ground.find(key(bx + dx, by + dy));
+                    if (it != ground.end()) return it->second;
+                }
+            }
+        }
+        return 0.0f;
+    };
+    for (auto& p : cloud->points) p.z -= getg(p.x, p.y);
+    for (auto& s : track) s.z -= getg(s.x, s.y);
+    float zmin1 = cloud->points.empty() ? 0.0f : cloud->points[0].z;
+    float zmax1 = zmin1;
+    for (const auto& p : cloud->points) {
+        zmin1 = std::min(zmin1, p.z);
+        zmax1 = std::max(zmax1, p.z);
+    }
+    std::cout << "[offline] ground-zero: z [" << zmin0 << ", " << zmax0
+              << "] -> [" << zmin1 << ", " << zmax1 << "]  blocks=" << ground.size() << "\n";
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::cerr << "usage: offline_map_export <dump_dir> <out_dir> [--res 0.05] [--kf-step 1.0]\n"
@@ -59,6 +113,7 @@ int main(int argc, char** argv) {
     std::string post_str = "denoise,close,dilate";
     std::string ground = "ransac";
     int close_r = 1, dilate_r = 1, min_comp = 30;
+    bool ground_zero = false;
 
     for (int i = 3; i < argc; ++i) {
         std::string a = argv[i];
@@ -74,6 +129,7 @@ int main(int argc, char** argv) {
         else if (a == "--dilate") nexti(dilate_r);
         else if (a == "--min-comp") nexti(min_comp);
         else if (a == "--ground" && i + 1 < argc) ground = argv[++i];
+        else if (a == "--ground-zero") ground_zero = true;
     }
 
     std::filesystem::create_directories(out);
@@ -120,6 +176,8 @@ int main(int argc, char** argv) {
         }
     }
     std::cout << "[offline] track " << track.size() << " samples\n";
+
+    if (ground_zero) normalizeGround(global, track);
 
     auto gen = GridMapFactory::create(generator);
     if (!gen) {

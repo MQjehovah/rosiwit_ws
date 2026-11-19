@@ -96,6 +96,13 @@ struct Config
 
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
     bool ground_follow_z = false;
+    // [开关] 地面高度锁定 (默认 0=关): 用地面锚定平面的 z 目标做 updateZ,
+    // 把地面高度锁在起始值; 配合 init_z=IMU 离地高度 -> 地面 z=0.
+    // 这是非官方约束, 只应在明确需要"地面 z=0"的建图时打开.
+    double ground_lock_z_sigma = 0.0;
+    // [开关] 当前帧地面直接锁 z=0: target = d_body / nz, 不依赖历史锚定平面.
+    // 默认 false = 官方; 只有明确需要"地面 z=0"的建图才打开.
+    bool ground_zero_lock = false;
     // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,
     // 默认关闭; 保留给'轮速可信但 LIO 会滑'的场合.
     bool odom_consistency_gate = false;
