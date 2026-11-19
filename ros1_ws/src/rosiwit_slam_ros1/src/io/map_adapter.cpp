@@ -159,21 +159,46 @@ bool saveMapData(const rosiwit_slam::MapData& data, const std::string& path, int
         }
         worlds.push_back(w);
     }
+    // 地面 z 锚点: 地图原点(第一个关键帧)附近 R 内点的 2% 分位 -> 平移到 0。
+    // 不能用"全局最低强峰": 图有 z 漂移时会被漂移区拉走, 实测把整图抬高 3.9 m,
+    // 重定位 fitness 永远到不了 0.89 => 一直"定位丢失"。
     double floor_z = 0.0;
-    if (zmax > zmin) {
-        constexpr int NB = 60;
-        std::vector<int> hist(NB, 0);
-        for (const auto& w : worlds) {
-            if (!w) continue;
-            for (const auto& q : w->points) {
-                if (!std::isfinite(q.z)) continue;
-                int i = (int)((q.z - zmin) / (zmax - zmin) * NB);
-                if (i >= 0 && i < NB) hist[i]++;
+    {
+        constexpr double kGroundRadius = 12.0;
+        const size_t kMinPts = 200;
+        double gx = 0.0, gy = 0.0;
+        bool has_origin = false;
+        for (const auto& kf : data.keyframes) {
+            if (!kf.cloud || kf.cloud->empty()) continue;
+            gx = kf.pose.trans.x();
+            gy = kf.pose.trans.y();
+            has_origin = true;
+            break;
+        }
+        std::vector<float> zs;
+        if (has_origin) {
+            for (const auto& w : worlds) {
+                if (!w) continue;
+                for (const auto& q : w->points) {
+                    if (!std::isfinite(q.z)) continue;
+                    const double dx = (double)q.x - gx, dy = (double)q.y - gy;
+                    if (dx * dx + dy * dy <= kGroundRadius * kGroundRadius) zs.push_back(q.z);
+                }
             }
         }
-        const int mx = *std::max_element(hist.begin(), hist.end());
-        for (int i = 0; i < NB; ++i) {
-            if (hist[i] > 0.35 * mx) { floor_z = zmin + (i + 0.5) * (zmax - zmin) / NB; break; }
+        if (zs.size() < kMinPts) {          // 兜底: 全图 2% 分位
+            zs.clear();
+            for (const auto& w : worlds) {
+                if (!w) continue;
+                for (const auto& q : w->points)
+                    if (std::isfinite(q.z)) zs.push_back(q.z);
+            }
+        }
+        if (!zs.empty()) {
+            const size_t i = std::min(zs.size() - 1,
+                                      (size_t)(0.02 * (double)(zs.size() - 1)));
+            std::nth_element(zs.begin(), zs.begin() + i, zs.end());
+            floor_z = (double)zs[i];
         }
     }
 

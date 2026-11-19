@@ -97,16 +97,22 @@ def yaw_of(q):
     return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 
 
-def detect_floor_z(P):
-    """z 直方图里最低的"强峰"作为地面高度。"""
-    # 0.133 m 的粗直方图（在真机上验证过），取最低的强峰作为地面。
-    # 细直方图会被墙角/噪点带偏 0.8 m 以上。
-    h, e = np.histogram(P[:, 2], bins=60, range=(-4, 4))
-    strong = h > 0.35 * h.max()
-    for i in range(len(h)):
-        if strong[i]:
-            return float((e[i] + e[i + 1]) / 2)
-    return 0.0
+def detect_floor_z(P, origin_xy, radius=12.0, min_pts=200):
+    """地面高度 = 地图原点(第一个关键帧)附近 radius 内点云 z 的 2% 分位。
+
+    不要用全局直方图取"最低强峰": 图一旦有 z 漂移(长坡道/回环), 峰值会被漂移区
+    拉走。2026-11-19 genz 图实测取到 -3.93, 整图被抬高 3.93 m, 原点地面变 +2.36,
+    重定位 fitness 只有 0.68, 永远达不到 th_fitness_relocalization=0.89,
+    表现为一直"定位丢失"。
+    """
+    if origin_xy is None:
+        return float(np.percentile(P[:, 2], 2))
+    dx = P[:, 0] - origin_xy[0]
+    dy = P[:, 1] - origin_xy[1]
+    m = (dx * dx + dy * dy) <= radius * radius
+    if m.sum() < min_pts:
+        return float(np.percentile(P[:, 2], 2))
+    return float(np.percentile(P[m, 2], 2))
 
 
 def main():
@@ -123,11 +129,6 @@ def main():
     P = read_pcd(os.path.join(run, "map.pcd"))
     print("points", len(P))
 
-    if not args.no_z_align:
-        floor = detect_floor_z(P)
-        P[:, 2] -= floor
-        print("floor z = %.3f -> ground at 0" % floor)
-
     A = load_odom(os.path.join(run, "odom_bag"))
     A[:, 0] -= A[0, 0]
     print("odom %d frames, %.1f s" % (len(A), A[-1, 0]))
@@ -143,23 +144,43 @@ def main():
         kf.append(A[-1])
     print("keyframes", len(kf), "step %.2f m" % args.kf_step)
 
+    # 地面 z 锚点 = 地图原点(第一个关键帧)附近 12 m 内点云的 2% 分位
+    if not args.no_z_align:
+        floor = detect_floor_z(P, (kf[0][1], kf[0][2]))
+        P[:, 2] -= floor
+        print("ground z = %.3f -> 原点地面平移到 0" % floor)
+
     px = np.array([k[1] for k in kf])
     py = np.array([k[2] for k in kf])
     yaws = np.array([yaw_of(k[4:8]) for k in kf])
 
-    idx = np.zeros(len(P), dtype=np.int32)
-    kp = np.stack([px, py], 1)
-    for i in range(0, len(P), 2000):
-        Q = P[i:i + 2000, :2]
-        d2 = ((Q[:, None, :] - kp[None, :, :]) ** 2).sum(2)
-        idx[i:i + 2000] = np.argmin(d2, axis=1)
+    # 关键帧 = 半径内整片点云(自适应体素压到 KF_MAX_PTS), 不是"最近邻格子".
+    # 机器人侧 kf_map_filter_num=2 会隔一个丢一个关键帧: 每帧只带 1m 格子时,
+    # 丢一半等于在地图上开 1m 宽的沟(覆盖-49%, fitness 卡 0.78); 整片点云后 0.96.
+    KF_RADIUS = 8.0
+    KF_MAX_PTS = 2400
+
+    def pick_points(j):
+        dx = P[:, 0] - px[j]
+        dy = P[:, 1] - py[j]
+        Q = P[(dx * dx + dy * dy) <= KF_RADIUS * KF_RADIUS]
+        if len(Q) == 0:
+            return Q
+        leaf = 0.30
+        S = Q
+        for _ in range(6):
+            key = np.floor(Q / leaf).astype(np.int64)
+            _, first = np.unique(key, axis=0, return_index=True)
+            S = Q[np.sort(first)]
+            if len(S) <= KF_MAX_PTS:
+                break
+            leaf *= 1.35
+        return S[:KF_MAX_PTS]
 
     out_pcd = os.path.join(run, args.out_prefix + ".pcd")
     write_pcd(out_pcd, P)
 
     out_xz = os.path.join(run, args.out_prefix + ".xzmap")
-    order = np.argsort(idx, kind="stable")
-    bounds = np.searchsorted(idx[order], np.arange(len(kf) + 1))
     with open(out_xz, "w", encoding="utf-8") as f:
         f.write("{\n")
         f.write('  "map_name": "%s",\n' % os.path.basename(run.rstrip("/")))
@@ -176,9 +197,9 @@ def main():
         f.write("  ],\n")
         f.write('  "key_frame_points": [\n')
         for j in range(len(kf)):
-            sel = order[bounds[j]:bounds[j + 1]]
+            sel = pick_points(j)
             cy, sy = math.cos(yaws[j]), math.sin(yaws[j])
-            d = P[sel] - np.array([px[j], py[j], 0.0])
+            d = sel - np.array([px[j], py[j], 0.0]) if len(sel) else sel.reshape(0, 3)
             # 关键帧局部坐标（只按 yaw 旋转；由 local2global 还原）
             lx = cy * d[:, 0] + sy * d[:, 1]
             ly = -sy * d[:, 0] + cy * d[:, 1]
