@@ -1,0 +1,185 @@
+# ============================================================
+# Mid-360 官方 FAST-LIO2 等价配置 (默认不开任何非官方约束)
+#   GenZ / ground_follow / physical_clamp / update_gate / flat_z 全关
+#   robust=none, min_effective_points=1, IMU 初始化=官方语义
+#   建图的后端/回环是 rosiwit 管线模块, 不属于 FAST-LIO2 核心
+# ============================================================
+# - 内置 IMU 加速度单位为 g, 需 acc_scale=9.81 换算为 m/s^2
+
+# - Mid-360 内置 IMU 与雷达对齐 (r_il=单位阵), 25° 安装斜角由 gravity_align 处理
+
+global:
+  startup_mode: mapping # 启动模式 mapping|localization|idle
+  drop_on_imu_gap: false
+  modules:
+    frontend: "fast_lio2_frontend"
+    backend: "ceres_pose_graph" # 无 GTSAM 的机器也能启动; 需要 gtsam_isam2 时显式改
+    loop_closure: "scan_context"
+    map_manager: "pcd_map_manager"
+    localization: "gicp_localization"
+
+  input:
+    imu_topic: /livox/imu  # IMU话题
+    lidar_topic: /livox/lidar # 雷达点云话题
+    lidar_filter_num: 3 # 雷达点抽稀倍数
+    lidar_min_range: 0.5 # 雷达最小有效距离(m)
+    lidar_max_range: 100.0 # 雷达最大有效距离(m)
+    scan_period_ms: 100.0 # 单帧扫描周期(ms)
+    acc_scale: 9.81 # IMU加速度单位换算
+    init_z: 0.000
+    ground_follow_z: false
+    ground_vz_sigma: 0.05
+    physical_clamp_enable: false
+    accel_bias_max: 0.1        # 仅在 physical_clamp_enable=true 时生效; ba 限幅, 防误差吸收
+    flat_vz_sigma: 0.0
+    flat_z_max: 0.0
+    flat_z_min: -1.3
+    flat_z_max_band: 0.6
+    flat_z_sigma: 0.0
+    flat_z_p_floor: 0.5      # z 协方差 floor (m), 保证增益有效
+    update_gate_enable: false
+    min_effective_points: 1
+    ground_tilt_only: false       # 对齐官方: 无地面 tilt 因子
+    init_rot_cov: 1.0             # 对齐官方: 初始姿态协方差 = I
+    max_state_velocity: 0
+    imu_static_init: false
+    acc_scale_normalize: false
+    imu_gap_reset: false
+    imu_max_prop_dt: 0.0
+    # [本包适配] Livox 内置 IMU 加速度是 g 单位，过滤阈值按 g 给
+    imu_acc_min: 5.0
+    imu_acc_max: 20.0
+    imu_gyro_max: 3.0
+    # [本包适配] 离线播包（rosbag play 发 reliable）
+    qos_reliable: true
+  frames:
+    lidar_frame: livox_frame  # 雷达frame
+    imu_frame: livox_frame # IMU frame
+    body_frame: base_link # 车体frame
+    world_frame: map # 世界frame (代码要求与 map_frame 一致)
+    map_frame: map # 地图frame
+    odom_frame: odom # 里程计frame
+  map:
+    voxel_resolution: 0.3 # 3D 点云地图降采样体素(m), 前端 IKD-Tree/局部地图
+    save_voxel: 0.3 # 地图/点云保存降采样体素(m)
+  scan_context:
+    num_rings: 20 # ScanContext环数
+    num_sectors: 60 # ScanContext扇区数
+    max_radius: 80.0 # ScanContext最大半径(m)
+    dist_thresh: 0.7
+    candidate_ratio: 0.5
+mapping:
+  frontend:
+    gravity_align: true # 是否用重力方向初始化姿态
+    lidar_cov_inv: 5000.0 # 激光观测信息矩阵权重
+    robust_kernel: none
+    enable_genz_weight: false
+    official_p_update: true
+    genz_planarity_threshold: 0.1
+    genz_kernel: 0.5
+    genz_near_dist_sq: 1.0
+    robust_scale: 0.5 # 鲁棒核尺度
+    robust_floor: 0.1 # 鲁棒权重下限
+    dynamic_removal: false
+    persist_thresh: 2 # 动态点持久确认帧数
+    persist_window: 20 # 动态点确认窗口帧数
+    dynamic_residual_thresh: 1.0 # 动态点残差阈值
+    local_map_size: 10000          # 局部地图立方体边长(m)
+    detection_range: 60          # 雷达有效检测距离(m)
+    map_move_threshold: 1.5      # 局部地图滑动窗口阈值比例
+    acc_noise: 0.05              # 加速度计白噪声
+    gyro_noise: 0.05             # 陀螺白噪声
+    acc_bias_random_walk: 0.001  # 加速度计零偏随机游走
+    gyro_bias_random_walk: 0.001 # 陀螺零偏随机游走
+    imu_init_samples: 100        # IMU静止初始化样本数
+    nearest_search_points: 5     # 近邻搜索点数
+    iekf_max_iterations: 5       # IEKF最大迭代次数
+    scan_voxel: 0.15              # 对齐原版 scan_resolution=0.15, 增强走廊轴向约束
+    imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
+    imu_lidar_translation: [0.0, 0.0, 0.0] # 初始IMU<-lidar平移(m)
+    estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
+    self_filter:
+      enabled: false # Livox 手持包无固定机身盒
+      x_min: -0.45
+      x_max: 0.75
+      y_min: -0.55
+      y_max: 0.55
+      z_min: 0.05
+      z_max: 1.40
+    free_space_carving: false # 自由空间雕刻, 默认关
+    carve_stride: 10 # 每 N 个点做一次射线
+    carve_free_thresh: 3 # 同一体素被 N 帧判空才清空
+  loop_closure:
+    icp_fitness_thresh: 0.7
+    icp_max_corr_dist: 2.0 # 回环ICP最大对应距离(m)
+    icp_voxel_res: 0.3 # 回环ICP降采样体素(m)
+    min_keyframe_gap: 30 # 回环最小关键帧间隔
+    max_relative_trans_m: 10.0
+    max_relative_rot_deg: 45.0
+    max_consistency_trans_m: 15.0
+    max_consistency_rot_deg: 45.0
+    submap_half_window: 3 # 回环 ICP 使用前后各 3 个关键帧组成局部子图
+    min_overlap: 0.30
+  map_manager:
+    max_correction_trans_m: 30
+    max_correction_rot_deg: 150 # 后端修正允许的最大旋转跳变(deg)
+    # [0.05 PGM] 保留全程逐帧观测; 默认 2M 点会裁到只剩最后 ~330m
+    max_observation_points: 50000000
+  backend:
+    loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m)
+    max_optimization_trans_m: 40
+    max_optimization_rot_deg: 60 # 含新约束的单次优化最大旋转修正
+  grid:
+    generator: ray_casting  # 2D栅格生成策略 (统一射线方案, 0.05m)
+    resolution: 0.05 # 最终 2D 栅格/PGM 分辨率(m)
+    realtime_resolution: 0.3 # 实时 /map 分辨率(m)
+    min_height: 0.1 # 地面以上障碍最低高度(m)
+    max_height: 2.0 # 地面以上障碍最高高度(m)
+    occupied_thresh: 1 # 每格最少点数判占据
+    dilate_radius: 1 # 障碍膨胀半径(格)
+    close_radius: 3
+    min_component_cells: 30 # 去噪最小连通域格数
+    max_range: 0.0 # 射线有效距离(m),0=不限
+    ground_method: ransac # 地面提取方法 ransac|percentile
+    ransac_dist_thr: 0.10 # RANSAC地面距离阈值(m)
+    min_hits: 2 # occupancy_logodds占据命中次数
+    min_misses: 2 # occupancy_logodds自由未命中次数
+    mark_radius: 0 # 栅格标记半径(格)
+    post_pipeline: denoise,close,dilate
+    connectivity: 8 # 后处理连通性 4|8
+    no_info_is_obstacle: false # unknown是否参与占据
+    open_radius: 0 # 开运算半径(格)
+    fill_max_hole_cells: 0 # 填洞最大格数
+    skeleton_width: 0 # 骨架化关闭
+    realtime_post_pipeline: denoise,close
+    realtime_min_component_cells: 3
+    realtime_close_radius: 1
+    realtime_skeleton_width: 0
+    line_min_len_m: 0.0 # Hough线段最小长度(m)
+    axis_snap: false # Hough线段吸附水平/垂直
+localization:
+  output:
+    smoothing_alpha: 0.3  # 输出平滑系数
+  global:
+    sc_num_rings: 20
+    sc_num_sectors: 60
+    sc_max_radius: 80.0
+    sc_dist_thresh: 0.4
+    sc_candidate_ratio: 0.3
+    icp_voxel_res: 0.3
+    icp_max_corr_dist: 2.0
+    icp_fitness_thresh: 0.7
+    icp_max_iter: 32
+    min_radius: 2.0  # 重定位候选最小半径(m)
+  gicp_localization:
+    voxel_resolution: 0.3  # GICP降采样体素(m)
+    fitness_threshold: 10.0 # GICP适应度阈值
+    max_iterations: 64 # GICP最大迭代次数
+    transformation_epsilon: 0.00000001 # GICP变换收敛阈值
+    max_correspondence_dist: 2.0 # GICP最大对应点距离(m)
+    euclid_epsilon: 0.01 # GICP欧氏收敛阈值
+    output_filter:
+      enabled: true  # 是否启用位姿输出滤波
+      alpha: 0.6 # 滤波融合系数
+      max_xy_m: 0.5 # 位置修正门限(m)
+      max_yaw_deg: 20.0 # 航向修正门限(deg)
