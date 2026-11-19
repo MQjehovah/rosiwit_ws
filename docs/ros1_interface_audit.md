@@ -134,7 +134,7 @@ cd /ws/ros1_ws && catkin_make -j4 -DCATKIN_ENABLE_TESTING=OFF \
 
 ## 9. ARM64 构建 + deb 打包（可装到设备）
 
-**镜像**：`docker-release-local.xzrobot.com/xzrobot/ros1-build:0.1.3` —— **arm64 / 2.79 GB**，
+**镜像**：`xzrobot_ros_melodic_compile:arm-0.1.3` —— **arm64 / 2.79 GB**，
 Ubuntu 18.04.6 + melodic + Ceres 1.13 + PCL 1.8.1 + OpenCV 3.2 + Eigen 3.3.4 + gcc 7.5。
 （不含 `xzrobot_ros_dependency` 与 Sophus，需挂载提供。）
 
@@ -148,7 +148,7 @@ sudo apt-get install -y qemu-user-static      # 装完自动注册 /proc/sys/fs/
 
 ```bash
 docker run --rm -v /tmp/arm_build:/ws -w /ws \
-  docker-release-local.xzrobot.com/xzrobot/ros1-build:0.1.3 bash -lc '
+  xzrobot_ros_melodic_compile:arm-0.1.3 bash -lc '
     cp -r /ws/third_party/sophus /opt/ros/melodic/include/
     source /opt/ros/melodic/setup.bash
     cd /ws/ros1_ws && catkin_make -j8 -DCATKIN_ENABLE_TESTING=OFF \
