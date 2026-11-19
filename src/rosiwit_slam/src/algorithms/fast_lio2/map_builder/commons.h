@@ -107,6 +107,14 @@ struct Config
     // (传感器到地面的竖直距离), vz=0. 不经过 updateZ, 不和滤波器抢协方差.
     // 默认 false; 这是最稳的"地面在 z=0"做法, 但会牺牲 z 方向平滑性.
     bool ground_zero_hard_lock = false;
+    // [开关] 固定高度硬锁: >0 时每帧直接把状态 z 设成该常数 (m), vz=0.
+    // 不依赖地面检测; 适合"地面基本水平"的现场, 坡道/台阶会被压平.
+    double ground_zero_const_z = 0.0;
+    // [开关] 平面约束 (锁 z + roll/pitch): 调用 IESKF::updatePlanar,
+    // z 固定到 planar_lock_z (<=0 时用 init_z), roll/pitch 对齐到首帧平地姿态,
+    // 保留 yaw. 默认 false; 平地/无坡度场景用.
+    bool planar_lock_enable = false;
+    double planar_lock_z = 0.0;
     // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,
     // 默认关闭; 保留给'轮速可信但 LIO 会滑'的场合.
     bool odom_consistency_gate = false;

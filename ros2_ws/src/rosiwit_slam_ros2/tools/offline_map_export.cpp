@@ -21,7 +21,9 @@
 #include <vector>
 
 #include <Eigen/Geometry>
+#include <Eigen/Sparse>
 #include <pcl/io/pcd_io.h>
+#include <pcl/kdtree/kdtree_flann.h>
 
 #include "algorithms/grid_map/grid_map_factory.h"
 #include "algorithms/grid_map/grid_map_io.h"
@@ -98,6 +100,132 @@ static void normalizeGround(CloudType::Ptr& cloud, std::vector<io::RobotKfSample
               << "] -> [" << zmin1 << ", " << zmax1 << "]  blocks=" << ground.size() << "\n";
 }
 
+// z-only 后端位姿图:
+//   节点 = 每个关键帧的 z; 边 = 相邻 z 增量 (原 LIO 轨迹) + 每帧地面 unary
+//   (z_k = h_k, h_k 由该帧点云检测的地面高度得到). 只改 z, xy/yaw 不动.
+//   这是手持建图正确的"地面 z=0"做法, 不在前端硬锁滤波器.
+static void poseGraphGround(const std::vector<Observation>& obs, CloudType::Ptr& cloud,
+                            std::vector<io::RobotKfSample>& track) {
+    const size_t N = obs.size();
+    if (N < 3) return;
+    std::vector<double> zold(N, 0.0), h(N, 0.0);
+    std::vector<char> valid(N, 0);
+    // 先用全局点云的 5m 分块 2% 分位估计局部地面 (比单帧圆锥更稳),
+    // 再用 z-only 位姿图把每帧传感器高度 z_k 平滑地约束到这个地面.
+    constexpr double B = 5.0;
+    auto bkey = [](int bx, int by) -> long long {
+        return (static_cast<long long>(bx) << 32) ^ static_cast<unsigned int>(by);
+    };
+    std::unordered_map<long long, std::vector<float>> zsmap;
+    zsmap.reserve(cloud->size() / 8 + 1);
+    for (const auto& p : cloud->points) {
+        const int bx = static_cast<int>(std::floor(p.x / B));
+        const int by = static_cast<int>(std::floor(p.y / B));
+        zsmap[bkey(bx, by)].push_back(p.z);
+    }
+    std::unordered_map<long long, float> bground;
+    bground.reserve(zsmap.size());
+    for (auto& kv : zsmap) {
+        auto& v = kv.second;
+        std::sort(v.begin(), v.end());
+        bground[kv.first] = v[std::min(v.size() - 1, static_cast<size_t>(0.02 * v.size()))];
+    }
+    auto getg = [&](double x, double y) -> float {
+        const int bx = static_cast<int>(std::floor(x / B));
+        const int by = static_cast<int>(std::floor(y / B));
+        for (int rr = 0; rr <= 8; ++rr) {
+            for (int dx = -rr; dx <= rr; ++dx) {
+                for (int dy = -rr; dy <= rr; ++dy) {
+                    if (rr > 0 && std::abs(dx) != rr && std::abs(dy) != rr) continue;
+                    auto it = bground.find(bkey(bx + dx, by + dy));
+                    if (it != bground.end()) return it->second;
+                }
+            }
+        }
+        return 0.0f;
+    };
+    for (size_t i = 0; i < N; ++i) {
+        zold[i] = obs[i].origin.z();
+        const double hgt = obs[i].origin.z() - getg(obs[i].origin.x(), obs[i].origin.y());
+        if (hgt < 0.15 || hgt > 2.0) continue;
+        h[i] = hgt;
+        valid[i] = 1;
+    }
+    size_t nvalid = 0;
+    for (char v : valid) nvalid += v;
+    if (nvalid < 10) {
+        std::cout << "[offline] posegraph: too few ground frames (" << nvalid << ")\n";
+        return;
+    }
+    const double wu = 1.0 / 0.05;   // 地面 unary (m)
+    const double wo = 1.0 / 0.10;   // 相邻 z 增量 (m)
+    const size_t rows = nvalid + (N - 1);
+    std::vector<Eigen::Triplet<double>> trips;
+    trips.reserve(nvalid * 1 + (N - 1) * 2);
+    Eigen::VectorXd b(rows);
+    b.setZero();
+    size_t r = 0;
+    for (size_t i = 0; i < N; ++i) {
+        if (!valid[i]) continue;
+        trips.emplace_back(static_cast<int>(r), static_cast<int>(i), wu);
+        b[r] = wu * h[i];
+        ++r;
+    }
+    for (size_t i = 0; i + 1 < N; ++i) {
+        trips.emplace_back(static_cast<int>(r), static_cast<int>(i), -wo);
+        trips.emplace_back(static_cast<int>(r), static_cast<int>(i + 1), wo);
+        b[r] = wo * (zold[i + 1] - zold[i]);
+        ++r;
+    }
+    Eigen::SparseMatrix<double> A(static_cast<int>(rows), static_cast<int>(N));
+    A.setFromTriplets(trips.begin(), trips.end());
+    Eigen::SparseMatrix<double> ATA = A.transpose() * A;
+    Eigen::VectorXd ATb = A.transpose() * b;
+    for (size_t i = 0; i < N; ++i) ATA.coeffRef(static_cast<int>(i), static_cast<int>(i)) += 1e-6;
+    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
+    solver.compute(ATA);
+    if (solver.info() != Eigen::Success) {
+        std::cout << "[offline] posegraph solve failed\n";
+        return;
+    }
+    Eigen::VectorXd znew = solver.solve(ATb);
+    std::vector<float> delta(N, 0.0f);
+    for (size_t i = 0; i < N; ++i) delta[i] = static_cast<float>(znew[i] - zold[i]);
+
+    // 每个地图点/轨迹点按最近关键帧 origin 的 delta 平移 z.
+    pcl::PointCloud<pcl::PointXYZ>::Ptr origins(new pcl::PointCloud<pcl::PointXYZ>());
+    origins->reserve(N);
+    for (const auto& o : obs)
+        origins->push_back(pcl::PointXYZ(static_cast<float>(o.origin.x()),
+                                         static_cast<float>(o.origin.y()), 0.0f));
+    pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+    kdtree.setInputCloud(origins);
+    std::vector<int> idx(1);
+    std::vector<float> d2(1);
+    float zmin0 = cloud->points.empty() ? 0.0f : cloud->points[0].z;
+    float zmax0 = zmin0;
+    for (const auto& p : cloud->points) {
+        zmin0 = std::min(zmin0, p.z);
+        zmax0 = std::max(zmax0, p.z);
+    }
+    for (auto& p : cloud->points) {
+        pcl::PointXYZ q(p.x, p.y, 0.0f);
+        if (kdtree.nearestKSearch(q, 1, idx, d2) > 0) p.z += delta[idx[0]];
+    }
+    for (auto& s : track) {
+        pcl::PointXYZ q(static_cast<float>(s.x), static_cast<float>(s.y), 0.0f);
+        if (kdtree.nearestKSearch(q, 1, idx, d2) > 0) s.z += delta[idx[0]];
+    }
+    float zmin1 = cloud->points.empty() ? 0.0f : cloud->points[0].z;
+    float zmax1 = zmin1;
+    for (const auto& p : cloud->points) {
+        zmin1 = std::min(zmin1, p.z);
+        zmax1 = std::max(zmax1, p.z);
+    }
+    std::cout << "[offline] posegraph: " << nvalid << "/" << N << " ground frames; z ["
+              << zmin0 << ", " << zmax0 << "] -> [" << zmin1 << ", " << zmax1 << "]\n";
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::cerr << "usage: offline_map_export <dump_dir> <out_dir> [--res 0.05] [--kf-step 1.0]\n"
@@ -114,6 +242,7 @@ int main(int argc, char** argv) {
     std::string ground = "ransac";
     int close_r = 1, dilate_r = 1, min_comp = 30;
     bool ground_zero = false;
+    bool ground_posegraph = false;
 
     for (int i = 3; i < argc; ++i) {
         std::string a = argv[i];
@@ -130,6 +259,7 @@ int main(int argc, char** argv) {
         else if (a == "--min-comp") nexti(min_comp);
         else if (a == "--ground" && i + 1 < argc) ground = argv[++i];
         else if (a == "--ground-zero") ground_zero = true;
+        else if (a == "--ground-posegraph") ground_posegraph = true;
     }
 
     std::filesystem::create_directories(out);
@@ -177,7 +307,8 @@ int main(int argc, char** argv) {
     }
     std::cout << "[offline] track " << track.size() << " samples\n";
 
-    if (ground_zero) normalizeGround(global, track);
+    if (ground_posegraph) poseGraphGround(observations, global, track);
+    else if (ground_zero) normalizeGround(global, track);
 
     auto gen = GridMapFactory::create(generator);
     if (!gen) {

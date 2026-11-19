@@ -470,6 +470,18 @@ void LidarProcessor::process(SyncPackage &package)
     // 有了它, 平地 v.z≈0, 坡道 v.z≈speed*sin(pitch), 坡度仍然保留.
     // 地面 3-DoF 量测: roll/pitch 由地面法向约束, z 由地面高度约束.
     // 不再直接写状态, 也不再积分 vz; 地面丢失时只用很松的 z 先验兜底.
+    // [开关] 平面约束: 锁 z + roll/pitch, 保留 yaw. 首帧姿态作为平地参考,
+    // 之后每帧把 z 固定到 planar_lock_z (<=0 用 init_z). 平地假设, 坡道会压平.
+    if (m_config.planar_lock_enable) {
+        if (!m_planar_r_valid) {
+            m_planar_r_flat = m_kf->x().r_wi;
+            m_planar_r_valid = true;
+        }
+        const double zref = (m_config.planar_lock_z > 0.0)
+                                ? m_config.planar_lock_z : m_config.init_z;
+        m_kf->updatePlanar(zref, m_planar_r_flat, true);
+    }
+
     if (m_ground_follow) {
         const auto &xs = m_kf->x();
         // [通用] 只做坡度感知的 vz 软约束: 用世界系地面法向把 v.z 钉到
@@ -491,9 +503,12 @@ void LidarProcessor::process(SyncPackage &package)
         m_kf->x().clampPhysical();
     }
 
-    // [开关] 地面 z 硬锁: 直接写状态 z, 不经过 updateZ/P, 不和 LiDAR 抢协方差.
-    // 目标 = frontend 的 ground_zero_lock 目标 (d_body/nz). 这是最稳的 z=0 做法.
-    if (m_config.ground_zero_hard_lock && m_ground_valid) {
+    // [开关] 固定高度硬锁: 直接写 z=常数, 不依赖地面检测, 不和滤波器抢协方差.
+    if (m_config.ground_zero_const_z > 0.0) {
+        auto &xs = m_kf->x();
+        xs.t_wi.z() = m_config.ground_zero_const_z;
+        xs.v.z() = 0.0;
+    } else if (m_config.ground_zero_hard_lock && m_ground_valid) {
         auto &xs = m_kf->x();
         xs.t_wi.z() = m_ground_z_target;
         xs.v.z() = 0.0;

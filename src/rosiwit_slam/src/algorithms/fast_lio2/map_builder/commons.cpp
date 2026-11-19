@@ -81,6 +81,15 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.ground_zero_hard_lock =
                 get_input("ground_zero_hard_lock", "ground_zero_hard_lock")
                     .as<bool>(out_cfg.ground_zero_hard_lock);
+            out_cfg.ground_zero_const_z =
+                get_input("ground_zero_const_z", "ground_zero_const_z")
+                    .as<double>(out_cfg.ground_zero_const_z);
+            out_cfg.planar_lock_enable =
+                get_input("planar_lock_enable", "planar_lock_enable")
+                    .as<bool>(out_cfg.planar_lock_enable);
+            out_cfg.planar_lock_z =
+                get_input("planar_lock_z", "planar_lock_z")
+                    .as<double>(out_cfg.planar_lock_z);
             out_cfg.odom_consistency_gate =
                 get_input("odom_consistency_gate", "odom_consistency_gate")
                     .as<bool>(out_cfg.odom_consistency_gate);

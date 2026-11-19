@@ -50,6 +50,9 @@ global:
     ground_lock_z_sigma: 0.0
     ground_zero_lock: false
     ground_zero_hard_lock: false
+    ground_zero_const_z: 0.0
+    planar_lock_enable: false
+    planar_lock_z: 0.0
   frames:
     lidar_frame: lidar  # 雷达frame
     imu_frame: lidar # IMU frame

@@ -131,4 +131,6 @@ private:
     bool m_ground_z_init = false;
     double m_ground_z_ref = 0.0;   // 兼容旧字段
     double m_ground_z_target = 0.0; // 传感器正下方地面高度 + h0
+    M3D m_planar_r_flat = M3D::Identity();  // 平面约束的 roll/pitch 参考
+    bool m_planar_r_valid = false;
 };
