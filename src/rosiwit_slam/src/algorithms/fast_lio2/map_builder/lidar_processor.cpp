@@ -503,18 +503,6 @@ void LidarProcessor::process(SyncPackage &package)
         m_kf->x().clampPhysical();
     }
 
-    // [新增] z 死区软边界: 死区内不干预(保留真实 1m 高差); 出界才拉回边界.
-    if (m_config.flat_z_sigma > 0.0) {
-        auto &P = m_kf->P();
-        const double f2 = m_config.flat_z_p_floor * m_config.flat_z_p_floor;
-        if (P(5, 5) < f2) P(5, 5) = f2;
-        const double z = m_kf->x().t_wi.z();
-        if (z < m_config.flat_z_min)
-            m_kf->updateZ(m_config.flat_z_min, m_config.flat_z_sigma);
-        else if (z > m_config.flat_z_max_band)
-            m_kf->updateZ(m_config.flat_z_max_band, m_config.flat_z_sigma);
-    }
-
     // [新增] 平地 z 安全边界: 现场基本平地, |z| 超过 flat_z_max 直接拉回并清零 v.z.
     if (m_config.flat_z_max > 0.0) {
         auto &xs = m_kf->x();

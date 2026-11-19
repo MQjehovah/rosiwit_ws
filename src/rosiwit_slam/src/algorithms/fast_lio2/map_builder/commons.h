@@ -111,16 +111,7 @@ struct Config
     // 注: 旧的 odom_position_clamp / odom_scale_xy 已删除 —— 硬钳位实测会把正常段
     // 也钳弯 (300-435m 偏差 16.9->22.2), 现在的 odom_win_pos_* 窗口位移约束是它的替代.
     double ground_vz_sigma = 0.30;   // v.z 软约束标准差 (m/s)
-    double flat_z_max = 0.0;   // 硬钳位上限 (m), 0=关 (与死区软边界二选一)
-    // [新增] z 死区软边界: z 在 [flat_z_min, flat_z_max] 内不干预 (保留真实高差),
-    // 超出才软拉回边界. flat_z_sigma>0 时启用; 0=关.
-    double flat_z_min = -1.3;
-    double flat_z_max_band = 0.6;
-    double flat_z_sigma = 0.0;
-    double flat_z_p_floor = 0.5;    // z 协方差 floor (m), 让软保持有真实增益
-    // z 的绝对软保持 (m, 0=关): 把 z 轻拉向初始值 0. 现场大多平地, 用它防
-    // 长时间漂移; sigma 给大(如 1.0)时坡道几乎不受影响 (vz 约束权重高两个量级).
-    double ground_z_hold_sigma = 0.0;
+    double flat_z_max = 0.0;   // [安全开关] |z| 硬钳位上限 (m), 0=关
     // 地面 z 约束改成"锚定平面"(历史平面参数): 平面在锚点时刻冻结, 本帧 z 目标由
     // 旧平面 + 传感器离地高度推出. 若用本帧现拟合的平面, 点云与平面随位姿一起平移,
     // 残差恒等于标定误差 (实测全程 -0.29..-0.59m), 约束退化成一个只往下推的棘轮.

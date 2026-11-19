@@ -88,17 +88,6 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
             out_cfg.flat_z_max =
                 get_input("flat_z_max", "flat_z_max").as<double>(out_cfg.flat_z_max);
-            out_cfg.flat_z_sigma =
-                get_input("flat_z_sigma", "flat_z_sigma").as<double>(out_cfg.flat_z_sigma);
-            out_cfg.flat_z_p_floor =
-                get_input("flat_z_p_floor", "flat_z_p_floor").as<double>(out_cfg.flat_z_p_floor);
-            out_cfg.flat_z_min =
-                get_input("flat_z_min", "flat_z_min").as<double>(out_cfg.flat_z_min);
-            out_cfg.flat_z_max_band =
-                get_input("flat_z_max_band", "flat_z_max_band").as<double>(out_cfg.flat_z_max_band);
-            out_cfg.ground_z_hold_sigma =
-                get_input("ground_z_hold_sigma", "ground_z_hold_sigma")
-                    .as<double>(out_cfg.ground_z_hold_sigma);
             out_cfg.ground_anchor_dt =
                 get_input("ground_anchor_dt", "ground_anchor_dt")
                     .as<double>(out_cfg.ground_anchor_dt);
