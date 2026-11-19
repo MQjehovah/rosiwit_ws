@@ -72,24 +72,15 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.odom_gate = (om == "gate");
             out_cfg.ground_follow_z =
                 get_input("ground_follow_z", "ground_follow_z").as<bool>(out_cfg.ground_follow_z);
-            out_cfg.ground_lock_z_sigma =
-                get_input("ground_lock_z_sigma", "ground_lock_z_sigma")
-                    .as<double>(out_cfg.ground_lock_z_sigma);
-            out_cfg.ground_zero_lock =
-                get_input("ground_zero_lock", "ground_zero_lock")
-                    .as<bool>(out_cfg.ground_zero_lock);
-            out_cfg.ground_zero_hard_lock =
-                get_input("ground_zero_hard_lock", "ground_zero_hard_lock")
-                    .as<bool>(out_cfg.ground_zero_hard_lock);
-            out_cfg.ground_zero_const_z =
-                get_input("ground_zero_const_z", "ground_zero_const_z")
-                    .as<double>(out_cfg.ground_zero_const_z);
             out_cfg.planar_lock_enable =
                 get_input("planar_lock_enable", "planar_lock_enable")
                     .as<bool>(out_cfg.planar_lock_enable);
             out_cfg.planar_lock_z =
                 get_input("planar_lock_z", "planar_lock_z")
                     .as<double>(out_cfg.planar_lock_z);
+            out_cfg.planar_lock_roll_pitch =
+                get_input("planar_lock_roll_pitch", "planar_lock_roll_pitch")
+                    .as<bool>(out_cfg.planar_lock_roll_pitch);
             out_cfg.odom_consistency_gate =
                 get_input("odom_consistency_gate", "odom_consistency_gate")
                     .as<bool>(out_cfg.odom_consistency_gate);

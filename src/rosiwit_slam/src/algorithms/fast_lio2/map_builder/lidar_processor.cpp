@@ -479,7 +479,7 @@ void LidarProcessor::process(SyncPackage &package)
         }
         const double zref = (m_config.planar_lock_z > 0.0)
                                 ? m_config.planar_lock_z : m_config.init_z;
-        m_kf->updatePlanar(zref, m_planar_r_flat, true);
+        m_kf->updatePlanar(zref, m_planar_r_flat, m_config.planar_lock_roll_pitch);
     }
 
     if (m_ground_follow) {
@@ -500,23 +500,6 @@ void LidarProcessor::process(SyncPackage &package)
     else if (m_config.ground_tilt_only && m_ground_valid && m_ground_normal.z() > 0.85) {
         // [开关] ground_follow_z=false 时是否仍用地面法向约束 roll/pitch
         m_kf->updateTilt(m_ground_normal, 0.02);
-        m_kf->x().clampPhysical();
-    }
-
-    // [开关] 固定高度硬锁: 直接写 z=常数, 不依赖地面检测, 不和滤波器抢协方差.
-    if (m_config.ground_zero_const_z > 0.0) {
-        auto &xs = m_kf->x();
-        xs.t_wi.z() = m_config.ground_zero_const_z;
-        xs.v.z() = 0.0;
-    } else if (m_config.ground_zero_hard_lock && m_ground_valid) {
-        auto &xs = m_kf->x();
-        xs.t_wi.z() = m_ground_z_target;
-        xs.v.z() = 0.0;
-    } else if (m_config.ground_lock_z_sigma > 0.0 && m_ground_valid) {
-        auto &P = m_kf->P();
-        const double f2 = m_config.flat_z_p_floor * m_config.flat_z_p_floor;
-        if (P(5, 5) < f2) P(5, 5) = f2;
-        m_kf->updateZ(m_ground_z_target, m_config.ground_lock_z_sigma);
         m_kf->x().clampPhysical();
     }
 
