@@ -113,17 +113,6 @@ struct RelativePoseError {
     Eigen::Quaterniond q_rel_;
 };
 
-// 地面 z unary: 只约束关键帧平移 z = 传感器离地高度 (地面 z=0).
-struct GroundZCost {
-    explicit GroundZCost(double h) : h_(h) {}
-    template <typename T>
-    bool operator()(const T* const t, T* residual) const {
-        residual[0] = t[2] - T(h_);
-        return true;
-    }
-    double h_;
-};
-
 CeresBackend::CeresBackend() {}
 
 bool CeresBackend::init(const std::string& config_path) {
@@ -160,8 +149,6 @@ bool CeresBackend::init(const std::string& config_path) {
             wheel_sigma_xy_ = backend["wheel_sigma_xy"].as<double>(wheel_sigma_xy_);
             wheel_sigma_yaw_ = backend["wheel_sigma_yaw"].as<double>(wheel_sigma_yaw_);
             use_odom2d_prior_ = backend["use_odom2d_prior"].as<bool>(use_odom2d_prior_);
-            use_ground_factor_ =
-                backend["ground_z_factor_enable"].as<bool>(use_ground_factor_);
             // odom_mode: factor = 松耦合后端约束 (与 fuse 的紧耦合对偶)
             try {
                 YAML::Node cfg = YAML::LoadFile(config_path);
@@ -192,10 +179,6 @@ void CeresBackend::addKeyFrame(const KeyFrame& kf) {
     if (kf_index_.count(kf.id)) {
         KeyFrameNode& node = keyframes_[kf_index_[kf.id]];
         node.pose = kf.pose;
-        if (kf.has_ground_h) {
-            node.ground_h = kf.ground_h;
-            node.has_ground_h = true;
-        }
         return;
     }
 
@@ -205,8 +188,6 @@ void CeresBackend::addKeyFrame(const KeyFrame& kf) {
     node.timestamp = kf.timestamp;
     node.wheel_pose = kf.wheel_pose;
     node.has_wheel_pose = kf.has_wheel_pose;
-    node.ground_h = kf.ground_h;
-    node.has_ground_h = kf.has_ground_h;
     if (!keyframes_.empty()) {
         const PoseStamped& prev = keyframes_.back().pose;
         node.odom_relative.time = kf.pose.time;
@@ -281,17 +262,6 @@ bool CeresBackend::optimize() {
         addWheelConstraints(problem, param_blocks);
         addOdom2dConstraints(problem, param_blocks);
         addLoopConstraints(problem, param_blocks);
-        // [开关] 后端地面 z 因子: 每个关键帧 z = 传感器离地高度; 只修 z.
-        if (use_ground_factor_) {
-            for (size_t i = 0; i < N; ++i) {
-                if (!keyframes_[i].has_ground_h) continue;
-                ceres::CostFunction* cost =
-                    new ceres::AutoDiffCostFunction<GroundZCost, 1, 3>(
-                        new GroundZCost(keyframes_[i].ground_h));
-                problem.AddResidualBlock(cost, new ceres::HuberLoss(0.20),
-                                         trans_blocks[i].data());
-            }
-        }
         ceres::Solver::Options options;
         options.max_num_iterations = max_iterations_;
         options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;

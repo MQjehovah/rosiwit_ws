@@ -109,10 +109,11 @@ mapping:
     submap_half_window: 3 # 回环 ICP 使用前后各 3 个关键帧组成局部子图
     min_overlap: 0.35 # ICP 配准后源点云最近邻命中率下限
   map_manager:
+    max_observation_points: 50000000
+    ground_posegraph_enable: true
     max_correction_trans_m: 15 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 150 # 后端修正允许的最大旋转跳变(deg)
   backend:
-    ground_z_factor_enable: false   # 手持建图设 true: 后端把地面 z 约束到 0
     loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m)
     max_optimization_trans_m: 20 # 含新约束的单次优化最大平移修正
     max_optimization_rot_deg: 60 # 含新约束的单次优化最大旋转修正
@@ -124,7 +125,7 @@ mapping:
     max_height: 2.0 # 地面以上障碍最高高度(m)
     occupied_thresh: 1 # 每格最少点数判占据
     dilate_radius: 1 # 障碍膨胀半径(格)
-    close_radius: 1 # 形态学闭运算半径(格)
+    close_radius: 3
     min_component_cells: 30 # 去噪最小连通域格数
     max_range: 0.0 # 射线有效距离(m),0=不限
     ground_method: ransac # 地面提取方法 ransac|percentile
@@ -132,7 +133,7 @@ mapping:
     min_hits: 2 # occupancy_logodds占据命中次数
     min_misses: 2 # occupancy_logodds自由未命中次数
     mark_radius: 0 # 栅格标记半径(格)
-    post_pipeline: denoise,close # 最终 PGM 只去噪+闭运算; 不做骨架化
+    post_pipeline: denoise,close,dilate
     connectivity: 8 # 后处理连通性 4|8
     no_info_is_obstacle: false # unknown是否参与占据
     open_radius: 0 # 开运算半径(格)

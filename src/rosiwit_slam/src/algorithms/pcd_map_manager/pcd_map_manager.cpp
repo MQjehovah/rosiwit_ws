@@ -4,10 +4,33 @@
 #include <iostream>
 #include <atomic>
 #include <fstream>
-#include <filesystem>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <unordered_map>
+
+// [可移植性] gcc 7 / Ubuntu 18.04 (机器人 bionic) 没有 <filesystem>，
+// 这里用 POSIX mkdir 递归创建目录，替代 std::filesystem::create_directories。
+namespace {
+inline void createDirectoriesPortable(const std::string& path) {
+    if (path.empty()) return;
+    std::string cur;
+    cur.reserve(path.size());
+    for (size_t i = 0; i < path.size(); ++i) {
+        const char ch = path[i];
+        cur += ch;
+        if (ch != '/' && i + 1 != path.size()) continue;
+        if (cur == "/" || cur.empty()) continue;
+        std::string d = cur;
+        if (d.back() == '/') d.pop_back();
+        if (d.empty()) continue;
+        ::mkdir(d.c_str(), 0755);   // 已存在返回 EEXIST，忽略
+    }
+}
+} // namespace
 
 #include "slam_core/voxel_downsample.h"
 #include <unordered_set>
@@ -149,6 +172,9 @@ bool PcdMapManager::init(const std::string& config_path) {
         if (mv("max_observation_points")) {
             const int v = mv("max_observation_points").as<int>();
             if (v > 0) max_observation_points_ = static_cast<size_t>(v);
+        }
+        if (mv("ground_posegraph_enable")) {
+            ground_posegraph_enable_ = mv("ground_posegraph_enable").as<bool>();
         }
         if (mv("max_submap_points")) {
             const int v = mv("max_submap_points").as<int>();
@@ -339,6 +365,14 @@ bool PcdMapManager::saveMap(const std::string& name) {
                   << " single-view points (min_views=" << dynamic_min_views_ << ")" << std::endl;
     }
 
+    // [开关] 手持建图: 保存前用后端 z-only 地面位姿图把地面锁到 z=0.
+    if (ground_posegraph_enable_ && !ground_posegraph_applied_ && !observations_.empty()) {
+        if (applyGroundPosegraph(observations_, global_map_)) {
+            rebuildVoxels(save_voxel_);
+            ground_posegraph_applied_ = true;
+        }
+    }
+
     // 服务接口文档允许绝对路径; 之前无条件拼 map_dir_ 会把
     // /tmp/map.pcd 变成 ./tmp/map.pcd 这类错误路径.
     const std::string path = (!name.empty() && name[0] == '/')
@@ -364,6 +398,7 @@ bool PcdMapManager::loadMap(const std::string& name) {
     global_map_ = cloud;
     rebuildVoxels(save_voxel_);
     observations_.clear();   // 纯 PCD 无逐帧原点, 射线类策略退回整体点云
+    ground_posegraph_applied_ = false;
     // 换图必须丢弃旧建图关键帧/锚点, 否则后续 addSubMap/backend 会
     // 把上一张地图的关键帧重新拼回来.
     submaps_.clear();
@@ -445,6 +480,7 @@ bool PcdMapManager::appendMap(const std::string& name, const PoseStamped& initia
     global_map_ = filtered;
     rebuildVoxels(leaf);
     observations_.clear();
+    ground_posegraph_applied_ = false;
     ++m_revision_;
     std::cout << "[PcdMapManager] Appended: " << path
               << " (" << source->size() << " pts, total " << global_map_->size() << ")" << std::endl;
@@ -829,9 +865,8 @@ bool PcdMapManager::dumpMapData(const std::string& dir)
         truncated = observations_truncated_;
     }
 
-    std::error_code ec;
-    std::filesystem::create_directories(dir + "/obs", ec);
-    if (ec) return false;
+    createDirectoriesPortable(dir + "/obs");
+    if (::access((dir + "/obs").c_str(), F_OK) != 0) return false;
 
     std::ofstream idx(dir + "/observations.txt");
     if (!idx) return false;

@@ -99,7 +99,6 @@ bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& no
         normal_world = -normal_world; plane_d = -plane_d;
         n_body = -n_body; d_body = -d_body;
     }
-    m_ground_h_body = d_body;   // 传感器到地面的 body 系距离
 
     if (std::acos(std::max(-1.0, std::min(1.0, normal_world.z()))) > 40.0 * M_PI / 180.0)
     {
@@ -465,8 +464,6 @@ bool FastLio2Frontend::getKeyFrame(KeyFrame& out) {
     out.cloud       = LidarProcessor::transformCloud(m_current_cloud, x.r_il, x.t_il);
     out.id          = "kf_" + std::to_string(m_frame_counter++);
     out.timestamp   = static_cast<int64_t>(m_last_lidar_time * 1e6);
-    out.ground_h    = m_ground_h_body;
-    out.has_ground_h = m_ground_valid && m_ground_h_body > 0.15 && m_ground_h_body < 2.0;
 
     m_last_kf_pose = out.pose;
 
