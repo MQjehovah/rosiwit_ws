@@ -9,6 +9,7 @@
 
 global:
   startup_mode: mapping # 启动模式 mapping|localization|idle
+  drop_on_imu_gap: false
   modules:
     frontend: "fast_lio2_frontend"
     backend: "ceres_pose_graph" # 机器人无 gtsam; 需要 gtsam_isam2 时显式改
@@ -45,6 +46,24 @@ global:
     # 陀螺刻度: 与轮式 /odom 对比实测约 +3.4%, 但写死后轨迹误差未下降, 暂保持 1.0.
     # 需要时再用 imu_gyro_scale 单独标定.
     imu_gyro_scale: 1.0
+    init_z: 0.0
+    physical_clamp_enable: false
+    accel_bias_max: 1.0
+    flat_vz_sigma: 0.0
+    flat_z_max: 0.0
+    flat_z_sigma: 0.0
+    flat_z_min: -1.3
+    flat_z_max_band: 0.6
+    flat_z_p_floor: 0.5
+    update_gate_enable: false
+    min_effective_points: 1
+    init_rot_cov: 1.0
+    max_state_velocity: 0
+    imu_static_init: false
+    acc_scale_normalize: false
+    imu_gap_reset: false
+    imu_max_prop_dt: 0.0
+    ground_tilt_only: false
   frames:
     lidar_frame: lidar  # 雷达frame
     imu_frame: lidar # IMU frame
@@ -84,8 +103,8 @@ mapping:
     odom_win_yaw_p_floor: 0.01    # rad, 姿态协方差下限
     odom_calib_yaw_scale: 1.0     # 陀螺净转角 / 轮速净转角
     odom_calib_dist_scale: 1.0    # 已知长度 / 该段轮速位移
-    ground_follow_z: true
-    ground_vz_sigma: 0.30
+    ground_follow_z: false
+    ground_vz_sigma: 0.05
     gravity_align: true # 是否用重力方向初始化姿态
     lidar_cov_inv: 5000.0 # 激光观测信息矩阵权重
     # 方向性退化检测阈值: H 位姿块 λmin/λmax 低于此值的方向视为退化
@@ -95,24 +114,24 @@ mapping:
     #   gain_k = clamp((r_k / thr)^0.25, degenerate_gain, 1), r_k = λ_k/λmax
     #   (0,1] = 降权下限; 该方向始终保留至少该比例的信息量 (没有删除路径).
     degenerate_gain: 0.0
-    robust_kernel: cauchy # 鲁棒核类型 none|huber|cauchy|tukey
+    robust_kernel: none # 鲁棒核类型 none|huber|cauchy|tukey
     robust_scale: 0.5 # 鲁棒核尺度
     robust_floor: 0.1 # 鲁棒权重下限
-    dynamic_removal: true # 是否剔除动态障碍物点
+    dynamic_removal: false # 是否剔除动态障碍物点
     persist_thresh: 2 # 动态点持久确认帧数
     persist_window: 20 # 动态点确认窗口帧数
     dynamic_residual_thresh: 1.0 # 动态点残差阈值
-    local_map_size: 300          # 局部地图立方体边长(m)
+    local_map_size: 10000          # 局部地图立方体边长(m)
     detection_range: 60          # 雷达有效检测距离(m)
     map_move_threshold: 1.5      # 局部地图滑动窗口阈值比例
-    acc_noise: 0.5               # 加速度计白噪声 (过坎冲击多, 不宜过小)
-    gyro_noise: 0.5             # 陀螺白噪声
-    acc_bias_random_walk: 0.0001  # 加速度计零偏随机游走
-    gyro_bias_random_walk: 0.0001 # 陀螺零偏随机游走
-    imu_init_samples: 400        # IMU静止初始化样本数
+    acc_noise: 0.05               # 加速度计白噪声 (过坎冲击多, 不宜过小)
+    gyro_noise: 0.05             # 陀螺白噪声
+    acc_bias_random_walk: 0.001  # 加速度计零偏随机游走
+    gyro_bias_random_walk: 0.001 # 陀螺零偏随机游走
+    imu_init_samples: 100        # IMU静止初始化样本数
     nearest_search_points: 5     # 近邻搜索点数
-    iekf_max_iterations: 8       # IEKF最大迭代次数
-    scan_voxel: 0.2              # 前端扫描降采样体素(m)
+    iekf_max_iterations: 5       # IEKF最大迭代次数
+    scan_voxel: 0.15              # 前端扫描降采样体素(m)
     imu_lidar_rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # 初始IMU<-lidar旋转矩阵(行优先)
     imu_lidar_translation: [0.0, 0.0, 0.0] # 初始IMU<-lidar平移(m)
     estimate_imu_lidar_extrinsic: false # 是否在线估计雷达-IMU外参
@@ -127,6 +146,11 @@ mapping:
     free_space_carving: false # 自由空间雕刻, 默认关
     carve_stride: 10 # 每 N 个点做一次射线
     carve_free_thresh: 3 # 同一体素被 N 帧判空才清空
+    enable_genz_weight: true
+    genz_planarity_threshold: 0.1
+    genz_kernel: 0.5
+    genz_near_dist_sq: 1.0
+    official_p_update: true
   loop_closure:
     odom_gate_m: 20
     icp_fitness_thresh: 0.5 # 回环ICP适应度阈值 (配合几何门控)
