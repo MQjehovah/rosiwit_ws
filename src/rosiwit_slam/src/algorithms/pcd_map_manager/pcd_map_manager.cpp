@@ -150,9 +150,6 @@ bool PcdMapManager::init(const std::string& config_path) {
             const int v = mv("max_observation_points").as<int>();
             if (v > 0) max_observation_points_ = static_cast<size_t>(v);
         }
-        if (mv("ground_posegraph_enable")) {
-            ground_posegraph_enable_ = mv("ground_posegraph_enable").as<bool>();
-        }
         if (mv("max_submap_points")) {
             const int v = mv("max_submap_points").as<int>();
             if (v > 0) max_submap_points_ = static_cast<size_t>(v);
@@ -342,15 +339,6 @@ bool PcdMapManager::saveMap(const std::string& name) {
                   << " single-view points (min_views=" << dynamic_min_views_ << ")" << std::endl;
     }
 
-    // [开关] 手持建图: 保存前用后端 z-only 地面位姿图把地面锁到 z=0.
-    // 只改 z, xy/yaw 不动; 已应用过则跳过, 避免二次平移.
-    if (ground_posegraph_enable_ && !ground_posegraph_applied_ && !observations_.empty()) {
-        if (applyGroundPosegraph(observations_, global_map_)) {
-            rebuildVoxels(save_voxel_);
-            ground_posegraph_applied_ = true;
-        }
-    }
-
     // 服务接口文档允许绝对路径; 之前无条件拼 map_dir_ 会把
     // /tmp/map.pcd 变成 ./tmp/map.pcd 这类错误路径.
     const std::string path = (!name.empty() && name[0] == '/')
@@ -376,7 +364,6 @@ bool PcdMapManager::loadMap(const std::string& name) {
     global_map_ = cloud;
     rebuildVoxels(save_voxel_);
     observations_.clear();   // 纯 PCD 无逐帧原点, 射线类策略退回整体点云
-    ground_posegraph_applied_ = false;
     // 换图必须丢弃旧建图关键帧/锚点, 否则后续 addSubMap/backend 会
     // 把上一张地图的关键帧重新拼回来.
     submaps_.clear();
@@ -458,7 +445,6 @@ bool PcdMapManager::appendMap(const std::string& name, const PoseStamped& initia
     global_map_ = filtered;
     rebuildVoxels(leaf);
     observations_.clear();
-    ground_posegraph_applied_ = false;
     ++m_revision_;
     std::cout << "[PcdMapManager] Appended: " << path
               << " (" << source->size() << " pts, total " << global_map_->size() << ")" << std::endl;

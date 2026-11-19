@@ -48,6 +48,7 @@ private:
     V3D m_ground_normal_w = V3D::UnitZ();
     double m_ground_last_ok = -1.0;
     double m_ground_h0 = 0.0;      // 传感器离地高度 (起始标定)
+    double m_ground_h_body = 0.0;  // 当前帧 body 系传感器到地面的距离
     // 地面估计诊断: 失败原因 / 选点数 / 法向 z (用于判断"地面跟随"为什么没生效)
     const char* m_ground_diag = "init";
     size_t m_ground_npts = 0;

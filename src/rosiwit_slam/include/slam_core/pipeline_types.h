@@ -15,6 +15,9 @@ struct KeyFrame {
     // 相对位姿因子, 不做绝对对齐.
     PoseStamped wheel_pose;
     bool has_wheel_pose = false;
+    // 该关键帧的传感器离地高度 (frontend 地面检测, body 系); 用于后端 z=地面 因子
+    double ground_h = -1.0;
+    bool has_ground_h = false;
 };
 
 struct Constraint {

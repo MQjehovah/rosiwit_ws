@@ -199,10 +199,10 @@ mapping:
     submap_half_window: 3 # 回环 ICP 使用前后各 3 个关键帧组成局部子图
     min_overlap: 0.35 # ICP 配准后源点云最近邻命中率下限
   map_manager:
-    ground_posegraph_enable: false   # 手持建图设 true: 保存前把地面锁到 z=0
     max_correction_trans_m: 1.5 # 后端修正允许的最大平移跳变(m)
     max_correction_rot_deg: 15.0 # 后端修正允许的最大旋转跳变(deg)
   backend:
+    ground_z_factor_enable: false   # 手持建图设 true: 后端把地面 z 约束到 0
     loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m)
     max_optimization_trans_m: 20 # 含新约束的单次优化最大平移修正
     max_optimization_rot_deg: 60 # 含新约束的单次优化最大旋转修正

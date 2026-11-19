@@ -22,6 +22,8 @@ struct KeyFrameNode {
     // 轮速 /odom 在关键帧时刻的位姿 (odom 自身系), 用于 3-DoF 相对因子
     PoseStamped wheel_pose;
     bool has_wheel_pose = false;
+    double ground_h = -1.0;
+    bool has_ground_h = false;
 };
 
 struct RelPoseConstraint {
@@ -42,7 +44,7 @@ public:
     bool optimize() override;
     /// 轮速因子开启时需要周期性优化 (不再依赖回环触发)
     // 2D 先验/轮速因子都需要周期优化, 否则后端只在有回环时才跑, 因子永不生效.
-    bool wantsPeriodicOptimize() const { return use_wheel_factor_ || use_odom2d_prior_; }
+    bool wantsPeriodicOptimize() const { return use_wheel_factor_ || use_odom2d_prior_ || use_ground_factor_; }
     bool getUpdatedPoses(std::vector<PoseStamped>& poses) override;
 
 private:
@@ -76,6 +78,8 @@ private:
     bool use_wheel_factor_ = false;
     // 2D 位姿的绝对 x/y 先验 (松耦合后端约束)
     bool use_odom2d_prior_ = false;
+    // 后端地面 z 因子: z_k = 该关键帧的 sensor-to-ground 高度; 只修正 z.
+    bool use_ground_factor_ = false;
     double odom2d_sigma_xy_ = 0.30;   // m
     double odom2d_sigma_yaw_ = 0.0;   // rad, 0 = 不加 yaw
     int odom2d_align_num_ = 30;       // 用于一次性对齐的关键帧数
