@@ -491,10 +491,13 @@ void LidarProcessor::process(SyncPackage &package)
         m_kf->x().clampPhysical();
     }
 
-    // [开关] 地面高度锁定: 用当前帧地面目标约束 z (默认 0=关).
-    // 必须给 P_zz 一个 floor, 否则 LiDAR 把 z 协方差压到极小后增益接近 0,
-    // updateZ 几乎不动 (之前锁不住的根因).
-    if (m_config.ground_lock_z_sigma > 0.0 && m_ground_valid) {
+    // [开关] 地面 z 硬锁: 直接写状态 z, 不经过 updateZ/P, 不和 LiDAR 抢协方差.
+    // 目标 = frontend 的 ground_zero_lock 目标 (d_body/nz). 这是最稳的 z=0 做法.
+    if (m_config.ground_zero_hard_lock && m_ground_valid) {
+        auto &xs = m_kf->x();
+        xs.t_wi.z() = m_ground_z_target;
+        xs.v.z() = 0.0;
+    } else if (m_config.ground_lock_z_sigma > 0.0 && m_ground_valid) {
         auto &P = m_kf->P();
         const double f2 = m_config.flat_z_p_floor * m_config.flat_z_p_floor;
         if (P(5, 5) < f2) P(5, 5) = f2;

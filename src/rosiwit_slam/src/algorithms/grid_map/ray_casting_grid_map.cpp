@@ -100,7 +100,9 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
         }
     }
     if (all.empty()) return false;
-    XYBounds bb = robustXYBounds(xs, ys, 0.005, 0.995);
+    // [本包适配] 之前用 0.5%~99.5% 分位会把地图边缘裁掉几十米; 用全量 min/max
+    // 再外扩 1m, 保证 PGM 覆盖完整点云边缘.
+    XYBounds bb = robustXYBounds(xs, ys, 0.0, 1.0);
     // 观测原点也要用稳健分位数: 单个后端异常位姿会把地图范围拉到上千米,
     // 0.05m 栅格随即触发降分辨率并拖垮后端. 这里不再让任意一个原点无限扩边.
     std::vector<double> oxs, oys;
@@ -113,12 +115,15 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
         }
     }
     if (!oxs.empty()) {
-        const XYBounds ob = robustXYBounds(oxs, oys, 0.01, 0.99);
+        const XYBounds ob = robustXYBounds(oxs, oys, 0.0, 1.0);
         bb.min_x = std::min(bb.min_x, ob.min_x);
         bb.max_x = std::max(bb.max_x, ob.max_x);
         bb.min_y = std::min(bb.min_y, ob.min_y);
         bb.max_y = std::max(bb.max_y, ob.max_y);
     }
+    const double margin = 1.0;
+    bb.min_x -= margin; bb.max_x += margin;
+    bb.min_y -= margin; bb.max_y += margin;
     double min_x = bb.min_x, max_x = bb.max_x;
     double min_y = bb.min_y, max_y = bb.max_y;
 

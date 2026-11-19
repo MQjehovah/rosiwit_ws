@@ -103,6 +103,10 @@ struct Config
     // [开关] 当前帧地面直接锁 z=0: target = d_body / nz, 不依赖历史锚定平面.
     // 默认 false = 官方; 只有明确需要"地面 z=0"的建图才打开.
     bool ground_zero_lock = false;
+    // [开关] 地面 z 硬锁: 每帧把状态 z 直接设成当前帧检测到的地面高度
+    // (传感器到地面的竖直距离), vz=0. 不经过 updateZ, 不和滤波器抢协方差.
+    // 默认 false; 这是最稳的"地面在 z=0"做法, 但会牺牲 z 方向平滑性.
+    bool ground_zero_hard_lock = false;
     // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,
     // 默认关闭; 保留给'轮速可信但 LIO 会滑'的场合.
     bool odom_consistency_gate = false;

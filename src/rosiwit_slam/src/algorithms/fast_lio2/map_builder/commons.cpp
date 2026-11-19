@@ -78,6 +78,9 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.ground_zero_lock =
                 get_input("ground_zero_lock", "ground_zero_lock")
                     .as<bool>(out_cfg.ground_zero_lock);
+            out_cfg.ground_zero_hard_lock =
+                get_input("ground_zero_hard_lock", "ground_zero_hard_lock")
+                    .as<bool>(out_cfg.ground_zero_hard_lock);
             out_cfg.odom_consistency_gate =
                 get_input("odom_consistency_gate", "odom_consistency_gate")
                     .as<bool>(out_cfg.odom_consistency_gate);

@@ -37,7 +37,9 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
         zs.push_back(p.z);
     }
     if (finite->empty()) return false;
-    XYBounds bb = robustXYBounds(xs, ys);
+    XYBounds bb = robustXYBounds(xs, ys, 0.0, 1.0);
+    bb.min_x -= 1.0; bb.max_x += 1.0;
+    bb.min_y -= 1.0; bb.max_y += 1.0;
     double min_x = std::min(bb.min_x, origin.x());
     double max_x = std::max(bb.max_x, origin.x());
     double min_y = std::min(bb.min_y, origin.y());

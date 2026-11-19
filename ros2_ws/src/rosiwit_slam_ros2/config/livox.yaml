@@ -42,6 +42,7 @@ global:
     ground_tilt_only: false
     ground_lock_z_sigma: 0.0
     ground_zero_lock: false
+    ground_zero_hard_lock: false
   frames:
     lidar_frame: livox_frame  # 雷达frame
     imu_frame: livox_frame # IMU frame
