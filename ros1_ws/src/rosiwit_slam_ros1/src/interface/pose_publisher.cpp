@@ -351,6 +351,22 @@ void Ros1SlamInterface::publishLocationInfo() {
         buildSlamInfo(slam_state, location_status, curr_map_name_, p.x, p.y, p.yaw, map_area,
                       matching_degree));
 
+    // ---- /location_info: 厂商 App 的"业务定位丢失"判据 (SUCCESS/RECOVERING/FAILED) ----
+    // 与 /slam/info 同源同值, 只少 update_request 字段; 不能只发 /slam/info, 否则界面
+    // 永远不会报丢失。
+    {
+        xzrobot_ros_dependency::LocationInfo li;
+        li.map_name = curr_map_name_;
+        li.robot_pose.x = p.x;
+        li.robot_pose.y = p.y;
+        li.robot_pose.theta = p.yaw;
+        li.location_status = location_status;
+        li.matching_degree = matching_degree;
+        li.slam_state = slam_state;
+        li.map_area = map_area;
+        location_info_puber_.publish(li);
+    }
+
     // ---- 定位健康等级 (仅用于日志) ----
     // 0=INIT 1=TRACKING 2=DEGRADED 3=LOST
     // 注: /localization/state 用的是自建消息 LocalizationState, 本机型厂商包没有该消息

@@ -335,7 +335,8 @@ private:
     ros::Publisher pose_puber_;               // curr_localization_pose PoseStamped 10
     ros::Publisher path_puber_;               // mapping_path      Path         10
     ros::Publisher loop_constraint_puber_;    // loop_constraint   MarkerArray  10 (D2 不发)
-    ros::Publisher slam_info_puber_;          // slam/info         SlamInfo     10
+    ros::Publisher slam_info_puber_;
+    ros::Publisher location_info_puber_;   // /location_info (厂商 App 的定位丢失判据)          // slam/info         SlamInfo     10
     double loc_sigma_xy_ = 0.05;               // 兜底位姿不确定度 (无 2D 匹配时)
     double loc_sigma_yaw_ = 0.03;
     float loc_degrade_matching_ = 0.65f;       // 低于此匹配度进入 DEGRADED

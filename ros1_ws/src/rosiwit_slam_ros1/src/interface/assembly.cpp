@@ -147,6 +147,9 @@ void Ros1SlamInterface::initPub() {
     path_puber_ = nh_.advertise<nav_msgs::Path>("mapping_path", 10);
     loop_constraint_puber_ = nh_.advertise<visualization_msgs::MarkerArray>("loop_constraint", 10);
     slam_info_puber_ = nh_.advertise<xzrobot_ros_dependency::SlamInfo>("slam/info", 10);
+    // 厂商 App 用 /location_info 判"业务定位丢失"; 与 /slam/info 同源同值。
+    location_info_puber_ =
+        nh_.advertise<xzrobot_ros_dependency::LocationInfo>("location_info", 10);
     // C2b 2D 约束开关: 由 simulation.yaml 的 localization.planar_constraint 控制.
     // (不改变默认行为; 打开前需要 seed_max_drift 收紧, 否则核心会假定位.)
     scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
