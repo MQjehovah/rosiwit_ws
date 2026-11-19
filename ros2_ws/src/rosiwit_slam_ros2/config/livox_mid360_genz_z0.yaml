@@ -1,7 +1,7 @@
 # ============================================================
 # Mid-360 GenZ + 地面 z=0 软约束 (显式非官方, 用于强制地面高度)
-#   init_z=0.495 (实测 IMU 离地高度) -> 地面在 z=0
-#   flat_z_sigma=0.05, 传感器 z 保持在 [0.40, 0.60] m
+#   init_z=0.509 (实测 IMU 离地高度) -> 地面在 z=0
+#   flat_z_sigma=0.05, 传感器 z 保持在 [0.48, 0.54] m
 #   ground_follow_z=false: 避免坡度 vz 约束与 z 保持互相打架
 #   注意: 会压平真实坡道/台阶 (1m 台阶), 仅用于需要地面 z=0 的图
 # ============================================================
@@ -27,15 +27,15 @@ global:
     lidar_max_range: 100.0 # 雷达最大有效距离(m)
     scan_period_ms: 100.0 # 单帧扫描周期(ms)
     acc_scale: 9.81 # IMU加速度单位换算
-    init_z: 0.495
+    init_z: 0.509
     ground_follow_z: false
     ground_vz_sigma: 0.05
     physical_clamp_enable: false
     accel_bias_max: 0.1        # 仅在 physical_clamp_enable=true 时生效; ba 限幅, 防误差吸收
     flat_vz_sigma: 0.0
     flat_z_max: 0.0
-    flat_z_min: 0.40
-    flat_z_max_band: 0.60
+    flat_z_min: 0.48
+    flat_z_max_band: 0.54
     flat_z_sigma: 0.05
     flat_z_p_floor: 0.5      # z 协方差 floor (m), 保证增益有效
     update_gate_enable: false
