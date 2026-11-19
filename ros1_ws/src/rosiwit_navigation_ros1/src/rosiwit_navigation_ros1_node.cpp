@@ -68,7 +68,6 @@
 #include "rosiwit_navigation/nav_core/localization_health.hpp"
 #include "rosiwit_navigation/nav_core/path_centering.hpp"
 #include <xzrobot_ros_dependency/SlamInfo.h>
-#include <xzrobot_ros_dependency/LocalizationState.h>
 #include <xzrobot_ros_dependency/VirtualObstacles.h>
 #include "path_smoother.hpp"
 #include "trajectory_parameterizer.hpp"
@@ -611,8 +610,6 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
   // 重建栅格时 /lio_odom 会短暂停顿, 0.6s 会误杀目标(实测 7m 目标中途偶发),
   // 仿真里放宽到 2.0s。
   pnh_.param<double>("odom_timeout", odom_timeout_, 0.6);
-    pnh_.param<std::string>("localization_state_topic", localization_state_topic_,
-                            "/localization/state");
     pnh_.param<double>("slam_degrade_matching", slam_degrade_matching_, 0.65);
     pnh_.param<double>("slam_degrade_scale", slam_degrade_scale_, 0.5);
     // 恢复规划: 当前 footprint 压住的栅格视为 free, 否则反向 escape
@@ -1130,12 +1127,7 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 定位健康: LOST -> 停车; matching 低 -> 限速
     slam_info_sub_ = nh_.subscribe("/slam/info", 1,
                                    &RosiwitNavigationRos1Node::slamInfoCallback, this);
-    // 新契约优先: 位姿/协方差/健康等级/匹配度/地图标识一次拿全.
-    localization_state_sub_ = nh_.subscribe(
-      localization_state_topic_, 1,
-      &RosiwitNavigationRos1Node::localizationStateCallback, this);
-    // 运行时切换运动 profile / 控制器: std_msgs/String "clean|free[,controller]"
-    profile_sub_ = nh_.subscribe("/set_motion_profile", 1,
+    // 运行时切换运动 profile / 控制器: std_msgs/String "clean|free[,controller]"    profile_sub_ = nh_.subscribe("/set_motion_profile", 1,
                                  &RosiwitNavigationRos1Node::profileCallback, this);
     if (voxel_enabled_ && !voxel_cloud_topic_.empty()) {
       voxel_sub_ = nh_.subscribe(voxel_cloud_topic_, 1,
@@ -3217,8 +3209,8 @@ private:
        << ",\"voxels\":" << voxel_layer_.size()
        << ",\"keepout\":" << (keepout_layer_ ? keepout_layer_->polygonCount() : 0)
        << ",\"speed_zones\":" << speed_limit_layer_.size()
-       << ",\"loc_health\":" << static_cast<int>(last_loc_health_)
-       << ",\"loc_state\":" << (has_localization_state_ ? 1 : 0)
+       << ",\"loc_health\":" << static_cast<int>(last_slam_status_)
+       << ",\"loc_state\":" << (last_slam_info_stamp_.isZero() ? 0 : 1)
        << ",\"scan_pts\":" << laser_points_.size()
        << ",\"scan_cap\":" << laser_points_.capacity()
        << ",\"track_pts_cap\":" << tracker_points_.capacity()
@@ -5060,9 +5052,18 @@ private:
 
   void slamInfoCallback(const xzrobot_ros_dependency::SlamInfo::ConstPtr & msg)
   {
-    // 迁移期 shim: 一旦收到过 /localization/state, 就完全以新契约为准,
-    // 避免两个来源打架 (旧话题还在发布给 App).
-    if (has_localization_state_) { return; }
+    // 唯一来源: /slam/info (SlamInfo, 厂商类型)。
+    // 位姿跳变检测: map_name 变化 => 坐标系跳了(切图/重定位), 旧计划立即作废。
+    if (has_reloc_baseline_ && !msg->map_name.empty() &&
+        msg->map_name != last_map_id_) {
+      pending_jump_seq_.store(0);
+      pending_jump_reason_.store(1);
+      pose_jump_pending_.store(true);
+    }
+    if (!msg->map_name.empty()) {
+      last_map_id_ = msg->map_name;
+      has_reloc_baseline_ = true;
+    }
     last_slam_info_stamp_ = ros::Time::now();
     last_slam_status_ = msg->location_status;
     last_slam_matching_ = msg->matching_degree;
@@ -5072,44 +5073,6 @@ private:
     last_slam_pipeline_mode_ = msg->slam_state;
   }
 
-  void localizationStateCallback(
-    const xzrobot_ros_dependency::LocalizationState::ConstPtr & msg)
-  {
-    using LocState = xzrobot_ros_dependency::LocalizationState;
-    // 位姿跳变检测 (契约: relocalize_count 变化 / map_id 变化 => 位姿坐标系跳了).
-    // 必须在更新缓存的同一拍完成: 跳变后旧计划/旧跟踪状态立即作废。
-    const bool map_changed = has_reloc_baseline_ && !msg->map_id.empty() &&
-      msg->map_id != last_map_id_;
-    const bool jumped = has_reloc_baseline_ &&
-      msg->relocalize_count != last_relocalize_count_;
-    if (map_changed || jumped) {
-      // 只登记: 本节点用 AsyncSpinner(2), 回调和控制环可能并发。
-      // 计划/控制器状态只在控制环里改, 避免两条线程同时动 current_core_path_。
-      pending_jump_seq_.store(msg->relocalize_count);
-      pending_jump_reason_.store(map_changed ? 1 : 0);
-      pose_jump_pending_.store(true);
-    }
-    last_relocalize_count_ = msg->relocalize_count;
-    has_reloc_baseline_ = true;
-
-    last_slam_info_stamp_ = ros::Time::now();
-    has_localization_state_ = true;
-    last_loc_health_ = msg->health;
-    last_map_id_ = msg->map_id;
-    switch (msg->health) {
-      case LocState::HEALTH_TRACKING:
-      case LocState::HEALTH_DEGRADED:
-        last_slam_status_ = 0;   // 仍在地图上; DEGRADED 由 matching 触发限速
-        break;
-      case LocState::HEALTH_INIT:
-        last_slam_status_ = 1;
-        break;
-      default:
-        last_slam_status_ = 2;   // LOST -> 停车
-        break;
-    }
-    last_slam_matching_ = msg->matching;
-  }
 
   /// 位姿跳变 (切图/重定位/手动初始位姿): 旧计划在新坐标系下已经没有意义。
   /// 只作废"计划与跟踪状态", 不清目标 —— 目标是地图坐标, 跳变后仍然有效。
@@ -6153,12 +6116,7 @@ private:
 
   // 定位健康: 丢失 -> 停车, 匹配度低 -> 限速
   ros::Subscriber slam_info_sub_;
-  ros::Subscriber localization_state_sub_;   // /localization/state (新契约, 优先)
-  std::string localization_state_topic_ = "/localization/state";
-  bool has_localization_state_ = false;
-  uint8_t last_loc_health_ = 0;
-  std::string last_map_id_;
-  uint32_t last_relocalize_count_ = 0;   // 契约字段, 变化 = 位姿跳变
+  std::string last_map_id_;              // /slam/info.map_name, 变化 = 位姿跳变
   std::atomic<bool> pose_jump_pending_{false};   // 回调登记, 控制环消费
   std::atomic<uint32_t> pending_jump_seq_{0};
   std::atomic<int> pending_jump_reason_{0};      // 0=重定位 1=切图

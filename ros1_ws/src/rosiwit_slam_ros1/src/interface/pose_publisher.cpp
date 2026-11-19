@@ -7,7 +7,6 @@
 // 不在这里做的事: 2D 平面约束算法 (planar_constraint.cpp, 它只产出修正量)。
 // ============================================================================
 #include "ros1_slam_interface.h"
-#include "xzrobot_ros_dependency/LocationInfo.h"
 
 #include <algorithm>
 #include <chrono>
@@ -352,21 +351,6 @@ void Ros1SlamInterface::publishLocationInfo() {
         buildSlamInfo(slam_state, location_status, curr_map_name_, p.x, p.y, p.yaw, map_area,
                       matching_degree));
 
-    // ---- /location_info: 厂商 App 的"业务定位丢失"判据 (SUCCESS/RECOVERING/FAILED) ----
-    // 与 /slam/info 同源同值, 只少 update_request 字段; 不能只发 /slam/info, 否则界面
-    // 永远不会报丢失。
-    {
-        xzrobot_ros_dependency::LocationInfo li;
-        li.map_name = curr_map_name_;
-        li.robot_pose.x = p.x;
-        li.robot_pose.y = p.y;
-        li.robot_pose.theta = p.yaw;
-        li.location_status = location_status;
-        li.matching_degree = matching_degree;
-        li.slam_state = slam_state;
-        li.map_area = map_area;
-        location_info_puber_.publish(li);
-    }
 
     // ---- 定位健康等级 (仅用于日志) ----
     // 0=INIT 1=TRACKING 2=DEGRADED 3=LOST
@@ -398,7 +382,7 @@ void Ros1SlamInterface::publishLocationInfo() {
     // 位姿融合诊断 (1Hz): direct 模式下 accepted 增长但 applied_* 恒 0;
     // eskf 模式下可看到 rejected_chi2 / rejected_in_place / applied_trans 与
     // LIO 相对观测计数 (relative_accepted/reanchored) / odom 权重。
-    if (fusion_diag_puber_) {
+    if (debug_publish_ && fusion_diag_puber_) {
         // 用时间节流, 不依赖本函数的调用频率 (定位卡顿时也不会把诊断一起拖慢)
         static ros::Time last_diag_pub;
         const ros::Time now = ros::Time::now();

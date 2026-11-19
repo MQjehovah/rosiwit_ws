@@ -336,7 +336,6 @@ private:
     ros::Publisher path_puber_;               // mapping_path      Path         10
     ros::Publisher loop_constraint_puber_;    // loop_constraint   MarkerArray  10 (D2 不发)
     ros::Publisher slam_info_puber_;
-    ros::Publisher location_info_puber_;   // /location_info (厂商 App 的定位丢失判据)          // slam/info         SlamInfo     10
     double loc_sigma_xy_ = 0.05;               // 兜底位姿不确定度 (无 2D 匹配时)
     double loc_sigma_yaw_ = 0.03;
     float loc_degrade_matching_ = 0.65f;       // 低于此匹配度进入 DEGRADED
@@ -406,8 +405,7 @@ private:
     // ---- [T8] service server + 换图状态 ----
     ros::ServiceServer srv_mode_switch_, srv_switch_map_, srv_relocation_, srv_stop_map_,
                        srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_,
-                       srv_dump_recorder_,
-                       srv_loc_relocalize_, srv_loc_set_initial_pose_, srv_loc_switch_map_;
+                       srv_dump_recorder_;
     std::string curr_map_path_;
     // 同名地图重存检测: 记录加载时的 mtime
     double loaded_map_mtime_ = 0.0;

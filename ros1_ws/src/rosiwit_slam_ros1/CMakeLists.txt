@@ -16,11 +16,8 @@ find_package(catkin REQUIRED COMPONENTS
     roscpp sensor_msgs nav_msgs geometry_msgs std_msgs std_srvs
     tf tf2 tf2_ros pcl_conversions pcl_ros visualization_msgs
     rosbag
-    message_generation
     xzrobot_ros_dependency)
 
-add_service_files(FILES SaveMap.srv LoadMap.srv SaveGridMap.srv SetSlamMode.srv)
-generate_messages(DEPENDENCIES std_msgs geometry_msgs)
 
 # 生成 map.jpg / thumb.png 要用 OpenCV (核心已依赖它; 这里显式声明, 供薄层直接用)
 find_package(OpenCV REQUIRED)
@@ -31,7 +28,7 @@ find_package(Boost REQUIRED COMPONENTS timer)
 # 本包是纯接口层(仅一个可执行 + 一个内部静态库), 不对外导出头文件, 因此不声明 INCLUDE_DIRS
 catkin_package(
     CATKIN_DEPENDS roscpp sensor_msgs nav_msgs geometry_msgs std_msgs std_srvs
-                   tf tf2 tf2_ros pcl_conversions visualization_msgs message_runtime
+                   tf tf2 tf2_ros pcl_conversions visualization_msgs
                    xzrobot_ros_dependency)
 
 # ==================== Ceres 兼容垫片 (薄层专属, 不改核心) ====================

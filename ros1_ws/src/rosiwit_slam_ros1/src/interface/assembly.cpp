@@ -148,9 +148,7 @@ void Ros1SlamInterface::initPub() {
     path_puber_ = nh_.advertise<nav_msgs::Path>("mapping_path", 10);
     loop_constraint_puber_ = nh_.advertise<visualization_msgs::MarkerArray>("loop_constraint", 10);
     slam_info_puber_ = nh_.advertise<xzrobot_ros_dependency::SlamInfo>("slam/info", 10);
-    // 厂商 App 用 /location_info 判"业务定位丢失"; 与 /slam/info 同源同值。
-    location_info_puber_ =
-        nh_.advertise<xzrobot_ros_dependency::LocationInfo>("location_info", 10);
+    // 注: 不发布 /location_info —— 厂商节点不发它, App 只订 /slam/info。
     // C2b 2D 约束开关: 由 simulation.yaml 的 localization.planar_constraint 控制.
     // (不改变默认行为; 打开前需要 seed_max_drift 收紧, 否则核心会假定位.)
     scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
@@ -251,17 +249,8 @@ void Ros1SlamInterface::initServer() {
     srv_expand_map_ = nh_.advertiseService("update_map_operation",
         &Ros1SlamInterface::handleExpandMap, this);
 
-    // ---- LocalizationServer 契约别名 ----
-    // 与旧服务同处理器, 只是换到 /localization/ 命名空间并给出统一语义:
-    //   relocalize       = 用给定初始位姿重定位 (Relocation)
-    //   set_initial_pose = 同上, map_name 可为空 (当前图)
-    //   switch_map       = 切图 (SwitchMap, 可带 initial_pose)
-    srv_loc_relocalize_ = nh_.advertiseService("/localization/relocalize",
-        &Ros1SlamInterface::handleRelocation, this);
-    srv_loc_set_initial_pose_ = nh_.advertiseService("/localization/set_initial_pose",
-        &Ros1SlamInterface::handleRelocation, this);
-    srv_loc_switch_map_ = nh_.advertiseService("/localization/switch_map",
-        &Ros1SlamInterface::handleSwitchMap, this);
+    // 注: 不再提供 /localization/* 别名服务 —— 真机 App 只用 /relocation 与
+    // /switch_map, 多余别名属于「私加接口」(2026-11-20 审计后移除)。
 }
 
 } // namespace rosiwit_slam_ros1
