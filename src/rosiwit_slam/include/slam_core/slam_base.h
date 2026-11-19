@@ -50,8 +50,9 @@ public:
     };
     SyncStats syncStats() const;
 
-    /// IMU 覆盖不足时是否丢弃该雷达帧 (默认 true: 保护 LIO 不用陈旧 IMU 强行传播).
-    /// LIVO 前端自己缓存 IMU 并做预积分, 丢帧反而让它失去连续性 -> 这类前端应关闭.
+    /// IMU 覆盖不足时是否丢弃该雷达帧.
+    /// [开关] 默认 false = 官方 FAST-LIO2 语义 (等 IMU, 不丢帧);
+    /// true = rosiwit 旧行为 (用陈旧 IMU 强行传播有风险, 由外部保护).
     void setDropOnImuGap(bool v) { m_drop_on_imu_gap = v; }
 
 protected:
@@ -67,7 +68,7 @@ private:
     std::deque<LidarFrame> m_lidar_buf;
     mutable std::mutex     m_buf_mutex;
     bool   m_lidar_pushed = false;
-    bool   m_drop_on_imu_gap = true;
+    bool   m_drop_on_imu_gap = false;
     double m_last_imu_time = -1.0;
     double m_last_lidar_end = -1.0;
     SyncPackage m_pending;

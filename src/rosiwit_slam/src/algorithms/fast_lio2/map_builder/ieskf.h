@@ -36,7 +36,8 @@ public:
 struct State
 {
     static double gravity;
-    static double accel_bias_max;   // 加计零偏限幅 (m/s^2), 由配置设置
+    static double accel_bias_max;        // 加计零偏限幅 (m/s^2), 由配置设置
+    static bool physical_clamp_enable;   // [开关] false 时 clampPhysical() 直接返回
     M3D r_wi = M3D::Identity();
     V3D t_wi = V3D::Zero();
     M3D r_il = M3D::Identity();
@@ -70,10 +71,14 @@ public:
     /// 方向性退化阈值: LiDAR 信息矩阵 λ_min/λ_max 低于它的方向被视为退化,
     /// 注入正则让该方向回落到 IMU/odom 先验 (窄通道沿轴无约束的场景).
     void setDegenerateEigenRatio(double r) { m_degenerate_eigen_ratio = std::max(1e-6, r); }
-    /// 弱方向自适应降权 (0 = 关闭): gain_k = clamp((r_k/thr)^0.25, gain, 1).
+    /// 无有效约束时的协方差更新: true = 官方语义 (仍按 H/b 更新 P);
+    /// false = 直接返回, 保留 predict 的 P (rosiwit 旧行为).
+    void setOfficialPUpdate(bool en) { m_official_p_update = en; }
+    /// [开关] 弱方向自适应降权 (0 = 关闭, 只检测): gain_k = clamp((r_k/thr)^0.25, gain, 1).
     /// 没有删除路径, 该方向至少保留 gain 的信息量.
     void setDegenerateGain(double g) { m_degenerate_gain = g; }
     void setAccelBiasMax(double v) { State::accel_bias_max = std::max(0.01, v); }
+    void setPhysicalClamp(bool en) { State::physical_clamp_enable = en; }
     // 状态速度物理上限(m/s); <=0 关闭。坏配准把速度打爆后的最后一道刹车(见 update)。
     void setMaxVel(double v) { m_max_vel = v; }
     void setLossFunction(loss_func func) { m_loss_func = func; }
@@ -129,8 +134,8 @@ public:
 private:
     size_t m_max_iter = 10;
     double m_degenerate_eigen_ratio = 0.02;
-    /// 弱方向自适应降权增益: 0 = 关闭(只检测); (0,1] = 降权下限, 无删除路径.
-    double m_degenerate_gain = 0.0;
+    bool m_official_p_update = true;
+    double m_degenerate_gain = 0.0;   // 0 = 关闭降权 (只检测)
     double m_max_vel = 3.0;
     double m_last_dt = 0.1;          // 上次 predict 的 dt (s), 供单帧位姿限幅使用
     double m_max_step_factor = 2.0;  // 单帧位移上限 = factor * max_vel * dt

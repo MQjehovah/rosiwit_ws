@@ -28,9 +28,10 @@ bool IMUProcessor::initialize(SyncPackage &package)
     V3D acc_sum = V3D::Zero();
     V3D gyro_sum = V3D::Zero();
     int n_static = 0;
+    const bool use_static = m_config.imu_static_init;
     for (const auto &imu : m_imu_cache)
     {
-        if (imu.gyro.norm() < 0.15)   // 近似静止
+        if (!use_static || imu.gyro.norm() < 0.15)   // 官方: 用全部样本
         {
             acc_sum += imu.acc;
             gyro_sum += imu.gyro;
@@ -77,7 +78,7 @@ bool IMUProcessor::initialize(SyncPackage &package)
         // 静止样本不过半时不做归一化, 直接信任配置里的 acc_scale(g 单位 IMU 已在此换算).
         const bool init_static_enough =
             (n_static * 2 >= static_cast<int>(m_imu_cache.size()));
-        if (init_static_enough && an > 5.0 && an < 15.0)
+        if (m_config.acc_scale_normalize && init_static_enough && an > 5.0 && an < 15.0)
         {
             m_acc_scale = 9.81 / an;
             std::printf("[FLIO2] acc scale normalized: |a_mean|=%.4f -> x%.5f\n",
@@ -130,7 +131,7 @@ bool IMUProcessor::initialize(SyncPackage &package)
         m_kf->P().block<3, 3>(18, 18) = M3D::Identity() * 0.0001;
     }
     // IMU 有空洞, 初始化姿态存在不确定性, 放大初始姿态协方差让 lidar 校正
-    m_kf->P().block<3, 3>(0, 0) = M3D::Identity() * 0.001;
+    m_kf->P().block<3, 3>(0, 0) = M3D::Identity() * m_config.init_rot_cov;
 
     m_last_imu = m_imu_cache.back();
     m_last_propagate_end_time = package.cloud_end_time;
@@ -159,7 +160,7 @@ void IMUProcessor::undistort(SyncPackage &package)
     if (m_imu_cache.size() > 1 && m_last_propagate_end_time > 0) {
         const double first_new_imu = m_imu_cache[1].time;   // [0]=m_last_imu, [1]=本帧首个IMU
         const double gap = first_new_imu - m_last_propagate_end_time;
-        if (gap > 0.3) {
+        if (m_config.imu_gap_reset && gap > 0.3) {
             m_last_propagate_end_time = first_new_imu;
             m_kf->x().v.setZero();
             // 增大位置/速度/姿态协方差, 让 lidar 观测重新主导
@@ -194,7 +195,7 @@ void IMUProcessor::undistort(SyncPackage &package)
     inp.gyro = m_imu_cache.back().gyro;
     // IMU 数据存在周期性的数百毫秒丢帧时, 禁止用陈旧 IMU 长时间积分。
     // 超过 50ms 的间隔直接跳过该段, 由 scan-to-map 更新兜底; 不再"截断后继续积分"。
-    const double max_prop_dt = 0.1;
+    const double max_prop_dt = (m_config.imu_max_prop_dt > 0.0) ? m_config.imu_max_prop_dt : 1e9;
     for (auto it_imu = m_imu_cache.begin(); it_imu < (m_imu_cache.end() - 1); it_imu++)
     {
         IMUData &head = *it_imu;

@@ -41,6 +41,8 @@ public:
     // PcdMapManager 扩展 (额外 frame_id 参数)
     bool saveGridMap(const std::string& pgm_path, const std::string& yaml_path,
                      double resolution, const std::string& frame_id);
+    /// 全量数据导出: dir/observations.txt + dir/obs/*.pcd + dir/global_map.pcd + dir/meta.txt
+    bool dumpMapData(const std::string& dir) override;
 
 private:
     struct Submap {

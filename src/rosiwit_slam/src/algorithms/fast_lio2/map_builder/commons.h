@@ -32,44 +32,48 @@ struct Config
 {
     int lidar_filter_num = 3;
     double lidar_min_range = 0.5;
-    double lidar_max_range = 20.0;
+    double lidar_max_range = 60.0;
     double scan_resolution = 0.15;
     double map_resolution = 0.3;
 
-    double cube_len = 300;
+    double cube_len = 10000.0;
     double det_range = 60;
     double move_thresh = 1.5;
 
-    double na = 0.01;
-    double ng = 0.01;
-    double nba = 0.0001;
-    double nbg = 0.0001;
-    double acc_scale = 1.0; // 加速度单位转换: 传感器若以 g 为单位(如 Livox 内置 IMU), 设 9.81
+    double na = 0.05;
+    double ng = 0.05;
+    double nba = 0.001;
+    double nbg = 0.001;
+    double acc_scale = 9.81; // 加速度单位转换: 传感器若以 g 为单位(如 Livox 内置 IMU), 设 9.81
     // 陀螺尺度因子: 校准 IMU 角速度标度误差 (实测本车万集 IMU 偏航角速度低估 3.5%,
     // 即实测/真值≈0.965 -> gyro_scale=1.036)。大角度累计旋转(掉头/绕圈)时航向误差
     // 随累计转角逐帧放大, 是窄区"转过就发散"的关键因素。1.0 = 不校准。
     double gyro_scale = 1.0;
     // 状态速度物理上限(m/s): 坏配准把速度打爆后的最后一道刹车(IEKF 内部限幅)。
     // 清洁机器人实际 ~1m/s, 默认 3.0 留 3 倍余量。<=0 关闭。
-    double max_state_velocity = 3.0;
+    double max_state_velocity = 0.0;  // 0=官方语义: 不做速度/单帧步长限幅
     int imu_init_num = 20;
+    // [开关] 以下四项默认关闭 = 官方 FAST-LIO2 语义
+    bool imu_static_init = false;      // true: 只用 |gyro|<0.15 的样本初始化
+    bool acc_scale_normalize = false;  // true: |a_mean| 归一化到 9.81
+    bool imu_gap_reset = false;        // true: IMU 空洞>0.3s 时重置 v/ba/bg
+    double imu_max_prop_dt = 0.0;      // >0: 单段传播 dt 截断 (官方不截断)
+
     int near_search_num = 5;
     int ieskf_max_iter = 5;
     // 有效平面点下限: 少于此数不做 EKF 更新(退化为纯预测)。
     // legacy(mapping_interface.cpp:2292) 是 50 —— 几何退化场景(窄区/视野受限)下
     // 只有几个有效点, 用它们做更新会让近秩亏的 H 把状态拖向不可观测方向(实测窄区漂移)。
-    int min_effective_points = 50;
-    // 退化检测: 有效平面点过少 / 占比过低 / 信息矩阵条件数过差时, 本帧跳过 LiDAR 更新
-    // (只走 IMU 预测), 避免在开阔/走廊场景把位姿拉偏 (实测急转段厚墙)。
-    int degenerate_min_effective_points = 300;
-    double degenerate_ratio = 0.10;      // eff / 输入点数 下限
-    double degenerate_eigen_ratio = 0.02; // 信息矩阵 λmin/λmax 低于此值的方向按退化处理
-    /// 弱方向自适应降权增益 (0 = 关闭, 只检测):
-    ///   gain_k = clamp((r_k/thr)^0.25, degenerate_gain, 1), r_k=λ_k/λmax, thr=degenerate_eigen_ratio
-    ///   = 0 时不做任何处理; (0,1] 时按下限降权, 该方向的信息量按 gain_k 保留.
-    /// 说明: 没有"删除/置零"路径, 该方向永远保留至少 degenerate_gain 的信息,
-    ///       避免沿走廊轴完全失去约束而自由漂移.
-    double degenerate_gain = 0.0;
+    int min_effective_points = 1;
+    // 退化诊断阈值: H 的 λmin/λmax 低于此值的方向记为退化 (检测始终执行).
+    double degenerate_eigen_ratio = 0.02;
+    // [开关] 退化保护, 默认关 = 官方语义:
+    //   degenerate_skip: 有效点过少/占比过低时跳过本帧 LiDAR 更新 (官方无);
+    //   degenerate_gain: (0,1] 时沿弱方向自适应降权, 0 = 只检测不处理.
+    bool degenerate_skip = false;
+    int degenerate_min_effective_points = 0;   // 0=不用点数判据
+    double degenerate_ratio = 0.0;             // 0=不用占比判据
+    double degenerate_gain = 0.0;              // 0=关闭降权 (只保留检测/日志)
     bool gravity_align = true;
     double init_z = 0.0;  // IMU body 世界 z 初值; 设成 IMU 离地高度使 footprint z=0
     bool undistort_enable = true;
@@ -91,7 +95,7 @@ struct Config
     double odom_calib_dist_scale = 1.0;     // 已知长度 / 该段轮速位移
 
     // 地面跟随: 不锁 z/roll/pitch, 只用世界系地面法向把 v.z 软约束到坡面分量.
-    bool ground_follow_z = true;
+    bool ground_follow_z = false;
     // 轮速一致性门控 (LIO 位移远超轮速时暂停 LiDAR). 实测对窄道错层无效,
     // 默认关闭; 保留给'轮速可信但 LIO 会滑'的场合.
     bool odom_consistency_gate = false;
@@ -100,9 +104,13 @@ struct Config
     // 注: 旧的 odom_position_clamp / odom_scale_xy 已删除 —— 硬钳位实测会把正常段
     // 也钳弯 (300-435m 偏差 16.9->22.2), 现在的 odom_win_pos_* 窗口位移约束是它的替代.
     double ground_vz_sigma = 0.30;   // v.z 软约束标准差 (m/s)
-    // [新增] 平地假设的 v.z 软约束 (m/s), 0=关. 每帧把 v.z 拉向 0, 与地面是否
-    // 有效无关; 用于长航时 z 通道无绝对观测时的漂移抑制 (现场基本平地).
-    double flat_vz_sigma = 0.0;
+    double flat_z_max = 0.0;   // 硬钳位上限 (m), 0=关 (与死区软边界二选一)
+    // [新增] z 死区软边界: z 在 [flat_z_min, flat_z_max] 内不干预 (保留真实高差),
+    // 超出才软拉回边界. flat_z_sigma>0 时启用; 0=关.
+    double flat_z_min = -1.3;
+    double flat_z_max_band = 0.6;
+    double flat_z_sigma = 0.0;
+    double flat_z_p_floor = 0.5;    // z 协方差 floor (m), 让软保持有真实增益
     // z 的绝对软保持 (m, 0=关): 把 z 轻拉向初始值 0. 现场大多平地, 用它防
     // 长时间漂移; sigma 给大(如 1.0)时坡道几乎不受影响 (vz 约束权重高两个量级).
     double ground_z_hold_sigma = 0.0;
@@ -115,6 +123,11 @@ struct Config
     // 误差吸收器 (实测 450-550s |ba| 顶到 1.0, 同时速度虚报 1.5~1.9 m/s).
     // 默认 1.0 = 保持原有行为, 收紧需显式配置.
     double accel_bias_max = 1.0;
+    // [开关] 物理限幅 / 整帧更新门控 / 地面 tilt-only / 初始姿态协方差
+    bool physical_clamp_enable = false;
+    bool update_gate_enable = false;
+    bool ground_tilt_only = false;
+    double init_rot_cov = 1.0;
     // 沿车头速度标量约束 (m/s, 0=关): v·ĥ = 轮速里程/Δt.
     // 只用 odom 的里程, 不用它的 yaw. 针对长走廊沿轴无观测的滑行.
     double odom_speed_sigma = 0.0;
@@ -131,22 +144,28 @@ struct Config
     double zupt_speed_thresh = 0.0;   // m/s, 0=关
     int    zupt_frames = 5;
     double zupt_sigma = 0.03;         // m/s
-    // 重力方向倾斜约束 (rad, 0=关). 用加速度计低通后的方向约束 roll/pitch;
-    // 地面法向对姿态是自指的 (点云随位姿一起转), 无法提供绝对参考.
-    double gravity_tilt_sigma = 0.0;
-    double gravity_tilt_tau = 1.0;      // s, 加速度低通时间常数
+    // [开关] 无有效点时的协方差更新方式:
+    //   true  = 官方语义: 即使本帧没有有效约束也按 H/b 更新 P (H=I, b=0)
+    //   false = rosiwit 旧行为: 直接 return, 不重写 P
+    bool official_p_update = true;
     // IEKF 收敛早停: 不要用 0.2m/0.5deg 这种过松阈值, 否则一次更新就停.
     bool convergence_check = true;
-    double pos_std_threshold = 0.01;   // m
-    double rot_std_threshold = 0.05;   // deg
+    double pos_std_threshold = 0.00015;   // m
+    double rot_std_threshold = 0.01;   // deg
     M3D r_il = M3D::Identity();
     V3D t_il = V3D::Zero();
 
-    double lidar_cov_inv = 1000.0;
-    std::string robust_kernel = "tukey";
+    double lidar_cov_inv = 5000.0;
+    // GenZ-ICP 自适应权重: 平面点走 point-to-plane, 非平面点走 point-to-point(3行),
+    // 用 sqrt(alpha) 混合. 长走廊退化时比单纯点面更稳.
+    bool enable_genz_weight = false;
+    double genz_planarity_threshold = 0.1;
+    double genz_kernel = 0.5;
+    double genz_near_dist_sq = 1.0;   // GenZ 近邻平方距离门限 (m^2); 官方非GenZ=5.0
+    std::string robust_kernel = "none";
     double robust_scale = 0.5;
     double robust_floor = 0.1;
-    bool dynamic_removal = true;
+    bool dynamic_removal = false;
     int persist_thresh = 2;
     int persist_window = 20;
     double dynamic_residual_thresh = 1.0;

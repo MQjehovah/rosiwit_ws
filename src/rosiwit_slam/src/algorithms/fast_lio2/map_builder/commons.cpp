@@ -77,8 +77,16 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                     .as<bool>(out_cfg.odom_consistency_gate);
             out_cfg.ground_vz_sigma =
                 get_input("ground_vz_sigma", "ground_vz_sigma").as<double>(out_cfg.ground_vz_sigma);
-            out_cfg.flat_vz_sigma =
-                get_input("flat_vz_sigma", "flat_vz_sigma").as<double>(out_cfg.flat_vz_sigma);
+            out_cfg.flat_z_max =
+                get_input("flat_z_max", "flat_z_max").as<double>(out_cfg.flat_z_max);
+            out_cfg.flat_z_sigma =
+                get_input("flat_z_sigma", "flat_z_sigma").as<double>(out_cfg.flat_z_sigma);
+            out_cfg.flat_z_p_floor =
+                get_input("flat_z_p_floor", "flat_z_p_floor").as<double>(out_cfg.flat_z_p_floor);
+            out_cfg.flat_z_min =
+                get_input("flat_z_min", "flat_z_min").as<double>(out_cfg.flat_z_min);
+            out_cfg.flat_z_max_band =
+                get_input("flat_z_max_band", "flat_z_max_band").as<double>(out_cfg.flat_z_max_band);
             out_cfg.ground_z_hold_sigma =
                 get_input("ground_z_hold_sigma", "ground_z_hold_sigma")
                     .as<double>(out_cfg.ground_z_hold_sigma);
@@ -91,6 +99,18 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
             out_cfg.accel_bias_max =
                 get_input("accel_bias_max", "accel_bias_max")
                     .as<double>(out_cfg.accel_bias_max);
+            out_cfg.physical_clamp_enable =
+                get_input("physical_clamp_enable", "physical_clamp_enable")
+                    .as<bool>(out_cfg.physical_clamp_enable);
+            out_cfg.update_gate_enable =
+                get_input("update_gate_enable", "update_gate_enable")
+                    .as<bool>(out_cfg.update_gate_enable);
+            out_cfg.ground_tilt_only =
+                get_input("ground_tilt_only", "ground_tilt_only")
+                    .as<bool>(out_cfg.ground_tilt_only);
+            out_cfg.init_rot_cov =
+                get_input("init_rot_cov", "init_rot_cov")
+                    .as<double>(out_cfg.init_rot_cov);
             out_cfg.odom_speed_sigma =
                 get_input("odom_speed_sigma", "odom_speed_sigma")
                     .as<double>(out_cfg.odom_speed_sigma);
@@ -116,12 +136,6 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
                 get_input("zupt_frames", "zupt_frames").as<int>(out_cfg.zupt_frames);
             out_cfg.zupt_sigma =
                 get_input("zupt_sigma", "zupt_sigma").as<double>(out_cfg.zupt_sigma);
-            out_cfg.gravity_tilt_sigma =
-                get_input("gravity_tilt_sigma", "gravity_tilt_sigma")
-                    .as<double>(out_cfg.gravity_tilt_sigma);
-            out_cfg.gravity_tilt_tau =
-                get_input("gravity_tilt_tau", "gravity_tilt_tau")
-                    .as<double>(out_cfg.gravity_tilt_tau);
         }
         // 轮速融合权重 (可配; 默认值等于原先的硬编码 0.2/0.10/0.05)
         // ---- 轮速 odom 量测 (fuse, 每帧) ----
@@ -140,17 +154,21 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
         out_cfg.max_state_velocity =
             get_alias("max_state_velocity","max_state_velocity").as<double>(out_cfg.max_state_velocity);
         out_cfg.imu_init_num     = get_alias("imu_init_samples","imu_init_num").as<int>(out_cfg.imu_init_num);
+        out_cfg.imu_static_init = get_input("imu_static_init","imu_static_init").as<bool>(out_cfg.imu_static_init);
+        out_cfg.acc_scale_normalize = get_input("acc_scale_normalize","acc_scale_normalize").as<bool>(out_cfg.acc_scale_normalize);
+        out_cfg.imu_gap_reset = get_input("imu_gap_reset","imu_gap_reset").as<bool>(out_cfg.imu_gap_reset);
+        out_cfg.imu_max_prop_dt = get_input("imu_max_prop_dt","imu_max_prop_dt").as<double>(out_cfg.imu_max_prop_dt);
         out_cfg.near_search_num  = get_alias("nearest_search_points","near_search_num").as<int>(out_cfg.near_search_num);
         out_cfg.ieskf_max_iter   = get_alias("iekf_max_iterations","ieskf_max_iter").as<int>(out_cfg.ieskf_max_iter);
         out_cfg.min_effective_points = get("min_effective_points").as<int>(out_cfg.min_effective_points);
-    out_cfg.degenerate_min_effective_points =
-        get("degenerate_min_effective_points").as<int>(out_cfg.degenerate_min_effective_points);
-    out_cfg.degenerate_ratio = get("degenerate_ratio").as<double>(out_cfg.degenerate_ratio);
+        out_cfg.official_p_update = get_input("official_p_update","official_p_update").as<bool>(out_cfg.official_p_update);
+        out_cfg.degenerate_skip = get_input("degenerate_skip","degenerate_skip").as<bool>(out_cfg.degenerate_skip);
+        out_cfg.degenerate_min_effective_points =
+            get("degenerate_min_effective_points").as<int>(out_cfg.degenerate_min_effective_points);
+        out_cfg.degenerate_ratio = get("degenerate_ratio").as<double>(out_cfg.degenerate_ratio);
+        out_cfg.degenerate_gain = get("degenerate_gain").as<double>(out_cfg.degenerate_gain);
     out_cfg.degenerate_eigen_ratio =
         get("degenerate_eigen_ratio").as<double>(out_cfg.degenerate_eigen_ratio);
-    // 自适应降权增益: 0 = 关闭(只检测); (0,1] = 降权下限
-    out_cfg.degenerate_gain =
-        get("degenerate_gain").as<double>(out_cfg.degenerate_gain);
         out_cfg.gravity_align    = get("gravity_align").as<bool>(out_cfg.gravity_align);
         out_cfg.init_z           = get("init_z").as<double>(out_cfg.init_z);
         out_cfg.undistort_enable = get("undistort_enable").as<bool>(out_cfg.undistort_enable);
@@ -167,6 +185,13 @@ bool parseFastLio2Config(const std::string& config_path, Config& out_cfg) {
 
         out_cfg.lidar_cov_inv = get_alias("lidar_information_weight","lidar_cov_inv").as<double>(out_cfg.lidar_cov_inv);
         out_cfg.robust_kernel = get("robust_kernel").as<std::string>(out_cfg.robust_kernel);
+            out_cfg.enable_genz_weight =
+                get_input("enable_genz_weight", "enable_genz_weight").as<bool>(out_cfg.enable_genz_weight);
+            out_cfg.genz_planarity_threshold =
+                get_input("genz_planarity_threshold", "genz_planarity_threshold").as<double>(out_cfg.genz_planarity_threshold);
+            out_cfg.genz_kernel =
+                get_input("genz_kernel", "genz_kernel").as<double>(out_cfg.genz_kernel);
+        out_cfg.genz_near_dist_sq = get_input("genz_near_dist_sq","genz_near_dist_sq").as<double>(out_cfg.genz_near_dist_sq);
         out_cfg.robust_scale  = get("robust_scale").as<double>(out_cfg.robust_scale);
         out_cfg.robust_floor  = get("robust_floor").as<double>(out_cfg.robust_floor);
         out_cfg.dynamic_removal = get("dynamic_removal").as<bool>(out_cfg.dynamic_removal);

@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <functional>
 #include <cmath>
 #include <thread>
@@ -446,6 +447,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
             "no TF override written; core keeps r_il/t_il from config");
     }
 
+    m_config_path = config_path;
     if (!m_algo->init(config_path)) { RCLCPP_FATAL(this->get_logger(), "Init failed"); throw std::runtime_error("init failed"); }
     m_algo->setOutputCallback([this](const SlamOutput& o){ onOutput(o); });
 
@@ -582,6 +584,7 @@ SlamNode::SlamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("rosiwit_s
     m_srv_merge_map = create_service<rosiwit_slam_ros2::srv::LoadMap>("merge_map", std::bind(&SlamNode::handleMergeMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_save_grid_map = create_service<rosiwit_slam_ros2::srv::SaveGridMap>("save_grid_map", std::bind(&SlamNode::handleSaveGridMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_save_robot_map = create_service<rosiwit_slam_ros2::srv::SaveRobotMap>("save_robot_map", std::bind(&SlamNode::handleSaveRobotMap, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
+    m_srv_dump_map_data = create_service<rosiwit_slam_ros2::srv::DumpMapData>("dump_map_data", std::bind(&SlamNode::handleDumpMapData, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
     m_srv_set_slam_mode = create_service<rosiwit_slam_ros2::srv::SetSlamMode>("set_slam_mode", std::bind(&SlamNode::handleSetSlamMode, this, _1, _2, _3), rmw_qos_profile_services_default, m_work_cb_group);
 
     std::string mode_str = m_algo_raw->getPipelineMode();
@@ -1413,6 +1416,32 @@ void SlamNode::handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const 
     } else {
         res->success = false; res->message = "Unknown: " + req->mode;
     }
+}
+
+
+void SlamNode::handleDumpMapData(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::DumpMapData::Request> req, std::shared_ptr<rosiwit_slam_ros2::srv::DumpMapData::Response> res) {
+    if (req->dir.empty()) {
+        res->success = false;
+        res->message = "empty dir";
+        return;
+    }
+    const bool ok = m_algo_raw->dumpMapData(req->dir);
+    if (ok) {
+        std::ofstream f(req->dir + "/traj.csv");
+        if (f) {
+            f << "x,y,z,yaw\n";
+            std::lock_guard<std::mutex> lk(m_track_mu);
+            for (const auto& s : m_pose_track)
+                f << s.x << "," << s.y << "," << s.z << "," << s.yaw << "\n";
+        }
+        if (!m_config_path.empty()) {
+            std::error_code ec;
+            std::filesystem::copy_file(m_config_path, req->dir + "/config_used.yaml",
+                                       std::filesystem::copy_options::overwrite_existing, ec);
+        }
+    }
+    res->success = ok;
+    res->message = ok ? "dumped" : "failed";
 }
 
 } // namespace rosiwit_slam

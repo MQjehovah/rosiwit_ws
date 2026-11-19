@@ -32,6 +32,7 @@
 #include "rosiwit_slam_ros2/srv/load_map.hpp"
 #include "rosiwit_slam_ros2/srv/save_grid_map.hpp"
 #include "rosiwit_slam_ros2/srv/save_robot_map.hpp"
+#include "rosiwit_slam_ros2/srv/dump_map_data.hpp"
 #include "rosiwit_slam_ros2/srv/set_slam_mode.hpp"
 
 namespace rosiwit_slam {
@@ -159,6 +160,7 @@ private:
     bool saveRobotXzMap(const std::string& path, const std::string& map_name,
                         double kf_step);
     void handleSaveRobotMap(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SaveRobotMap::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SaveRobotMap::Response>);
+    void handleDumpMapData(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::DumpMapData::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::DumpMapData::Response>);
     void handleSetSlamMode(const std::shared_ptr<rmw_request_id_t>, const std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Request>, std::shared_ptr<rosiwit_slam_ros2::srv::SetSlamMode::Response>);
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr          m_imu_sub;
@@ -208,6 +210,7 @@ private:
     rclcpp::Service<rosiwit_slam_ros2::srv::LoadMap>::SharedPtr       m_srv_merge_map;
     rclcpp::Service<rosiwit_slam_ros2::srv::SaveGridMap>::SharedPtr   m_srv_save_grid_map;
     rclcpp::Service<rosiwit_slam_ros2::srv::SaveRobotMap>::SharedPtr  m_srv_save_robot_map;
+    rclcpp::Service<rosiwit_slam_ros2::srv::DumpMapData>::SharedPtr   m_srv_dump_map_data;
     rclcpp::Service<rosiwit_slam_ros2::srv::SetSlamMode>::SharedPtr   m_srv_set_slam_mode;
     NodeConfig m_cfg;
     std::mutex m_out_mutex;
@@ -220,6 +223,7 @@ private:
     // 导出 xzmap 用的轨迹（接口层只读记录，不参与核心）
     mutable std::mutex m_track_mu;
     std::vector<rosiwit_slam::io::RobotKfSample> m_pose_track;
+    std::string m_config_path;   // 实际使用的配置 (可能含外参 override), 供数据 dump
     bool m_have_output = false;
     nav_msgs::msg::Path m_path;
     bool m_grid_map_published = false;

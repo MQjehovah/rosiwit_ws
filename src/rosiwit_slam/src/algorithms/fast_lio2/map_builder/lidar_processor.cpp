@@ -9,6 +9,7 @@ LidarProcessor::LidarProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_co
     m_norm_vec.reset(new CloudType);
     m_effect_cloud_lidar.reset(new CloudType);
     m_effect_norm_vec.reset(new CloudType);
+    m_effect_nearest.reset(new CloudType);
     // 缓冲区将在 process() 中根据实际点云大小动态调整
 
     if (m_config.scan_resolution > 0.0)
@@ -331,6 +332,9 @@ void LidarProcessor::process(SyncPackage &package)
             m_nearest_points.resize(n);
         if (m_point_selected_flag.size() != n)
             m_point_selected_flag.resize(n, false);
+        if (m_point_planar.size() != n) m_point_planar.resize(n, 0);
+        if (m_effect_planar.size() != n) m_effect_planar.resize(n, 0);
+        if (m_effect_nearest->size() != n) m_effect_nearest->resize(n);
         if (m_robust_weight.size() != n)
             m_robust_weight.resize(n, 1.0);
         if (m_effect_weight.size() != n)
@@ -363,7 +367,7 @@ void LidarProcessor::process(SyncPackage &package)
     const State before = m_kf->x();
     const M21D P_before = m_kf->P();
     m_kf->update();
-    {
+    if (m_config.update_gate_enable) {
         const State &after = m_kf->x();
         // 门限只看水平: 垂直修正不能因为 z 误差大就被拒, 否则 z 永远回不来。
         const double dv = std::hypot(after.v.x() - before.v.x(),
@@ -468,32 +472,44 @@ void LidarProcessor::process(SyncPackage &package)
     // 不再直接写状态, 也不再积分 vz; 地面丢失时只用很松的 z 先验兜底.
     if (m_ground_follow) {
         const auto &xs = m_kf->x();
+        // [通用] 只做坡度感知的 vz 软约束: 用世界系地面法向把 v.z 钉到
+        //   vz = -(n_x v_x + n_y v_y)/n_z
+        // 平地 vz≈0, 坡道 vz=速度×坡度. 不做任何 z 锚定/平地假设, 因此
+        // 多层地面/1m 下坡会自然跟随; 地面法向只随姿态变化, 不随 z 漂移.
         if (m_ground_valid && m_ground_normal.z() > 0.85) {
-            m_kf->updateGround(m_ground_normal, m_ground_z_target, 0.02, 0.10);
             const double nz = m_ground_normal.z();
             const double vz = std::max(-1.0, std::min(1.0,
                 -(m_ground_normal.x() * xs.v.x() +
                   m_ground_normal.y() * xs.v.y()) / nz));
             m_kf->updateVerticalVelocity(vz, m_config.ground_vz_sigma);
-            if (m_config.ground_z_hold_sigma > 0.0)
-                m_kf->updateZ(0.0, m_config.ground_z_hold_sigma);
-            m_ground_z_ref = m_ground_z_target;
-            m_ground_z_init = true;
-        } else if (m_ground_z_init) {
-            m_kf->updateZ(m_ground_z_ref, 0.40);
         }
         m_kf->x().clampPhysical();
     }
-    else if (m_ground_valid && m_ground_normal.z() > 0.85) {
-        // [试验] ground_follow_z=false: 仍用地面对 roll/pitch 做约束, 不做 z/vz 跟随
+    else if (m_config.ground_tilt_only && m_ground_valid && m_ground_normal.z() > 0.85) {
+        // [开关] ground_follow_z=false 时是否仍用地面法向约束 roll/pitch
         m_kf->updateTilt(m_ground_normal, 0.02);
         m_kf->x().clampPhysical();
     }
 
-    // [新增] 平地 vz 软约束: 与地面提取是否成功无关, 每帧抑制 v.z 积分漂移.
-    if (m_config.flat_vz_sigma > 0.0) {
-        m_kf->updateVerticalVelocity(0.0, m_config.flat_vz_sigma);
-        m_kf->x().clampPhysical();
+    // [新增] z 死区软边界: 死区内不干预(保留真实 1m 高差); 出界才拉回边界.
+    if (m_config.flat_z_sigma > 0.0) {
+        auto &P = m_kf->P();
+        const double f2 = m_config.flat_z_p_floor * m_config.flat_z_p_floor;
+        if (P(5, 5) < f2) P(5, 5) = f2;
+        const double z = m_kf->x().t_wi.z();
+        if (z < m_config.flat_z_min)
+            m_kf->updateZ(m_config.flat_z_min, m_config.flat_z_sigma);
+        else if (z > m_config.flat_z_max_band)
+            m_kf->updateZ(m_config.flat_z_max_band, m_config.flat_z_sigma);
+    }
+
+    // [新增] 平地 z 安全边界: 现场基本平地, |z| 超过 flat_z_max 直接拉回并清零 v.z.
+    if (m_config.flat_z_max > 0.0) {
+        auto &xs = m_kf->x();
+        if (std::fabs(xs.t_wi.z()) > m_config.flat_z_max) {
+            xs.t_wi.z() = std::copysign(m_config.flat_z_max, xs.t_wi.z());
+            xs.v.z() = 0.0;
+        }
     }
 
     // 轮式 odom 紧耦合 (每帧, 和 IMU 一样): 用"上一帧->本帧"的位姿增量
@@ -610,32 +626,100 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         point_world.z = point_world_vec(2);
         point_world.intensity = point_body.intensity;
         m_point_residual[i] = 0.0;
+        m_point_planar[i] = 0;
         std::vector<float> point_sq_dist(m_config.near_search_num);
         auto &points_near = m_nearest_points[i];
         m_ikdtree->Nearest_Search(point_world, m_config.near_search_num, points_near, point_sq_dist);
-        if (points_near.size() >= static_cast<size_t>(m_config.near_search_num) && point_sq_dist[m_config.near_search_num - 1] <= 5)
+        const double near_thr = m_config.enable_genz_weight
+                                    ? m_config.genz_near_dist_sq : 5.0;
+        if (points_near.size() >= static_cast<size_t>(m_config.near_search_num) &&
+            point_sq_dist[m_config.near_search_num - 1] <= near_thr)
             m_point_selected_flag[i] = true;
         else
             m_point_selected_flag[i] = false;
         if (!m_point_selected_flag[i])
             continue;
 
-        Eigen::Vector4d pabcd;
-        m_point_selected_flag[i] = false;
-        if (esti_plane(points_near, 0.1, pabcd))
+        if (!m_config.enable_genz_weight)
         {
-            double pd2 = pabcd(0) * point_world_vec(0) + pabcd(1) * point_world_vec(1) + pabcd(2) * point_world_vec(2) + pabcd(3);
-            m_point_residual[i] = pd2;
-            double s = 1 - 0.9 * std::fabs(pd2) / std::sqrt(point_body_vec.norm());
-            if (s > 0.9)
+            // ---- 原 FAST-LIO 路径: 平面拟合 + s>0.9 门限 (+ 现有鲁棒核) ----
+            m_point_selected_flag[i] = false;
+            Eigen::Vector4d pabcd;
+            if (esti_plane(points_near, 0.1, pabcd))
             {
-                m_point_selected_flag[i] = true;
-                m_norm_vec->points[i].x = pabcd(0);
-                m_norm_vec->points[i].y = pabcd(1);
-                m_norm_vec->points[i].z = pabcd(2);
-                m_norm_vec->points[i].intensity = pd2;
-                m_robust_weight[i] = robustWeight(pd2);
+                double pd2 = pabcd(0) * point_world_vec(0) + pabcd(1) * point_world_vec(1) + pabcd(2) * point_world_vec(2) + pabcd(3);
+                m_point_residual[i] = pd2;
+                double s = 1 - 0.9 * std::fabs(pd2) / std::sqrt(point_body_vec.norm());
+                if (s > 0.9)
+                {
+                    m_point_selected_flag[i] = true;
+                    m_point_planar[i] = 1;
+                    m_norm_vec->points[i].x = pabcd(0);
+                    m_norm_vec->points[i].y = pabcd(1);
+                    m_norm_vec->points[i].z = pabcd(2);
+                    m_norm_vec->points[i].intensity = pd2;
+                    m_robust_weight[i] = robustWeight(pd2);
+                }
             }
+            continue;
+        }
+
+        // ---- GenZ-ICP: 邻域协方差 -> planarity -> 平面/非平面 ----
+        Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+        for (const auto &p : points_near) centroid += Eigen::Vector3d(p.x, p.y, p.z);
+        centroid /= static_cast<double>(points_near.size());
+        Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+        for (const auto &p : points_near)
+        {
+            Eigen::Vector3d d = Eigen::Vector3d(p.x, p.y, p.z) - centroid;
+            cov += d * d.transpose();
+        }
+        cov /= static_cast<double>(points_near.size());
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
+        if (es.info() != Eigen::Success) { m_point_selected_flag[i] = false; continue; }
+        const double l1 = es.eigenvalues()(2);
+        const double l2 = es.eigenvalues()(1);
+        const double l3 = es.eigenvalues()(0);
+        const double planarity = l3 / (l1 + l2 + l3 + 1e-12);
+        const Eigen::Vector3d nearest(points_near[0].x, points_near[0].y, points_near[0].z);
+
+        if (planarity < m_config.genz_planarity_threshold)
+        {
+            Eigen::Vector3d normal = es.eigenvectors().col(0).normalized();
+            double pd2 = normal.dot(point_world_vec - nearest);
+            double s_ratio = 1 - 0.9 * std::fabs(pd2) / std::max(1e-6, point_body_vec.norm());
+            if (s_ratio > 0.9)
+            {
+                m_point_planar[i] = 1;
+                m_norm_vec->points[i].x = normal(0);
+                m_norm_vec->points[i].y = normal(1);
+                m_norm_vec->points[i].z = normal(2);
+                m_norm_vec->points[i].intensity = pd2;
+                m_point_residual[i] = pd2;
+            }
+            else
+            {
+                // 平面结构但距离超限 -> 降级为 point-to-point
+                m_point_planar[i] = 0;
+                Eigen::Vector3d dir = point_world_vec - nearest;
+                double dist = std::max(1e-6, dir.norm());
+                m_norm_vec->points[i].x = dir.x() / dist;
+                m_norm_vec->points[i].y = dir.y() / dist;
+                m_norm_vec->points[i].z = dir.z() / dist;
+                m_norm_vec->points[i].intensity = dist;
+                m_point_residual[i] = dist;
+            }
+        }
+        else
+        {
+            m_point_planar[i] = 0;
+            Eigen::Vector3d dir = point_world_vec - nearest;
+            double dist = std::max(1e-6, dir.norm());
+            m_norm_vec->points[i].x = dir.x() / dist;
+            m_norm_vec->points[i].y = dir.y() / dist;
+            m_norm_vec->points[i].z = dir.z() / dist;
+            m_norm_vec->points[i].intensity = dist;
+            m_point_residual[i] = dist;
         }
     }
 
@@ -646,6 +730,7 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
     }
 
     int effect_feat_num = 0;
+    int planar_count = 0;
     for (int i = 0; i < size; i++)
     {
         if (!m_point_selected_flag[i])
@@ -653,21 +738,28 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         m_effect_cloud_lidar->points[effect_feat_num] = m_cloud_down_lidar->points[i];
         m_effect_norm_vec->points[effect_feat_num] = m_norm_vec->points[i];
         m_effect_weight[effect_feat_num] = m_robust_weight[i];
+        m_effect_planar[effect_feat_num] = m_point_planar[i];
+        if (!m_point_planar[i])
+        {
+            const auto &pn = m_nearest_points[i][0];
+            m_effect_nearest->points[effect_feat_num].x = pn.x;
+            m_effect_nearest->points[effect_feat_num].y = pn.y;
+            m_effect_nearest->points[effect_feat_num].z = pn.z;
+        }
+        if (m_point_planar[i]) planar_count++;
         effect_feat_num++;
     }
-    // 诊断: 有效平面点数 + IEKF 状态, 每 ~1s 一行. 用于定位长航时/转弯发散.
+    // 诊断: 有效点数 + IEKF 状态, 每 ~1s 一行.
     {
         static int diag_cnt = 0;
         if (++diag_cnt % 50 == 0) {
             const State &xs = m_kf->x();
-            // 显式分解 rpy (度). 不用 Eigen::eulerAngles(2,1,0): 它返回的顺序是
-            // (yaw,pitch,roll), 且在中角分支点上会给出 pitch=±180° 的等价解,
-            // 日志看起来像姿态发散, 实际姿态正常 (雷达斜装 42° 时尤其明显).
             const M3D &Rw = xs.r_wi;
             const double yaw_d   = std::atan2(Rw(1, 0), Rw(0, 0)) * 180.0 / M_PI;
             const double pitch_d = std::asin(std::max(-1.0, std::min(1.0, -Rw(2, 0)))) * 180.0 / M_PI;
             const double roll_d  = std::atan2(Rw(2, 1), Rw(2, 2)) * 180.0 / M_PI;
             std::cout << "[FLIO2] eff=" << effect_feat_num << "/" << size
+                      << " planar=" << planar_count
                       << " min=" << m_config.min_effective_points
                       << " v=" << xs.v.transpose()
                       << " bg=" << xs.bg.transpose()
@@ -679,14 +771,14 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
     }
     if (effect_feat_num < m_config.min_effective_points)
     {
-        // 有效平面点不足 -> 本帧不做 EKF 更新(纯预测通过)。legacy 语义: <50 拒绝。
         share_data.valid = false;
         if (effect_feat_num == 0)
             std::cerr << "NO Effective Points!" << std::endl;
         return;
     }
-    // 退化检测 (LIO-SAM/FAST-LIO 常见做法): 有效点太少或占比太低时, 点面匹配
-    // 只剩下少数方向约束, 强行更新会把 yaw/平移拉偏 (实测急转+开阔段厚墙).
+    // [开关] 退化跳过 (默认关 = 官方语义): 有效点过少或占比过低时,
+    // 本帧不更新 LiDAR (只走 IMU 预测), 避免近秩亏 H 把位姿拉偏.
+    if (m_config.degenerate_skip)
     {
         const double ratio = size > 0 ? static_cast<double>(effect_feat_num) / size : 0.0;
         const bool few = effect_feat_num < m_config.degenerate_min_effective_points;
@@ -694,8 +786,6 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         if (few || low_ratio) {
             ++m_degenerate_count;
             share_data.valid = false;
-            // 注意: 不做 P *= 1.1 这类逐帧放大的操作 —— 连续退化时会指数放大协方差,
-            // 恢复后第一帧就能把状态拉飞 (实测 z 掉到 -66m)。退化期间只跳过更新。
             static int deg_log = 0;
             if (++deg_log % 20 == 0) {
                 std::cout << "[FLIO2] degenerate skip eff=" << effect_feat_num
@@ -709,26 +799,85 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
     share_data.valid = true;
     share_data.H.setZero();
     share_data.b.setZero();
-    Eigen::Matrix<double, 1, 12> J;
+
+    const double alpha = static_cast<double>(planar_count) / static_cast<double>(effect_feat_num);
+    const double sqrt_alpha = std::sqrt(alpha);
+    const double sqrt_one_minus_alpha = std::sqrt(std::max(0.0, 1.0 - alpha));
+    const double k2 = m_config.genz_kernel * m_config.genz_kernel;
+    auto geman = [&](double r2) { return k2 / ((k2 + r2) * (k2 + r2)); };
+
+    if (!m_config.enable_genz_weight)
+    {
+        // 原路径: 单行 point-to-plane
+        Eigen::Matrix<double, 1, 12> J;
+        for (int i = 0; i < effect_feat_num; i++)
+        {
+            J.setZero();
+            const PointType &laser_p = m_effect_cloud_lidar->points[i];
+            const PointType &norm_p = m_effect_norm_vec->points[i];
+            Eigen::Vector3d laser_p_vec(laser_p.x, laser_p.y, laser_p.z);
+            Eigen::Vector3d norm_vec(norm_p.x, norm_p.y, norm_p.z);
+            Eigen::Matrix<double, 1, 3> B = -norm_vec.transpose() * state.r_wi * Sophus::SO3d::hat(state.r_il * laser_p_vec + state.t_il);
+            J.block<1, 3>(0, 0) = B;
+            J.block<1, 3>(0, 3) = norm_vec.transpose();
+            if (m_config.esti_il)
+            {
+                Eigen::Matrix<double, 1, 3> C = -norm_vec.transpose() * state.r_wi * state.r_il * Sophus::SO3d::hat(laser_p_vec);
+                Eigen::Matrix<double, 1, 3> D = norm_vec.transpose() * state.r_wi;
+                J.block<1, 3>(0, 6) = C;
+                J.block<1, 3>(0, 9) = D;
+            }
+            share_data.H += J.transpose() * m_config.lidar_cov_inv * m_effect_weight[i] * J;
+            share_data.b += J.transpose() * m_config.lidar_cov_inv * m_effect_weight[i] * norm_p.intensity;
+        }
+        return;
+    }
+
+    // GenZ: 平面点 1 行 + 非平面点 3 行
     for (int i = 0; i < effect_feat_num; i++)
     {
-        J.setZero();
         const PointType &laser_p = m_effect_cloud_lidar->points[i];
-        const PointType &norm_p = m_effect_norm_vec->points[i];
         Eigen::Vector3d laser_p_vec(laser_p.x, laser_p.y, laser_p.z);
-        Eigen::Vector3d norm_vec(norm_p.x, norm_p.y, norm_p.z);
-        Eigen::Matrix<double, 1, 3> B = -norm_vec.transpose() * state.r_wi * Sophus::SO3d::hat(state.r_il * laser_p_vec + state.t_wi);
-        J.block<1, 3>(0, 0) = B;
-        J.block<1, 3>(0, 3) = norm_vec.transpose();
-        if (m_config.esti_il)
+        if (m_effect_planar[i])
         {
-            Eigen::Matrix<double, 1, 3> C = -norm_vec.transpose() * state.r_wi * state.r_il * Sophus::SO3d::hat(laser_p_vec);
-            Eigen::Matrix<double, 1, 3> D = norm_vec.transpose() * state.r_wi;
-            J.block<1, 3>(0, 6) = C;
-            J.block<1, 3>(0, 9) = D;
+            const PointType &norm_p = m_effect_norm_vec->points[i];
+            Eigen::Vector3d norm_vec(norm_p.x, norm_p.y, norm_p.z);
+            const double residual = norm_p.intensity;
+            const double w = sqrt_alpha * std::sqrt(geman(residual * residual));
+            Eigen::Matrix<double, 1, 12> J;
+            J.setZero();
+            Eigen::Matrix<double, 1, 3> B = -norm_vec.transpose() * state.r_wi * Sophus::SO3d::hat(state.r_il * laser_p_vec + state.t_il);
+            J.block<1, 3>(0, 0) = B;
+            J.block<1, 3>(0, 3) = norm_vec.transpose();
+            if (m_config.esti_il)
+            {
+                Eigen::Matrix<double, 1, 3> C = -norm_vec.transpose() * state.r_wi * state.r_il * Sophus::SO3d::hat(laser_p_vec);
+                Eigen::Matrix<double, 1, 3> D = norm_vec.transpose() * state.r_wi;
+                J.block<1, 3>(0, 6) = C;
+                J.block<1, 3>(0, 9) = D;
+            }
+            share_data.H += J.transpose() * m_config.lidar_cov_inv * w * J;
+            share_data.b += J.transpose() * m_config.lidar_cov_inv * w * residual;
         }
-        share_data.H += J.transpose() * m_config.lidar_cov_inv * m_effect_weight[i] * J;
-        share_data.b += J.transpose() * m_config.lidar_cov_inv * m_effect_weight[i] * norm_p.intensity;
+        else
+        {
+            const auto &near_p = m_effect_nearest->points[i];
+            Eigen::Vector3d src = state.r_wi * (state.r_il * laser_p_vec + state.t_il) + state.t_wi;
+            Eigen::Vector3d tgt(near_p.x, near_p.y, near_p.z);
+            Eigen::Vector3d r3 = src - tgt;
+            const double w = sqrt_one_minus_alpha * std::sqrt(geman(r3.squaredNorm()));
+            Eigen::Matrix<double, 3, 12> J3;
+            J3.setZero();
+            J3.block<3, 3>(0, 0) = -state.r_wi * Sophus::SO3d::hat(state.r_il * laser_p_vec + state.t_il);
+            J3.block<3, 3>(0, 3) = Eigen::Matrix3d::Identity();
+            if (m_config.esti_il)
+            {
+                J3.block<3, 3>(0, 6) = -state.r_wi * state.r_il * Sophus::SO3d::hat(laser_p_vec);
+                J3.block<3, 3>(0, 9) = state.r_wi;
+            }
+            share_data.H += J3.transpose() * m_config.lidar_cov_inv * w * J3;
+            share_data.b += J3.transpose() * m_config.lidar_cov_inv * w * r3;
+        }
     }
 }
 

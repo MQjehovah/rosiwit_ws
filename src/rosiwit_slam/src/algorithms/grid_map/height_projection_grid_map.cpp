@@ -46,7 +46,8 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
     double min_z = *zmin_it, max_z = *zmax_it;
 
     // 2. 网格分辨率: 若按请求分辨率会超出格数上限, 自适应放粗, 避免 int 溢出与内存爆炸
-    const long long MAX_CELLS = 25LL * 1000 * 1000;   // 2500 万格
+    // [本包适配] 与 ray_casting 相同的 1 亿格上限 (离线回退路径也能保持 0.05m).
+    const long long MAX_CELLS = 100LL * 1000 * 1000;
     double res = std::max(1e-3, cfg.resolution);
     double span_x = std::max(max_x - min_x, res);
     double span_y = std::max(max_y - min_y, res);
@@ -61,7 +62,8 @@ bool HeightProjectionGridMap::build(const CloudType::Ptr& cloud,
     // 3. 自适应体素下采样 leaf: 限制每轴体素数, 避免 PCL VoxelGrid 整数索引溢出.
     //    leaf 不细于网格分辨率, 否则会把多个可能落入同一格的原始点提前合并丢失.
     const double extent = std::max({max_x - min_x, max_y - min_y, max_z - min_z, 1e-3});
-    const double leaf = std::max(0.02, std::max(res, extent / 1024.0));
+    // [本包适配] 与 ray_casting 一致: 避免 500m 级地图把 leaf 放大到 0.5m.
+    const double leaf = std::max(0.02, std::max(res, extent / 16384.0));
     CloudType::Ptr filtered(new CloudType());
     pcl::VoxelGrid<PointType> vg;
     vg.setInputCloud(finite);

@@ -290,6 +290,9 @@ bool SlamPipeline::init(const std::string& config_path) {
         return cfg[key];
     };
     m_pipeline_name = g("pipeline").as<std::string>("custom_pipeline");
+    // [开关] IMU 空洞丢帧: 官方 FAST-LIO2 等 IMU, 不丢帧; 默认 false.
+    // 旧行为 (丢覆盖不足的帧) 需要显式配置 drop_on_imu_gap: true.
+    setDropOnImuGap(g("drop_on_imu_gap").as<bool>(false));
     {
         const YAML::Node mapcfg = (glob && glob["map"]) ? glob["map"] : cfg["map"];
         if (mapcfg && mapcfg["enable_rgb"]) m_rgb_enabled = mapcfg["enable_rgb"].as<bool>(true);
@@ -1189,6 +1192,11 @@ bool SlamPipeline::resetForNewMapping(const std::string& config_path) {
 bool SlamPipeline::saveGridMap(const std::string& pgm_path, const std::string& yaml_path, double resolution) {
     if (!m_map_mgr) return false;
     return m_map_mgr->saveGridMap(pgm_path, yaml_path, resolution);
+}
+
+bool SlamPipeline::dumpMapData(const std::string& dir) {
+    if (!m_map_mgr) return false;
+    return m_map_mgr->dumpMapData(dir);
 }
 
 void SlamPipeline::requestRelocalization() {

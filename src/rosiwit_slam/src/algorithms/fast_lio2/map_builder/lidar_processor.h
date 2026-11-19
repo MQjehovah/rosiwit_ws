@@ -75,6 +75,9 @@ private:
     CloudType::Ptr m_cloud_down_lidar;
     CloudType::Ptr m_cloud_down_world;
     std::vector<bool> m_point_selected_flag;
+    std::vector<uint8_t> m_point_planar;      // 1=planar, 0=non-planar
+    std::vector<uint8_t> m_effect_planar;
+    CloudType::Ptr m_effect_nearest;          // 非平面点的最近邻 (world)
     CloudType::Ptr m_norm_vec;
     CloudType::Ptr m_effect_cloud_lidar;
     CloudType::Ptr m_effect_norm_vec;
@@ -88,7 +91,6 @@ private:
     std::unordered_map<long, int> m_voxel_free;   // L3a: 体素"被穿过"计数
     long m_frame_idx = 0;
     double m_last_cloud_end = -1.0;   // 上一帧已处理点云结束时间, 用于识别空洞后首帧
-    int m_degenerate_count = 0;   // 连续退化帧数
     bool m_odom_consistency_ok = true;
     bool m_odom_prior = false;
     double m_odom_speed = 0.0;
@@ -122,6 +124,7 @@ private:
     double m_z_ref_offset = 0.0;
     // 地面跟随: 世界系地面法向, 用来把 v.z 软约束到坡面分量 (不锁 z/roll/pitch)
     bool m_ground_follow = false;
+    int m_degenerate_count = 0;   // 连续退化帧数 (degenerate_skip 开启时统计)
     bool m_ground_valid = false;
     V3D m_ground_normal = V3D::UnitZ();
     V3D m_ground_normal_prev = V3D::UnitZ();

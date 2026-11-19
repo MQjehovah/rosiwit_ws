@@ -32,6 +32,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     "srv/LoadMap.srv"
     "srv/SaveGridMap.srv"
     "srv/SaveRobotMap.srv"
+    "srv/DumpMapData.srv"
     "srv/SetSlamMode.srv"
     DEPENDENCIES builtin_interfaces
 )
@@ -74,6 +75,18 @@ ament_target_dependencies(livo_replay
     rclcpp sensor_msgs rosbag2_cpp rosbag2_storage pcl_conversions)
 target_link_libraries(livo_replay rosiwit_slam)
 install(TARGETS livo_replay DESTINATION lib/${PROJECT_NAME})
+
+# ==================== 离线地图导出 (dump -> pcd/pgm/xzmap) ====================
+find_package(PCL REQUIRED COMPONENTS common io)
+add_executable(offline_map_export
+    tools/offline_map_export.cpp
+    src/io/xzmap_writer.cpp
+    src/io/robot_map_export.cpp)
+target_include_directories(offline_map_export PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PCL_INCLUDE_DIRS})
+target_link_libraries(offline_map_export rosiwit_slam ${PCL_LIBRARIES})
+install(TARGETS offline_map_export DESTINATION lib/${PROJECT_NAME})
 
 # ==================== 安装 ====================
 install(TARGETS ${NODE_NAME} DESTINATION lib/${PROJECT_NAME})

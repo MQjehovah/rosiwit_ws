@@ -7,6 +7,7 @@
 
 double State::gravity = 9.81;
 double State::accel_bias_max = 1.0;
+bool State::physical_clamp_enable = true;
 
 namespace
 {
@@ -137,6 +138,7 @@ void State::operator+=(const V21D &delta)
 
 void State::clampPhysical()
 {
+    if (!physical_clamp_enable) return;
     if (!t_wi.allFinite()) { t_wi.setZero(); v.setZero(); }
     if (!v.allFinite()) v.setZero();
     if (!bg.allFinite()) bg.setZero();
@@ -466,10 +468,10 @@ void IESKF::update()
         // 方向性退化 (窄通道/走廊): 沿走廊轴向的信息量趋近 0, 直接求解会让位姿沿轴滑动.
         // 这里把"检测"和"处理"分开:
         //   检测: 对 H 的 6x6 位姿块做特征分解, λ/λmax < degenerate_eigen_ratio 的方向
-        //         记为退化. 无论是否处理都执行, 便于用它来定量观测现场退化程度.
-        //   处理: degenerate_remove_weak=true 时, 把弱方向的量测信息从 H 里**移除**,
-        //         该方向回落到先验 (IMU/odom). 绝不能反过来给弱方向加信息(等于宣称量得
-        //         很准, 实测把滤波焊死, z 掉到 -101).
+        //         记为退化. 检测始终执行 (只上报日志, 不改 H/b).
+        //   处理: degenerate_gain>0 时沿弱方向自适应降权 (gain_k =
+        //         clamp((r_k/thr)^0.25, gain, 1)), 该方向回落到 IMU/odom 先验;
+        //         degenerate_gain=0 (默认) 时不做任何处理.
         // 只处理"水平平移主导"的弱方向: z/roll/pitch 对这个 42deg 斜装雷达本来就弱
         // (ratio 常年 0.0002~0.002), 由地面因子负责, 不在这里动.
         {
@@ -546,9 +548,10 @@ void IESKF::update()
             break;
     }
 
-    // 一帧都没得到有效约束时不要重写协方差: 否则 H=I、delta=0 会把 P 直接刷成单位阵,
-    // 之后所有帧都会被"过度信任"(一次空白墙/遮挡就能造成位姿跳变)。
-    if (!any_valid_iter) { return; }
+    // [开关] 无有效约束时的协方差更新:
+    //   official_p_update=true (默认, 官方语义): 继续按 H=I/b=0 更新 P;
+    //   false: 直接返回, 保留 predict 的 P (rosiwit 旧行为).
+    if (!any_valid_iter && !m_official_p_update) { return; }
     M21D L = M21D::Identity();
     // L.block<3, 3>(0, 0) = JrInv(delta.segment<3>(0));
     // L.block<3, 3>(6, 6) = JrInv(delta.segment<3>(6));

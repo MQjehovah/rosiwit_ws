@@ -123,7 +123,9 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
     double min_y = bb.min_y, max_y = bb.max_y;
 
     // 2. 网格分辨率: 超出格数上限则自适应放粗, 避免 int 溢出与内存爆炸
-    const long long MAX_CELLS = 25LL * 1000 * 1000;   // 2500 万格
+    // [本包适配] 全图 256x579m @0.05m 约 5900 万格; 15GB 内存可承受.
+    // 默认 25M 会把分辨率自动放粗到 ~0.077m, 这里放宽到 1 亿格以支持 0.05m.
+    const long long MAX_CELLS = 100LL * 1000 * 1000;  // 1 亿格上限
     double res = std::max(1e-3, cfg.resolution);
     double span_x = std::max(max_x - min_x, res);
     double span_y = std::max(max_y - min_y, res);
@@ -137,7 +139,9 @@ bool RayCastingGridMap::buildFromObservations(const std::vector<Observation>& ob
 
     // 3. 每帧自适应体素下采样 leaf: 限制每轴体素数, 避免 VoxelGrid 整数索引溢出
     const double extent = std::max({max_x - min_x, max_y - min_y, max_z - min_z, 1e-3});
-    const double leaf = std::max(0.02, std::max(res, extent / 1024.0));
+    // [本包适配] extent/1024 在 500m 级地图上会把 leaf 放大到 0.5m, 0.05m PGM 的墙
+    // 会被抽没. 这里放宽到 extent/16384: 500m 地图 -> 0.03m, 实际取 res=0.05.
+    const double leaf = std::max(0.02, std::max(res, extent / 16384.0));
 
     int width  = static_cast<int>(std::ceil(span_x / res)) + 3;
     int height = static_cast<int>(std::ceil(span_y / res)) + 3;

@@ -34,6 +34,9 @@ public:
     virtual GridInfo getGridInfo() const { return {}; }
     // 运行时切换栅格生成策略 (GridMapFactory 注册名)
     virtual bool setGridMapGenerator(const std::string& /*name*/) { return false; }
+    /// [可选] 导出全量建图数据 (逐帧观测 origin+cloud + 全局点云 + meta),
+    /// 供离线重新生成 pcd/pgm/xzmap, 不需要重跑建图.
+    virtual bool dumpMapData(const std::string& /*dir*/) { return false; }
 };
 
 } // namespace rosiwit_slam

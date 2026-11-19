@@ -17,9 +17,11 @@ bool FastLio2Frontend::init(const std::string& config_path) {
     m_kf = std::make_shared<IESKF>();
     m_kf->setMaxIter(static_cast<size_t>(m_config.ieskf_max_iter));
     m_kf->setDegenerateEigenRatio(m_config.degenerate_eigen_ratio);
-    m_kf->setDegenerateGain(m_config.degenerate_gain);
+    m_kf->setOfficialPUpdate(m_config.official_p_update);
+    m_kf->setDegenerateGain(m_config.degenerate_gain);   // [开关] 0 = 只检测, 不降权
     m_kf->setAccelBiasMax(m_config.accel_bias_max);
     m_kf->setMaxVel(m_config.max_state_velocity);   // 速度安全网 (见 IESKF::update)
+    m_kf->setPhysicalClamp(m_config.physical_clamp_enable);   // [开关] 物理限幅总开关
     m_builder = std::make_shared<MapBuilder>(m_config, m_kf);
     m_inited = true;
     return true;
@@ -51,7 +53,7 @@ bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& no
         // 地面跟随从上线起就没生效过, z 实际上一直没有约束.
         if (depress < std::cos(84.0 * M_PI / 180.0) ||
             depress > std::cos(60.0 * M_PI / 180.0)) continue;
-        coarse.push_back(R * pb + t);
+        coarse.push_back(pb);   // [修改] 车身系拟合, 平面与位姿无关
     }
     if (coarse.size() < 80) { m_ground_npts = coarse.size(); m_ground_diag = "few-points"; return false; }
     m_ground_npts = coarse.size();
@@ -85,12 +87,18 @@ bool FastLio2Frontend::estimateGroundNormal(const CloudType::Ptr& cloud, V3D& no
     }
     V3D n1;
     const bool refined = (inliers.size() >= 50 && fit(inliers, n1));
-    normal_world = refined ? n1 : n0;
+    V3D n_body = refined ? n1 : n0;
     const std::vector<V3D>& src = refined ? inliers : coarse;
     V3D m2 = V3D::Zero();
     for (const auto& p : src) m2 += p;
     m2 /= static_cast<double>(src.size());
-    plane_d = -normal_world.dot(m2);
+    double d_body = -n_body.dot(m2);
+    normal_world = R * n_body;
+    plane_d = d_body - normal_world.dot(t);
+    if (normal_world.z() < 0.0) {
+        normal_world = -normal_world; plane_d = -plane_d;
+        n_body = -n_body; d_body = -d_body;
+    }
 
     if (std::acos(std::max(-1.0, std::min(1.0, normal_world.z()))) > 40.0 * M_PI / 180.0)
     {
@@ -251,38 +259,6 @@ void FastLio2Frontend::onLidar(const LidarFrame& f) {
                       << " future_span=" << fut_span << "ms"
                       << " front_ahead=" << front_ahead << "ms"
                       << " imu_reorder_total=" << g_imu_reorder << std::endl;
-        }
-    }
-
-    // 重力方向倾斜约束: 加速度计在**车体系**测重力, 与位姿估计无关.
-    // 地面法向做不到这件事 (点云随位姿一起转, 残差恒为 0), 所以 roll/pitch 只有
-    // 这一个绝对参考. 准静态 (|a| 接近 g) 时才用.
-    if (m_config.gravity_tilt_sigma > 0.0 && !fast_imus.empty()) {
-        V3D mean_a = V3D::Zero();
-        for (const auto &im : fast_imus)
-            mean_a += V3D(im.acc.x(), im.acc.y(), im.acc.z());
-        mean_a /= static_cast<double>(fast_imus.size());
-        const double an = mean_a.norm();
-        if (an > 1e-3) {
-            const V3D ahat = mean_a / an;
-            const double dt_a = (m_acc_lp_t > 0.0)
-                                    ? std::max(1e-3, f.end_time - m_acc_lp_t)
-                                    : 0.1;
-            if (!m_acc_lp_valid) {
-                m_acc_lp = ahat;
-                m_acc_lp_valid = true;
-            } else {
-                const double tau = std::max(1e-3, m_config.gravity_tilt_tau);
-                const double a = 1.0 - std::exp(-dt_a / tau);
-                V3D b = m_acc_lp * (1.0 - a) + ahat * a;
-                if (b.norm() > 1e-6) m_acc_lp = b.normalized();
-            }
-            m_acc_lp_t = f.end_time;
-            if (std::fabs(an - State::gravity) < 1.5) {
-                const V3D up_w = m_kf->x().r_wi * m_acc_lp;
-                m_kf->updateTilt(up_w, m_config.gravity_tilt_sigma);
-                m_kf->x().clampPhysical();
-            }
         }
     }
 

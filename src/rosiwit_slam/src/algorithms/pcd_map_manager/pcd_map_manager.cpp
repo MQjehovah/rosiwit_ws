@@ -4,6 +4,7 @@
 #include <iostream>
 #include <atomic>
 #include <fstream>
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -805,6 +806,68 @@ bool PcdMapManager::setGridMapGenerator(const std::string& name) {
     grid_gen_ = std::move(gen);
     grid_gen_name_ = name;
     std::cout << "[PcdMapManager] grid generator -> " << name << std::endl;
+    return true;
+}
+
+
+bool PcdMapManager::dumpMapData(const std::string& dir)
+{
+    std::vector<Observation> observations;
+    CloudType::Ptr global_map;
+    GridMapConfig cfg;
+    std::string gen;
+    double save_voxel = 0.3;
+    bool truncated = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_);
+        if (!global_map_ || global_map_->empty()) return false;
+        observations = observations_;
+        global_map.reset(new CloudType(*global_map_));
+        cfg = grid_cfg_;
+        gen = grid_gen_name_;
+        save_voxel = save_voxel_;
+        truncated = observations_truncated_;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(dir + "/obs", ec);
+    if (ec) return false;
+
+    std::ofstream idx(dir + "/observations.txt");
+    if (!idx) return false;
+    idx << "# index origin_x origin_y origin_z points file\n";
+
+    size_t total_points = 0, saved = 0;
+    for (size_t i = 0; i < observations.size(); ++i) {
+        const auto& ob = observations[i];
+        if (!ob.cloud || ob.cloud->empty()) continue;
+        char name[64];
+        std::snprintf(name, sizeof(name), "obs/%06zu.pcd", i);
+        if (pcl::io::savePCDFileBinary(dir + "/" + name, *ob.cloud) != 0) continue;
+        idx << i << " " << ob.origin.x() << " " << ob.origin.y() << " "
+            << ob.origin.z() << " " << ob.cloud->size() << " " << name << "\n";
+        total_points += ob.cloud->size();
+        ++saved;
+    }
+    idx.close();
+
+    if (pcl::io::savePCDFileBinary(dir + "/global_map.pcd", *global_map) != 0) return false;
+
+    std::ofstream meta(dir + "/meta.txt");
+    meta << "generator " << gen << "\n"
+         << "resolution " << cfg.resolution << "\n"
+         << "min_height " << cfg.min_height << "\n"
+         << "max_height " << cfg.max_height << "\n"
+         << "ground_method " << cfg.ground_method << "\n"
+         << "ransac_dist_thr " << cfg.ransac_dist_thr << "\n"
+         << "save_voxel " << save_voxel << "\n"
+         << "observation_frames " << saved << "\n"
+         << "observation_points " << total_points << "\n"
+         << "observations_truncated " << (truncated ? 1 : 0) << "\n";
+
+    std::cout << "[PcdMapManager] dumpMapData: " << saved << " frames, "
+              << total_points << " pts -> " << dir
+              << (truncated ? " (WARN: observations were trimmed)" : "") << std::endl;
     return true;
 }
 
