@@ -159,36 +159,61 @@ static void poseGraphGround(const std::vector<Observation>& obs, CloudType::Ptr&
     }
     const double wu = 1.0 / 0.05;   // 地面 unary (m)
     const double wo = 1.0 / 0.10;   // 相邻 z 增量 (m)
-    const size_t rows = nvalid + (N - 1);
-    std::vector<Eigen::Triplet<double>> trips;
-    trips.reserve(nvalid * 1 + (N - 1) * 2);
-    Eigen::VectorXd b(rows);
-    b.setZero();
-    size_t r = 0;
-    for (size_t i = 0; i < N; ++i) {
-        if (!valid[i]) continue;
-        trips.emplace_back(static_cast<int>(r), static_cast<int>(i), wu);
-        b[r] = wu * h[i];
-        ++r;
+    std::vector<double> wun(N, 1.0);
+    std::vector<double> wod(N > 1 ? N - 1 : 0, 1.0);
+    Eigen::VectorXd znew;
+    const int max_iter = 6;
+    for (int it = 0; it < max_iter; ++it) {
+        const size_t rows = nvalid + (N - 1);
+        std::vector<Eigen::Triplet<double>> trips;
+        trips.reserve(nvalid + (N - 1) * 2);
+        Eigen::VectorXd b(rows);
+        b.setZero();
+        size_t r = 0;
+        for (size_t i = 0; i < N; ++i) {
+            if (!valid[i]) continue;
+            const double w = wu * wun[i];
+            trips.emplace_back(static_cast<int>(r), static_cast<int>(i), w);
+            b[r] = w * h[i];
+            ++r;
+        }
+        for (size_t i = 0; i + 1 < N; ++i) {
+            const double w = wo * wod[i];
+            trips.emplace_back(static_cast<int>(r), static_cast<int>(i), -w);
+            trips.emplace_back(static_cast<int>(r), static_cast<int>(i + 1), w);
+            b[r] = w * (zold[i + 1] - zold[i]);
+            ++r;
+        }
+        Eigen::SparseMatrix<double> A(static_cast<int>(rows), static_cast<int>(N));
+        A.setFromTriplets(trips.begin(), trips.end());
+        Eigen::SparseMatrix<double> ATA = A.transpose() * A;
+        Eigen::VectorXd ATb = A.transpose() * b;
+        for (size_t i = 0; i < N; ++i) ATA.coeffRef(static_cast<int>(i), static_cast<int>(i)) += 1e-6;
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
+        solver.compute(ATA);
+        if (solver.info() != Eigen::Success) {
+            std::cout << "[offline] posegraph solve failed at iter " << it << "\n";
+            return;
+        }
+        znew = solver.solve(ATb);
+        // Huber 重加权: 地面残差 >0.15m / odom 残差 >0.20m 降权
+        double max_rg = 0.0, max_ro = 0.0;
+        for (size_t i = 0; i < N; ++i) {
+            if (!valid[i]) continue;
+            const double rr = std::fabs(znew[i] - h[i]);
+            max_rg = std::max(max_rg, rr);
+            wun[i] = rr <= 0.15 ? 1.0 : 0.15 / rr;
+        }
+        for (size_t i = 0; i + 1 < N; ++i) {
+            const double rr = std::fabs((znew[i + 1] - znew[i]) - (zold[i + 1] - zold[i]));
+            max_ro = std::max(max_ro, rr);
+            wod[i] = rr <= 0.20 ? 1.0 : 0.20 / rr;
+        }
+        if (it == max_iter - 1) {
+            std::cout << "[offline] posegraph robust iters=" << (it + 1)
+                      << " max|rg|=" << max_rg << " max|ro|=" << max_ro << "\n";
+        }
     }
-    for (size_t i = 0; i + 1 < N; ++i) {
-        trips.emplace_back(static_cast<int>(r), static_cast<int>(i), -wo);
-        trips.emplace_back(static_cast<int>(r), static_cast<int>(i + 1), wo);
-        b[r] = wo * (zold[i + 1] - zold[i]);
-        ++r;
-    }
-    Eigen::SparseMatrix<double> A(static_cast<int>(rows), static_cast<int>(N));
-    A.setFromTriplets(trips.begin(), trips.end());
-    Eigen::SparseMatrix<double> ATA = A.transpose() * A;
-    Eigen::VectorXd ATb = A.transpose() * b;
-    for (size_t i = 0; i < N; ++i) ATA.coeffRef(static_cast<int>(i), static_cast<int>(i)) += 1e-6;
-    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
-    solver.compute(ATA);
-    if (solver.info() != Eigen::Success) {
-        std::cout << "[offline] posegraph solve failed\n";
-        return;
-    }
-    Eigen::VectorXd znew = solver.solve(ATb);
     std::vector<float> delta(N, 0.0f);
     for (size_t i = 0; i < N; ++i) delta[i] = static_cast<float>(znew[i] - zold[i]);
 
