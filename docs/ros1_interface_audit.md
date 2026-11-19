@@ -102,4 +102,34 @@ A 需要改导航的订阅与判停逻辑（`health==LOST` → `location_status=
 
 顺序建议：**1 → 2 → 3 → 4 → 5 → §6.1-A（导航改用 `/slam/info`）→ 6**，每步都编译验证。
 
+## 8. 编译验证（容器服务器 192.168.31.34）
+
+镜像：`xzrobot_ros_compile:1.0.3`（amd64 / Ubuntu 18.04 / ROS **melodic** / PCL1.8 /
+OpenCV3.2 / Eigen3.3.4 / 已装 `xzrobot_ros_dependency`）。镜像里**没有** Ceres、Sophus，
+且其 `xzrobot_ros_dependency` 是**老版本（无 `SlamInfo.h`）**，所以：
+
+```bash
+# 容器内（一次性）
+apt-get install -y libceres-dev ros-melodic-tf2-geometry-msgs
+cp -r <sophus> /opt/ros/melodic/include/            # ieskf 需要
+# 用仓库里的厂商包快照编译（不能用镜像里那份老的）
+cd /ws/ros1_ws && catkin_make -j4 -DCATKIN_ENABLE_TESTING=OFF \
+   -DCMAKE_BUILD_TYPE=Release -DCMAKE_DISABLE_FIND_PACKAGE_GTSAM=ON
+```
+
+**结果（2026-11-20）**：
+
+| 包 | 结果 |
+|---|---|
+| `rosiwit_slam`（核心） | ✅ `Built target rosiwit_slam` |
+| `rosiwit_slam_ros1`（接口层） | ✅ `Built target rosiwit_slam_ros1_node` |
+| `rosiwit_navigation_ros1` | ✅ `Built target rosiwit_navigation_ros1_node` |
+
+编译中额外修掉的两个**真问题**（与本轮接口整改无关，但 bionic 上才会暴露）：
+
+| 文件 | 问题 | 修复 |
+|---|---|---|
+| `include/slam_core/ground_posegraph.h` | `Eigen::SimplicialLDLT` 依赖 `<Eigen/SparseCholesky>`；而 PCL 定义了 `EIGEN_MPL2_ONLY`，该模块直接 `#error` | 改用 `Eigen::ConjugateGradient`（`<Eigen/IterativeLinearSolvers>`，MPL2 可用） |
+| `xzrobot_ros_dependency/{CMakeLists,package.xml}`（**我们的快照**） | 厂家原版 `package.xml` 只声明 `actionlib*`，但消息用了 std/geometry/sensor/nav/tf2/visualization；`msg/` 已含 action 展开消息，再 `add_action_files` 会出现同名 target | 补 6 个 `<depend>`；CMakeLists 按原版文件清单生成且**不加** `add_action_files` |
+
 <!-- 执行状态见提交信息 -->

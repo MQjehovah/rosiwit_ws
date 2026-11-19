@@ -1127,7 +1127,8 @@ pnh_.param<double>("scan_self_x_min", scan_self_x_min_, -0.45);
     // 定位健康: LOST -> 停车; matching 低 -> 限速
     slam_info_sub_ = nh_.subscribe("/slam/info", 1,
                                    &RosiwitNavigationRos1Node::slamInfoCallback, this);
-    // 运行时切换运动 profile / 控制器: std_msgs/String "clean|free[,controller]"    profile_sub_ = nh_.subscribe("/set_motion_profile", 1,
+    // 运行时切换运动 profile / 控制器: std_msgs/String "clean|free[,controller]"
+    profile_sub_ = nh_.subscribe("/set_motion_profile", 1,
                                  &RosiwitNavigationRos1Node::profileCallback, this);
     if (voxel_enabled_ && !voxel_cloud_topic_.empty()) {
       voxel_sub_ = nh_.subscribe(voxel_cloud_topic_, 1,

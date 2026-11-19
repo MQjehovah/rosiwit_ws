@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <Eigen/Sparse>
+#include <Eigen/IterativeLinearSolvers>   // ConjugateGradient (SparseCholesky 在 EIGEN_MPL2_ONLY 下不可用)
 #include <pcl/kdtree/kdtree_flann.h>
 
 #include "slam_core/i_grid_map_generator.h"
@@ -102,7 +103,13 @@ inline bool applyGroundPosegraph(const std::vector<Observation>& obs, CloudType:
         Eigen::SparseMatrix<double> ATA = A.transpose() * A;
         Eigen::VectorXd ATb = A.transpose() * b;
         for (size_t i = 0; i < N; ++i) ATA.coeffRef(static_cast<int>(i), static_cast<int>(i)) += 1e-6;
-        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
+        // [可移植性] PCL 会定义 EIGEN_MPL2_ONLY, 此时 <Eigen/SparseCholesky> 直接报错,
+        // SimplicialLDLT 不可用。这里改用共轭梯度 (IterativeLinearSolvers 在 MPL2 下可用);
+        // ATA + 1e-6·I 是 SPD, CG 收敛良好。
+        Eigen::ConjugateGradient<Eigen::SparseMatrix<double>,
+                                 Eigen::Lower | Eigen::Upper> solver;
+        solver.setTolerance(1e-8);
+        solver.setMaxIterations(200);
         solver.compute(ATA);
         if (solver.info() != Eigen::Success) {
             std::cout << "[ground_posegraph] solve failed at iter " << it << "\n";

@@ -82,9 +82,6 @@ add_service_files(FILES
   WifiUpdateDatabase.srv
 )
 
-add_action_files(DIRECTORY action FILES
-  NaviCmdAction.action
-)
 
 generate_messages(DEPENDENCIES std_msgs geometry_msgs sensor_msgs nav_msgs actionlib_msgs actionlib tf2_msgs visualization_msgs)
 
