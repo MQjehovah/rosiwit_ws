@@ -12,19 +12,18 @@
 # ★ 参数联动关系表 (改一个必须想一圈; 不变量由 LocPipeline 启动时校验并告警)
 # ============================================================================
 #  [fitness 阈值链 —— 2026-10-17 僵尸带事故的教训]
-#   monitor.lost_fitness(0.75) < accept.min_coverage(0.85)
-#     < monitor.credible_fitness(0.88) ≤ global.reloc_accept_score(0.88)
-#   2026-11-19 变更: accept.min_coverage 0.35 -> 0.85 (现场要求只接受高置信匹配)。
-#   口径因此改变: 接受线现在高于"不健康线", fitness 在 0.75~0.85 的帧会被**拒绝更新**
-#   (位姿靠 odom/预测顶), 长廊/退化段可能"位姿冻结"。观察手段:
-#       grep 'LocProbe' <log> | grep -i reject
-#   若 rejected 占比过高, 回落到 0.35(实测覆盖率 0.43~0.99, 0.5 就会拒掉有效匹配)。
+#   accept.min_coverage(0.35) < monitor.lost_fitness(0.75)
+#     < monitor.credible_fitness(0.88) ≤ global.reloc_accept_score(0.88)   必须保持此序!
+#   2026-11-19: credible 0.85->0.88, reloc_accept 0.85->0.88 (向厂家 0.89 靠);
+#   min_coverage 试过 0.85 造成"位姿冻结", 已回滚 0.35 (见 accept 段注释)。
 #   - min_coverage: 单帧匹配被接受的最低覆盖率。过高 -> 有效匹配被拒, 位姿冻结;
 #     过低 -> 错位姿被放行"散步"(事故: 0.35 放行 0.6 的垃圾匹配走了 18m)。
 #   - credible_fitness: 健康线。低于它连续 lost_patience 帧 -> 判丢重定位
 #     (统一替代原 mediocre_patience / lost_patience_low / coast_patience 三条路径);
 #     有界恢复必须达到此线才算成功, 否则放行全局重定位。
 #   - reloc_accept_score: 冷启动接受线。低于它宁可保持 LOST(界面如实), 不接受弱锁。
+#     ★ 想"只接受高置信"改这里, 不要改 min_coverage —— 对应厂家 th_fitness_relocalization。
+#   观察 min_coverage 是否卡得太死: grep 'LocProbe' <log> | grep -i reject
 #  [匹配捕获-滤波螺旋]
 #   matcher.dynamic_dist(0.4) ↔ matcher.max_correspondence_dist(2.5) ↔ local_map.cache_move(0.5):
 #   预测滞后一旦超过 dynamic_dist, 动态滤波开始删"离目标太远"的点 —— 删掉的恰是
@@ -403,10 +402,17 @@ localization:
   # ---- s2m 配准接受判据 (mode: 0=仅覆盖率, 1=残差+多帧一致性) ----
   accept:
     mode: 1
-    # 实机: gicp 覆盖率典型 0.43, 历史值 0.5 会一直接受不了 -> 位姿不输出(角标冻结)。
-    # 2026-11-19: 按现场要求收紧到 0.85 —— 只接受高置信匹配; 代价是低于 0.85 的帧
-    # 不更新位姿(靠 odom/预测), 退化段可能位姿冻结。回滚值 0.35。
-    min_coverage: 0.85   # ★联动(阈值链): 见文件头; 必须 < credible_fitness(0.88)
+    # min_coverage = 单帧配准的**重叠率下限**（不是"可信度"，也不是"健康线"）:
+    #   coverage = 扫描点中"离地图最近点 <= matcher.inlier_dist(0.3m)"的比例
+    #   （registration_metrics: evaluateCoverage, 最多采样 3000 点）
+    #   低于它 -> 本帧配准结果**不采纳**，位姿靠 odom/预测顶（不报丢失，但也不更新）
+    # 历史实测: 万集 + 那张图 覆盖率典型 0.43（范围 0.43~0.99）。
+    # 2026-11-19: 曾试改到 0.85（想"只接受高置信匹配"），但 0.85 是典型值的 2 倍，
+    #   会把大多数有效帧拒掉 -> 位姿冻结/漂走。已回滚 0.35。
+    #   若确实要收紧: 先跑一次看 coverage 分布（LocProbe），再取 p10 附近的值。
+    #   "只接受高置信重定位"应该改的是 localization.global.reloc_accept_score(0.88)，
+    #   对应厂家 xz_3d_slam 的 th_fitness_relocalization(0.89) —— 口径不同, 别混用。
+    min_coverage: 0.35   # ★联动(阈值链): 见文件头; 必须 < credible_fitness(0.88)
     residual_margin: 0.10
     consistent_frames: 2
     mahalanobis_gate: true    # 用匹配协方差做 Mahalanobis 门控
