@@ -20,7 +20,7 @@ using namespace rosiwit_slam;
 
 namespace rosiwit_slam_ros1 {
 
-RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
+Ros1OutputsInterface::Ros1OutputsInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
                                    SlamAlgorithm& engine)
     : nh_(nh), pnh_(pnh), engine_(engine) {
     // ---- 发布 ----
@@ -32,7 +32,7 @@ RosiwitInterface::RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     engine_.addTickHook([this] { onTick(); });
 }
 
-void RosiwitInterface::onTick() {
+void Ros1OutputsInterface::onTick() {
     SlamOutput out;
     if (engine_.latestOutput(out) && out.has_new_pose) publishPose(out);
     // 在线标定的估算更新 (原来挂在 2s 定时器上, 保持 2s 节奏)
@@ -45,13 +45,13 @@ void RosiwitInterface::onTick() {
     }
 }
 
-void RosiwitInterface::publishPose(const SlamOutput& out) {
+void Ros1OutputsInterface::publishPose(const SlamOutput& out) {
     const PreparedPose p = preparePose(out);
     publishOdometry(p);
     publishClouds(out, p);
 }
 
-RosiwitInterface::PreparedPose RosiwitInterface::preparePose(const SlamOutput& out) {
+Ros1OutputsInterface::PreparedPose Ros1OutputsInterface::preparePose(const SlamOutput& out) {
     PreparedPose p;
     p.new_pose = out.pose.time > last_pose_time_ + 1e-6;
     if (p.new_pose) last_pose_time_ = out.pose.time;
@@ -83,7 +83,7 @@ RosiwitInterface::PreparedPose RosiwitInterface::preparePose(const SlamOutput& o
     return p;
 }
 
-void RosiwitInterface::publishOdometry(const PreparedPose& p) {
+void Ros1OutputsInterface::publishOdometry(const PreparedPose& p) {
     const Eigen::Quaterniond q(p.pose.rot);
 
     nav_msgs::Odometry odom;
@@ -129,7 +129,7 @@ void RosiwitInterface::publishOdometry(const PreparedPose& p) {
     odom_pub_.publish(odom);
 }
 
-void RosiwitInterface::publishClouds(const rosiwit_slam::SlamOutput& out,
+void Ros1OutputsInterface::publishClouds(const rosiwit_slam::SlamOutput& out,
                                    const PreparedPose& /*p*/) {
     if (!out.world_cloud || out.world_cloud->empty()) return;
     if (world_cloud_pub_.getNumSubscribers() == 0) return;

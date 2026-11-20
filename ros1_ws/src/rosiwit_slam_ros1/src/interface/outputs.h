@@ -23,9 +23,9 @@
 
 namespace rosiwit_slam_ros1 {
 
-class RosiwitInterface {
+class Ros1OutputsInterface {
 public:
-    RosiwitInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine);
+    Ros1OutputsInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh, SlamAlgorithm& engine);
 
 private:
     /// 挂在 engine 的 50Hz 泵上: 与重构前"同一个 processCB 里排空+发布"时序一致

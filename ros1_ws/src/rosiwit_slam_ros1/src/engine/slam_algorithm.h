@@ -93,7 +93,6 @@ public:
 
     // 这些原本来自 legacy JSON, 现在统一来自同一份 YAML
     double rtGridPublishHz() const { return cfg_.rt_grid_map_publish_hz; }
-    int publishHz() const { return cfg_.publish_hz; }
     const std::string& slamInitType() const { return cfg_.slam_init_type; }
     bool debugPublish() const { return cfg_.debug_publish; }
     bool isDebug() const { return cfg_.is_debug; }
@@ -270,7 +269,6 @@ private:
         // 机身自过滤: 在 base_link 下按包围盒删除机体自身回波.
         // ---- 以下原本在 legacy JSON, 现在只从 YAML 读 ----
         double rt_grid_map_publish_hz = 1.0;    // mapping.rt_grid_map_publish_hz
-        int publish_hz = 20;                    // mapping.publish_hz (仅日志)
         std::string slam_init_type = "mapping"; // global.startup_mode
         bool debug_publish = false;             // global.debug_publish
         bool is_debug = false;                  // global.is_debug

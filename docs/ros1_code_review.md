@@ -102,6 +102,49 @@ map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("/map", 10);   // 无 latchi
 | P0-3 | `/map`、`/slam_warning_code` 改 latched | ✅ 已改：`advertise(/map, 1, true)`、`advertise(slam_warning_code, 1, true)` |
 | P0-2 | `/slam/mode_switch` 异步化 | ✅ 已改：服务只做校验/去重/投递，重建放到 `disk_write` lane（与存图串行），回调有界等待 8 s；`resetCore()` 里 `core_mu_` 改为**有界获取 2 s**（原来无超时，这是"卡死数分钟"的根因） |
 | P2-8 | 单元测试 | ✅ 已跑：见下表 |
+| P1-1 | 服务回调内的阻塞重试/等待 | ✅ 已改：服务改为**独立回调队列 + 独立 spinner 线程**，切图/切模式/存图的等待只阻塞服务线程（详见下节） |
+| P1-2 | `publish_hz` 读了不生效 | ✅ 已删：配置项、解析、字段一起移除；`0.1 s` 固定（与厂商真机一致），日志不再谎报可调 |
+| P1-3 | `curr_map_path_` / `loaded_map_mtime_` 跨线程 | ✅ 已改：`map_path_mu_` + `currentMapPath()/setCurrentMapPath()`；mtime 改 `std::atomic<double>` |
+| P2-7 | 类名 `RosiwitInterface` 易混 | ✅ 已改名 `Ros1OutputsInterface`（与 `Ros1SlamInterface` 分清） |
+| P2-9 | 弃用脚本 | ✅ `scripts/localization_kidnap_check.py` → `scripts/deprecated/` |
+
+### P1-1 为什么必须拆 spinner（这是"切图期间点云不动"的根因）
+
+`main.cpp` 原来是 `ros::spin()`，**单线程**消费全局回调队列：话题、定时器、服务全在一个线程里。
+只要有一个服务回调阻塞，IMU/雷达回调、`0.1 s` 发布定时器、`1 s` 栅格定时器就一起停摆。
+
+现在：
+
+```
+io_spinner  (1 线程, 默认队列):   话题 + 定时器, 保持原来的串行顺序
+srv_spinner (1 线程, 服务队列):   9 个服务, 阻塞只影响服务自己
+```
+
+- 服务的 `NodeHandle` 是 `srv_nh_`，构造里 `srv_nh_.setCallbackQueue(&srv_queue_)` 后注册，
+  所以 9 个服务全在独立队列上；话题/定时器仍在 `nh_` 的默认队列
+- `SlamRosNode::serviceQueue()` / `SlamRos1Interface::serviceQueue()` 把它透出给 `main`
+- 服务之间仍严格串行（一个线程），不改变原先"服务互斥"的语义
+
+### 一个必须记住的坑：`runOnLaneWithDone` 的 DoneFn 参数不是"成功"
+
+```cpp
+executor_->submit(..., [done](JobId, bool ok) { done(ok); });   // ok = 任务被执行过
+```
+
+`ok=false` 只表示**被取消/被丢弃/抛异常**，`ok=true` 不代表业务成功。
+`/slam/mode_switch` 第一版就用 `ok` 当结果，实测「`/set_detect_mode` 不存在」时仍回 `result: 1`。
+现在改为在任务体里 `mode_switch_ok_.store(applyModeSwitch(target))`，DoneFn 只在 `!ran` 时置 false。
+（`runOnLaneAndWait` 没这个问题，它额外看了 `body_ok`。）
+
+### 冒烟验证（容器内 roscore + 真节点，无厂商节点）
+
+| 用例 | 结果 |
+|---|---|
+| 节点启动、9 个服务 + 18 个话题注册 | ✅ `rosnode info` 全在 |
+| `/slam/mode_switch {mode:0}`，无 `/set_detect_mode` | ✅ `result: 0`（服务回 error），日志 `mode 0 -> FAILED` |
+| `/slam/mode_switch {mode:0}`，假服务回 true | ✅ `result: 1`，日志 `mode 0 -> ok` |
+| `/slam/mode_switch {mode:1}` | ✅ `result: 1`，日志 `mode 1 -> ok` |
+| 连续调用后进程 | ✅ ALIVE（不再卡死） |
 
 ### P0-2 异步化的具体约定
 

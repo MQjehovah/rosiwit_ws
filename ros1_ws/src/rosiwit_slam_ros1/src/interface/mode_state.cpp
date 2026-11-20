@@ -42,7 +42,7 @@ SlamMode Ros1SlamInterface::updateModeFromCore() {
         // 切图过渡期间 core 会短暂 idle；此时不能清掉刚设置的地图状态。
         if (!map_switch_busy_.load() && !relocating_.load()) {
             setMapName(std::string());
-            curr_map_path_.clear();
+            setCurrentMapPath(std::string());
             realtime_grid_map_area_ = 0.0;
             static_map_valid_.store(false);
             curr_pose_valid_.store(false);

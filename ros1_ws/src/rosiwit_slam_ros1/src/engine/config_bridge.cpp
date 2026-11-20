@@ -230,7 +230,6 @@ void SlamAlgorithm::loadInputConfig(bool& vo_enabled, bool& odom_enabled,
                 // 原本在 legacy JSON 的项: 现在只认 YAML (不再兼容旧键名)
                 cfg_.rt_grid_map_publish_hz =
                     gi("rt_grid_map_publish_hz").as<double>(cfg_.rt_grid_map_publish_hz);
-                cfg_.publish_hz = gi("publish_hz").as<int>(cfg_.publish_hz);
                 if (glob && glob["debug_publish"]) cfg_.debug_publish = glob["debug_publish"].as<bool>();
                 if (glob && glob["is_debug"])      cfg_.is_debug = glob["is_debug"].as<bool>();
                 if (glob) {

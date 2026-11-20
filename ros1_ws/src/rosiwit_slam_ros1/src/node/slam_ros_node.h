@@ -35,6 +35,12 @@ public:
 
   bool ok() const { return ok_; }
 
+  /// 服务专用回调队列 (main.cpp 给它单独起一个 AsyncSpinner)
+  ros::CallbackQueue * serviceQueue()
+  {
+    return iface_ ? iface_->serviceQueue() : nullptr;
+  }
+
 private:
   ros::NodeHandle nh_;
   ros::NodeHandle pnh_;

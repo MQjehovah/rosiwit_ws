@@ -13,6 +13,7 @@
 #pragma once
 
 #include <ros/ros.h>
+#include <ros/callback_queue.h>
 
 #include <geometry_msgs/PoseStamped.h>
 #include <nav_msgs/OccupancyGrid.h>
@@ -89,6 +90,8 @@ public:
     /// 我们只有**一个核心**, 所以这里同时把模式同步给核心 (FREE -> "idle")。
     void setModeFromConfig(SlamMode m);
     SlamMode slamMode() const { return slam_mode_; }
+    /// 服务专用回调队列 (main.cpp 里单独起一个 AsyncSpinner 消费)
+    ros::CallbackQueue* serviceQueue() { return &srv_queue_; }
 
     // ---- [T8/T11] 地图与定位 latch ----
     /// 换图/进入定位/重定位时调 (旧实现: relocating_ = true)
@@ -241,6 +244,10 @@ private:
     void broadcastMapOdom(); // 定位 LOST 时冻结最后有效 map->odom 并持续广播
 
     ros::NodeHandle nh_, pnh_;
+    // 服务专用回调队列: 服务回调里有有界等待 (切图/切模式/存图), 不能和
+    // 话题/定时器共用同一个 spinner 线程, 否则一次切图会让 IMU/雷达回调饿死。
+    ros::CallbackQueue srv_queue_;
+    ros::NodeHandle srv_nh_;
     SlamAlgorithm& engine_;
     const bool debug_publish_;       // 旧 debug_publish_ 开关
     const bool is_debug_;
@@ -408,9 +415,18 @@ private:
     ros::ServiceServer srv_mode_switch_, srv_switch_map_, srv_relocation_, srv_stop_map_,
                        srv_global_loc_, srv_finish_task_, srv_start_task_, srv_expand_map_,
                        srv_dump_recorder_;
-    std::string curr_map_path_;
-    // 同名地图重存检测: 记录加载时的 mtime
-    double loaded_map_mtime_ = 0.0;
+    // 地图路径: 服务线程写 (switch_map), tick 线程读 (/slam/info) -> 必须加锁
+    mutable std::mutex map_path_mu_;
+    std::string curr_map_path_;   // 只能经 currentMapPath()/setCurrentMapPath() 访问
+    std::string currentMapPath() const {
+        std::lock_guard<std::mutex> lk(map_path_mu_);
+        return curr_map_path_;
+    }
+    void setCurrentMapPath(const std::string& p) {
+        std::lock_guard<std::mutex> lk(map_path_mu_);
+        curr_map_path_ = p;
+    }
+    std::atomic<double> loaded_map_mtime_{0.0};   // 同名地图重存检测: 加载时 mtime
     // 保存前质量门限
     double map_quality_free_min_m2_ = 1.0;
     double map_quality_unknown_max_ = 0.60;    // 旧 curr_map_path_

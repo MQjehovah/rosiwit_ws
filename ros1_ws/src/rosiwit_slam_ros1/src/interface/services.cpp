@@ -132,10 +132,12 @@ bool Ros1SlamInterface::handleModeSwitch(
     const bool submitted = engine_.runOnLaneWithDone("disk_write", "mode_switch",
         [this, target](rosiwit_common::CancelToken token) {
             if (token.cancelled()) { return; }
-            applyModeSwitch(target);
+            // 注意: DoneFn 的 ok 只表示"任务被执行过 (没被取消/丢弃)", **不是**切换成功。
+            // 真正的结果必须在任务体里存下来 (实测踩过: detect_mode 失败仍报 result=1)。
+            mode_switch_ok_.store(applyModeSwitch(target));
         },
-        [this, gen](bool ok) {
-            mode_switch_ok_.store(ok);
+        [this, gen](bool ran) {
+            if (!ran) { mode_switch_ok_.store(false); }   // 取消/丢弃/异常 -> 失败
             mode_switch_pending_.store(-1);
             mode_switch_done_gen_.store(gen);
         });
@@ -217,7 +219,7 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
     last_pose_stamp_ = 0.0;
 
     slam_mode_ = SlamMode::LOCALIZATION;
-    curr_map_path_ = req.map_dir;
+    setCurrentMapPath(req.map_dir);
     setMapName(req.map_name);
     last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
     core_ever_localized_ = false;
@@ -324,7 +326,7 @@ bool Ros1SlamInterface::handleSwitchMap(
     // 同一张图且核心确实在定位：只重设初始位姿，不重载地图。
     // 不能只看 slam_mode_：切 idle 后 timer 尚未刷新时会误走这里。
     const bool core_is_localization = (engine_.pipelineMode() == "localization");
-    if (req.map_dir == curr_map_path_ && slam_mode_ == SlamMode::LOCALIZATION &&
+    if (req.map_dir == currentMapPath() && slam_mode_ == SlamMode::LOCALIZATION &&
         core_is_localization) {
         // 同名重存过 (重新建图覆盖了同目录) 必须重载, 否则 App 看到的还是内存里的旧图.
         struct stat st {};
@@ -333,22 +335,22 @@ bool Ros1SlamInterface::handleSwitchMap(
         if (::stat((base + ".xzmap").c_str(), &st) == 0) {
             mtime = static_cast<double>(st.st_mtime);
         }
-        if (mtime <= 0.0 || mtime <= loaded_map_mtime_) {
+        if (mtime <= 0.0 || mtime <= loaded_map_mtime_.load()) {
             applyInitPose(req.initial_pose, true);
             res.success = true;
             return true;
         }
         ROS_WARN_STREAM("[ros1_slam] /switch_map: 同名地图已更新 (mtime "
-                        << mtime << " > " << loaded_map_mtime_ << "), 强制重载");
-        curr_map_path_.clear();
+                        << mtime << " > " << loaded_map_mtime_.load() << "), 强制重载");
+        setCurrentMapPath(std::string());
     }
 
     // 换图：阶段一同步完成（服务立即返回），阶段二在后台加载 MapData。
     {
         struct stat st {};
         const std::string base = xzMapBase(req.map_dir);
-        loaded_map_mtime_ = (::stat((base + ".xzmap").c_str(), &st) == 0)
-          ? static_cast<double>(st.st_mtime) : 0.0;
+        loaded_map_mtime_.store((::stat((base + ".xzmap").c_str(), &st) == 0)
+          ? static_cast<double>(st.st_mtime) : 0.0);
     }
     MapSwitchContext ctx = beginMapSwitch(xzMapBase(req.map_dir), req);
     startMapLoadJob(ctx, req.initial_pose);
@@ -631,7 +633,7 @@ bool Ros1SlamInterface::handleExpandMap(
             core_ever_localized_ = false;
     odom_mon_.reset();
     odom_mon_wrong_prev_ = false;
-            curr_map_path_ = req.map_dir;
+            setCurrentMapPath(req.map_dir);
         } else {
             ROS_ERROR_STREAM("[ros1_slam] update_map_operation: loadMap failed: " << base);
         }

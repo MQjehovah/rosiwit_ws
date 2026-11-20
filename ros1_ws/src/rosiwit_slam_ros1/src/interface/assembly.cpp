@@ -31,7 +31,7 @@ using namespace rosiwit_slam_ros1::interface_internal;
 namespace rosiwit_slam_ros1 {
 Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
                                                  SlamAlgorithm& engine)
-    : nh_(nh), pnh_(pnh), engine_(engine),
+    : nh_(nh), pnh_(pnh), srv_nh_(nh), engine_(engine),
       debug_publish_(engine.debugPublish()),
       is_debug_(engine.isDebug()),
       use_tf_(engine.useTf()) {
@@ -40,6 +40,9 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     initTimerPub();
     initSub();
     initClients();
+    // 服务走独立回调队列 (main.cpp 里单独起 spinner): 切图/切模式/存图的
+    // 有界等待只阻塞服务线程, 不再让话题回调与定时器跟着停摆。
+    srv_nh_.setCallbackQueue(&srv_queue_);
     initServer();
     // 与旧实现一致: 切建图时清空上一轮地图 (见 resetCoreAndCaches 注释)。
     // 默认开启; `_reset_on_mode_switch:=false` 可退回"不清图"的行为做 A/B。
@@ -162,7 +165,9 @@ void Ros1SlamInterface::initPub() {
 }
 
 void Ros1SlamInterface::initTimerPub() {
-    // legacy.cpp:254-255: 先按 publish_hz_ 算, 紧接着**硬编码覆盖成 0.1** —— publish_hz 无效 (M2)
+    // 厂商 legacy.cpp:254-255 先按 publish_hz_ 算, 紧接着硬编码覆盖成 0.1 —— 也就是说真机上
+    // 这个参数**从来没生效**。为保持接口时序与真机一致, 这里同样固定 0.1s, 并把配置项删掉
+    // (留着会让人以为能调, 实际不生效)。
     const double pub_time_gap = 0.1;
     double rt_hz = static_cast<double>(engine_.rtGridPublishHz());
     if (!(rt_hz > 0.0)) rt_hz = 1.0;
@@ -170,7 +175,7 @@ void Ros1SlamInterface::initTimerPub() {
 
     std::cout << "[ros1_slam] timers: pub=" << pub_time_gap << "s, pose=tick(20ms), rt_grid="
               << rt_gap << "s (rt_grid_map_publish_hz=" << engine_.rtGridPublishHz()
-              << ", publish_hz=" << engine_.publishHz() << " 无效-硬编码 0.1)" << std::endl;
+              << ")" << std::endl;
 
     point_cloud_mapping_timer_ = nh_.createTimer(
         ros::Duration(pub_time_gap), &Ros1SlamInterface::timerPublishLocalCloudAndSubmap, this);
@@ -233,23 +238,23 @@ void Ros1SlamInterface::initClients() {
 }
 void Ros1SlamInterface::initServer() {
     // legacy.cpp:235-242 逐字 (注意 update_map_operation 没有前导 '/', 解析到全局同名)
-    srv_mode_switch_ = nh_.advertiseService("/slam/mode_switch",
+    srv_mode_switch_ = srv_nh_.advertiseService("/slam/mode_switch",
         &Ros1SlamInterface::handleModeSwitch, this);
-    srv_switch_map_ = nh_.advertiseService("/switch_map",
+    srv_switch_map_ = srv_nh_.advertiseService("/switch_map",
         &Ros1SlamInterface::handleSwitchMap, this);
-    srv_relocation_ = nh_.advertiseService("/relocation",
+    srv_relocation_ = srv_nh_.advertiseService("/relocation",
         &Ros1SlamInterface::handleRelocation, this);
-    srv_stop_map_ = nh_.advertiseService("/stop_map_operation",
+    srv_stop_map_ = srv_nh_.advertiseService("/stop_map_operation",
         &Ros1SlamInterface::handleStopMap, this);
-    srv_global_loc_ = nh_.advertiseService("/global_localization",
+    srv_global_loc_ = srv_nh_.advertiseService("/global_localization",
         &Ros1SlamInterface::handleGlobalLocalization, this);
-    srv_dump_recorder_ = nh_.advertiseService("/slam/dump_recorder",
+    srv_dump_recorder_ = srv_nh_.advertiseService("/slam/dump_recorder",
         &Ros1SlamInterface::handleDumpRecorder, this);
-    srv_finish_task_ = nh_.advertiseService("/finish_task",
+    srv_finish_task_ = srv_nh_.advertiseService("/finish_task",
         &Ros1SlamInterface::handleFinishTask, this);
-    srv_start_task_ = nh_.advertiseService("/start_task",
+    srv_start_task_ = srv_nh_.advertiseService("/start_task",
         &Ros1SlamInterface::handleStartTask, this);
-    srv_expand_map_ = nh_.advertiseService("update_map_operation",
+    srv_expand_map_ = srv_nh_.advertiseService("update_map_operation",
         &Ros1SlamInterface::handleExpandMap, this);
 
     // 注: 不再提供 /localization/* 别名服务 —— 真机 App 只用 /relocation 与

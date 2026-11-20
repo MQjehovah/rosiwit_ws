@@ -24,7 +24,6 @@ global:
                        # 按方位角推导的顺序/相位和 Gazebo 插件对不上, 实测反而把旋转时的
                        # 位置误差从 0.25m 放大到 0.5m). 实机 10Hz 点云带 timestamp, 不受影响.
     use_odom: false # 是否订阅并使用轮式odom
-    publish_hz: 20 # 里程计/位姿发布频率(Hz)
     rt_grid_map_publish_hz: 1.0 # 实时栅格地图发布频率(Hz)
   frames:
     lidar_frame: lidar  # 雷达frame (与实机 xzrobot.v3.urdf 同名)

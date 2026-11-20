@@ -99,7 +99,6 @@ global:
                     # (2026-11: 掉头/绕圈累计旋转时航向误差放大的关键; 1.0=不校准)
     max_state_velocity: 3.0 # 状态速度物理上限(m/s, <=0关闭): 坏配准把速度打爆后的刹车
     use_odom: true # 是否订阅并使用轮式odom（legacy 由接口订阅；非 legacy 由引擎订阅）
-    publish_hz: 20 # 里程计/位姿发布频率(Hz)
     rt_grid_map_publish_hz: 1.0 # 实时栅格地图发布频率(Hz)
   frames:
     body_frame: base_link  # 车体frame
