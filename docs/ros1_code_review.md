@@ -93,3 +93,35 @@ map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("/map", 10);   // 无 latchi
 - 无自建消息；厂商包为设备原版（32 msg / 39 srv / 1 action）
 - `rosiwit_slam` / `rosiwit_slam_ros1` / `rosiwit_navigation_ros1` 在 melodic 容器中编译通过
 - arm64 deb 在设备上 `dpkg -i` 成功、`ldd` 零缺失
+
+## 修复进度（2026-11-20）
+
+| # | 项目 | 状态 |
+|---|---|---|
+| P0-1 | `/switch_map` 等地图就绪再返回 | ✅ 已改：`map_load_done_gen_` / `map_load_ok_`，最多等 12 s；加载成功返回真实结果，超时仍按"已受理"返回 true 并打 WARN。4 条退出路径 + DoneFn 兜底都会写 done |
+| P0-3 | `/map`、`/slam_warning_code` 改 latched | ✅ 已改：`advertise(/map, 1, true)`、`advertise(slam_warning_code, 1, true)` |
+| P0-2 | `/slam/mode_switch` 异步化 | ⏳ 待做（设计见下） |
+| P2-8 | 单元测试 | ✅ 已跑：见下表 |
+
+### 单元测试结果（amd64 melodic 容器，`catkin_make run_tests`）
+
+15 个 gtest 套件、93 个用例，**0 失败 0 错误**：
+
+| 套件 | 用例 | 套件 | 用例 |
+|---|---|---|---|
+| test_calibration_controller | 3 | test_map_store | 8 |
+| test_channel | 6 | test_online_calibrator | 2 |
+| test_convert | 15 | test_pcd_map_manager | 8 |
+| test_ekf_prior | 6 | test_pose_fusion | 8 |
+| test_executor | 8 | test_realtime_grid | 4 |
+| test_gicp_matcher_guard | 3 | test_reloc_disambig | 6 |
+| test_lost_monitor | 8 | test_snapshot | 2 |
+| test_thread | 6 | | |
+
+跑测试的三个前提（每次都容易忘）：
+
+1. 容器里 `apt-get install -y libceres-dev`（镜像默认没有）
+2. `cp -r third_party/sophus /usr/local/include/`（镜像没有 Sophus）
+3. 首次 configure 必须**干净**：如果先在没有 ceres 的环境 configure 过，
+   `Ceres_DIR-NOTFOUND` 会被写进 `CMakeCache.txt`，之后装了 ceres 也不会重新找，
+   表现为 `librosiwit_slam.so: undefined reference to ceres::...` → 删 build 目录重来
