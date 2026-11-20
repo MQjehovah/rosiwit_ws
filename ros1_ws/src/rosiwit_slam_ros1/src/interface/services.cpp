@@ -76,10 +76,8 @@ void Ros1SlamInterface::applyInitPose(
     engine_.applyInitPose(in, zero_if_insane, /*force_z_zero=*/true, count_as_jump);
 }
 
-bool Ros1SlamInterface::handleModeSwitch(
-    xzrobot_ros_dependency::SlamModeSwitchService::Request& req,
-    xzrobot_ros_dependency::SlamModeSwitchService::Response& res) {
-    if (req.mode == 0) {
+bool Ros1SlamInterface::applyModeSwitch(int mode) {
+    if (mode == 0) {
         // 旧 switchToLocalization (legacy.cpp:2060-2115): 先置 FREE, 再调 /set_detect_mode(0),
         // **要求成功** —— 失败就 result=0 + return false。
         // 旧实现同时 DELETE_PTR 掉了建图/定位实例 -> 我们在这里也重建核心(丢上一轮地图)。
@@ -88,11 +86,9 @@ bool Ros1SlamInterface::handleModeSwitch(
         // 不短路: 即使核心重建失败也要把检测模式切回 0, 否则 SLAM 侧状态与
         // 本层 FREE 不一致 (外层只关心整体成败)。
         const bool detect_ok = callSetDetectMode(0);
-        const bool ok = rebuilt && detect_ok;
-        res.result = ok ? 1 : 0;
-        return ok;
+        return rebuilt && detect_ok;
     }
-    if (req.mode == 1) {
+    if (mode == 1) {
         // 旧 switchToMapping (legacy.cpp:1974-2058): 也调 /set_detect_mode(1), 但
         // "if (!success) return false;" 那行在 2026 是**注释掉的** -> 结果不影响返回值;
         // 随后 run() -> warning_code_start_task_ = true (184), 即重新开启抑制窗口。
@@ -103,10 +99,71 @@ bool Ros1SlamInterface::handleModeSwitch(
         setModeFromConfig(SlamMode::MAPPING);
         setWarningSuppression(true);
         // 核心没重建成功时不能对外报 MAPPING: 否则"新一帧在旧图上配准"会静默发生。
-        res.result = rebuilt ? 1 : 0;
         return rebuilt;
     }
-    return false;   // 非法 mode: result 保持默认 0
+    return false;
+}
+
+bool Ros1SlamInterface::handleModeSwitch(
+    xzrobot_ros_dependency::SlamModeSwitchService::Request& req,
+    xzrobot_ros_dependency::SlamModeSwitchService::Response& res) {
+    if (req.mode != 0 && req.mode != 1) {
+        return false;   // 非法 mode: result 保持默认 0
+    }
+
+    // 已有一次切换在执行: 只回"已受理", 绝不再投一次 —— 两次 resetCore() 会把
+    // 上一轮刚建好的状态反复清空, 表现为"刚进建图又空了"。
+    const int inflight = mode_switch_pending_.load();
+    if (inflight >= 0) {
+        ROS_WARN_STREAM("[ros1_slam] /slam/mode_switch: already switching to mode "
+                        << inflight << ", request ignored (target " << req.mode << ")");
+        res.result = (inflight == req.mode) ? 1 : 0;
+        return true;
+    }
+
+    const int target = req.mode;
+    const uint64_t gen = mode_switch_generation_.fetch_add(1) + 1;
+    mode_switch_ok_.store(false);
+    mode_switch_pending_.store(target);
+
+    // 真正的重建放到 disk_write lane (与存图/导出串行), 不再占用 ROS 服务线程。
+    // 旧实现在回调里同步 resetCore(); 核心一旦被长操作占住, 服务线程就无限挂起
+    // —— 设备上 /slam/mode_switch 卡死数分钟、Ctrl+C 无效就是这么来的。
+    const bool submitted = engine_.runOnLaneWithDone("disk_write", "mode_switch",
+        [this, target](rosiwit_common::CancelToken token) {
+            if (token.cancelled()) { return; }
+            applyModeSwitch(target);
+        },
+        [this, gen](bool ok) {
+            mode_switch_ok_.store(ok);
+            mode_switch_pending_.store(-1);
+            mode_switch_done_gen_.store(gen);
+        });
+    if (!submitted) {
+        mode_switch_pending_.store(-1);
+        ROS_ERROR_STREAM("[ros1_slam] /slam/mode_switch: lane queue full, rejected");
+        res.result = 0;
+        return false;
+    }
+
+    // 有界等待: 正常路径只有几十毫秒 (resetCore 本身也有 200ms/2s 上限)。
+    // 超时按"已受理"回答, 由 /slam/info + 日志反映后续结果, 绝不挂住服务线程。
+    constexpr double kWaitSec = 8.0;
+    const ros::Time deadline = ros::Time::now() + ros::Duration(kWaitSec);
+    while (mode_switch_done_gen_.load() < gen && ros::Time::now() < deadline) {
+        ros::Duration(0.01).sleep();
+    }
+    if (mode_switch_done_gen_.load() < gen) {
+        ROS_WARN_STREAM("[ros1_slam] /slam/mode_switch: still running after " << kWaitSec
+                        << "s, returning accepted (mode " << target << ")");
+        res.result = 1;
+        return true;
+    }
+    const bool ok = mode_switch_ok_.load();
+    res.result = ok ? 1 : 0;
+    std::cout << "[ros1_slam] /slam/mode_switch: mode " << target << " -> "
+              << (ok ? "ok" : "FAILED") << std::endl;
+    return ok;
 }
 
 Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(

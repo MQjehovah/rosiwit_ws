@@ -233,6 +233,8 @@ private:
     /// `_reset_on_mode_switch:=true` 打开以便复现/排查。
     /// 返回 false 表示"核心没重建成功": 调用方必须把服务结果置 0, 不能对外报成功。
     bool resetCoreAndCaches();
+    /// 模式切换的执行体 (在 disk_write lane 上跑, 不再占用 ROS 服务线程)
+    bool applyModeSwitch(int mode);
 
     // ---- [T9] 动态 map->odom TF ----
     void sendTransform();   // legacy.cpp:1899-1936, 更新并广播
@@ -416,6 +418,11 @@ private:
     // /switch_map 就绪信号 (后台加载任务写, 服务线程读)
     std::atomic<uint64_t> map_load_done_gen_{0};      // 已完成加载的 generation
     std::atomic<bool>     map_load_ok_{false};        // 该次加载是否成功
+    // /slam/mode_switch 异步执行状态 (服务线程只投递, lane 线程执行)
+    std::atomic<int>      mode_switch_pending_{-1};      // 正在切换的目标模式, -1=空闲
+    std::atomic<uint64_t> mode_switch_generation_{0};    // 每次投递 +1
+    std::atomic<uint64_t> mode_switch_done_gen_{0};      // 已完成的 generation
+    std::atomic<bool>     mode_switch_ok_{false};        // 该次切换是否成功
     // ROS 层兼容：大图 xzmap 解析/关键帧重建在 aarch64 上可达 25s，
     // 不能让 /switch_map 服务线程被拖到 App 超时。PGM 先同步发布，
     // 完整定位地图在后台串行加载。

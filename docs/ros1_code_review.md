@@ -100,8 +100,26 @@ map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("/map", 10);   // 无 latchi
 |---|---|---|
 | P0-1 | `/switch_map` 等地图就绪再返回 | ✅ 已改：`map_load_done_gen_` / `map_load_ok_`，最多等 12 s；加载成功返回真实结果，超时仍按"已受理"返回 true 并打 WARN。4 条退出路径 + DoneFn 兜底都会写 done |
 | P0-3 | `/map`、`/slam_warning_code` 改 latched | ✅ 已改：`advertise(/map, 1, true)`、`advertise(slam_warning_code, 1, true)` |
-| P0-2 | `/slam/mode_switch` 异步化 | ⏳ 待做（设计见下） |
+| P0-2 | `/slam/mode_switch` 异步化 | ✅ 已改：服务只做校验/去重/投递，重建放到 `disk_write` lane（与存图串行），回调有界等待 8 s；`resetCore()` 里 `core_mu_` 改为**有界获取 2 s**（原来无超时，这是"卡死数分钟"的根因） |
 | P2-8 | 单元测试 | ✅ 已跑：见下表 |
+
+### P0-2 异步化的具体约定
+
+`/slam/mode_switch` 的应答语义（对 App 可见）：
+
+| 情形 | `result` | `return` |
+|---|---|---|
+| 切换在 8 s 内完成且成功 | 1 | true |
+| 切换在 8 s 内完成但失败（核心重建失败 / `/set_detect_mode` 失败） | 0 | false |
+| 8 s 内没跑完（极慢） | 1（已受理） | true |
+| 已有同目标切换在跑，本次被忽略 | 1 | true |
+| 已有**不同**目标切换在跑 | 0 | true |
+| 非法 mode | 0 | false |
+
+- 内核重建只做一次（`mode_switch_pending_` 去重），避免 App 重试把刚建好的状态反复清空
+- `resetCore()` 的 `core_excl_mu_` 200 ms、`core_mu_` 2 s 都是上限，拿不到就明确失败
+- 进度只能看日志（`[ros1_slam] /slam/mode_switch: mode X -> ok/FAILED`），
+  `/slam/info` 语义未改（避免 App 误判）
 
 ### 单元测试结果（amd64 melodic 容器，`catkin_make run_tests`）
 

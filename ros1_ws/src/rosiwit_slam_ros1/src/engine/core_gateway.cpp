@@ -29,6 +29,7 @@
 #include <iostream>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <thread>
 
 #include "slam_core/slam_factory.h"
 #include "slam_core/slam_pipeline.h"
@@ -260,7 +261,26 @@ bool SlamAlgorithm::resetCore() {
     // 200ms 拿不到就明确失败 (调用方是 ROS 服务线程, 不能在这里挂住 spinner)。
     if (!lockExcl(core_excl_mu_, 200, "resetCore")) return false;
     std::lock_guard<std::timed_mutex> excl(core_excl_mu_, std::adopt_lock);
-    std::lock_guard<std::mutex> core_lk(core_mu_);
+    // core_mu_ 是**无超时**的互斥锁: 热路径只短暂持有, 但一旦有长操作占着它,
+    // 原来的 lock_guard 会让调用线程无限等待 (设备上 /slam/mode_switch 卡死数分钟)。
+    // 这里改成有界获取: 2s 拿不到就明确失败, 由调用方回报失败给 App。
+    bool core_locked = false;
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+        while (!core_locked && std::chrono::steady_clock::now() < deadline) {
+            core_locked = core_mu_.try_lock();
+            if (!core_locked) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
+    }
+    if (!core_locked) {
+        std::cout << "[slam_algo] resetCore: core_mu_ busy > 2s -> fail (不挂住调用线程)"
+                  << std::endl;
+        return false;
+    }
+    std::lock_guard<std::mutex> core_lk(core_mu_, std::adopt_lock);
     if (!algo_raw_) return false;
     ++core_generation_;   // 让"解析中"的地图装载作废
     // 先复位 latch/快照类状态, 免得重建后还带着上一轮的位姿
