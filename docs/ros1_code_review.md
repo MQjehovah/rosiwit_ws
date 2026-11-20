@@ -138,7 +138,9 @@ map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("/map", 10);   // 无 latchi
 
 跑测试的三个前提（每次都容易忘）：
 
-1. 容器里 `apt-get install -y libceres-dev`（镜像默认没有）
+0. **用 `xzrobot_ros_compile:1.0.3-ceres` 这个镜像**（已内置 `libceres-dev` + Sophus），
+   不用再每次 `apt-get install`（新建容器里 apt 会静默失败，编译到 `ceres/ceres.h` 才炸）
+1. 容器里 `apt-get install -y libceres-dev`（基础镜像 `xzrobot_ros_compile:1.0.3` 默认没有）
 2. `cp -r third_party/sophus /usr/local/include/`（镜像没有 Sophus）
 3. 首次 configure 必须**干净**：如果先在没有 ceres 的环境 configure 过，
    `Ceres_DIR-NOTFOUND` 会被写进 `CMakeCache.txt`，之后装了 ceres 也不会重新找，
