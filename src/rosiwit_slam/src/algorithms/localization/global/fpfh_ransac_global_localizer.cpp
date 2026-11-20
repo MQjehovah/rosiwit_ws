@@ -141,8 +141,13 @@ int FpfhRansacGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_
     const int n = static_cast<int>(scan_xyz->size());
     std::vector<int> idx(n);
     for (int i = 0; i < n; ++i) idx[i] = i;
-    std::mt19937 rng(static_cast<uint32_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count() & 0xffffffff));
+    // 0 = 时钟种子 (生产: 每帧采样不同, 这是"同图多候选"的来源)
+    // 非 0 = 固定种子 (测试/A-B 可复现)
+    const uint32_t seed = (m_cfg.random_seed != 0)
+        ? m_cfg.random_seed
+        : static_cast<uint32_t>(
+              std::chrono::steady_clock::now().time_since_epoch().count() & 0xffffffff);
+    std::mt19937 rng(seed);
 
     // 每轮留 85% 随机子集: 不同的采样让 RANSAC 在重复结构下落到不同的"相似位置",
     // 这是产生多候选的来源 (同一份数据同一采样 = 同一个解, 跑再多轮也没用)。

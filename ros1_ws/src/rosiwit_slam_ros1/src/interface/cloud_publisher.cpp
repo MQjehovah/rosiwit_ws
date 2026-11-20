@@ -182,12 +182,8 @@ void Ros1SlamInterface::publishPointMap() {
         cloud.height = 1;
         point_map_puber_.publish(toPointCloud2(cloud, kMapFrame, ros::Time::now()));
     }
-    // global_grid_map: 由 set_grid_map_ 标志驱动, 发一次就清 (legacy.cpp:926-946)
-    if (set_grid_map_) {
-        grip_map_puber_.publish(global_grid_map_msg_);
-        std::cout << "pub once grid map" << std::endl;
-        set_grid_map_ = false;
-    }
+    // 注: 旧实现的 set_grid_map_ 标志在本仓库里从来没有被置真 (死代码), 已删除;
+    // global_grid_map 话题仍然注册 (接口面与厂商一致), 只是没有生产者。
 }
 
 // ---------------------------------------------------------------- 0.01s 位姿 + slam/info

@@ -93,6 +93,22 @@ public:
     /// 服务专用回调队列 (main.cpp 里单独起一个 AsyncSpinner 消费)
     ros::CallbackQueue* serviceQueue() { return &srv_queue_; }
 
+    // ---- 发布侧 latch 的跨线程复位 (单一写者) ----
+    // 切图/切模式/重定位发生在服务线程, 但 last_* / odom_mon_ / 状态位是
+    // slam_pub 线程 50Hz 在用的。服务线程只置位掩码, 真正的复位由发布线程
+    // 在自己的循环里做 —— 这样这些字段永远只有一个写者, 不会撕裂读。
+    static constexpr uint32_t kPubResetPoseLatch    = 1u << 0;  // curr_pose_valid_ + 位姿/高频戳
+    static constexpr uint32_t kPubResetLocStatus    = 1u << 1;  // last_core_loc_status_ + core_ever_localized_
+    static constexpr uint32_t kPubResetOdomMon      = 1u << 2;  // odom_mon_ + odom_mon_wrong_prev_
+    static constexpr uint32_t kPubResetPath         = 1u << 3;  // mapping_path_msg_ + 轨迹节流
+    static constexpr uint32_t kPubResetPlanar       = 1u << 4;  // planar_field_/pending/ever_locked
+    static constexpr uint32_t kPubResetInfoThrottle = 1u << 5;  // last_location_info_pub_
+    static constexpr uint32_t kPubResetDebugFlags   = 1u << 6;  // debug_map_published_
+
+    void requestPublishReset(uint32_t mask) { pub_reset_mask_.fetch_or(mask); }
+    /// 只在 slam_pub 线程调用 (publishCurrPose 开头)
+    void applyPublishResetIfRequested();
+
     // ---- [T8/T11] 地图与定位 latch ----
     /// 换图/进入定位/重定位时调 (旧实现: relocating_ = true)
     void resetLocalizationLatch();
@@ -142,7 +158,6 @@ private:
 
     // 定时器回调
     void timerPublishLocalCloudAndSubmap(const ros::TimerEvent&);  // 0.1s -> startPub()
-    void timerPublishLocalizationPose(const ros::TimerEvent&);     // 0.01s -> publishCurrPose()
     void timerPublishRealtimeGridMap(const ros::TimerEvent&);      // 1/rt_hz, 仅 MAPPING
 
     void startPub();                 // legacy.cpp:333-371
@@ -264,8 +279,9 @@ private:
     }
     double last_pose_stamp_ = 0.0;         // 同帧去重 (legacy.cpp:1116/1121)
 
-    bool have_imu_ = false, have_laser_ = false;    // legacy 的 get_imu_data_/get_laser_data_
-    bool debug_map_published_ = false;              // 每进一次模式只发一次 global_map
+    // 输入钩子在 FrontEnd 线程写, 0.1s 发布定时器在 io 线程读 -> atomic
+    std::atomic<bool> have_imu_{false}, have_laser_{false};   // legacy 的 get_imu_data_/get_laser_data_
+    std::atomic<bool> debug_map_published_{false};            // 每进一次模式只发一次 global_map
     std::atomic<double> realtime_grid_map_area_{0.0};   // 主线程写(1Hz), tick 读
     std::atomic<bool> static_map_valid_{false};   // /switch_map 已加载 PGM，由 tick 兜底重发
     ros::Time last_static_map_pub_;
@@ -278,10 +294,8 @@ private:
     ros::Time last_map_odom_pub_;
     std::atomic<bool> relocating_{false};           // 旧 relocating_ (legacy.cpp:1843-1853)
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图
-    bool set_grid_map_ = false;                     // 旧 set_grid_map_ (legacy.cpp:448/940)
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= mapping.grid.resolution)
     double realtime_grid_resolution_ = 0.05;        // 实时 /map 分辨率 (= mapping.grid.realtime_resolution)
-    nav_msgs::OccupancyGrid global_grid_map_msg_;   // 旧 global_grid_map_ (latch 一次)
 
     // 静态/实时栅格: 主线程的 1Hz timer 与 beginMapSwitch 写, tick 线程读 (slam/info、
     // /localization/state、兜底重发) -> 用拷贝快照, 别让 std::vector 边写边读。
@@ -352,6 +366,8 @@ private:
     // ---- C2b: 2D 激光平面约束 ----
     std::vector<rosiwit_slam::PlanarPoint> planar_pts_base_;  // base 系 2D 点
     ros::Time planar_pts_stamp_;
+    // planar 状态: 激光回调 (io 线程) 写点集, slam_pub 线程跑匹配/纠偏 -> 一把锁
+    mutable std::mutex planar_mu_;
     ros::Time planar_last_try_;
     rosiwit_slam::PlanarGrid planar_grid_;
     std::vector<float> planar_field_;
@@ -404,8 +420,9 @@ private:
     std::map<int, WarningInfo> warning_code_table_;
     mutable std::mutex warning_code_mtx_;
     std::vector<int> pending_warning_codes_;
-    bool warning_code_start_task_ = false;   // 初值 false (xz_slam_ros1_interface.h:552)
-    int warning_code_suppress_ticks_ = 0;
+    // start_task (服务线程) 写, 1s 告警定时器 (io 线程) 读/清 -> atomic
+    std::atomic<bool> warning_code_start_task_{false};   // 初值 false (xz_slam_ros1_interface.h:552)
+    std::atomic<int> warning_code_suppress_ticks_{0};
     struct FreqWindow { ros::Time start; int count = 0; };
     FreqWindow imu_freq_, lidar_freq_;       // 旧实现 imu/lidar 各一个 1s 窗口
     ros::Timer warning_code_timer_;
@@ -430,6 +447,8 @@ private:
     // 保存前质量门限
     double map_quality_free_min_m2_ = 1.0;
     double map_quality_unknown_max_ = 0.60;    // 旧 curr_map_path_
+    std::atomic<uint32_t> pub_reset_mask_{0};   // 见 kPubReset* 位定义 (服务线程置位)
+    uint64_t pub_reset_seen_ = 0;               // 仅 slam_pub 线程访问
     std::atomic<uint64_t> map_switch_generation_{0};  // 最后一次切图请求胜出
     // /switch_map 就绪信号 (后台加载任务写, 服务线程读)
     std::atomic<uint64_t> map_load_done_gen_{0};      // 已完成加载的 generation

@@ -40,6 +40,9 @@ double planarNormAngle(double a) {
 }  // namespace
 
 void Ros1SlamInterface::planarConstraintStep() {
+    // 整个步骤持 planar_mu_: 激光回调 (io 线程) 在锁内 swap 点集,
+    // 这里 (slam_pub) 读点集并改 pending/field, 两边不能同时动。
+    std::lock_guard<std::mutex> planar_lk(planar_mu_);
     if (!planar_constraint_enabled_) return;
     if (slam_mode_ != SlamMode::LOCALIZATION) return;
     // 只有"曾经真的定位成功过"才允许 2D 纠偏: 否则启动阶段位姿本来就是 0,

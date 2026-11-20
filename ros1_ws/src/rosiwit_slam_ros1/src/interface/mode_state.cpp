@@ -111,22 +111,10 @@ bool Ros1SlamInterface::resetCoreAndCaches() {
         std::lock_guard<std::mutex> lk(pose_mu_);
         curr_pose_ = Xz3dPose();
     }
-    curr_pose_valid_.store(false);
-    last_new_pose_ros_ = ros::Time();
-    last_high_rate_pub_ = ros::Time();
-    last_high_rate_tf_ = ros::Time();
-    last_pose_stamp_ = 0.0;
-    last_mapping_path_time_ = -1.0;
-    last_mapping_path_pub_ = ros::Time();
-    last_location_info_pub_ = ros::Time();
-    {
-        // 发布线程按 1Hz 在锁内整条拷贝; 这里清空也必须持同一把锁
-        std::lock_guard<std::mutex> lk(path_mu_);
-        mapping_path_msg_ = nav_msgs::Path();
-    }
-    last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
-    core_ever_localized_ = false;
-    debug_map_published_ = false;
+    // 这些字段归 slam_pub 线程写 (见 kPubReset*): 这里只置复位掩码,
+    // 避免服务/lane 线程与 50Hz 发布线程同时写同一批时间戳与状态位。
+    requestPublishReset(kPubResetPoseLatch | kPubResetPath | kPubResetLocStatus |
+                        kPubResetInfoThrottle | kPubResetDebugFlags);
     std::cout << "[ros1_slam] core rebuilt + local caches cleared" << std::endl;
     // 之前这里缺少 return: 函数声明为 bool, 默认 reset_on_mode_switch_=true 时
     // 走到末尾是**未定义返回值** -> handleModeSwitch 把成功当失败, 服务回调返回 false,
@@ -136,10 +124,7 @@ bool Ros1SlamInterface::resetCoreAndCaches() {
 
 void Ros1SlamInterface::resetLocalizationLatch() {
     relocating_ = true;
-    last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
-    core_ever_localized_ = false;
-    odom_mon_.reset();
-    odom_mon_wrong_prev_ = false;
+    requestPublishReset(kPubResetLocStatus | kPubResetOdomMon);
 }
 
 void Ros1SlamInterface::setInputSeen(bool imu, bool laser) {

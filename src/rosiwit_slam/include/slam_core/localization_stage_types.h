@@ -7,6 +7,7 @@
 #include <vector>
 #include <memory>
 #include <cmath>
+#include <cstdint>
 #include <Eigen/Eigen>
 #include "slam_core/slam_types.h"
 
@@ -225,6 +226,9 @@ struct GlobalLocalizeConfig {
     // 全局重定位单次预算(ms): 超了就带着已有候选返回, 不能无限跑
     int    reloc_budget_ms = 5000;
     double fpfh_similarity = 0.9;     // 预拒绝相似度阈值
+    // RANSAC 随机子集种子: 0 = 用时钟(生产默认, 每帧采样不同 -> 多候选);
+    // 非 0 = 固定种子, 用于可复现的回归测试/A-B (采样相同 -> 结果确定).
+    uint32_t random_seed = 0;
 };
 
 // ==================== 位姿融合 (pose_fusion) ====================

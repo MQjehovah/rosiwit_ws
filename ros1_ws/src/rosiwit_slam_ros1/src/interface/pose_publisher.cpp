@@ -30,10 +30,48 @@ using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
 
 namespace rosiwit_slam_ros1 {
-void Ros1SlamInterface::timerPublishLocalizationPose(const ros::TimerEvent&) {
-    publishCurrPose();   // legacy.cpp:826-827
+// 发布侧 latch 的统一复位点。**只在 slam_pub 线程执行** (publishCurrPose 开头),
+// 服务线程通过 requestPublishReset(mask) 置位, 不直接碰这些字段。
+void Ros1SlamInterface::applyPublishResetIfRequested() {
+    const uint32_t mask = pub_reset_mask_.exchange(0);
+    if (mask == 0) return;
+    pub_reset_seen_++;
+    if (mask & kPubResetPoseLatch) {
+        curr_pose_valid_ = false;
+        have_map_odom_ = false;          // TF latch 一并由发布线程复位
+        last_map_odom_pub_ = ros::Time();
+        last_new_pose_ros_ = ros::Time();
+        last_high_rate_pub_ = ros::Time();
+        last_high_rate_tf_ = ros::Time();
+        last_pose_stamp_ = 0.0;
+        last_static_map_pub_ = ros::Time();
+    }
+    if (mask & kPubResetLocStatus) {
+        last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
+        core_ever_localized_ = false;
+    }
+    if (mask & kPubResetOdomMon) {
+        odom_mon_.reset();
+        odom_mon_wrong_prev_ = false;
+    }
+    if (mask & kPubResetPath) {
+        last_mapping_path_time_ = -1.0;
+        last_mapping_path_pub_ = ros::Time();
+        std::lock_guard<std::mutex> lk(path_mu_);
+        mapping_path_msg_ = nav_msgs::Path();
+    }
+    if (mask & kPubResetPlanar) {
+        std::lock_guard<std::mutex> lk(planar_mu_);
+        planar_ever_locked_ = false;
+        planar_field_.clear();
+        planar_pending_ = false;
+    }
+    if (mask & kPubResetInfoThrottle) { last_location_info_pub_ = ros::Time(); }
+    if (mask & kPubResetDebugFlags)   { debug_map_published_.store(false); }
 }
+
 void Ros1SlamInterface::publishCurrPose() {
+    applyPublishResetIfRequested();   // 服务线程要求过复位就在这里落地 (单写者)
     updateModeFromCore();
 
     // 切图期间核心已 idle、旧输出快照已清空；这里再兜底，任何残留的旧图输出都不发布。
@@ -214,6 +252,7 @@ void Ros1SlamInterface::publishSlamInfoThrottled() {
 }
 
 void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
+    const Xz3dPose p = currentPoseSnapshot();   // 只读快照 (写侧在服务线程也可能动)
     if (!curr_pose_valid_) {
         broadcastMapOdom();
         return;
@@ -232,13 +271,13 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
         geometry_msgs::PoseStamped ps;
         ps.header.frame_id = kMapFrame;
         ps.header.stamp = now;
-        ps.pose.position.x = curr_pose_.x;
-        ps.pose.position.y = curr_pose_.y;
-        ps.pose.position.z = curr_pose_.z;
-        ps.pose.orientation.x = curr_pose_.q.x();
-        ps.pose.orientation.y = curr_pose_.q.y();
-        ps.pose.orientation.z = curr_pose_.q.z();
-        ps.pose.orientation.w = curr_pose_.q.w();
+        ps.pose.position.x = p.x;
+        ps.pose.position.y = p.y;
+        ps.pose.position.z = p.z;
+        ps.pose.orientation.x = p.q.x();
+        ps.pose.orientation.y = p.q.y();
+        ps.pose.orientation.z = p.q.z();
+        ps.pose.orientation.w = p.q.w();
         pose_puber_.publish(ps);
         if (use_tf_ && (last_high_rate_tf_.isZero() ||
                         (now - last_high_rate_tf_).toSec() >= 0.05)) {
@@ -265,26 +304,23 @@ void Ros1SlamInterface::publishStaticMapFallback() {
 }
 
 void Ros1SlamInterface::publishZeroPoseInfo() {
-    // 切图后旧图的 map->odom 不能再沿用，先回到 identity，定位成功后再更新。
-    have_map_odom_ = false;
-    last_map_odom_pub_ = ros::Time();
+    // 切图后旧图的 map->odom 不能再沿用: TF latch 的复位交给 slam_pub
+    // (kPubResetPoseLatch, beginMapSwitch 已置位), 这里只把位姿清零。
     {
         std::lock_guard<std::mutex> lk(pose_mu_);
         curr_pose_ = Xz3dPose();
     }
-    last_location_info_pub_ = ros::Time::now();
+    // 节流戳与 planar 状态归 slam_pub 线程写: 这里只置复位掩码
+    requestPublishReset(kPubResetInfoThrottle | kPubResetPlanar);
     slam_info_puber_.publish(
         buildSlamInfo(/*slam_state=*/1, /*location_status=*/1, mapName(),
                       0.0, 0.0, 0.0,
                       static_cast<float>(realtime_grid_map_area_), 0.0f));
-    // 新地图上还没定位成功过: 2D 纠偏不能用旧图的"曾经锁定"状态.
-    planar_ever_locked_ = false;
-    planar_field_.clear();
-    planar_pending_ = false;
 }
 
 void Ros1SlamInterface::publishLocationInfo() {
-    Xz3dPose p = curr_pose_;
+    // curr_pose_ 由本线程写、服务线程 (publishZeroPoseInfo) 也会写, 读侧必须持锁取快照
+    Xz3dPose p = currentPoseSnapshot();   // 下面可能把 NaN 归零, 所以是可变副本
     // legacy.cpp:1826-1830: 任一 NaN 则三者归零
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.yaw)) {
         p.x = 0.0; p.y = 0.0; p.yaw = 0.0;
@@ -419,8 +455,10 @@ void Ros1SlamInterface::sendTransform() {
         ROS_ERROR("%s", ex.what());
         return;
     }
-    if (!std::isfinite(curr_pose_.x) || !std::isfinite(curr_pose_.y) ||
-        !std::isfinite(curr_pose_.yaw)) {
+    // 与服务线程 (publishZeroPoseInfo) 共享, 取锁内快照
+    const Xz3dPose pose = currentPoseSnapshot();
+    if (!std::isfinite(pose.x) || !std::isfinite(pose.y) ||
+        !std::isfinite(pose.yaw)) {
         return;
     }
 
@@ -429,10 +467,10 @@ void Ros1SlamInterface::sendTransform() {
     // 注意这里必须用 xzYawFromRot(q)(= -标准航向) 再取负, 与旧实现成对出现 ——
     // 直接用 curr_pose_.yaw 会把符号弄反。
     const double yaw =
-        xzYawFromRot(curr_pose_.q.normalized().toRotationMatrix());
+        xzYawFromRot(pose.q.normalized().toRotationMatrix());
     const Eigen::Matrix3d R_f =
         Eigen::AngleAxisd(-yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-    const Eigen::Vector3d t_f(curr_pose_.x, curr_pose_.y, curr_pose_.z);
+    const Eigen::Vector3d t_f(pose.x, pose.y, pose.z);
 
     const Eigen::Quaterniond q_o(tfo_msg.transform.rotation.w, tfo_msg.transform.rotation.x,
                                  tfo_msg.transform.rotation.y, tfo_msg.transform.rotation.z);

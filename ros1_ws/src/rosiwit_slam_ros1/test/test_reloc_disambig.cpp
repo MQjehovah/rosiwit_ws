@@ -81,6 +81,9 @@ TEST(FpfhDisambig, TwoIdenticalRoomsYieldTwoCandidates) {
     cfg.fpfh_similarity = 0.9;
     cfg.min_score = 0.4;
     cfg.voxel_resolution = 0.3;
+    // 固定随机种子: RANSAC 的随机子集是这个测试唯一的不确定源 (生产默认 0=时钟),
+    // 不固定的话并行跑测试时会偶发只出 1 个候选 -> 假失败.
+    cfg.random_seed = 20261017u;
     loc.configure(cfg);
     ASSERT_TRUE(loc.setMap("", map));
 

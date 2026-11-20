@@ -69,6 +69,8 @@ void Ros1SlamInterface::laserScanCB(const sensor_msgs::LaserScan::ConstPtr& msg)
                 pts.push_back({p.x(), p.y()});
             }
             if (pts.size() >= 60) {
+                // slam_pub 线程正在 planarConstraintStep 里读这两个成员
+                std::lock_guard<std::mutex> lk(planar_mu_);
                 planar_pts_base_.swap(pts);
                 planar_pts_stamp_ = msg->header.stamp;
             }

@@ -212,19 +212,13 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
         std::lock_guard<std::mutex> lk(pose_mu_);
         curr_pose_ = Xz3dPose();
     }
-    curr_pose_valid_.store(false);
-    last_new_pose_ros_ = ros::Time();
-    last_high_rate_pub_ = ros::Time();
-    last_high_rate_tf_ = ros::Time();
-    last_pose_stamp_ = 0.0;
+    // latch 状态交给 slam_pub 线程复位 (服务线程只置掩码, 避免与 50Hz 发布争写)
+    requestPublishReset(kPubResetPoseLatch | kPubResetLocStatus |
+                        kPubResetOdomMon | kPubResetDebugFlags);
 
     slam_mode_ = SlamMode::LOCALIZATION;
     setCurrentMapPath(req.map_dir);
     setMapName(req.map_name);
-    last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
-    core_ever_localized_ = false;
-    odom_mon_.reset();
-    odom_mon_wrong_prev_ = false;
     setWarningSuppression(true);
     publishZeroPoseInfo();   // 只发一次，之后由核心输出接管
     return ctx;
@@ -395,10 +389,7 @@ bool Ros1SlamInterface::applyRelocation(
     // 契约字段 relocalize_count 由 SlamAlgorithm::poseJumpSeq() 单源提供
     // (applyInitPose 里 +1), 这里不再自己计数。
     // [T11] 进入重定位 -> 清 latch (下次真的定位上之前报 1, 不报 0)
-    last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
-    core_ever_localized_ = false;
-    odom_mon_.reset();
-    odom_mon_wrong_prev_ = false;
+    requestPublishReset(kPubResetLocStatus | kPubResetOdomMon);
     res.success = true;
     return true;
 }
@@ -570,8 +561,7 @@ bool Ros1SlamInterface::handleGlobalLocalization(std_srvs::Empty::Request&,
     // (localization.pipeline.relocalizer=bbs 时即全局检索; =none 时退化为有界局部重锁)。
     if (!engine_.algo()) return false;
     engine_.requestRelocalization();
-    odom_mon_.reset();
-    odom_mon_wrong_prev_ = false;
+    requestPublishReset(kPubResetOdomMon);
     relocating_ = true;
     std::cout << "[ros1_slam] /global_localization -> relocalization requested" << std::endl;
     return true;
@@ -629,10 +619,7 @@ bool Ros1SlamInterface::handleExpandMap(
             engine_.setCorePipelineMode("localization", /*wait_ms=*/1000);
             slam_mode_ = SlamMode::LOCALIZATION;
             applyInitPose(req.initial_pose, false);
-            last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
-            core_ever_localized_ = false;
-    odom_mon_.reset();
-    odom_mon_wrong_prev_ = false;
+            requestPublishReset(kPubResetLocStatus | kPubResetOdomMon);
             setCurrentMapPath(req.map_dir);
         } else {
             ROS_ERROR_STREAM("[ros1_slam] update_map_operation: loadMap failed: " << base);
