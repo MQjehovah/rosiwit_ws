@@ -1,0 +1,24 @@
+{
+  "name": "rosiwit-hmi",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "rosiwit 调试用 HMI（Vue 3 + Three.js + rosbridge）",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "0.160.1",
+    "vue": "^3.4.38"
+  },
+  "devDependencies": {
+    "@types/three": "^0.160.0",
+    "@vitejs/plugin-vue": "^5.1.3",
+    "typescript": "~5.5.4",
+    "vite": "^5.4.3",
+    "vue-tsc": "^2.0.29"
+  }
+}

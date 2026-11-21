@@ -1,0 +1,147 @@
+:root {
+  color-scheme: dark;
+  --bg: #0a0f15;
+  --panel: #101823;
+  --line: #1d2a38;
+  --text: #d7e3ef;
+  --dim: #7e91a4;
+  --accent: #38bdf8;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* ---------- 通用控件 ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: 1px solid #263748;
+  border-radius: 5px;
+  background: #15202c;
+  color: #c3d4e3;
+  font-size: 11.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.btn:hover:not(:disabled) {
+  background: #1b2a39;
+  border-color: #33495e;
+  color: #e2f0fb;
+}
+.btn:active:not(:disabled) {
+  background: #111a24;
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.56);
+  color: #7dd3fc;
+}
+.btn.primary:hover:not(:disabled) {
+  background: rgba(56, 189, 248, 0.26);
+  color: #bae6fd;
+}
+.btn.warn {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.45);
+  color: #fcd34d;
+}
+.btn.warn:hover:not(:disabled) {
+  background: rgba(251, 191, 36, 0.2);
+}
+.btn.tiny {
+  padding: 3px 7px;
+  font-size: 10.5px;
+}
+.btn.small {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.input {
+  padding: 5px 8px;
+  border: 1px solid #243546;
+  border-radius: 5px;
+  background: #0b141d;
+  color: var(--text);
+  font-size: 11.5px;
+  outline: none;
+  min-width: 0;
+}
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.12);
+}
+.input::placeholder {
+  color: #4c6172;
+}
+
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* ---------- 滚动条 ---------- */
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #223242;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2f465c;
+  background-clip: content-box;
+}
+
+code,
+pre {
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+}
