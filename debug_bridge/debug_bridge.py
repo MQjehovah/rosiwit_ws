@@ -1632,7 +1632,7 @@ class BridgeWS(websocket.WebSocketHandler):
                     voxel_eff = 0.05
                 cached = SOURCE.topic_data(stream)
                 if stream == "/global_map" and not (CACHE.slam and CACHE.slam.get("map_name")):
-                    # 没有 /slam/info 时不知道当前是哪张图，先等 2s 再回退
+                    # no /slam/info yet: wait 2s so we pick the current map
                     SOURCE.ensure_stream(STREAM_STATUS)
                     deadline = now() + 2.0
                     while now() < deadline and not (CACHE.slam and CACHE.slam.get("map_name")):
