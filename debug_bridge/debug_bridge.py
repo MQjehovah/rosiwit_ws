@@ -1368,8 +1368,8 @@ class BridgeWS(websocket.WebSocketHandler):
         try:
             if action == ACTION_SUBSCRIBE:
                 is_topic = stream.startswith("/")
+                SOURCE.ensure_stream(stream)
                 if is_topic:
-                    SOURCE.ensure_stream(stream)
                     typ = SOURCE.type_of(stream)
                     default_voxel = 0.05 if TYPE_KIND.get(typ) == KIND_CLOUD else 0.0
                     default_rate = 2.0

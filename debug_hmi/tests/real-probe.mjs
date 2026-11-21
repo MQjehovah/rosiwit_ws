@@ -62,9 +62,11 @@ ws.on('open', async () => {
   const laser = await waitFor((m) => m.laser)
   console.log('laser:', laser.laser.stream, laser.laser.ranges.byteLength, 'bytes ranges')
 
-  send({ action: 2, stream: '/map', refresh: false })
-  const grid = await waitFor((m) => m.grid, 90000)
-  console.log('grid:', grid.grid.stream, grid.grid.width, 'x', grid.grid.height, grid.grid.data.byteLength, 'bytes zlib')
+  if (!process.env.SKIP_MAP) {
+    send({ action: 2, stream: '/map', refresh: false })
+    const grid = await waitFor((m) => m.grid, 90000)
+    console.log('grid:', grid.grid.stream, grid.grid.width, 'x', grid.grid.height, grid.grid.data.byteLength, 'bytes zlib')
+  }
 
   send({ action: 2, stream: '/global_map', voxel: 0.05, max_points: 0 })
   try {
