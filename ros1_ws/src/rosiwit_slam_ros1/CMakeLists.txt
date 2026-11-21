@@ -197,6 +197,16 @@ if(CATKIN_ENABLE_TESTING)
     if(TARGET test_pose_fusion)
         target_link_libraries(test_pose_fusion rosiwit_slam_ros1_lib)
     endif()
+
+    catkin_add_gtest(test_overlay_map_maintainer ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_overlay_map_maintainer.cpp)
+    if(TARGET test_overlay_map_maintainer)
+        target_link_libraries(test_overlay_map_maintainer rosiwit_slam_ros1_lib)
+    endif()
+
+    catkin_add_gtest(test_rolling_submap ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_rolling_submap.cpp)
+    if(TARGET test_rolling_submap)
+        target_link_libraries(test_rolling_submap rosiwit_slam_ros1_lib)
+    endif()
 endif()
 
 install(TARGETS rosiwit_slam_ros1_node

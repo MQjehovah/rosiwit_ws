@@ -339,6 +339,19 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.w_anchor = getv<int>(mtc, "w_anchor", m_maintainer_cfg.w_anchor);
         m_maintainer_cfg.shadow   = getv<bool>(mtc, "shadow", m_maintainer_cfg.shadow);
     }
+    // ---- B 阶段: 突变场景滚动子图 (shadow) ----
+    auto subc = loc["submap"];
+    if (subc) {
+        m_submap_enabled = getv<bool>(subc, "enabled", m_submap_enabled);
+        m_submap_use_for_tracking =
+            getv<bool>(subc, "use_for_tracking", m_submap_use_for_tracking);
+        m_submap_open_ss = getv<double>(subc, "open_static_support", m_submap_open_ss);
+        m_submap_close_ss = getv<double>(subc, "close_static_support", m_submap_close_ss);
+        m_submap_radius = getv<double>(subc, "radius_m", m_submap_radius);
+        m_submap_voxel = getv<double>(subc, "voxel", m_submap_voxel);
+    }
+    m_rolling.configure(RollingSubmap::Config{
+        m_submap_radius, m_submap_voxel, m_submap_max_points});
     auto plc = loc["planar"];
     if (plc) {
         m_planar_cfg.mode          = getv<std::string>(plc, "mode", m_planar_cfg.mode);
@@ -538,6 +551,7 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
         m_snapshot_valid = false;
     }
     m_has_cached_target = false;
+    resetRollingSubmap();
     m_map_path = map_name;
     ++m_global_generation;
     {
@@ -612,6 +626,7 @@ void LocalizationPipeline::setMapData(const MapData& data) {
         m_snapshot_valid = false;
     }
     m_has_cached_target = false;
+    resetRollingSubmap();
     m_map_path = data.meta.map_id;
     ++m_global_generation;
     {
@@ -994,6 +1009,7 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     m_healthy_streak = 0;
     m_unhealthy_streak = 0;
     m_has_cached_target = false;
+    resetRollingSubmap();
     m_coast_count = 0;
     diag::log('I', "LocPipeline", "bounded recovery, fitness=" + std::to_string(best_fit));
     FlightRecorder::instance().event("RECOVERY", "bounded recovery fitness=" +
@@ -1435,6 +1451,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             reject_reason = accepted ? "accepted" : "coverage";
         }
         m_has_cached_target = false;
+    resetRollingSubmap();
     } else {
         // 局部地图缓存: 位姿小幅移动(或全图)且**叠加层未变**时复用, 避免每帧重建
         // 降采样+KD-tree。之前配了维护层(m_maintainer)就直接放弃缓存 —— 但 overlay
@@ -1902,6 +1919,34 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 int anchor_age = 0;
                 size_t submap_pts = 0;
                 const double ss = m_maintainer->staticSupport(m_pose, &anchor_age, &submap_pts);
+
+                // ---- B 阶段(影子): 突变场景滚动子图 ----
+                // 高可信几何看不到 -> 以上一次可信位姿为锚开子图; 恢复后关闭。
+                // 目前只累积与打日志, 不参与匹配 (use_for_tracking=false)。
+                int  submap_active = 0;
+                size_t submap_size = 0;
+                int  submap_age = 0;
+                if (m_submap_enabled) {
+                    std::lock_guard<std::mutex> lk(m_rolling_mu);
+                    const double now_s = (res.pose.time > 0.0) ? res.pose.time : f.end_time;
+                    if (!m_rolling.active()) {
+                        if (ss >= 0.0 && ss < m_submap_open_ss &&
+                            res.converged && accepted && m_status.load() != LOST) {
+                            m_rolling.reset(m_pose, now_s);
+                            std::cout << "[submap] open (static_support=" << ss << ")" << std::endl;
+                        }
+                    } else {
+                        if (f.cloud && !f.cloud->empty()) m_rolling.update(*f.cloud, m_pose);
+                        if (ss >= m_submap_close_ss) {
+                            std::cout << "[submap] close (static_support=" << ss
+                                      << ", age=" << m_rolling.ageS(now_s) << "s)" << std::endl;
+                            m_rolling.deactivate();   // 已在 m_rolling_mu 内, 不能再调加锁版
+                        }
+                    }
+                    submap_active = m_rolling.active() ? 1 : 0;
+                    submap_size = m_rolling.size();
+                    submap_age = static_cast<int>(m_rolling.ageS(now_s));
+                }
                 std::ostringstream qs;
                 qs.setf(std::ios::fixed);
                 qs.precision(3);
@@ -1914,7 +1959,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                        : (m_status.load() == LOCALIZED ? "LOCALIZED" : "INIT"))
                    << " shadow=" << (m_maintainer_cfg.shadow ? 1 : 0)
                    << " w_anchor=" << m_maintainer_cfg.w_anchor
-                   << " fitness=" << res.fitness;
+                   << " fitness=" << res.fitness
+                   << " submap=" << submap_active
+                   << " submap_pts=" << submap_size
+                   << " submap_age=" << submap_age;
                 std::cout << qs.str() << std::endl;
             }
         }

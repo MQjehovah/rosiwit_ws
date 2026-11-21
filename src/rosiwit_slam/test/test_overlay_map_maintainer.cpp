@@ -144,3 +144,9 @@ TEST(OverlayMaintainerWeights, CarveDecaysAndDeletes)
     EXPECT_EQ(sub, 0u);
     EXPECT_LT(s, 0.0);
 }
+
+// catkin_add_gtest 只链 GTEST_LIBRARIES (不含 gtest_main), 所以这里自带 main
+int main(int argc, char** argv) {
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

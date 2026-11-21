@@ -391,6 +391,18 @@ localization:
 
   # ---- 健康监测 (monitor: threshold | windowed) —— ★联动(阈值链)见文件头 ----
     min_radius: 2.0 # 重定位候选最小半径(m)
+  # ---- B 阶段: 突变场景滚动子图 (影子) ----
+  # 高可信几何看不到(static_support < open)时, 以当前位姿为锚开一个局部子图,
+  # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
+  # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
+  submap:
+    enabled: true
+    use_for_tracking: false
+    radius_m: 25.0
+    voxel: 0.15
+    open_static_support: 0.20
+    close_static_support: 0.30
+
   monitor:
     enabled: true
     credible_fitness: 0.80   # 健康线: ≥ 此为健康帧; 有界恢复达标线
