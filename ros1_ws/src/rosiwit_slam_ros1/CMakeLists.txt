@@ -203,9 +203,9 @@ if(CATKIN_ENABLE_TESTING)
         target_link_libraries(test_overlay_map_maintainer rosiwit_slam_ros1_lib)
     endif()
 
-    catkin_add_gtest(test_rolling_submap ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_rolling_submap.cpp)
-    if(TARGET test_rolling_submap)
-        target_link_libraries(test_rolling_submap rosiwit_slam_ros1_lib)
+    catkin_add_gtest(test_session_map ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_session_map.cpp)
+    if(TARGET test_session_map)
+        target_link_libraries(test_session_map rosiwit_slam_ros1_lib)
     endif()
 endif()
 

@@ -140,8 +140,8 @@ mapping:
     map_move_threshold: 1.5 # 局部地图滑动窗口阈值比例
     acc_noise: 0.05 # 加速度计白噪声 (对齐 Livox)
     gyro_noise: 0.05 # 陀螺白噪声 (对齐 Livox)
-    acc_bias_random_walk: 0.001 # 加速度计零偏随机游走 (对齐 Livox)
-    gyro_bias_random_walk: 0.001 # 陀螺零偏随机游走 (对齐 Livox)
+    acc_bias_random_persistencyalk: 0.001 # 加速度计零偏随机游走 (对齐 Livox)
+    gyro_bias_random_persistencyalk: 0.001 # 陀螺零偏随机游走 (对齐 Livox)
     imu_init_samples: 100 # IMU静止初始化样本数 (对齐 Livox)
     nearest_search_points: 5 # 近邻搜索点数
     iekf_max_iterations: 5 # IEKF最大迭代次数
@@ -253,7 +253,7 @@ localization:
     slip_ratio_lo: 0.5          # |d_pose|/|d_odom| 低于此开始降权
     slip_ratio_hi: 2.0          # 高于此开始降权
     slip_yaw_thresh_deg: 20.0   # odom 横摆率与陀螺横摆率差的阈值 (deg/s)
-    odom_weight_min: 0.05       # 权重下限 (保底, 不归零)
+    odom_persistencyeight_min: 0.05       # 权重下限 (保底, 不归零)
     # 相对观测连续性保护: LIO 复位/模式切换/丢帧时重新锚定
     rel_max_gap: 0.6            # 最大时间间隔 (s)
     rel_max_step: 3.0           # 单步相对位移上限 (m); 检出跳变用, 不是速度限制
@@ -392,16 +392,16 @@ localization:
   # ---- 健康监测 (monitor: threshold | windowed) —— ★联动(阈值链)见文件头 ----
     min_radius: 2.0 # 重定位候选最小半径(m)
   # ---- B 阶段: 突变场景滚动子图 (影子) ----
-  # 高可信几何看不到(static_support < open)时, 以当前位姿为锚开一个局部子图,
+  # 高可信几何看不到(persistency_cov < open)时, 以当前位姿为锚开一个局部子图,
   # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
   # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
-  submap:
+  session_map:
     enabled: true
     use_for_tracking: false
     radius_m: 25.0
     voxel: 0.15
-    open_static_support: 0.20
-    close_static_support: 0.30
+    open_persistency_cov: 0.20
+    close_persistency_cov: 0.30
 
   monitor:
     enabled: true
@@ -490,6 +490,13 @@ localization:
 
   # ---- 地图维护 (map_maintainer: overlay) —— 非破坏性: 原图冻结, 变化存为叠加层 ----
   maintainer:
+    # w 的计票单位: frame(每帧, 与扫描频率耦合, 仅 A/B) | view(每次重新进入视野)
+    #              | session(每个任务会话) | day(每个自然日)
+    persistency_unit: session
+    persistency_hit_gain: 1          # 每个单位 +1 -> w ≈ "多少个任务确认过"
+    persistency_miss_confirm: 3      # 连续 free 证据帧数 -> 删除(去抖)
+    persistency_miss_action: 0       # 0=删除  1=按 persistency_hit_gain 递减
+    persistency_session_hours: 12    # 会话超时自动换新
     enabled: true
     fitness_trigger: 0.5      # fitness 低于此判为环境变化
     min_keyframe_dist: 1.0    # 叠加关键帧最小间距(m)
@@ -503,7 +510,7 @@ localization:
     decay_frames: 0            # ★A 阶段: 交给体素可信度 w 软删除, 不再按帧龄硬删 (0=不衰减)
     override_base: true       # 结构被移除/替换时压制原图旧点
     # ---- A 阶段: 体素可信度 w (影子模式, 只统计不决策) ----
-    w_anchor: 128             # w>=此值视为"高可信静态几何" (0~255; 观测 +8 / 雕刻 -8 / 0 删除)
+    persistency_anchor: 128             # w>=此值视为"高可信静态几何" (0~255; 观测 +8 / 雕刻 -8 / 0 删除)
     shadow: true              # true: w 只进 [quality] 日志, 不影响定位/插入 (B/C 阶段再启用)
     # 插入门控: LIO 相对观测与 S2M 残差超过此值则不写入 (0=关闭该条)
     max_insert_divergence: 0.2

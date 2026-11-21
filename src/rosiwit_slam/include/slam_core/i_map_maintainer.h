@@ -49,13 +49,13 @@ public:
     virtual bool load(const std::string& /*path*/) { return false; }
 
     /// A 阶段(影子): 最近一次"位姿可信"帧的扫描点里, 落在 overlay 体素上的点中
-    /// w >= maintainer.w_anchor 的占比 (0~1)。只统计, 不参与决策。
+    /// w >= maintainer.persistency_anchor 的占比 (0~1)。只统计, 不参与决策。
     /// @param anchor_age 出参: 命中锚点体素中"最久未再观测"的帧龄; 无锚点则 0
-    /// @param submap_pts 出参: 参与统计的点数 (落在 overlay 体素上的扫描点)
+    /// @param session_map_pts 出参: 参与统计的点数 (落在 overlay 体素上的扫描点)
     /// @return 占比; 无变化结构可见时返回 -1 (调用方记 n/a)
-    virtual double staticSupport(const PoseStamped& /*pose*/,
+    virtual double persistencyCoverage(const PoseStamped& /*pose*/,
                                  int* /*anchor_age*/ = nullptr,
-                                 size_t* /*submap_pts*/ = nullptr) const { return -1.0; }
+                                 size_t* /*session_map_pts*/ = nullptr) const { return -1.0; }
 };
 
 } // namespace rosiwit_slam

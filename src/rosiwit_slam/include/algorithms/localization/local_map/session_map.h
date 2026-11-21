@@ -1,5 +1,5 @@
 // ============================================================================
-// rolling_submap.h — 突变场景用的滚动子图（方案 v3 §3 B 阶段）
+// session_map.h — 突变场景用的滚动子图（方案 v3 §3 B 阶段）
 //
 // 解决的场景：机器人进入一个"全是货堆、看不到高可信几何"的区域，
 // 全局图的锚（map->odom）不可用。此时用一个**局部子图**维持跟踪：
@@ -23,7 +23,7 @@
 
 namespace rosiwit_slam {
 
-class RollingSubmap {
+class SessionMap {
 public:
   struct Config {
     double radius = 25.0;      // 机器人周围保留半径 (m)

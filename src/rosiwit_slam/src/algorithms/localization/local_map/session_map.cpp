@@ -1,11 +1,11 @@
-#include "algorithms/localization/local_map/rolling_submap.h"
+#include "algorithms/localization/local_map/session_map.h"
 
 #include <cmath>
 #include <iostream>
 
 namespace rosiwit_slam {
 
-int64_t RollingSubmap::key(double x, double y, double z) const {
+int64_t SessionMap::key(double x, double y, double z) const {
   const double v = (cfg_.voxel > 1e-6) ? cfg_.voxel : 0.15;
   const int64_t ix = static_cast<int64_t>(std::floor(x / v));
   const int64_t iy = static_cast<int64_t>(std::floor(y / v));
@@ -14,7 +14,7 @@ int64_t RollingSubmap::key(double x, double y, double z) const {
   return ((ix & 0x1FFFFF) << 42) | ((iy & 0x1FFFFF) << 21) | (iz & 0x1FFFFF);
 }
 
-void RollingSubmap::reset(const PoseStamped& anchor, double now_s) {
+void SessionMap::reset(const PoseStamped& anchor, double now_s) {
   anchor_ = anchor;
   created_s_ = now_s;
   pts_.clear();
@@ -25,7 +25,7 @@ void RollingSubmap::reset(const PoseStamped& anchor, double now_s) {
             << anchor.trans.y() << ") radius=" << cfg_.radius << std::endl;
 }
 
-void RollingSubmap::sweepFar() {
+void SessionMap::sweepFar() {
   if (!have_robot_) return;
   const double r = cfg_.radius;
   if (r <= 0.0) return;
@@ -40,7 +40,7 @@ void RollingSubmap::sweepFar() {
   sweep_origin_ = robot_anchor_;
 }
 
-void RollingSubmap::update(const CloudType& scan_body, const PoseStamped& pose_world) {
+void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_world) {
   if (!active_ || scan_body.empty()) return;
 
   // world = pose * body
@@ -80,7 +80,7 @@ void RollingSubmap::update(const CloudType& scan_body, const PoseStamped& pose_w
   }
 }
 
-CloudType::Ptr RollingSubmap::pointsWorld() const {
+CloudType::Ptr SessionMap::pointsWorld() const {
   CloudType::Ptr out(new CloudType());
   if (!active_ || pts_.empty()) return out;
   out->reserve(pts_.size());

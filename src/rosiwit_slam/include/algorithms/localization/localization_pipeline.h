@@ -6,7 +6,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
-#include "algorithms/localization/local_map/rolling_submap.h"
+#include "algorithms/localization/local_map/session_map.h"
 #include "slam_core/i_localization.h"
 #include "rosiwit_common/executor.hpp"
 #include "slam_core/i_scan_matcher.h"
@@ -117,20 +117,25 @@ private:
     MaintainerConfig    m_maintainer_cfg;
 
     // ---- B 阶段: 突变场景滚动子图 (shadow: 只累积 + 日志, 暂不参与匹配) ----
-    // 高可信几何看不到 (static_support 低) 时开子图, 冻住锚; 恢复后关闭。
-    RollingSubmap m_rolling;
-    mutable std::mutex m_rolling_mu;   // onLidar 与 setMap/setInitPose 都会碰子图
-    bool   m_submap_enabled = true;
-    bool   m_submap_use_for_tracking = false;   // 真正当作匹配目标(未启用)
-    double m_submap_open_ss = 0.20;
-    double m_submap_close_ss = 0.30;
-    double m_submap_radius = 25.0;
-    double m_submap_voxel = 0.15;
-    size_t m_submap_max_points = 300000;
+    // 高可信几何看不到 (persistency_cov 低) 时开子图, 冻住锚; 恢复后关闭。
+    SessionMap m_session_map;
+    mutable std::mutex m_session_map_mu;   // onLidar 与 setMap/setInitPose 都会碰子图
+    bool   m_session_map_enabled = true;
+    bool   m_session_map_use_for_tracking = false;   // 真正当作匹配目标(未启用)
+    // 锚质量判据 (行业标准): JtJ 最小特征值比 (Zhang, ICRA 2016) + 内点数
+    int    m_anchor_min_inliers = 500;
+    double m_anchor_min_eig_ratio = 1e-3;
+    int    m_anchor_patience = 5;         // 连续弱锚帧 -> 开会话地图
+    int    m_anchor_close_patience = 10;  // 连续好锚帧 -> 关
+    int    m_anchor_weak_streak = 0;
+    int    m_anchor_ok_streak = 0;
+    double m_session_map_radius = 25.0;
+    double m_session_map_voxel = 0.15;
+    size_t m_session_map_max_points = 300000;
     /// 服务/换图线程调用: 加锁清空子图
-    void resetRollingSubmap() {
-        std::lock_guard<std::mutex> lk(m_rolling_mu);
-        m_rolling.deactivate();
+    void resetSessionMap() {
+        std::lock_guard<std::mutex> lk(m_session_map_mu);
+        m_session_map.deactivate();
     }
     PlanarConstraintConfig m_planar_cfg;
     std::string m_relocalizer_name = "none";

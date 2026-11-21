@@ -27,7 +27,7 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     // 继续叠加到新图局部目标上，造成"新图里混着上一张图的点" (切图干扰)。
     m_cells.clear();
     m_voxel_seen.clear();
-    m_w.clear();
+    m_persistency.clear();
     m_last_world.reset();
     m_pending_store.reset();
     m_overlay_count = 0;
@@ -54,7 +54,7 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
         static_cast<int>(m_voxel_seen.size()) >= m_cfg.max_voxels) {
         m_cells.clear();
         m_voxel_seen.clear();
-        m_w.clear();
+        m_persistency.clear();
         m_last_world.reset();
         m_pending_store.reset();
         m_hits.clear();
@@ -69,12 +69,12 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
     const int vz = static_cast<int>(std::floor(p.z() / m_voxel));
     const int64_t vk = voxelKey(vx, vy, vz);
     if (m_voxel_seen.count(vk)) {   // 体素去重
-        bumpWeight(vk, 8);          // A 阶段: 重复观测 -> 可信度累加
+        hitVoxel(vk);               // 重复观测 -> 按计票单位累加
         return;
     }
     m_voxel_seen[vk] = m_frame;
-    m_w[vk] = 0;                    // A 阶段: 新体素从 0 起, 本次观测即一次 hit
-    bumpWeight(vk, 8);
+    m_persistency[vk] = PersistencyVoxel{};             // 新体素从 0 起, 本次观测即一次 hit
+    hitVoxel(vk);
 
     const int cx = static_cast<int>(std::floor(p.x() / m_cell));
     const int cy = static_cast<int>(std::floor(p.y() / m_cell));
@@ -113,27 +113,81 @@ void OverlayMapMaintainer::rayCarve(const PoseStamped& pose, const CloudType::Pt
             const int vy = static_cast<int>(std::floor(q.y() / m_voxel));
             const int vz = static_cast<int>(std::floor(q.z() / m_voxel));
             const int64_t vk = voxelKey(vx, vy, vz);
-            auto wit = m_w.find(vk);
-            if (wit != m_w.end()) {
-                // A 阶段: miss 只衰减, 衰减到 0 才从"可见集"删除 (结构重现时原体素还在)
-                if (wit->second > 8) {
-                    wit->second = static_cast<uint8_t>(wit->second - 8);
-                } else {
-                    m_w.erase(wit);
-                    m_voxel_seen.erase(vk);
-                }
-            } else {
-                m_voxel_seen.erase(vk);   // 无权重记录的体素: 保持原来的硬删除
-            }
+            missVoxel(vk);   // 连续 persistency_miss_confirm 帧 free 证据才删(去抖)
         }
     }
 }
 
-void OverlayMapMaintainer::bumpWeight(int64_t vk, int delta) {
-    auto it = m_w.find(vk);
-    if (it == m_w.end()) return;
-    const int v = static_cast<int>(it->second) + delta;
-    it->second = static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
+void OverlayMapMaintainer::beginPersistencySession() {
+    ++m_session_id;
+    if (m_session_id == 0) m_session_id = 1;
+    m_session_start_s = -1.0;   // 下一帧重新记起点
+    std::cout << "[OverlayMapMaintainer] new session=" << m_session_id << std::endl;
+}
+
+uint32_t OverlayMapMaintainer::currentUnitKey() const {
+    switch (m_cfg.persistency_unit) {
+        case 0:  return static_cast<uint32_t>(m_frame);
+        case 1:  return static_cast<uint32_t>(m_frame);
+        case 2:  return m_session_id;
+        default: return m_day_index;
+    }
+}
+
+// 一个体素被"命中": 按计票单位决定这次算不算一票。
+void OverlayMapMaintainer::hitVoxel(int64_t vk) {
+    auto it = m_persistency.find(vk);
+    if (it == m_persistency.end()) return;
+    PersistencyVoxel& v = it->second;
+    const uint32_t frame = static_cast<uint32_t>(m_frame);
+    bool count = false;
+    switch (m_cfg.persistency_unit) {
+        case 0:  count = true; break;                              // frame: 每帧
+        case 1:  // view: 首次看到也算一票; 之后再看到需要中间隔过帧(离开过视野)
+                 count = (v.last_frame == 0) || (frame > v.last_frame + 1); break;
+        case 2:  count = (v.last_key != m_session_id); break;       // session
+        default: count = (v.last_key != m_day_index); break;        // day
+    }
+    v.last_frame = frame;
+    if (count) {
+        const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
+        const int nw = static_cast<int>(v.w) + gain;
+        v.w = static_cast<uint8_t>(nw > 255 ? 255 : nw);
+        if (m_cfg.persistency_unit >= 2) v.last_key = currentUnitKey();
+    }
+    v.miss = 0;   // 又看到了: 清空 free 累计
+}
+
+// 一个体素被"自由空间雕刻": 连续 persistency_miss_confirm 帧才生效(去抖)。
+void OverlayMapMaintainer::missVoxel(int64_t vk) {
+    auto it = m_persistency.find(vk);
+    if (it == m_persistency.end()) {
+        m_voxel_seen.erase(vk);   // 无权重记录的体素: 保持原来的硬删除语义
+        return;
+    }
+    PersistencyVoxel& v = it->second;
+    const int need = m_cfg.persistency_miss_confirm > 0 ? m_cfg.persistency_miss_confirm : 1;
+    if (++v.miss < need) return;
+    if (m_cfg.persistency_miss_action == 0) {
+        m_persistency.erase(it);
+        m_voxel_seen.erase(vk);
+    } else {
+        const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
+        v.w = (v.w > gain) ? static_cast<uint8_t>(v.w - gain) : 0;
+        v.miss = 0;
+        if (v.w == 0) {
+            m_persistency.erase(it);
+            m_voxel_seen.erase(vk);
+        }
+    }
+}
+
+int OverlayMapMaintainer::persistencyAt(const Eigen::Vector3d& p) const {
+    const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x() / m_voxel)),
+                                static_cast<int>(std::floor(p.y() / m_voxel)),
+                                static_cast<int>(std::floor(p.z() / m_voxel)));
+    auto it = m_persistency.find(vk);
+    return it == m_persistency.end() ? -1 : static_cast<int>(it->second.w);
 }
 
 void OverlayMapMaintainer::observeHits(const PoseStamped& pose, const CloudType::Ptr& scan_body) {
@@ -153,8 +207,8 @@ void OverlayMapMaintainer::observeHits(const PoseStamped& pose, const CloudType:
         const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
         const int64_t vk = voxelKey(vx, vy, vz);
         if (!seen.insert(vk).second) continue;
-        if (m_w.find(vk) == m_w.end()) continue;
-        bumpWeight(vk, 8);
+        if (m_persistency.find(vk) == m_persistency.end()) continue;
+        hitVoxel(vk);
         m_voxel_seen[vk] = m_frame;   // 被再观测: 刷新存活时间
         PointType q;
         q.x = static_cast<float>(w.x());
@@ -168,6 +222,17 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
                                        const MatchResult& match, bool pose_confident) {
     if (!m_cfg.enabled || !scan_body || scan_body->empty()) return;
     ++m_frame;
+    // 计票单位 = session/day 需要的记账
+    if (pose.time > 0.0) {
+        m_day_index = static_cast<uint32_t>(pose.time / 86400.0);
+        if (m_session_start_s < 0.0) {
+            m_session_start_s = pose.time;
+        } else if (m_cfg.persistency_session_hours > 0 &&
+                   pose.time - m_session_start_s > 3600.0 * m_cfg.persistency_session_hours) {
+            beginPersistencySession();
+            m_session_start_s = pose.time;
+        }
+    }
     if (m_cfg.autosave_frames > 0 && !m_map_path.empty() &&
         m_frame % m_cfg.autosave_frames == 0) {
         save(m_map_path + ".overlay.pcd");
@@ -317,17 +382,17 @@ CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
     return out;
 }
 
-double OverlayMapMaintainer::staticSupport(const PoseStamped& pose,
-                                          int* anchor_age, size_t* submap_pts) const {
-    // A 阶段(影子): 统计"当前扫描点中落在 overlay(变化结构)上的点"里, w>=w_anchor 的占比.
+double OverlayMapMaintainer::persistencyCoverage(const PoseStamped& pose,
+                                          int* anchor_age, size_t* session_map_pts) const {
+    // A 阶段(影子): 统计"当前扫描点中落在 overlay(变化结构)上的点"里, w>=persistency_anchor 的占比.
     // 分母只含变化结构上的点; 纯底图区域不参与 (那里本来就是静态的, 不构成判断依据).
     // 只读, 不改变任何状态; 返回 -1 = 本帧没有可见的变化结构 (日志记 n/a).
     if (anchor_age) *anchor_age = 0;
-    if (submap_pts) *submap_pts = 0;
+    if (session_map_pts) *session_map_pts = 0;
     if (!m_last_world || m_last_world->empty()) return -1.0;
     const double radius = m_cfg.radius > 0 ? m_cfg.radius : 60.0;
     const double r2 = radius * radius;
-    const int anchor = m_cfg.w_anchor > 0 ? m_cfg.w_anchor : 128;
+    const int anchor = m_cfg.persistency_anchor > 0 ? m_cfg.persistency_anchor : 128;
     size_t total = 0;
     size_t trusted = 0;
     long oldest = -1;
@@ -339,17 +404,17 @@ double OverlayMapMaintainer::staticSupport(const PoseStamped& pose,
         const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
                                     static_cast<int>(std::floor(p.y / m_voxel)),
                                     static_cast<int>(std::floor(p.z / m_voxel)));
-        auto wit = m_w.find(vk);
-        if (wit == m_w.end()) continue;
+        auto wit = m_persistency.find(vk);
+        if (wit == m_persistency.end()) continue;
         ++total;
-        if (static_cast<int>(wit->second) >= anchor) {
+        if (static_cast<int>(wit->second.w) >= anchor) {
             ++trusted;
             auto sit = m_voxel_seen.find(vk);
             const long last = (sit == m_voxel_seen.end()) ? 0 : sit->second;
             if (oldest < 0 || last < oldest) oldest = last;
         }
     }
-    if (submap_pts) *submap_pts = total;
+    if (session_map_pts) *session_map_pts = total;
     if (oldest >= 0) {
         const long age = m_frame - oldest;
         if (anchor_age) *anchor_age = static_cast<int>(age < 0 ? 0 : age);

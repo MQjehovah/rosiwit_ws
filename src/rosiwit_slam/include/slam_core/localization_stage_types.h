@@ -351,8 +351,16 @@ struct MaintainerConfig {
     // ---- A 阶段: 体素可信度 w (方案 v3 §3, 影子模式) ----
     // w 是每个 overlay 体素的"高可信几何"权重: 被观测为占据 +8, 被自由空间雕刻 -8,
     // 0 时删除该体素。只统计、不参与任何决策 (shadow=true)。
-    int    w_anchor = 128;           // w 达到此值视为"高可信静态几何"(0~255, 默认半程)
-    bool   shadow = true;            // true: w 只用于 static_support 观测, 不影响定位/插入
+    int    persistency_anchor = 128;
+    // ---- w 的计票单位 (同一个体素在每个单位内最多 +1) ----
+    // 0=frame(每帧) 1=view(每次重新进入视野) 2=session(每个任务会话) 3=day(每个自然日)
+    // frame 与扫描频率耦合, 只用于 A/B; 默认 session: w ≈ "多少个任务确认过".
+    int    persistency_unit = 2;
+    int    persistency_hit_gain = 1;        // 每个单位加多少
+    int    persistency_miss_confirm = 3;    // 连续 free 证据帧数 -> 判定消失(去抖)
+    int    persistency_miss_action = 0;     // 0=删除  1=按 persistency_hit_gain 递减
+    int    persistency_session_hours = 12;  // 会话超时自动换新(防长期不重启)
+    bool   shadow = true;            // true: w 只用于 persistency_cov 观测, 不影响定位/插入
     bool   override_base = false;    // 叠加层压制同位置的原图点(处理"结构被移除/被替换")
     double delta_min = 0.3;          // 只沉淀"离原图 > 该距离(m)"的新结构(变化增量)
     int    carve_stride = 20;        // 自由空间雕刻时扫描点抽样步长

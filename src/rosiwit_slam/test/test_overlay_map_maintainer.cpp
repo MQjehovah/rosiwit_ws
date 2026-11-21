@@ -1,5 +1,5 @@
 // test/test_overlay_map_maintainer.cpp
-// A 阶段(影子)体素可信度 w: 观测累加 / 雕刻衰减 / static_support 统计.
+// A 阶段(影子)体素可信度 w: 观测累加 / 雕刻衰减 / persistency_cov 统计.
 #include <gtest/gtest.h>
 
 #include <initializer_list>
@@ -48,8 +48,13 @@ MaintainerConfig testCfg()
     c.delta_min = 0.0;
     c.carve_stride = 1;
     c.decay_frames = 0;
-    c.w_anchor = 128;
+    c.persistency_anchor = 128;
     c.shadow = true;
+    // 老用例的语义 = 每帧计票, 每帧 -8, 递减到 0 删除
+    c.persistency_unit = 0;
+    c.persistency_hit_gain = 8;
+    c.persistency_miss_confirm = 1;
+    c.persistency_miss_action = 1;
     return c;
 }
 
@@ -69,7 +74,7 @@ TEST(OverlayMaintainerWeights, NoOverlayReturnsNotAvailable)
     m.configure(testCfg());
     int age = -1;
     size_t sub = 123;
-    EXPECT_LT(m.staticSupport(mkPose(0.0), &age, &sub), 0.0);
+    EXPECT_LT(m.persistencyCoverage(mkPose(0.0), &age, &sub), 0.0);
     EXPECT_EQ(sub, 0u);
 }
 
@@ -85,13 +90,13 @@ TEST(OverlayMaintainerWeights, HitsAccumulateToAnchor)
     size_t sub = 0;
     // 首次写入发生在 observeHits 之后, 所以当帧还没有可统计的点 (n/a)
     m.onLocalized(pose, scan, mr, true);
-    double s = m.staticSupport(pose, &age, &sub);
+    double s = m.persistencyCoverage(pose, &age, &sub);
     ASSERT_EQ(sub, 0u);
     EXPECT_LT(s, 0.0);
 
     // 再观测 15 帧: w = 8 + 15*8 = 128 -> 恰好达标
     for (int i = 0; i < 15; ++i) m.onLocalized(pose, scan, mr, true);
-    s = m.staticSupport(pose, &age, &sub);
+    s = m.persistencyCoverage(pose, &age, &sub);
     ASSERT_EQ(sub, 1u);
     EXPECT_DOUBLE_EQ(s, 1.0);
     EXPECT_GE(age, 0);
@@ -100,7 +105,7 @@ TEST(OverlayMaintainerWeights, HitsAccumulateToAnchor)
     OverlayMapMaintainer m2;
     m2.configure(testCfg());
     for (int i = 0; i < 15; ++i) m2.onLocalized(pose, scan, mr, true);
-    s = m2.staticSupport(pose, &age, &sub);
+    s = m2.persistencyCoverage(pose, &age, &sub);
     ASSERT_EQ(sub, 1u);
     EXPECT_DOUBLE_EQ(s, 0.0);
 }
@@ -116,7 +121,7 @@ TEST(OverlayMaintainerWeights, UnhealthyFramesDoNotWrite)
     // pose_confident = false (过桥/漂移期): 只读不写
     for (int i = 0; i < 20; ++i) m.onLocalized(pose, scan, mr, false);
     size_t sub = 123;
-    EXPECT_LT(m.staticSupport(pose, nullptr, &sub), 0.0);
+    EXPECT_LT(m.persistencyCoverage(pose, nullptr, &sub), 0.0);
     EXPECT_EQ(sub, 0u);
 }
 
@@ -129,7 +134,7 @@ TEST(OverlayMaintainerWeights, CarveDecaysAndDeletes)
     const MatchResult mr = lowFitnessMatch();
 
     for (int i = 0; i < 16; ++i) m.onLocalized(pose, near, mr, true);   // w = 8 + 15*8 = 128
-    ASSERT_DOUBLE_EQ(m.staticSupport(pose), 1.0);
+    ASSERT_DOUBLE_EQ(m.persistencyCoverage(pose), 1.0);
 
     // 扫描到更远处: 射线穿过 1.0m 的体素 -> 每帧 -8, 16 帧后 w=0 删除.
     // 关掉写入(最小关键帧间距拉大), 保证只有"雕刻"在起作用.
@@ -139,10 +144,115 @@ TEST(OverlayMaintainerWeights, CarveDecaysAndDeletes)
     auto far = mkCloud({V3D(3.0, 0.0, 0.0)});
     for (int i = 0; i < 20; ++i) m.onLocalized(pose, far, mr, true);
     size_t sub = 123;
-    const double s = m.staticSupport(pose, nullptr, &sub);
+    const double s = m.persistencyCoverage(pose, nullptr, &sub);
     // 锚点被雕刻删除, 也没有新体素写入 -> 没有变化结构可见 (n/a)
     EXPECT_EQ(sub, 0u);
     EXPECT_LT(s, 0.0);
+}
+
+// ---------------- w 计票单位 ----------------
+
+TEST(OverlayWUnits, FrameCountsEveryFrame)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.persistency_unit = 0;            // frame
+    c.persistency_hit_gain = 1;
+    m.configure(c);
+    const PoseStamped pose = mkPose(0.0);
+    auto scan = mkCloud({V3D(1.0, 0.0, 0.0)});
+    const MatchResult mr = lowFitnessMatch();
+    for (int i = 0; i < 5; ++i) m.onLocalized(pose, scan, mr, true);
+    EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 5);
+}
+
+TEST(OverlayWUnits, SessionCountsOncePerSession)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.persistency_unit = 2;            // session
+    c.persistency_hit_gain = 1;
+    m.configure(c);
+    const PoseStamped pose = mkPose(0.0);
+    auto scan = mkCloud({V3D(1.0, 0.0, 0.0)});
+    const MatchResult mr = lowFitnessMatch();
+
+    for (int i = 0; i < 5; ++i) m.onLocalized(pose, scan, mr, true);
+    EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 1);   // 同一会话只算一票
+
+    m.beginPersistencySession();
+    for (int i = 0; i < 5; ++i) m.onLocalized(pose, scan, mr, true);
+    EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 2);   // 新会话 +1
+}
+
+TEST(OverlayWUnits, ViewCountsOnReentry)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.persistency_unit = 1;            // view
+    c.persistency_hit_gain = 1;
+    m.configure(c);
+    const PoseStamped pose = mkPose(0.0);
+    const MatchResult mr = lowFitnessMatch();
+
+    auto scan_a = mkCloud({V3D(1.0, 0.0, 0.0)});
+    m.onLocalized(pose, scan_a, mr, true);
+    m.onLocalized(pose, scan_a, mr, true);
+    EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 1);   // 连续看到 -> 一票
+
+    // 中间一帧看点别处(射线不穿过 1m 处), 再回来 -> 新的一次"扫到"
+    auto scan_b = mkCloud({V3D(-3.0, 0.0, 0.0)});
+    m.onLocalized(pose, scan_b, mr, true);
+    m.onLocalized(pose, scan_a, mr, true);
+    EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 2);
+}
+
+TEST(OverlayWUnits, MissConfirmDeletesAfterNthFreeFrame)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.persistency_unit = 2;            // session
+    c.persistency_hit_gain = 1;
+    c.persistency_miss_confirm = 3;    // 连续 3 帧 free 才删
+    c.persistency_miss_action = 0;     // 删除
+    m.configure(c);
+    const PoseStamped pose = mkPose(0.0);
+    const MatchResult mr = lowFitnessMatch();
+
+    auto near = mkCloud({V3D(1.0, 0.0, 0.0)});
+    m.onLocalized(pose, near, mr, true);
+    ASSERT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 1);
+
+    // 射线穿过 1m 处但不在那里落点 -> free 证据
+    auto far = mkCloud({V3D(5.0, 0.0, 0.0)});
+    m.onLocalized(pose, far, mr, true);
+    m.onLocalized(pose, far, mr, true);
+    EXPECT_GE(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 1);   // 还没到 3 帧
+    m.onLocalized(pose, far, mr, true);
+    EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), -1);  // 已删除
+}
+
+TEST(OverlayWUnits, HitResetsMissCounter)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.persistency_unit = 2;
+    c.persistency_hit_gain = 1;
+    c.persistency_miss_confirm = 3;
+    c.persistency_miss_action = 0;
+    m.configure(c);
+    const PoseStamped pose = mkPose(0.0);
+    const MatchResult mr = lowFitnessMatch();
+
+    auto near = mkCloud({V3D(1.0, 0.0, 0.0)});
+    auto far = mkCloud({V3D(5.0, 0.0, 0.0)});
+    m.onLocalized(pose, near, mr, true);
+    m.onLocalized(pose, far, mr, true);    // miss 1
+    m.onLocalized(pose, far, mr, true);    // miss 2
+    m.onLocalized(pose, near, mr, true);   // 又看到 -> miss 清零
+    m.onLocalized(pose, far, mr, true);    // miss 1
+    m.onLocalized(pose, far, mr, true);    // miss 2
+    EXPECT_GE(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 1);   // 没被删
 }
 
 // catkin_add_gtest 只链 GTEST_LIBRARIES (不含 gtest_main), 所以这里自带 main

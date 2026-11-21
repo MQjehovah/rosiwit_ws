@@ -336,22 +336,34 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.max_insert_divergence =
             getv<double>(mtc, "max_insert_divergence", m_maintainer_cfg.max_insert_divergence);
         // A 阶段: 体素可信度 w (影子: 只统计, 不参与决策)
-        m_maintainer_cfg.w_anchor = getv<int>(mtc, "w_anchor", m_maintainer_cfg.w_anchor);
+        m_maintainer_cfg.persistency_anchor = getv<int>(mtc, "persistency_anchor", m_maintainer_cfg.persistency_anchor);
         m_maintainer_cfg.shadow   = getv<bool>(mtc, "shadow", m_maintainer_cfg.shadow);
+        const std::string wu = getv<std::string>(mtc, "persistency_unit", "session");
+        if (wu == "frame")        m_maintainer_cfg.persistency_unit = 0;
+        else if (wu == "view")    m_maintainer_cfg.persistency_unit = 1;
+        else if (wu == "session") m_maintainer_cfg.persistency_unit = 2;
+        else if (wu == "day")     m_maintainer_cfg.persistency_unit = 3;
+        m_maintainer_cfg.persistency_hit_gain      = getv<int>(mtc, "persistency_hit_gain", m_maintainer_cfg.persistency_hit_gain);
+        m_maintainer_cfg.persistency_miss_confirm  = getv<int>(mtc, "persistency_miss_confirm", m_maintainer_cfg.persistency_miss_confirm);
+        m_maintainer_cfg.persistency_miss_action   = getv<int>(mtc, "persistency_miss_action", m_maintainer_cfg.persistency_miss_action);
+        m_maintainer_cfg.persistency_session_hours = getv<int>(mtc, "persistency_session_hours", m_maintainer_cfg.persistency_session_hours);
     }
     // ---- B 阶段: 突变场景滚动子图 (shadow) ----
     auto subc = loc["submap"];
     if (subc) {
-        m_submap_enabled = getv<bool>(subc, "enabled", m_submap_enabled);
-        m_submap_use_for_tracking =
-            getv<bool>(subc, "use_for_tracking", m_submap_use_for_tracking);
-        m_submap_open_ss = getv<double>(subc, "open_static_support", m_submap_open_ss);
-        m_submap_close_ss = getv<double>(subc, "close_static_support", m_submap_close_ss);
-        m_submap_radius = getv<double>(subc, "radius_m", m_submap_radius);
-        m_submap_voxel = getv<double>(subc, "voxel", m_submap_voxel);
+        m_session_map_enabled = getv<bool>(subc, "enabled", m_session_map_enabled);
+        m_session_map_use_for_tracking =
+            getv<bool>(subc, "use_for_tracking", m_session_map_use_for_tracking);
+        m_anchor_min_inliers = getv<int>(subc, "anchor_min_inliers", m_anchor_min_inliers);
+        m_anchor_min_eig_ratio = getv<double>(subc, "anchor_min_eig_ratio", m_anchor_min_eig_ratio);
+        m_anchor_patience = getv<int>(subc, "anchor_patience", m_anchor_patience);
+        m_anchor_close_patience =
+            getv<int>(subc, "anchor_close_patience", m_anchor_close_patience);
+        m_session_map_radius = getv<double>(subc, "radius_m", m_session_map_radius);
+        m_session_map_voxel = getv<double>(subc, "voxel", m_session_map_voxel);
     }
-    m_rolling.configure(RollingSubmap::Config{
-        m_submap_radius, m_submap_voxel, m_submap_max_points});
+    m_session_map.configure(SessionMap::Config{
+        m_session_map_radius, m_session_map_voxel, m_session_map_max_points});
     auto plc = loc["planar"];
     if (plc) {
         m_planar_cfg.mode          = getv<std::string>(plc, "mode", m_planar_cfg.mode);
@@ -551,7 +563,7 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
         m_snapshot_valid = false;
     }
     m_has_cached_target = false;
-    resetRollingSubmap();
+    resetSessionMap();
     m_map_path = map_name;
     ++m_global_generation;
     {
@@ -626,7 +638,7 @@ void LocalizationPipeline::setMapData(const MapData& data) {
         m_snapshot_valid = false;
     }
     m_has_cached_target = false;
-    resetRollingSubmap();
+    resetSessionMap();
     m_map_path = data.meta.map_id;
     ++m_global_generation;
     {
@@ -1009,7 +1021,7 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     m_healthy_streak = 0;
     m_unhealthy_streak = 0;
     m_has_cached_target = false;
-    resetRollingSubmap();
+    resetSessionMap();
     m_coast_count = 0;
     diag::log('I', "LocPipeline", "bounded recovery, fitness=" + std::to_string(best_fit));
     FlightRecorder::instance().event("RECOVERY", "bounded recovery fitness=" +
@@ -1451,7 +1463,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             reject_reason = accepted ? "accepted" : "coverage";
         }
         m_has_cached_target = false;
-    resetRollingSubmap();
+    resetSessionMap();
     } else {
         // 局部地图缓存: 位姿小幅移动(或全图)且**叠加层未变**时复用, 避免每帧重建
         // 降采样+KD-tree。之前配了维护层(m_maintainer)就直接放弃缓存 —— 但 overlay
@@ -1913,56 +1925,73 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                       << " coast=" << m_coast_count
                       << " have_last=" << (m_have_last_accepted ? 1 : 0)
                       << " rejection=" << reject_reason << std::endl;
-            // A 阶段(影子): 体素可信度统计, 只观测不决策. 每天按 w>=w_anchor 导出点云,
-            // 看是否只剩立柱/墙体, 并对比正常段 / 假锁段 / 堆货区 的 static_support 分布.
+            // A 阶段(影子): 体素可信度统计, 只观测不决策. 每天按 w>=persistency_anchor 导出点云,
+            // 看是否只剩立柱/墙体, 并对比正常段 / 假锁段 / 堆货区 的 persistency_cov 分布.
             if (m_maintainer) {
                 int anchor_age = 0;
-                size_t submap_pts = 0;
-                const double ss = m_maintainer->staticSupport(m_pose, &anchor_age, &submap_pts);
+                size_t persistency_pts = 0;
+                const double ss = m_maintainer->persistencyCoverage(m_pose, &anchor_age, &persistency_pts);
 
-                // ---- B 阶段(影子): 突变场景滚动子图 ----
-                // 高可信几何看不到 -> 以上一次可信位姿为锚开子图; 恢复后关闭。
-                // 目前只累积与打日志, 不参与匹配 (use_for_tracking=false)。
-                int  submap_active = 0;
-                size_t submap_size = 0;
-                int  submap_age = 0;
-                if (m_submap_enabled) {
-                    std::lock_guard<std::mutex> lk(m_rolling_mu);
+                // ---- B 阶段(影子): 突变场景"会话地图"(session map) ----
+                // 锚质量 = 行业标准三件套: 本帧被接受 + inliers + JtJ 最小特征值比
+                // (Zhang, ICRA 2016). 弱锚持续 N 帧才开, 恢复 M 帧才关。
+                // persistency_cov 只作诊断, 不再参与判定。
+                const bool anchor_geom_ok =
+                    (!res.has_hessian) || (res.smallest_eig_ratio >= m_anchor_min_eig_ratio);
+                const bool anchor_ok = res.converged && accepted &&
+                                       (res.inliers >= m_anchor_min_inliers) && anchor_geom_ok;
+                if (anchor_ok) {
+                    ++m_anchor_ok_streak;
+                    m_anchor_weak_streak = 0;
+                } else {
+                    ++m_anchor_weak_streak;
+                    m_anchor_ok_streak = 0;
+                }
+
+                int  session_map_active = 0;
+                size_t session_map_size = 0;
+                int  session_map_age = 0;
+                if (m_session_map_enabled) {
+                    std::lock_guard<std::mutex> lk(m_session_map_mu);
                     const double now_s = (res.pose.time > 0.0) ? res.pose.time : f.end_time;
-                    if (!m_rolling.active()) {
-                        if (ss >= 0.0 && ss < m_submap_open_ss &&
-                            res.converged && accepted && m_status.load() != LOST) {
-                            m_rolling.reset(m_pose, now_s);
-                            std::cout << "[submap] open (static_support=" << ss << ")" << std::endl;
+                    if (!m_session_map.active()) {
+                        if (!anchor_ok && m_anchor_weak_streak >= m_anchor_patience &&
+                            m_status.load() != LOST) {
+                            m_session_map.reset(m_pose, now_s);
+                            std::cout << "[session_map] open (anchor WEAK inl=" << res.inliers
+                                      << " eig=" << res.smallest_eig_ratio << ")" << std::endl;
                         }
                     } else {
-                        if (f.cloud && !f.cloud->empty()) m_rolling.update(*f.cloud, m_pose);
-                        if (ss >= m_submap_close_ss) {
-                            std::cout << "[submap] close (static_support=" << ss
-                                      << ", age=" << m_rolling.ageS(now_s) << "s)" << std::endl;
-                            m_rolling.deactivate();   // 已在 m_rolling_mu 内, 不能再调加锁版
+                        if (f.cloud && !f.cloud->empty()) m_session_map.update(*f.cloud, m_pose);
+                        if (anchor_ok && m_anchor_ok_streak >= m_anchor_close_patience) {
+                            std::cout << "[session_map] close (anchor OK, age="
+                                      << m_session_map.ageS(now_s) << "s)" << std::endl;
+                            m_session_map.deactivate();
                         }
                     }
-                    submap_active = m_rolling.active() ? 1 : 0;
-                    submap_size = m_rolling.size();
-                    submap_age = static_cast<int>(m_rolling.ageS(now_s));
+                    session_map_active = m_session_map.active() ? 1 : 0;
+                    session_map_size = m_session_map.size();
+                    session_map_age = static_cast<int>(m_session_map.ageS(now_s));
                 }
                 std::ostringstream qs;
                 qs.setf(std::ios::fixed);
                 qs.precision(3);
-                qs << "[quality] static_support=";
+                qs << "[quality] persistency_cov=";
                 if (ss < 0.0) qs << "n/a"; else qs << ss;
                 qs << " anchor_age=" << anchor_age
-                   << " submap_pts=" << submap_pts
+                   << " persistency_pts=" << persistency_pts
                    << " state="
                    << (m_status.load() == LOST ? "LOST"
                        : (m_status.load() == LOCALIZED ? "LOCALIZED" : "INIT"))
                    << " shadow=" << (m_maintainer_cfg.shadow ? 1 : 0)
-                   << " w_anchor=" << m_maintainer_cfg.w_anchor
+                   << " persistency_anchor=" << m_maintainer_cfg.persistency_anchor
                    << " fitness=" << res.fitness
-                   << " submap=" << submap_active
-                   << " submap_pts=" << submap_size
-                   << " submap_age=" << submap_age;
+                   << " anchor=" << (anchor_ok ? "OK" : "WEAK")
+                   << " inl=" << res.inliers
+                   << " eig=" << res.smallest_eig_ratio
+                   << " session_map=" << session_map_active
+                   << " session_map_size=" << session_map_size
+                   << " session_map_age=" << session_map_age;
                 std::cout << qs.str() << std::endl;
             }
         }

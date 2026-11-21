@@ -27,10 +27,16 @@ public:
     bool load(const std::string& path) override;
 
     /// A 阶段(影子): 最近一次可信帧的扫描点里, 落在 overlay 体素上的点中
-    /// w >= cfg.w_anchor 的占比; 只统计, 不参与决策. 无变化结构可见时返回 -1.
-    double staticSupport(const PoseStamped& pose,
+    /// w >= cfg.persistency_anchor 的占比; 只统计, 不参与决策. 无变化结构可见时返回 -1.
+    double persistencyCoverage(const PoseStamped& pose,
                          int* anchor_age = nullptr,
-                         size_t* submap_pts = nullptr) const override;
+                         size_t* session_map_pts = nullptr) const override;
+
+    /// 开始一个新会话(任务): w 按 session 计票时, 每个会话最多 +1。
+    /// 由 /start_task (或换图/节点启动) 调用; 超过 persistency_session_hours 也会自动换。
+    void beginPersistencySession();
+    /// 诊断/测试: 某点所在体素的权重, 不存在返回 -1
+    int persistencyAt(const Eigen::Vector3d& p) const;
 
     size_t overlaySize() const { return m_overlay_count; }
     uint64_t revision() const override { return m_revision; }
@@ -40,7 +46,9 @@ private:
     void addPoint(const Eigen::Vector3d& p);
     void rayCarve(const PoseStamped& pose, const CloudType::Ptr& scan_body);
     void observeHits(const PoseStamped& pose, const CloudType::Ptr& scan_body);
-    void bumpWeight(int64_t vk, int delta);
+    void hitVoxel(int64_t vk);
+    void missVoxel(int64_t vk);
+    uint32_t currentUnitKey() const;
     void rebuildCells();
     void commitKeyframe(const PoseStamped& pose, const CloudType::Ptr& body);
     void flushBuffer();
@@ -56,10 +64,19 @@ private:
     double m_cell = 10.0;
     std::unordered_map<int64_t, long> m_voxel_seen;   // 体素 -> 最近观测帧(去重+衰减)
     std::unordered_map<int64_t, int> m_hits;          // 候选体素命中计数(持久化过滤)
-    // A 阶段(影子): 体素可信度 w. 观测到占据 +8, 被自由空间雕刻 -8, 0 时删体素.
-    // 只统计 static_support, 不参与定位/插入决策 (cfg.shadow=true).
-    std::unordered_map<int64_t, uint8_t> m_w;
-    CloudType::Ptr m_last_world;   // 最近一次可信帧的扫描点(世界系, 按体素去重, 供 staticSupport)
+    // A 阶段(影子): 体素可信度 w. 计票单位见 cfg.persistency_unit (frame/view/session/day).
+    // 只在可信帧写; shadow=true 时不参与决策.
+    struct PersistencyVoxel {
+        uint8_t  w = 0;          // 可信度
+        uint8_t  miss = 0;       // 连续 free 证据帧数 (去抖)
+        uint32_t last_key = 0;   // 上次计票的单位键 (session/day)
+        uint32_t last_frame = 0; // 上次 hit 的帧号 (view 单位用)
+    };
+    std::unordered_map<int64_t, PersistencyVoxel> m_persistency;
+    uint32_t m_session_id = 1;     // 计票单位 = session
+    uint32_t m_day_index = 0;      // 计票单位 = day (pose.time/86400)
+    double   m_session_start_s = -1.0;
+    CloudType::Ptr m_last_world;   // 最近一次可信帧的扫描点(世界系, 按体素去重, 供 persistencyCoverage)
     std::unordered_map<int64_t, CloudType::Ptr> m_cells;  // 粗分块索引
     Eigen::Vector3d m_last_add = Eigen::Vector3d::Zero();
     bool m_have_last = false;
