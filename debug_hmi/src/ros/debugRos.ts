@@ -39,15 +39,7 @@ const TOPIC_STREAM: Record<string, StreamMap> = {
   '/tf': { stream: 'tf', opts: { throttle: 50, queue: 1 } },
   '/tf_static': { stream: 'tf', opts: { throttle: 50, queue: 1 } },
   '/slam/info': { stream: 'status', opts: { throttle: 100, queue: 1 } },
-  '/slam/fusion_diag': { stream: 'diag', opts: { throttle: 1000, queue: 1 } },
   '/rosout_agg': { stream: 'logs', opts: { throttle: 200, queue: 50 } },
-  '/scan': { stream: 'laser', opts: { throttle: 100, queue: 1 } },
-  '/global_path': { stream: 'paths', opts: { throttle: 500, queue: 1 } },
-  '/local_path': { stream: 'paths', opts: { throttle: 500, queue: 1 } },
-  '/robot_footprint': { stream: 'footprint', opts: { throttle: 1000, queue: 1 } },
-  '/scan_f_map': { stream: 'scan', opts: { throttle: 250, queue: 1 } },
-  '/curr_scan_point': { stream: 'scan', opts: { throttle: 250, queue: 1 } },
-  '/points_2d': { stream: 'points_2d', opts: { throttle: 500, queue: 1 } },
 }
 
 const REQUEST_ONLY = new Set(['/global_map', '/vanjee_points722', '/map', '/initialpose'])
@@ -55,13 +47,7 @@ const REQUEST_ONLY = new Set(['/global_map', '/vanjee_points722', '/map', '/init
 const STREAM_DEFAULT_RATE: Record<string, number> = {
   tf: 20,
   status: 10,
-  diag: 1,
   logs: 5,
-  laser: 10,
-  paths: 2,
-  footprint: 1,
-  scan: 4,
-  points_2d: 2,
 }
 
 function rateOf(opts: SubscribeOptions): number {
@@ -139,9 +125,6 @@ export class DebugRosClient {
         msg: l.msg,
         header: { stamp: stampObj(l.stamp) },
       })
-    })
-    this.bridge.onDiag((d) => {
-      this.dispatch('/slam/fusion_diag', { data: d.text, header: { stamp: stampObj(d.stamp) } })
     })
     this.bridge.onPath((p) => {
       const topic = '/' + (p.stream || 'global_path')
@@ -246,8 +229,8 @@ export class DebugRosClient {
       if (count === 0) {
         this.bridge.setSubscription(mapped.stream, {
           rate: rateOf(opts) || STREAM_DEFAULT_RATE[mapped.stream] || 5,
-          voxel: mapped.stream === 'scan' ? 0.05 : mapped.stream === 'points_2d' ? 0.08 : 0,
-          max: 200000,
+          voxel: 0,
+          max: 0,
         })
       }
       return

@@ -19,6 +19,7 @@ export interface CloudData {
 }
 
 export interface GridData {
+  stream?: string
   width: number
   height: number
   resolution: number

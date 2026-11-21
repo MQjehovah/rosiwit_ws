@@ -13,8 +13,7 @@
         </div>
         <template v-else>
           <div class="badges">
-            <span class="badge" :class="locClass">{{ locText }}</span>
-            <span class="badge ghost">{{ modeText }}</span>
+            <span class="badge" :class="locClass">{{ state.statusText || locText }}</span>
             <span class="badge ghost">匹配 {{ percent(state.slam.matching_degree) }}</span>
           </div>
 
@@ -25,14 +24,6 @@
               :style="{ width: Math.max(0, Math.min(1, state.slam.matching_degree)) * 100 + '%' }"
             />
             <div class="meter-mark" title="credible 0.80" />
-          </div>
-
-          <div v-if="state.matchHistory.length > 1" class="spark-wrap">
-            <svg class="spark" viewBox="0 0 120 24" preserveAspectRatio="none">
-              <line class="spark-threshold" x1="0" y1="4.8" x2="120" y2="4.8" />
-              <polyline :points="sparkPoints" />
-            </svg>
-            <span class="spark-label">{{ sparkSeconds }}s</span>
           </div>
 
           <dl class="kv2">
@@ -64,64 +55,154 @@
             </div>
           </div>
 
-          <details v-if="state.fusionDiag" class="sub">
-            <summary>融合诊断</summary>
-            <pre>{{ state.fusionDiag }}</pre>
+          <details class="sub">
+            <summary>定位状态插件</summary>
+            <p class="note">
+              直接消费 <code>/slam/info</code>：同时兼容数字枚举与字符串，前端翻译成可读状态。
+              当前：{{ state.statusText || '等待数据' }}
+            </p>
+            <pre class="diag-pre">{{ slamRaw }}</pre>
           </details>
         </template>
       </div>
     </details>
 
-    <!-- 数据源 -->
+    <!-- 显示项（RViz 风格：任意话题动态添加） -->
     <details class="sec" open>
       <summary>
-        <span class="sec-title">数据源</span>
-        <span class="sec-meta">{{ activeLayers }} / {{ layerList.length }}</span>
+        <span class="sec-title">显示项</span>
+        <span class="sec-meta">{{ activeDisplays }} / {{ state.displays.length }}</span>
       </summary>
       <div class="sec-body">
-        <p class="source-hint">像 RViz 一样按需订阅；只有 TF 常开。所有数据走 debug_bridge（WebSocket + protobuf）。</p>
+        <p class="source-hint">
+          像 RViz 一样按需订阅任意话题。后端只负责订阅 / 压缩 / 传输（点云、栅格、激光、路径、JSON），
+          渲染参数由这里控制。
+        </p>
 
-        <div class="layer-grid">
-          <div v-for="layer in layerList" :key="layer.key" class="layer-item">
-            <label class="layer" :title="layer.topic">
+        <div class="row add-topic">
+          <select v-model="newTopic" class="select">
+            <option value="">选择话题…</option>
+            <option v-for="t in state.topics" :key="t.name" :value="t.name">
+              {{ t.name }} · {{ shortType(t.type) }}
+            </option>
+          </select>
+          <button class="btn small" :disabled="!newTopic" @click="doAddDisplay">添加</button>
+          <button class="btn tiny" :disabled="state.status !== 'open' || state.topicScanning" @click="doRefreshTopics">
+            {{ state.topicScanning ? '…' : '刷新' }}
+          </button>
+        </div>
+        <p v-if="state.displayError" class="error-text">{{ state.displayError }}</p>
+
+        <div v-if="!state.displays.length" class="prompt">
+          还没有显示项。先刷新话题列表，再选择要看的点云 / 栅格 / 激光…
+        </div>
+
+        <div v-for="d in state.displays" :key="d.id" class="display-item">
+          <div class="display-head">
+            <label class="layer" :title="d.type">
               <input
                 type="checkbox"
-                :checked="state.layers[layer.key]"
-                @change="setLayer(layer.key, ($event.target as HTMLInputElement).checked)"
+                :checked="d.enabled"
+                @change="toggleDisplay(d.id)"
               />
-              <span class="swatch" :style="{ background: layer.color }" />
-              <span class="layer-name">{{ layer.name }}</span>
-              <span v-if="layerCount(layer.key)" class="layer-count">{{ layerCount(layer.key) }}</span>
+              <span class="swatch" :style="{ background: d.color }" />
+              <span class="layer-name">{{ d.topic }}</span>
             </label>
+            <span class="type-tag">{{ shortType(d.type) }}</span>
+            <button class="mini danger" title="移除" @click="removeDisplay(d.id)">×</button>
+          </div>
 
-            <button
-              v-if="layer.key === 'globalMap'"
-              class="mini"
-              :disabled="state.status !== 'open'"
-              title="重新请求 /global_map（latched）"
-              @click="doReloadMap"
-            >
-              重载
-            </button>
-            <button
-              v-else-if="layer.key === 'lidar'"
-              class="mini"
-              :disabled="(state.status !== 'open') || state.snapshotPending"
-              title="抓取一帧 /vanjee_points722"
-              @click="doGrabLidar"
-            >
-              {{ state.snapshotPending ? '…' : '抓帧' }}
-            </button>
-            <button
-              v-else-if="layer.key === 'grid'"
-              class="mini"
-              :class="{ warn: state.gridPending }"
-              :disabled="state.status !== 'open'"
-              :title="state.gridPending ? '取消接收' : '/map 单帧约 43MB，接收约 1~2 分钟'"
-              @click="state.gridPending ? cancelGrid() : doGrabGrid()"
-            >
-              {{ state.gridPending ? gridElapsed + 's' : '抓取' }}
-            </button>
+          <div class="display-controls">
+            <label>
+              渲染
+              <select
+                class="select mini-select"
+                :value="d.renderer"
+                @change="updateDisplay(d.id, { renderer: ($event.target as HTMLSelectElement).value as any })"
+              >
+                <option v-for="r in rendererOptions(d)" :key="r" :value="r">{{ r }}</option>
+              </select>
+            </label>
+            <label v-if="d.renderer === 'points' || d.renderer === 'laser'">
+              点大小
+              <input
+                class="input tiny-input"
+                type="number"
+                min="0.01"
+                max="1"
+                step="0.01"
+                :value="d.pointSize"
+                @change="updateDisplay(d.id, { pointSize: Number(($event.target as HTMLInputElement).value) || 0.07 })"
+              />
+            </label>
+            <label v-if="d.renderer !== 'json'">
+              颜色
+              <input
+                class="color-input"
+                type="color"
+                :value="d.color"
+                @input="updateDisplay(d.id, { color: ($event.target as HTMLInputElement).value })"
+              />
+            </label>
+            <label v-if="d.renderer === 'points'">
+              着色
+              <select
+                class="select mini-select"
+                :value="d.colorMode"
+                @change="updateDisplay(d.id, { colorMode: ($event.target as HTMLSelectElement).value as any })"
+              >
+                <option value="height">高度</option>
+                <option value="flat">固定</option>
+              </select>
+            </label>
+            <label v-if="d.renderer === 'points'">
+              体素
+              <input
+                class="input tiny-input"
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                :value="d.voxel"
+                @change="updateDisplay(d.id, { voxel: Number(($event.target as HTMLInputElement).value) || 0 })"
+              />
+            </label>
+            <label v-if="d.renderer === 'points'">
+              上限
+              <input
+                class="input tiny-input"
+                type="number"
+                min="0"
+                step="10000"
+                :value="d.max"
+                @change="updateDisplay(d.id, { max: Number(($event.target as HTMLInputElement).value) || 0 })"
+              />
+            </label>
+            <label>
+              频率
+              <select
+                class="select mini-select"
+                :value="d.rate"
+                @change="updateDisplay(d.id, { rate: Number(($event.target as HTMLSelectElement).value) || 2 })"
+              >
+                <option :value="1">1Hz</option>
+                <option :value="2">2Hz</option>
+                <option :value="5">5Hz</option>
+                <option :value="10">10Hz</option>
+                <option :value="20">20Hz</option>
+              </select>
+            </label>
+            <button class="mini" :disabled="state.status !== 'open'" @click="grabTopic(d.id)">抓取</button>
+          </div>
+
+          <div class="display-stats">
+            <span>{{ d.stats.hz.toFixed(1) }} Hz</span>
+            <span>{{ formatBytes(d.stats.bytes) }}/帧</span>
+            <span>累计 {{ formatBytes(d.stats.total) }}</span>
+            <span v-if="d.stats.age >= 0">{{ (d.stats.age / 1000).toFixed(1) }}s 前</span>
+            <span v-if="state.pointCounts[d.topic]">
+              {{ state.pointCounts[d.topic].toLocaleString() }} 点/格
+            </span>
           </div>
         </div>
 
@@ -138,7 +219,7 @@
 
         <div class="foot">
           <label class="slider-row">
-            <span>点大小</span>
+            <span>点大小倍率</span>
             <input
               type="range"
               min="0.4"
@@ -153,21 +234,6 @@
             {{ gridInfo }}
           </span>
         </div>
-
-        <details class="sub">
-          <summary>数据说明</summary>
-          <p class="note">
-            <code>/global_map</code> 受设备 <code>debug_publish</code> 控制；关闭时用
-            <code>/scan_f_map</code>（当前帧，已在 map 系配准）。<code>/map</code> 单帧 43MB，
-            只按需抓快照，成功后缓存到本地。
-          </p>
-          <div class="row">
-            <button class="btn tiny" @click="copyDebugCmd">复制 debug_publish 命令</button>
-            <button v-if="state.gridTime" class="btn tiny" @click="doClearGridCache">
-              清除栅格缓存
-            </button>
-          </div>
-        </details>
       </div>
     </details>
 
@@ -208,7 +274,7 @@
     <details class="sec">
       <summary>
         <span class="sec-title">控制</span>
-        <span class="sec-meta">{{ busy ? '执行中…' : modeText }}</span>
+        <span class="sec-meta">{{ busy ? '执行中…' : state.statusText }}</span>
       </summary>
       <div class="sec-body">
         <div class="grid2">
@@ -229,40 +295,77 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
-  cancelGridSnapshot,
+  addDisplay,
   dumpRecorder,
-  grabGridSnapshot,
-  grabLidarSnapshot,
+  grabTopic,
   loadMapFile,
   publishInitialPose,
   pushLog,
+  refreshTopics,
   relocate,
-  reloadGlobalMap,
+  removeDisplay,
   setLayer,
   setPendingPose,
   setPointScale,
   state,
   stopMapOperation,
   switchSlamMode,
-  type LayerKey,
+  toggleDisplay,
+  updateDisplay,
+  type DisplayItem,
+  type RendererKind,
 } from '../ros/app'
-import { clearGridCache } from '../ros/gridCache'
 
-const layerList: Array<{ key: LayerKey; name: string; topic: string; color: string }> = [
-  { key: 'tf', name: 'TF 坐标轴', topic: '/tf · /tf_static（常订阅）', color: '#94a3b8' },
-  { key: 'status', name: '定位状态', topic: '/slam/info', color: '#34d399' },
-  { key: 'diag', name: '融合诊断', topic: '/slam/fusion_diag', color: '#86efac' },
-  { key: 'logs', name: '系统日志', topic: '/rosout_agg', color: '#fbbf24' },
-  { key: 'scan', name: '当前帧（已配准）', topic: '/scan_f_map · /curr_scan_point', color: '#fbbf24' },
-  { key: 'laser', name: '激光雷达', topic: '/scan', color: '#ff8a3d' },
-  { key: 'globalMap', name: '全局地图点云', topic: '/global_map', color: '#38bdf8' },
-  { key: 'points2d', name: '2D 点云', topic: '/points_2d', color: '#34d399' },
-  { key: 'robot', name: '机器人足迹', topic: '/robot_footprint', color: '#22d3ee' },
-  { key: 'paths', name: '路径', topic: '/global_path · /local_path', color: '#818cf8' },
-  { key: 'lidar', name: '雷达原始帧', topic: '/vanjee_points722', color: '#f87171' },
-  { key: 'grid', name: '栅格地图', topic: '/map', color: '#a5c9e8' },
-  { key: 'trail', name: '行驶轨迹', topic: '本地累积', color: '#60a5fa' },
-]
+const newTopic = ref('')
+
+function doAddDisplay(): void {
+  if (!newTopic.value) return
+  addDisplay(newTopic.value)
+  newTopic.value = ''
+}
+
+function doRefreshTopics(): void {
+  void refreshTopics()
+}
+
+function shortType(type: string): string {
+  return type ? type.split('/').pop() || type : '?'
+}
+
+function rendererOptions(d: DisplayItem): RendererKind[] {
+  const base: RendererKind[] = ['json']
+  if (d.type.includes('PointCloud')) return ['points', 'json']
+  if (d.type.includes('OccupancyGrid')) return ['grid', 'json']
+  if (d.type.includes('LaserScan')) return ['laser', 'json']
+  if (d.type.endsWith('/Path')) return ['path', 'json']
+  if (d.type.includes('Polygon')) return ['polygon', 'json']
+  if (d.type.includes('SlamInfo')) return ['status', 'json']
+  // 类型未知时允许手动选择，方便接入自定义消息
+  return ['points', 'grid', 'laser', 'path', 'polygon', ...base, 'status']
+}
+
+function formatBytes(n: number): string {
+  if (!n) return '0 B'
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${n} B`
+}
+
+const slamRaw = computed(() =>
+  JSON.stringify(
+    {
+      slam_state: state.slam.slam_state,
+      location_status: state.slam.location_status,
+      matching_degree: state.slam.matching_degree,
+      update_request: state.slam.update_request,
+      map_name: state.slam.map_name,
+      map_area: state.slam.map_area,
+      robot_pose: state.slam.robot_pose,
+    },
+    null,
+    2,
+  ),
+)
 
 const locText = computed(
   () => ['定位正常', '恢复中', '定位失败'][state.slam.location_status] ?? '无数据',
@@ -272,13 +375,9 @@ const locClass = computed(() => ({
   warn: state.slam.location_status === 1,
   bad: state.slam.location_status === 2,
 }))
-const modeText = computed(() => {
-  const map: Record<number, string> = { 0: '建图中', 1: '定位模式', 2: '错误' }
-  return map[state.slam.slam_state] ?? '模式未知'
-})
 
 const busy = computed(() => state.servicePending || state.status !== 'open')
-const activeLayers = computed(() => Object.values(state.layers).filter(Boolean).length)
+const activeDisplays = computed(() => state.displays.filter((d) => d.enabled).length)
 const shortSource = computed(() => state.robot.source.replace('TF map→', 'TF '))
 
 const nowTick = ref(Date.now())
@@ -298,11 +397,6 @@ const slamAgeText = computed(() => {
   return `${((nowTick.value - state.slamTime) / 1000).toFixed(1)}s 前`
 })
 
-const gridElapsed = computed(() => {
-  if (!state.gridPending || !state.gridStartedAt) return 0
-  return Math.max(0, Math.floor((nowTick.value - state.gridStartedAt) / 1000))
-})
-
 const gridInfo = computed(() => {
   if (!state.gridTime) return ''
   return `${(state.gridCells / 1e6).toFixed(1)}M 格 · ${ageText(Date.now() - state.gridTime)}前`
@@ -313,20 +407,6 @@ const poseSummary = computed(() => {
   if (!pose) return state.estimating ? '点选中' : '未选点'
   return `x ${pose.x.toFixed(2)} · y ${pose.y.toFixed(2)} · ${((pose.theta * 180) / Math.PI).toFixed(0)}°`
 })
-
-const sparkPoints = computed(() => {
-  const h = state.matchHistory
-  if (h.length < 2) return ''
-  const n = h.length
-  return h
-    .map((v, i) => {
-      const y = 24 - Math.min(1, Math.max(0, v)) * 24
-      return `${((i / (n - 1)) * 120).toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
-})
-
-const sparkSeconds = computed(() => Math.round(state.matchHistory.length * 0.4))
 
 const draft = reactive({ x: 0, y: 0 })
 const draftTheta = ref(0)
@@ -358,20 +438,6 @@ function ageText(age: number): string {
   if (age < 0) return '—'
   if (age < 1000) return `${age}ms`
   return `${(age / 1000).toFixed(1)}s`
-}
-
-function fmtCount(n: number): string {
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
-  if (n >= 1e4) return `${(n / 1e3).toFixed(1)}k`
-  return String(n)
-}
-
-function layerCount(key: LayerKey): string {
-  if (key === 'scan') return state.pointCounts.scan ? fmtCount(state.pointCounts.scan) : ''
-  if (key === 'globalMap') return state.pointCounts.globalMap ? fmtCount(state.pointCounts.globalMap) : ''
-  if (key === 'lidar') return state.pointCounts.lidar ? fmtCount(state.pointCounts.lidar) : ''
-  if (key === 'grid') return state.gridCells ? `${(state.gridCells / 1e6).toFixed(1)}M` : ''
-  return ''
 }
 
 function toggleEstimate(): void {
@@ -438,20 +504,6 @@ async function doDump(): Promise<void> {
   }
 }
 
-function doReloadMap(): void {
-  // 显式开启图层后再请求 latched 的 /global_map
-  if (!state.layers.globalMap) {
-    setLayer('globalMap', true)
-    return
-  }
-  reloadGlobalMap()
-}
-
-async function doGrabLidar(): Promise<void> {
-  if (!state.layers.lidar) setLayer('lidar', true)
-  await grabLidarSnapshot()
-}
-
 async function onMapFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -463,39 +515,8 @@ async function onMapFile(event: Event): Promise<void> {
   }
 }
 
-async function doGrabGrid(): Promise<void> {
-  if (!state.layers.grid) setLayer('grid', true)
-  await grabGridSnapshot()
-}
-
-function cancelGrid(): void {
-  cancelGridSnapshot()
-}
-
-async function doClearGridCache(): Promise<void> {
-  if (!window.confirm('清除本地缓存的栅格地图？下次刷新需要重新抓取（1~2 分钟）。')) return
-  try {
-    await clearGridCache()
-    state.gridFromCache = false
-    pushLog('info', '已清除本地栅格缓存（当前画面保留）')
-  } catch (e) {
-    pushLog('warn', `清除缓存失败：${(e as Error).message}`)
-  }
-}
-
 function onPointScale(value: number): void {
   if (Number.isFinite(value)) setPointScale(value)
-}
-
-async function copyDebugCmd(): Promise<void> {
-  const cmd =
-    "sudo sed -i 's/debug_publish: false/debug_publish: true/' /opt/ros/melodic/share/rosiwit_slam_ros1/config/default.yaml && sudo systemctl restart xzrobot"
-  try {
-    await navigator.clipboard.writeText(cmd)
-    pushLog('info', '已复制：开启 debug_publish 的命令')
-  } catch {
-    pushLog('warn', cmd)
-  }
 }
 </script>
 
@@ -574,9 +595,116 @@ async function copyDebugCmd(): Promise<void> {
 }
 
 .source-hint {
-  margin: 0 0 6px;
-  font-size: 9.5px;
-  color: #54687a;
+  margin: 0 0 8px;
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.add-topic {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  background: #0b141d;
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.mini-select {
+  flex: none;
+  width: 74px;
+  padding: 2px 4px;
+}
+
+.tiny-input {
+  width: 62px;
+  padding: 2px 4px;
+}
+
+.color-input {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 4px;
+}
+
+.display-item {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 7px;
+  background: rgba(11, 20, 29, 0.55);
+}
+
+.display-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.display-head .layer {
+  flex: 1;
+  min-width: 0;
+}
+
+.type-tag {
+  color: var(--dim);
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.display-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 6px;
+  align-items: center;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+
+.display-controls label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.display-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 5px;
+  color: #7f97ab;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mini.danger {
+  color: #fca5a5;
+}
+
+.diag-pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  background: #080f16;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: #9fb4c7;
+  font-size: 10.5px;
+  line-height: 1.45;
 }
 
 .map-file {

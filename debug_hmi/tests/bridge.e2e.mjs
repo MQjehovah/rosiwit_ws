@@ -64,7 +64,7 @@ console.log('connected', url)
 
 const hello = await waitFor((m) => m.hello)
 assert(hello.hello && hello.hello.name === 'debug_bridge', 'hello name')
-console.log('      streams:', hello.hello.streams.map((s) => s.name).join(','))
+console.log('      builtin streams:', hello.hello.streams.map((s) => s.name).join(','))
 
 subscribe('tf', 10)
 const tf = await waitFor((m) => m.tf)
@@ -76,45 +76,55 @@ const slam = await waitFor((m) => m.slam)
 assert(slam.slam && slam.slam.map_name === 'demo', 'slam info')
 console.log('      slam', slam.slam.map_name, slam.slam.matching_degree)
 
-subscribe('diag', 1)
-const diag = await waitFor((m) => m.diag)
-assert(diag.diag && diag.diag.text.length > 0, 'diag text')
-
 subscribe('logs', 5)
 const log = await waitFor((m) => m.log, 15000)
 assert(log.log && log.log.msg.length > 0, 'log entry')
 
-subscribe('laser', 10)
+// 通用话题：/curr_scan_point 点云
+subscribe('/curr_scan_point', 4, 0.05, 0)
+const cloud = await waitFor((m) => m.cloud && m.cloud.stream === '/curr_scan_point')
+assert(cloud.cloud.count > 0, 'cloud count')
+const raw = zlib.inflateSync(Buffer.from(cloud.cloud.xyz_cm))
+assert(raw.length === cloud.cloud.count * 6, 'cloud xyz_cm length')
+console.log(`      cloud count=${cloud.cloud.count} bytes=${cloud.cloud.xyz_cm.length}`)
+
+// 通用话题：/scan 激光
+subscribe('/scan', 10)
 const laser = await waitFor((m) => m.laser)
-assert(laser.laser && laser.laser.ranges.byteLength > 0, 'laser ranges')
+assert(laser.laser && laser.laser.stream === '/scan', 'laser stream = /scan')
+assert(laser.laser.ranges.byteLength > 0, 'laser ranges')
 const laserBytes = Uint8Array.from(laser.laser.ranges)
 const ranges = new Float32Array(laserBytes.buffer)
 assert(ranges.length > 100, 'laser range count')
 
-subscribe('paths', 2)
+// 通用话题：Path / Polygon
+subscribe('/global_path', 2)
 const path = await waitFor((m) => m.path)
-assert(path.path && path.path.poses.length > 0, 'path poses')
+assert(path.path && path.path.stream === '/global_path' && path.path.poses.length > 0, 'path poses')
 
-subscribe('footprint', 1)
+subscribe('/robot_footprint', 1)
 const poly = await waitFor((m) => m.polygon)
-assert(poly.polygon && poly.polygon.xy.byteLength >= 24, 'footprint')
+assert(poly.polygon && poly.polygon.stream === '/robot_footprint', 'polygon stream')
+assert(poly.polygon.xy.byteLength >= 24, 'polygon xy')
 
-subscribe('scan', 4, 0.05, 200000)
-const cloud = await waitFor((m) => m.cloud && m.cloud.stream === 'scan')
-assert(cloud.cloud.count > 0, 'scan cloud count')
-const raw = zlib.inflateSync(Buffer.from(cloud.cloud.xyz_cm))
-assert(raw.length === cloud.cloud.count * 6, 'scan xyz_cm length')
-console.log(`      scan count=${cloud.cloud.count} bytes=${cloud.cloud.xyz_cm.length}`)
-
-const grid = (() => {
-  send({ action: 2, stream: 'grid', refresh: true })
-  return waitFor((m) => m.grid, 30000)
-})()
-const g = await grid
-assert(g.grid.width > 0 && g.grid.height > 0, 'grid dims')
+// 单帧请求：/map 栅格
+const gridPromise = waitFor((m) => m.grid, 30000)
+send({ action: 2, stream: '/map', refresh: true })
+const g = await gridPromise
+assert(g.grid.stream === '/map' && g.grid.width > 0 && g.grid.height > 0, 'grid dims + stream')
 const cells = zlib.inflateSync(Buffer.from(g.grid.data))
 assert(cells.length === g.grid.width * g.grid.height, 'grid cells')
 console.log(`      grid ${g.grid.width}x${g.grid.height} res=${g.grid.resolution}`)
+
+// 单帧请求：/global_map 大点云
+const gmPromise = waitFor((m) => m.cloud && m.cloud.stream === '/global_map', 30000)
+send({ action: 2, stream: '/global_map', voxel: 0.05, max_points: 0 })
+const gm = await gmPromise
+assert(gm.cloud.count > 0, 'global_map count')
+
+// 速率 / 总流量统计
+const stat = await waitFor((m) => m.stat && m.stat.topic, 10000)
+assert(stat.stat.rate_hz >= 0 && stat.stat.total_bytes >= 0, 'stat rate/total')
 
 send({ action: 3, x: 1, y: 2, yaw: 0.5 })
 await waitFor((m) => m.status && m.status.stream === 'initialpose')

@@ -63,7 +63,6 @@ ENV_TOPICS = 12
 ENV_STAT = 13
 ENV_RAW = 14
 ENV_SERVICE = 15
-ENV_DIAG = 16
 
 ACTION_SUBSCRIBE = 0
 ACTION_UNSUBSCRIBE = 1
@@ -77,44 +76,46 @@ ACTION_RAW_UNSUBSCRIBE = 7
 COMP_NONE = 0
 COMP_ZLIB = 1
 
+# 内置流: 只有 TF / 定位状态 / 日志。其余全部按标准 ROS 话题动态订阅
+# (stream 直接就是话题名，例如 "/curr_scan_point")。
 STREAM_TF = "tf"
 STREAM_STATUS = "status"
-STREAM_DIAG = "diag"
 STREAM_LOGS = "logs"
-STREAM_LASER = "laser"
-STREAM_PATHS = "paths"
-STREAM_FOOTPRINT = "footprint"
-STREAM_SCAN = "scan"
-STREAM_POINTS2D = "points_2d"
-STREAM_GRID = "grid"
-STREAM_GLOBAL = "global_map"
-STREAM_VANJEE = "vanjee_points722"
 
 DEFAULT_RATES = {
     STREAM_TF: 20.0,
     STREAM_STATUS: 10.0,
-    STREAM_DIAG: 1.0,
     STREAM_LOGS: 5.0,
-    STREAM_LASER: 10.0,
-    STREAM_PATHS: 2.0,
-    STREAM_FOOTPRINT: 1.0,
-    STREAM_SCAN: 4.0,
-    STREAM_POINTS2D: 2.0,
 }
 
 STREAM_TOPICS = {
     STREAM_TF: ["/tf", "/tf_static"],
     STREAM_STATUS: ["/slam/info"],
-    STREAM_DIAG: ["/slam/fusion_diag"],
     STREAM_LOGS: ["/rosout_agg"],
-    STREAM_LASER: ["/scan"],
-    STREAM_PATHS: ["/global_path", "/local_path"],
-    STREAM_FOOTPRINT: ["/robot_footprint"],
-    STREAM_SCAN: ["/scan_f_map"],
-    STREAM_POINTS2D: ["/points_2d"],
-    STREAM_GRID: ["/map"],
-    STREAM_GLOBAL: ["/global_map"],
-    STREAM_VANJEE: ["/vanjee_points722"],
+}
+
+BUILTIN_STREAMS = (STREAM_TF, STREAM_STATUS, STREAM_LOGS)
+
+# 话题类型 -> 归一化种类
+KIND_CLOUD = "cloud"
+KIND_GRID = "grid"
+KIND_LASER = "laser"
+KIND_PATH = "path"
+KIND_POLYGON = "polygon"
+KIND_RAW = "raw"
+
+TYPE_KIND = {
+    "sensor_msgs/PointCloud2": KIND_CLOUD,
+    "sensor_msgs/PointCloud": KIND_CLOUD,
+    "nav_msgs/OccupancyGrid": KIND_GRID,
+    "sensor_msgs/LaserScan": KIND_LASER,
+    "nav_msgs/Path": KIND_PATH,
+    "geometry_msgs/PolygonStamped": KIND_POLYGON,
+}
+
+# 单帧请求默认超时（秒）：/global_map 整图可能很大，给足接收时间
+REQUEST_TIMEOUTS = {
+    "/global_map": 180.0,
 }
 
 ALLOWED_SERVICES = set(
@@ -296,10 +297,6 @@ def encode_error(message):
     return envelope(ENV_ERROR, pb_string(1, message))
 
 
-def encode_diag(text, stamp):
-    return envelope(ENV_DIAG, pb_string(1, text) + pb_double(2, stamp))
-
-
 def encode_slam(s):
     frame = (
         pb_uint(1, s.get("slam_state", 0))
@@ -348,7 +345,7 @@ def encode_path(stream, msg):
     return envelope(ENV_PATH, frame)
 
 
-def encode_laser(msg):
+def encode_laser(msg, stream):
     ranges = msg["ranges"]
     try:
         raw = struct.pack("<%df" % len(ranges), *ranges)
@@ -362,13 +359,18 @@ def encode_laser(msg):
         + pb_float(5, msg.get("range_min", 0.0))
         + pb_float(6, msg.get("range_max", 0.0))
         + pb_bytes(7, raw)
+        + pb_string(8, stream)
     )
     return envelope(ENV_LASER, frame)
 
 
-def encode_polygon(msg):
+def encode_polygon(msg, stream):
     raw = struct.pack("<%df" % (len(msg["xy"])), *msg["xy"])
-    frame = pb_message(1, header(msg.get("frame"), msg.get("stamp"))) + pb_bytes(2, raw)
+    frame = (
+        pb_message(1, header(msg.get("frame"), msg.get("stamp")))
+        + pb_bytes(2, raw)
+        + pb_string(3, stream)
+    )
     return envelope(ENV_POLYGON, frame)
 
 
@@ -380,12 +382,14 @@ def encode_topics(topics):
     return envelope(ENV_TOPICS, frame)
 
 
-def encode_stat(topic, count, age_ms, size):
+def encode_stat(topic, count, age_ms, size, total_bytes=0, rate_hz=0.0):
     frame = (
         pb_string(1, topic)
         + pb_uint(2, count)
         + pb_uint(3, age_ms)
         + pb_uint(4, size)
+        + pb_uint(5, total_bytes)
+        + pb_float(6, rate_hz)
     )
     return envelope(ENV_STAT, frame)
 
@@ -427,7 +431,7 @@ def encode_cloud(stream, c, voxel, max_points):
     return envelope(ENV_CLOUD, frame)
 
 
-def encode_grid(g):
+def encode_grid(g, stream):
     raw = g["data"]
     if hasattr(raw, "tobytes"):
         raw = raw.tobytes()
@@ -445,6 +449,7 @@ def encode_grid(g):
         + pb_uint(6, COMP_ZLIB)
         + pb_bytes(7, body)
         + pb_uint(8, next_seq())
+        + pb_string(9, stream)
     )
     return envelope(ENV_GRID, frame)
 
@@ -486,7 +491,6 @@ class Cache(object):
         self.tf_dynamic = {}
         self.tf_static = {}
         self.slam = None
-        self.diag = None
         self.logs = collections.deque(maxlen=500)
         self.log_seq = 0
         self.laser = None
@@ -544,6 +548,21 @@ CACHE = Cache()
 STORE_LOCK = threading.Lock()
 CLOUDS = {}
 GRID = {"data": None}
+# 通用话题缓存: topic -> {"kind":..., "stamp":..., "recv":..., ...}
+TOPIC_DATA = {}
+
+
+def set_topic_data(topic, data):
+    data = dict(data)
+    data["recv"] = now()
+    with STORE_LOCK:
+        TOPIC_DATA[topic] = data
+    CACHE.touch(topic)
+
+
+def get_topic_data(topic):
+    with STORE_LOCK:
+        return TOPIC_DATA.get(topic)
 
 
 def set_cloud(topic, points, frame, stamp):
@@ -603,7 +622,7 @@ class OneShot(object):
         return None
 
 
-def pc2_points(msg, max_points=1500000):
+def pc2_points(msg, max_points=0):
     fields = dict((f.name, f) for f in msg.fields)
     if not all(k in fields for k in ("x", "y", "z")):
         return []
@@ -618,7 +637,7 @@ def pc2_points(msg, max_points=1500000):
     cz = "<" + fmt[fz.datatype]
     ox, oy, oz = fx.offset, fy.offset, fz.offset
     n = msg.width * msg.height
-    stride = int(math.ceil(float(n) / max_points)) if n > max_points else 1
+    stride = int(math.ceil(float(n) / max_points)) if max_points and n > max_points else 1
     out = []
     try:
         for i in range(0, n, stride):
@@ -636,9 +655,9 @@ def pc2_points(msg, max_points=1500000):
     return out
 
 
-def pc_points(msg, max_points=600000):
+def pc_points(msg, max_points=0):
     pts = msg.points
-    stride = int(math.ceil(float(len(pts)) / max_points)) if len(pts) > max_points else 1
+    stride = int(math.ceil(float(len(pts)) / max_points)) if max_points and len(pts) > max_points else 1
     out = []
     for i in range(0, len(pts), stride):
         p = pts[i]
@@ -646,6 +665,109 @@ def pc_points(msg, max_points=600000):
             continue
         out.append((p.x, p.y, p.z))
     return out
+
+
+def grid_dict(msg):
+    w = int(msg.info.width)
+    h = int(msg.info.height)
+    try:
+        from array import array
+
+        data = array("b", msg.data)
+    except Exception:
+        data = bytearray(bytearray((v & 0xFF) for v in msg.data))
+    o = msg.info.origin
+    return {
+        "kind": KIND_GRID,
+        "data": data,
+        "w": w,
+        "h": h,
+        "res": float(msg.info.resolution),
+        "ox": float(o.position.x),
+        "oy": float(o.position.y),
+        "oth": yaw_from_quat(o.orientation),
+        "frame": msg.header.frame_id or "map",
+        "stamp": msg.header.stamp.to_sec(),
+    }
+
+
+def laser_dict(msg):
+    return {
+        "kind": KIND_LASER,
+        "frame": msg.header.frame_id,
+        "stamp": msg.header.stamp.to_sec(),
+        "angle_min": msg.angle_min,
+        "angle_max": msg.angle_max,
+        "angle_increment": msg.angle_increment,
+        "range_min": msg.range_min,
+        "range_max": msg.range_max,
+        "ranges": list(msg.ranges),
+    }
+
+
+def path_dict(msg):
+    poses = []
+    for ps in msg.poses:
+        p = ps.pose.position
+        q = ps.pose.orientation
+        poses.append((p.x, p.y, yaw_from_quat(q), p.z))
+    return {
+        "kind": KIND_PATH,
+        "frame": msg.header.frame_id,
+        "stamp": msg.header.stamp.to_sec(),
+        "seq": msg.header.seq,
+        "poses": poses,
+    }
+
+
+def polygon_dict(msg):
+    xy = []
+    for p in msg.polygon.points:
+        xy.extend([p.x, p.y])
+    return {
+        "kind": KIND_POLYGON,
+        "frame": msg.header.frame_id,
+        "stamp": msg.header.stamp.to_sec(),
+        "xy": xy,
+    }
+
+
+def raw_dict(topic, typ, msg):
+    from rosbridge_library.internal.message_conversion import extract_values
+
+    text = json.dumps(extract_values(msg))
+    if len(text) > MAX_RAW_JSON:
+        text = text[:MAX_RAW_JSON] + "...(truncated)"
+    stamp = 0.0
+    try:
+        stamp = msg.header.stamp.to_sec()
+    except Exception:
+        stamp = now()
+    return {"kind": KIND_RAW, "type": typ, "json": text, "stamp": stamp}
+
+
+def normalize_topic(topic, typ, msg):
+    kind = TYPE_KIND.get(typ)
+    if kind == KIND_CLOUD:
+        if typ == "sensor_msgs/PointCloud2":
+            pts = pc2_points(msg)
+        else:
+            pts = pc_points(msg)
+        return {
+            "kind": KIND_CLOUD,
+            "points": pts,
+            "frame": msg.header.frame_id or "map",
+            "stamp": msg.header.stamp.to_sec(),
+        }
+    if kind == KIND_GRID:
+        return grid_dict(msg)
+    if kind == KIND_LASER:
+        return laser_dict(msg)
+    if kind == KIND_PATH:
+        return path_dict(msg)
+    if kind == KIND_POLYGON:
+        return polygon_dict(msg)
+    return raw_dict(topic, typ, msg)
 
 
 class RosSource(object):
@@ -671,10 +793,9 @@ class RosSource(object):
             self.subs[topic] = self.rospy.Subscriber(topic, cls, cb, queue_size=1, buff_size=buff_size)
 
     def ensure_stream(self, stream):
-        from sensor_msgs.msg import PointCloud, PointCloud2, LaserScan
+        from sensor_msgs.msg import PointCloud2, LaserScan
         from nav_msgs.msg import Path
         from geometry_msgs.msg import PolygonStamped
-        from std_msgs.msg import String
 
         if stream == STREAM_TF:
             from tf2_msgs.msg import TFMessage
@@ -685,23 +806,53 @@ class RosSource(object):
             from xzrobot_ros_dependency.msg import SlamInfo
 
             self._sub("/slam/info", SlamInfo, self._on_slam)
-        elif stream == STREAM_DIAG:
-            self._sub("/slam/fusion_diag", String, self._on_diag)
         elif stream == STREAM_LOGS:
             from rosgraph_msgs.msg import Log
 
             self._sub("/rosout_agg", Log, self._on_log)
-        elif stream == STREAM_LASER:
-            self._sub("/scan", LaserScan, self._on_laser)
-        elif stream == STREAM_PATHS:
-            self._sub("/global_path", Path, lambda m: self._on_path("global_path", m))
-            self._sub("/local_path", Path, lambda m: self._on_path("local_path", m))
-        elif stream == STREAM_FOOTPRINT:
-            self._sub("/robot_footprint", PolygonStamped, self._on_footprint)
-        elif stream == STREAM_SCAN:
-            self._sub("/scan_f_map", PointCloud, self._on_scan)
-        elif stream == STREAM_POINTS2D:
-            self._sub("/points_2d", PointCloud2, self._on_points2d)
+        elif stream.startswith("/"):
+            self.ensure_topic(stream)
+
+    def ensure_topic(self, topic):
+        """按真实消息类型动态订阅任意话题，缓存归一化后的数据。"""
+        with self.lock:
+            if topic in self.subs:
+                return
+        typ = self.type_of(topic)
+        if not typ:
+            raise RuntimeError("topic not found: %s" % topic)
+        from roslib.message import get_message_class
+
+        cls = get_message_class(typ)
+        if cls is None:
+            raise RuntimeError("cannot load message class for %s" % typ)
+        with self.lock:
+            if topic in self.subs:
+                return
+            self.subs[topic] = self.rospy.Subscriber(
+                topic,
+                cls,
+                lambda m: self._on_topic(topic, typ, m),
+                queue_size=1,
+                buff_size=2 ** 24,
+            )
+
+    def topic_data(self, topic):
+        return get_topic_data(topic)
+
+    def request_topic(self, topic, timeout):
+        """等一帧（latched 话题会立刻返回），归一化后写入缓存。"""
+        self.ensure_topic(topic)
+        typ = self.type_of(topic)
+        from roslib.message import get_message_class
+
+        cls = get_message_class(typ)
+        msg = OneShot(topic, cls).wait(timeout)
+        if msg is None:
+            return get_topic_data(topic)
+        data = normalize_topic(topic, typ, msg)
+        set_topic_data(topic, data)
+        return get_topic_data(topic)
 
     # --- callbacks ---------------------------------------------------------
 
@@ -746,128 +897,21 @@ class RosSource(object):
             CACHE.slam["stamp"] = now()
         CACHE.touch("/slam/info", 64)
 
-    def _on_diag(self, msg):
-        CACHE.diag = {"text": msg.data, "stamp": now()}
-        CACHE.touch("/slam/fusion_diag", len(msg.data))
+    def _on_topic(self, topic, typ, msg):
+        try:
+            data = normalize_topic(topic, typ, msg)
+            set_topic_data(topic, data)
+        except Exception as e:
+            log("normalize %s (%s): %s" % (topic, typ, e))
 
     def _on_log(self, msg):
         CACHE.add_log(msg.level, msg.name, msg.msg, msg.header.stamp.to_sec() or now())
         CACHE.touch("/rosout_agg", len(msg.msg))
 
-    def _on_laser(self, msg):
-        CACHE.laser = {
-            "frame": msg.header.frame_id,
-            "stamp": msg.header.stamp.to_sec(),
-            "angle_min": msg.angle_min,
-            "angle_max": msg.angle_max,
-            "angle_increment": msg.angle_increment,
-            "range_min": msg.range_min,
-            "range_max": msg.range_max,
-            "ranges": list(msg.ranges),
-        }
-        CACHE.touch("/scan", len(msg.ranges) * 4)
-
-    def _on_path(self, stream, msg):
-        poses = []
-        for ps in msg.poses:
-            p = ps.pose.position
-            q = ps.pose.orientation
-            poses.append((p.x, p.y, yaw_from_quat(q), p.z))
-        CACHE.paths[stream] = {
-            "frame": msg.header.frame_id,
-            "stamp": msg.header.stamp.to_sec(),
-            "seq": msg.header.seq,
-            "poses": poses,
-        }
-        CACHE.touch("/%s" % stream, 32 * len(poses))
-
-    def _on_footprint(self, msg):
-        xy = []
-        for p in msg.polygon.points:
-            xy.extend([p.x, p.y])
-        CACHE.footprint = {
-            "frame": msg.header.frame_id,
-            "stamp": msg.header.stamp.to_sec(),
-            "xy": xy,
-        }
-        CACHE.touch("/robot_footprint", len(xy) * 4)
-
-    def _on_scan(self, msg):
-        set_cloud("/scan_f_map", pc_points(msg), msg.header.frame_id, msg.header.stamp.to_sec())
-
-    def _on_points2d(self, msg):
-        set_cloud("/points_2d", pc2_points(msg), msg.header.frame_id, msg.header.stamp.to_sec())
-
     # --- one-shot ----------------------------------------------------------
 
     def grid(self, refresh=False, timeout=8.0):
-        with self.grid_lock:
-            current = get_grid()
-            if current is not None and not refresh and now() - current["recv"] < 5.0:
-                return current
-            from nav_msgs.msg import OccupancyGrid
-
-            msg = OneShot("/map", OccupancyGrid).wait(timeout)
-            if msg is None:
-                return current
-            w = int(msg.info.width)
-            h = int(msg.info.height)
-            try:
-                from array import array
-
-                data = array("b", msg.data)
-            except Exception:
-                data = bytearray(bytearray((v & 0xFF) for v in msg.data))
-            o = msg.info.origin
-            g = {
-                "data": data,
-                "w": w,
-                "h": h,
-                "res": float(msg.info.resolution),
-                "ox": float(o.position.x),
-                "oy": float(o.position.y),
-                "oth": yaw_from_quat(o.orientation),
-                "frame": msg.header.frame_id or "map",
-                "stamp": msg.header.stamp.to_sec(),
-            }
-            set_grid(g)
-            return g
-
-    def cloud(self, stream, timeout=8.0):
-        if stream in (STREAM_SCAN, STREAM_POINTS2D):
-            self.ensure_stream(stream)
-            started = now()
-            topic = "/scan_f_map" if stream == STREAM_SCAN else "/points_2d"
-            while now() - started < timeout:
-                c = get_cloud(topic)
-                if c is not None and now() - c["recv"] < 2.0:
-                    return c
-                time.sleep(0.05)
-            return get_cloud(topic)
-
-        if stream == STREAM_VANJEE:
-            from sensor_msgs.msg import PointCloud2
-
-            msg = OneShot("/vanjee_points722", PointCloud2).wait(timeout)
-            if msg is None:
-                return None
-            pts = pc2_points(msg)
-            frame = msg.header.frame_id or "map"
-            stamp = msg.header.stamp.to_sec()
-        elif stream == STREAM_GLOBAL:
-            from sensor_msgs.msg import PointCloud2
-
-            msg = OneShot("/global_map", PointCloud2).wait(timeout)
-            if msg is None:
-                return None
-            pts = pc2_points(msg)
-            frame = msg.header.frame_id or "map"
-            stamp = msg.header.stamp.to_sec()
-        else:
-            return None
-        c = {"points": pts, "frame": frame, "stamp": stamp}
-        set_cloud("/vanjee_points722" if stream == STREAM_VANJEE else "/global_map", pts, frame, stamp)
-        return c
+        return self.request_topic("/map", timeout)
 
     # --- commands ----------------------------------------------------------
 
@@ -949,6 +993,7 @@ class DemoSource(object):
         self.oy = -15.0
         g = self._make_grid()
         set_grid(g)
+        set_topic_data("/map", g)
         self.thread = threading.Thread(target=self._loop)
         self.thread.daemon = True
         self.thread.start()
@@ -973,6 +1018,7 @@ class DemoSource(object):
                         v = 100
                 data[y * w + x] = v
         return {
+            "kind": KIND_GRID,
             "data": data,
             "w": w,
             "h": h,
@@ -1030,37 +1076,43 @@ class DemoSource(object):
                 "stamp": now(),
             }
             CACHE.touch("/slam/info", 64)
-            CACHE.diag = {"text": "demo fusion diag", "stamp": now()}
-            CACHE.touch("/slam/fusion_diag", 16)
             ranges = []
             for i in range(720):
                 a = i * math.pi / 360.0
                 ranges.append(6.0 + 0.5 * math.sin(a * 3.0 + t))
-            CACHE.laser = {
-                "frame": "map",
-                "stamp": now(),
-                "angle_min": 0.0,
-                "angle_max": math.pi * 2,
-                "angle_increment": math.pi / 360.0,
-                "range_min": 0.1,
-                "range_max": 20.0,
-                "ranges": ranges,
-            }
-            CACHE.touch("/scan", len(ranges) * 4)
+            set_topic_data(
+                "/scan",
+                {
+                    "kind": KIND_LASER,
+                    "frame": "map",
+                    "stamp": now(),
+                    "angle_min": 0.0,
+                    "angle_max": math.pi * 2,
+                    "angle_increment": math.pi / 360.0,
+                    "range_min": 0.1,
+                    "range_max": 20.0,
+                    "ranges": ranges,
+                },
+            )
             poses = []
             for i in range(120):
                 a = t * 0.15 + i * 0.05
                 poses.append((10.0 + 4.0 * math.cos(a), 7.0 + 3.0 * math.sin(a), a, 0.0))
-            CACHE.paths["global_path"] = {
-                "frame": "map",
-                "stamp": now(),
-                "seq": int(t * 10),
-                "poses": poses,
-            }
-            CACHE.touch("/global_path", 32 * len(poses))
+            set_topic_data(
+                "/global_path",
+                {
+                    "kind": KIND_PATH,
+                    "frame": "map",
+                    "stamp": now(),
+                    "seq": int(t * 10),
+                    "poses": poses,
+                },
+            )
             xy = [-0.5, -0.35, 0.5, -0.35, 0.5, 0.35, -0.5, 0.35]
-            CACHE.footprint = {"frame": "base_link", "stamp": now(), "xy": xy}
-            CACHE.touch("/robot_footprint", 32)
+            set_topic_data(
+                "/robot_footprint",
+                {"kind": KIND_POLYGON, "frame": "base_link", "stamp": now(), "xy": xy},
+            )
             pts = []
             for i in range(720):
                 a = i * math.pi / 360.0 + t * 0.2
@@ -1069,7 +1121,12 @@ class DemoSource(object):
                 py = y + r * math.sin(a)
                 if 2.0 <= px <= 16.0 and 2.0 <= py <= 13.0:
                     pts.append((px, py, 0.25 + 0.15 * math.sin(a * 3.0)))
-            set_cloud("/scan_f_map", pts, "map", now())
+            set_topic_data(
+                "/curr_scan_point", {"kind": KIND_CLOUD, "points": pts, "frame": "map", "stamp": now()}
+            )
+            set_topic_data(
+                "/global_map", {"kind": KIND_CLOUD, "points": pts, "frame": "map", "stamp": now()}
+            )
             if int(t) % 10 == 0:
                 CACHE.add_log(2, "/demo", "demo heartbeat %d" % int(t), now())
             time.sleep(0.1)
@@ -1080,21 +1137,17 @@ class DemoSource(object):
     def ensure_stream(self, stream):
         pass
 
-    def grid(self, refresh=False, timeout=6.0):
-        g = get_grid()
-        g = dict(g)
-        g["stamp"] = now()
-        set_grid(g)
-        return get_grid()
+    def ensure_topic(self, topic):
+        pass
 
-    def cloud(self, stream, timeout=6.0):
-        if stream in (STREAM_SCAN, STREAM_POINTS2D):
-            return get_cloud("/scan_f_map")
-        if stream == STREAM_GLOBAL:
-            return {"points": [], "frame": "map", "stamp": now()}
-        if stream == STREAM_VANJEE:
-            return get_cloud("/scan_f_map")
-        return None
+    def topic_data(self, topic):
+        return get_topic_data(topic)
+
+    def request_topic(self, topic, timeout):
+        return get_topic_data(topic)
+
+    def grid(self, refresh=False, timeout=6.0):
+        return get_topic_data("/map")
 
     def set_initial_pose(self, x, y, yaw):
         CACHE.add_log(2, "/demo", "initial pose %.2f %.2f %.2f" % (x, y, yaw), now())
@@ -1108,9 +1161,8 @@ class DemoSource(object):
             "/tf",
             "/tf_static",
             "/slam/info",
-            "/slam/fusion_diag",
             "/rosout_agg",
-            "/scan_f_map",
+            "/curr_scan_point",
             "/scan",
             "/points_2d",
             "/global_path",
@@ -1121,10 +1173,24 @@ class DemoSource(object):
             "/vanjee_points722",
             "/initialpose",
         ]
-        return [[n, "demo/Type"] for n in names]
+        return [[n, self.type_of(n)] for n in names]
 
     def type_of(self, topic):
-        return "demo/Type"
+        if topic in ("/curr_scan_point", "/global_map", "/points_2d", "/vanjee_points722"):
+            return "sensor_msgs/PointCloud2"
+        if topic == "/map":
+            return "nav_msgs/OccupancyGrid"
+        if topic == "/scan":
+            return "sensor_msgs/LaserScan"
+        if topic in ("/global_path", "/local_path"):
+            return "nav_msgs/Path"
+        if topic == "/robot_footprint":
+            return "geometry_msgs/PolygonStamped"
+        if topic == "/slam/info":
+            return "xzrobot_ros_dependency/SlamInfo"
+        if topic == "/rosout_agg":
+            return "rosgraph_msgs/Log"
+        return "std_msgs/String"
 
     def raw_subscribe(self, topic, cb):
         raise RuntimeError("raw subscribe not available in demo mode")
@@ -1143,11 +1209,25 @@ class Client(object):
         self.raw_subs = {}
         self.raw_last = {}
         self.last_stats = 0.0
+        self.sent = {}  # topic -> {count, total, size, last}
+        self.stat_prev = {}
 
     def send(self, payload):
         if self.closed:
             return
         LOOP.add_callback(self._write, payload)
+
+    def send_topic(self, topic, payload):
+        if topic:
+            st = self.sent.get(topic)
+            if st is None:
+                st = {"count": 0, "total": 0, "size": 0, "last": 0.0}
+                self.sent[topic] = st
+            st["count"] += 1
+            st["total"] += len(payload)
+            st["size"] = len(payload)
+            st["last"] = now()
+        self.send(payload)
 
     def _write(self, payload):
         if self.closed:
@@ -1180,38 +1260,31 @@ def stream_available(stream):
         return bool(CACHE.tf_snapshot(False) or CACHE.tf_snapshot(True))
     if stream == STREAM_STATUS:
         return CACHE.slam is not None
-    if stream == STREAM_DIAG:
-        return CACHE.diag is not None
     if stream == STREAM_LOGS:
         return CACHE.max_log_seq() > 0
-    if stream == STREAM_LASER:
-        return CACHE.laser is not None
-    if stream == STREAM_PATHS:
-        return any(CACHE.paths.values())
-    if stream == STREAM_FOOTPRINT:
-        return CACHE.footprint is not None
-    if stream in (STREAM_SCAN, STREAM_POINTS2D):
-        c = get_cloud("/scan_f_map" if stream == STREAM_SCAN else "/points_2d")
-        return c is not None and now() - c["recv"] < 5.0
     return False
 
 
 def hello_streams():
-    names = [
-        STREAM_TF,
-        STREAM_STATUS,
-        STREAM_DIAG,
-        STREAM_LOGS,
-        STREAM_LASER,
-        STREAM_PATHS,
-        STREAM_FOOTPRINT,
-        STREAM_SCAN,
-        STREAM_POINTS2D,
-        STREAM_GRID,
-        STREAM_GLOBAL,
-        STREAM_VANJEE,
-    ]
+    names = [STREAM_TF, STREAM_STATUS, STREAM_LOGS]
     return [(n, stream_available(n), DEFAULT_RATES.get(n, 0.0)) for n in names]
+
+
+def encode_topic_frame(topic, data, sub):
+    kind = data.get("kind")
+    if kind == KIND_CLOUD:
+        return encode_cloud(topic, data, sub.get("voxel", 0.0), sub.get("max", 0))
+    if kind == KIND_GRID:
+        return encode_grid(data, topic)
+    if kind == KIND_LASER:
+        return encode_laser(data, topic)
+    if kind == KIND_PATH:
+        return encode_path(topic, data)
+    if kind == KIND_POLYGON:
+        return encode_polygon(data, topic)
+    if kind == KIND_RAW:
+        return encode_raw(topic, data.get("type", ""), data.get("json", ""), data.get("stamp", 0.0))
+    return None
 
 
 def frames_for_stream(stream, sub, client):
@@ -1228,30 +1301,22 @@ def frames_for_stream(stream, sub, client):
     elif stream == STREAM_STATUS:
         if CACHE.slam:
             out.append(encode_slam(CACHE.slam))
-    elif stream == STREAM_DIAG:
-        if CACHE.diag:
-            out.append(encode_diag(CACHE.diag["text"], CACHE.diag["stamp"]))
     elif stream == STREAM_LOGS:
         entries = CACHE.logs_since(client.log_seq, 20)
         for e in entries:
             client.log_seq = e["seq"]
             out.append(encode_log(e))
-    elif stream == STREAM_LASER:
-        if CACHE.laser:
-            out.append(encode_laser(CACHE.laser))
-    elif stream == STREAM_PATHS:
-        for name in ("global_path", "local_path"):
-            p = CACHE.paths.get(name)
-            if p:
-                out.append(encode_path(name, p))
-    elif stream == STREAM_FOOTPRINT:
-        if CACHE.footprint:
-            out.append(encode_polygon(CACHE.footprint))
-    elif stream in (STREAM_SCAN, STREAM_POINTS2D):
-        topic = "/scan_f_map" if stream == STREAM_SCAN else "/points_2d"
-        c = get_cloud(topic)
-        if c and now() - c["recv"] < 5.0:
-            out.append(encode_cloud(stream, c, sub["voxel"], sub["max"]))
+    elif stream.startswith("/"):
+        data = get_topic_data(stream)
+        if not data or now() - data["recv"] > 10.0:
+            return out
+        stamp = data.get("stamp", 0.0)
+        if stamp and sub.get("last_stamp") == stamp:
+            return out
+        frame = encode_topic_frame(stream, data, sub)
+        if frame is not None:
+            sub["last_stamp"] = stamp
+            out.append(frame)
     return out
 
 
@@ -1302,15 +1367,24 @@ class BridgeWS(websocket.WebSocketHandler):
 
         try:
             if action == ACTION_SUBSCRIBE:
-                rate = min(30.0, max(0.5, rate or DEFAULT_RATES.get(stream, 5.0)))
+                is_topic = stream.startswith("/")
+                if is_topic:
+                    SOURCE.ensure_stream(stream)
+                    typ = SOURCE.type_of(stream)
+                    default_voxel = 0.05 if TYPE_KIND.get(typ) == KIND_CLOUD else 0.0
+                    default_rate = 2.0
+                else:
+                    default_voxel = 0.0
+                    default_rate = DEFAULT_RATES.get(stream, 5.0)
+                rate = min(30.0, max(0.5, rate or default_rate))
                 self.client.subs[stream] = {
                     "rate": rate,
-                    "voxel": min(1.0, max(0.0, voxel or (0.05 if stream == STREAM_SCAN else 0.08))),
-                    "max": max_points or 200000,
+                    "voxel": min(1.0, max(0.0, voxel if voxel > 0 else default_voxel)),
+                    "max": max_points or 0,
                     "last": 0.0,
                     "last_static": 0.0,
+                    "last_stamp": None,
                 }
-                SOURCE.ensure_stream(stream)
                 self.client.send(encode_status(stream, True, "subscribed %.1fHz" % rate))
             elif action == ACTION_UNSUBSCRIBE:
                 self.client.subs.pop(stream, None)
@@ -1339,13 +1413,11 @@ class BridgeWS(websocket.WebSocketHandler):
             self.client.send(encode_error("%s" % e))
 
     def _request(self, client, stream, voxel, max_points, refresh):
-        if stream == STREAM_GRID:
-            voxel = 0.0
-            max_points = 0
-        elif voxel <= 0:
-            voxel = 0.2 if stream == STREAM_GLOBAL else 0.05
-        if not max_points:
-            max_points = 500000 if stream == STREAM_GLOBAL else 200000
+        if stream == "grid":
+            stream = "/map"
+        if not stream.startswith("/"):
+            client.send(encode_error("request needs a topic name: %s" % stream))
+            return
 
         def run():
             lock = CAPTURE_LOCKS.setdefault(stream, threading.Lock())
@@ -1354,18 +1426,33 @@ class BridgeWS(websocket.WebSocketHandler):
                 return
             try:
                 client.send(encode_status(stream, True, "capturing"))
-                if stream == STREAM_GRID:
-                    g = SOURCE.grid(refresh=refresh)
-                    if g is None:
-                        client.send(encode_error("no /map message"))
-                    else:
-                        client.send(encode_grid(g))
+                typ = SOURCE.type_of(stream)
+                kind = TYPE_KIND.get(typ, KIND_RAW)
+                voxel_eff = voxel
+                if kind == KIND_CLOUD and voxel_eff <= 0:
+                    voxel_eff = 0.05
+                cached = SOURCE.topic_data(stream)
+                timeout = REQUEST_TIMEOUTS.get(stream, 30.0)
+                if cached is not None and now() - cached["recv"] < 3.0 and not refresh:
+                    data = cached
                 else:
-                    c = SOURCE.cloud(stream)
-                    if c is None:
-                        client.send(encode_error("no message on %s" % stream))
-                    else:
-                        client.send(encode_cloud(stream, c, voxel, max_points))
+                    client.send(
+                        encode_status(
+                            stream,
+                            True,
+                            "waiting for %s (%s)" % (stream, typ or "unknown"),
+                        )
+                    )
+                    data = SOURCE.request_topic(stream, timeout)
+                if data is None:
+                    client.send(encode_error("no message on %s" % stream))
+                    return
+                client.send(encode_status(stream, True, "encoding"))
+                frame = encode_topic_frame(stream, data, {"voxel": voxel_eff, "max": max_points or 0})
+                if frame is None:
+                    client.send(encode_error("unsupported message on %s" % stream))
+                    return
+                client.send_topic(stream, frame)
             except Exception as e:
                 client.send(encode_error("%s: %s" % (stream, e)))
             finally:
@@ -1454,22 +1541,24 @@ def publisher_loop():
                     continue
                 if frames:
                     sub["last"] = t0
+                    target = stream if stream.startswith("/") else (STREAM_TOPICS.get(stream) or [stream])[0]
                     for f in frames:
-                        client.send(f)
+                        client.send_topic(target, f)
             if t0 - client.last_send > 10.0:
                 client.send(encode_status("heartbeat", True, "alive"))
-            # 话题统计（约 2Hz）
+            # 话题速率 / 流量统计（约 2Hz）
             if t0 - client.last_stats >= 0.5:
-                topics = set()
-                for stream in client.subs:
-                    for t in STREAM_TOPICS.get(stream, []):
-                        topics.add(t)
-                for t in client.raw_subs:
-                    topics.add(t)
-                for t in topics:
-                    st = CACHE.stat(t)
-                    if st is not None:
-                        client.send(encode_stat(t, st[0], int(st[1] * 1000), st[2]))
+                dt = t0 - client.last_stats
+                for topic, st in list(client.sent.items()):
+                    prev = client.stat_prev.get(topic)
+                    rate = 0.0
+                    if prev and dt > 0:
+                        rate = (st["count"] - prev[0]) / dt
+                    client.stat_prev[topic] = (st["count"], t0)
+                    age_ms = int(max(0.0, t0 - st["last"]) * 1000)
+                    client.send(
+                        encode_stat(topic, st["count"], age_ms, st["size"], st["total"], rate)
+                    )
                 client.last_stats = t0
         STOP.wait(0.05)
 

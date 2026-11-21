@@ -227,6 +227,10 @@
             "ranges": {
               "type": "bytes",
               "id": 7
+            },
+            "stream": {
+              "type": "string",
+              "id": 8
             }
           }
         },
@@ -239,6 +243,10 @@
             "xy": {
               "type": "bytes",
               "id": 2
+            },
+            "stream": {
+              "type": "string",
+              "id": 3
             }
           }
         },
@@ -280,6 +288,14 @@
             "bytes": {
               "type": "uint32",
               "id": 4
+            },
+            "total_bytes": {
+              "type": "uint64",
+              "id": 5
+            },
+            "rate_hz": {
+              "type": "float",
+              "id": 6
             }
           }
         },
@@ -323,18 +339,6 @@
             }
           }
         },
-        "DiagFrame": {
-          "fields": {
-            "text": {
-              "type": "string",
-              "id": 1
-            },
-            "stamp": {
-              "type": "double",
-              "id": 2
-            }
-          }
-        },
         "GridFrame": {
           "fields": {
             "header": {
@@ -368,6 +372,10 @@
             "seq": {
               "type": "uint32",
               "id": 8
+            },
+            "stream": {
+              "type": "string",
+              "id": 9
             }
           }
         },
@@ -556,8 +564,7 @@
                 "topics",
                 "stat",
                 "raw",
-                "service",
-                "diag"
+                "service"
               ]
             }
           },
@@ -621,10 +628,6 @@
             "service": {
               "type": "ServiceResult",
               "id": 15
-            },
-            "diag": {
-              "type": "DiagFrame",
-              "id": 16
             }
           }
         }

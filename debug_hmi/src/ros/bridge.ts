@@ -77,6 +77,7 @@ export interface PathData {
 }
 
 export interface LaserData {
+  stream: string
   frame: string
   stamp: number
   angle_min: number
@@ -88,14 +89,10 @@ export interface LaserData {
 }
 
 export interface PolygonData {
+  stream: string
   frame: string
   stamp: number
   xy: Float32Array
-}
-
-export interface DiagData {
-  text: string
-  stamp: number
 }
 
 export interface TopicStatData {
@@ -103,6 +100,8 @@ export interface TopicStatData {
   count: number
   age_ms: number
   bytes: number
+  total_bytes: number
+  rate_hz: number
 }
 
 export interface RawData {
@@ -165,10 +164,11 @@ export class BridgeClient {
   autoReconnect = true
 
   private subs = new Map<string, SubscribeOptions>()
-  private gridWaiters: Waiter<GridData>[] = []
+  private gridWaiters = new Map<string, Waiter<GridData>[]>()
   private cloudWaiters = new Map<string, Waiter<CloudData>[]>()
   private helloWaiters: HelloWaiter[] = []
   private cloudListeners = new Set<CloudListener>()
+  private gridListeners = new Set<(stream: string, grid: GridData) => void>()
   private helloListeners = new Set<HelloListener>()
   private statusListeners = new Set<StatusListener>()
   private connectionListeners = new Set<ConnectionListener>()
@@ -179,7 +179,6 @@ export class BridgeClient {
   private pathListeners = new Set<(path: PathData) => void>()
   private laserListeners = new Set<(laser: LaserData) => void>()
   private polygonListeners = new Set<(polygon: PolygonData) => void>()
-  private diagListeners = new Set<(diag: DiagData) => void>()
   private statListeners = new Set<(stat: TopicStatData) => void>()
   private rawListeners = new Set<(raw: RawData) => void>()
   private topicWaiters: Array<Waiter<TopicInfoData[]>> = []
@@ -342,10 +341,12 @@ export class BridgeClient {
 
   // ------------------------------------------------------------------ requests
 
-  requestGrid(refresh = true, timeout = 90000): Promise<GridData> {
-    return this.request(this.gridWaiters, timeout, {
+  requestGrid(stream = '/map', refresh = true, timeout = 120000): Promise<GridData> {
+    const bucket = this.gridWaiters.get(stream) ?? []
+    this.gridWaiters.set(stream, bucket)
+    return this.request(bucket, timeout, {
       action: ACTION_REQUEST,
-      stream: 'grid',
+      stream,
       refresh,
     })
   }
@@ -400,6 +401,11 @@ export class BridgeClient {
     return () => this.cloudListeners.delete(fn)
   }
 
+  onGrid(fn: (stream: string, grid: GridData) => void): () => void {
+    this.gridListeners.add(fn)
+    return () => this.gridListeners.delete(fn)
+  }
+
   onHello(fn: HelloListener): () => void {
     this.helloListeners.add(fn)
     return () => this.helloListeners.delete(fn)
@@ -448,11 +454,6 @@ export class BridgeClient {
   onPolygon(fn: (polygon: PolygonData) => void): () => void {
     this.polygonListeners.add(fn)
     return () => this.polygonListeners.delete(fn)
-  }
-
-  onDiag(fn: (diag: DiagData) => void): () => void {
-    this.diagListeners.add(fn)
-    return () => this.diagListeners.delete(fn)
   }
 
   onStat(fn: (stat: TopicStatData) => void): () => void {
@@ -520,7 +521,9 @@ export class BridgeClient {
   }
 
   cancelGrid(): void {
-    this.failWaiter(this.gridWaiters, new Error('已取消'))
+    for (const bucket of this.gridWaiters.values()) {
+      this.failWaiter(bucket, new Error('已取消'))
+    }
   }
 
   private emitConnection(connected: boolean): void {
@@ -635,13 +638,6 @@ export class BridgeClient {
       return
     }
 
-    if (msg.diag) {
-      for (const fn of this.diagListeners) {
-        fn({ text: msg.diag.text || '', stamp: Number(msg.diag.stamp) || 0 })
-      }
-      return
-    }
-
     if (msg.path) {
       const poses = (msg.path.poses || []).map((p: any) => ({
         x: Number(p.pose?.x) || 0,
@@ -666,6 +662,7 @@ export class BridgeClient {
       const copy = raw ? raw.slice() : new Uint8Array(0)
       for (const fn of this.laserListeners) {
         fn({
+          stream: msg.laser.stream || '',
           frame: msg.laser.header?.frame_id || 'map',
           stamp: Number(msg.laser.header?.stamp) || 0,
           angle_min: Number(msg.laser.angle_min) || 0,
@@ -684,6 +681,7 @@ export class BridgeClient {
       const copy = raw ? raw.slice() : new Uint8Array(0)
       for (const fn of this.polygonListeners) {
         fn({
+          stream: msg.polygon.stream || '',
           frame: msg.polygon.header?.frame_id || 'base_link',
           stamp: Number(msg.polygon.header?.stamp) || 0,
           xy: new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / 4)),
@@ -698,6 +696,8 @@ export class BridgeClient {
         count: Number(msg.stat.count) || 0,
         age_ms: Number(msg.stat.age_ms) || 0,
         bytes: Number(msg.stat.bytes) || 0,
+        total_bytes: Number(msg.stat.total_bytes) || 0,
+        rate_hz: Number(msg.stat.rate_hz) || 0,
       }
       const existing = this.stats.get(stat.topic)
       const lastTime = Date.now() - stat.age_ms
@@ -756,13 +756,17 @@ export class BridgeClient {
     if (msg.grid) {
       try {
         const grid = await decodeGrid(msg.grid)
-        const waiter = this.gridWaiters.shift()
+        const stream: string = msg.grid.stream || ''
+        const bucket = this.gridWaiters.get(stream)
+        const waiter = bucket?.shift()
         if (waiter) {
           clearTimeout(waiter.timer)
           waiter.resolve(grid)
+        } else if (this.subs.has(stream)) {
+          for (const fn of this.gridListeners) fn(stream, grid)
         }
       } catch (e) {
-        this.failWaiter(this.gridWaiters, new Error((e as Error).message))
+        this.failWaiter(this.gridWaiters.get(msg.grid.stream) ?? [], new Error((e as Error).message))
       }
       return
     }
@@ -796,7 +800,8 @@ export class BridgeClient {
       this.failWaiter(bucket, err)
       return
     }
-    if (stream === 'grid' && this.gridWaiters.length) this.failWaiter(this.gridWaiters, err)
+    const grids = this.gridWaiters.get(stream)
+    if (grids?.length) this.failWaiter(grids, err)
   }
 
   private failWaiter<T>(bucket: Waiter<T>[], err: Error): void {
@@ -807,10 +812,13 @@ export class BridgeClient {
   }
 
   private dropAllWaiters(err: Error): void {
-    for (const waiter of this.gridWaiters.splice(0)) {
-      clearTimeout(waiter.timer)
-      waiter.reject(err)
+    for (const bucket of this.gridWaiters.values()) {
+      for (const waiter of bucket.splice(0)) {
+        clearTimeout(waiter.timer)
+        waiter.reject(err)
+      }
     }
+    this.gridWaiters.clear()
     for (const bucket of this.cloudWaiters.values()) {
       for (const waiter of bucket.splice(0)) {
         clearTimeout(waiter.timer)
@@ -892,6 +900,7 @@ async function decodeGrid(frame: any): Promise<GridData> {
   const total = width * height
   if (raw.byteLength < total) throw new Error(`栅格数据不足：${raw.byteLength} < ${total}`)
   return {
+    stream: frame.stream || '',
     width,
     height,
     resolution: Number(frame.resolution) || 0.05,

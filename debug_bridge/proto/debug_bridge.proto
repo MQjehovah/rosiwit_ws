@@ -86,11 +86,13 @@ message LaserFrame {
   float range_min = 5;
   float range_max = 6;
   bytes ranges = 7; // float32 LE
+  string stream = 8; // ROS topic
 }
 
 message PolygonFrame {
   Header header = 1;
   bytes xy = 2; // float32 pairs
+  string stream = 3; // ROS topic
 }
 
 message TopicInfo {
@@ -107,6 +109,8 @@ message TopicStat {
   uint32 count = 2;
   uint64 age_ms = 3;
   uint32 bytes = 4;
+  uint64 total_bytes = 5;
+  float rate_hz = 6;
 }
 
 message RawMessage {
@@ -123,11 +127,6 @@ message ServiceResult {
   string json = 4;
 }
 
-message DiagFrame {
-  string text = 1;
-  double stamp = 2;
-}
-
 message GridFrame {
   Header header = 1;
   uint32 width = 2;
@@ -137,6 +136,7 @@ message GridFrame {
   Compression compression = 6;
   bytes data = 7; // zlib(int8[width*height]) when compression=ZLIB
   uint32 seq = 8;
+  string stream = 9; // ROS topic
 }
 
 message CloudFrame {
@@ -216,6 +216,5 @@ message Envelope {
     TopicStat stat = 13;
     RawMessage raw = 14;
     ServiceResult service = 15;
-    DiagFrame diag = 16;
   }
 }

@@ -38,20 +38,31 @@ export const ros = new DebugRosClient(
 export const bridge = ros.bridge
 export const tfTree = new TfTree()
 
-export type LayerKey =
-  | 'tf'
-  | 'status'
-  | 'diag'
-  | 'logs'
-  | 'scan'
-  | 'laser'
-  | 'globalMap'
-  | 'points2d'
-  | 'robot'
-  | 'paths'
-  | 'lidar'
-  | 'grid'
-  | 'trail'
+export type LayerKey = 'tf' | 'status' | 'logs' | 'trail'
+
+export type RendererKind = 'points' | 'grid' | 'laser' | 'path' | 'polygon' | 'json' | 'status'
+
+export interface DisplayStats {
+  hz: number
+  bytes: number
+  total: number
+  age: number
+}
+
+export interface DisplayItem {
+  id: string
+  topic: string
+  type: string
+  renderer: RendererKind
+  enabled: boolean
+  rate: number
+  voxel: number
+  max: number
+  pointSize: number
+  color: string
+  colorMode: 'flat' | 'height'
+  stats: DisplayStats
+}
 
 export interface SlamInfo {
   slam_state: number
@@ -117,7 +128,13 @@ export const state = reactive({
 
   slam: { ...initialSlam } as SlamInfo,
   slamTime: 0,
-  fusionDiag: '',
+  /** 前端“定位状态”插件根据 /slam/info 推导出的展示文本 */
+  statusText: '',
+
+  displays: [] as DisplayItem[],
+  topics: [] as Array<{ name: string; type: string }>,
+  topicQuery: '',
+  displayError: '',
 
   robot: {
     x: 0,
@@ -131,19 +148,10 @@ export const state = reactive({
   },
 
   layers: {
-    // 只有 TF 默认订阅；其余像 RViz 一样由用户显式勾选
+    // 只有 TF 默认订阅；日志/定位面板按需打开
     tf: true,
-    status: false,
-    diag: false,
+    status: true,
     logs: false,
-    scan: false,
-    laser: false,
-    globalMap: false,
-    points2d: false,
-    robot: false,
-    paths: false,
-    lidar: false,
-    grid: false,
     trail: true,
   } as Record<LayerKey, boolean>,
 
@@ -276,28 +284,9 @@ const LAYER_SUBS: Record<LayerKey, Array<[string, SubscribeOptions]>> = {
     ['/tf_static', { queue: 1 }],
   ],
   status: [['/slam/info', { throttle: 150, queue: 1 }]],
-  diag: [['/slam/fusion_diag', { throttle: 1000, queue: 1 }]],
   logs: [['/rosout_agg', { throttle: 500, queue: 5 }]],
-  scan: [
-    // /scan_f_map 是旧版 PointCloud，未开 debug_publish 时也有数据，已在 map 系配准
-    ['/scan_f_map', { throttle: 200, queue: 1, compression: 'cbor' }],
-    ['/curr_scan_point', { throttle: 120, queue: 1, compression: 'cbor' }],
-  ],
-  laser: [['/scan', { throttle: 200, queue: 1 }]],
-  // /global_map 是 latched（每次进模式只发一次），用 CBOR 拿原始字节
-  globalMap: [['/global_map', { throttle: 0, queue: 1, compression: 'cbor' }]],
-  points2d: [['/points_2d', { throttle: 500, queue: 1, compression: 'cbor' }]],
-  robot: [['/robot_footprint', { throttle: 1000, queue: 1 }]],
-  paths: [
-    ['/global_path', { throttle: 1000, queue: 1 }],
-    ['/local_path', { throttle: 500, queue: 1 }],
-  ],
-  lidar: [],
-  grid: [],
   trail: [],
 }
-
-const BRIDGE_STREAM_TOPICS = new Set(['/scan_f_map', '/curr_scan_point', '/global_map', '/points_2d'])
 
 function desiredSubscriptions(): Map<string, SubscribeOptions> {
   const wanted = new Map<string, SubscribeOptions>()
@@ -322,6 +311,185 @@ export function syncSubscriptions(): void {
   }
   for (const topic of managed) {
     if (!wanted.has(topic) && ros.isSubscribed(topic)) ros.unsubscribe(topic)
+  }
+  // 动态显示项：断线重连 / 面板切换后重新对齐订阅
+  for (const d of state.displays) {
+    if (d.enabled) subscribeDisplay(d)
+    else unsubscribeDisplay(d)
+  }
+}
+
+// -------------------------------------------------------------- dynamic displays
+
+const DISPLAYS_KEY = 'hmi.displays.v3'
+const PALETTE = ['#38bdf8', '#fbbf24', '#34d399', '#f472b6', '#a78bfa', '#fb923c', '#22d3ee', '#f87171']
+
+export function rendererForType(type: string): RendererKind {
+  if (type === 'sensor_msgs/PointCloud2' || type === 'sensor_msgs/PointCloud') return 'points'
+  if (type === 'nav_msgs/OccupancyGrid') return 'grid'
+  if (type === 'sensor_msgs/LaserScan') return 'laser'
+  if (type === 'nav_msgs/Path') return 'path'
+  if (type === 'geometry_msgs/PolygonStamped') return 'polygon'
+  if (type === 'xzrobot_ros_dependency/SlamInfo') return 'status'
+  return 'json'
+}
+
+function displayDefaults(topic: string, type: string, index: number): DisplayItem {
+  const renderer = rendererForType(type)
+  return {
+    id: `${topic}#${Date.now().toString(36)}`,
+    topic,
+    type,
+    renderer,
+    enabled: true,
+    rate: renderer === 'points' ? 2 : renderer === 'laser' ? 5 : renderer === 'grid' ? 1 : 2,
+    voxel: renderer === 'points' ? 0.05 : 0,
+    max: renderer === 'points' ? 300000 : 0,
+    pointSize: renderer === 'laser' ? 0.12 : 0.07,
+    color: PALETTE[index % PALETTE.length],
+    colorMode: renderer === 'laser' || renderer === 'path' || renderer === 'polygon' ? 'flat' : 'height',
+    stats: { hz: 0, bytes: 0, total: 0, age: -1 },
+  }
+}
+
+function subscribeDisplay(d: DisplayItem): void {
+  if (!d.topic.startsWith('/') || d.renderer === 'status') return
+  bridge.setSubscription(d.topic, {
+    rate: d.rate,
+    voxel: d.voxel,
+    max: d.max,
+  })
+}
+
+function unsubscribeDisplay(d: DisplayItem): void {
+  if (!d.topic.startsWith('/') || d.renderer === 'status') return
+  bridge.setSubscription(d.topic, null)
+}
+
+export function addDisplay(topic: string, type?: string): void {
+  const clean = topic.trim()
+  if (!clean) return
+  const existing = state.displays.find((d) => d.topic === clean)
+  if (existing) {
+    state.displayError = `${clean} 已经在显示列表中`
+    return
+  }
+  const known = state.topics.find((t) => t.name === clean)
+  const typ = type || known?.type || ''
+  const item = displayDefaults(clean, typ, state.displays.length)
+  state.displays.push(item)
+  state.displayError = ''
+  saveDisplays()
+  if (item.enabled) subscribeDisplay(item)
+}
+
+export function removeDisplay(id: string): void {
+  const i = state.displays.findIndex((d) => d.id === id)
+  if (i < 0) return
+  const [item] = state.displays.splice(i, 1)
+  unsubscribeDisplay(item)
+  saveDisplays()
+}
+
+export function updateDisplay(id: string, patch: Partial<DisplayItem>): void {
+  const d = state.displays.find((x) => x.id === id)
+  if (!d) return
+  Object.assign(d, patch)
+  saveDisplays()
+  if (d.enabled) subscribeDisplay(d)
+}
+
+export function toggleDisplay(id: string): void {
+  const d = state.displays.find((x) => x.id === id)
+  if (!d) return
+  d.enabled = !d.enabled
+  if (d.enabled) subscribeDisplay(d)
+  else unsubscribeDisplay(d)
+  saveDisplays()
+}
+
+/** 单帧抓取：点云/栅格/激光/path/polygon 都能用（/global_map 允许很大）。 */
+export async function grabTopic(id: string): Promise<void> {
+  const d = state.displays.find((x) => x.id === id)
+  if (!d) return
+  if (ros.status !== 'open') {
+    state.displayError = 'debug_bridge 未连接'
+    return
+  }
+  state.displayError = ''
+  const prev = d.enabled
+  pushLog('info', `抓取 ${d.topic} 单帧…`)
+  try {
+    if (d.renderer === 'grid') {
+      const grid = await bridge.requestGrid(d.topic, true, 180000)
+      emitTopicGrid(d.topic, grid)
+    } else if (d.renderer === 'points') {
+      const cloud = await bridge.requestCloud(d.topic, {
+        voxel: 0.05,
+        max: 0,
+        timeout: d.topic === '/global_map' ? 300000 : 120000,
+      })
+      emitTopicCloud(d.topic, cloud)
+    } else {
+      state.displayError = '这类话题是连续发布的，订阅后直接看实时帧即可'
+      return
+    }
+    pushLog('info', `${d.topic} 单帧已接收`)
+  } catch (e) {
+    state.displayError = (e as Error).message
+    pushLog('warn', `${d.topic} 抓取失败：${(e as Error).message}`)
+  } finally {
+    if (!prev) d.enabled = false
+  }
+}
+
+function saveDisplays(): void {
+  try {
+    const slim = state.displays.map(({ stats, id, ...rest }) => ({ ...rest, id }))
+    localStorage.setItem(DISPLAYS_KEY, JSON.stringify(slim))
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadDisplays(): void {
+  try {
+    const raw = localStorage.getItem(DISPLAYS_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return
+    state.displays = parsed
+      .filter((d) => d && typeof d.topic === 'string')
+      .map((d, i) => ({ ...displayDefaults(d.topic, String(d.type || ''), i), ...d, stats: { hz: 0, bytes: 0, total: 0, age: -1 } }))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 拉取话题列表，供“添加显示项”下拉框使用。 */
+export async function refreshTopics(): Promise<void> {
+  if (state.topicScanning) return
+  state.topicScanning = true
+  try {
+    const topics = await ros.getTopics()
+    const map: Record<string, string> = { ...TOPIC_CATALOG }
+    for (const item of topics) {
+      if (item.type) map[item.name] = item.type
+    }
+    state.topicNames = topics.map((t) => t.name)
+    state.topicTypes = map
+    state.topics = topics
+      .map((t) => ({ name: t.name, type: t.type || map[t.name] || '' }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    if (!state.displays.length) {
+      const seed = '/curr_scan_point'
+      if (state.topics.some((t) => t.name === seed)) addDisplay(seed, map[seed])
+    }
+    pushLog('info', `话题列表已更新：${topics.length} 个`)
+  } catch (e) {
+    pushLog('warn', `读取话题列表失败：${(e as Error).message}`)
+  } finally {
+    state.topicScanning = false
   }
 }
 
@@ -421,7 +589,7 @@ export async function grabGridSnapshot(): Promise<void> {
       return
     }
     pushLog('info', '正在通过 debug_bridge 获取栅格地图（服务端 zlib）…')
-    const grid = await bridge.requestGrid(true)
+    const grid = await bridge.requestGrid('/map', true, 180000)
     if (!grid) throw new Error('没有有效栅格数据')
     state.gridCells = grid.width * grid.height
     state.gridBytes = grid.data.byteLength
@@ -439,11 +607,38 @@ export async function grabGridSnapshot(): Promise<void> {
   }
 }
 
+// ------------------------------------------------------------------ topic frames
+
+type TopicCloudHandler = (topic: string, cloud: CloudData) => void
+type TopicGridHandler = (topic: string, grid: GridData) => void
+
+const topicCloudHandlers = new Set<TopicCloudHandler>()
+const topicGridHandlers = new Set<TopicGridHandler>()
+
+export function onTopicCloud(handler: TopicCloudHandler): () => void {
+  topicCloudHandlers.add(handler)
+  return () => topicCloudHandlers.delete(handler)
+}
+
+export function onTopicGrid(handler: TopicGridHandler): () => void {
+  topicGridHandlers.add(handler)
+  return () => topicGridHandlers.delete(handler)
+}
+
+export function emitTopicCloud(topic: string, cloud: CloudData): void {
+  state.pointCounts[topic] = cloud.count
+  for (const fn of topicCloudHandlers) fn(topic, cloud)
+}
+
+export function emitTopicGrid(topic: string, grid: GridData): void {
+  state.pointCounts[topic] = grid.width * grid.height
+  for (const fn of topicGridHandlers) fn(topic, grid)
+}
+
 // ------------------------------------------------------------------ global map
 
 function emitLoadedMap(cloud: CloudData): void {
   state.pointCounts.globalMap = cloud.count
-  if (!state.layers.globalMap) setLayer('globalMap', true)
   for (const fn of globalMapHandlers) fn(cloud)
 }
 
@@ -504,27 +699,10 @@ export async function restoreMapCache(): Promise<void> {
   }
 }
 
-/** debug_publish=true 时从 /global_map 拉一份（文件加载的首选替代） */
-export function reloadGlobalMap(): void {
-  if (ros.status !== 'open') {
-    pushLog('warn', 'debug_bridge 未连接')
-    return
-  }
-  pushLog('info', '正在请求 /global_map（需要 debug_publish=true）…')
-  void bridge
-    .requestCloud('global_map', { voxel: 0.2, max: 500000, timeout: 40000 })
-    .then((cloud) => {
-      emitLoadedMap(cloud)
-      pushLog('info', `全局地图：${cloud.count.toLocaleString()} 点（${cloud.frame || 'map'}）`)
-    })
-    .catch((e) => pushLog('warn', `全局地图加载失败：${(e as Error).message}`))
-}
-
 // ------------------------------------------------------------------ handlers
 
 const TOPIC_CATALOG: Record<string, string> = {
   '/slam/info': 'xzrobot_ros_dependency/SlamInfo',
-  '/slam/fusion_diag': 'std_msgs/String',
   '/slam_warning_code': 'std_msgs/String',
   '/curr_localization_pose': 'geometry_msgs/PoseStamped',
   '/curr_scan_point': 'sensor_msgs/PointCloud2',
@@ -584,6 +762,29 @@ let handlersReady = false
 
 let lastMatchSample = 0
 
+/** 定位状态插件：把 /slam/info 的枚举/字符串统一成可读文本。 */
+function describeLocationStatus(slamState: unknown, location: unknown): string {
+  const locMap: Record<string, string> = {
+    '0': '定位正常',
+    '1': '定位中 / 恢复中',
+    '2': '定位失败',
+    SUCCESS: '定位正常',
+    RECOVERING: '定位中 / 恢复中',
+    FAILED: '定位失败',
+  }
+  const slamMap: Record<string, string> = {
+    '0': '建图模式',
+    '1': '定位模式',
+    '2': '错误模式',
+    MAPPING: '建图模式',
+    LOCALIZATION: '定位模式',
+    ERROR: '错误模式',
+  }
+  const loc = typeof location === 'string' ? (locMap[location] ?? location) : locMap[String(location)]
+  const mode = typeof slamState === 'string' ? (slamMap[slamState] ?? slamState) : slamMap[String(slamState)]
+  return [mode, loc].filter(Boolean).join(' · ') || '状态未知'
+}
+
 function registerHandlers(): void {
   if (handlersReady) return
   handlersReady = true
@@ -592,20 +793,24 @@ function registerHandlers(): void {
   ros.onTopic('/tf_static', (msg) => tfTree.ingest(msg, true))
 
   ros.onTopic('/slam/info', (msg) => {
+    const slam = msg?.slam ?? msg
+    const stateRaw = slam?.slam_state
+    const locRaw = slam?.location_status
     state.slam = {
-      slam_state: Number(msg?.slam_state ?? -1),
-      location_status: Number(msg?.location_status ?? -1),
-      matching_degree: Number(msg?.matching_degree ?? 0),
-      update_request: Number(msg?.update_request ?? 0),
-      map_name: String(msg?.map_name ?? ''),
-      map_area: Number(msg?.map_area ?? 0),
+      slam_state: Number(stateRaw ?? -1),
+      location_status: Number(locRaw ?? -1),
+      matching_degree: Number(slam?.matching_degree ?? 0),
+      update_request: Number(slam?.update_request ?? 0),
+      map_name: String(slam?.map_name ?? ''),
+      map_area: Number(slam?.map_area ?? 0),
       robot_pose: {
-        x: Number(msg?.robot_pose?.x ?? 0),
-        y: Number(msg?.robot_pose?.y ?? 0),
-        theta: Number(msg?.robot_pose?.theta ?? 0),
+        x: Number(slam?.robot_pose?.x ?? 0),
+        y: Number(slam?.robot_pose?.y ?? 0),
+        theta: Number(slam?.robot_pose?.theta ?? 0),
       },
     }
     state.slamTime = Date.now()
+    state.statusText = describeLocationStatus(stateRaw, locRaw)
 
     // 匹配度趋势：约 2.5Hz 采样，保留最近 120 点（~48s）
     const now = performance.now()
@@ -616,16 +821,24 @@ function registerHandlers(): void {
     }
   })
 
-  ros.onTopic('/slam/fusion_diag', (msg) => {
-    state.fusionDiag = String(msg?.data ?? '')
-  })
-
   ros.onTopic('/rosout_agg', (msg) => {
     if (state.pausedLogs) return
     const source = String(msg?.name ?? 'ros')
     if (state.mutedSources.includes(source)) return
     const level = ROSOUT_LEVEL[Number(msg?.level)] ?? 'info'
     pushLog(level, String(msg?.msg ?? ''), source)
+  })
+
+  bridge.onStat((stat) => {
+    const d = state.displays.find((x) => x.topic === stat.topic)
+    if (d) {
+      d.stats = {
+        hz: stat.rate_hz,
+        bytes: stat.bytes,
+        total: stat.total_bytes,
+        age: stat.age_ms,
+      }
+    }
   })
 
   // /tf 帧列表低频刷新（面板展示用）
@@ -677,25 +890,6 @@ export function disconnect(): void {
   ros.disconnect()
 }
 
-export async function refreshTopics(): Promise<void> {
-  if (state.topicScanning) return
-  state.topicScanning = true
-  try {
-    const topics = await ros.getTopics()
-    const map: Record<string, string> = { ...TOPIC_CATALOG }
-    for (const item of topics) {
-      if (item.type) map[item.name] = item.type
-    }
-    state.topicNames = topics.map((t) => t.name)
-    state.topicTypes = map
-    pushLog('info', `话题列表已更新：${topics.length} 个`)
-  } catch (e) {
-    pushLog('warn', `读取话题列表失败：${(e as Error).message}`)
-  } finally {
-    state.topicScanning = false
-  }
-}
-
 export function topicType(topic: string): string {
   return state.topicTypes[topic] ?? TOPIC_CATALOG[topic] ?? ''
 }
@@ -711,6 +905,7 @@ export function initHmi(): void {
   state.topicTypes = { ...TOPIC_CATALOG }
   state.mutedSources = loadMutedSources()
   Object.assign(state.layers, loadLayers())
+  loadDisplays()
 
   ros.onStatus((status, detail) => {
     state.status = status
@@ -718,6 +913,7 @@ export function initHmi(): void {
       state.connectedAt = Date.now()
       state.error = ''
       syncSubscriptions()
+      void refreshTopics()
     }
     if (detail && (status === 'error' || status === 'closed')) state.error = detail
   })

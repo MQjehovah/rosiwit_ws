@@ -59,6 +59,11 @@ export class PointCloudLayer {
     this.material.size = size
   }
 
+  setColor(color: number): void {
+    this.material.color.setHex(color)
+    this.material.needsUpdate = true
+  }
+
   clear(): void {
     this.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3))
     this.geometry.setDrawRange(0, 0)
@@ -309,6 +314,10 @@ export class PathLayer {
 
   setVisible(visible: boolean): void {
     this.object.visible = visible
+  }
+
+  setColor(color: number): void {
+    ;(this.object.material as THREE.LineBasicMaterial).color.setHex(color)
   }
 
   dispose(): void {

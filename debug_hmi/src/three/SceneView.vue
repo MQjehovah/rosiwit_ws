@@ -2,11 +2,8 @@
   <div ref="host" class="viewport" :class="{ estimating: state.estimating, measuring: state.measure.active }">
     <div class="hud hud-tl">
       <span class="chip">FPS {{ state.fps.toFixed(0) }}</span>
-      <span v-if="scanInfo" class="chip">{{ scanInfo }}</span>
-      <span v-if="globalPoints" class="chip">地图 {{ globalPoints }}</span>
-      <span v-if="state.layers.grid && gridCells" class="chip">
-        栅格 {{ (gridCells / 1e6).toFixed(1) }}M
-      </span>
+      <span v-if="displayCount" class="chip">{{ displayCount }} 个显示项</span>
+      <span v-if="globalPoints" class="chip">PCD {{ globalPoints }}</span>
     </div>
     <div class="hud hud-tr">
       <span class="chip">{{ sourceShort }}</span>
@@ -24,12 +21,12 @@
     <div
       v-if="globalMapMissing"
       class="map-hint"
-      title="设备 debug_publish: false 时 /global_map 不发布；当前帧来自 /scan_f_map（已在 map 系配准）"
+      title="/global_map 是 latched 话题；机器人只在一进模式时发一次。可在左侧显示项里点“抓取”或加载 PCD。"
     >
-      全局地图未发布 · 可在左侧加载 PCD 文件
+      全局地图未收到 · 可在左侧抓取单帧或加载 PCD
     </div>
     <div v-if="noSources" class="empty-hint">
-      只订阅了 TF · 在左侧「数据源」勾选要看的点云 / 地图
+      像 RViz 一样在左侧「显示项」里添加话题：点云、栅格、激光、路径都可以单独设置
     </div>
     <div v-if="state.measure.active || state.measure.a" class="hud hud-measure">
       <span v-if="!state.measure.a" class="chip">测距：点第一个点</span>
@@ -61,9 +58,11 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import {
   bridge,
   clearMeasure,
+  emitTopicCloud,
+  emitTopicGrid,
   onGlobalMapSnapshot,
-  onGridSnapshot,
-  onLidarSnapshot,
+  onTopicCloud,
+  onTopicGrid,
   pushLog,
   restoreMapCache,
   ros,
@@ -74,12 +73,7 @@ import {
   toggleMeasure,
 } from '../ros/app'
 import { loadGridCache, saveGridCache } from '../ros/gridCache'
-import {
-  decodeLaserScan,
-  decodePath,
-  decodePolygon,
-  type CloudData,
-} from '../ros/decode'
+import type { CloudData, GridData } from '../ros/decode'
 import { quatToRpy } from '../ros/tf'
 import {
   applyTransform,
@@ -100,17 +94,19 @@ let controls: OrbitControls | null = null
 let raf = 0
 let resizeObserver: ResizeObserver | null = null
 
-const globalLayer = new PointCloudLayer({ size: 0.1, opacity: 0.9 })
-const scanLayer = new PointCloudLayer({ size: 0.07, color: 0xffc247 })
-const laserLayer = new PointCloudLayer({ size: 0.12, color: 0xff8a3d })
-const points2dLayer = new PointCloudLayer({ size: 0.1, color: 0x34d399 })
-const lidarLayer = new PointCloudLayer({ size: 0.06, opacity: 0.95 })
-const gridLayer = new GridMapLayer()
+/** 本地 PCD / 文件地图专用层；ROS 话题全部走 dynamicLayers */
+const mapLayer = new PointCloudLayer({ size: 0.1, opacity: 0.9 })
 const robotLayer = new RobotLayer()
 const tfLayer = new TfLayer()
-const globalPath = new PathLayer(0x60a5fa, 0.9)
-const localPath = new PathLayer(0xf472b6, 0.9)
 const trailLayer = new TrailLayer(0x38bdf8)
+
+interface DynamicLayer {
+  renderer: string
+  layer: PointCloudLayer | GridMapLayer | PathLayer
+}
+
+const dynamicLayers = new Map<string, DynamicLayer>()
+const lastGrid = new Map<string, GridData>()
 
 const pendingGroup = new THREE.Group()
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
@@ -159,30 +155,21 @@ function currentFrames(): string[] {
   return frameCache
 }
 
-const gridCells = computed(() => state.gridCells || (state.pointCounts.grid ?? 0))
+const displayCount = computed(() => state.displays.filter((d) => d.enabled).length)
 
-/** 勾了「全局地图」但一条都没收到（通常是 debug_publish=false） */
+/** 有 /global_map 显示项但一条都没收到 */
 const globalMapMissing = computed(
   () =>
-    state.layers.globalMap &&
     state.status === 'open' &&
-    (state.pointCounts.globalMap ?? 0) === 0,
+    state.displays.some((d) => d.topic === '/global_map' && d.enabled) &&
+    (state.pointCounts['/global_map'] ?? 0) === 0,
 )
 
-/** 除 TF 外没有勾选任何数据源 */
-const noSources = computed(() =>
-  (
-    ['status', 'diag', 'logs', 'scan', 'laser', 'globalMap', 'points2d', 'robot', 'paths', 'lidar', 'grid'] as const
-  ).every((key) => !state.layers[key]),
-)
-
-const scanInfo = computed(() => {
-  const n = state.pointCounts.scan ?? 0
-  return n ? `扫描 ${n.toLocaleString()}` : ''
-})
+/** 没有任何显示项 */
+const noSources = computed(() => state.displays.length === 0)
 
 const globalPoints = computed(() => {
-  const n = state.pointCounts.globalMap ?? 0
+  const n = state.loadedMapPoints || 0
   if (!n) return ''
   return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n.toLocaleString()
 })
@@ -233,123 +220,260 @@ function buildMarker(): void {
 }
 
 function applyGlobalMap(cloud: CloudData): void {
-  globalLayer.setPoints(cloud.positions, cloud.colors)
-  placeInMap(globalLayer.object, cloud.frame)
+  mapLayer.setPoints(cloud.positions, cloud.colors)
+  placeInMap(mapLayer.object, cloud.frame)
   state.pointCounts.globalMap = cloud.count
   pushLog(
     'info',
-    `全局地图：${cloud.count.toLocaleString()} 点` +
+    `PCD 地图：${cloud.count.toLocaleString()} 点` +
       (cloud.total > cloud.count ? `（原始 ${cloud.total.toLocaleString()}，已抽稀）` : ''),
   )
 }
 
+// ---------------------------------------------------------------- dynamic layers
+
+function hexColor(value: string): number {
+  const c = new THREE.Color(value)
+  return c.getHex()
+}
+
+function heightColors(positions: Float32Array): Float32Array {
+  const n = positions.length / 3
+  const out = new Float32Array(n * 3)
+  let zmin = Infinity
+  let zmax = -Infinity
+  for (let i = 2; i < positions.length; i += 3) {
+    const z = positions[i]
+    if (z < zmin) zmin = z
+    if (z > zmax) zmax = z
+  }
+  const span = zmax - zmin || 1
+  for (let i = 0; i < n; i++) {
+    const t = (positions[i * 3 + 2] - zmin) / span
+    // 蓝(0.66) -> 青 -> 绿 -> 黄 -> 红(0)
+    const h = 0.66 * (1 - t)
+    const s = 0.85
+    const l = 0.52
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+    const p = 2 * l - q
+    const hue = (x: number): number => {
+      let v = x
+      if (v < 0) v += 1
+      if (v > 1) v -= 1
+      if (v < 1 / 6) return p + (q - p) * 6 * v
+      if (v < 1 / 2) return q
+      if (v < 2 / 3) return p + (q - p) * (2 / 3 - v) * 6
+      return p
+    }
+    out[i * 3] = hue(h + 1 / 3)
+    out[i * 3 + 1] = hue(h)
+    out[i * 3 + 2] = hue(h - 1 / 3)
+  }
+  return out
+}
+
+function disposeDynamic(topic: string): void {
+  const entry = dynamicLayers.get(topic)
+  if (!entry) return
+  if (scene) scene.remove(entry.layer.object)
+  if (entry.layer instanceof PointCloudLayer) entry.layer.dispose()
+  else if (entry.layer instanceof PathLayer) entry.layer.dispose()
+  else entry.layer.clear()
+  dynamicLayers.delete(topic)
+}
+
+function ensureDynamic(topic: string, renderer: string): DynamicLayer | null {
+  const existing = dynamicLayers.get(topic)
+  if (existing && existing.renderer === renderer) return existing
+  if (existing) disposeDynamic(topic)
+  const d = state.displays.find((x) => x.topic === topic)
+  let layer: PointCloudLayer | GridMapLayer | PathLayer
+  if (renderer === 'grid') layer = new GridMapLayer()
+  else if (renderer === 'path' || renderer === 'polygon') layer = new PathLayer(hexColor(d?.color || '#38bdf8'), 0.9)
+  else if (renderer === 'points' || renderer === 'laser') {
+    layer = new PointCloudLayer({
+      size: (d?.pointSize || 0.08) * state.pointScale,
+      color: hexColor(d?.color || '#38bdf8'),
+      opacity: 0.95,
+    })
+  } else {
+    return null
+  }
+  const entry = { renderer, layer }
+  dynamicLayers.set(topic, entry)
+  if (scene) scene.add(layer.object)
+  return entry
+}
+
+function syncDisplayLayers(): void {
+  const alive = new Set(state.displays.map((d) => d.topic))
+  for (const topic of [...dynamicLayers.keys()]) {
+    if (!alive.has(topic)) disposeDynamic(topic)
+  }
+  for (const d of state.displays) {
+    const entry = ensureDynamic(d.topic, d.renderer)
+    if (!entry) continue
+    entry.layer.setVisible(d.enabled)
+    if (entry.layer instanceof PointCloudLayer) {
+      entry.layer.setSize(d.pointSize * state.pointScale)
+      entry.layer.setColor(hexColor(d.color))
+    } else if (entry.layer instanceof PathLayer) {
+      entry.layer.setColor(hexColor(d.color))
+    } else if (entry.layer instanceof GridMapLayer) {
+      const cached = lastGrid.get(d.topic)
+      if (cached) entry.layer.update(cached)
+    }
+  }
+}
+
+// ---------------------------------------------------------------- topic frames
+
+function applyTopicCloud(topic: string, cloud: CloudData): void {
+  const d = state.displays.find((x) => x.topic === topic)
+  if (!d || !d.enabled || d.renderer !== 'points') return
+  const entry = ensureDynamic(topic, 'points')
+  if (!entry || !(entry.layer instanceof PointCloudLayer)) return
+  const colors = d.colorMode === 'height' ? heightColors(cloud.positions) : null
+  entry.layer.setPoints(cloud.positions, colors)
+  entry.layer.setColor(hexColor(d.color))
+  entry.layer.setSize(d.pointSize * state.pointScale)
+  entry.layer.setVisible(true)
+  placeInMap(entry.layer.object, cloud.frame)
+  state.pointCounts[topic] = cloud.count
+}
+
+function applyTopicGrid(topic: string, grid: GridData): void {
+  const d = state.displays.find((x) => x.topic === topic)
+  if (!d || !d.enabled || d.renderer !== 'grid') return
+  const entry = ensureDynamic(topic, 'grid')
+  if (!entry || !(entry.layer instanceof GridMapLayer)) return
+  entry.layer.update(grid)
+  entry.layer.setVisible(true)
+  lastGrid.set(topic, grid)
+  state.pointCounts[topic] = grid.width * grid.height
+  if (topic === '/map') {
+    state.gridCells = grid.width * grid.height
+    state.gridTime = Date.now()
+    state.gridFromCache = false
+    void saveGridCache(grid).catch(() => {
+      /* 缓存失败不影响显示 */
+    })
+  }
+}
+
+function laserPositions(l: {
+  ranges: Float32Array
+  angle_min: number
+  angle_increment: number
+  range_min: number
+  range_max: number
+}): Float32Array {
+  const pts: number[] = []
+  for (let i = 0; i < l.ranges.length; i++) {
+    const r = l.ranges[i]
+    if (!Number.isFinite(r) || r < l.range_min || r > l.range_max) continue
+    const a = l.angle_min + i * l.angle_increment
+    pts.push(r * Math.cos(a), r * Math.sin(a), 0.15)
+  }
+  return new Float32Array(pts)
+}
+
+function applyTopicLaser(l: {
+  stream: string
+  frame: string
+  ranges: Float32Array
+  angle_min: number
+  angle_increment: number
+  range_min: number
+  range_max: number
+}): void {
+  const d = state.displays.find((x) => x.topic === l.stream)
+  if (!d || !d.enabled || d.renderer !== 'laser') return
+  const entry = ensureDynamic(l.stream, 'laser')
+  if (!entry || !(entry.layer instanceof PointCloudLayer)) return
+  const positions = laserPositions(l)
+  entry.layer.setPoints(positions, null)
+  entry.layer.setColor(hexColor(d.color))
+  entry.layer.setSize(d.pointSize * state.pointScale)
+  entry.layer.setVisible(true)
+  placeInMap(entry.layer.object, l.frame)
+  state.pointCounts[l.stream] = positions.length / 3
+}
+
+function applyTopicPath(p: { stream: string; frame: string; poses: Array<{ x: number; y: number; z: number }> }): void {
+  const d = state.displays.find((x) => x.topic === p.stream)
+  if (!d || !d.enabled || d.renderer !== 'path') return
+  const entry = ensureDynamic(p.stream, 'path')
+  if (!entry || !(entry.layer instanceof PathLayer)) return
+  const positions = new Float32Array(p.poses.length * 3)
+  p.poses.forEach((q, i) => {
+    positions[i * 3] = q.x
+    positions[i * 3 + 1] = q.y
+    positions[i * 3 + 2] = q.z
+  })
+  entry.layer.setPoints(positions)
+  entry.layer.setColor(hexColor(d.color))
+  entry.layer.setVisible(true)
+  placeInMap(entry.layer.object, p.frame)
+}
+
+function applyTopicPolygon(p: { stream: string; frame: string; xy: Float32Array }): void {
+  const d = state.displays.find((x) => x.topic === p.stream)
+  if (!d || !d.enabled || d.renderer !== 'polygon') return
+  const n = Math.floor(p.xy.length / 2)
+  if (n < 2) return
+  const entry = ensureDynamic(p.stream, 'polygon')
+  if (!entry || !(entry.layer instanceof PathLayer)) return
+  const positions = new Float32Array((n + 1) * 3)
+  for (let i = 0; i < n; i++) {
+    positions[i * 3] = p.xy[i * 2]
+    positions[i * 3 + 1] = p.xy[i * 2 + 1]
+    positions[i * 3 + 2] = 0.02
+  }
+  positions[n * 3] = p.xy[0]
+  positions[n * 3 + 1] = p.xy[1]
+  positions[n * 3 + 2] = 0.02
+  entry.layer.setPoints(positions)
+  entry.layer.setColor(hexColor(d.color))
+  entry.layer.setVisible(true)
+  placeInMap(entry.layer.object, p.frame)
+}
+
 function bindTopics(): void {
-  unsubs.push(
-    onGlobalMapSnapshot((cloud) => applyGlobalMap(cloud)),
-  )
-
-  unsubs.push(
-    bridge.onCloud((stream, cloud) => applyBridgeCloud(stream, cloud)),
-  )
-
-  unsubs.push(
-    ros.onTopic('/scan', (msg) => {
-      const cloud = decodeLaserScan(msg)
-      if (!cloud) return
-      laserLayer.setPoints(cloud.positions, null)
-      placeInMap(laserLayer.object, cloud.frame)
-      state.pointCounts.laser = cloud.count
-    }),
-  )
-
-  unsubs.push(
-    onLidarSnapshot((cloud) => {
-      lidarLayer.setPoints(cloud.positions, cloud.colors)
-      placeInMap(lidarLayer.object, cloud.frame)
-      state.pointCounts.lidar = cloud.count
-    }),
-  )
-
-  unsubs.push(
-    onGridSnapshot((grid) => {
-      gridLayer.update(grid)
-      state.pointCounts.grid = grid.width * grid.height
-      pushLog('info', `栅格已渲染：${grid.width}×${grid.height} @ ${grid.resolution}m`)
-      void saveGridCache(grid).catch(() => {
-        /* 缓存失败不影响显示 */
-      })
-    }),
-  )
-
-  unsubs.push(
-    ros.onTopic('/global_path', (msg) => {
-      const path = decodePath(msg)
-      if (!path) return
-      globalPath.setPoints(path.positions)
-      placeInMap(globalPath.object, path.frame)
-    }),
-  )
-
-  unsubs.push(
-    ros.onTopic('/local_path', (msg) => {
-      const path = decodePath(msg)
-      if (!path) return
-      localPath.setPoints(path.positions)
-      placeInMap(localPath.object, path.frame)
-    }),
-  )
-
-  unsubs.push(
-    ros.onTopic('/robot_footprint', (msg) => {
-      const poly = decodePolygon(msg)
-      if (!poly) return
-      if (poly.frame && poly.frame !== 'base_link' && poly.frame !== 'base_footprint') {
-        warnOnce('footprint-frame', `/robot_footprint 在 ${poly.frame} 系，未使用`)
-        return
-      }
-      robotLayer.setFootprint(poly.positions)
-    }),
-  )
+  unsubs.push(onGlobalMapSnapshot((cloud) => applyGlobalMap(cloud)))
+  unsubs.push(bridge.onCloud((topic, cloud) => applyTopicCloud(topic, cloud)))
+  unsubs.push(bridge.onGrid((topic, grid) => applyTopicGrid(topic, grid)))
+  unsubs.push(bridge.onLaser((l) => applyTopicLaser(l)))
+  unsubs.push(bridge.onPath((p) => applyTopicPath(p)))
+  unsubs.push(bridge.onPolygon((p) => applyTopicPolygon(p)))
+  unsubs.push(onTopicCloud((topic, cloud) => applyTopicCloud(topic, cloud)))
+  unsubs.push(onTopicGrid((topic, grid) => applyTopicGrid(topic, grid)))
 }
 
 function applyVisibility(): void {
-  globalLayer.setVisible(state.layers.globalMap)
-  scanLayer.setVisible(state.layers.scan)
-  laserLayer.setVisible(state.layers.laser)
-  points2dLayer.setVisible(state.layers.points2d)
-  lidarLayer.setVisible(state.layers.lidar)
-  gridLayer.setVisible(state.layers.grid)
-  globalPath.setVisible(state.layers.paths)
-  localPath.setVisible(state.layers.paths)
-  // 机器人本体只依赖 TF，常显示；足迹是额外订阅
+  // 机器人本体只依赖 TF，常显示
   robotLayer.setVisible(true)
-  robotLayer.setFootprintVisible(state.layers.robot)
+  robotLayer.setFootprintVisible(true)
   trailLayer.setVisible(state.layers.trail)
   tfLayer.object.visible = state.layers.tf
+  for (const d of state.displays) {
+    const entry = dynamicLayers.get(d.topic)
+    if (entry) entry.layer.setVisible(d.enabled)
+  }
 }
 
 function applyPointScale(): void {
   const s = state.pointScale
-  globalLayer.setSize(0.1 * s)
-  scanLayer.setSize(0.07 * s)
-  laserLayer.setSize(0.12 * s)
-  points2dLayer.setSize(0.1 * s)
-  lidarLayer.setSize(0.06 * s)
-}
-
-// ---------------------------------------------------------------- bridge push
-
-function applyBridgeCloud(stream: string, cloud: CloudData): void {
-  if (stream === 'scan') {
-    scanLayer.setPoints(cloud.positions, cloud.colors)
-    placeInMap(scanLayer.object, cloud.frame)
-    state.pointCounts.scan = cloud.count
-  } else if (stream === 'points_2d') {
-    points2dLayer.setPoints(cloud.positions, cloud.colors)
-    placeInMap(points2dLayer.object, cloud.frame)
-    state.pointCounts.points2d = cloud.count
+  mapLayer.setSize(0.1 * s)
+  for (const [topic, entry] of dynamicLayers) {
+    if (entry.layer instanceof PointCloudLayer) {
+      const d = state.displays.find((x) => x.topic === topic)
+      entry.layer.setSize((d?.pointSize || 0.07) * s)
+    }
   }
 }
+
+// ---------------------------------------------------------------- interactions
 
 function syncMeasure(): void {
   const { active, a, b } = state.measure
@@ -415,13 +539,7 @@ function setupScene(): void {
 
   buildMarker()
   const all = [
-    gridLayer.object,
-    globalLayer.object,
-    scanLayer.object,
-    laserLayer.object,
-    points2dLayer.object,
-    globalPath.object,
-    localPath.object,
+    mapLayer.object,
     trailLayer.object,
     robotLayer.object,
     tfLayer.object,
@@ -432,6 +550,7 @@ function setupScene(): void {
 
   applyVisibility()
   applyPointScale()
+  syncDisplayLayers()
   syncMeasure()
   resize()
   resizeObserver = new ResizeObserver(resize)
@@ -546,12 +665,8 @@ function contentBox(): THREE.Box3 {
     const b = new THREE.Box3().setFromObject(object)
     if (!b.isEmpty()) box.union(b)
   }
-  include(globalLayer.object)
-  include(scanLayer.object)
-  include(points2dLayer.object)
-  include(laserLayer.object)
-  include(lidarLayer.object)
-  include(gridLayer.object)
+  include(mapLayer.object)
+  for (const entry of dynamicLayers.values()) include(entry.layer.object)
   if (state.robot.source !== '-') {
     box.expandByPoint(new THREE.Vector3(state.robot.x, state.robot.y, 0))
   }
@@ -696,6 +811,12 @@ watch(
 )
 
 watch(
+  () => state.displays,
+  () => syncDisplayLayers(),
+  { deep: true },
+)
+
+watch(
   () => state.pointScale,
   () => applyPointScale(),
 )
@@ -740,10 +861,11 @@ onMounted(() => {
   void loadGridCache()
     .then((cached) => {
       if (!cached) return
-      gridLayer.update(cached.grid)
+      lastGrid.set('/map', cached.grid)
       state.gridCells = cached.grid.width * cached.grid.height
       state.gridTime = cached.savedAt
       state.gridFromCache = true
+      if (state.displays.some((d) => d.topic === '/map')) applyTopicGrid('/map', cached.grid)
       pushLog(
         'info',
         `已从缓存恢复栅格地图：${cached.grid.width}×${cached.grid.height}` +
@@ -762,14 +884,8 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   for (const unsub of unsubs) unsub()
   window.removeEventListener('keydown', onKeyDown)
-  globalLayer.dispose()
-  scanLayer.dispose()
-  laserLayer.dispose()
-  points2dLayer.dispose()
-  lidarLayer.dispose()
-  gridLayer.clear()
-  globalPath.dispose()
-  localPath.dispose()
+  mapLayer.dispose()
+  for (const topic of [...dynamicLayers.keys()]) disposeDynamic(topic)
   controls?.dispose()
   renderer?.dispose()
   renderer?.domElement.remove()
