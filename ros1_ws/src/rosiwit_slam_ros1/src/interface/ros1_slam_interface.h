@@ -304,24 +304,26 @@ private:
     double grid_resolution_ = 0.05;                 // 存 pgm/yaml 用的分辨率 (= mapping.grid.resolution)
     double realtime_grid_resolution_ = 0.05;        // 实时 /map 分辨率 (= mapping.grid.realtime_resolution)
 
-    // 静态/实时栅格: 主线程的 1Hz timer 与 beginMapSwitch 写, tick 线程读 (slam/info、
-    // /localization/state、兜底重发) -> 用拷贝快照, 别让 std::vector 边写边读。
+    // 静态/实时栅格: 生产方 (1Hz 栅格任务 / 切图) 构造一次不可变消息, 读者拿 shared_ptr。
+    // **不做整体拷贝**: 一张 1600m 地图的 OccupancyGrid 是 640KB, 原来每读一次就拷一份
+    // (兜底重发 1Hz + planar 最高 4Hz -> 最多 ~3MB/s 的无谓 memcpy + 分配)。
+    using GridMsgPtr = std::shared_ptr<const nav_msgs::OccupancyGrid>;
     mutable std::mutex static_map_mu_;
-    nav_msgs::OccupancyGrid staticMapSnapshot() const {
+    GridMsgPtr staticMapSnapshot() const {
         std::lock_guard<std::mutex> lk(static_map_mu_);
-        return realtime_grid_map_;
+        return static_grid_msg_;
     }
     bool hasStaticMap() const {
         std::lock_guard<std::mutex> lk(static_map_mu_);
-        return !realtime_grid_map_.data.empty();
+        return static_grid_msg_ && !static_grid_msg_->data.empty();
     }
-    void setStaticMap(nav_msgs::OccupancyGrid msg) {
+    void setStaticMap(GridMsgPtr msg) {
         std::lock_guard<std::mutex> lk(static_map_mu_);
-        realtime_grid_map_ = std::move(msg);
+        static_grid_msg_ = std::move(msg);
     }
     void clearStaticMap() {
         std::lock_guard<std::mutex> lk(static_map_mu_);
-        realtime_grid_map_ = nav_msgs::OccupancyGrid();
+        static_grid_msg_.reset();
     }
 
     // 地图名: 服务线程写 (switch_map), tick 线程读 (slam/info、planar)
@@ -403,6 +405,7 @@ private:
     std::atomic<bool> grid_job_busy_{false};
     std::atomic<bool> global_map_job_busy_{false};
     std::atomic<bool> planar_job_busy_{false};
+    std::atomic<bool> origin_point_job_busy_{false};   // /origin_point 发布任务在途
     std::atomic<double> last_path_build_s_{0.0};   // 轨迹的 1Hz 构造节流
     AuxJobGuard aux_jobs_;                          // 析构时等在途任务
     ControlLoop control_;                           // 管理命令: 载图/切模式/存图
@@ -416,7 +419,7 @@ private:
 
     // 旧 /map 的那张"实时栅格"对象 (legacy.cpp 的 realtime_grid_map_):
     // 它是**常驻**的 —— 没有新数据时也照发上一张 (legacy.cpp:909 无条件 publish)
-    nav_msgs::OccupancyGrid realtime_grid_map_;
+    GridMsgPtr static_grid_msg_;    // 不可变快照 (shared_ptr 交换, 零拷贝)
 
     // 原始输入点云缓存 (T6 填)。
     // 写入方 = 雷达回调线程 (engine 的 raw lidar hook); 读取方 = 0.1s/0.01s 定时器线程。

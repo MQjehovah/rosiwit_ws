@@ -303,10 +303,10 @@ void Ros1SlamInterface::publishStaticMapFallback() {
     if (!static_map_valid_) return;
     const ros::Time now = ros::Time::now();
     if (!last_static_map_pub_.isZero() && (now - last_static_map_pub_).toSec() < 1.0) return;
-    // 拷贝快照: 这张图由主线程的 1Hz timer / beginMapSwitch 更新, 这里在 tick 线程读
-    nav_msgs::OccupancyGrid snap = staticMapSnapshot();
-    if (snap.data.empty()) return;
-    realtime_grid_map_puber_.publish(snap);
+    // 拿共享快照 (不是拷贝): 这张图由 1Hz 栅格任务 / 切图更新
+    const auto snap = staticMapSnapshot();
+    if (!snap || snap->data.empty()) return;
+    realtime_grid_map_puber_.publish(*snap);
     last_static_map_pub_ = now;
 }
 
@@ -459,7 +459,9 @@ void Ros1SlamInterface::sendTransform() {
     try {
         tfo_msg = tf_buffer_->lookupTransform("base_footprint", "odom", ros::Time(0));
     } catch (const tf2::TransformException& ex) {
-        ROS_ERROR("%s", ex.what());
+        // 20ms 心跳下, TF 树不完整时原来会每秒刷 50 条 ERROR (控制台 I/O 在 ARM 上
+        // 带 flush 很贵) -> 节流到 5s 一条
+        ROS_ERROR_THROTTLE(5.0, "%s", ex.what());
         return;
     }
     // 与服务线程 (publishZeroPoseInfo) 共享, 取锁内快照

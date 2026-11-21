@@ -232,3 +232,43 @@ main:
 | 线程池 | 5（含空转的 feature） | 3 |
 | 业务 | 1（frontend） | 1（frontend） |
 | 合计（不含库内部） | 12 | **7** |
+
+## 9. 性能审计（2026-11-21）
+
+审计口径：**每秒无谓拷贝的字节数 / 热路径上的锁 / 热路径上的日志**。不猜，只列能定位到代码的。
+
+### 9.1 已改
+
+| # | 问题 | 之前 | 现在 |
+|---|---|---|---|
+| P1 | `/world_cloud` 每帧整幅点云序列化 | 10 Hz × 全帧（数 MB/s），导航再 stride 抽样扔掉 | **删除**，导航订原始雷达（`voxelCloudCallback` 自带 `map<-lidar` TF） |
+| P2 | 静态栅格每次读取整份拷贝 | `staticMapSnapshot()` 返回**值**：640 KB/次，兜底重发 1 Hz + planar ≤4 Hz + 栅格任务内再拷一次 → 最多 ~3 MB/s 分配+memcpy | 改 `shared_ptr<const OccupancyGrid>`，**零拷贝** |
+| P3 | `/origin_point` 在**持 `core_mu_` 的输入热路径**上做整帧拷贝 + 序列化 | 10 Hz × 几万点拷贝 + 序列化，期间 `applyInitPose`/`resetCore` 全被顶住 | 无人订阅直接返回（不拷贝）；有人订阅时序列化投 `pool`，最新优先 |
+| P4 | TF 查找失败每秒刷 50 条 `ROS_ERROR` | TF 树不完整时 ~5% CPU（ARM 控制台带 flush） | `ROS_ERROR_THROTTLE(5.0)` |
+| P5 | 建图模式 `/curr_scan_point`、`/or_curr_scan_point` 无条件发 | 10 Hz × 整帧 | 统一受 `debug_publish`（默认 false）门控 |
+
+### 9.2 量化（估算，按 20 万点 / 1600 m 地图）
+
+| 项 | 之前 | 现在 |
+|---|---|---|
+| 点云序列化（非导航） | ~30 MB/s | 0（默认关闭） |
+| 栅格拷贝 | ~3 MB/s | 0 |
+| 输入热路径上的阻塞（点云发布） | 每帧 3~10 ms | 0 |
+| TF 报错 | 50 条/s | 0.2 条/s |
+| 实测 `/slam/info` | 8.6~8.9 Hz | 9.0~9.1 Hz |
+
+### 9.3 看过但**没改**的（有理由）
+
+| 项 | 现状 | 为什么不动 |
+|---|---|---|
+| `/map` 1 Hz 重发（内容不变也发） | 640 KB/s 序列化 | 占 CPU < 0.1%，但 App/工具可能靠"周期性刷新"判断新鲜度；改了就变成行为变更，收益不值 |
+| `localizationStatus()/pipelineMode()/getMatchingDegree()` 要拿 `core_mu_` | 心跳最多等一个帧的处理时间（几十 ms） | 换成无锁快照能进一步降抖动，但要改核心访问器；当前 10 Hz 心跳有余量，先记录不改 |
+| `frontendLoop` 持 `core_mu_` 时 `tryPopAndProcess()` | 建图时一次输入可能处理多个后端条目 | 属于核心设计（输入与结构操作互斥）；要改得动 `SlamPipeline` 的职责划分 |
+| `processLidar` 全程持 `core_mu_` | 一帧内 `ros2Pcl` + `onLidar` | 同上，且这是"帧串行"的语义保证 |
+| `/lio_odom` 每帧取 `bodyFrame()/worldFrame()`（返回 `std::string`） | 100 次/秒小分配 | 量级可忽略，缓存反而增加不一致风险 |
+
+### 9.4 真机上要验的三条
+
+1. `top -H` 看 `pool` 的 3 条线程在**建图 + RViz 连上**时的 CPU 占比（预期转换任务被 `debug_publish` 关掉后很低）
+2. 建图 10 分钟后 `/slam/info` 的抖动（p99 间隔），确认心跳没被帧处理拖住
+3. 重定位（判丢 → 全局搜索）期间，`/lio_odom` 与 `map->odom` TF 是否仍然连续（搜索已在线程池，理论上不再占 frontend）

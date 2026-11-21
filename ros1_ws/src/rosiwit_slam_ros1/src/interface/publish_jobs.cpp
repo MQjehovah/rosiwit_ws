@@ -157,12 +157,13 @@ void Ros1SlamInterface::buildGridMessage() {
         realtime_grid_map_area_.store(area);
         // legacy.cpp:1749 把建图面积塞进 origin.position.z
         msg->info.origin.position.z = area * 0.00001;
-        setStaticMap(*msg);        // 这份 640KB 拷贝也放在池线程
+        setStaticMap(msg);         // shared_ptr: 不再复制 640KB
     } else {
-        // 没有新栅格也照发上一张 (legacy.cpp:909 无条件 publish)
-        nav_msgs::OccupancyGrid cur = staticMapSnapshot();
-        if (cur.data.empty()) return;
-        msg = std::make_shared<nav_msgs::OccupancyGrid>(std::move(cur));
+        // 没有新栅格也照发上一张 (legacy.cpp:909 无条件 publish) —— 直接复用快照
+        auto cur = staticMapSnapshot();
+        if (!cur || cur->data.empty()) return;
+        realtime_grid_map_puber_.publish(*cur);
+        return;
     }
     realtime_grid_map_puber_.publish(*msg);   // latched: 订阅者随到随取
 }

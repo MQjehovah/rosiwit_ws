@@ -162,12 +162,14 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
                      static_grid.width > 0 && static_grid.height > 0;
     }
     if (ctx.pgm_ok) {
-        realtime_grid_map_ = toRosGrid(static_grid, kMapFrame);
+        auto pgm_msg = std::make_shared<nav_msgs::OccupancyGrid>(
+            toRosGrid(static_grid, kMapFrame));
         realtime_grid_map_area_ =
             static_cast<double>(static_grid.width) * static_grid.height *
             static_grid.resolution * static_grid.resolution;
-        realtime_grid_map_.info.origin.position.z = realtime_grid_map_area_ * 0.00001;
-        realtime_grid_map_puber_.publish(realtime_grid_map_);
+        pgm_msg->info.origin.position.z = realtime_grid_map_area_ * 0.00001;
+        setStaticMap(pgm_msg);              // 零拷贝: 交换 shared_ptr
+        realtime_grid_map_puber_.publish(*pgm_msg);
         std::cout << "[ros1_slam] /switch_map: published PGM map "
                   << static_grid.width << "x" << static_grid.height
                   << " unknown=" << std::count(static_grid.data.begin(), static_grid.data.end(), -1)

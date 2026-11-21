@@ -64,25 +64,25 @@ void Ros1SlamInterface::planarConstraintStep() {
         (now - planar_last_try_).toSec() < min_period) return;
     planar_last_try_ = now;
 
-    const nav_msgs::OccupancyGrid map_snap = staticMapSnapshot();
-    if (map_snap.data.empty() ||
-        map_snap.info.width == 0 || map_snap.info.height == 0) {
+    const auto map_snap = staticMapSnapshot();   // 共享快照, 不拷贝 640KB
+    if (!map_snap || map_snap->data.empty() ||
+        map_snap->info.width == 0 || map_snap->info.height == 0) {
         return;
     }
 
     // 地图几何变化时重建栅格 + 距离场 (一次性开销, 不是每帧).
     const bool geom_changed =
-        planar_grid_.width != static_cast<int>(map_snap.info.width) ||
-        planar_grid_.height != static_cast<int>(map_snap.info.height) ||
-        std::fabs(planar_grid_.resolution - realtime_grid_map_.info.resolution) > 1e-9 ||
-        planar_grid_.data.size() != realtime_grid_map_.data.size();
+        planar_grid_.width != static_cast<int>(map_snap->info.width) ||
+        planar_grid_.height != static_cast<int>(map_snap->info.height) ||
+        std::fabs(planar_grid_.resolution - map_snap->info.resolution) > 1e-9 ||
+        planar_grid_.data.size() != map_snap->data.size();
     if (geom_changed || planar_field_.empty()) {
-        planar_grid_.width = static_cast<int>(realtime_grid_map_.info.width);
-        planar_grid_.height = static_cast<int>(realtime_grid_map_.info.height);
-        planar_grid_.resolution = realtime_grid_map_.info.resolution;
-        planar_grid_.origin_x = realtime_grid_map_.info.origin.position.x;
-        planar_grid_.origin_y = realtime_grid_map_.info.origin.position.y;
-        planar_grid_.data = realtime_grid_map_.data;
+        planar_grid_.width = static_cast<int>(map_snap->info.width);
+        planar_grid_.height = static_cast<int>(map_snap->info.height);
+        planar_grid_.resolution = map_snap->info.resolution;
+        planar_grid_.origin_x = map_snap->info.origin.position.x;
+        planar_grid_.origin_y = map_snap->info.origin.position.y;
+        planar_grid_.data = map_snap->data;
         planar_field_ = buildPlanarDistanceField(planar_grid_, 1.5);
         planar_pending_ = false;
         std::cout << "[planar] distance field built: " << planar_grid_.width << "x"
