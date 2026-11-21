@@ -255,7 +255,8 @@ localization:
     #   scan_context + 两级精配 p95 1.7 s / 召回 100% / 误锁 0%;
     #   fpfh_ransac 同一地图 p95 数十秒. 有 .scdb 时优先 scan_context:
     #     relocalizer: scan_context
-    relocalizer: fpfh_ransac
+    # 默认关闭全局重定位; 需要冷启动/丢失后全局重锁时改 fpfh_ransac 或 scan_context.
+    relocalizer: none
     motion_prior: imu
     local_map: keyframe_submap
     matcher: pp_icp
@@ -352,9 +353,12 @@ localization:
     bbs_max_levels: 6
     bbs_min_points_per_cell: 5.0
     # fpfh_ransac 专用
-    fpfh_normal_radius: 2.0
-    fpfh_feature_radius: 8.0
-    fpfh_max_iter: 50000
+    # 不要复用 voxel_resolution 做 FPFH; 大图 + 8m 邻域会跑数小时.
+    fpfh_voxel_resolution: 1.0
+    fpfh_normal_radius: 1.0
+    fpfh_feature_radius: 3.0
+    fpfh_threads: 2
+    fpfh_max_iter: 10000
     fpfh_inlier_fraction: 0.25
     fpfh_similarity: 0.9
 

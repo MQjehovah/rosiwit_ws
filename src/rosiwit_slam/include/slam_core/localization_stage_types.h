@@ -218,8 +218,12 @@ struct GlobalLocalizeConfig {
     int    bbs_max_levels = 6;        // 金字塔最大层数
     double bbs_min_points_per_cell = 5.0;  // 单格命中密度归一化上限
     // FPFH-RANSAC 6DoF 全局重定位
-    double fpfh_normal_radius = 2.0;  // 法向估计半径(m)
-    double fpfh_feature_radius = 8.0; // FPFH 特征半径(m)
+    // 注意: FPFH 自己用 fpfh_voxel_resolution, 不要复用 BBS 的 voxel_resolution(0.3);
+    // 8m 特征半径在 6M 点地图上会把邻域放大到几万点, aarch64 实测数小时跑不完.
+    double fpfh_normal_radius = 1.0;  // 法向估计半径(m)
+    double fpfh_feature_radius = 3.0; // FPFH 特征半径(m)
+    double fpfh_voxel_resolution = 1.0; // FPFH 专用降采样(m); <=0 时回退 voxel_resolution
+    int    fpfh_threads = 2;          // Normal/FPFH OMP 线程数 (0 = 全部核心)
     int    fpfh_max_iter = 5000;      // RANSAC 最大迭代 (50000 在 25 万点地图上单场景 >10 min;
                                        // 有 .scdb 时优先用 scan_context, FPFH 只做无库兜底)
     double fpfh_inlier_fraction = 0.25;

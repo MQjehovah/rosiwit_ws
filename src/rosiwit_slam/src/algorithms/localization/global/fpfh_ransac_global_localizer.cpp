@@ -9,15 +9,27 @@
 #include <random>
 #include <numeric>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 
 namespace rosiwit_slam {
 
 namespace {
+// FPFH 专用降采样: 不要复用 BBS 的 0.3m. 1m 级输入 + 1m/3m 半径才能在
+// aarch64 上把 6M 点地图的建库从"数小时"压到几十秒.
+double featureVoxel(const GlobalLocalizeConfig& c) {
+    if (c.fpfh_voxel_resolution > 0) return c.fpfh_voxel_resolution;
+    return c.voxel_resolution > 0 ? c.voxel_resolution : 0.5;
+}
+
+int featureThreads(const GlobalLocalizeConfig& c) {
+    return c.fpfh_threads > 0 ? c.fpfh_threads : 0;   // 0 = PCL 默认(全部核心)
+}
+
 pcl::PointCloud<pcl::Normal>::Ptr estimateNormals(
-        const pcl::PointCloud<pcl::PointXYZ>::Ptr& xyz, double radius) {
+        const pcl::PointCloud<pcl::PointXYZ>::Ptr& xyz, double radius, int threads) {
     pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>());
-    pcl::NormalEstimationOMP<pcl::PointXYZ, pcl::Normal> ne;
+    pcl::NormalEstimationOMP<pcl::PointXYZ, pcl::Normal> ne(static_cast<unsigned int>(threads));
     ne.setInputCloud(xyz);
     ne.setSearchMethod(pcl::search::KdTree<pcl::PointXYZ>::Ptr(
         new pcl::search::KdTree<pcl::PointXYZ>()));
@@ -28,9 +40,10 @@ pcl::PointCloud<pcl::Normal>::Ptr estimateNormals(
 
 pcl::PointCloud<pcl::FPFHSignature33>::Ptr computeFpfh(
         const pcl::PointCloud<pcl::PointXYZ>::Ptr& xyz,
-        const pcl::PointCloud<pcl::Normal>::Ptr& normals, double radius) {
+        const pcl::PointCloud<pcl::Normal>::Ptr& normals, double radius, int threads) {
     pcl::PointCloud<pcl::FPFHSignature33>::Ptr fpfh(new pcl::PointCloud<pcl::FPFHSignature33>());
-    pcl::FPFHEstimationOMP<pcl::PointXYZ, pcl::Normal, pcl::FPFHSignature33> fe;
+    pcl::FPFHEstimationOMP<pcl::PointXYZ, pcl::Normal, pcl::FPFHSignature33>
+        fe(static_cast<unsigned int>(threads));
     fe.setInputCloud(xyz);
     fe.setInputNormals(normals);
     fe.setSearchMethod(pcl::search::KdTree<pcl::PointXYZ>::Ptr(
@@ -55,33 +68,52 @@ bool FpfhRansacGlobalLocalizer::setMap(const std::string& map_path,
     m_ready = false;
     if (!global_map || global_map->empty()) return false;
 
-    m_map_down = downsampleCloud(filterFinite(global_map),
-                                 m_cfg.voxel_resolution > 0 ? m_cfg.voxel_resolution : 0.5);
+    const double voxel = featureVoxel(m_cfg);
+    const int threads = featureThreads(m_cfg);
+    const auto t0 = std::chrono::steady_clock::now();
+    m_map_down = downsampleCloud(filterFinite(global_map), voxel);
     if (!m_map_down || m_map_down->size() < 64) return false;
     m_kdtree.setInputCloud(m_map_down);
 
     m_map_xyz.reset(new pcl::PointCloud<pcl::PointXYZ>());
     pcl::copyPointCloud(*m_map_down, *m_map_xyz);
-    const pcl::PointCloud<pcl::Normal>::Ptr normals = estimateNormals(m_map_xyz, m_cfg.fpfh_normal_radius);
-    m_map_fpfh = computeFpfh(m_map_xyz, normals, m_cfg.fpfh_feature_radius);
+    const pcl::PointCloud<pcl::Normal>::Ptr normals =
+        estimateNormals(m_map_xyz, m_cfg.fpfh_normal_radius, threads);
+    m_map_fpfh = computeFpfh(m_map_xyz, normals, m_cfg.fpfh_feature_radius, threads);
 
     m_ready = true;
+    const double ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - t0).count();
     std::cout << "[FPFH-RANSAC] map features: " << m_map_fpfh->size()
-              << " pts=" << m_map_xyz->size() << std::endl;
+              << " pts=" << m_map_xyz->size()
+              << " voxel=" << voxel
+              << " nr=" << m_cfg.fpfh_normal_radius
+              << " fr=" << m_cfg.fpfh_feature_radius
+              << " threads=" << threads
+              << " ms=" << ms << std::endl;
     return true;
 }
 
 bool FpfhRansacGlobalLocalizer::localize(const CloudType::Ptr& scan, GlobalCandidate& out) {
     if (!m_ready || !scan || scan->empty()) return false;
 
-    CloudType::Ptr scan_down = downsampleCloud(filterFinite(scan),
-                                               m_cfg.voxel_resolution > 0 ? m_cfg.voxel_resolution : 0.5);
+    const double icp_voxel = m_cfg.voxel_resolution > 0 ? m_cfg.voxel_resolution : 0.5;
+    const double fpfh_voxel = featureVoxel(m_cfg);
+    const int threads = featureThreads(m_cfg);
+    CloudType::Ptr scan_down = downsampleCloud(filterFinite(scan), icp_voxel);
     if (!scan_down || scan_down->size() < 64) return false;
+    CloudType::Ptr scan_fpfh_down =
+        std::fabs(fpfh_voxel - icp_voxel) < 1e-6
+            ? scan_down
+            : downsampleCloud(filterFinite(scan), fpfh_voxel);
+    if (!scan_fpfh_down || scan_fpfh_down->size() < 64) return false;
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr scan_xyz(new pcl::PointCloud<pcl::PointXYZ>());
-    pcl::copyPointCloud(*scan_down, *scan_xyz);
-    const pcl::PointCloud<pcl::Normal>::Ptr scan_normals = estimateNormals(scan_xyz, m_cfg.fpfh_normal_radius);
-    const pcl::PointCloud<pcl::FPFHSignature33>::Ptr scan_fpfh = computeFpfh(scan_xyz, scan_normals, m_cfg.fpfh_feature_radius);
+    pcl::copyPointCloud(*scan_fpfh_down, *scan_xyz);
+    const pcl::PointCloud<pcl::Normal>::Ptr scan_normals =
+        estimateNormals(scan_xyz, m_cfg.fpfh_normal_radius, threads);
+    const pcl::PointCloud<pcl::FPFHSignature33>::Ptr scan_fpfh =
+        computeFpfh(scan_xyz, scan_normals, m_cfg.fpfh_feature_radius, threads);
 
     pcl::SampleConsensusPrerejective<pcl::PointXYZ, pcl::PointXYZ, pcl::FPFHSignature33> sac;
     sac.setInputSource(scan_xyz);
@@ -113,7 +145,7 @@ bool FpfhRansacGlobalLocalizer::localize(const CloudType::Ptr& scan, GlobalCandi
     Eigen::Matrix4d T = guess.cast<double>();
     if (m_gicp.hasConverged()) T = m_gicp.getFinalTransformation().cast<double>();
 
-    const CoverageStats cs = evaluateCoverage(m_kdtree, *scan_down, T, m_cfg.voxel_resolution);
+    const CoverageStats cs = evaluateCoverage(m_kdtree, *scan_down, T, fpfh_voxel);
     if (cs.coverage < m_cfg.min_score) return false;
 
     out.pose = matrixToPose(T);
@@ -128,15 +160,22 @@ int FpfhRansacGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_
     if (!m_ready || !scan || scan->empty() || max_k < 1) return 0;
 
     // 扫描特征只算一次 (原来 localize() 每次调用都重算 FPFH)
-    CloudType::Ptr scan_down = downsampleCloud(filterFinite(scan),
-                                               m_cfg.voxel_resolution > 0 ? m_cfg.voxel_resolution : 0.5);
+    const double icp_voxel = m_cfg.voxel_resolution > 0 ? m_cfg.voxel_resolution : 0.5;
+    const double fpfh_voxel = featureVoxel(m_cfg);
+    const int threads = featureThreads(m_cfg);
+    CloudType::Ptr scan_down = downsampleCloud(filterFinite(scan), icp_voxel);
     if (!scan_down || scan_down->size() < 64) return 0;
+    CloudType::Ptr scan_fpfh_down =
+        std::fabs(fpfh_voxel - icp_voxel) < 1e-6
+            ? scan_down
+            : downsampleCloud(filterFinite(scan), fpfh_voxel);
+    if (!scan_fpfh_down || scan_fpfh_down->size() < 64) return 0;
     pcl::PointCloud<pcl::PointXYZ>::Ptr scan_xyz(new pcl::PointCloud<pcl::PointXYZ>());
-    pcl::copyPointCloud(*scan_down, *scan_xyz);
+    pcl::copyPointCloud(*scan_fpfh_down, *scan_xyz);
     const pcl::PointCloud<pcl::Normal>::Ptr scan_normals =
-        estimateNormals(scan_xyz, m_cfg.fpfh_normal_radius);
+        estimateNormals(scan_xyz, m_cfg.fpfh_normal_radius, threads);
     const pcl::PointCloud<pcl::FPFHSignature33>::Ptr scan_fpfh =
-        computeFpfh(scan_xyz, scan_normals, m_cfg.fpfh_feature_radius);
+        computeFpfh(scan_xyz, scan_normals, m_cfg.fpfh_feature_radius, threads);
 
     const int n = static_cast<int>(scan_xyz->size());
     std::vector<int> idx(n);
@@ -202,7 +241,7 @@ int FpfhRansacGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max_
         Eigen::Matrix4d T = guess.cast<double>();
         if (m_gicp.hasConverged()) T = m_gicp.getFinalTransformation().cast<double>();
 
-        const CoverageStats cs = evaluateCoverage(m_kdtree, *scan_down, T, m_cfg.voxel_resolution);
+        const CoverageStats cs = evaluateCoverage(m_kdtree, *scan_down, T, fpfh_voxel);
         if (cs.coverage < m_cfg.min_score) continue;
 
         GlobalCandidate cand;
