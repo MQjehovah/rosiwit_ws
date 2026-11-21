@@ -16,6 +16,50 @@
 | ③ | 锚定 | `map→odom` 只在「高可信几何可见」时更新，限速回灌；否则冻结 |
 | ④ | DEGRADED 怎么报 | **不扩接口**：`location_status = 1`（INIT），位姿照发 |
 
+## 0.5 与现有地图更新（`map_maintainer=overlay`）的关系
+
+**本方案不是新造一套"地图更新"，而是给现有 overlay 做三处升级。**
+`config/default.yaml` 里本来就是：
+
+```yaml
+map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
+```
+
+设备日志确认在跑：`[LocPipeline] ... map_maintainer=overlay`。
+
+### 已经有的（直接复用）
+
+| 现有实现 | 对应本方案 |
+|---|---|
+| `base` 冻结 + overlay 叠加 | 静态底图 / 动态层 |
+| `onLocalized(..., pose_confident)` | 只在位姿可信时写图 |
+| `rayCarve(pose, scan_body)` | **射线 miss 证据**（不是"没看到就衰减"） |
+| `min_confirm` | 变化确认去抖 |
+| `delta_min`（>0.3 m 才沉淀） | 只吸收新结构 |
+| `override_base` | 处理"被移除 / 被替换" |
+| `persist_hits` | 天然的瞬态过滤（≈ 临时货物可信度低） |
+| `max_voxels` / `revision()` / `popOverlayDelta` / `save` | 容量上限 / 缓存失效 / 增量落盘 / 持久化 |
+| `decay_frames`（默认 0） | **不使用**：存在性只由证据决定 |
+
+### 本方案真正新增的（3 条）
+
+| 新增 | 现有做不到的原因 |
+|---|---|
+| ① **`w` 暴露出来做锚定门控** | `persist_hits` 的计数只用于过滤瞬态，没有"哪些几何可当锚"的概念 |
+| ② **滚动子图（odom 系）做跟踪目标** | 现在配准目标 = 全局局部 + overlay，**全在 map 系**；`map→odom` 一错，overlay 跟着错 |
+| ③ **`map→odom` 门控 / 冻结 + DEGRADED** | 现在每帧直接由 GICP 算，没有"锚冻结"和降级语义 |
+
+### 一个必须堵住的漏洞
+
+现有 `pose_confident` 是**基于 fitness** 的（≥ 阈值）。本次现场假锁的 fitness 是 0.80~0.84 ——
+**`pose_confident` 为真**，于是 overlay 会把错误位姿下的几何写进 map 系地图，等于**强化错误**。
+
+因此：
+
+- 写图判据从"`fitness ≥ 阈值`"升级为"`fitness ≥ 阈值` **且** `static_support ≥ τ_s`"
+- 这也是本方案引入 `w` 的根本原因：fitness 只回答"配得多好"，`static_support` 才回答
+  "我是**靠什么**配上的"
+
 ## 1. 两个结构，职责严格分开
 
 | 结构 | 内容 | 谁用 | 更新 |
@@ -143,7 +187,7 @@ anchor:
 
 | 阶段 | 内容 | 改动面 | 验收 |
 |---|---|---|---|
-| **A**（只记录） | 全局图 `w` 更新 + 滚动子图（仅构建/统计，不参与匹配）+ `[quality]` 日志 + 导出 `w≥128` 点云 | `overlay_map_maintainer`、新增 `RollingSubmap`、sidecar 读写 | ①导出的高 w 点云是否只剩立柱/墙；②`static_support` 分布；③子图点数/内存实测 |
+| **A**（只记录） | **扩展 overlay 的体素**：hit/miss 维护 `w`（复用现成的 `rayCarve`），暴露 `static_support`，加 `[quality]` 日志，导出 `w≥128` 点云；`shadow=true` 不参与锚定门控 | `overlay_map_maintainer.{h,cpp}`（原有体素表加一列 `w`）、sidecar 读写 | ①导出的高 w 点云是否只剩立柱/墙；②`static_support` 分布；③体素总量/内存实测 |
 | **B** | 跟踪目标切到子图（odom 系），保留全局匹配只做锚 | `localization_pipeline` 的匹配入口 | 堆货区整体更换后不 LOST；连续跟踪时长 |
 | **C** | 锚定门控 + 限速回灌 + DEGRADED 状态 | `map→odom` 更新处、`pose_publisher` 状态映射 | 出口处位姿跳变 ≤3 cm；`static_support` 与漂移的相关性 |
 | **D** | 可选：`flip` 字段、评分策略可插拔（影子对比） | `acceptMatch` 上层 | 同一段数据新旧判定差异 |
@@ -154,7 +198,7 @@ A 跑一周即可定量出 `τ_s`、`R`、`w_anchor` 的取值。
 
 | 位置 | 用途 |
 |---|---|
-| `algorithms/localization/maintainer/overlay_map_maintainer.{h,cpp}` | 全局图 `w` 更新；`onLocalized(..., pose_confident)` 是现成的健康门控 |
+| `algorithms/localization/maintainer/overlay_map_maintainer.{h,cpp}` | **主战场**：体素表加 `w`；复用 `rayCarve` 做 miss；`onLocalized(..., pose_confident)` 是现成的写入门控（需再加 `static_support` 条件） |
 | `slam_core/map_data.h` → `MapData` | 挂 sidecar 持久层（不动 `xzmap` v1 格式） |
 | `slam_core/pipeline_types.h` → `Observation` | miss 射线的现成证据源 |
 | 新增 `algorithms/localization/local_map/rolling_submap.{h,cpp}` | 机器人中心子图（覆盖式） |
@@ -166,6 +210,7 @@ A 跑一周即可定量出 `τ_s`、`R`、`w_anchor` 的取值。
 | 风险 | 处置 |
 |---|---|
 | 位姿不可信时写 `w` | 只在匹配健康时更新；`LOST` 期间只读 |
+| **假锁被当成"位姿可信"写进 overlay** | 写入条件加 `static_support ≥ τ_s`；只靠 fitness 不够（现场 0.80~0.84 的假锁会通过） |
 | 未观测区域被误删 | 只认射线 miss；FOV/遮挡不动 |
 | 锚冻结期间漂移累积 | `anchor_age` 暴露 + DEGRADED；超过累计位移/时长上限如实降级 |
 | 出口大幅修正 | >0.5 m 视为重定位事件，不静默拉回 |
