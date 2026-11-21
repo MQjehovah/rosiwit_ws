@@ -1631,6 +1631,12 @@ class BridgeWS(websocket.WebSocketHandler):
                 if kind == KIND_CLOUD and voxel_eff <= 0:
                     voxel_eff = 0.05
                 cached = SOURCE.topic_data(stream)
+                if stream == "/global_map" and not (CACHE.slam and CACHE.slam.get("map_name")):
+                    # 没有 /slam/info 时不知道当前是哪张图，先等 2s 再回退
+                    SOURCE.ensure_stream(STREAM_STATUS)
+                    deadline = now() + 2.0
+                    while now() < deadline and not (CACHE.slam and CACHE.slam.get("map_name")):
+                        time.sleep(0.05)
                 timeout = 15.0 if stream == "/global_map" else REQUEST_TIMEOUTS.get(stream, 30.0)
                 if cached is not None and now() - cached["recv"] < 3.0 and not refresh:
                     data = cached
