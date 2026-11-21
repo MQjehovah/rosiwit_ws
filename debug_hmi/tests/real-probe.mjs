@@ -47,7 +47,7 @@ ws.on('open', async () => {
   if (process.env.ONLY_GLOBAL) {
     send({ action: 2, stream: '/global_map', voxel: 0.1, max_points: 0 })
     try {
-      const cloud = await waitFor((m) => m.cloud && m.cloud.stream === '/global_map', 300000)
+      const cloud = await waitFor((m) => m.cloud && m.cloud.stream === '/global_map', 900000)
       console.log('global_map:', cloud.cloud.count, 'points,', cloud.cloud.xyz_cm.byteLength, 'bytes zlib')
     } catch {
       console.log('global_map: no frame')
@@ -82,7 +82,7 @@ ws.on('open', async () => {
 
   send({ action: 2, stream: '/global_map', voxel: 0.05, max_points: 0 })
   try {
-    const cloud = await waitFor((m) => m.cloud && m.cloud.stream === '/global_map', 300000)
+    const cloud = await waitFor((m) => m.cloud && m.cloud.stream === '/global_map', 900000)
     console.log('global_map:', cloud.cloud.count, 'points,', cloud.cloud.xyz_cm.byteLength, 'bytes zlib')
   } catch {
     console.log('global_map: no frame (topic never published / not latched)')
@@ -99,4 +99,4 @@ ws.on('error', (e) => {
 setTimeout(() => {
   console.log('overall timeout')
   process.exit(1)
-}, 360000)
+}, 1200000)

@@ -427,7 +427,7 @@ export async function grabTopic(id: string): Promise<void> {
       const cloud = await bridge.requestCloud(d.topic, {
         voxel: 0.05,
         max: 0,
-        timeout: d.topic === '/global_map' ? 300000 : 120000,
+        timeout: d.topic === '/global_map' ? 900000 : 120000,
       })
       emitTopicCloud(d.topic, cloud)
     } else {

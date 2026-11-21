@@ -96,6 +96,12 @@ export class DebugRosClient {
       this.lastError = message
       this.emitLog('error', `debug_bridge: ${message}`)
     })
+    this.bridge.onStatus((status) => {
+      const text = String(status.message || '')
+      if (/(waiting|capturing|encoding|map\.pcd|global_map)/i.test(text)) {
+        this.emitLog('info', `${status.stream}: ${text}`)
+      }
+    })
     this.bridge.onTf((update) => {
       const msg = {
         transforms: update.transforms.map((t) => ({
