@@ -205,6 +205,16 @@ private:
     // 不健康帧累计到 lost_patience -> LOST。LOCALIZED 不因单帧异常回到 INIT。
     int m_healthy_streak = 0;
     int m_unhealthy_streak = 0;
+    // 匹配位姿与融合输出持续分歧帧数 (创新过大但 ESKF 一直拒收 -> 判定定位不可信)
+    int m_inconsistent_streak = 0;
+    // 种子观察窗剩余帧数: 进入 LOCALIZED 时置为 m_scrutiny_cfg_frames,
+    // 期间 fitness 掉到 reloc_accept_score 以下直接退回 INIT
+    int m_scrutiny_frames = 0;
+    // 配置 (来自 localization.monitor.*): 不放进 MonitorConfig 头文件,
+    // 避免改头文件触发核心库全量重编 (设备上 aarch64 编译很慢).
+    int m_scrutiny_cfg_frames = 10;
+    double m_consensus_trans_m = 1.0;
+    double m_consensus_yaw_deg = 20.0;
 
     // lifelong: 用叠加层刷新全局重定位器
     int m_refresh_counter = 0;

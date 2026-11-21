@@ -291,6 +291,9 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_monitor_cfg.lost_fitness       = getv<double>(moc, "lost_fitness", m_monitor_cfg.lost_fitness);
         m_monitor_cfg.localized_patience = getv<int>(moc, "localized_patience", m_monitor_cfg.localized_patience);
         m_monitor_cfg.lost_patience      = getv<int>(moc, "lost_patience", m_monitor_cfg.lost_patience);
+        m_scrutiny_cfg_frames = getv<int>(moc, "scrutiny_frames", m_scrutiny_cfg_frames);
+        m_consensus_trans_m   = getv<double>(moc, "consensus_trans_m", m_consensus_trans_m);
+        m_consensus_yaw_deg   = getv<double>(moc, "consensus_yaw_deg", m_consensus_yaw_deg);
         m_monitor_cfg.nees_threshold     = getv<double>(moc, "nees_threshold", m_monitor_cfg.nees_threshold);
         m_monitor_cfg.window_length      = getv<int>(moc, "window_length", m_monitor_cfg.window_length);
         m_monitor_cfg.window_std_k       = getv<double>(moc, "window_std_k", m_monitor_cfg.window_std_k);
@@ -519,6 +522,8 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     m_seed_pending = false;
     m_healthy_streak = 0;
     m_unhealthy_streak = 0;
+    m_inconsistent_streak = 0;
+    m_scrutiny_frames = 0;
     m_initialized = false;
     {
         std::lock_guard<std::mutex> lk(m_cmd_mu);
@@ -591,6 +596,8 @@ void LocalizationPipeline::setMapData(const MapData& data) {
     m_seed_pending = false;
     m_healthy_streak = 0;
     m_unhealthy_streak = 0;
+    m_inconsistent_streak = 0;
+    m_scrutiny_frames = 0;
     m_initialized = false;
     {
         std::lock_guard<std::mutex> lk(m_cmd_mu);
@@ -1310,6 +1317,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             // 只有在换图 (setMapData) 时才需要重置.
             m_healthy_streak = 0;
             m_unhealthy_streak = 0;
+            m_inconsistent_streak = 0;
+            m_scrutiny_frames = 0;
             m_corr_prev_valid = false;
             m_consistent_cnt = 0;
             m_initialized = true;
@@ -1733,16 +1742,58 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     //   LOCALIZED -> LOST：连续 lost_patience 帧 fitness < lost_fitness
     // credible_fitness 是高置信/恢复线；lost_fitness 才是丢失线。
     // 位于 lost_fitness 与 credible_fitness 之间只是 degraded/coast，不能判丢。
+    // ---- 种子观察窗: 刚进入 LOCALIZED 后前 N 帧仍按 reloc_accept_score 复核 ----
+    // 弱种子 (0.80~0.84 的局部自洽) 能过 first-frame 校验, 但撑不过几百帧;
+    // 这里在锁定初期就要求同样的高置信, 失败直接退回 INIT 等下一次真种子.
+    if (m_status == LOCALIZED && m_scrutiny_frames > 0) {
+        const bool scrutiny_ok =
+            res.converged && accepted &&
+            res.fitness >= m_global_cfg.reloc_accept_score;
+        if (!scrutiny_ok) {
+            m_status = INIT;
+            m_scrutiny_frames = 0;
+            m_healthy_streak = 0;
+            std::ostringstream os;
+            os << "seed scrutiny failed: fitness=" << res.fitness
+               << " < " << m_global_cfg.reloc_accept_score
+               << " (converged=" << (res.converged ? 1 : 0)
+               << " accepted=" << (accepted ? 1 : 0) << ") -> INIT";
+            diag::log('W', "LocPipeline", os.str());
+            FlightRecorder::instance().event("SEED_SCRUTINY_FAIL", os.str());
+        } else {
+            --m_scrutiny_frames;
+        }
+    }
+
+    // ---- 匹配↔融合长期分歧: 定位错了但界面仍显示成功的兜底 ----
+    // 现场典型: 位姿被拉到错误位置 (甚至 z 掉到地下几米), GICP 每帧都给出 ~10m 外
+    // 的匹配, 但 ESKF 卡方门控一直拒收, 发布位姿靠 IMU 推算不动; 上层只看到
+    // fitness 0.8+, 于是永远 LOCALIZED. 用"匹配位姿 vs 融合输出"的持续分歧判丢.
+    double innov_trans = 0.0;
+    double innov_yaw_deg = 0.0;
+    if (res.converged) {
+        V3D dt;
+        double da = 0.0;
+        poseDelta(res.pose, m_pose, dt, da);
+        innov_trans = dt.norm();
+        innov_yaw_deg = std::fabs(da) * 57.2957795;
+    }
+    const bool inconsistent =
+        res.converged &&
+        (innov_trans > m_consensus_trans_m ||
+         innov_yaw_deg > m_consensus_yaw_deg);
+    m_inconsistent_streak = inconsistent ? (m_inconsistent_streak + 1) : 0;
+    const bool consensus_unhealthy =
+        m_inconsistent_streak >= std::max(1, m_monitor_cfg.lost_patience);
+
     const bool hard_unhealthy =
         seed_failed || !res.converged ||
         res.fitness < m_monitor_cfg.lost_fitness;
-    const bool init_healthy =
-        !seed_failed && res.converged && accepted &&
-        res.fitness >= m_global_cfg.reloc_accept_score;
 
     if (m_status == LOCALIZED) {
         // 跟踪阶段只要不低于 lost_fitness 就继续运行；不要求达到 credible_fitness。
-        if (hard_unhealthy) {
+        // 但"匹配与融合输出持续分歧"同样算不健康, 否则错位姿会一直报成功.
+        if (hard_unhealthy || consensus_unhealthy) {
             ++m_unhealthy_streak;
         } else {
             m_unhealthy_streak = 0;
@@ -1750,6 +1801,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         if (m_unhealthy_streak >= std::max(1, m_monitor_cfg.lost_patience)) {
             const bool was_lost = (m_status == LOST);
             m_status = LOST;
+            m_scrutiny_frames = 0;
             {
                 std::lock_guard<std::mutex> lk(m_global_mu);
                 m_global_request = true;
@@ -1760,7 +1812,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             if (!was_lost) {
                 std::ostringstream os;
                 os << "unhealthy frames=" << m_unhealthy_streak
-                   << " >= " << m_monitor_cfg.lost_patience << " -> LOST";
+                   << " >= " << m_monitor_cfg.lost_patience
+                   << " (consensus=" << (consensus_unhealthy ? 1 : 0)
+                   << " innov_t=" << innov_trans << "m innov_yaw="
+                   << innov_yaw_deg << "deg fitness=" << res.fitness << ") -> LOST";
                 diag::log('W', "LocPipeline", os.str());
                 FlightRecorder::instance().event("LOST", os.str());
                 FlightRecorder::instance().onStatusChange(true);
@@ -1768,12 +1823,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
     } else {
         // INIT / 重定位后：必须连续高置信帧才恢复 LOCALIZED。
+        const bool init_healthy =
+            !seed_failed && res.converged && accepted &&
+            res.fitness >= m_global_cfg.reloc_accept_score;
         if (init_healthy) {
             ++m_healthy_streak;
             m_unhealthy_streak = 0;
             if (m_status != LOCALIZED &&
                 m_healthy_streak >= std::max(1, m_monitor_cfg.localized_patience)) {
                 m_status = LOCALIZED;
+                m_scrutiny_frames = std::max(0, m_scrutiny_cfg_frames);
                 {
                     std::lock_guard<std::mutex> lk(m_global_mu);
                     m_global_request = false;
@@ -1789,6 +1848,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             if (m_unhealthy_streak >= std::max(1, m_monitor_cfg.lost_patience)) {
                 const bool was_lost = (m_status == LOST);
                 m_status = LOST;
+                m_scrutiny_frames = 0;
                 {
                     std::lock_guard<std::mutex> lk(m_global_mu);
                     m_global_request = true;
@@ -1817,6 +1877,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                       << " accepted=" << (accepted ? 1 : 0)
                       << " converged=" << (res.converged ? 1 : 0)
                       << " fitness=" << res.fitness
+                      << " innov_t=" << innov_trans
+                      << " innov_yaw=" << innov_yaw_deg
+                      << " inconsistent=" << m_inconsistent_streak
+                      << " scrutiny=" << m_scrutiny_frames
                       << " healthy=" << m_healthy_streak
                       << " unhealthy=" << m_unhealthy_streak
                       << " coast=" << m_coast_count

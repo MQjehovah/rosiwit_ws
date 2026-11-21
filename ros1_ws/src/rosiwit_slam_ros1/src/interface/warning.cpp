@@ -112,9 +112,21 @@ void Ros1SlamInterface::timerPublishWarningCode(const ros::TimerEvent&) {
     // 抑制窗口 (legacy.cpp:459-468): 只在 start_task 之后才生效
     if (warning_code_start_task_) {
         ++warning_code_suppress_ticks_;
-        if (warning_code_suppress_ticks_ < 100) return;
-        warning_code_start_task_ = false;
-        warning_code_suppress_ticks_ = 0;
+        // 启动/切图后只压 3s 的频率类抖动 (rt_grid 默认 1Hz).
+        // 位姿丢失 20003504 是故障, 必须立即上报 —— 否则现场"丢了不报".
+        if (warning_code_suppress_ticks_ < 3) {
+            bool has_pose_lost = false;
+            {
+                std::lock_guard<std::mutex> lk(warning_code_mtx_);
+                for (int c : pending_warning_codes_) {
+                    if (c == 20003504) { has_pose_lost = true; break; }
+                }
+            }
+            if (!has_pose_lost) return;
+        } else {
+            warning_code_start_task_ = false;
+            warning_code_suppress_ticks_ = 0;
+        }
     }
 
     std::vector<int> codes;
