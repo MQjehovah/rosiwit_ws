@@ -29,6 +29,13 @@ using namespace rosiwit_slam;
 using namespace rosiwit_slam_ros1::interface_internal;
 
 namespace rosiwit_slam_ros1 {
+
+/// 控制线程与调用方之间传递"存图结果"(超时后闭包仍可能写它, 所以用 shared_ptr)
+struct StopResult {
+    bool ret = false;      // 处理函数返回值 (与旧实现一致)
+    bool success = false;  // response.success
+    std::string error;
+};
 bool Ros1SlamInterface::callTagDetect(std::string& charging_pile_json) {
     charging_pile_json.clear();
     for (int i = 0; i < 10; ++i) {   // 1.0s 超时 (100ms x 10)
@@ -110,62 +117,24 @@ bool Ros1SlamInterface::handleModeSwitch(
     if (req.mode != 0 && req.mode != 1) {
         return false;   // 非法 mode: result 保持默认 0
     }
+    const int mode = req.mode;
 
-    // 已有一次切换在执行: 只回"已受理", 绝不再投一次 —— 两次 resetCore() 会把
-    // 上一轮刚建好的状态反复清空, 表现为"刚进建图又空了"。
-    const int inflight = mode_switch_pending_.load();
-    if (inflight >= 0) {
-        ROS_WARN_STREAM("[ros1_slam] /slam/mode_switch: already switching to mode "
-                        << inflight << ", request ignored (target " << req.mode << ")");
-        res.result = (inflight == req.mode) ? 1 : 0;
-        return true;
-    }
-
-    const int target = req.mode;
-    const uint64_t gen = mode_switch_generation_.fetch_add(1) + 1;
-    mode_switch_ok_.store(false);
-    mode_switch_pending_.store(target);
-
-    // 真正的重建放到 disk_write lane (与存图/导出串行), 不再占用 ROS 服务线程。
-    // 旧实现在回调里同步 resetCore(); 核心一旦被长操作占住, 服务线程就无限挂起
-    // —— 设备上 /slam/mode_switch 卡死数分钟、Ctrl+C 无效就是这么来的。
-    const bool submitted = engine_.runOnLaneWithDone("disk_write", "mode_switch",
-        [this, target](rosiwit_common::CancelToken token) {
-            if (token.cancelled()) { return; }
-            // 注意: DoneFn 的 ok 只表示"任务被执行过 (没被取消/丢弃)", **不是**切换成功。
-            // 真正的结果必须在任务体里存下来 (实测踩过: detect_mode 失败仍报 result=1)。
-            mode_switch_ok_.store(applyModeSwitch(target));
-        },
-        [this, gen](bool ran) {
-            if (!ran) { mode_switch_ok_.store(false); }   // 取消/丢弃/异常 -> 失败
-            mode_switch_pending_.store(-1);
-            mode_switch_done_gen_.store(gen);
-        });
-    if (!submitted) {
-        mode_switch_pending_.store(-1);
-        ROS_ERROR_STREAM("[ros1_slam] /slam/mode_switch: lane queue full, rejected");
-        res.result = 0;
-        return false;
-    }
-
-    // 有界等待: 正常路径只有几十毫秒 (resetCore 本身也有 200ms/2s 上限)。
-    // 超时按"已受理"回答, 由 /slam/info + 日志反映后续结果, 绝不挂住服务线程。
-    constexpr double kWaitSec = 8.0;
-    const ros::Time deadline = ros::Time::now() + ros::Duration(kWaitSec);
-    while (mode_switch_done_gen_.load() < gen && ros::Time::now() < deadline) {
-        ros::Duration(0.01).sleep();
-    }
-    if (mode_switch_done_gen_.load() < gen) {
-        ROS_WARN_STREAM("[ros1_slam] /slam/mode_switch: still running after " << kWaitSec
-                        << "s, returning accepted (mode " << target << ")");
+    // 投到控制线程: 与载图/存图严格串行 (它们都要改核心对象图), 服务线程只等结果。
+    // 结果用 shared_ptr 传递: 超时后闭包还在队列里, 不能捕获栈上的 res。
+    auto ok = std::make_shared<std::atomic<bool>>(false);
+    const bool done = control_.postAndWait(
+        [this, mode, ok] { ok->store(applyModeSwitch(mode)); }, /*timeout_ms=*/15000);
+    if (!done) {
+        ROS_WARN_STREAM("[ros1_slam] /slam/mode_switch: control thread busy > 15s, "
+                        "returning accepted (mode " << mode << ")");
         res.result = 1;
         return true;
     }
-    const bool ok = mode_switch_ok_.load();
-    res.result = ok ? 1 : 0;
-    std::cout << "[ros1_slam] /slam/mode_switch: mode " << target << " -> "
-              << (ok ? "ok" : "FAILED") << std::endl;
-    return ok;
+    const bool switched = ok->load();
+    res.result = switched ? 1 : 0;
+    std::cout << "[ros1_slam] /slam/mode_switch: mode " << mode << " -> "
+              << (switched ? "ok" : "FAILED") << std::endl;
+    return switched;
 }
 
 Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
@@ -179,7 +148,6 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
     engine_.setCorePipelineMode("idle");
     engine_.clearLatestOutput();
 
-    ctx.generation = ++map_switch_generation_;
     relocating_ = true;
     map_switch_busy_.store(true);
     ctx.detect_ok = callSetDetectMode(0);
@@ -224,89 +192,37 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
     return ctx;
 }
 
-void Ros1SlamInterface::finishMapLoadJob() {
-    std::lock_guard<std::mutex> lk(map_load_mtx_);
-    if (map_load_inflight_ > 0) --map_load_inflight_;
-    if (map_load_inflight_ == 0) map_load_cv_.notify_all();
-}
-
-void Ros1SlamInterface::startMapLoadJob(
+bool Ros1SlamInterface::runMapLoadInline(
     const MapSwitchContext& ctx,
     const geometry_msgs::PoseWithCovarianceStamped& init_pose) {
-    // 大图解析在 aarch64 上可达 25s, 不能拖住 /switch_map 服务线程;
-    // 投到执行器的 "disk_read" lane: threads=1 => 串行, 天然替代原来的
-    // map_switch_mtx_ + future 列表; generation 保证只有最后一次请求生效。
-    {
-        std::lock_guard<std::mutex> lk(map_load_mtx_);
-        ++map_load_inflight_;   // 必须在提交前自增, 否则析构可能漏等
+    // 在**控制线程**上同步装载: 解析大图 (aarch64 实测可达 25s) + 装进核心。
+    // 控制线程不承担延迟敏感的工作, 所以在这里阻塞是允许的; 而且它与存图/切模式
+    // 天然串行 (同一个队列), 不需要 generation 那种跨线程仲裁。
+    map_switch_busy_.store(true);
+    rosiwit_slam::MapData map_data;
+    const uint64_t core_gen = engine_.coreGeneration();
+    const bool parsed = map_adapter::loadMapData(ctx.base, map_data);
+    if (!parsed) {
+        ROS_ERROR_STREAM("[ros1_slam] /switch_map: parse failed: " << ctx.base);
+        relocating_ = false;
+        map_switch_busy_.store(false);
+        return false;
     }
-
-    const std::string base = ctx.base;
-    const uint64_t gen = ctx.generation;
-    // 在途计数挂在 DoneFn 上: 任务被执行 / 被取消 / 被丢队列三种情况都会回调,
-    // 所以析构的等待一定能结束 (I4)。任务体里不再自己收尾。
-    const bool accepted = engine_.runOnLaneWithDone("disk_read", "switch_map_load",
-        [this, base, init_pose, gen](rosiwit_common::CancelToken token) {
-            // 每个退出路径都必须写 done/ok, 否则 /switch_map 要一直等到超时
-            auto mark_done = [this, gen](bool ok) {
-                map_load_ok_.store(ok);
-                map_load_done_gen_.store(gen);
-            };
-            map_switch_busy_.store(true);
-            rosiwit_slam::MapData map_data;
-            // 解析 25s 期间核心可能被模式切换重建: 抓解析前的 generation, 装载时校验
-            const uint64_t core_gen = engine_.coreGeneration();
-            const bool parsed = map_adapter::loadMapData(base, map_data);
-            if (token.cancelled()) {
-                std::cout << "[ros1_slam] /switch_map: load cancelled after parse: "
-                          << base << std::endl;
-                map_switch_busy_.store(false);
-                relocating_ = false;
-                mark_done(false);
-                return;
-            }
-            const bool loaded = parsed && engine_.loadLocalizationMapData(map_data, core_gen);
-            if (gen != map_switch_generation_.load()) {
-                std::cout << "[ros1_slam] /switch_map: discard stale map load: "
-                          << base << std::endl;
-                map_switch_busy_.store(false);
-                mark_done(false);
-                return;
-            }
-            if (!loaded) {
-                ROS_ERROR_STREAM("[ros1_slam] /switch_map background loadMap failed: "
-                                 << base);
-                relocating_ = false;
-                map_switch_busy_.store(false);
-                mark_done(false);
-                return;
-            }
-            if (!engine_.setCorePipelineMode("localization", /*wait_ms=*/1000)) {
-                ROS_ERROR_STREAM("[ros1_slam] /switch_map: core setPipelineMode(localization) FAILED"
-                                 << " (map_loaded flag or busy)");
-            }
-            applyInitPose(init_pose, true);
-            relocating_ = false;
-            map_switch_busy_.store(false);
-            std::cout << "[ros1_slam] /switch_map background localization map ready: "
-                      << base << std::endl;
-            mark_done(true);
-        },
-        [this, gen](bool ok) {
-            if (!ok) {
-                // 被取消/丢弃/异常: 别把"切图中"/"重定位中"标志留下来, 并解除等待
-                map_switch_busy_.store(false);
-                relocating_ = false;
-                map_load_ok_.store(false);
-                map_load_done_gen_.store(gen);
-            }
-            finishMapLoadJob();
-        });
-
-    if (!accepted) {
-        ROS_ERROR_STREAM("[ros1_slam] /switch_map: rejected by executor (lane busy): "
-                         << base);
+    if (!engine_.loadLocalizationMapData(map_data, core_gen)) {
+        ROS_ERROR_STREAM("[ros1_slam] /switch_map: loadMap failed: " << ctx.base);
+        relocating_ = false;
+        map_switch_busy_.store(false);
+        return false;
     }
+    if (!engine_.setCorePipelineMode("localization", /*wait_ms=*/1000)) {
+        ROS_ERROR_STREAM("[ros1_slam] /switch_map: setPipelineMode(localization) FAILED");
+    }
+    applyInitPose(init_pose, true);
+    relocating_ = false;
+    map_switch_busy_.store(false);
+    std::cout << "[ros1_slam] /switch_map: localization map ready: " << ctx.base
+              << std::endl;
+    return true;
 }
 
 bool Ros1SlamInterface::handleSwitchMap(
@@ -317,57 +233,68 @@ bool Ros1SlamInterface::handleSwitchMap(
         return true;
     }
 
-    // 同一张图且核心确实在定位：只重设初始位姿，不重载地图。
-    // 不能只看 slam_mode_：切 idle 后 timer 尚未刷新时会误走这里。
-    const bool core_is_localization = (engine_.pipelineMode() == "localization");
-    if (req.map_dir == currentMapPath() && slam_mode_ == SlamMode::LOCALIZATION &&
-        core_is_localization) {
-        // 同名重存过 (重新建图覆盖了同目录) 必须重载, 否则 App 看到的还是内存里的旧图.
-        struct stat st {};
-        const std::string base = xzMapBase(req.map_dir);
-        double mtime = 0.0;
-        if (::stat((base + ".xzmap").c_str(), &st) == 0) {
-            mtime = static_cast<double>(st.st_mtime);
-        }
-        if (mtime <= 0.0 || mtime <= loaded_map_mtime_.load()) {
-            applyInitPose(req.initial_pose, true);
-            res.success = true;
-            return true;
-        }
-        ROS_WARN_STREAM("[ros1_slam] /switch_map: 同名地图已更新 (mtime "
-                        << mtime << " > " << loaded_map_mtime_.load() << "), 强制重载");
-        setCurrentMapPath(std::string());
-    }
-
-    // 换图：阶段一同步完成（服务立即返回），阶段二在后台加载 MapData。
-    {
-        struct stat st {};
-        const std::string base = xzMapBase(req.map_dir);
-        loaded_map_mtime_.store((::stat((base + ".xzmap").c_str(), &st) == 0)
-          ? static_cast<double>(st.st_mtime) : 0.0);
-    }
-    MapSwitchContext ctx = beginMapSwitch(xzMapBase(req.map_dir), req);
-    startMapLoadJob(ctx, req.initial_pose);
-
-    // 等后台加载完成再回答 (aarch64 上大图解析可达 25s, 这里最多等 kWaitSec)。
-    // done  -> 返回**真实**结果 (App 可以立刻给位姿, 不会再被"图未就绪"拒)
-    // 超时  -> 仍按"已受理"返回 true (与旧行为一致), 只打 WARN
-    constexpr double kWaitSec = 12.0;
-    const ros::Time deadline = ros::Time::now() + ros::Duration(kWaitSec);
-    while (map_load_done_gen_.load() < ctx.generation && ros::Time::now() < deadline) {
-        ros::Duration(0.02).sleep();
-    }
-    const bool load_done = map_load_done_gen_.load() >= ctx.generation;
-    if (load_done) {
-        res.success = map_load_ok_.load();
-        if (!res.success) {
-            ROS_ERROR_STREAM("[ros1_slam] /switch_map: map load FAILED: " << ctx.base);
-        }
-    } else {
-        ROS_WARN_STREAM("[ros1_slam] /switch_map: still loading after " << kWaitSec
-                        << "s, returning accepted: " << ctx.base);
+    // 上一次装载还在跑: 直接回"已受理", 不排进队列 —— 否则 App 的重试会让控制线程
+    // 把同一张大图解析两遍 (25s x2)。
+    if (map_switch_busy_.load()) {
+        ROS_WARN_STREAM("[ros1_slam] /switch_map: previous load still running, "
+                        "accepted without reload: " << req.map_dir);
         res.success = true;
+        return true;
     }
+
+    const auto cmd = req;   // 值拷贝: 超时后闭包仍在队列里, 不能引用栈对象
+    auto ok = std::make_shared<std::atomic<bool>>(false);
+    const bool done = control_.postAndWait(
+        [this, cmd, ok] {
+            auto applySameMap = [this, &cmd]() {
+                // 同一张图 + 核心确实在定位 + 文件没更新: 只重设初始位姿
+                const bool core_is_localization = (engine_.pipelineMode() == "localization");
+                if (cmd.map_dir != currentMapPath() ||
+                    slam_mode_ != SlamMode::LOCALIZATION || !core_is_localization) {
+                    return false;
+                }
+                struct stat st {};
+                const std::string base = xzMapBase(cmd.map_dir);
+                double mtime = 0.0;
+                if (::stat((base + ".xzmap").c_str(), &st) == 0) {
+                    mtime = static_cast<double>(st.st_mtime);
+                }
+                if (mtime > 0.0 && mtime > loaded_map_mtime_.load()) {
+                    ROS_WARN_STREAM("[ros1_slam] /switch_map: 同名地图已更新 (mtime "
+                                    << mtime << " > " << loaded_map_mtime_.load()
+                                    << "), 强制重载");
+                    setCurrentMapPath(std::string());
+                    return false;   // 需要真的重载
+                }
+                applyInitPose(cmd.initial_pose, true);
+                return true;
+            };
+
+            if (applySameMap()) { ok->store(true); return; }
+
+            {
+                struct stat st {};
+                const std::string base = xzMapBase(cmd.map_dir);
+                loaded_map_mtime_.store((::stat((base + ".xzmap").c_str(), &st) == 0)
+                    ? static_cast<double>(st.st_mtime) : 0.0);
+            }
+            MapSwitchContext ctx = beginMapSwitch(xzMapBase(cmd.map_dir), cmd);
+            const bool loaded = runMapLoadInline(ctx, cmd.initial_pose);
+            // 与旧行为一致: PGM 发布成功即算"换图受理", 完整装载失败另看日志
+            ok->store(loaded || ctx.pgm_ok);
+            if (!loaded) {
+                ROS_ERROR_STREAM("[ros1_slam] /switch_map: load FAILED: " << ctx.base);
+            }
+        },
+        /*timeout_ms=*/12000);
+    if (!done) {
+        // 大图解析可到 25s: 超过 12s 按"已受理"返回, 装载仍在控制线程继续
+        ROS_WARN_STREAM("[ros1_slam] /switch_map: still loading after 12s, "
+                        "returning accepted: " << req.map_dir);
+        res.success = true;
+        return true;
+    }
+    res.success = ok->load();
     return true;
 }
 
@@ -397,23 +324,31 @@ bool Ros1SlamInterface::applyRelocation(
 bool Ros1SlamInterface::handleStopMap(
     xzrobot_ros_dependency::StopMapOperation::Request& req,
     xzrobot_ros_dependency::StopMapOperation::Response& res) {
-    // 存图 = 导出整图 + 写 xzmap + 生成 pgm/yaml + 缩略图 + 充电桩检测 (秒级)。
-    // 全部丢到 disk_write lane 上做, 服务在这里等结果 —— 主线程不被 CPU/IO 占住,
-    // 而位姿/TF 已经由 slam_tick 发布, 所以等待期间对外输出照常。
-    bool do_ok = true;
-    const bool ran = engine_.runOnLaneAndWait(
-        "disk_write", "stop_map",
-        [this, &req, &res, &do_ok](rosiwit_common::CancelToken) { do_ok = doStopMap(req, res); },
+    // 存图 = 导出整图 + 写 xzmap/pgm + 缩略图 + 调外部服务, 秒级 (大图上限 180s)。
+    // 投到控制线程: 与切图/切模式严格串行 (它们改的是同一份核心地图)。
+    // 位姿/TF 由 io 线程的心跳定时器照常发布, 所以等待期间对外输出不受影响。
+    const auto cmd = req;   // 值拷贝: 超时后闭包仍在队列里
+    auto out = std::make_shared<StopResult>();
+    const bool done = control_.postAndWait(
+        [this, cmd, out] {
+            // lambda 里 cmd 是 const; doStopMap 要非 const 引用 (旧实现会改 req)
+            xzrobot_ros_dependency::StopMapOperation::Request r_req = cmd;
+            xzrobot_ros_dependency::StopMapOperation::Response r_res;
+            out->ret = doStopMap(r_req, r_res);
+            out->success = r_res.success;
+            out->error = r_res.error;
+        },
         /*timeout_ms=*/180000);
-    if (!ran) {
-        // 池拒绝/超时: 任务可能还在跑, 结果丢不掉就明确报错
+    if (!done) {
         res.success = false;
-        if (res.error.empty()) res.error = "MAP_SAVE_EXECUTOR_FAILED";
-        ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: map save job failed/timeout: "
+        if (res.error.empty()) res.error = "MAP_SAVE_TIMEOUT";
+        ROS_ERROR_STREAM("[ros1_slam] /stop_map_operation: save still running after 180s: "
                          << req.map_dir);
         return true;
     }
-    return do_ok;   // 与旧实现一致: mkdir 失败返回 false, 其余失败用 res.error 表达
+    res.success = out->success;
+    res.error = out->error;
+    return out->ret;   // 与旧实现一致: mkdir 失败返回 false, 其余失败用 res.error 表达
 }
 
 bool Ros1SlamInterface::doStopMap(

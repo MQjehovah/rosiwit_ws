@@ -30,11 +30,9 @@ public:
           outputs_(new Ros1OutputsInterface(nh, pnh, engine)) {}
 
     ~SlamRos1Interface() {
-        // **必须先摘钩子再销毁发布者**: tick 线程(50Hz) 会调 Ros1OutputsInterface::onTick,
-        // FrontEnd 线程会调 input_seen/raw_lidar 钩子, 实时栅格线程会调回本对象。
-        // 若等成员析构完才摘, 中间的每一拍都是 use-after-free。
-        engine_.clearTickHooks();
-        engine_.clearPublishHooks();
+        // **必须先摘钩子再销毁发布者**: FrontEnd 线程会调 input_seen/raw_lidar 钩子,
+        // 实时栅格线程会调回本对象。若等成员析构完才摘, 中间每一拍都是 use-after-free。
+        // (发布现在由 ROS 定时器/池任务驱动, 它们由本对象析构时一并停掉。)
         engine_.clearInputHooks();
         interface_->stopBackgroundWork();   // 停 RealtimeGrid worker (它会调回本对象)
     }

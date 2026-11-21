@@ -35,6 +35,8 @@
 #include <string>
 #include <vector>
 
+#include "aux_jobs.h"
+#include "control_loop.h"
 #include "slam_core/slam_types.h"
 #include "localization/planar_scan_matcher.hpp"
 #include "xzrobot_ros_dependency/CommonBoolService.h"
@@ -159,15 +161,21 @@ private:
     // 定时器回调
     void timerPublishLocalCloudAndSubmap(const ros::TimerEvent&);  // 0.1s -> startPub()
     void timerPublishRealtimeGridMap(const ros::TimerEvent&);      // 1/rt_hz, 仅 MAPPING
+    /// 20ms 心跳: 位姿 / TF / slam/info / 告警码 (都是小消息, 跑在 io 线程)
+    void timerHeartbeat(const ros::TimerEvent&);
 
-    void startPub();                 // legacy.cpp:333-371
-    void publishCurrScan();          // legacy.cpp:966-1110
-    void publishLocalizationScan(const rosiwit_slam::CloudType& world, const ros::Time& stamp);
-    void publishMappingScan(const rosiwit_slam::CloudType& world, const ros::Time& stamp);
-    void publishRawInputScan();
-    void publishMappingPath();       // legacy.cpp:840-889
-    void publishRealtimeGridMap();   // legacy.cpp:891-910
-    void publishPointMap();          // legacy.cpp:912-964
+    // ---- 大消息: 构造 + 发布都在线程池 (见 publish_jobs.cpp) ----
+    void startPub();                 // 0.1s 定时器 -> 投递, 不再直接转换
+    void scheduleScanJob();
+    void scheduleGridJob();
+    void scheduleGlobalMapJob();
+    void schedulePlanarJob();
+    // 池任务体: 构造并就地 publish
+    void buildScanMessages();
+    void buildGridMessage();
+    void buildGlobalMapMessage();
+    /// 析构前等在途池任务收尾 (任务体捕获 this)
+    void waitForAuxJobs();
     void publishCurrPose();          // 位姿发布总入口 (只做模式分派/顺序)
     /// 定位分支的发布结果：需要丢弃整个 tick / 本 tick 不发 slam/info / 正常发
     enum class PoseTickResult { DropTick, NoInfo, Info };
@@ -204,16 +212,15 @@ private:
                           xzrobot_ros_dependency::SlamModeSwitchService::Response& res);
     struct MapSwitchContext {
         std::string base;
-        uint64_t generation = 0;
         bool detect_ok = false;
         bool pgm_ok = false;
     };
     /// 切图第一阶段：停旧核心/清旧输出/发预览/重置本层状态，服务可以立即返回。
     MapSwitchContext beginMapSwitch(const std::string& base,
                                     const xzrobot_ros_dependency::SwitchMap::Request& req);
-    /// 切图第二阶段：后台串行加载新图，generation 过期则丢弃。
-    void startMapLoadJob(const MapSwitchContext& ctx,
-                         const geometry_msgs::PoseWithCovarianceStamped& init_pose);
+    /// 切图第二阶段：在**控制线程**上同步装载 (与存图/切模式串行)
+    bool runMapLoadInline(const MapSwitchContext& ctx,
+                          const geometry_msgs::PoseWithCovarianceStamped& init_pose);
     bool handleSwitchMap(xzrobot_ros_dependency::SwitchMap::Request& req,
                          xzrobot_ros_dependency::SwitchMap::Response& res);
     bool handleRelocation(xzrobot_ros_dependency::Relocation::Request& req,
@@ -390,10 +397,20 @@ private:
     int planar_apply_repeats_ = 0;
     ros::Publisher scan_puber_;               // points_2d         PointCloud2  10 (永不发)
     ros::Publisher warning_code_puber_;       // slam_warning_code String       10 (T7)
+
+    // "最新优先": 上一份还在算就丢掉本帧 (点云/栅格都是最新状态才有意义)
+    std::atomic<bool> scan_job_busy_{false};
+    std::atomic<bool> grid_job_busy_{false};
+    std::atomic<bool> global_map_job_busy_{false};
+    std::atomic<bool> planar_job_busy_{false};
+    std::atomic<double> last_path_build_s_{0.0};   // 轨迹的 1Hz 构造节流
+    AuxJobGuard aux_jobs_;                          // 析构时等在途任务
+    ControlLoop control_;                           // 管理命令: 载图/切模式/存图
     ros::Publisher fusion_diag_puber_;        // slam/fusion_diag String  2 (pose_fusion 诊断, 1Hz)
     ros::Publisher point_puber_;              // origin_point      PointCloud2  10
 
     ros::Timer point_cloud_mapping_timer_;    // 0.1s
+    ros::Timer heartbeat_timer_;              // 20ms: 位姿/TF/slam_info
 
     ros::Timer realtime_grid_map_timer_;      // 1/rt_grid_map_publish_hz
 
@@ -449,28 +466,17 @@ private:
     double map_quality_unknown_max_ = 0.60;    // 旧 curr_map_path_
     std::atomic<uint32_t> pub_reset_mask_{0};   // 见 kPubReset* 位定义 (服务线程置位)
     uint64_t pub_reset_seen_ = 0;               // 仅 slam_pub 线程访问
-    std::atomic<uint64_t> map_switch_generation_{0};  // 最后一次切图请求胜出
     // /switch_map 就绪信号 (后台加载任务写, 服务线程读)
-    std::atomic<uint64_t> map_load_done_gen_{0};      // 已完成加载的 generation
-    std::atomic<bool>     map_load_ok_{false};        // 该次加载是否成功
     // /slam/mode_switch 异步执行状态 (服务线程只投递, lane 线程执行)
-    std::atomic<int>      mode_switch_pending_{-1};      // 正在切换的目标模式, -1=空闲
-    std::atomic<uint64_t> mode_switch_generation_{0};    // 每次投递 +1
-    std::atomic<uint64_t> mode_switch_done_gen_{0};      // 已完成的 generation
-    std::atomic<bool>     mode_switch_ok_{false};        // 该次切换是否成功
     // ROS 层兼容：大图 xzmap 解析/关键帧重建在 aarch64 上可达 25s，
     // 不能让 /switch_map 服务线程被拖到 App 超时。PGM 先同步发布，
     // 完整定位地图在后台串行加载。
     // 完整定位地图加载投到执行器的 "disk_read" lane (threads=1, 天然串行),
     // 不再自己 std::async —— 线程由组装根持有。
     // 在途计数用于析构等待: 任务体捕获了 this, 绝不能析构后还在跑。
-    std::mutex map_load_mtx_;
-    std::condition_variable map_load_cv_;
-    int map_load_inflight_ = 0;
     std::atomic<bool> map_switch_busy_{false};
 
     /// 切图任务收尾 (在途计数--, 归零时唤醒析构)。任务体与提交失败路径都要调。
-    void finishMapLoadJob();
 
     // ---- [T9] TF ----
     // 旧实现: listener_ = new tf2_ros::TransformListener(tfBuffer_) (legacy.cpp:94)。

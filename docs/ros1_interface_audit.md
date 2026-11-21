@@ -24,7 +24,7 @@
 
 | | 厂商 `/xz_3d_slam` | 我们 | 差异 |
 |---|---|---|---|
-| 发布 | `/curr_localization_pose` `/curr_scan_point` `/curr_submap_point` `/global_grid_map` `/global_map` `/loop_constraint` `/map` `/mapping_path` `/or_curr_scan_point` `/origin_point` `/points_2d` `/scan_f_map` `/slam/info` `/slam_warning_code` `/tf` | 同左 **+** `/lio_odom` `/world_cloud` `/slam/fusion_diag` `/location_info` | 多 4 个（3 个诊断 + 1 个见 §4） |
+| 发布 | `/curr_localization_pose` `/curr_scan_point` `/curr_submap_point` `/global_grid_map` `/global_map` `/loop_constraint` `/map` `/mapping_path` `/or_curr_scan_point` `/origin_point` `/points_2d` `/scan_f_map` `/slam/info` `/slam_warning_code` `/tf` | 同左 **+** `/lio_odom` `/slam/fusion_diag` | 多 2 个（导航位姿 + 诊断）；`/world_cloud` 已删除，导航改订原始雷达（见 §4） |
 | 订阅 | `/initialpose` `/lift/state` `/lift_type` `/odom` `/scan` `/tf` `/tf_static` `/vanjee_lidar_imu_packets` `/vanjee_points722` | `/scan` `/odom` `/lift/state` `/lift_type` + imu/lidar | **缺 `/initialpose`**（见 §3） |
 
 ## 3. 必须修：缺 `/initialpose` 订阅
@@ -49,7 +49,8 @@ Publishers: /xzrobot_app      Subscribers: /xz_3d_slam
 | `/localization/switch_map` | ❌ | 与 `/switch_map` 同一处理器 → **删** |
 | `/location_info`（发布） | ❌（厂商不发） | App 只订 `/slam/info`；`/xzrobot_record` 记录用。**非必要，删** |
 | `/slam/dump_recorder` | ❌ | 用于离线导出 dump（我们的工作流）→ **保留**，但标注为私有 |
-| `/lio_odom` `/world_cloud` `/slam/fusion_diag` | ❌ | 诊断用；应受 `debug_publish`（默认 false）控制，目前**无条件发布** → 改为跟随开关 |
+| `/lio_odom` `/slam/fusion_diag` | ❌ | `/lio_odom` 是导航输入（小消息，保留）；`/slam/fusion_diag` 跟随 `debug_publish` |
+| ~~`/world_cloud`~~ | — | **已删除**。导航 `voxelCallback` 本来就自己做 `map<-lidar` 的 TF，改订原始雷达话题即可，SLAM 侧不再重复序列化整帧点云 |
 
 ## 5. 包内自建 srv（死代码）
 
@@ -95,7 +96,7 @@ A 需要改导航的订阅与判停逻辑（`health==LOST` → `location_status=
 | 1 | 订阅 `/initialpose`（PoseWithCovarianceStamped）→ 走现有 setInitialPose 流程 | 低（只增不减） |
 | 2 | 删 3 个 `/localization/*` 别名服务 | 低（App 不用） |
 | 3 | 删 `/location_info` 发布 | 低（App 不用） |
-| 4 | `/lio_odom` `/world_cloud` `/slam/fusion_diag` 跟随 `debug_publish` | 低 |
+| 4 | `/slam/fusion_diag` 跟随 `debug_publish`；点云类话题统一由 `debug_publish` 门控 | 低 |
 | 5 | 删包内 4 个未使用 srv | 低（无人 advertise） |
 | 6 | 删工作区里的 `xzrobot_ros_dependency` 副本 | **中**：导航还依赖它里面的 `LocalizationState`，需先做 §6.1-A |
 | 7 | 保留 `/slam/dump_recorder`（离线 dump 工作流） | — |

@@ -14,19 +14,13 @@ namespace
 /// lane 声明属于"执行资源策略", 不属于算法。需要时可通过参数覆盖 CPU 线程数。
 std::vector<rosiwit_common::LaneSpec> makeLanes(ros::NodeHandle & pnh)
 {
-  int cpu_threads = 2;
-  int feature_threads = 1;
-  pnh.param<int>("pool_cpu_threads", cpu_threads, 2);
-  pnh.param<int>("pool_feature_threads", feature_threads, 1);
+  int pool_threads = 3;
+  pnh.param<int>("pool_threads", pool_threads, 3);
   return {
-    // 写盘/改地图: 必须串行 (避免两个保存/切图同时改同一个目录)
-    {"disk_write", 1, 8, rosiwit_common::LaneOverflow::kReject},
-    // 读盘/载图: 串行 (切图有 generation 保护, 串行更简单)
-    {"disk_read", 1, 8, rosiwit_common::LaneOverflow::kReject},
-    // CPU 突发: 实时栅格 / 质量体检 / 缩略图
-    {"cpu", cpu_threads, 16, rosiwit_common::LaneOverflow::kReject},
-    // 建库 (fpfh/scan_context): 独占低优先, 满就丢
-    {"feature", feature_threads, 4, rosiwit_common::LaneOverflow::kDropOldest},
+    // 只保留一条"线程池": 装的是业务相关性小 / 可丢帧的活
+    // (点云转换、栅格渲染、2D 匹配、在线标定)。
+    // 串行的管理操作 (载图/切模式/存图) 不在这里, 它们在 ControlLoop 上顺序执行。
+    {"pool", pool_threads, 16, rosiwit_common::LaneOverflow::kReject},
   };
 }
 

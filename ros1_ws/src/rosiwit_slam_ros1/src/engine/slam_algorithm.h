@@ -187,18 +187,9 @@ public:
     /// 闭环标定: 过门限/稳定窗口后应用时间偏移；异常回滚。
     rosiwit_slam::CalibrationDecision updateCalibration();
 
-    // ---- 泵 / 钩子 ----
-    /// 注册 50Hz tick (在排空核心输出之后按注册顺序调用)。两套接口各挂一个:
-    /// 这样"排空 + 发布"仍发生在同一个回调里, 时序与重构前的 processCB 完全一致。
-    void addTickHook(std::function<void()> hook);
-    /// 摘掉所有 tick 钩子。**接口层析构必须先调**, 否则 tick 线程会调进已销毁对象。
-    void clearTickHooks();
-
-    /// 发布钩子: 跑在**独立的发布线程** (50Hz), 与 tick 互不拖累。
-    /// 用途: 老契约的位姿/TF/slam/info (每个 tick 都做很多小发布)。
-    /// 放在 tick 里会把 /lio_odom 拖到 67Hz (实测), 所以单独一条线程。
-    void addPublishHook(std::function<void()> hook);
-    void clearPublishHooks();
+    // ---- 输入侧钩子 ----
+    // 注: 原来的 50Hz tick/pub 两条 PeriodicThread 已删除 —— 发布改由 ROS 定时器
+    // (io 线程, 20ms) 与线程池任务各自完成, 引擎不再负责"泵"。
     /// 摘掉输入侧钩子 (input_seen / raw_lidar)。同样必须在接口层析构时调用。
     void clearInputHooks();
     /// 每次核心产出时调用。**在核心自己的线程上执行**, 跨线程用要自己同步。
@@ -297,12 +288,8 @@ private:
     /// 真正的帧处理 (只在 FrontEnd 线程上跑)
     void processImu(const sensor_msgs::Imu::ConstPtr& msg);
     void processLidar(const sensor_msgs::PointCloud2::ConstPtr& msg);
-    /// FrontEnd: 唯一消费帧的线程 (替代原 50Hz processCB + input_worker)
+    /// FrontEnd: 唯一消费帧的线程 (运动先验 + 匹配 + 建图前端)
     void frontendLoop(rosiwit_common::CancelToken token);
-    /// 50Hz tick: 新接口的精简输出
-    void tickLoop();
-    /// 50Hz 发布线程: 老契约 (位姿/TF/健康话题)
-    void publishLoop();
 
     // 传感器输入队列: ROS 回调只入队, 重处理在独立线程串行执行。
     // 这样 Lidar 的 PCL 转换和核心 onLidar 不再阻塞 spinner/timer。
@@ -346,8 +333,6 @@ private:
     rosiwit_common::Channel<InputItem> input_{kInputCapacity,
       rosiwit_common::OverflowPolicy::kDropOldest};
     std::unique_ptr<rosiwit_common::Thread> frontend_;
-    std::unique_ptr<rosiwit_common::PeriodicThread> tick_;
-    std::unique_ptr<rosiwit_common::PeriodicThread> publish_;
     std::atomic<uint64_t> input_imu_in_{0};
     std::atomic<uint64_t> input_lidar_in_{0};
     std::atomic<uint64_t> input_imu_done_{0};
@@ -357,8 +342,6 @@ private:
     rosiwit_slam::SlamOutput latest_;
     bool have_output_ = false;
 
-    std::vector<std::function<void()>> tick_hooks_;
-    std::vector<std::function<void()>> publish_hooks_;
     std::function<void(const rosiwit_slam::SlamOutput&)> output_hook_;
     std::function<void(bool)> input_seen_hook_;
     std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> raw_lidar_hook_;

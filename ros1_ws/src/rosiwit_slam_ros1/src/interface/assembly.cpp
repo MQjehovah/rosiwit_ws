@@ -44,6 +44,8 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     // 有界等待只阻塞服务线程, 不再让话题回调与定时器跟着停摆。
     srv_nh_.setCallbackQueue(&srv_queue_);
     initServer();
+    // 管理命令线程 (载图/切模式/存图): 服务只投命令, 真正的执行在这里串行
+    control_.start();
     // 与旧实现一致: 切建图时清空上一轮地图 (见 resetCoreAndCaches 注释)。
     // 默认开启; `_reset_on_mode_switch:=false` 可退回"不清图"的行为做 A/B。
     pnh_.param<bool>("reset_on_mode_switch", reset_on_mode_switch_, true);
@@ -113,29 +115,12 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
 }
 
 Ros1SlamInterface::~Ros1SlamInterface() {
-    // 后台切图任务若还在解析地图，等它结束；避免析构后访问 engine/this。
-    // 任务跑在执行器的 "disk_read" lane 上，必须在此处同步等待 (执行器由
-    // 组装根持有, 关停顺序晚于本对象析构)。
-    std::unique_lock<std::mutex> lk(map_load_mtx_);
-    if (map_load_inflight_ > 0) {
-        ROS_INFO("[ros1_slam] waiting for %d in-flight map load job(s) to finish",
-                 map_load_inflight_);
-    }
-    // 在途计数已挪到 DoneFn, 一定会归零; 这里仍给上限并周期告警, 避免
-    // 文件系统卡死时进程永远退不掉。
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
-    while (map_load_inflight_ > 0) {
-        if (map_load_cv_.wait_for(lk, std::chrono::seconds(5)) == std::cv_status::no_timeout) {
-            continue;
-        }
-        if (std::chrono::steady_clock::now() > deadline) {
-            ROS_FATAL("[ros1_slam] map load still in flight after 120s, giving up wait "
-                      "(inflight=%d)", map_load_inflight_);
-            break;
-        }
-        ROS_WARN("[ros1_slam] still waiting for %d in-flight map load job(s)",
-                 map_load_inflight_);
-    }
+    // 关停顺序:
+    //   1) 控制线程: 关闸 (不再接命令) 并把正在跑的载图/存图做完
+    //   2) 线程池任务: 等它们收尾 (任务体捕获 this)
+    //   3) 之后才析构发布者/订阅者
+    control_.stop();
+    waitForAuxJobs();
 }
 
 void Ros1SlamInterface::initPub() {
@@ -179,9 +164,11 @@ void Ros1SlamInterface::initTimerPub() {
 
     point_cloud_mapping_timer_ = nh_.createTimer(
         ros::Duration(pub_time_gap), &Ros1SlamInterface::timerPublishLocalCloudAndSubmap, this);
-    // 位姿 / TF / slam/info / localization/state 改由 slam_tick 线程驱动 (§C3):
-    // 主线程一旦被存图/切图/服务回调占住, 这些也照常发布。50Hz 足够 (核心输出按雷达帧)。
-    engine_.addPublishHook([this] { publishCurrPose(); });
+    // 位姿 / TF / slam/info / 告警码: 20ms 心跳定时器, 跑在 io 线程上。
+    // 这些全是小消息 (µs 级序列化), io 线程上的重活已经全部搬进线程池,
+    // 所以不会再出现"切图期间界面冻结"。
+    heartbeat_timer_ = nh_.createTimer(
+        ros::Duration(0.02), &Ros1SlamInterface::timerHeartbeat, this);
     realtime_grid_map_timer_ = nh_.createTimer(
         ros::Duration(rt_gap), &Ros1SlamInterface::timerPublishRealtimeGridMap, this);
     // 告警定时器与 rt_grid 同周期 (legacy.cpp:267)

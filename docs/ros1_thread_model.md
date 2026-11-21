@@ -6,10 +6,32 @@
 
 | # | 线程 | 谁创建 | 周期/触发 | 干什么 |
 |---|---|---|---|---|
-| T1 | `io_spinner` | `main.cpp` `AsyncSpinner(1)` | 事件 | 默认回调队列：IMU/雷达/scan/odom/lift 订阅、`/initialpose`、0.1 s 点云定时器、1 s 栅格定时器、1 s 告警定时器 |
+| T1 | `io_spinner` | `main.cpp` `AsyncSpinner(1)` | 事件 + 定时器 | 所有订阅回调（只入队）；20 ms 心跳（位姿/TF/`/slam/info`/告警码）；0.1 s / 1 s 定时器**只做触发**（投池） |
+| T2 | `srv_spinner` | `main.cpp` `AsyncSpinner(1, srv_queue_)` | 事件 | 9 个服务：**只投管理命令 + 有界等待**，不做实际工作 |
+| T3 | `slam_control` | `ControlLoop`（`main` 线程即可承载） | 命令驱动 | 载图 / 切模式 / 存图 / 扩图，**严格按命令顺序执行** |
+| T4 | `pool` ×3 | `ThreadPool` | 任务 | 点云抽稀+转换+发布、栅格渲染+发布、2D 匹配、在线标定 |
+| T5 | `frontend` | `SlamAlgorithm` | 输入驱动 | 运动先验 + 匹配 + 建图前端（持 `core_mu_`） |
+| T6 | 建图后端 / `rt_grid` | 核心 / `RealtimeGrid` | 各自周期 | 后端优化、实时栅格生成 |
+| T7 | `tf2 listener` | tf2 | 事件 | TF buffer |
+| T8 | roscpp 内部 | roscpp | — | rosout、XMLRPC、TCPROS |
+
+设计原则（与 `rosiwit_common/README.md` 一致）：
+
+1. **io 线程只做"入队 + 小消息发布"**：任何 O(n) 的转换都在池里；
+2. **管理操作串行靠线程，不靠锁**：`ControlLoop` 一条命令队列，载图与存图天然不会并发；
+3. **线程池只装"业务相关性小或会丢帧也没关系"的活**：转换/渲染/匹配/标定；
+4. **大消息在哪里算就在哪里发**：ROS1 的 `publish()` 在调用线程序列化，与其转手不如就地发完。
+
+`rosnode info` 实测。
+
+## 1. 线程清单
+
+| # | 线程 | 谁创建 | 周期/触发 | 干什么 |
+|---|---|---|---|---|
+| T1 | `io_spinner` | `main.cpp` `AsyncSpinner(1)` | 事件 | 默认回调队列：IMU/雷达/scan/odom/lift 订阅、`/initialpose`；3 个定时器**只做触发**（投递任务，不转换） |
 | T2 | `srv_spinner` | `main.cpp` `AsyncSpinner(1, srv_queue_)` | 事件 | 9 个服务的回调（与 T1 隔离，见 `docs/ros1_code_review.md` P1-1） |
-| T3 | `slam_tick` | `PeriodicThread` | 20 ms | `Ros1OutputsInterface::onTick()`：`/lio_odom`、`/world_cloud`、每 2 s 在线标定 |
-| T4 | `slam_pub` | `PeriodicThread` | 20 ms | `publishCurrPose()`：`/curr_localization_pose`、`/slam/info`、`/slam_warning_code`、TF `map->odom`、planar 约束、`/map` 兜底重发 |
+| T3 | `slam_tick` | `PeriodicThread` | 20 ms | `/lio_odom` + **大消息排空**（每次最多一条：点云/轨迹/栅格/整图） |
+| T4 | `slam_pub` | `PeriodicThread` | 20 ms | 只发**小消息**：`/curr_localization_pose`、`/slam/info`、`/slam_warning_code`、TF `map->odom`；并**投递** planar 任务 |
 | T5 | `frontend` | `SlamAlgorithm` | 输入驱动 | 消费 IMU/激光队列，`processImu/processLidar`、`base_->tryPopAndProcess()`（持 `core_mu_`） |
 | T6 | `disk_write` lane | 线程池 | 任务 | 存图、扩图、**切模式重建核心** |
 | T7 | `disk_read` lane | 线程池 | 任务 | `/switch_map` 地图解析 + 装载 |
@@ -29,6 +51,44 @@ Publications: 18 个（含 /map /slam/info /lio_odom /world_cloud /tf）
 ```
 
 ## 2. 锁与所有权
+
+### 2.0 大消息：池任务里就地发布（本轮核心改动）
+
+之前的划分并不自洽：0.1 s 定时器（**IO 线程**）上做点云抽稀 + 序列化（实测可到 30 MB/s），
+1 s 定时器（IO）上复制 640 KB 栅格（还复制两次），`planarConstraintStep`（2D 匹配）跑在
+**发布线程**上，`updateCalibration` 跑在 tick 线程上。
+
+现在：
+
+```
+IO 定时器 ──触发──> pool: buildScanMessages / buildGridMessage / buildGlobalMapMessage
+                          └── 构造完**直接 publish**（不再经过任何输出线程）
+        └── 触发 ──> pool: planar_step / calib
+```
+
+| 规则 | 实现 |
+|---|---|
+| 转换/拷贝/匹配不碰 io 线程 | `publish_jobs.cpp` 的 `build*` + `schedulePlanarJob` + `scheduleCalibJob` |
+| 大消息不经过额外线程 | 池任务构造完就地 `publish`（ROS1 序列化本来就在调用线程） |
+| 不排队、不积压 | 每类任务一个 `busy` 标志：上一份还没算完就丢掉本帧 |
+| 析构安全 | `AuxJobGuard`：投递计数 + `DoneFn` 归零；析构时关闸并等在途 ≤2 s |
+
+**`/world_cloud` 已删除**：导航的 `voxelCallback` 本来就做 `map<-lidar` 的 TF，
+改订原始雷达话题（`voxel_cloud_topic`）即可，SLAM 侧不再序列化整帧点云。
+点云/轨迹类调试话题统一由现有的 `debug_publish` 开关门控。
+
+### 2.0b 管理操作：控制线程 + 命令队列
+
+`/switch_map` `/slam/mode_switch` `/stop_map_operation` `/update_map_operation` 全部改为：
+
+```
+srv 线程: control_.postAndWait(命令, timeout)   → 拿到结果或"已受理"
+控制线程: 载图解析(25 s) / resetCore / 导出存图(180 s) —— 顺序执行
+```
+
+- 服务的返回语义没变：完成给真实结果，超时给 `result=1`（已受理）
+- 大图解析 25 s 期间，io/心跳与定位线程完全不受影响（实测切图失败路径 `/slam/info` 仍 9 Hz）
+- 不再需要 `disk_read`/`disk_write`/`feature`/`cpu` 这些 lane 名字与 generation 握手
 
 ### 2.1 引擎侧（`SlamAlgorithm`）
 
@@ -93,6 +153,12 @@ pose_mu_    ->  （不嵌套任何其它锁）
 | T-7 | `debug_map_published_` 服务写、定时器读写 | T2 ↔ T1 | 数据竞争；现在服务只置掩码，实际单写者 | `std::atomic<bool>` |
 | T-8 | `set_grid_map_` / `global_grid_map_msg_` 从来没有置真 | — | 死代码，误导"global_grid_map 有生产者" | 删除（话题仍注册） |
 | T-9 | `timerPublishLocalizationPose` 未注册却调 `publishCurrPose` | — | 一旦有人注册就会变成第二个写者 | 删除 |
+| T-10 | **IO 线程上做点云抽稀 + 序列化**（`startPub`） | T1 | IMU 200 Hz 回调被挤掉 → 丢帧/位姿抖 | 转换搬到 `cpu` lane，输出线程只 publish |
+| T-11 | **IO 线程上复制 640 KB 栅格 ×2**（`publishRealtimeGridMap`） | T1 | 同上 | 搬到 `cpu` lane（`buildGridMessage`） |
+| T-12 | **发布线程上跑 2D 匹配**（`planarConstraintStep`） | T4 | 匹配期间位姿/TF 停发（sim 里是 enabled） | 搬到 `cpu` lane，带防重入 |
+| T-13 | tick 线程上跑在线标定 | T3 | 标定变慢会拖 `/lio_odom` | 搬到 `cpu` lane |
+| T-14 | `/world_cloud` 的 `toROSMsg` 在输出线程 | T3 | 大点云转换顶住 50 Hz 输出 | 搬到 `cpu` lane + `drainWorldCloud` |
+| T-15 | 池任务捕获 `this`，析构时可能还在跑 | — | 退出时 use-after-free | `AuxJobGuard` + 析构等待（实测 SIGINT 干净退出） |
 
 ## 4. 生命周期 / 关停顺序
 
@@ -127,33 +193,35 @@ main:
 | `stop_map` 在服务线程等 180 s | 现在只阻塞 T2（独立队列），但同一时间其它服务会排队 |
 | `ros::Time` 参与跨线程比较的地方仍有个别（如 `last_odom_t_`） | 已 atomic<double>，新增代码请沿用"存秒数不存 ros::Time" |
 
-## 6. 验证
+## 6. 验证（2026-11-21，最终形态）
 
 | 项 | 结果 |
 |---|---|
 | 编译（amd64 melodic，`xzrobot_ros_compile:1.0.3-ceres`） | ✅ `Built target rosiwit_slam_ros1_node` |
-| 单元测试 | ✅ 15 套件 / 93 用例 / 0 失败（`run_tests exit=0`；`test_reloc_disambig` 已固定种子，8/8 稳定） |
-| 启动冒烟（容器 roscore + 本体节点，`default.yaml`） | ✅ 节点存活、9 服务 + 18 话题注册、`/slam/info` 约 9 Hz |
-| `/slam/mode_switch {mode:0}` 无 `/set_detect_mode` | ✅ `result: 0`（失败如实上报） |
-| `/slam/mode_switch {mode:0}` 有假服务回 true | ✅ `result: 1` |
-| `/slam/mode_switch {mode:1}` | ✅ `result: 1` |
-| 连续切模式后进程 | ✅ ALIVE |
+| 单元测试 | ✅ 15 套件 / 93 用例 / 0 失败（含固定种子的 `test_reloc_disambig`） |
+| 启动冒烟 | ✅ 9 服务、`/slam/info` ≈9 Hz |
+| `mode_switch 1 → 0` | ✅ 两次 `result: 1` |
+| `switch_map` 指向不存在的目录 | ✅ `success: False`，不挂死，切图期间心跳保持 9 Hz |
+| SIGINT 退出 | ✅ `EXITED-CLEAN`（control 先关闸，再等池任务，最后析构发布者） |
 
-**未覆盖**：`planar_mu_` 这条路径需要真实地图 + 激光（`planar_constraint` 只在定位模式且有 `/scan` 时
-才进入），容器里没有数据源 —— 只做了编译与静态审查验证。上机验证时要看
-`[locstate] ... planar=1` 且 `/slam/info` 不掉频。
+**未覆盖**：`planar_mu_` 与 `/map` 发布路径需要真实地图/激光数据，容器里只做了编译与静态验证。
 
-## 7. 观察（不是并发问题，但值得记）
+## 7. 观察
 
-- **全局重定位是随机的**：`FpfhRansacGlobalLocalizer` 每轮用时钟种子抽 85% 子集
-  （`fpfh_ransac_global_localizer.cpp:144`），这正是"同图多候选"的来源，但也让
-  `test_reloc_disambig` 偶发（并行跑测试时实测 1/6 概率只出 1 个候选 → 假失败）。
-  已加 `GlobalLocalizeConfig::random_seed`（0 = 时钟，生产不变），测试固定种子后 8/8 稳定。
-  **产品含义**：单帧重定位返回的候选数本来就会波动，App 侧不要假设"一次调用就能看到全部歧义"。
-- `sendTransform()` 的 `lookupTransform("base_footprint", "odom")` 失败时用 `ROS_ERROR`，
-  在 T4 的 50 Hz 下会刷屏（容器里没有底盘 TF 时实测每秒 50 条）。建议改
-  `ROS_ERROR_THROTTLE(5.0, ...)`；不影响接口面。
-- `T3` 每 2 s 的 `updateCalibration()` 跑在 tick 线程，若标定变慢会拖 `/lio_odom`；
-  建议后续记录其耗时并在超过 5 ms 时告警。
-- `stop_map` 在服务线程最多等 180 s（大图导出），只阻塞 T2；同一时刻其它服务排队。
-  若 App 有并发调用需求，可给每个服务单独的队列 + 线程。
+- **全局重定位是随机的**：`FpfhRansacGlobalLocalizer` 每轮用时钟种子抽 85% 子集，
+  这是"同图多候选"的来源，也导致测试偶发（已加 `GlobalLocalizeConfig::random_seed`，测试固定种子）。
+- 核心 `LocalizationPipeline` 仍自带两条裸线程（`m_global_thread` / `m_reloc_thread`，
+  是 2026-10-17 推行丢失事故的热修）。按本模型应分别迁到 `pool` 与"重定位请求→投递"，
+  属于下一步。
+- `sendTransform()` 的 TF 查找失败用 `ROS_ERROR`，20 ms 心跳下会刷屏；建议改 `THROTTLE`。
+
+## 8. 线程数对照
+
+| | 之前 | 现在 |
+|---|---|---|
+| ROS 执行线程 | 2（io + srv） | 2（io + srv） |
+| 发布线程 | 2（slam_tick + slam_pub） | 0（心跳在 io，大消息在池） |
+| 管理/lane | 4 条 lane（disk_read/disk_write/cpu×2/feature，其中 feature 空转） | 1 条控制线程 |
+| 线程池 | 5（含空转的 feature） | 3 |
+| 业务 | 1（frontend） | 1（frontend） |
+| 合计（不含库内部） | 12 | **7** |

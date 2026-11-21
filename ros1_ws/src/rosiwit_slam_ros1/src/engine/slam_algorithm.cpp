@@ -97,14 +97,9 @@ void SlamAlgorithm::start()
     // FrontEnd: 唯一消费帧的线程 (替代原 50Hz processCB 里的 tryPopAndProcess)
     frontend_.reset(new rosiwit_common::Thread("slam_fe",
         [this](rosiwit_common::CancelToken token) { frontendLoop(token); }));
-    // Tick: 新接口的精简输出 (只发 /lio_odom 等), 50Hz
-    tick_.reset(new rosiwit_common::PeriodicThread("slam_tick",
-        std::chrono::milliseconds(20), [this] { tickLoop(); }));
-    // Publish: 老契约位姿/TF/健康话题, 独立线程 —— 与 tick 抢同一线程会把
-    // /lio_odom 从 ~96Hz 拖到 67Hz (实测)。
-    publish_.reset(new rosiwit_common::PeriodicThread("slam_pub",
-        std::chrono::milliseconds(20), [this] { publishLoop(); }));
-    ROS_INFO("[slam_algo] started: frontend thread + 50Hz tick%s",
+    // 发布不再由引擎驱动: 小消息走 io 线程的 20ms 定时器, 大消息在线程池任务里
+    // 就地 publish (见 docs/ros1_thread_model.md)。
+    ROS_INFO("[slam_algo] started: frontend thread%s",
              executor_ ? " (+ injected executor)" : "");
 }
 
@@ -114,8 +109,6 @@ void SlamAlgorithm::shutdown()
     // 注意 executor 由组装根关闭, 这里不能碰 (LOST 时还要投递飞行记录)。
     input_.close();
     if (frontend_) { frontend_->requestStop(); frontend_->join(); frontend_.reset(); }
-    if (tick_) { tick_->requestStop(); tick_->join(); tick_.reset(); }
-    if (publish_) { publish_->requestStop(); publish_->join(); publish_.reset(); }
     // 后端的线程是 abandon 语义 (可能卡在 Ceres 里), 退出前给它一个有界窗口,
     // 免得进程在静态对象析构时还有线程在跑 (I6)。
     if (algo_raw_) { algo_raw_->waitForBackgroundIdle(2000); }
@@ -143,15 +136,6 @@ void SlamAlgorithm::frontendLoop(rosiwit_common::CancelToken token)
     }
 }
 
-void SlamAlgorithm::tickLoop()
-{
-    for (auto & h : tick_hooks_) { if (h) { h(); } }
-}
-
-void SlamAlgorithm::publishLoop()
-{
-    for (auto & h : publish_hooks_) { if (h) { h(); } }
-}
 
 
 
@@ -297,25 +281,9 @@ rosiwit_slam::YawCalibrationResult SlamAlgorithm::onlineYawCalibration() const {
 
 
 
-void SlamAlgorithm::clearTickHooks() {
-    tick_hooks_.clear();
-}
-
-void SlamAlgorithm::clearPublishHooks() {
-    publish_hooks_.clear();
-}
-
-void SlamAlgorithm::addPublishHook(std::function<void()> hook) {
-    if (hook) publish_hooks_.push_back(std::move(hook));
-}
-
 void SlamAlgorithm::clearInputHooks() {
     input_seen_hook_ = nullptr;
     raw_lidar_hook_ = nullptr;
-}
-
-void SlamAlgorithm::addTickHook(std::function<void()> hook) {
-    if (hook) tick_hooks_.push_back(std::move(hook));
 }
 
 void SlamAlgorithm::setOutputHook(std::function<void(const SlamOutput&)> hook) {

@@ -155,7 +155,7 @@ rviz_goal_align_yaw: true
 
 # ---------- 3D 体素 / STVL 层 (仿真里的障碍来源) ----------
 voxel_enabled: true
-voxel_cloud_topic: "/world_cloud"
+voxel_cloud_topic: "/velodyne_points"    # 仿真: 原始雷达
 voxel_resolution: 0.10
 voxel_max_points: 200000
 voxel_min_height: 0.15

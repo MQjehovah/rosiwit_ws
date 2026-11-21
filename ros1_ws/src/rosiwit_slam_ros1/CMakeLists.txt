@@ -84,6 +84,7 @@ set(ROSIWIT_ROS1_LIB_SOURCES
     src/interface/convert.cpp
     src/interface/assembly.cpp
     src/interface/cloud_publisher.cpp
+    src/interface/publish_jobs.cpp
     src/interface/pose_publisher.cpp
     src/interface/warning.cpp
     src/interface/services.cpp

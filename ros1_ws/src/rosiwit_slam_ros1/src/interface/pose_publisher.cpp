@@ -70,6 +70,12 @@ void Ros1SlamInterface::applyPublishResetIfRequested() {
     if (mask & kPubResetDebugFlags)   { debug_map_published_.store(false); }
 }
 
+// 20ms 心跳 (io 线程): 只发小消息。定位线程/线程池卡顿时, 这个心跳仍然在跑,
+// 所以 App 不会因为某一帧慢就判"节点死了"。
+void Ros1SlamInterface::timerHeartbeat(const ros::TimerEvent&) {
+    publishCurrPose();
+}
+
 void Ros1SlamInterface::publishCurrPose() {
     applyPublishResetIfRequested();   // 服务线程要求过复位就在这里落地 (单写者)
     updateModeFromCore();
@@ -82,7 +88,8 @@ void Ros1SlamInterface::publishCurrPose() {
     publishCoreStatusIfChanged();
 
     // C2b: 2D 激光约束 (只在 DEGRADED/LOST 且曾定位成功过时介入, 内部自带节流).
-    planarConstraintStep();
+    // 2D 匹配是纯计算, 投到 cpu lane: 在发布线程上跑会直接顶住位姿/TF.
+    schedulePlanarJob();
 
     SlamOutput out;
     const bool have_out = engine_.latestOutput(out) && out.has_new_pose;

@@ -1,7 +1,8 @@
 // ============================================================================
 // outputs.cpp — 兼容层之外的补充输出
 //
-// 只做一件事: 把核心输出的位姿/点云变成导航要的两路话题 (/lio_odom、/world_cloud)。
+// 只做一件事: 把核心输出的位姿变成导航要的 /lio_odom。
+// (/world_cloud 已删除, 导航直接订原始雷达并自己做 TF)
 // 老接口 (xz_3d_slam 兼容层) 负责 App 看到的一切; 这里不再重复。
 // ============================================================================
 #include "outputs.h"
@@ -26,29 +27,24 @@ Ros1OutputsInterface::Ros1OutputsInterface(ros::NodeHandle& nh, ros::NodeHandle&
     // ---- 发布 ----
     // App 只调老接口; 这里只发导航消费的两路输出。TF 由老接口独占 (重复发会打架)。
     odom_pub_ = nh_.advertise<nav_msgs::Odometry>("lio_odom", 1000);
-    world_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("world_cloud", 10000);
 
-    // 不再用 ros::Timer (主线程): 整图/栅格在 cpu lane 上算, tick 线程发布。
-    engine_.addTickHook([this] { onTick(); });
+    // /lio_odom 是小消息, 20ms 定时器 (io 线程) 足够; 重活都在线程池里。
+    tick_timer_ = nh_.createTimer(
+        ros::Duration(0.02), &Ros1OutputsInterface::timerTick, this);
 }
+
+void Ros1OutputsInterface::timerTick(const ros::TimerEvent&) { onTick(); }
 
 void Ros1OutputsInterface::onTick() {
     SlamOutput out;
     if (engine_.latestOutput(out) && out.has_new_pose) publishPose(out);
-    // 在线标定的估算更新 (原来挂在 2s 定时器上, 保持 2s 节奏)
-    const ros::Time now = ros::Time::now();
-    // 在线标定的估算更新 (原来挂在 2s 定时器上, 保持 2s 节奏)。
-    // 只更新内部状态, 不再额外发一条 slam_calibration 话题 (App 不看, 老接口也没有)。
-    if (last_calib_update_.isZero() || (now - last_calib_update_).toSec() >= 2.0) {
-        last_calib_update_ = now;
-        engine_.updateCalibration();
-    }
+    // 在线标定的估算更新 (2s 节奏): 纯计算 -> cpu lane, 不再拖 /lio_odom
+    scheduleCalibJob();
 }
 
 void Ros1OutputsInterface::publishPose(const SlamOutput& out) {
     const PreparedPose p = preparePose(out);
     publishOdometry(p);
-    publishClouds(out, p);
 }
 
 Ros1OutputsInterface::PreparedPose Ros1OutputsInterface::preparePose(const SlamOutput& out) {
@@ -129,15 +125,8 @@ void Ros1OutputsInterface::publishOdometry(const PreparedPose& p) {
     odom_pub_.publish(odom);
 }
 
-void Ros1OutputsInterface::publishClouds(const rosiwit_slam::SlamOutput& out,
-                                   const PreparedPose& /*p*/) {
-    if (!out.world_cloud || out.world_cloud->empty()) return;
-    if (world_cloud_pub_.getNumSubscribers() == 0) return;
-    sensor_msgs::PointCloud2 msg;
-    pcl::toROSMsg(*out.world_cloud, msg);
-    msg.header.frame_id = engine_.worldFrame();
-    msg.header.stamp = (out.pose.time > 0) ? ros::Time(out.pose.time) : ros::Time::now();
-    world_cloud_pub_.publish(msg);
+Ros1OutputsInterface::~Ros1OutputsInterface() {
+    waitForAuxJobs();
 }
 
 } // namespace rosiwit_slam_ros1

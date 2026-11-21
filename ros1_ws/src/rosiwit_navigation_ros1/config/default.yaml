@@ -188,7 +188,7 @@ recovery_timeout: 20.0
 
 # 3D 体素 / STVL 层
 voxel_enabled: false
-voxel_cloud_topic: "/world_cloud"
+voxel_cloud_topic: "/vanjee_points722"   # 原始雷达: 导航自己 lookup map<-lidar
 voxel_resolution: 0.10
 voxel_max_points: 200000
 voxel_min_height: 0.15
