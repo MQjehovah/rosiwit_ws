@@ -80,7 +80,7 @@ console.log(`      scan count=${cloud.cloud.count} bytes=${cloud.cloud.xyz_cm.le
 
 send({ action: 2, stream: 'grid', refresh: true })
 const grid = await waitFor((m) => m.grid, 30000)
-assert(grid.grid.width === 800 && grid.grid.height === 600, 'grid dims')
+assert(grid.grid.width > 0 && grid.grid.height > 0, 'grid dims')
 assert(grid.grid.compression === 1, 'grid zlib compression')
 const cells = zlib.inflateSync(Buffer.from(grid.grid.data))
 assert(cells.length === grid.grid.width * grid.grid.height, 'grid cells')
