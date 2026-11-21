@@ -476,6 +476,45 @@ TEST(AnchorQuality, RejectedFrameIsNotAnAnchor)
     EXPECT_FALSE(anchorQualityOk(q, c));
 }
 
+TEST(OverlayNovelStructure, ClusterCountsWholeScanNotOnlyNovel)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.fitness_trigger = 0.5;
+    c.min_keyframe_dist = 1.0;
+    c.delta_min = 0.3;
+    c.novel_min_cluster = 3;
+    c.persistency_unit = 1;      // view
+    c.persist_hits = 1;
+    m.configure(c);
+    m.setBaseMap("", mkFloorBase());
+
+    // 第一帧: 一小块 3x1x3 的结构, 正常沉淀
+    CloudType::Ptr patch(new CloudType());
+    for (int ix = 0; ix <= 2; ++ix)
+        for (int iz = 0; iz <= 2; ++iz) {
+            PointType p;
+            p.x = 2.0f + static_cast<float>(ix) * 0.3f;
+            p.y = 0.0f;
+            p.z = 0.6f + static_cast<float>(iz) * 0.3f;
+            patch->push_back(p);
+        }
+    patch->width = static_cast<uint32_t>(patch->size());
+    patch->height = 1;
+    m.onLocalized(mkPose(0.0), patch, confidentMatch(), true);
+    ASSERT_GE(m.persistencyAt(V3D(2.6, 0.0, 0.6)), 1);
+
+    // 第二帧: 同一块 + 一个贴着它的新点. 新点的邻居全在"已沉淀体素"上,
+    // 它们不该被当成噪声 —— 最小簇要按整帧观测算, 不是只看本帧新体素.
+    PointType q;
+    q.x = 2.9f; q.y = 0.0f; q.z = 0.6f;
+    patch->push_back(q);
+    patch->width = static_cast<uint32_t>(patch->size());
+    m.onLocalized(mkPose(0.0), patch, confidentMatch(), true);
+
+    EXPECT_GE(m.persistencyAt(V3D(2.9, 0.0, 0.6)), 1);
+}
+
 // catkin_add_gtest 只链 GTEST_LIBRARIES (不含 gtest_main), 所以这里自带 main
 int main(int argc, char** argv) {
     testing::InitGoogleTest(&argc, argv);

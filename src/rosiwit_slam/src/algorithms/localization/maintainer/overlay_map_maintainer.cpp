@@ -335,25 +335,33 @@ void OverlayMapMaintainer::collectNovel(const PoseStamped& pose, const CloudType
     };
     std::unordered_map<int64_t, Novel> novel;
     novel.reserve(body->size() / 4 + 16);
+    // 整帧扫描的体素集合: 最小簇按它算. 已经沉淀/被底图覆盖的部分同样是"邻居",
+    // 否则新长出来的一小块会因为邻居都被算成"非新体素"而误判成孤立噪点.
+    std::unordered_set<int64_t> scan_voxels;
+    scan_voxels.reserve(body->size());
+    m_dbg_scan = 0; m_dbg_seen = 0; m_dbg_base = 0; m_dbg_kd = 0; m_dbg_cluster = 0;
     std::vector<int> idx(1);
     std::vector<float> sq(1);
     for (const auto& p : body->points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        ++m_dbg_scan;
         const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
         const int cx = static_cast<int>(std::floor(w.x() / m_voxel));
         const int cy = static_cast<int>(std::floor(w.y() / m_voxel));
         const int cz = static_cast<int>(std::floor(w.z() / m_voxel));
         const int64_t vk = voxelKey(cx, cy, cz);
+        scan_voxels.insert(vk);
         auto sit = m_voxel_seen.find(vk);
-        if (sit != m_voxel_seen.end()) { sit->second = m_frame; continue; }  // 已沉淀: 刷新存活
+        if (sit != m_voxel_seen.end()) { sit->second = m_frame; ++m_dbg_seen; continue; }  // 已沉淀: 刷新存活
         if (novel.find(vk) != novel.end()) continue;                         // 同帧同体素只留一个点
-        if (m_base_voxels.count(vk)) continue;   // 底图同一体素已有观测: 不是新结构
+        if (m_base_voxels.count(vk)) { ++m_dbg_base; continue; }   // 底图同一体素已有观测: 不是新结构
         PointType q;
         q.x = static_cast<float>(w.x());
         q.y = static_cast<float>(w.y());
         q.z = static_cast<float>(w.z());
         if (m_has_base && m_base_kdtree.nearestKSearch(q, 1, idx, sq) > 0 &&
             sq[0] <= dmin2) {
+            ++m_dbg_kd;
             continue;   // 离底图太近: 位姿误差/重采样差异, 不是新结构
         }
         Novel n;
@@ -373,8 +381,8 @@ void OverlayMapMaintainer::collectNovel(const PoseStamped& pose, const CloudType
             for (int dx = -1; dx <= 1; ++dx)
                 for (int dy = -1; dy <= 1; ++dy)
                     for (int dz = -1; dz <= 1; ++dz)
-                        if (novel.count(voxelKey(n.cx + dx, n.cy + dy, n.cz + dz))) ++cnt;
-            if (cnt < min_cluster) continue;   // 孤立点/散点: 不是结构
+                        if (scan_voxels.count(voxelKey(n.cx + dx, n.cy + dy, n.cz + dz))) ++cnt;
+            if (cnt < min_cluster) { ++m_dbg_cluster; continue; }   // 孤立点/散点: 不是结构
         }
         CandidateVoxel& cand = m_hits[kv.first];
         bool count = false;
@@ -396,6 +404,17 @@ void OverlayMapMaintainer::collectNovel(const PoseStamped& pose, const CloudType
             m_hits.erase(kv.first);
             ++m_novel_committed;
         }
+    }
+    // [临时探针] 每 100 帧打一次分支计数
+    if (m_frame % 100 == 0) {
+        std::cout << "[maint] scan=" << m_dbg_scan
+                  << " seen=" << m_dbg_seen
+                  << " base=" << m_dbg_base
+                  << " kd=" << m_dbg_kd
+                  << " cand=" << novel.size()
+                  << " cluster_rej=" << m_dbg_cluster
+                  << " votes=" << m_novel_votes
+                  << " commits=" << m_novel_committed << std::endl;
     }
 }
 
