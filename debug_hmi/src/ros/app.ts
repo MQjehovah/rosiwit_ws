@@ -763,6 +763,15 @@ let handlersReady = false
 let lastMatchSample = 0
 
 /** 定位状态插件：把 /slam/info 的枚举/字符串统一成可读文本。 */
+function numeric(value: unknown, fallback = -1): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : fallback
+  }
+  return fallback
+}
+
 function describeLocationStatus(slamState: unknown, location: unknown): string {
   const locMap: Record<string, string> = {
     '0': '定位正常',
@@ -797,16 +806,16 @@ function registerHandlers(): void {
     const stateRaw = slam?.slam_state
     const locRaw = slam?.location_status
     state.slam = {
-      slam_state: Number(stateRaw ?? -1),
-      location_status: Number(locRaw ?? -1),
-      matching_degree: Number(slam?.matching_degree ?? 0),
-      update_request: Number(slam?.update_request ?? 0),
+      slam_state: numeric(stateRaw),
+      location_status: numeric(locRaw),
+      matching_degree: numeric(slam?.matching_degree, 0),
+      update_request: numeric(slam?.update_request, 0),
       map_name: String(slam?.map_name ?? ''),
-      map_area: Number(slam?.map_area ?? 0),
+      map_area: numeric(slam?.map_area, 0),
       robot_pose: {
-        x: Number(slam?.robot_pose?.x ?? 0),
-        y: Number(slam?.robot_pose?.y ?? 0),
-        theta: Number(slam?.robot_pose?.theta ?? 0),
+        x: numeric(slam?.robot_pose?.x, 0),
+        y: numeric(slam?.robot_pose?.y, 0),
+        theta: numeric(slam?.robot_pose?.theta, 0),
       },
     }
     state.slamTime = Date.now()
