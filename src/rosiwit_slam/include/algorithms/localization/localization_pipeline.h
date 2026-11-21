@@ -212,7 +212,8 @@ private:
     int m_scrutiny_frames = 0;
     // 配置 (来自 localization.monitor.*): 不放进 MonitorConfig 头文件,
     // 避免改头文件触发核心库全量重编 (设备上 aarch64 编译很慢).
-    int m_scrutiny_cfg_frames = 10;
+    int m_scrutiny_cfg_frames = 0;   // 默认关闭: 本站稳态 fitness 0.80~0.87,
+                                     // 用 0.85 复核会在 0.80~0.85 抖动时反复 LOCALIZED<->INIT
     double m_consensus_trans_m = 1.0;
     double m_consensus_yaw_deg = 20.0;
 

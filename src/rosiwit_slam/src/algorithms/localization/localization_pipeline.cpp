@@ -1823,6 +1823,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
     } else {
         // INIT / 重定位后：必须连续高置信帧才恢复 LOCALIZED。
+        // 恢复/重定位接受线保持独立参数 global.reloc_accept_score，不要用 credible_fitness 下盖。
         const bool init_healthy =
             !seed_failed && res.converged && accepted &&
             res.fitness >= m_global_cfg.reloc_accept_score;
@@ -1844,7 +1845,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             }
         } else {
             m_healthy_streak = 0;
-            if (hard_unhealthy) ++m_unhealthy_streak;
+            // 关键: 本帧不硬坏 (fitness >= lost_fitness) 时必须归零, 否则在 INIT 里
+            // 间歇性坏帧会一直累计, 几十秒后"凭空"判 LOST (实机 13:48 就是这样丢的).
+            if (hard_unhealthy) {
+                ++m_unhealthy_streak;
+            } else {
+                m_unhealthy_streak = 0;
+            }
             if (m_unhealthy_streak >= std::max(1, m_monitor_cfg.lost_patience)) {
                 const bool was_lost = (m_status == LOST);
                 m_status = LOST;

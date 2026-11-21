@@ -398,7 +398,9 @@ localization:
     lost_patience: 30         # 连续不健康帧数达到此值 -> LOST (约3s, 避免LOST后HMI仍显示成功10s)
                               # (统一替代原 mediocre_patience / lost_patience_low / coast_patience;
                               #  2026-10-17 僵尸带事故: fitness 长期 0.5~0.67 时必须能判丢)
-    scrutiny_frames: 10       # 进入 LOCALIZED 后前 N 帧仍按 reloc_accept_score 复核(弱种子假锁)
+    scrutiny_frames: 0        # 进入 LOCALIZED 后前 N 帧仍按 reloc_accept_score 复核(弱种子假锁)
+                              # 默认 0=关闭: 本站稳态 fitness 0.80~0.87, 用 0.85 复核会在
+                              # 0.80~0.85 抖动时反复 LOCALIZED<->INIT, 反而把定位抖丢.
     # 匹配位姿 vs 融合输出长期分歧 -> 判不健康(定位错了但界面仍显示成功).
     # 现场: GICP 每帧给出 ~10m 外匹配, 但 ESKF 卡方门控一直拒收, 发布位姿靠 IMU 推算
     # 不动、z 甚至掉到地下几米; fitness 仍 0.8+, 只看覆盖率永远判不了丢.
