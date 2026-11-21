@@ -1,4 +1,4 @@
-# test/test_grid_map_postprocess.cpp
+// test/test_grid_map_postprocess.cpp
 #include <gtest/gtest.h>
 #include <vector>
 

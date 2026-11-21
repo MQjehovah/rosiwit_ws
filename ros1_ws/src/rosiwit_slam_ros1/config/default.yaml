@@ -62,7 +62,7 @@
 # ############################################################################
 
 global:
-  startup_mode: mapping # 启动模式 mapping|localization|idle
+  startup_mode: free # 启动模式 mapping|localization|free|idle (free/idle = 不自建图也不定位, 等 App 切模式)
   is_debug: false # 调试日志开关
   debug_publish: false # 发布调试话题 (world_cloud/body_cloud 等)
   modules:
@@ -488,8 +488,11 @@ localization:
     persist_hits: 3           # 工厂: 只沉淀持久半静态堆货
     autosave_frames: 300      # 周期性落盘叠加层
     refresh_frames: 300       # ★联动: 周期性用叠加层刷新全局重定位库(环境变化防失效)
-    decay_frames: 3000        # 长期未再观测的叠加体素移除
+    decay_frames: 0            # ★A 阶段: 交给体素可信度 w 软删除, 不再按帧龄硬删 (0=不衰减)
     override_base: true       # 结构被移除/替换时压制原图旧点
+    # ---- A 阶段: 体素可信度 w (影子模式, 只统计不决策) ----
+    w_anchor: 128             # w>=此值视为"高可信静态几何" (0~255; 观测 +8 / 雕刻 -8 / 0 删除)
+    shadow: true              # true: w 只进 [quality] 日志, 不影响定位/插入 (B/C 阶段再启用)
     # 插入门控: LIO 相对观测与 S2M 残差超过此值则不写入 (0=关闭该条)
     max_insert_divergence: 0.2
     delta_min: 0.3            # 只沉淀"离原图 > 该距离(m)"的新结构(变化增量), 不重复静态

@@ -348,6 +348,11 @@ struct MaintainerConfig {
     int    autosave_frames = 0;      // 每 N 帧自动落盘叠加层 (0=仅析构时)
     int    refresh_frames = 0;       // 每 N 帧用叠加层刷新全局重定位器 (0=关闭)
     int    decay_frames = 0;         // 叠加层体素超过该帧数未再观测则移除 (0=不衰减)
+    // ---- A 阶段: 体素可信度 w (方案 v3 §3, 影子模式) ----
+    // w 是每个 overlay 体素的"高可信几何"权重: 被观测为占据 +8, 被自由空间雕刻 -8,
+    // 0 时删除该体素。只统计、不参与任何决策 (shadow=true)。
+    int    w_anchor = 128;           // w 达到此值视为"高可信静态几何"(0~255, 默认半程)
+    bool   shadow = true;            // true: w 只用于 static_support 观测, 不影响定位/插入
     bool   override_base = false;    // 叠加层压制同位置的原图点(处理"结构被移除/被替换")
     double delta_min = 0.3;          // 只沉淀"离原图 > 该距离(m)"的新结构(变化增量)
     int    carve_stride = 20;        // 自由空间雕刻时扫描点抽样步长

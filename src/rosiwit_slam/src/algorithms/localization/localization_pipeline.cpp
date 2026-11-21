@@ -335,6 +335,9 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.max_voxels       = getv<int>(mtc, "max_voxels", m_maintainer_cfg.max_voxels);
         m_maintainer_cfg.max_insert_divergence =
             getv<double>(mtc, "max_insert_divergence", m_maintainer_cfg.max_insert_divergence);
+        // A 阶段: 体素可信度 w (影子: 只统计, 不参与决策)
+        m_maintainer_cfg.w_anchor = getv<int>(mtc, "w_anchor", m_maintainer_cfg.w_anchor);
+        m_maintainer_cfg.shadow   = getv<bool>(mtc, "shadow", m_maintainer_cfg.shadow);
     }
     auto plc = loc["planar"];
     if (plc) {
@@ -1893,6 +1896,27 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                       << " coast=" << m_coast_count
                       << " have_last=" << (m_have_last_accepted ? 1 : 0)
                       << " rejection=" << reject_reason << std::endl;
+            // A 阶段(影子): 体素可信度统计, 只观测不决策. 每天按 w>=w_anchor 导出点云,
+            // 看是否只剩立柱/墙体, 并对比正常段 / 假锁段 / 堆货区 的 static_support 分布.
+            if (m_maintainer) {
+                int anchor_age = 0;
+                size_t submap_pts = 0;
+                const double ss = m_maintainer->staticSupport(m_pose, &anchor_age, &submap_pts);
+                std::ostringstream qs;
+                qs.setf(std::ios::fixed);
+                qs.precision(3);
+                qs << "[quality] static_support=";
+                if (ss < 0.0) qs << "n/a"; else qs << ss;
+                qs << " anchor_age=" << anchor_age
+                   << " submap_pts=" << submap_pts
+                   << " state="
+                   << (m_status.load() == LOST ? "LOST"
+                       : (m_status.load() == LOCALIZED ? "LOCALIZED" : "INIT"))
+                   << " shadow=" << (m_maintainer_cfg.shadow ? 1 : 0)
+                   << " w_anchor=" << m_maintainer_cfg.w_anchor
+                   << " fitness=" << res.fitness;
+                std::cout << qs.str() << std::endl;
+            }
         }
     }
 }

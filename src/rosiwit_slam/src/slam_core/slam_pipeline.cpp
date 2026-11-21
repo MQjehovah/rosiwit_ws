@@ -307,6 +307,8 @@ bool SlamPipeline::init(const std::string& config_path) {
     }
     if (mode_str == "mapping")          m_mode = PipelineMode::MAPPING;
     else if (mode_str == "localization") m_mode = PipelineMode::LOCALIZATION;
+    // free / idle: 不建图也不定位 (接口层 SlamMode::FREE)。free 只是 idle 的对外叫法,
+    // 显式列出来避免"free"看起来像未知值.
     else                                m_mode = PipelineMode::IDLE;
 
     auto modules = (glob && glob["modules"]) ? glob["modules"] : cfg["modules"];

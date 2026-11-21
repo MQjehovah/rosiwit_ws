@@ -27,6 +27,8 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     // 继续叠加到新图局部目标上，造成"新图里混着上一张图的点" (切图干扰)。
     m_cells.clear();
     m_voxel_seen.clear();
+    m_w.clear();
+    m_last_world.reset();
     m_pending_store.reset();
     m_overlay_count = 0;
     ++m_revision;
@@ -52,6 +54,8 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
         static_cast<int>(m_voxel_seen.size()) >= m_cfg.max_voxels) {
         m_cells.clear();
         m_voxel_seen.clear();
+        m_w.clear();
+        m_last_world.reset();
         m_pending_store.reset();
         m_hits.clear();
         m_overlay_count = 0;
@@ -64,8 +68,13 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
     const int vy = static_cast<int>(std::floor(p.y() / m_voxel));
     const int vz = static_cast<int>(std::floor(p.z() / m_voxel));
     const int64_t vk = voxelKey(vx, vy, vz);
-    if (m_voxel_seen.count(vk)) return;   // 体素去重
+    if (m_voxel_seen.count(vk)) {   // 体素去重
+        bumpWeight(vk, 8);          // A 阶段: 重复观测 -> 可信度累加
+        return;
+    }
     m_voxel_seen[vk] = m_frame;
+    m_w[vk] = 0;                    // A 阶段: 新体素从 0 起, 本次观测即一次 hit
+    bumpWeight(vk, 8);
 
     const int cx = static_cast<int>(std::floor(p.x() / m_cell));
     const int cy = static_cast<int>(std::floor(p.y() / m_cell));
@@ -103,8 +112,55 @@ void OverlayMapMaintainer::rayCarve(const PoseStamped& pose, const CloudType::Pt
             const int vx = static_cast<int>(std::floor(q.x() / m_voxel));
             const int vy = static_cast<int>(std::floor(q.y() / m_voxel));
             const int vz = static_cast<int>(std::floor(q.z() / m_voxel));
-            m_voxel_seen.erase(voxelKey(vx, vy, vz));
+            const int64_t vk = voxelKey(vx, vy, vz);
+            auto wit = m_w.find(vk);
+            if (wit != m_w.end()) {
+                // A 阶段: miss 只衰减, 衰减到 0 才从"可见集"删除 (结构重现时原体素还在)
+                if (wit->second > 8) {
+                    wit->second = static_cast<uint8_t>(wit->second - 8);
+                } else {
+                    m_w.erase(wit);
+                    m_voxel_seen.erase(vk);
+                }
+            } else {
+                m_voxel_seen.erase(vk);   // 无权重记录的体素: 保持原来的硬删除
+            }
         }
+    }
+}
+
+void OverlayMapMaintainer::bumpWeight(int64_t vk, int delta) {
+    auto it = m_w.find(vk);
+    if (it == m_w.end()) return;
+    const int v = static_cast<int>(it->second) + delta;
+    it->second = static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
+}
+
+void OverlayMapMaintainer::observeHits(const PoseStamped& pose, const CloudType::Ptr& scan_body) {
+    // A 阶段: 每帧每个体素只加一次 w (扫描点按体素去重), 只累加"已经是变化体素"的那些,
+    // 新体素仍走 commitKeyframe 的持久化门控 (persist_hits) —— w 只衡量持久结构被
+    // 重复看到的次数, 不会把瞬时点云抬成高可信.
+    if (!m_last_world) m_last_world.reset(new CloudType());
+    else m_last_world->clear();
+    if (!scan_body || scan_body->empty()) return;
+    std::unordered_set<int64_t> seen;
+    seen.reserve(scan_body->size());
+    for (const auto& p : scan_body->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
+        const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
+        const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
+        const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
+        const int64_t vk = voxelKey(vx, vy, vz);
+        if (!seen.insert(vk).second) continue;
+        if (m_w.find(vk) == m_w.end()) continue;
+        bumpWeight(vk, 8);
+        m_voxel_seen[vk] = m_frame;   // 被再观测: 刷新存活时间
+        PointType q;
+        q.x = static_cast<float>(w.x());
+        q.y = static_cast<float>(w.y());
+        q.z = static_cast<float>(w.z());
+        m_last_world->push_back(q);
     }
 }
 
@@ -122,6 +178,8 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
 
     // 清除: 看到"本该有货的地方是空的" -> 移除该处 overlay
     rayCarve(pose, scan_body);
+    // A 阶段: 观测命中 -> w += 8 (只统计, 不参与决策)
+    observeHits(pose, scan_body);
 
     if (m_cfg.pose_graph) {
         // L13: 变化关键帧缓冲, fitness 恢复或达阈值时 flush (GTSAM 位姿图平滑)
@@ -257,6 +315,47 @@ CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
                 }
             }
     return out;
+}
+
+double OverlayMapMaintainer::staticSupport(const PoseStamped& pose,
+                                          int* anchor_age, size_t* submap_pts) const {
+    // A 阶段(影子): 统计"当前扫描点中落在 overlay(变化结构)上的点"里, w>=w_anchor 的占比.
+    // 分母只含变化结构上的点; 纯底图区域不参与 (那里本来就是静态的, 不构成判断依据).
+    // 只读, 不改变任何状态; 返回 -1 = 本帧没有可见的变化结构 (日志记 n/a).
+    if (anchor_age) *anchor_age = 0;
+    if (submap_pts) *submap_pts = 0;
+    if (!m_last_world || m_last_world->empty()) return -1.0;
+    const double radius = m_cfg.radius > 0 ? m_cfg.radius : 60.0;
+    const double r2 = radius * radius;
+    const int anchor = m_cfg.w_anchor > 0 ? m_cfg.w_anchor : 128;
+    size_t total = 0;
+    size_t trusted = 0;
+    long oldest = -1;
+    for (const auto& p : m_last_world->points) {
+        const double dx = p.x - pose.trans.x();
+        const double dy = p.y - pose.trans.y();
+        const double dz = p.z - pose.trans.z();
+        if (dx * dx + dy * dy + dz * dz > r2) continue;
+        const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
+                                    static_cast<int>(std::floor(p.y / m_voxel)),
+                                    static_cast<int>(std::floor(p.z / m_voxel)));
+        auto wit = m_w.find(vk);
+        if (wit == m_w.end()) continue;
+        ++total;
+        if (static_cast<int>(wit->second) >= anchor) {
+            ++trusted;
+            auto sit = m_voxel_seen.find(vk);
+            const long last = (sit == m_voxel_seen.end()) ? 0 : sit->second;
+            if (oldest < 0 || last < oldest) oldest = last;
+        }
+    }
+    if (submap_pts) *submap_pts = total;
+    if (oldest >= 0) {
+        const long age = m_frame - oldest;
+        if (anchor_age) *anchor_age = static_cast<int>(age < 0 ? 0 : age);
+    }
+    if (total == 0) return -1.0;
+    return static_cast<double>(trusted) / static_cast<double>(total);
 }
 
 void OverlayMapMaintainer::popOverlayDelta(CloudType::Ptr& out) {
