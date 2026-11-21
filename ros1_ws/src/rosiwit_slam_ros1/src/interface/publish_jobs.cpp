@@ -74,18 +74,17 @@ void Ros1SlamInterface::buildScanMessages() {
     std::shared_ptr<nav_msgs::Path>           path;         // /mapping_path
 
     if (mode == SlamMode::LOCALIZATION) {
-        // 定位: scan_f_map 抽稀 z∈(0.1,2); curr_scan_point 只在 debug 打开时发
-        if (want_f || want_dbg) {
+        // 定位: scan_f_map 保留 z∈(0.1,2) 抽稀; curr_scan_point 发**完整** map 系点云,
+        // 仍然只在 debug_publish 打开时发 (用于 RViz 对照匹配源, 不做 scanShape).
+        if (want_dbg) {
+            scan_point = std::make_shared<sensor_msgs::PointCloud2>(
+                toPointCloud2(world, kMapFrame, stamp));
+        }
+        if (want_f) {
             CloudType::Ptr shaped = scanShape(world, kLocZMax, 1, scan_ground_z_, kScanZMin);
             if (shaped && !shaped->empty()) {
-                if (want_f) {
-                    scan_f = std::make_shared<sensor_msgs::PointCloud>(
-                        toOldPointCloud(*shaped, kMapFrame, stamp));
-                }
-                if (want_dbg) {
-                    scan_point = std::make_shared<sensor_msgs::PointCloud2>(
-                        toPointCloud2(*shaped, kMapFrame, stamp));
-                }
+                scan_f = std::make_shared<sensor_msgs::PointCloud>(
+                    toOldPointCloud(*shaped, kMapFrame, stamp));
             }
         }
     } else if (mode == SlamMode::MAPPING) {
