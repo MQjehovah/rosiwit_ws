@@ -170,6 +170,9 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
         pgm_msg->info.origin.position.z = realtime_grid_map_area_ * 0.00001;
         setStaticMap(pgm_msg);              // 零拷贝: 交换 shared_ptr
         realtime_grid_map_puber_.publish(*pgm_msg);
+        // /global_grid_map 是老系统兼容别名: 与 /map 同一份内容, 受 debug 开关控制,
+        // 只发这一帧 (latched), 不做周期重发.
+        if (debug_publish_) grip_map_puber_.publish(*pgm_msg);
         std::cout << "[ros1_slam] /switch_map: published PGM map "
                   << static_grid.width << "x" << static_grid.height
                   << " unknown=" << std::count(static_grid.data.begin(), static_grid.data.end(), -1)
