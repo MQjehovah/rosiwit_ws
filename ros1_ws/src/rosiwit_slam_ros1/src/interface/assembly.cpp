@@ -133,20 +133,12 @@ void Ros1SlamInterface::initPub() {
     pointcloud_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("curr_scan_point", 10);
     ros1_pointcloud_puber_ = nh_.advertise<sensor_msgs::PointCloud>("scan_f_map", 10);
     submap_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("curr_submap_point", 10);
-    or_pointcloud_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("or_curr_scan_point", 10);
     pose_puber_ = nh_.advertise<geometry_msgs::PoseStamped>("curr_localization_pose", 10);
     path_puber_ = nh_.advertise<nav_msgs::Path>("mapping_path", 10);
-    loop_constraint_puber_ = nh_.advertise<visualization_msgs::MarkerArray>("loop_constraint", 10);
     slam_info_puber_ = nh_.advertise<xzrobot_ros_dependency::SlamInfo>("slam/info", 10);
     // 注: 不发布 /location_info —— 厂商节点不发它, App 只订 /slam/info。
-    // C2b 2D 约束开关: 由 simulation.yaml 的 localization.planar_constraint 控制.
-    // (不改变默认行为; 打开前需要 seed_max_drift 收紧, 否则核心会假定位.)
-    scan_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("points_2d", 10);
     // [偏离 legacy] latched: 瞬时故障码不会因订阅端晚到而漏掉
     warning_code_puber_ = nh_.advertise<std_msgs::String>("slam_warning_code", 1, true);
-    // 位姿融合诊断 (JSON, 1Hz): 用于 direct / eskf 两种方案的现场 A/B 与回归
-    fusion_diag_puber_ = nh_.advertise<std_msgs::String>("slam/fusion_diag", 2);
-    point_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("origin_point", 10);
 }
 
 void Ros1SlamInterface::initTimerPub() {
@@ -204,13 +196,10 @@ void Ros1SlamInterface::initSub() {
     lift_type_sub_ = nh_.subscribe<std_msgs::String>(
         "lift_type", 10, &Ros1SlamInterface::liftTypeCB, this);
 
-    // 引擎的输入钩子: 复刻旧的 get_imu_data_/get_laser_data_ 门控 + origin_point 数据源
+    // 引擎的输入钩子: 复刻旧的 get_imu_data_/get_laser_data_ 门控
     engine_.setInputSeenHook([this](bool is_lidar) {
         if (is_lidar) have_laser_ = true; else have_imu_ = true;
         tickFreqWindow(is_lidar);   // [T7] 1s 频率窗口 -> 20003001/20003002
-    });
-    engine_.setRawLidarHook([this](const CloudType& c, const ros::Time& t) {
-        onRawInputCloud(c, t);
     });
     std::cout << "[ros1_slam] subscribed: scan, odom, lift/state, lift_type "
               << "(imu/lidar/initialpose 由 SlamAlgorithm 订阅)" << std::endl;

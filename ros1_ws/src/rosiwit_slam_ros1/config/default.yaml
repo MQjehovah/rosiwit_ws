@@ -499,7 +499,7 @@ localization:
     # w 的计票单位: frame(每帧, 与扫描频率耦合, 仅 A/B) | view(每次重新进入视野)
     #              | session(每个任务会话) | day(每个自然日)
     persistency_unit: session
-    persistency_hit_gain: 1          # 每个单位 +1 -> w ≈ "多少个任务确认过"
+    persistency_hit_gain: 8          # 每个计票单位 +8 -> anchor 128 = 16 个会话(或 16 帧)
     persistency_miss_confirm: 3      # 连续 free 证据帧数 -> 删除(去抖)
     persistency_miss_action: 0       # 0=删除  1=按 persistency_hit_gain 递减
     persistency_session_hours: 12    # 会话超时自动换新

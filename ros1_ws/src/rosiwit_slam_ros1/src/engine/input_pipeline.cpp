@@ -113,7 +113,6 @@ void SlamAlgorithm::processLidar(const sensor_msgs::PointCloud2::ConstPtr& msg) 
     f.start_time = getSec(msg->header.stamp);
     f.end_time = f.start_time + cfg_.scan_period_ms / 1000.0;
     if (input_seen_hook_) input_seen_hook_(true);
-    if (raw_lidar_hook_) raw_lidar_hook_(*f.cloud, msg->header.stamp);
     algo_->onLidar(f);
 }
 

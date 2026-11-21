@@ -286,7 +286,6 @@ rosiwit_slam::YawCalibrationResult SlamAlgorithm::onlineYawCalibration() const {
 
 void SlamAlgorithm::clearInputHooks() {
     input_seen_hook_ = nullptr;
-    raw_lidar_hook_ = nullptr;
 }
 
 void SlamAlgorithm::setOutputHook(std::function<void(const SlamOutput&)> hook) {
@@ -295,11 +294,6 @@ void SlamAlgorithm::setOutputHook(std::function<void(const SlamOutput&)> hook) {
 
 void SlamAlgorithm::setInputSeenHook(std::function<void(bool)> hook) {
     input_seen_hook_ = std::move(hook);
-}
-
-void SlamAlgorithm::setRawLidarHook(
-    std::function<void(const CloudType&, const ros::Time&)> hook) {
-    raw_lidar_hook_ = std::move(hook);
 }
 
 } // namespace rosiwit_slam_ros1

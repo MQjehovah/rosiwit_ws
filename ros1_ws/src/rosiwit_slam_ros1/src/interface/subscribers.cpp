@@ -107,33 +107,4 @@ void Ros1SlamInterface::liftTypeCB(const std_msgs::String::ConstPtr& msg) {
     }
 }
 
-void Ros1SlamInterface::onRawInputCloud(const CloudType& raw_cloud, const ros::Time& stamp) {
-    // 这个回调在**持 core_mu_ 的输入热路径**上 (processLidar -> raw_lidar_hook)。
-    // 所以两件事都不能在这里做:
-    //   1) 没人订阅时的整帧拷贝 (10Hz x 几万点)
-    //   2) /origin_point 的序列化 (几 MB, 会顶住 applyInitPose/resetCore)
-    const bool want_or = debug_publish_ && or_pointcloud_puber_.getNumSubscribers() > 0;
-    const bool want_point = point_puber_.getNumSubscribers() > 0;
-    if (!want_or && !want_point) return;   // 都没人看: 连拷贝都省掉
-
-    CloudType::Ptr snapshot(new CloudType(raw_cloud));
-    {
-        std::lock_guard<std::mutex> lk(raw_input_mtx_);
-        raw_input_ = snapshot;
-        raw_input_stamp_ = stamp;
-    }
-    if (!want_point || snapshot->empty()) return;
-
-    // origin_point: 每帧雷达都发 (legacy.cpp:3169/3299/3427), frame_id 用 "map" 照抄旧实现。
-    // 序列化投到线程池: 上一帧还没发完就丢掉本帧 (调试话题, 最新状态足够)。
-    if (origin_point_job_busy_.exchange(true)) return;
-    aux_jobs_.submit(engine_, "pool", "origin_point_pub",
-        [this, snapshot, stamp] {
-            if (point_puber_.getNumSubscribers() > 0) {
-                point_puber_.publish(toPointCloud2(*snapshot, kMapFrame, stamp));
-            }
-        },
-        [this] { origin_point_job_busy_.store(false); });
-}
-
 } // namespace rosiwit_slam_ros1

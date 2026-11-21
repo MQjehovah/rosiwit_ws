@@ -71,7 +71,6 @@ void Ros1SlamInterface::buildScanMessages() {
 
     std::shared_ptr<sensor_msgs::PointCloud2> scan_point;   // /curr_scan_point
     std::shared_ptr<sensor_msgs::PointCloud>  scan_f;       // /scan_f_map
-    std::shared_ptr<sensor_msgs::PointCloud2> or_scan;      // /or_curr_scan_point
     std::shared_ptr<nav_msgs::Path>           path;         // /mapping_path
 
     if (mode == SlamMode::LOCALIZATION) {
@@ -86,23 +85,6 @@ void Ros1SlamInterface::buildScanMessages() {
                 if (want_dbg) {
                     scan_point = std::make_shared<sensor_msgs::PointCloud2>(
                         toPointCloud2(*shaped, kMapFrame, stamp));
-                }
-            }
-        }
-        // 原始输入帧 (or_curr_scan_point): 抽稀 x2, 不过滤 z; 纯调试话题 -> debug 开关
-        if (debug_publish_ && or_pointcloud_puber_.getNumSubscribers() > 0) {
-            CloudType::Ptr raw;
-            ros::Time raw_stamp;
-            {
-                std::lock_guard<std::mutex> lk(raw_input_mtx_);
-                raw = raw_input_;
-                raw_stamp = raw_input_stamp_;
-            }
-            if (raw && !raw->empty()) {
-                CloudType::Ptr orc = scanShape(*raw, -1.0, 2, scan_ground_z_);
-                if (orc && !orc->empty()) {
-                    or_scan = std::make_shared<sensor_msgs::PointCloud2>(
-                        toPointCloud2(*orc, kMapFrame, raw_stamp));
                 }
             }
         }
@@ -143,7 +125,6 @@ void Ros1SlamInterface::buildScanMessages() {
     // 就地发布: 这些话题都是"最新状态", 丢中间帧不影响语义, 也不需要和别的线程排序
     if (scan_point) pointcloud_puber_.publish(*scan_point);
     if (scan_f)     ros1_pointcloud_puber_.publish(*scan_f);
-    if (or_scan)    or_pointcloud_puber_.publish(*or_scan);
     if (path)       path_puber_.publish(*path);
 }
 

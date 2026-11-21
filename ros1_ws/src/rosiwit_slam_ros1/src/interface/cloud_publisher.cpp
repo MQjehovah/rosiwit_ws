@@ -2,7 +2,7 @@
 // cloud_publisher.cpp — 兼容层的点云 / 栅格输出
 //
 // 单一职责: 把核心输出变成 legacy 话题 (scan_f_map / curr_scan_point /
-// or_curr_scan_point / mapping_path / global_map / global_grid_map / /map)。
+// mapping_path / global_map / global_grid_map / /map)。
 // 输入回调在 subscribers.cpp; 位姿/健康在 pose_publisher.cpp。
 // ============================================================================
 #include "ros1_slam_interface.h"

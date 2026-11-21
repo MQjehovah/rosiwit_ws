@@ -79,11 +79,6 @@ public:
     ~Ros1SlamInterface();
 
     // ---- [T6] 订阅侧往这里喂数据 ----
-    /// 每收到一帧**原始输入**(未配准、在传感器自身坐标系)点云就调一次:
-    /// 它是 `origin_point`(每帧雷达) 与定位模式下 `or_curr_scan_point` 的数据源。
-    /// 这两个话题都以 `frame_id="map"` 发布 —— 照抄旧实现 (xz_slam_ros1_interface.cpp:1053/3115),
-    /// 即 frame_id 只是兼容标记, 点本身并未转到 map 系, 消费方需知悉。
-    void onRawInputCloud(const rosiwit_slam::CloudType& raw_cloud, const ros::Time& stamp);
     /// [T6] 记录"收到过 IMU / 激光" —— 旧实现建图分支要求两者都为真才发布 (legacy.cpp:351)
     void setInputSeen(bool imu, bool laser);
 
@@ -353,17 +348,15 @@ private:
     std::atomic<double> last_odom_t_{-1.0};
     RealtimeGrid realtime_grid_;    // T2
 
-    // ---- 发布器 (14 个, legacy.cpp:282-297 的名字/类型/queue/latch 逐字照抄) ----
+    // ---- 发布器 (legacy.cpp:282-297 的名字/类型/queue/latch 逐字照抄) ----
     ros::Publisher point_map_puber_;          // global_map        PointCloud2  1  latch
     ros::Publisher grip_map_puber_;           // global_grid_map   OccupancyGrid 1 latch
     ros::Publisher realtime_grid_map_puber_;  // /map              OccupancyGrid 10
     ros::Publisher pointcloud_puber_;         // curr_scan_point   PointCloud2  10
     ros::Publisher ros1_pointcloud_puber_;    // scan_f_map        PointCloud   10
     ros::Publisher submap_puber_;             // curr_submap_point PointCloud2  10 (D2 不发)
-    ros::Publisher or_pointcloud_puber_;      // or_curr_scan_point PointCloud2 10
     ros::Publisher pose_puber_;               // curr_localization_pose PoseStamped 10
     ros::Publisher path_puber_;               // mapping_path      Path         10
-    ros::Publisher loop_constraint_puber_;    // loop_constraint   MarkerArray  10 (D2 不发)
     ros::Publisher slam_info_puber_;
     double loc_sigma_xy_ = 0.05;               // 兜底位姿不确定度 (无 2D 匹配时)
     double loc_sigma_yaw_ = 0.03;
@@ -394,7 +387,6 @@ private:
     ros::Time last_planar_applied_;
     double last_planar_x_ = 0.0, last_planar_y_ = 0.0;
     int planar_apply_repeats_ = 0;
-    ros::Publisher scan_puber_;               // points_2d         PointCloud2  10 (永不发)
     ros::Publisher warning_code_puber_;       // slam_warning_code String       10 (T7)
 
     // "最新优先": 上一份还在算就丢掉本帧 (点云/栅格都是最新状态才有意义)
@@ -402,12 +394,9 @@ private:
     std::atomic<bool> grid_job_busy_{false};
     std::atomic<bool> global_map_job_busy_{false};
     std::atomic<bool> planar_job_busy_{false};
-    std::atomic<bool> origin_point_job_busy_{false};   // /origin_point 发布任务在途
     std::atomic<double> last_path_build_s_{0.0};   // 轨迹的 1Hz 构造节流
     AuxJobGuard aux_jobs_;                          // 析构时等在途任务
     ControlLoop control_;                           // 管理命令: 载图/切模式/存图
-    ros::Publisher fusion_diag_puber_;        // slam/fusion_diag String  2 (pose_fusion 诊断, 1Hz)
-    ros::Publisher point_puber_;              // origin_point      PointCloud2  10
 
     ros::Timer point_cloud_mapping_timer_;    // 0.1s
     ros::Timer heartbeat_timer_;              // 20ms: 位姿/TF/slam_info
@@ -417,13 +406,6 @@ private:
     // 旧 /map 的那张"实时栅格"对象 (legacy.cpp 的 realtime_grid_map_):
     // 它是**常驻**的 —— 没有新数据时也照发上一张 (legacy.cpp:909 无条件 publish)
     GridMsgPtr static_grid_msg_;    // 不可变快照 (shared_ptr 交换, 零拷贝)
-
-    // 原始输入点云缓存 (T6 填)。
-    // 写入方 = 雷达回调线程 (engine 的 raw lidar hook); 读取方 = 0.1s/0.01s 定时器线程。
-    // 当前 main 用单线程 ros::spin() 本就安全; 加锁是为了换 AsyncSpinner/多线程执行器时也安全。
-    mutable std::mutex raw_input_mtx_;
-    rosiwit_slam::CloudType::Ptr raw_input_;
-    ros::Time raw_input_stamp_;
 
     // ---- [T6] 额外订阅 (引擎已覆盖 imu/lidar/initialpose, 这里补 legacy 剩下的 4 个) ----
     ros::Subscriber scan_sub_, chassis_odom_sub_, lift_state_sub_, lift_type_sub_;

@@ -190,22 +190,13 @@ public:
     // ---- 输入侧钩子 ----
     // 注: 原来的 50Hz tick/pub 两条 PeriodicThread 已删除 —— 发布改由 ROS 定时器
     // (io 线程, 20ms) 与线程池任务各自完成, 引擎不再负责"泵"。
-    /// 摘掉输入侧钩子 (input_seen / raw_lidar)。同样必须在接口层析构时调用。
+    /// 摘掉输入侧钩子 (input_seen)。同样必须在接口层析构时调用。
     void clearInputHooks();
     /// 每次核心产出时调用。**在核心自己的线程上执行**, 跨线程用要自己同步。
     void setOutputHook(std::function<void(const rosiwit_slam::SlamOutput&)> hook);
     /// [T6] 每收到一帧输入就调用 (`is_lidar=true` 表示雷达帧)。
     /// 旧接口用它复刻 legacy 的 `get_imu_data_`/`get_laser_data_` 门控 (legacy.cpp:351)。
     void setInputSeenHook(std::function<void(bool is_lidar)> hook);
-    /// [T6] 每收到一帧雷达点云就调用 —— 旧接口用它发 `origin_point` /
-    /// 定位模式下的 `or_curr_scan_point`。
-    /// **在 ROS 回调线程上执行**。给的是已按 lidar_filter_num/min/max_range 处理过的、
-    /// **仍在雷达自身坐标系**的云 (与交给核心的是同一份)。旧实现这两个话题也用
-    /// `frame_id="map"` 发布 (xz_slam_ros1_interface.cpp:1053/3115), 薄层照抄该约定;
-    /// 即这两个"原始点"话题的点是**未配准到 map 系**的输入点, frame_id 仅作兼容标记。
-    /// 另注: 旧实现的 origin_point 是更原始的 CustomMsg 转换结果 (含 delete/z 过滤差异)。
-    void setRawLidarHook(std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> hook);
-
     // ---- 输入 (公开给测试/其它接口复用) ----
     // ---- 输入入口: 由 SlamRosNode 订阅后转发 (本类不再自己 subscribe) ----
     // 只做入队: 真正的处理在 FrontEnd 线程 (frontendLoop -> processImu/processLidar),
@@ -344,7 +335,7 @@ private:
 
     std::function<void(const rosiwit_slam::SlamOutput&)> output_hook_;
     std::function<void(bool)> input_seen_hook_;
-    std::function<void(const rosiwit_slam::CloudType&, const ros::Time&)> raw_lidar_hook_;
+
 
     // legacy profile: 优先从 TF 推导 r_il/t_il (雷达-IMU 外参), 而不是写死在配置里
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
