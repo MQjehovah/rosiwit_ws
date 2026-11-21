@@ -41,6 +41,10 @@ public:
     /// 可跨帧复用, 不必每帧重建(实测每帧重建把位姿输出拖到 10Hz, 雷达是 15.8Hz)。
     virtual uint64_t revision() const { return 0; }
 
+    /// 诊断: 最近一帧参与"新结构候选"计票的体素数 / 本帧实际沉淀的体素数
+    virtual size_t lastNovelVotes() const { return 0; }
+    virtual size_t lastNovelCommitted() const { return 0; }
+
     /// 取出并清空"自上次调用以来新增"的 overlay 点 (供存储底座增量插入)
     virtual void popOverlayDelta(CloudType::Ptr& out) { out.reset(); }
 

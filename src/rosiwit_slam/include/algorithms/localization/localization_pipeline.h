@@ -75,6 +75,9 @@ private:
     void setMapImpl(const std::string& map_name);
     bool acceptMatch(const MatchResult& res, const CloudType::Ptr& scan,
                      const PoseStamped& guess, const char** reject_reason = nullptr);
+    /// 锚质量(行业标准, Zhang ICRA 2016): 本帧收敛+被采纳 + 内点数 + JtJ 最小特征值比.
+    /// 只看 fitness 会把"假锁"(几何退化但残差小)当成可信, 用它写地图等于把错误固化.
+    bool anchorOk(const MatchResult& res, bool accepted) const;
     /// 按逐点时间戳把一帧扫描补偿到帧末位姿; 旋转时避免点云在时间上被拉斜.
     CloudType::Ptr deskewScan(const LidarFrame& f, const PoseStamped& end_pose);
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)

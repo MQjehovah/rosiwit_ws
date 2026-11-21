@@ -266,6 +266,8 @@ localization:
     min_keyframe_dist: 1.0
     # 只沉淀离底图 >0.3m 的新结构(避免位姿小误差造成"双层墙")
     delta_min: 0.3
+    # 新结构最小簇: 26 邻域内本帧新颖体素数(含自身), 滤掉孤立噪点
+    novel_min_cluster: 3
     voxel: 0.3
     persist_hits: 1
     # 每 300 帧(约30s)把叠加层落盘一次, 防止进程被杀丢增量
@@ -275,6 +277,11 @@ localization:
     override_base: false
     # 叠加层容量上限 (体素): 超过后整体重置并告警, 防止长期运行无界增长
     max_voxels: 400000
+    # 仿真验证: persistency 按"每次重新进入视野"计票; anchor=1 便于日志观察
+    persistency_unit: view
+    persistency_hit_gain: 1
+    persistency_anchor: 1
+    shadow: true
 
   smoother:
     enabled: true

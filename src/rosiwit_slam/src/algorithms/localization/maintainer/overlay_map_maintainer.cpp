@@ -2,6 +2,8 @@
 #include "algorithms/localization/maintainer/overlay_map_maintainer.h"
 #include "algorithms/localization/localization_utils.h"
 #include <cmath>
+#include <fstream>
+#include <iostream>
 #include <pcl/io/pcd_io.h>
 
 #ifdef USE_GTSAM
@@ -14,6 +16,9 @@
 #endif
 
 namespace rosiwit_slam {
+
+namespace {
+} // namespace
 
 int64_t OverlayMapMaintainer::voxelKey(int cx, int cy, int cz) {
     const int64_t ox = static_cast<int64_t>(cx) & 0x1FFFFF;
@@ -42,6 +47,8 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     m_base_raw = base;
     m_base.reset();
     m_has_base = false;
+    m_base_voxels.clear();
+    m_base_indexed = false;
     // 尝试载入已存在的叠加层 (原图不变, 叠加层单独落盘)
     if (!map_path.empty()) load(map_path + ".overlay.pcd");
 }
@@ -192,7 +199,7 @@ int OverlayMapMaintainer::persistencyAt(const Eigen::Vector3d& p) const {
 
 void OverlayMapMaintainer::observeHits(const PoseStamped& pose, const CloudType::Ptr& scan_body) {
     // A 阶段: 每帧每个体素只加一次 w (扫描点按体素去重), 只累加"已经是变化体素"的那些,
-    // 新体素仍走 commitKeyframe 的持久化门控 (persist_hits) —— w 只衡量持久结构被
+    // 新体素仍走 collectNovel 的持久化门控 (按 persistency_unit 计票) —— w 只衡量持久结构被
     // 重复看到的次数, 不会把瞬时点云抬成高可信.
     if (!m_last_world) m_last_world.reset(new CloudType());
     else m_last_world->clear();
@@ -222,6 +229,8 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
                                        const MatchResult& match, bool pose_confident) {
     if (!m_cfg.enabled || !scan_body || scan_body->empty()) return;
     ++m_frame;
+    m_novel_votes = 0;
+    m_novel_committed = 0;
     // 计票单位 = session/day 需要的记账
     if (pose.time > 0.0) {
         m_day_index = static_cast<uint32_t>(pose.time / 86400.0);
@@ -262,15 +271,11 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
             }
         }
     } else {
-        if (match.fitness >= m_cfg.fitness_trigger) { m_low_count = 0; }
-        else if (++m_low_count >= m_cfg.min_confirm) {
-            const double moved = m_have_last ? (pose.trans - m_last_add).norm() : 1e9;
-            if (moved >= m_cfg.min_keyframe_dist) {
-                commitKeyframe(pose, scan_body);
-                m_last_add = pose.trans;
-                m_have_last = true;
-            }
-        }
+        // 新结构沉淀: 与 fitness 解耦. 新增点没有对应点, 不会进 fitness 的分子/分母,
+        // 所以"环境变了"不一定让 fitness 下降; 反过来 low fitness 也可能只是稀疏/遮挡.
+        // 真正的判据是几何证据: 离底图 > delta_min + 按计票单位重复确认 + 最小簇.
+        collectNovel(pose, scan_body);
+        m_low_count = 0;
     }
 
     // 衰减兜底: 长期未再观测的叠加体素移除
@@ -282,40 +287,122 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
     }
 }
 
-void OverlayMapMaintainer::commitKeyframe(const PoseStamped& pose, const CloudType::Ptr& body) {
-    if (!body) return;
-    const int persist = std::max(1, m_cfg.persist_hits);
-    const double dmin2 = m_cfg.delta_min * m_cfg.delta_min;
-    std::vector<int> idx(1);
-    std::vector<float> sq(1);
-    // 懒建 KD 树(首次吸收判据时): setBaseMap 只存了原始指针, 这里一次性补降采样+建树
-    if (!m_has_base && m_base_raw && !m_base_raw->empty()) {
+void OverlayMapMaintainer::ensureBaseIndex() {
+    if (m_base_indexed) return;
+    m_base_indexed = true;
+    if (!m_base_raw || m_base_raw->empty()) return;
+    if (!m_base) {
         m_base = downsampleCloud(filterFinite(m_base_raw), m_voxel);
         m_base_kdtree.setInputCloud(m_base);
-        m_has_base = true;
     }
+    if (!m_base || m_base->empty()) return;
+    m_has_base = true;
+    m_base_voxels.clear();
+    m_base_voxels.reserve(m_base->size());
+    for (const auto& p : m_base->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        m_base_voxels.insert(voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
+                                      static_cast<int>(std::floor(p.y / m_voxel)),
+                                      static_cast<int>(std::floor(p.z / m_voxel))));
+    }
+}
+
+// 新结构沉淀: 与 fitness 解耦.
+// 新增点没有对应点, 不进 fitness 的分子/分母, 所以"环境变了"不一定会让 fitness 下降;
+// 反过来 fitness 低也可能只是稀疏/遮挡. 判据只看几何证据:
+//   1) 离底图 > delta_min (防"双层墙"), 底图同体素直接跳过(不解 KD);
+//   2) 单帧同体素只算一个候选点;
+//   3) 26 邻域最小簇 novel_min_cluster, 滤掉孤立噪点;
+//   4) 按 persistency_unit 计票, 够 persist_hits 才写入.
+void OverlayMapMaintainer::collectNovel(const PoseStamped& pose, const CloudType::Ptr& body) {
+    if (!body || body->empty()) return;
+    ensureBaseIndex();
+    const int persist = std::max(1, m_cfg.persist_hits);
+    const int min_cluster = m_cfg.novel_min_cluster;
+    const double dmin2 = m_cfg.delta_min * m_cfg.delta_min;
+
+    // 候选表只增不减会让长期运行内存无界: 每 600 帧清一次"很久没再看到"的候选.
+    if (m_frame % 600 == 0 && !m_hits.empty()) {
+        for (auto it = m_hits.begin(); it != m_hits.end();) {
+            if (m_frame - static_cast<long>(it->second.last_frame) > 600) it = m_hits.erase(it);
+            else ++it;
+        }
+    }
+
+    struct Novel {
+        PointType p;
+        int cx = 0, cy = 0, cz = 0;
+    };
+    std::unordered_map<int64_t, Novel> novel;
+    novel.reserve(body->size() / 4 + 16);
+    std::vector<int> idx(1);
+    std::vector<float> sq(1);
     for (const auto& p : body->points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
-        if (m_has_base) {
-            PointType q;
-            q.x = static_cast<float>(w.x()); q.y = static_cast<float>(w.y()); q.z = static_cast<float>(w.z());
-            if (m_base_kdtree.nearestKSearch(q, 1, idx, sq) > 0 && sq[0] <= dmin2) continue;
+        const int cx = static_cast<int>(std::floor(w.x() / m_voxel));
+        const int cy = static_cast<int>(std::floor(w.y() / m_voxel));
+        const int cz = static_cast<int>(std::floor(w.z() / m_voxel));
+        const int64_t vk = voxelKey(cx, cy, cz);
+        auto sit = m_voxel_seen.find(vk);
+        if (sit != m_voxel_seen.end()) { sit->second = m_frame; continue; }  // 已沉淀: 刷新存活
+        if (novel.find(vk) != novel.end()) continue;                         // 同帧同体素只留一个点
+        if (m_base_voxels.count(vk)) continue;   // 底图同一体素已有观测: 不是新结构
+        PointType q;
+        q.x = static_cast<float>(w.x());
+        q.y = static_cast<float>(w.y());
+        q.z = static_cast<float>(w.z());
+        if (m_has_base && m_base_kdtree.nearestKSearch(q, 1, idx, sq) > 0 &&
+            sq[0] <= dmin2) {
+            continue;   // 离底图太近: 位姿误差/重采样差异, 不是新结构
         }
-        const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
-        const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
-        const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
-        const int64_t vk = voxelKey(vx, vy, vz);
-        auto it = m_voxel_seen.find(vk);
-        if (it != m_voxel_seen.end()) { it->second = m_frame; continue; }
-        if (++m_hits[vk] >= persist) { addPoint(w); m_hits.erase(vk); }
+        Novel n;
+        n.p = q;
+        n.cx = cx;
+        n.cy = cy;
+        n.cz = cz;
+        novel.emplace(vk, n);
+    }
+    if (novel.empty()) return;
+
+    const uint32_t frame = static_cast<uint32_t>(m_frame);
+    for (const auto& kv : novel) {
+        const Novel& n = kv.second;
+        if (min_cluster > 1) {
+            int cnt = 0;
+            for (int dx = -1; dx <= 1; ++dx)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dz = -1; dz <= 1; ++dz)
+                        if (novel.count(voxelKey(n.cx + dx, n.cy + dy, n.cz + dz))) ++cnt;
+            if (cnt < min_cluster) continue;   // 孤立点/散点: 不是结构
+        }
+        CandidateVoxel& cand = m_hits[kv.first];
+        bool count = false;
+        switch (m_cfg.persistency_unit) {
+            case 0:  count = true; break;   // frame: 每帧
+            case 1:  // view: 连续看到只算一票, 离开过视野再回来才 +1
+                     count = (cand.last_frame == 0) || (frame > cand.last_frame + 1); break;
+            case 2:  count = (cand.last_key != m_session_id); break;   // session
+            default: count = (cand.last_key != m_day_index); break;    // day
+        }
+        cand.last_frame = frame;
+        if (count) {
+            if (cand.votes < 0xFFFF) ++cand.votes;
+            if (m_cfg.persistency_unit >= 2) cand.last_key = currentUnitKey();
+            ++m_novel_votes;
+        }
+        if (cand.votes >= persist) {
+            addPoint(Eigen::Vector3d(n.p.x, n.p.y, n.p.z));
+            m_hits.erase(kv.first);
+            ++m_novel_committed;
+        }
     }
 }
 
 void OverlayMapMaintainer::flushBuffer() {
     if (m_buf.empty()) return;
     optimizePoses();
-    for (auto& k : m_buf) commitKeyframe(k.pose, k.body);
+    for (auto& k : m_buf) collectNovel(k.pose, k.body);
     m_buf.clear();
 }
 

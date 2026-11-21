@@ -4,8 +4,8 @@
 // 用于定位侧从设备端导出的 map.xzmap 载入关键帧 (位姿 + 机体系点云), 构建
 // 关键帧子图 (keyframe_submap). 采用内置极简 JSON 解析器, 不引入第三方依赖.
 //
-// 注意: 解析为完整内存树, 大图 (数十万点) 会占用较多内存; 关键帧子图仅需
-//       关键帧层级数据, 常规地图规模可接受.
+// 注意: 流式解析, 点云直接写入 keyframes, 不构建 JVal 树; 6M 点的大图
+//       峰值从 ~4.5GB 降到 "文件缓冲 + 原始点" 量级.
 #include <string>
 #include <vector>
 #include "xzmap_writer.h"

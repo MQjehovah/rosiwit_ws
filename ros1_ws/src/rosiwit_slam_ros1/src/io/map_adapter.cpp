@@ -10,13 +10,14 @@
 #include <iostream>
 #include <mutex>
 
-#include "algorithms/map_store/voxel_map_store.h"
+#include "algorithms/map_store/pcd_map_store.h"
 #include "xzmap_reader.h"
 #include "xzmap_writer.h"
 
 namespace rosiwit_slam_ros1 {
 namespace map_adapter {
 namespace {
+
 
 std::string mapBase(const std::string& path) {
     if (path.empty()) return path;
@@ -60,7 +61,8 @@ bool loadPcdMapData(const std::string& pcd_path, const std::string& base,
     kf.cloud = cloud;
     out.keyframes.push_back(kf);
 
-    auto store = std::make_shared<rosiwit_slam::VoxelMapStore>(0.3);
+    // 单块连续点云 + 懒建 KD 树: 不再把 6M 点拆成几百万个体素小对象.
+    auto store = std::make_shared<rosiwit_slam::PcdMapStore>(0.3);
     store->buildFromCloud(cloud);
     out.points = store;
 
@@ -123,7 +125,8 @@ bool loadMapData(const std::string& path, rosiwit_slam::MapData& out) {
         pcl::transformPointCloud(*kf.cloud, *world, T);
         *global += *world;
     }
-    auto store = std::make_shared<rosiwit_slam::VoxelMapStore>(0.3);
+    // 单块连续点云 + 懒建 KD 树: 不再把 6M 点拆成几百万个体素小对象.
+    auto store = std::make_shared<rosiwit_slam::PcdMapStore>(0.3);
     store->buildFromCloud(global);
     out.points = store;
     std::cout << "[map_adapter] loaded " << out.keyframes.size() << " kfs, "

@@ -46,6 +46,7 @@ MaintainerConfig testCfg()
     c.min_keyframe_dist = 0.0;
     c.persist_hits = 1;
     c.delta_min = 0.0;
+    c.novel_min_cluster = 1;   // 老用例: 单点也允许沉淀
     c.carve_stride = 1;
     c.decay_frames = 0;
     c.persistency_anchor = 128;
@@ -137,9 +138,9 @@ TEST(OverlayMaintainerWeights, CarveDecaysAndDeletes)
     ASSERT_DOUBLE_EQ(m.persistencyCoverage(pose), 1.0);
 
     // 扫描到更远处: 射线穿过 1.0m 的体素 -> 每帧 -8, 16 帧后 w=0 删除.
-    // 关掉写入(最小关键帧间距拉大), 保证只有"雕刻"在起作用.
+    // 关掉新结构沉淀(最小簇设到不可能满足), 保证只有"雕刻"在起作用.
     MaintainerConfig no_insert = testCfg();
-    no_insert.min_keyframe_dist = 1e9;
+    no_insert.novel_min_cluster = 1000;
     m.configure(no_insert);
     auto far = mkCloud({V3D(3.0, 0.0, 0.0)});
     for (int i = 0; i < 20; ++i) m.onLocalized(pose, far, mr, true);
@@ -253,6 +254,161 @@ TEST(OverlayWUnits, HitResetsMissCounter)
     m.onLocalized(pose, far, mr, true);    // miss 1
     m.onLocalized(pose, far, mr, true);    // miss 2
     EXPECT_GE(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 1);   // 没被删
+}
+
+// ---------------- 新结构沉淀 (与 fitness 解耦) ----------------
+
+namespace {
+
+// 底图: 4m 见方的地板 (z=0, 0.2m 间距), 2m 外没有结构
+CloudType::Ptr mkFloorBase()
+{
+    CloudType::Ptr c(new CloudType());
+    for (int i = -20; i <= 20; ++i)
+        for (int j = -20; j <= 20; ++j) {
+            PointType p;
+            p.x = static_cast<float>(i * 0.2);
+            p.y = static_cast<float>(j * 0.2);
+            p.z = 0.0f;
+            c->push_back(p);
+        }
+    c->width = static_cast<uint32_t>(c->size());
+    c->height = 1;
+    return c;
+}
+
+// 扫描: 近处地板 + (可选) 2m 外一个 3x3x3 的新结构
+CloudType::Ptr mkScanWithNovelBox(bool with_box = true)
+{
+    CloudType::Ptr c(new CloudType());
+    for (int i = -5; i <= 5; ++i)
+        for (int j = -5; j <= 5; ++j) {
+            PointType p;
+            p.x = static_cast<float>(i * 0.2);
+            p.y = static_cast<float>(j * 0.2);
+            p.z = 0.0f;
+            c->push_back(p);
+        }
+    if (with_box) {
+        for (int ix = 0; ix <= 2; ++ix)
+            for (int iy = -1; iy <= 1; ++iy)
+                for (int iz = 0; iz <= 2; ++iz) {
+                    PointType p;
+                    p.x = 2.0f + static_cast<float>(ix) * 0.3f;
+                    p.y = static_cast<float>(iy) * 0.3f;
+                    p.z = 0.6f + static_cast<float>(iz) * 0.3f;
+                    c->push_back(p);
+                }
+    }
+    c->width = static_cast<uint32_t>(c->size());
+    c->height = 1;
+    return c;
+}
+
+MatchResult confidentMatch()
+{
+    MatchResult mr;
+    mr.converged = true;
+    mr.fitness = 0.95;   // 高于 fitness_trigger: 老逻辑不会沉淀
+    return mr;
+}
+
+}  // namespace
+
+TEST(OverlayNovelStructure, CommittedWhileFitnessHigh)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.fitness_trigger = 0.5;
+    c.min_keyframe_dist = 1.0;   // 静止机器人: 距离门控永远不满足
+    c.delta_min = 0.3;
+    c.novel_min_cluster = 3;
+    c.persistency_unit = 1;      // view
+    c.persist_hits = 1;
+    m.configure(c);
+    m.setBaseMap("", mkFloorBase());
+
+    m.onLocalized(mkPose(0.0), mkScanWithNovelBox(), confidentMatch(), true);
+
+    EXPECT_GT(m.overlaySize(), 0u);
+    EXPECT_GE(m.persistencyAt(V3D(2.0, 0.0, 0.6)), 1);
+}
+
+TEST(OverlayNovelStructure, VotesPerViewNotPerFrame)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.fitness_trigger = 0.5;
+    c.min_keyframe_dist = 1.0;
+    c.delta_min = 0.3;
+    c.novel_min_cluster = 3;
+    c.persistency_unit = 1;      // view
+    c.persist_hits = 2;          // 需要两次"重新看到"
+    m.configure(c);
+    m.setBaseMap("", mkFloorBase());
+
+    const PoseStamped pose = mkPose(0.0);
+    auto box = mkScanWithNovelBox(true);
+    auto plain = mkScanWithNovelBox(false);
+    const MatchResult mr = confidentMatch();
+
+    m.onLocalized(pose, box, mr, true);
+    m.onLocalized(pose, box, mr, true);      // 连续看到: 仍只有 1 票
+    EXPECT_EQ(m.overlaySize(), 0u);
+
+    m.onLocalized(pose, plain, mr, true);    // 中间一帧看不到
+    m.onLocalized(pose, box, mr, true);      // 重新进入视野: 第 2 票
+    EXPECT_GT(m.overlaySize(), 0u);
+}
+
+TEST(OverlayNovelStructure, StructureAlreadyInBaseIsNotCommitted)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.fitness_trigger = 0.5;
+    c.min_keyframe_dist = 1.0;
+    c.delta_min = 0.3;
+    c.novel_min_cluster = 3;
+    c.persistency_unit = 1;
+    c.persist_hits = 1;
+    m.configure(c);
+
+    // 底图里已经有同样的箱子 -> 属于"已知结构", 不能沉淀
+    CloudType::Ptr base = mkFloorBase();
+    auto with_box = mkScanWithNovelBox(true);
+    for (const auto& p : with_box->points) {
+        if (p.z > 0.1f) base->push_back(p);
+    }
+    base->width = static_cast<uint32_t>(base->size());
+    base->height = 1;
+    m.setBaseMap("", base);
+
+    m.onLocalized(mkPose(0.0), mkScanWithNovelBox(), confidentMatch(), true);
+    EXPECT_EQ(m.overlaySize(), 0u);
+}
+
+TEST(OverlayNovelStructure, IsolatedNovelPointRejectedByCluster)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig c = testCfg();
+    c.fitness_trigger = 0.5;
+    c.min_keyframe_dist = 1.0;
+    c.delta_min = 0.3;
+    c.novel_min_cluster = 3;
+    c.persistency_unit = 1;
+    c.persist_hits = 1;
+    m.configure(c);
+    m.setBaseMap("", mkFloorBase());
+
+    // 单个孤立点 (噪声) 不能进 overlay
+    CloudType::Ptr scan = mkScanWithNovelBox(false);
+    PointType p;
+    p.x = 2.0f; p.y = 0.0f; p.z = 0.6f;
+    scan->push_back(p);
+    scan->width = static_cast<uint32_t>(scan->size());
+
+    m.onLocalized(mkPose(0.0), scan, confidentMatch(), true);
+    EXPECT_EQ(m.overlaySize(), 0u);
 }
 
 // catkin_add_gtest 只链 GTEST_LIBRARIES (不含 gtest_main), 所以这里自带 main

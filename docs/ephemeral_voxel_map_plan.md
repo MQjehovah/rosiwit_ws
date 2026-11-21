@@ -35,9 +35,9 @@ map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
 | `onLocalized(..., pose_confident)` | 只在位姿可信时写图 |
 | `rayCarve(pose, scan_body)` | **射线 miss 证据**（不是"没看到就衰减"） |
 | `min_confirm` | 变化确认去抖 |
-| `delta_min`（>0.3 m 才沉淀） | 只吸收新结构 |
+| `delta_min`（>0.3 m 才沉淀）+ `novel_min_cluster`（26 邻域最小簇） | 只吸收新结构，滤孤立噪点 |
 | `override_base` | 处理"被移除 / 被替换" |
-| `persist_hits` | 天然的瞬态过滤（≈ 临时货物可信度低） |
+| `persist_hits` | 按 `persistency_unit` 计票的确认次数（session 默认 => N 个会话） |
 | `max_voxels` / `revision()` / `popOverlayDelta` / `save` | 容量上限 / 缓存失效 / 增量落盘 / 持久化 |
 | `decay_frames`（默认 0） | **不使用**：存在性只由证据决定 |
 
@@ -56,9 +56,13 @@ map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
 
 因此：
 
-- 写图判据从"`fitness ≥ 阈值`"升级为"`fitness ≥ 阈值` **且** `static_support ≥ τ_s`"
-- 这也是本方案引入 `w` 的根本原因：fitness 只回答"配得多好"，`static_support` 才回答
-  "我是**靠什么**配上的"
+- 写图判据从"`fitness ≥ 阈值`"升级为**锚质量三件套**
+  `anchor_ok = converged && accepted && inliers ≥ 500 && (!has_hessian || smallest_eig_ratio ≥ 1e-3)`
+  （Zhang, ICRA 2016）。`persistency_cov` 只作诊断，不参与判定。
+- **已实现（2026-11-21）**：`anchor_ok` 同时是 overlay 写入的前置条件；并且沉积判据
+  不再要求 `fitness < fitness_trigger` —— 新增点没有对应点，不会进 fitness 的分子/分母，
+  所以"环境变了"不一定降 fitness。现在的判据是纯几何证据：
+  `离底图 > delta_min` + `26 邻域最小簇` + `按 persistency_unit 计票 ≥ persist_hits`。
 
 ## 1. 两个结构，职责严格分开
 

@@ -38,6 +38,10 @@ public:
     /// 诊断/测试: 某点所在体素的权重, 不存在返回 -1
     int persistencyAt(const Eigen::Vector3d& p) const;
 
+    /// 诊断: 最近一帧参与"新结构候选"计票的体素数 / 本帧实际沉淀的体素数
+    size_t lastNovelVotes() const override { return m_novel_votes; }
+    size_t lastNovelCommitted() const override { return m_novel_committed; }
+
     size_t overlaySize() const { return m_overlay_count; }
     uint64_t revision() const override { return m_revision; }
 
@@ -50,7 +54,10 @@ private:
     void missVoxel(int64_t vk);
     uint32_t currentUnitKey() const;
     void rebuildCells();
-    void commitKeyframe(const PoseStamped& pose, const CloudType::Ptr& body);
+    /// 懒建底图索引(降采样点云 + KD树 + 体素粗筛表)
+    void ensureBaseIndex();
+    /// 新结构沉淀: 与 fitness 解耦, 只看"离底图 > delta_min" + 计票单位 + 最小簇
+    void collectNovel(const PoseStamped& pose, const CloudType::Ptr& body);
     void flushBuffer();
     void optimizePoses();   // GTSAM 位姿图平滑缓冲关键帧
 
@@ -60,10 +67,19 @@ private:
     CloudType::Ptr m_base;                       // 冻结原图(降采样), 用于增量/雕刻
     pcl::KdTreeFLANN<PointType> m_base_kdtree;
     bool m_has_base = false;
+    std::unordered_set<int64_t> m_base_voxels;   // 底图体素(粗筛: 同体素直接跳过 KD)
+    bool m_base_indexed = false;                 // 懒建标志
     double m_voxel = 0.3;
     double m_cell = 10.0;
     std::unordered_map<int64_t, long> m_voxel_seen;   // 体素 -> 最近观测帧(去重+衰减)
-    std::unordered_map<int64_t, int> m_hits;          // 候选体素命中计数(持久化过滤)
+    // 新结构候选: 与 w 用同一套计票单位 (frame/view/session/day).
+    // votes 够 persist_hits 才 addPoint; 单帧同体素只算一次.
+    struct CandidateVoxel {
+        uint16_t votes = 0;      // 已获得的计票单位数
+        uint32_t last_key = 0;   // 上次计票的单位键 (session/day)
+        uint32_t last_frame = 0; // 上次观测的帧号 (view 用; 0=从未)
+    };
+    std::unordered_map<int64_t, CandidateVoxel> m_hits;
     // A 阶段(影子): 体素可信度 w. 计票单位见 cfg.persistency_unit (frame/view/session/day).
     // 只在可信帧写; shadow=true 时不参与决策.
     struct PersistencyVoxel {
@@ -83,6 +99,8 @@ private:
     int m_low_count = 0;
     long m_frame = 0;
     size_t m_overlay_count = 0;
+    size_t m_novel_votes = 0;       // 本帧计票的候选体素数(诊断)
+    size_t m_novel_committed = 0;   // 本帧沉淀的体素数(诊断)
     uint64_t m_revision = 0;      // 内容版本号: addPoint/load 自增, 供目标缓存判失效
 
     // L13 位姿图: 变化关键帧缓冲 (pose + 机体系点云)

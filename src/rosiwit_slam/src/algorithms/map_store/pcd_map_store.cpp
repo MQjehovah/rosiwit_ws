@@ -25,6 +25,12 @@ bool PcdMapStore::buildFromCloud(const CloudType::Ptr& cloud) {
     return !m_cloud->empty();
 }
 
+CloudType::Ptr PcdMapStore::exportCloud() const {
+    if (!m_cloud) return CloudType::Ptr(new CloudType());
+    // 返回副本: store 后续 insert/erase 不能影响已导出的地图快照.
+    return CloudType::Ptr(new CloudType(*m_cloud));
+}
+
 void PcdMapStore::ensureTree() const {
     if (m_dirty && m_cloud) { m_kdt.setInputCloud(m_cloud); m_dirty = false; }
 }

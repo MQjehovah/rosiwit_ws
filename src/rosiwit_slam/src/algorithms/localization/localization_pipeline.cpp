@@ -31,6 +31,7 @@ T getv(const YAML::Node& n, const char* key, const T& def) {
     return def;
 }
 #endif
+
 } // namespace
 
 bool LocalizationPipeline::init(const std::string& config_path) {
@@ -329,6 +330,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.decay_frames     = getv<int>(mtc, "decay_frames", m_maintainer_cfg.decay_frames);
         m_maintainer_cfg.override_base    = getv<bool>(mtc, "override_base", m_maintainer_cfg.override_base);
         m_maintainer_cfg.delta_min        = getv<double>(mtc, "delta_min", m_maintainer_cfg.delta_min);
+        m_maintainer_cfg.novel_min_cluster = getv<int>(mtc, "novel_min_cluster", m_maintainer_cfg.novel_min_cluster);
         m_maintainer_cfg.carve_stride     = getv<int>(mtc, "carve_stride", m_maintainer_cfg.carve_stride);
         m_maintainer_cfg.pose_graph       = getv<bool>(mtc, "pose_graph", m_maintainer_cfg.pose_graph);
         m_maintainer_cfg.pg_min_keyframes = getv<int>(mtc, "pg_min_keyframes", m_maintainer_cfg.pg_min_keyframes);
@@ -1699,8 +1701,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
         const bool tracking = (m_status == LOCALIZED) &&
             (!m_monitor_cfg.enabled || res.fitness >= m_monitor_cfg.credible_fitness);
-        if (allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg)) {
-            m_maintainer->onLocalized(out_pose, scan, m_last_match, accepted);
+        // 插入比定位更严格: 位姿必须通过"锚质量"判据 (内点 + JtJ 最小特征值比),
+        // 只看 fitness 会把 0.80~0.84 的假锁当成可信, 把错误几何写进 overlay.
+        if (allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg) &&
+            anchorOk(res, accepted)) {
+            m_maintainer->onLocalized(out_pose, scan, m_last_match, true);
         }
     }
 
@@ -1936,10 +1941,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // 锚质量 = 行业标准三件套: 本帧被接受 + inliers + JtJ 最小特征值比
                 // (Zhang, ICRA 2016). 弱锚持续 N 帧才开, 恢复 M 帧才关。
                 // persistency_cov 只作诊断, 不再参与判定。
-                const bool anchor_geom_ok =
-                    (!res.has_hessian) || (res.smallest_eig_ratio >= m_anchor_min_eig_ratio);
-                const bool anchor_ok = res.converged && accepted &&
-                                       (res.inliers >= m_anchor_min_inliers) && anchor_geom_ok;
+                const bool anchor_ok = anchorOk(res, accepted);
                 if (anchor_ok) {
                     ++m_anchor_ok_streak;
                     m_anchor_weak_streak = 0;
@@ -1980,6 +1982,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 if (ss < 0.0) qs << "n/a"; else qs << ss;
                 qs << " anchor_age=" << anchor_age
                    << " persistency_pts=" << persistency_pts
+                   << " novel_votes=" << m_maintainer->lastNovelVotes()
+                   << " novel_commits=" << m_maintainer->lastNovelCommitted()
                    << " state="
                    << (m_status.load() == LOST ? "LOST"
                        : (m_status.load() == LOCALIZED ? "LOCALIZED" : "INIT"))
@@ -2044,6 +2048,13 @@ bool LocalizationPipeline::predictAt(double t, PoseStamped& out) {
     }
     std::lock_guard<std::mutex> prior_lk(m_prior_mu);
     out = m_prior->predict(t);   // 运动先验(IMU)从最后校正位姿传播
+    return true;
+}
+
+bool LocalizationPipeline::anchorOk(const MatchResult& res, bool accepted) const {
+    if (!res.converged || !accepted) return false;
+    if (res.inliers < m_anchor_min_inliers) return false;
+    if (res.has_hessian && res.smallest_eig_ratio < m_anchor_min_eig_ratio) return false;
     return true;
 }
 

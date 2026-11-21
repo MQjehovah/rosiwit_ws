@@ -25,6 +25,8 @@ public:
     size_t size() const override { return m_cloud ? m_cloud->size() : 0; }
     bool save(const std::string& path) const override;
     bool load(const std::string& path) override;
+    /// 全量点云快照 (MapData 导出用). 返回副本, 不暴露内部 m_cloud.
+    CloudType::Ptr exportCloud() const override;
 
 private:
     void ensureTree() const;
