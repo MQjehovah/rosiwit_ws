@@ -205,7 +205,12 @@ def pb_bytes(field, value):
 def pb_string(field, value):
     if not value:
         return b""
-    data = value.encode("utf-8")
+    if isinstance(value, bytes):
+        data = value  # Python2 str (ROS 字符串) 已经是 UTF-8 字节
+    elif isinstance(value, TEXT_TYPE):
+        data = value.encode("utf-8")
+    else:
+        data = str(value).encode("utf-8")
     return pb_key(field, 2) + pb_varint(len(data)) + data
 
 
@@ -1442,7 +1447,11 @@ def publisher_loop():
                 interval = 1.0 / sub["rate"]
                 if t0 - sub["last"] < interval:
                     continue
-                frames = frames_for_stream(stream, sub, client)
+                try:
+                    frames = frames_for_stream(stream, sub, client)
+                except Exception as e:
+                    log("encode %s: %s" % (stream, e))
+                    continue
                 if frames:
                     sub["last"] = t0
                     for f in frames:
