@@ -72,14 +72,15 @@ cp .env.example .env.local
 
 ## 大数据怎么传
 
-### 方案 A：hmi_bridge（推荐）
+### 方案 A：hmi_bridge（推荐，已在设备上部署验证）
 
 [`bridge/hmi_bridge.py`](bridge/hmi_bridge.py) 在机器人本地降采样/量化/zlib，浏览器用 HTTP 拉二进制帧：
 
-- `/map` 4300 万格 → zlib（占位数据重复度高，通常几百 KB 级），按需快照。
-- `/scan_f_map` → 体素 5cm + int16 厘米 + zlib，每帧几十 KB，HMI 端约 3~4 Hz 轮询。
-- `/global_map`、`/vanjee` → 一次性抓取，体素 0.2 / 0.05m。
+- `/map` 4300 万格 → **实测 1.4MB**（机器人本地 6.4s，隧道约 15s），按需快照。
+- `/scan_f_map` → 体素 5cm + int16 厘米 + zlib，**约 4KB/帧**，HMI 端约 4Hz 轮询。
+- `/global_map`、`/vanjee` → 一次性抓取，体素 0.2 / 0.05m（vanjee 5000 点约 17KB）。
 - 客户端是 `src/ros/bridge.ts`，用 `fetch` + `DecompressionStream('deflate')`，无第三方依赖。
+- 部署：`bridge/hmi-bridge.service`（systemd）+ `bridge/README.md`。
 
 HMI 会自动从 rosbridge 地址推导桥接地址（`8089→9100`、`ws(s)→http(s)`），也可以在
 「数据源 → 二进制桥接」里手填。远程隧道需要把目标端口改成 9100。
@@ -132,7 +133,8 @@ sudo systemctl restart xzrobot
 hmi/
 ├── bridge/
 │   ├── hmi_bridge.py    # ROS 侧降采样/压缩桥（ROS1，Python 2.7/3，无额外依赖）
-│   └── README.md        # 部署、API、帧格式
+│   ├── hmi-bridge.service # systemd 单元（PartOf=xzrobot）
+│   └── README.md        # 部署、API、帧格式、实测数据
 ├── src/
 │   ├── ros/
 │   │   ├── client.ts    # rosbridge 客户端（JSON + CBOR、订阅/发布/服务、重连）
@@ -158,4 +160,5 @@ hmi/
 - rosbridge `cbor-raw` 在设备 0.11.16 上不可用（`OutboundMessage._buff` 未填充），所以走结构化 `cbor`。
 - 桥接是 HTTP 轮询（3~4 Hz），刻意不做推送：慢链路自然降频，不会积压内存。
 - `/map` 是快照而非连续更新；需要刷新就再点一次「抓取」。
+- 桥接没有鉴权，默认绑定 `0.0.0.0:9100`；建议只通过隧道/内网访问，必要时 `--host 127.0.0.1`。
 - 位姿的 z/rpy 是 TF 真值；如果 `map→odom` 的 z 有偏移，HMI 会如实显示（这通常是有用的诊断信息）。

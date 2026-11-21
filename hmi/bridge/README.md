@@ -17,36 +17,41 @@
 2. **量化**：坐标转 int16 厘米（3 个点 = 6 字节）。
 3. **压缩**：zlib。
 
-结果：栅格通常几百 KB（占位数据高度重复），点云每帧几十 KB。浏览器用
-`fetch` + `DecompressionStream('deflate')` 解码，不依赖任何 JS 库。
+### 设备实测（aarch64 / Ubuntu 18.04 / Melodic）
 
-## 运行
+| 请求 | 原始 | 传输 | 耗时 |
+|---|---|---|---|
+| `/map`（7453×5782 = 43,093,246 格） | 43 MB | **1.4 MB** | 机器人本地 6.4s；隧道约 15s |
+| `/scan_f_map`（1002 点） | ~37 KB | **4.0 KB** | 5 ms |
+| `/vanjee_points722`（5cm 体素后 5242 点） | ~1 MB | **17 KB** | 0.3 s |
+| `/global_map` | latched | 503（`debug_publish=false`） | 2~8 s |
 
-只依赖 `rospy`，Python 2.7 / 3 都能跑（设备上的 ROS Melodic 是 Python 2.7）。
+浏览器用 `fetch` + `DecompressionStream('deflate')` 解码，不依赖任何 JS 库。
+
+## 部署
 
 ```bash
-# 机器人上
-source /opt/ros/melodic/setup.bash
-source ~/rosiwit_build/ros1_ws/devel/setup.bash   # 按实际工作空间
-python /path/to/hmi_bridge.py --port 9100
+# 1) 放文件（设备能访问 GitHub 时最省事）
+mkdir -p ~/hmi_bridge
+curl -fsSL https://raw.githubusercontent.com/MQjehovah/rosiwit_ws/master/hmi/bridge/hmi_bridge.py \
+  -o ~/hmi_bridge/hmi_bridge.py
+
+# 2) systemd（仓库里带了一份 hmi-bridge.service）
+sudo cp hmi-bridge.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hmi-bridge
+systemctl status --no-pager hmi-bridge
+
+# 3) 验证
+curl -s http://127.0.0.1:9100/api/v1/health
+curl -s -o /dev/null -w '%{http_code} %{size_download} %{time_total}\n' \
+  'http://127.0.0.1:9100/api/v1/cloud?topic=scan_f_map&voxel=0.05&wait=2'
+curl -s -o /dev/null -w '%{http_code} %{size_download} %{time_total}\n' \
+  'http://127.0.0.1:9100/api/v1/grid?refresh=1'
 ```
 
-systemd 示例（`/etc/systemd/system/hmi-bridge.service`）：
-
-```ini
-[Unit]
-Description=rosiwit HMI bridge
-After=network.target
-
-[Service]
-User=xzrobot
-Environment=PYTHONUNBUFFERED=1
-ExecStart=/bin/bash -lc 'source /opt/ros/melodic/setup.bash && exec python /opt/xzrobot/hmi_bridge/hmi_bridge.py --port 9100'
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
+单元里的 `PartOf=xzrobot.service` 保证 xzrobot 重启时桥接跟着重启；`Restart=always` 兜底。
+只依赖 `rospy`，Python 2.7 / 3 都能跑（Melodic 上用 `python` 即 2.7）。
 
 远程访问：隧道目标端口改成 **9100**，例如
 `https://<host>/remote-terminal/tunnel/<SN>/<TOKEN>/127.0.0.1/9100/`。
