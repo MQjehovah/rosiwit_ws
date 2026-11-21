@@ -770,6 +770,194 @@ def normalize_topic(topic, typ, msg):
     return raw_dict(topic, typ, msg)
 
 
+MAPS_DIR = "/opt/xzrobot/maps"
+MAP_DB = "/opt/xzrobot/database.db"
+
+
+def _lzf_decompress(data, expected):
+    """PCL binary_compressed 里的 liblzf 流。"""
+    out = bytearray(expected)
+    i = 0
+    o = 0
+    n = len(data)
+    while i < n:
+        ctrl = ord(data[i]) if isinstance(data[i], str) else data[i]
+        i += 1
+        if ctrl < 32:
+            length = ctrl + 1
+            out[o:o + length] = data[i:i + length]
+            i += length
+            o += length
+            continue
+        length = ctrl >> 5
+        ref = o - ((ctrl & 0x1F) << 8) - 1
+        if length == 7:
+            extra = ord(data[i]) if isinstance(data[i], str) else data[i]
+            i += 1
+            length += extra
+        back = ord(data[i]) if isinstance(data[i], str) else data[i]
+        i += 1
+        ref -= back
+        length += 2
+        for _ in range(length):
+            out[o] = out[ref]
+            o += 1
+            ref += 1
+    return bytes(out)
+
+
+def _read_pcd_header(f):
+    header = {}
+    fields = []
+    while True:
+        line = f.readline()
+        if not line:
+            break
+        text = line.decode("ascii", "replace").strip()
+        if not text or text.startswith("#"):
+            continue
+        parts = text.split()
+        key = parts[0].upper()
+        header[key] = parts[1:]
+        if key == "FIELDS":
+            fields = parts[1:]
+        if key == "DATA":
+            break
+    return header, fields
+
+
+def read_pcd_points(path, voxel=0.1, max_points=0):
+    """读标准 PCD（ascii/binary/binary_compressed），体素降采样后返回点列表。"""
+    with open(path, "rb") as f:
+        header, fields = _read_pcd_header(f)
+        payload = f.read()
+
+    n = int((header.get("POINTS") or header.get("WIDTH") or ["0"])[0])
+    if n <= 0:
+        return []
+    data_kind = (header.get("DATA") or ["ascii"])[0].lower()
+    sizes = [int(v) for v in header.get("SIZE", ["4"] * len(fields))]
+    types = header.get("TYPE", ["F"] * len(fields))
+    counts = [int(v) for v in header.get("COUNT", ["1"] * len(fields))]
+    point_step = sum(sizes[i] * counts[i] for i in range(len(fields)))
+
+    if data_kind == "binary_compressed":
+        comp_size, uncomp_size = struct.unpack_from("<II", payload, 0)
+        raw = _lzf_decompress(payload[8:8 + comp_size], uncomp_size)
+        stride = 1
+    elif data_kind == "binary":
+        raw = payload
+        stride = point_step
+    else:
+        raw = None
+        stride = 0
+
+    try:
+        ix = fields.index("x")
+        iy = fields.index("y")
+        iz = fields.index("z")
+    except ValueError:
+        return []
+
+    col_off = []
+    acc = 0
+    for i in range(len(fields)):
+        col_off.append(acc)
+        acc += sizes[i] * counts[i] * n
+    if data_kind == "binary_compressed":
+        offs = (col_off[ix], col_off[iy], col_off[iz])
+    else:
+        offs = (
+            sum(sizes[k] * counts[k] for k in range(ix)),
+            sum(sizes[k] * counts[k] for k in range(iy)),
+            sum(sizes[k] * counts[k] for k in range(iz)),
+        )
+
+    fmt = {
+        ("F", 4): "<f", ("F", 8): "<d",
+        ("I", 2): "<h", ("I", 4): "<i",
+        ("U", 1): "<B", ("U", 2): "<H", ("U", 4): "<I",
+    }
+    fx = fmt.get((types[ix], sizes[ix]), "<f")
+    fy = fmt.get((types[iy], sizes[iy]), "<f")
+    fz = fmt.get((types[iz], sizes[iz]), "<f")
+
+    inv = 1.0 / voxel if voxel and voxel > 0 else 0.0
+    seen = set() if inv else None
+    out = []
+    limit = max_points if max_points else 0
+    lines = payload.splitlines() if data_kind == "ascii" else None
+    for i in range(n):
+        if data_kind == "ascii":
+            parts = lines[i].split() if lines and i < len(lines) else []
+            if len(parts) < max(ix, iy, iz) + 1:
+                continue
+            x = float(parts[ix])
+            y = float(parts[iy])
+            z = float(parts[iz])
+        elif data_kind == "binary_compressed":
+            base = 4 * i
+            x = struct.unpack_from(fx, raw, offs[0] + base)[0]
+            y = struct.unpack_from(fy, raw, offs[1] + base)[0]
+            z = struct.unpack_from(fz, raw, offs[2] + base)[0]
+        else:
+            base = i * stride
+            x = struct.unpack_from(fx, raw, base + offs[0])[0]
+            y = struct.unpack_from(fy, raw, base + offs[1])[0]
+            z = struct.unpack_from(fz, raw, base + offs[2])[0]
+        if x != x or y != y or z != z:
+            continue
+        if seen is not None:
+            key = (int(x * inv), int(y * inv), int(z * inv))
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append((x, y, z))
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
+def current_map_pcd(map_name):
+    """按 /slam/info 的地图名查 database.db，拿当前地图的 map.pcd。"""
+    import glob
+
+    path = None
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(MAP_DB)
+        try:
+            cur = conn.cursor()
+            if map_name:
+                cur.execute(
+                    "select uuid from map where name=? order by id desc limit 1", (map_name,)
+                )
+            else:
+                cur.execute("select uuid from map order by id desc limit 1")
+            row = cur.fetchone()
+            if row and row[0]:
+                path = os.path.join(MAPS_DIR, str(row[0]), "map.pcd")
+        finally:
+            conn.close()
+    except Exception as e:
+        log("map db: %s" % e)
+    if not path or not os.path.exists(path):
+        candidates = glob.glob(os.path.join(MAPS_DIR, "*", "map.pcd"))
+        if candidates:
+            path = max(candidates, key=os.path.getmtime)
+    return path if path and os.path.exists(path) else None
+
+
+def fallback_global_map(voxel=0.1, max_points=0):
+    name = CACHE.slam.get("map_name") if CACHE.slam else ""
+    path = current_map_pcd(name)
+    if not path:
+        return None, None
+    pts = read_pcd_points(path, voxel or 0.1, max_points)
+    return pts, path
+
+
 class RosSource(object):
     def __init__(self):
         import rospy
@@ -1432,7 +1620,7 @@ class BridgeWS(websocket.WebSocketHandler):
                 if kind == KIND_CLOUD and voxel_eff <= 0:
                     voxel_eff = 0.05
                 cached = SOURCE.topic_data(stream)
-                timeout = REQUEST_TIMEOUTS.get(stream, 30.0)
+                timeout = 15.0 if stream == "/global_map" else REQUEST_TIMEOUTS.get(stream, 30.0)
                 if cached is not None and now() - cached["recv"] < 3.0 and not refresh:
                     data = cached
                 else:
@@ -1444,6 +1632,24 @@ class BridgeWS(websocket.WebSocketHandler):
                         )
                     )
                     data = SOURCE.request_topic(stream, timeout)
+                if stream == "/global_map" and (
+                    data is None or (data.get("kind") == KIND_CLOUD and not data.get("points"))
+                ):
+                    client.send(
+                        encode_status(stream, True, "话题未发布，读取设备 map.pcd 快照…")
+                    )
+                    pts, pcd_path = fallback_global_map(voxel_eff, 0)
+                    if not pts:
+                        client.send(encode_error("no /global_map and no map.pcd on device"))
+                        return
+                    data = {
+                        "kind": KIND_CLOUD,
+                        "points": pts,
+                        "frame": "map",
+                        "stamp": now(),
+                    }
+                    voxel_eff = 0.0
+                    log("global_map fallback: %s (%d pts)" % (pcd_path, len(pts)))
                 if data is None:
                     client.send(encode_error("no message on %s" % stream))
                     return
