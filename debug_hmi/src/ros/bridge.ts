@@ -37,6 +37,93 @@ export interface BridgeStatus {
   stamp_ms: number
 }
 
+export interface TfTransformData {
+  parent: string
+  child: string
+  translation: { x: number; y: number; z: number }
+  rotation: { x: number; y: number; z: number; w: number }
+  stamp: number
+}
+
+export interface TfUpdateData {
+  transforms: TfTransformData[]
+  is_static: boolean
+}
+
+export interface SlamData {
+  slam_state: number
+  location_status: number
+  matching_degree: number
+  update_request: number
+  map_name: string
+  map_area: number
+  robot_pose: { x: number; y: number; theta: number }
+  stamp: number
+}
+
+export interface LogData {
+  level: number
+  name: string
+  msg: string
+  stamp: number
+}
+
+export interface PathData {
+  stream: string
+  frame: string
+  stamp: number
+  seq: number
+  poses: Array<{ x: number; y: number; yaw: number; z: number }>
+}
+
+export interface LaserData {
+  frame: string
+  stamp: number
+  angle_min: number
+  angle_max: number
+  angle_increment: number
+  range_min: number
+  range_max: number
+  ranges: Float32Array
+}
+
+export interface PolygonData {
+  frame: string
+  stamp: number
+  xy: Float32Array
+}
+
+export interface DiagData {
+  text: string
+  stamp: number
+}
+
+export interface TopicStatData {
+  topic: string
+  count: number
+  age_ms: number
+  bytes: number
+}
+
+export interface RawData {
+  topic: string
+  type: string
+  json: string
+  stamp: number
+}
+
+export interface ServiceResultData {
+  request_id: string
+  service: string
+  ok: boolean
+  json: string
+}
+
+export interface TopicInfoData {
+  name: string
+  type: string
+}
+
 export interface SubscribeOptions {
   /** 推送频率（Hz） */
   rate: number
@@ -86,6 +173,18 @@ export class BridgeClient {
   private statusListeners = new Set<StatusListener>()
   private connectionListeners = new Set<ConnectionListener>()
   private errorListeners = new Set<ErrorListener>()
+  private tfListeners = new Set<(tf: TfUpdateData) => void>()
+  private slamListeners = new Set<(slam: SlamData) => void>()
+  private logListeners = new Set<(log: LogData) => void>()
+  private pathListeners = new Set<(path: PathData) => void>()
+  private laserListeners = new Set<(laser: LaserData) => void>()
+  private polygonListeners = new Set<(polygon: PolygonData) => void>()
+  private diagListeners = new Set<(diag: DiagData) => void>()
+  private statListeners = new Set<(stat: TopicStatData) => void>()
+  private rawListeners = new Set<(raw: RawData) => void>()
+  private topicWaiters: Array<Waiter<TopicInfoData[]>> = []
+  private serviceWaiters = new Map<string, Waiter<any>>()
+  readonly stats = new Map<string, { count: number; lastSize: number; lastTime: number }>()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private manualClose = false
   private connecting: Promise<void> | null = null
@@ -321,6 +420,109 @@ export class BridgeClient {
     return () => this.errorListeners.delete(fn)
   }
 
+  onTf(fn: (tf: TfUpdateData) => void): () => void {
+    this.tfListeners.add(fn)
+    return () => this.tfListeners.delete(fn)
+  }
+
+  onSlam(fn: (slam: SlamData) => void): () => void {
+    this.slamListeners.add(fn)
+    return () => this.slamListeners.delete(fn)
+  }
+
+  onLog(fn: (log: LogData) => void): () => void {
+    this.logListeners.add(fn)
+    return () => this.logListeners.delete(fn)
+  }
+
+  onPath(fn: (path: PathData) => void): () => void {
+    this.pathListeners.add(fn)
+    return () => this.pathListeners.delete(fn)
+  }
+
+  onLaser(fn: (laser: LaserData) => void): () => void {
+    this.laserListeners.add(fn)
+    return () => this.laserListeners.delete(fn)
+  }
+
+  onPolygon(fn: (polygon: PolygonData) => void): () => void {
+    this.polygonListeners.add(fn)
+    return () => this.polygonListeners.delete(fn)
+  }
+
+  onDiag(fn: (diag: DiagData) => void): () => void {
+    this.diagListeners.add(fn)
+    return () => this.diagListeners.delete(fn)
+  }
+
+  onStat(fn: (stat: TopicStatData) => void): () => void {
+    this.statListeners.add(fn)
+    return () => this.statListeners.delete(fn)
+  }
+
+  onRaw(fn: (raw: RawData) => void): () => void {
+    this.rawListeners.add(fn)
+    return () => this.rawListeners.delete(fn)
+  }
+
+  // ------------------------------------------------------------------ commands
+
+  setInitialPose(x: number, y: number, yaw: number): boolean {
+    return this.sendCommand({ action: 3, x, y, yaw })
+  }
+
+  callService(name: string, args: Record<string, unknown>, timeout = 15000): Promise<any> {
+    const id = `svc-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.serviceWaiters.delete(id)
+        reject(new Error(`服务 ${name} 超时（${timeout}ms）`))
+      }, timeout)
+      this.serviceWaiters.set(id, { resolve, reject, timer })
+      const ok = this.sendCommand({
+        action: 4,
+        service: name,
+        args_json: JSON.stringify(args || {}),
+        request_id: id,
+      })
+      if (!ok) {
+        clearTimeout(timer)
+        this.serviceWaiters.delete(id)
+        reject(new Error('发送失败'))
+      }
+    })
+  }
+
+  getTopics(timeout = 8000): Promise<TopicInfoData[]> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const i = this.topicWaiters.indexOf(waiter)
+        if (i >= 0) this.topicWaiters.splice(i, 1)
+        reject(new Error('获取话题列表超时'))
+      }, timeout)
+      const waiter: Waiter<TopicInfoData[]> = { resolve, reject, timer }
+      this.topicWaiters.push(waiter)
+      if (!this.sendCommand({ action: 5 })) {
+        clearTimeout(timer)
+        const i = this.topicWaiters.indexOf(waiter)
+        if (i >= 0) this.topicWaiters.splice(i, 1)
+        reject(new Error('发送失败'))
+      }
+    })
+  }
+
+  rawSubscribe(topic: string, rate = 2): boolean {
+    return this.sendCommand({ action: 6, topic, rate_hz: rate })
+  }
+
+  rawUnsubscribe(topic: string): boolean {
+    return this.sendCommand({ action: 7, topic })
+  }
+
+  cancelGrid(): void {
+    this.failWaiter(this.gridWaiters, new Error('已取消'))
+  }
+
   private emitConnection(connected: boolean): void {
     for (const fn of this.connectionListeners) fn(connected)
   }
@@ -377,6 +579,177 @@ export class BridgeClient {
       this.lastError = text
       this.emitError(text)
       this.dropAllWaiters(new Error(text))
+      return
+    }
+
+    if (msg.tf) {
+      const transforms: TfTransformData[] = (msg.tf.transforms || []).map((t: any) => ({
+        parent: t.parent || '',
+        child: t.child || '',
+        translation: {
+          x: Number(t.translation?.x) || 0,
+          y: Number(t.translation?.y) || 0,
+          z: Number(t.translation?.z) || 0,
+        },
+        rotation: {
+          x: Number(t.rotation?.x) || 0,
+          y: Number(t.rotation?.y) || 0,
+          z: Number(t.rotation?.z) || 0,
+          w: t.rotation?.w === undefined ? 1 : Number(t.rotation.w),
+        },
+        stamp: Number(t.stamp) || 0,
+      }))
+      const update: TfUpdateData = { transforms, is_static: !!msg.tf.is_static }
+      for (const fn of this.tfListeners) fn(update)
+      return
+    }
+
+    if (msg.slam) {
+      const s: SlamData = {
+        slam_state: Number(msg.slam.slam_state) || 0,
+        location_status: Number(msg.slam.location_status) || 0,
+        matching_degree: Number(msg.slam.matching_degree) || 0,
+        update_request: Number(msg.slam.update_request) || 0,
+        map_name: msg.slam.map_name || '',
+        map_area: Number(msg.slam.map_area) || 0,
+        robot_pose: {
+          x: Number(msg.slam.robot_pose?.x) || 0,
+          y: Number(msg.slam.robot_pose?.y) || 0,
+          theta: Number(msg.slam.robot_pose?.theta) || 0,
+        },
+        stamp: Number(msg.slam.stamp) || 0,
+      }
+      for (const fn of this.slamListeners) fn(s)
+      return
+    }
+
+    if (msg.log) {
+      for (const fn of this.logListeners) {
+        fn({
+          level: Number(msg.log.level) || 0,
+          name: msg.log.name || '',
+          msg: msg.log.msg || '',
+          stamp: Number(msg.log.stamp) || 0,
+        })
+      }
+      return
+    }
+
+    if (msg.diag) {
+      for (const fn of this.diagListeners) {
+        fn({ text: msg.diag.text || '', stamp: Number(msg.diag.stamp) || 0 })
+      }
+      return
+    }
+
+    if (msg.path) {
+      const poses = (msg.path.poses || []).map((p: any) => ({
+        x: Number(p.pose?.x) || 0,
+        y: Number(p.pose?.y) || 0,
+        yaw: Number(p.pose?.theta) || 0,
+        z: Number(p.z) || 0,
+      }))
+      for (const fn of this.pathListeners) {
+        fn({
+          stream: msg.path.stream || '',
+          frame: msg.path.header?.frame_id || 'map',
+          stamp: Number(msg.path.header?.stamp) || 0,
+          seq: Number(msg.path.seq) || 0,
+          poses,
+        })
+      }
+      return
+    }
+
+    if (msg.laser) {
+      const raw = msg.laser.ranges as Uint8Array
+      const copy = raw ? raw.slice() : new Uint8Array(0)
+      for (const fn of this.laserListeners) {
+        fn({
+          frame: msg.laser.header?.frame_id || 'map',
+          stamp: Number(msg.laser.header?.stamp) || 0,
+          angle_min: Number(msg.laser.angle_min) || 0,
+          angle_max: Number(msg.laser.angle_max) || 0,
+          angle_increment: Number(msg.laser.angle_increment) || 0,
+          range_min: Number(msg.laser.range_min) || 0,
+          range_max: Number(msg.laser.range_max) || 0,
+          ranges: new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / 4)),
+        })
+      }
+      return
+    }
+
+    if (msg.polygon) {
+      const raw = msg.polygon.xy as Uint8Array
+      const copy = raw ? raw.slice() : new Uint8Array(0)
+      for (const fn of this.polygonListeners) {
+        fn({
+          frame: msg.polygon.header?.frame_id || 'base_link',
+          stamp: Number(msg.polygon.header?.stamp) || 0,
+          xy: new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / 4)),
+        })
+      }
+      return
+    }
+
+    if (msg.stat) {
+      const stat: TopicStatData = {
+        topic: msg.stat.topic || '',
+        count: Number(msg.stat.count) || 0,
+        age_ms: Number(msg.stat.age_ms) || 0,
+        bytes: Number(msg.stat.bytes) || 0,
+      }
+      const existing = this.stats.get(stat.topic)
+      const lastTime = Date.now() - stat.age_ms
+      this.stats.set(stat.topic, {
+        count: stat.count,
+        lastSize: stat.bytes,
+        lastTime: existing?.lastTime ? Math.max(existing.lastTime, lastTime) : lastTime,
+      })
+      for (const fn of this.statListeners) fn(stat)
+      return
+    }
+
+    if (msg.topics) {
+      const topics: TopicInfoData[] = (msg.topics.topics || []).map((t: any) => ({
+        name: t.name || '',
+        type: t.type || '',
+      }))
+      const waiter = this.topicWaiters.shift()
+      if (waiter) {
+        clearTimeout(waiter.timer)
+        waiter.resolve(topics)
+      }
+      return
+    }
+
+    if (msg.service) {
+      const id = msg.service.request_id || ''
+      const waiter = this.serviceWaiters.get(id)
+      if (!waiter) return
+      clearTimeout(waiter.timer)
+      this.serviceWaiters.delete(id)
+      if (!msg.service.ok) {
+        waiter.reject(new Error(msg.service.json || '服务调用失败'))
+        return
+      }
+      try {
+        waiter.resolve(msg.service.json ? JSON.parse(msg.service.json) : {})
+      } catch {
+        waiter.resolve(msg.service.json)
+      }
+      return
+    }
+
+    if (msg.raw) {
+      for (const fn of this.rawListeners) {
+        fn({
+          topic: msg.raw.topic || '',
+          type: msg.raw.type || '',
+          json: msg.raw.json || '',
+          stamp: Number(msg.raw.stamp) || 0,
+        })
+      }
       return
     }
 
@@ -479,7 +852,7 @@ export function deriveBridgeUrl(rosUrl: string): string {
   }
 }
 
-/** 兼容旧配置里的 http(s) 地址。 */
+/** 兼容旧配置里的 http(s)/8089 地址。 */
 export function normalizeBridgeUrl(url: string): string {
   const trimmed = url.trim()
   if (!trimmed) return ''
@@ -487,6 +860,13 @@ export function normalizeBridgeUrl(url: string): string {
     const u = new URL(trimmed)
     if (u.protocol === 'http:') u.protocol = 'ws:'
     if (u.protocol === 'https:') u.protocol = 'wss:'
+    if (u.port === '8089') {
+      u.port = '9100'
+    } else if (u.pathname.includes('/8089/')) {
+      u.pathname = u.pathname.replace('/8089/', '/9100/')
+    } else if (/\/8089\/?$/.test(u.pathname)) {
+      u.pathname = u.pathname.replace(/8089(\/?)$/, '9100$1')
+    }
     let out = u.toString()
     if (!out.endsWith('/')) out += '/'
     return out

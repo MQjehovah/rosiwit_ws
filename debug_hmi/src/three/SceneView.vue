@@ -26,7 +26,7 @@
       class="map-hint"
       title="设备 debug_publish: false 时 /global_map 不发布；当前帧来自 /scan_f_map（已在 map 系配准）"
     >
-      全局地图未发布 · <code>debug_publish=false</code>
+      全局地图未发布 · 可在左侧加载 PCD 文件
     </div>
     <div v-if="noSources" class="empty-hint">
       只订阅了 TF · 在左侧「数据源」勾选要看的点云 / 地图
@@ -65,6 +65,7 @@ import {
   onGridSnapshot,
   onLidarSnapshot,
   pushLog,
+  restoreMapCache,
   ros,
   setMeasurePoint,
   setPendingPose,
@@ -76,8 +77,6 @@ import { loadGridCache, saveGridCache } from '../ros/gridCache'
 import {
   decodeLaserScan,
   decodePath,
-  decodePointCloud,
-  decodePointCloud2,
   decodePolygon,
   type CloudData,
 } from '../ros/decode'
@@ -166,7 +165,7 @@ const gridCells = computed(() => state.gridCells || (state.pointCounts.grid ?? 0
 const globalMapMissing = computed(
   () =>
     state.layers.globalMap &&
-    (state.status === 'open' || state.bridge.ok) &&
+    state.status === 'open' &&
     (state.pointCounts.globalMap ?? 0) === 0,
 )
 
@@ -233,8 +232,6 @@ function buildMarker(): void {
   pendingGroup.visible = false
 }
 
-let lastFineScan = 0
-
 function applyGlobalMap(cloud: CloudData): void {
   globalLayer.setPoints(cloud.positions, cloud.colors)
   placeInMap(globalLayer.object, cloud.frame)
@@ -253,47 +250,6 @@ function bindTopics(): void {
 
   unsubs.push(
     bridge.onCloud((stream, cloud) => applyBridgeCloud(stream, cloud)),
-  )
-
-  unsubs.push(
-    ros.onTopic('/global_map', (msg) => {
-      const cloud = decodePointCloud2(msg, { maxPoints: 1200000, colorMode: 'height' })
-      if (cloud) applyGlobalMap(cloud)
-    }),
-  )
-
-  unsubs.push(
-    ros.onTopic('/curr_scan_point', (msg) => {
-      const cloud = decodePointCloud2(msg, { maxPoints: 200000, colorMode: 'flat' })
-      if (!cloud) return
-      lastFineScan = performance.now()
-      scanLayer.setPoints(cloud.positions, cloud.colors)
-      placeInMap(scanLayer.object, cloud.frame)
-      state.pointCounts.scan = cloud.count
-    }),
-  )
-
-  // /scan_f_map: 旧版 PointCloud，未开 debug_publish 时唯一可用的「当前帧（已配准到 map）」
-  unsubs.push(
-    ros.onTopic('/scan_f_map', (msg) => {
-      if (performance.now() - lastFineScan < 2000) return // 有更精细的 /curr_scan_point 就不用它
-      const cloud = decodePointCloud(msg, { maxPoints: 200000, colorMode: 'height' })
-      if (!cloud) return
-      scanLayer.setPoints(cloud.positions, cloud.colors)
-      placeInMap(scanLayer.object, cloud.frame)
-      state.pointCounts.scan = cloud.count
-      state.pointCounts.scanTotal = cloud.total
-    }),
-  )
-
-  unsubs.push(
-    ros.onTopic('/points_2d', (msg) => {
-      const cloud = decodePointCloud2(msg, { maxPoints: 200000, colorMode: 'flat' })
-      if (!cloud) return
-      points2dLayer.setPoints(cloud.positions, cloud.colors)
-      placeInMap(points2dLayer.object, cloud.frame)
-      state.pointCounts.points2d = cloud.count
-    }),
   )
 
   unsubs.push(
@@ -383,24 +339,11 @@ function applyPointScale(): void {
 
 // ---------------------------------------------------------------- bridge push
 
-function syncBridgeSubscriptions(): void {
-  const enabled = state.bridge.enabled
-  bridge.setSubscription(
-    'scan',
-    enabled && state.layers.scan ? { rate: 4, voxel: 0.05, max: 200000 } : null,
-  )
-  bridge.setSubscription(
-    'points_2d',
-    enabled && state.layers.points2d ? { rate: 2, voxel: 0.08, max: 200000 } : null,
-  )
-}
-
 function applyBridgeCloud(stream: string, cloud: CloudData): void {
   if (stream === 'scan') {
     scanLayer.setPoints(cloud.positions, cloud.colors)
     placeInMap(scanLayer.object, cloud.frame)
     state.pointCounts.scan = cloud.count
-    lastFineScan = performance.now()
   } else if (stream === 'points_2d') {
     points2dLayer.setPoints(cloud.positions, cloud.colors)
     placeInMap(points2dLayer.object, cloud.frame)
@@ -753,12 +696,6 @@ watch(
 )
 
 watch(
-  () => [state.bridge.enabled, state.layers.scan, state.layers.points2d] as const,
-  () => syncBridgeSubscriptions(),
-  { immediate: true },
-)
-
-watch(
   () => state.pointScale,
   () => applyPointScale(),
 )
@@ -816,13 +753,13 @@ onMounted(() => {
     .catch(() => {
       /* 没有缓存/被浏览器禁用都忽略 */
     })
+
+  void restoreMapCache()
 })
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   resizeObserver?.disconnect()
-  bridge.setSubscription('scan', null)
-  bridge.setSubscription('points_2d', null)
   for (const unsub of unsubs) unsub()
   window.removeEventListener('keydown', onKeyDown)
   globalLayer.dispose()

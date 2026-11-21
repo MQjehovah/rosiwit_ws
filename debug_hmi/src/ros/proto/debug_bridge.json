@@ -36,6 +36,305 @@
             }
           }
         },
+        "Vector3": {
+          "fields": {
+            "x": {
+              "type": "double",
+              "id": 1
+            },
+            "y": {
+              "type": "double",
+              "id": 2
+            },
+            "z": {
+              "type": "double",
+              "id": 3
+            }
+          }
+        },
+        "Quaternion": {
+          "fields": {
+            "x": {
+              "type": "double",
+              "id": 1
+            },
+            "y": {
+              "type": "double",
+              "id": 2
+            },
+            "z": {
+              "type": "double",
+              "id": 3
+            },
+            "w": {
+              "type": "double",
+              "id": 4
+            }
+          }
+        },
+        "Transform": {
+          "fields": {
+            "parent": {
+              "type": "string",
+              "id": 1
+            },
+            "child": {
+              "type": "string",
+              "id": 2
+            },
+            "translation": {
+              "type": "Vector3",
+              "id": 3
+            },
+            "rotation": {
+              "type": "Quaternion",
+              "id": 4
+            },
+            "stamp": {
+              "type": "double",
+              "id": 5
+            }
+          }
+        },
+        "TfUpdate": {
+          "fields": {
+            "transforms": {
+              "rule": "repeated",
+              "type": "Transform",
+              "id": 1
+            },
+            "is_static": {
+              "type": "bool",
+              "id": 2
+            }
+          }
+        },
+        "SlamInfo": {
+          "fields": {
+            "slam_state": {
+              "type": "int32",
+              "id": 1
+            },
+            "location_status": {
+              "type": "int32",
+              "id": 2
+            },
+            "matching_degree": {
+              "type": "float",
+              "id": 3
+            },
+            "update_request": {
+              "type": "int32",
+              "id": 4
+            },
+            "map_name": {
+              "type": "string",
+              "id": 5
+            },
+            "map_area": {
+              "type": "double",
+              "id": 6
+            },
+            "robot_pose": {
+              "type": "Pose2D",
+              "id": 7
+            },
+            "stamp": {
+              "type": "double",
+              "id": 8
+            }
+          }
+        },
+        "LogEntry": {
+          "fields": {
+            "level": {
+              "type": "int32",
+              "id": 1
+            },
+            "name": {
+              "type": "string",
+              "id": 2
+            },
+            "msg": {
+              "type": "string",
+              "id": 3
+            },
+            "stamp": {
+              "type": "double",
+              "id": 4
+            }
+          }
+        },
+        "PoseStamped": {
+          "fields": {
+            "pose": {
+              "type": "Pose2D",
+              "id": 1
+            },
+            "z": {
+              "type": "double",
+              "id": 2
+            }
+          }
+        },
+        "PathFrame": {
+          "fields": {
+            "header": {
+              "type": "Header",
+              "id": 1
+            },
+            "poses": {
+              "rule": "repeated",
+              "type": "PoseStamped",
+              "id": 2
+            },
+            "seq": {
+              "type": "uint32",
+              "id": 3
+            },
+            "stream": {
+              "type": "string",
+              "id": 4
+            }
+          }
+        },
+        "LaserFrame": {
+          "fields": {
+            "header": {
+              "type": "Header",
+              "id": 1
+            },
+            "angle_min": {
+              "type": "float",
+              "id": 2
+            },
+            "angle_max": {
+              "type": "float",
+              "id": 3
+            },
+            "angle_increment": {
+              "type": "float",
+              "id": 4
+            },
+            "range_min": {
+              "type": "float",
+              "id": 5
+            },
+            "range_max": {
+              "type": "float",
+              "id": 6
+            },
+            "ranges": {
+              "type": "bytes",
+              "id": 7
+            }
+          }
+        },
+        "PolygonFrame": {
+          "fields": {
+            "header": {
+              "type": "Header",
+              "id": 1
+            },
+            "xy": {
+              "type": "bytes",
+              "id": 2
+            }
+          }
+        },
+        "TopicInfo": {
+          "fields": {
+            "name": {
+              "type": "string",
+              "id": 1
+            },
+            "type": {
+              "type": "string",
+              "id": 2
+            }
+          }
+        },
+        "TopicList": {
+          "fields": {
+            "topics": {
+              "rule": "repeated",
+              "type": "TopicInfo",
+              "id": 1
+            }
+          }
+        },
+        "TopicStat": {
+          "fields": {
+            "topic": {
+              "type": "string",
+              "id": 1
+            },
+            "count": {
+              "type": "uint32",
+              "id": 2
+            },
+            "age_ms": {
+              "type": "uint64",
+              "id": 3
+            },
+            "bytes": {
+              "type": "uint32",
+              "id": 4
+            }
+          }
+        },
+        "RawMessage": {
+          "fields": {
+            "topic": {
+              "type": "string",
+              "id": 1
+            },
+            "type": {
+              "type": "string",
+              "id": 2
+            },
+            "json": {
+              "type": "string",
+              "id": 3
+            },
+            "stamp": {
+              "type": "double",
+              "id": 4
+            }
+          }
+        },
+        "ServiceResult": {
+          "fields": {
+            "request_id": {
+              "type": "string",
+              "id": 1
+            },
+            "service": {
+              "type": "string",
+              "id": 2
+            },
+            "ok": {
+              "type": "bool",
+              "id": 3
+            },
+            "json": {
+              "type": "string",
+              "id": 4
+            }
+          }
+        },
+        "DiagFrame": {
+          "fields": {
+            "text": {
+              "type": "string",
+              "id": 1
+            },
+            "stamp": {
+              "type": "double",
+              "id": 2
+            }
+          }
+        },
         "GridFrame": {
           "fields": {
             "header": {
@@ -190,6 +489,38 @@
             "refresh": {
               "type": "bool",
               "id": 6
+            },
+            "x": {
+              "type": "double",
+              "id": 7
+            },
+            "y": {
+              "type": "double",
+              "id": 8
+            },
+            "yaw": {
+              "type": "double",
+              "id": 9
+            },
+            "service": {
+              "type": "string",
+              "id": 10
+            },
+            "args_json": {
+              "type": "string",
+              "id": 11
+            },
+            "request_id": {
+              "type": "string",
+              "id": 12
+            },
+            "topic": {
+              "type": "string",
+              "id": 13
+            },
+            "type": {
+              "type": "string",
+              "id": 14
             }
           },
           "nested": {
@@ -197,7 +528,12 @@
               "values": {
                 "SUBSCRIBE": 0,
                 "UNSUBSCRIBE": 1,
-                "REQUEST": 2
+                "REQUEST": 2,
+                "SET_INITIAL_POSE": 3,
+                "CALL_SERVICE": 4,
+                "GET_TOPICS": 5,
+                "RAW_SUBSCRIBE": 6,
+                "RAW_UNSUBSCRIBE": 7
               }
             }
           }
@@ -210,7 +546,18 @@
                 "grid",
                 "cloud",
                 "status",
-                "error"
+                "error",
+                "tf",
+                "slam",
+                "log",
+                "path",
+                "laser",
+                "polygon",
+                "topics",
+                "stat",
+                "raw",
+                "service",
+                "diag"
               ]
             }
           },
@@ -234,6 +581,50 @@
             "error": {
               "type": "Error",
               "id": 5
+            },
+            "tf": {
+              "type": "TfUpdate",
+              "id": 6
+            },
+            "slam": {
+              "type": "SlamInfo",
+              "id": 7
+            },
+            "log": {
+              "type": "LogEntry",
+              "id": 8
+            },
+            "path": {
+              "type": "PathFrame",
+              "id": 9
+            },
+            "laser": {
+              "type": "LaserFrame",
+              "id": 10
+            },
+            "polygon": {
+              "type": "PolygonFrame",
+              "id": 11
+            },
+            "topics": {
+              "type": "TopicList",
+              "id": 12
+            },
+            "stat": {
+              "type": "TopicStat",
+              "id": 13
+            },
+            "raw": {
+              "type": "RawMessage",
+              "id": 14
+            },
+            "service": {
+              "type": "ServiceResult",
+              "id": 15
+            },
+            "diag": {
+              "type": "DiagFrame",
+              "id": 16
             }
           }
         }

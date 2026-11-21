@@ -2,8 +2,9 @@ syntax = "proto3";
 
 package debug_bridge;
 
-// Wire schema for debug_bridge.  Robot: hand-encoded (no protobuf runtime on
-// Melodic/Python 2.7); Browser: protobufjs with the generated JSON descriptor.
+// debug_hmi <-> debug_bridge 的唯一数据通道。
+// 机器人侧手工编码（Melodic/Python2 没有 protobuf runtime），
+// 浏览器侧用 protobufjs + 生成的 JSON descriptor 解码。
 
 enum Compression {
   NONE = 0;
@@ -19,6 +20,112 @@ message Pose2D {
   double x = 1;
   double y = 2;
   float theta = 3;
+}
+
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Quaternion {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+message Transform {
+  string parent = 1;
+  string child = 2;
+  Vector3 translation = 3;
+  Quaternion rotation = 4;
+  double stamp = 5;
+}
+
+message TfUpdate {
+  repeated Transform transforms = 1;
+  bool is_static = 2;
+}
+
+message SlamInfo {
+  int32 slam_state = 1;
+  int32 location_status = 2;
+  float matching_degree = 3;
+  int32 update_request = 4;
+  string map_name = 5;
+  double map_area = 6;
+  Pose2D robot_pose = 7;
+  double stamp = 8;
+}
+
+message LogEntry {
+  int32 level = 1;
+  string name = 2;
+  string msg = 3;
+  double stamp = 4;
+}
+
+message PoseStamped {
+  Pose2D pose = 1;
+  double z = 2;
+}
+
+message PathFrame {
+  Header header = 1;
+  repeated PoseStamped poses = 2;
+  uint32 seq = 3;
+  string stream = 4; // global_path / local_path
+}
+
+message LaserFrame {
+  Header header = 1;
+  float angle_min = 2;
+  float angle_max = 3;
+  float angle_increment = 4;
+  float range_min = 5;
+  float range_max = 6;
+  bytes ranges = 7; // float32 LE
+}
+
+message PolygonFrame {
+  Header header = 1;
+  bytes xy = 2; // float32 pairs
+}
+
+message TopicInfo {
+  string name = 1;
+  string type = 2;
+}
+
+message TopicList {
+  repeated TopicInfo topics = 1;
+}
+
+message TopicStat {
+  string topic = 1;
+  uint32 count = 2;
+  uint64 age_ms = 3;
+  uint32 bytes = 4;
+}
+
+message RawMessage {
+  string topic = 1;
+  string type = 2;
+  string json = 3;
+  double stamp = 4;
+}
+
+message ServiceResult {
+  string request_id = 1;
+  string service = 2;
+  bool ok = 3;
+  string json = 4;
+}
+
+message DiagFrame {
+  string text = 1;
+  double stamp = 2;
 }
 
 message GridFrame {
@@ -70,6 +177,11 @@ message ClientCommand {
     SUBSCRIBE = 0;
     UNSUBSCRIBE = 1;
     REQUEST = 2;
+    SET_INITIAL_POSE = 3;
+    CALL_SERVICE = 4;
+    GET_TOPICS = 5;
+    RAW_SUBSCRIBE = 6;
+    RAW_UNSUBSCRIBE = 7;
   }
   Action action = 1;
   string stream = 2;
@@ -77,6 +189,14 @@ message ClientCommand {
   float voxel = 4;
   uint32 max_points = 5;
   bool refresh = 6;
+  double x = 7;
+  double y = 8;
+  double yaw = 9;
+  string service = 10;
+  string args_json = 11;
+  string request_id = 12;
+  string topic = 13;
+  string type = 14;
 }
 
 message Envelope {
@@ -86,5 +206,16 @@ message Envelope {
     CloudFrame cloud = 3;
     Status status = 4;
     Error error = 5;
+    TfUpdate tf = 6;
+    SlamInfo slam = 7;
+    LogEntry log = 8;
+    PathFrame path = 9;
+    LaserFrame laser = 10;
+    PolygonFrame polygon = 11;
+    TopicList topics = 12;
+    TopicStat stat = 13;
+    RawMessage raw = 14;
+    ServiceResult service = 15;
+    DiagFrame diag = 16;
   }
 }

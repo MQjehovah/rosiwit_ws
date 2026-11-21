@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 纯数学/解码层单测（不依赖浏览器、不连设备）：
-#   tf 变换、PointCloud2 / OccupancyGrid / LaserScan 解码
+#   tf 变换、PointCloud2 / PointCloud / OccupancyGrid / LaserScan 解码、栅格降采样、PCD 解析
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -16,8 +16,9 @@ trap 'rm -rf "$out"' EXIT
 
 ./node_modules/.bin/esbuild src/ros/tf.ts --bundle --format=esm --outfile="$out/tf.mjs" >/dev/null
 ./node_modules/.bin/esbuild src/ros/decode.ts --bundle --format=esm --outfile="$out/decode.mjs" >/dev/null
-./node_modules/.bin/esbuild src/ros/cbor.ts --bundle --format=esm --outfile="$out/cbor.mjs" >/dev/null
 ./node_modules/.bin/esbuild src/three/gridImage.ts --bundle --format=esm --outfile="$out/gridImage.mjs" >/dev/null
-cp tests/ros.test.mjs "$out/"
+./node_modules/.bin/esbuild src/ros/mapFile.ts --bundle --format=esm --outfile="$out/mapFile.mjs" >/dev/null
+cp tests/ros.test.mjs tests/pcd.test.mjs "$out/"
 cp -r tests/fixtures "$out/" 2>/dev/null || true
 node "$out/ros.test.mjs"
+node "$out/pcd.test.mjs"

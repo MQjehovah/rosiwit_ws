@@ -25,14 +25,7 @@ ws.binaryType = 'arraybuffer'
 
 const waiters = []
 ws.on('message', (data) => {
-  const buf = new Uint8Array(data)
-  let msg
-  try {
-    msg = Envelope.decode(buf)
-  } catch (e) {
-    console.log('decode fail', e.message)
-    return
-  }
+  const msg = Envelope.decode(new Uint8Array(data))
   for (const w of [...waiters]) {
     if (w.match(msg)) {
       waiters.splice(waiters.indexOf(w), 1)
@@ -59,8 +52,11 @@ function waitFor(match, timeout = 8000) {
 }
 
 function send(cmd) {
-  const bytes = ClientCommand.encode(ClientCommand.create(cmd)).finish()
-  ws.send(bytes)
+  ws.send(ClientCommand.encode(ClientCommand.create(cmd)).finish())
+}
+
+function subscribe(stream, rate, voxel = 0, max = 0) {
+  send({ action: 0, stream, rate_hz: rate, voxel, max_points: max })
 }
 
 await opened
@@ -70,26 +66,63 @@ const hello = await waitFor((m) => m.hello)
 assert(hello.hello && hello.hello.name === 'debug_bridge', 'hello name')
 console.log('      streams:', hello.hello.streams.map((s) => s.name).join(','))
 
-send({ action: 0, stream: 'scan', rate_hz: 4, voxel: 0.05, max_points: 200000 })
+subscribe('tf', 10)
+const tf = await waitFor((m) => m.tf)
+assert(tf.tf && tf.tf.transforms.length > 0, 'tf transforms')
+console.log('      tf', tf.tf.transforms.length, 'transforms, static=', tf.tf.is_static)
+
+subscribe('status', 10)
+const slam = await waitFor((m) => m.slam)
+assert(slam.slam && slam.slam.map_name === 'demo', 'slam info')
+console.log('      slam', slam.slam.map_name, slam.slam.matching_degree)
+
+subscribe('diag', 1)
+const diag = await waitFor((m) => m.diag)
+assert(diag.diag && diag.diag.text.length > 0, 'diag text')
+
+subscribe('logs', 5)
+const log = await waitFor((m) => m.log, 15000)
+assert(log.log && log.log.msg.length > 0, 'log entry')
+
+subscribe('laser', 10)
+const laser = await waitFor((m) => m.laser)
+assert(laser.laser && laser.laser.ranges.byteLength > 0, 'laser ranges')
+const laserBytes = Uint8Array.from(laser.laser.ranges)
+const ranges = new Float32Array(laserBytes.buffer)
+assert(ranges.length > 100, 'laser range count')
+
+subscribe('paths', 2)
+const path = await waitFor((m) => m.path)
+assert(path.path && path.path.poses.length > 0, 'path poses')
+
+subscribe('footprint', 1)
+const poly = await waitFor((m) => m.polygon)
+assert(poly.polygon && poly.polygon.xy.byteLength >= 24, 'footprint')
+
+subscribe('scan', 4, 0.05, 200000)
 const cloud = await waitFor((m) => m.cloud && m.cloud.stream === 'scan')
 assert(cloud.cloud.count > 0, 'scan cloud count')
 const raw = zlib.inflateSync(Buffer.from(cloud.cloud.xyz_cm))
 assert(raw.length === cloud.cloud.count * 6, 'scan xyz_cm length')
-assert(cloud.cloud.compression === 1, 'scan zlib compression')
 console.log(`      scan count=${cloud.cloud.count} bytes=${cloud.cloud.xyz_cm.length}`)
 
-send({ action: 2, stream: 'grid', refresh: true })
-const grid = await waitFor((m) => m.grid, 30000)
-assert(grid.grid.width > 0 && grid.grid.height > 0, 'grid dims')
-assert(grid.grid.compression === 1, 'grid zlib compression')
-const cells = zlib.inflateSync(Buffer.from(grid.grid.data))
-assert(cells.length === grid.grid.width * grid.grid.height, 'grid cells')
-console.log(`      grid ${grid.grid.width}x${grid.grid.height} res=${grid.grid.resolution}`)
+const grid = (() => {
+  send({ action: 2, stream: 'grid', refresh: true })
+  return waitFor((m) => m.grid, 30000)
+})()
+const g = await grid
+assert(g.grid.width > 0 && g.grid.height > 0, 'grid dims')
+const cells = zlib.inflateSync(Buffer.from(g.grid.data))
+assert(cells.length === g.grid.width * g.grid.height, 'grid cells')
+console.log(`      grid ${g.grid.width}x${g.grid.height} res=${g.grid.resolution}`)
 
-send({ action: 2, stream: 'vanjee_points722', voxel: 0.05, max_points: 200000 })
-const v = await waitFor((m) => m.cloud && m.cloud.stream === 'vanjee_points722')
-assert(v.cloud.count > 0, 'vanjee cloud count')
-console.log(`      vanjee count=${v.cloud.count} bytes=${v.cloud.xyz_cm.length}`)
+send({ action: 3, x: 1, y: 2, yaw: 0.5 })
+await waitFor((m) => m.status && m.status.stream === 'initialpose')
+
+send({ action: 5 })
+const topics = await waitFor((m) => m.topics)
+assert(topics.topics.topics.length > 0, 'topic list')
+console.log('      topics', topics.topics.topics.length)
 
 ws.close()
 if (!process.exitCode) console.log('\nall bridge tests passed')

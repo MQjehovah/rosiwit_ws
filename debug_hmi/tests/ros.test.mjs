@@ -1,8 +1,6 @@
 import { TfTree, quatToRpy, quatToYaw } from './tf.mjs'
 import { decodePointCloud2, decodeOccupancyGrid, decodeLaserScan, decodePointCloud } from './decode.mjs'
-import { decodeCbor } from './cbor.mjs'
 import { gridToImage } from './gridImage.mjs'
-import fs from 'node:fs'
 
 function assert(cond, msg) {
   if (!cond) {
@@ -161,41 +159,33 @@ const scan = decodeLaserScan({
 assert(scan && scan.count === 2, 'laser scan filters invalid ranges')
 assert(scan && near(scan.positions[0], 1) && near(scan.positions[3], 0), 'laser scan xy')
 
-// ------------------------------------------------------------------ CBOR
+// ------------------------------------------------------------------ PointCloud (旧版)
 
-// tag 72 = int8[]；验证 typed-array tag 能还原成 Int8Array
-const typed = decodeCbor(new Uint8Array([0xa1, 0x61, 0x61, 0xd8, 0x48, 0x43, 0x00, 0x64, 0xff]))
-assert(typed.a instanceof Int8Array, 'cbor tag72 -> Int8Array')
-assert(typed.a.length === 3 && typed.a[1] === 100 && typed.a[2] === -1, 'cbor int8 values')
-
-// 真实 rosbridge cbor 帧（/scan_f_map，压缩后 61KB）
-const fixture = new URL('./fixtures/scan_f_map.cbor', import.meta.url)
-if (fs.existsSync(fixture)) {
-  const frame = decodeCbor(new Uint8Array(fs.readFileSync(fixture)))
-  assert(frame?.op === 'publish', 'cbor frame op')
-  assert(frame?.topic === '/scan_f_map', 'cbor frame topic')
-  assert(frame?.msg?.header?.frame_id === 'map', 'cbor frame_id = map')
-  assert(Array.isArray(frame?.msg?.points) && frame.msg.points.length > 500, 'cbor PointCloud points')
-
-  const cloud = decodePointCloud(frame.msg, { maxPoints: 200000 })
-  assert(cloud && cloud.count === frame.msg.points.length, 'PointCloud decoded count')
-  assert(cloud && cloud.frame === 'map', 'PointCloud frame')
-  assert(cloud && cloud.colors && cloud.colors.length === cloud.count * 3, 'PointCloud height colors')
-  assert(
-    cloud && Number.isFinite(cloud.positions[0]) && Number.isFinite(cloud.positions[2]),
-    'PointCloud positions finite',
-  )
-
-  // 同一份数据用 OccupancyGrid 的 int8[] 路径也能吃 Int8Array
-  const grid = decodeOccupancyGrid({
+const pcloud = decodePointCloud(
+  {
     header: { frame_id: 'map' },
-    info: { width: 2, height: 2, resolution: 0.5, origin: { position: {}, orientation: {} } },
-    data: new Int8Array([0, 100, -1, 40]),
-  })
-  assert(grid && grid.data[1] === 100 && grid.data[2] === -1, 'OccupancyGrid accepts Int8Array')
-} else {
-  console.log('skip: tests/fixtures/scan_f_map.cbor 不存在（可用设备重新抓一份）')
-}
+    points: [
+      { x: 1, y: 2, z: 0.5 },
+      { x: -1, y: 0, z: 1 },
+    ],
+  },
+  { maxPoints: 200000 },
+)
+assert(pcloud && pcloud.count === 2, 'PointCloud decoded count')
+assert(pcloud && pcloud.frame === 'map', 'PointCloud frame')
+assert(pcloud && pcloud.colors && pcloud.colors.length === 6, 'PointCloud height colors')
+assert(
+  pcloud && near(pcloud.positions[0], 1) && near(pcloud.positions[3], -1),
+  'PointCloud positions',
+)
+
+// OccupancyGrid 的 int8[] 路径
+const gridInt8 = decodeOccupancyGrid({
+  header: { frame_id: 'map' },
+  info: { width: 2, height: 2, resolution: 0.5, origin: { position: {}, orientation: {} } },
+  data: new Int8Array([0, 100, -1, 40]),
+})
+assert(gridInt8 && gridInt8.data[1] === 100 && gridInt8.data[2] === -1, 'OccupancyGrid accepts Int8Array')
 
 // ------------------------------------------------------------------ 栅格降采样
 

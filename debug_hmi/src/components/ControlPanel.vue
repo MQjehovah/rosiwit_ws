@@ -79,40 +79,7 @@
         <span class="sec-meta">{{ activeLayers }} / {{ layerList.length }}</span>
       </summary>
       <div class="sec-body">
-        <p class="source-hint">像 RViz 一样按需订阅；只有 TF 常开。大点云 / 栅格走 debug_bridge（WebSocket + protobuf）。</p>
-
-        <div class="bridge">
-          <div class="row">
-            <label class="live-toggle" title="点云/栅格改走 debug_bridge（WebSocket + protobuf，服务端降采样）">
-              <input
-                type="checkbox"
-                :checked="state.bridge.enabled"
-                @change="toggleBridge(($event.target as HTMLInputElement).checked)"
-              />
-              debug_bridge
-            </label>
-            <span
-              class="bridge-state"
-              :class="{ ok: state.bridge.ok, bad: !!state.bridge.error }"
-              :title="state.bridge.error"
-            >
-              {{ state.bridge.ok ? '可用' : state.bridge.error ? '不可用' : '未连接' }}
-            </span>
-            <button class="mini" :disabled="state.bridge.checking" @click="applyBridge">
-              {{ state.bridge.checking ? '…' : '连接' }}
-            </button>
-          </div>
-          <div class="row">
-            <input
-              v-model="bridgeInput"
-              class="input grow"
-              spellcheck="false"
-              placeholder="ws://ip:9100"
-              @keyup.enter="applyBridge"
-            />
-            <button class="mini" @click="applyBridge">保存</button>
-          </div>
-        </div>
+        <p class="source-hint">像 RViz 一样按需订阅；只有 TF 常开。所有数据走 debug_bridge（WebSocket + protobuf）。</p>
 
         <div class="layer-grid">
           <div v-for="layer in layerList" :key="layer.key" class="layer-item">
@@ -130,7 +97,7 @@
             <button
               v-if="layer.key === 'globalMap'"
               class="mini"
-              :disabled="state.status !== 'open' && !bridgeActive()"
+              :disabled="state.status !== 'open'"
               title="重新请求 /global_map（latched）"
               @click="doReloadMap"
             >
@@ -139,7 +106,7 @@
             <button
               v-else-if="layer.key === 'lidar'"
               class="mini"
-              :disabled="(state.status !== 'open' && !bridgeActive()) || state.snapshotPending"
+              :disabled="(state.status !== 'open') || state.snapshotPending"
               title="抓取一帧 /vanjee_points722"
               @click="doGrabLidar"
             >
@@ -149,7 +116,7 @@
               v-else-if="layer.key === 'grid'"
               class="mini"
               :class="{ warn: state.gridPending }"
-              :disabled="state.status !== 'open' && !bridgeActive()"
+              :disabled="state.status !== 'open'"
               :title="state.gridPending ? '取消接收' : '/map 单帧约 43MB，接收约 1~2 分钟'"
               @click="state.gridPending ? cancelGrid() : doGrabGrid()"
             >
@@ -157,6 +124,17 @@
             </button>
           </div>
         </div>
+
+        <div class="row map-file">
+          <label class="btn small file-btn" :class="{ disabled: state.mapLoading }">
+            {{ state.mapLoading ? '解析中…' : '加载 PCD 地图' }}
+            <input type="file" accept=".pcd" :disabled="state.mapLoading" @change="onMapFile" />
+          </label>
+          <span v-if="state.loadedMapName" class="inline-info" :title="state.loadedMapName">
+            {{ state.loadedMapName }} · {{ state.loadedMapPoints.toLocaleString() }} 点
+          </span>
+        </div>
+        <p v-if="state.mapError" class="error-text">{{ state.mapError }}</p>
 
         <div class="foot">
           <label class="slider-row">
@@ -251,18 +229,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
-  bridgeActive,
   cancelGridSnapshot,
-  checkBridge,
   dumpRecorder,
   grabGridSnapshot,
   grabLidarSnapshot,
+  loadMapFile,
   publishInitialPose,
   pushLog,
   relocate,
   reloadGlobalMap,
-  setBridgeEnabled,
-  setBridgeUrl,
   setLayer,
   setPendingPose,
   setPointScale,
@@ -272,30 +247,6 @@ import {
   type LayerKey,
 } from '../ros/app'
 import { clearGridCache } from '../ros/gridCache'
-
-const bridgeInput = ref(state.bridge.url)
-
-watch(
-  () => state.bridge.url,
-  (url) => {
-    bridgeInput.value = url
-  },
-)
-
-function toggleBridge(enabled: boolean): void {
-  setBridgeEnabled(enabled)
-  pushLog(
-    'info',
-    enabled
-      ? 'debug_bridge 已启用：点云/栅格走 WebSocket + protobuf'
-      : 'debug_bridge 已关闭：回到 rosbridge',
-  )
-}
-
-function applyBridge(): void {
-  setBridgeUrl(bridgeInput.value)
-  void checkBridge()
-}
 
 const layerList: Array<{ key: LayerKey; name: string; topic: string; color: string }> = [
   { key: 'tf', name: 'TF 坐标轴', topic: '/tf · /tf_static（常订阅）', color: '#94a3b8' },
@@ -501,15 +452,18 @@ async function doGrabLidar(): Promise<void> {
   await grabLidarSnapshot()
 }
 
-async function doGrabGrid(): Promise<void> {
-  if (!bridgeActive()) {
-    const ok = window.confirm(
-      '/map 单帧约 43MB（4300 万格），走 CBOR 二进制接收。\n' +
-        '设备端要逐个打包这些格子，实测约 1~2 分钟；期间实时数据会暂停。\n' +
-        '建议开启 debug_bridge 后再抓。确定用 rosbridge 抓取吗？',
-    )
-    if (!ok) return
+async function onMapFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    await loadMapFile(file)
+  } finally {
+    input.value = ''
   }
+}
+
+async function doGrabGrid(): Promise<void> {
   if (!state.layers.grid) setLayer('grid', true)
   await grabGridSnapshot()
 }
@@ -625,46 +579,30 @@ async function copyDebugCmd(): Promise<void> {
   color: #54687a;
 }
 
-.bridge {
-  margin-bottom: 8px;
-  padding: 6px 7px;
-  border: 1px solid #1b2a38;
-  border-radius: 6px;
-  background: #0a121a;
+.map-file {
+  margin-top: 8px;
 }
-.bridge .row + .row {
-  margin-top: 5px;
-}
-.live-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  color: #9fb4c7;
+.file-btn {
+  position: relative;
+  overflow: hidden;
   cursor: pointer;
 }
-.live-toggle input {
-  margin: 0;
-  accent-color: var(--accent);
+.file-btn.disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
-.bridge-state {
-  margin-left: auto;
-  font-size: 9.5px;
-  color: #54687a;
+.file-btn input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
-.bridge-state.ok {
-  color: #6ee7b7;
-}
-.bridge-state.bad {
-  color: #fca5a5;
-}
-.bridge .input {
-  padding: 3px 6px;
+.error-text {
+  margin: 6px 0 0;
   font-size: 10px;
-}
-.grow {
-  flex: 1;
-  min-width: 0;
+  line-height: 1.5;
+  color: var(--bad);
+  word-break: break-all;
 }
 
 .badges {

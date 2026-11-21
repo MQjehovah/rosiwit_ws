@@ -18,7 +18,7 @@
           v-model="urlInput"
           class="input grow"
           spellcheck="false"
-          placeholder="ws://ip:8089 或 wss://…"
+          placeholder="ws://ip:9100 或 wss://…"
           @keyup.enter="apply"
         />
         <button v-if="state.status !== 'open'" class="btn primary" @click="apply">连接</button>
@@ -38,7 +38,7 @@
       </div>
 
       <div class="pop-meta">
-        <span>8089 = rosbridge</span>
+        <span>9100 = debug_bridge</span>
         <span class="sep">·</span>
         <span>9090 = 厂商 http_bridge</span>
         <span v-if="state.status === 'open'" class="sep">·</span>
