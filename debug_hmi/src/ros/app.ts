@@ -8,7 +8,7 @@
 
 import { reactive } from 'vue'
 import { RosBridgeClient, type RosStatus, type RosLogEvent, type SubscribeOptions } from './client'
-import { BridgeClient, deriveBridgeUrl } from './bridge'
+import { BridgeClient, deriveBridgeUrl, normalizeBridgeUrl } from './bridge'
 import { decodeOccupancyGrid, decodePointCloud2, type CloudData, type GridData } from './decode'
 import { TfTree } from './tf'
 
@@ -169,7 +169,7 @@ export const state = reactive({
   rawTime: 0,
   rawPaused: false,
 
-  /** hmi_bridge（HTTP 二进制）状态 */
+  /** debug_bridge（WebSocket + protobuf）状态 */
   bridge: {
     enabled: localStorage.getItem('hmi.bridge.enabled') === '1',
     url: localStorage.getItem('hmi.bridge.url') || '',
@@ -200,8 +200,10 @@ export const state = reactive({
 
 // ------------------------------------------------------------------ logging
 
-export const bridge = new BridgeClient(state.bridge.url || deriveBridgeUrl(state.url))
-if (!state.bridge.url) state.bridge.url = bridge.baseUrl
+export const bridge = new BridgeClient(normalizeBridgeUrl(state.bridge.url) || deriveBridgeUrl(state.url))
+state.bridge.url = bridge.url
+
+let lastBridgeError = ''
 
 export function bridgeActive(): boolean {
   return state.bridge.enabled && state.bridge.ok
@@ -214,16 +216,23 @@ export function setBridgeEnabled(enabled: boolean): void {
   } catch {
     /* ignore */
   }
-  if (enabled) void checkBridge(false)
+  if (enabled) {
+    bridge.autoReconnect = true
+    void checkBridge(false)
+  } else {
+    bridge.disconnect()
+    state.bridge.ok = false
+  }
   syncSubscriptions()
 }
 
 export function setBridgeUrl(url: string): void {
   const trimmed = url.trim()
-  state.bridge.url = trimmed || deriveBridgeUrl(state.url)
-  bridge.setBaseUrl(state.bridge.url)
+  const normalized = trimmed ? normalizeBridgeUrl(trimmed) : deriveBridgeUrl(state.url)
+  state.bridge.url = normalized
+  bridge.setUrl(normalized)
   try {
-    if (trimmed) localStorage.setItem('hmi.bridge.url', trimmed)
+    if (trimmed) localStorage.setItem('hmi.bridge.url', normalized)
     else localStorage.removeItem('hmi.bridge.url')
   } catch {
     /* ignore */
@@ -235,17 +244,20 @@ export function setBridgeUrl(url: string): void {
 
 export async function checkBridge(verbose = true): Promise<void> {
   if (state.bridge.checking) return
-  if (!bridge.ready) {
+  if (!bridge.url) {
     state.bridge.ok = false
     state.bridge.error = '未配置桥接地址'
     return
   }
   state.bridge.checking = true
   try {
-    const health = await bridge.health()
-    state.bridge.ok = !!health.ok
+    bridge.autoReconnect = state.bridge.enabled
+    await bridge.connect(5000)
+    state.bridge.ok = bridge.connected
     state.bridge.error = ''
-    if (verbose) pushLog('info', `桥接可用（v${health.version}，已运行 ${health.uptime}s）`)
+    if (verbose) {
+      pushLog('info', `桥接可用（v${bridge.hello?.version ?? '?'}，${bridge.hello?.streams.length ?? 0} 个流）`)
+    }
   } catch (e) {
     state.bridge.ok = false
     state.bridge.error = (e as Error).message
@@ -487,7 +499,7 @@ export async function grabLidarSnapshot(): Promise<void> {
   try {
     if (bridgeActive()) {
       pushLog('info', '正在从桥接抓取一帧 /vanjee_points722…')
-      emitLidar(await bridge.cloud('vanjee_points722', { voxel: 0.05, max: 200000, timeout: 30000 }))
+      emitLidar(await bridge.requestCloud('vanjee_points722', { voxel: 0.05, max: 200000, timeout: 30000 }))
       return
     }
     if (ros.status !== 'open') {
@@ -522,7 +534,7 @@ export async function grabGridSnapshot(): Promise<void> {
     let grid: GridData | null = null
     if (bridgeActive()) {
       pushLog('info', '正在从桥接获取栅格地图（服务端已压缩）…')
-      grid = await bridge.grid(true)
+      grid = await bridge.requestGrid(true)
     } else {
       if (ros.status !== 'open') {
         pushLog('warn', '未连接 rosbridge，无法抓取栅格地图')
@@ -559,7 +571,7 @@ export function reloadGlobalMap(): void {
   if (bridgeActive()) {
     pushLog('info', '正在从桥接加载 /global_map（体素 0.2m）…')
     void bridge
-      .cloud('global_map', { voxel: 0.2, max: 500000, timeout: 40000 })
+      .requestCloud('global_map', { voxel: 0.2, max: 500000, timeout: 40000 })
       .then((cloud) => {
         for (const fn of globalMapHandlers) fn(cloud)
         pushLog('info', `全局地图：${cloud.count.toLocaleString()} 点（${cloud.frame || '未知坐标系'}）`)
@@ -731,10 +743,12 @@ export function connect(url?: string): void {
   }
   // 桥接地址默认跟随 rosbridge 地址推导（端口 8089 -> 9100）
   if (!localStorage.getItem('hmi.bridge.url')) {
-    state.bridge.url = deriveBridgeUrl(state.url)
-    bridge.setBaseUrl(state.bridge.url)
+    const derived = deriveBridgeUrl(state.url)
+    if (derived !== state.bridge.url) {
+      state.bridge.url = derived
+      bridge.setUrl(derived)
+    }
   }
-  state.bridge.ok = false
   if (state.bridge.enabled) void checkBridge(false)
   ros.connect(state.url)
 }
@@ -777,6 +791,33 @@ export function initHmi(): void {
   if (started) return
   started = true
   registerHandlers()
+
+  bridge.onHello(() => {
+    state.bridge.ok = true
+    state.bridge.error = ''
+    lastBridgeError = ''
+    syncSubscriptions()
+  })
+
+  bridge.onConnection((connected) => {
+    state.bridge.ok = connected
+    if (!connected && state.bridge.enabled) {
+      state.bridge.error = bridge.lastError || state.bridge.error || '桥接已断开'
+      syncSubscriptions()
+    }
+  })
+
+  bridge.onError((message) => {
+    state.bridge.error = message
+    if (message !== lastBridgeError) {
+      lastBridgeError = message
+      pushLog('warn', `桥接：${message}`)
+    }
+  })
+
+  bridge.onStatus((status) => {
+    if (!status.ok) state.bridge.error = status.message || `桥接 ${status.stream} 失败`
+  })
 
   state.topicNames = Object.keys(TOPIC_CATALOG).sort()
   state.topicTypes = { ...TOPIC_CATALOG }

@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package debug_bridge;
+
+// Wire schema for debug_bridge.  Robot: hand-encoded (no protobuf runtime on
+// Melodic/Python 2.7); Browser: protobufjs with the generated JSON descriptor.
+
+enum Compression {
+  NONE = 0;
+  ZLIB = 1;
+}
+
+message Header {
+  string frame_id = 1;
+  double stamp = 2;
+}
+
+message Pose2D {
+  double x = 1;
+  double y = 2;
+  float theta = 3;
+}
+
+message GridFrame {
+  Header header = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  float resolution = 4;
+  Pose2D origin = 5;
+  Compression compression = 6;
+  bytes data = 7; // zlib(int8[width*height]) when compression=ZLIB
+  uint32 seq = 8;
+}
+
+message CloudFrame {
+  Header header = 1;
+  uint32 count = 2;
+  float voxel = 3;
+  Compression compression = 4;
+  bytes xyz_cm = 5; // int16 LE [count*3], centimeters, zlib when ZLIB
+  uint32 seq = 6;
+  string stream = 7;
+}
+
+message StreamInfo {
+  string name = 1;
+  bool available = 2;
+  float rate_hz = 3;
+}
+
+message ServerHello {
+  string name = 1;
+  string version = 2;
+  repeated StreamInfo streams = 3;
+}
+
+message Status {
+  string stream = 1;
+  bool ok = 2;
+  string message = 3;
+  uint64 stamp_ms = 4;
+}
+
+message Error {
+  string message = 1;
+}
+
+message ClientCommand {
+  enum Action {
+    SUBSCRIBE = 0;
+    UNSUBSCRIBE = 1;
+    REQUEST = 2;
+  }
+  Action action = 1;
+  string stream = 2;
+  float rate_hz = 3;
+  float voxel = 4;
+  uint32 max_points = 5;
+  bool refresh = 6;
+}
+
+message Envelope {
+  oneof payload {
+    ServerHello hello = 1;
+    GridFrame grid = 2;
+    CloudFrame cloud = 3;
+    Status status = 4;
+    Error error = 5;
+  }
+}

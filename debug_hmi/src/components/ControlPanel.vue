@@ -79,27 +79,27 @@
         <span class="sec-meta">{{ activeLayers }} / {{ layerList.length }}</span>
       </summary>
       <div class="sec-body">
-        <p class="source-hint">像 RViz 一样按需订阅；只有 TF 常开。大点云 / 栅格建议走桥接。</p>
+        <p class="source-hint">像 RViz 一样按需订阅；只有 TF 常开。大点云 / 栅格走 debug_bridge（WebSocket + protobuf）。</p>
 
         <div class="bridge">
           <div class="row">
-            <label class="live-toggle" title="点云/栅格改走 hmi_bridge（HTTP 二进制，服务端压缩）">
+            <label class="live-toggle" title="点云/栅格改走 debug_bridge（WebSocket + protobuf，服务端降采样）">
               <input
                 type="checkbox"
                 :checked="state.bridge.enabled"
                 @change="toggleBridge(($event.target as HTMLInputElement).checked)"
               />
-              二进制桥接
+              debug_bridge
             </label>
             <span
               class="bridge-state"
               :class="{ ok: state.bridge.ok, bad: !!state.bridge.error }"
               :title="state.bridge.error"
             >
-              {{ state.bridge.ok ? '可用' : state.bridge.error ? '不可用' : '未检测' }}
+              {{ state.bridge.ok ? '可用' : state.bridge.error ? '不可用' : '未连接' }}
             </span>
             <button class="mini" :disabled="state.bridge.checking" @click="applyBridge">
-              {{ state.bridge.checking ? '…' : '检测' }}
+              {{ state.bridge.checking ? '…' : '连接' }}
             </button>
           </div>
           <div class="row">
@@ -107,7 +107,7 @@
               v-model="bridgeInput"
               class="input grow"
               spellcheck="false"
-              placeholder="http://ip:9100"
+              placeholder="ws://ip:9100"
               @keyup.enter="applyBridge"
             />
             <button class="mini" @click="applyBridge">保存</button>
@@ -286,7 +286,9 @@ function toggleBridge(enabled: boolean): void {
   setBridgeEnabled(enabled)
   pushLog(
     'info',
-    enabled ? '桥接已启用：点云/栅格改走 HTTP 二进制' : '桥接已关闭：回到 rosbridge',
+    enabled
+      ? 'debug_bridge 已启用：点云/栅格走 WebSocket + protobuf'
+      : 'debug_bridge 已关闭：回到 rosbridge',
   )
 }
 
@@ -504,7 +506,7 @@ async function doGrabGrid(): Promise<void> {
     const ok = window.confirm(
       '/map 单帧约 43MB（4300 万格），走 CBOR 二进制接收。\n' +
         '设备端要逐个打包这些格子，实测约 1~2 分钟；期间实时数据会暂停。\n' +
-        '建议开启「二进制桥接」后再抓。确定用 rosbridge 抓取吗？',
+        '建议开启 debug_bridge 后再抓。确定用 rosbridge 抓取吗？',
     )
     if (!ok) return
   }

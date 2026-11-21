@@ -166,8 +166,8 @@ const gridCells = computed(() => state.gridCells || (state.pointCounts.grid ?? 0
 const globalMapMissing = computed(
   () =>
     state.layers.globalMap &&
-    state.status === 'open' &&
-    (state.stats['/global_map']?.count ?? 0) === 0,
+    (state.status === 'open' || state.bridge.ok) &&
+    (state.pointCounts.globalMap ?? 0) === 0,
 )
 
 /** 除 TF 外没有勾选任何数据源 */
@@ -249,6 +249,10 @@ function applyGlobalMap(cloud: CloudData): void {
 function bindTopics(): void {
   unsubs.push(
     onGlobalMapSnapshot((cloud) => applyGlobalMap(cloud)),
+  )
+
+  unsubs.push(
+    bridge.onCloud((stream, cloud) => applyBridgeCloud(stream, cloud)),
   )
 
   unsubs.push(
@@ -377,81 +381,30 @@ function applyPointScale(): void {
   lidarLayer.setSize(0.06 * s)
 }
 
-// ---------------------------------------------------------------- bridge polling
+// ---------------------------------------------------------------- bridge push
 
-let scanTimer: number | null = null
-let p2dTimer: number | null = null
-let scanBusy = false
-let p2dBusy = false
-let bridgeErrorLogged = false
-
-function stopBridgePolling(): void {
-  if (scanTimer !== null) {
-    clearInterval(scanTimer)
-    scanTimer = null
-  }
-  if (p2dTimer !== null) {
-    clearInterval(p2dTimer)
-    p2dTimer = null
-  }
+function syncBridgeSubscriptions(): void {
+  const enabled = state.bridge.enabled
+  bridge.setSubscription(
+    'scan',
+    enabled && state.layers.scan ? { rate: 4, voxel: 0.05, max: 200000 } : null,
+  )
+  bridge.setSubscription(
+    'points_2d',
+    enabled && state.layers.points2d ? { rate: 2, voxel: 0.08, max: 200000 } : null,
+  )
 }
 
-async function pollBridgeScan(): Promise<void> {
-  if (scanBusy) return
-  scanBusy = true
-  try {
-    const cloud = await bridge.cloud('scan_f_map', {
-      voxel: 0.05,
-      max: 200000,
-      wait: 0.8,
-      timeout: 5000,
-    })
-    if (!state.bridge.ok || !state.layers.scan) return
+function applyBridgeCloud(stream: string, cloud: CloudData): void {
+  if (stream === 'scan') {
     scanLayer.setPoints(cloud.positions, cloud.colors)
     placeInMap(scanLayer.object, cloud.frame)
     state.pointCounts.scan = cloud.count
     lastFineScan = performance.now()
-    bridgeErrorLogged = false
-  } catch (e) {
-    if (!bridgeErrorLogged) {
-      bridgeErrorLogged = true
-      pushLog('warn', `桥接扫描获取失败：${(e as Error).message}`)
-    }
-  } finally {
-    scanBusy = false
-  }
-}
-
-async function pollBridge2d(): Promise<void> {
-  if (p2dBusy) return
-  p2dBusy = true
-  try {
-    const cloud = await bridge.cloud('points_2d', {
-      voxel: 0.08,
-      max: 200000,
-      wait: 0.8,
-      timeout: 5000,
-    })
-    if (!state.bridge.ok || !state.layers.points2d) return
+  } else if (stream === 'points_2d') {
     points2dLayer.setPoints(cloud.positions, cloud.colors)
     placeInMap(points2dLayer.object, cloud.frame)
     state.pointCounts.points2d = cloud.count
-  } catch {
-    /* 2D 点云没数据时不刷屏 */
-  } finally {
-    p2dBusy = false
-  }
-}
-
-function syncBridgePolling(): void {
-  stopBridgePolling()
-  if (!state.bridge.enabled || !state.bridge.ok) return
-  if (state.layers.scan) {
-    void pollBridgeScan()
-    scanTimer = window.setInterval(() => void pollBridgeScan(), 250)
-  }
-  if (state.layers.points2d) {
-    p2dTimer = window.setInterval(() => void pollBridge2d(), 500)
   }
 }
 
@@ -800,8 +753,8 @@ watch(
 )
 
 watch(
-  () => [state.bridge.enabled, state.bridge.ok, state.layers.scan, state.layers.points2d] as const,
-  () => syncBridgePolling(),
+  () => [state.bridge.enabled, state.layers.scan, state.layers.points2d] as const,
+  () => syncBridgeSubscriptions(),
   { immediate: true },
 )
 
@@ -868,7 +821,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   resizeObserver?.disconnect()
-  stopBridgePolling()
+  bridge.setSubscription('scan', null)
+  bridge.setSubscription('points_2d', null)
   for (const unsub of unsubs) unsub()
   window.removeEventListener('keydown', onKeyDown)
   globalLayer.dispose()

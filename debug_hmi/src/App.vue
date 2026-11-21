@@ -1,7 +1,7 @@
 <template>
   <div class="app">
     <header class="topbar">
-      <div class="brand">rosiwit<span>HMI</span></div>
+      <div class="brand">rosiwit<span>debug_hmi</span></div>
       <ConnectionPill />
 
       <div class="state">

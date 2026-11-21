@@ -7,7 +7,7 @@ import type { GridData } from './decode'
  * 直接把 downsample 前的 Int8Array 存下来（约 43MB），启动时恢复并重新生成纹理。
  */
 
-const DB_NAME = 'rosiwit-hmi'
+const DB_NAME = 'debug_hmi'
 const DB_VERSION = 1
 const STORE = 'grid'
 const KEY = 'latest'

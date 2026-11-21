@@ -1,0 +1,243 @@
+{
+  "nested": {
+    "debug_bridge": {
+      "nested": {
+        "Compression": {
+          "values": {
+            "NONE": 0,
+            "ZLIB": 1
+          }
+        },
+        "Header": {
+          "fields": {
+            "frame_id": {
+              "type": "string",
+              "id": 1
+            },
+            "stamp": {
+              "type": "double",
+              "id": 2
+            }
+          }
+        },
+        "Pose2D": {
+          "fields": {
+            "x": {
+              "type": "double",
+              "id": 1
+            },
+            "y": {
+              "type": "double",
+              "id": 2
+            },
+            "theta": {
+              "type": "float",
+              "id": 3
+            }
+          }
+        },
+        "GridFrame": {
+          "fields": {
+            "header": {
+              "type": "Header",
+              "id": 1
+            },
+            "width": {
+              "type": "uint32",
+              "id": 2
+            },
+            "height": {
+              "type": "uint32",
+              "id": 3
+            },
+            "resolution": {
+              "type": "float",
+              "id": 4
+            },
+            "origin": {
+              "type": "Pose2D",
+              "id": 5
+            },
+            "compression": {
+              "type": "Compression",
+              "id": 6
+            },
+            "data": {
+              "type": "bytes",
+              "id": 7
+            },
+            "seq": {
+              "type": "uint32",
+              "id": 8
+            }
+          }
+        },
+        "CloudFrame": {
+          "fields": {
+            "header": {
+              "type": "Header",
+              "id": 1
+            },
+            "count": {
+              "type": "uint32",
+              "id": 2
+            },
+            "voxel": {
+              "type": "float",
+              "id": 3
+            },
+            "compression": {
+              "type": "Compression",
+              "id": 4
+            },
+            "xyz_cm": {
+              "type": "bytes",
+              "id": 5
+            },
+            "seq": {
+              "type": "uint32",
+              "id": 6
+            },
+            "stream": {
+              "type": "string",
+              "id": 7
+            }
+          }
+        },
+        "StreamInfo": {
+          "fields": {
+            "name": {
+              "type": "string",
+              "id": 1
+            },
+            "available": {
+              "type": "bool",
+              "id": 2
+            },
+            "rate_hz": {
+              "type": "float",
+              "id": 3
+            }
+          }
+        },
+        "ServerHello": {
+          "fields": {
+            "name": {
+              "type": "string",
+              "id": 1
+            },
+            "version": {
+              "type": "string",
+              "id": 2
+            },
+            "streams": {
+              "rule": "repeated",
+              "type": "StreamInfo",
+              "id": 3
+            }
+          }
+        },
+        "Status": {
+          "fields": {
+            "stream": {
+              "type": "string",
+              "id": 1
+            },
+            "ok": {
+              "type": "bool",
+              "id": 2
+            },
+            "message": {
+              "type": "string",
+              "id": 3
+            },
+            "stamp_ms": {
+              "type": "uint64",
+              "id": 4
+            }
+          }
+        },
+        "Error": {
+          "fields": {
+            "message": {
+              "type": "string",
+              "id": 1
+            }
+          }
+        },
+        "ClientCommand": {
+          "fields": {
+            "action": {
+              "type": "Action",
+              "id": 1
+            },
+            "stream": {
+              "type": "string",
+              "id": 2
+            },
+            "rate_hz": {
+              "type": "float",
+              "id": 3
+            },
+            "voxel": {
+              "type": "float",
+              "id": 4
+            },
+            "max_points": {
+              "type": "uint32",
+              "id": 5
+            },
+            "refresh": {
+              "type": "bool",
+              "id": 6
+            }
+          },
+          "nested": {
+            "Action": {
+              "values": {
+                "SUBSCRIBE": 0,
+                "UNSUBSCRIBE": 1,
+                "REQUEST": 2
+              }
+            }
+          }
+        },
+        "Envelope": {
+          "oneofs": {
+            "payload": {
+              "oneof": [
+                "hello",
+                "grid",
+                "cloud",
+                "status",
+                "error"
+              ]
+            }
+          },
+          "fields": {
+            "hello": {
+              "type": "ServerHello",
+              "id": 1
+            },
+            "grid": {
+              "type": "GridFrame",
+              "id": 2
+            },
+            "cloud": {
+              "type": "CloudFrame",
+              "id": 3
+            },
+            "status": {
+              "type": "Status",
+              "id": 4
+            },
+            "error": {
+              "type": "Error",
+              "id": 5
+            }
+          }
+        }
+      }
+    }
+  }
+}

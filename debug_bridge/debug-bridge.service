@@ -1,5 +1,5 @@
 [Unit]
-Description=rosiwit HMI data bridge
+Description=rosiwit debug_bridge
 After=network.target xzrobot.service
 Wants=xzrobot.service
 PartOf=xzrobot.service
@@ -8,7 +8,7 @@ PartOf=xzrobot.service
 User=xzrobot
 Environment=PYTHONUNBUFFERED=1
 Environment=ROS_MASTER_URI=http://127.0.0.1:11311
-ExecStart=/bin/bash -lc "source /opt/ros/melodic/setup.bash && exec python /home/xzrobot/hmi_bridge/hmi_bridge.py --port 9100"
+ExecStart=/bin/bash -lc "source /opt/ros/melodic/setup.bash && exec python /home/xzrobot/debug_bridge/debug_bridge.py --port 9100"
 Restart=always
 RestartSec=3
 
