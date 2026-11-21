@@ -1,178 +1,188 @@
-# 持久度体素地图 + 会话子图 方案（2026-11-21）
+# 可信度地图 + 滚动子图 定位方案（2026-11-21，v2）
 
-> 背景：现场出现过"明明定位错了却显示成功"（详见 `docs/ros1_deploy_runbook.md` §6.5）。
-> 根因是**只靠单帧局部 GICP fitness 判断**，而堆货区每天都在变：局部子图（1.2 万点）
-> 在错误位姿上也能配到 0.80~0.84，被判为定位成功且无法自行脱离。
+> 背景：现场出现过"明明定位错了却显示成功"（`docs/ros1_deploy_runbook.md` §6.5）。
+> 根因：只靠单帧局部 GICP fitness，而堆货区每天在变 —— 局部子图（1.2 万点）在错误位姿
+> 上也能配到 0.80~0.84，被判成定位成功且无法自行脱离。
 >
-> 本方案给体素加"持久度"维度，并引入"会话子图 + 全局锚定"，让
-> **变化的东西不参与定位、当天几何保证不丢、全局位姿有锚**。
+> v2 修正了两处设计错误：**不做时间衰减**（存在性只由观测证据决定）、
+> **子图不是会话物件**（一个、以机器人为中心、一直在）。
 
 ## 0. 决策摘要
 
 | # | 决策 | 结论 |
 |---|---|---|
-| ① | 会话层怎么划 | **C：不划实体子图**。体素带 `w` + `last_seen`，"子图" = 「距我 R 内 且 最近 T 内见过」的查询 |
-| ② | 跨天怎么算 | **C：连续新鲜度衰减**（无硬边界）。临时层 τ≈36 h，静态层 τ≈30 d |
-| ③ | 锚定频率 | **B：每秒一次 + 质量门槛**（连续 3 帧 `static_support ≥ τ_s` 才更新）+ 恢复时事件补一次 |
-| ④ | DEGRADED 怎么报 | **不扩接口**：DEGRADED 映射为 `location_status = 1`（INIT），位姿照常输出，原因只进日志 |
+| ① | 子图形态 | **一个**机器人中心滚动子图（odom 系，半径 R，覆盖式更新） |
+| ② | 新鲜度/跨天 | **不做时间衰减**。存在性只由 hit/miss 证据决定 |
+| ③ | 锚定 | `map→odom` 只在「高可信几何可见」时更新，限速回灌；否则冻结 |
+| ④ | DEGRADED 怎么报 | **不扩接口**：`location_status = 1`（INIT），位姿照发 |
 
-## 1. 数据模型
+## 1. 两个结构，职责严格分开
 
-体素层是**独立 sidecar**，不动 `xzmap` v1 格式（App/其它设备不受影响）：
+| 结构 | 内容 | 谁用 | 更新 |
+|---|---|---|---|
+| **全局图** | `{w}`（+ 诊断用 `last_seen`） | **只用于锚定**：挑高 `w` 几何算 `map→odom` | 证据驱动（hit/miss） |
+| **子图** | odom 系下机器人 ±R 的点/体素缓冲 | **只用于跟踪**：局部 GICP 目标 | 覆盖式，每帧 |
+
+关键点：
+
+- **`w` 只在全局图里存在**，语义是"这块几何能不能当锚"，不是"这块几何新不新"
+- **子图里没有 `w`**：它的内容永远是"当前看到的样子"，所以不需要置信度
+- 子图**不需要** `session_id`、不需要"建/关"状态 —— 它一直在，走哪跟哪
+
+这正是我们现有的坐标系结构：
+
+```
+pose_global = T_map_odom × pose_odom
+                   ▲              ▲
+                   │              └── LIO 里程计（已有，局部连续）
+                   └── 全局匹配产物（已有，但要加门控）
+```
+
+## 2. 全局图的置信度 `w`
 
 ```c
-struct Voxel {          // 0.15 m
-    uint8_t  w;         // 持久度 0~255
-    uint32_t last_seen; // 秒
-};                      // 6 B/体素；稀疏哈希，仓库尺度 5~15 MB
+struct Voxel {
+    uint8_t  w;          // 可信度 0~255
+    uint32_t last_seen;  // 仅诊断/事后分析, **不参与任何决策**
+};
 ```
 
-**两个维度，不引入第三个**：删除的"连续确认"用 `k_miss` 比例表达（见 §2），
-效果等价于 `miss_streak`，但只占两个字段。
-
-挂载点（已核对）：
-
-| 位置 | 用途 |
+| 事件 | 操作 |
 |---|---|
-| `slam_core/map_data.h` → `MapData` | 增加可选的持久层（不进 `xzmap`，由适配层读写 sidecar） |
-| `algorithms/localization/maintainer/overlay_map_maintainer.{h,cpp}` | **权重更新的落地位置**；`onLocalized(pose, scan, match, pose_confident)` 已带健康门控 |
-| `slam_core/pipeline_types.h` → `Observation` | miss 射线的现成证据源（ray casting） |
+| hit：本帧点落在体素内，**且位姿健康** | `w = min(255, w + 8)`；`last_seen = now` |
+| miss：**射线穿过**该体素（free-space evidence） | `w = max(0, w − 8)` |
+| FOV 外 / 超量程 / 被遮挡 | **不动** |
+| `w == 0` | 删除（满权重 → 删除 = 32 次连续 miss ≈ 3 s） |
 
-## 2. 更新规则
+**只在 `LOCALIZED` 或 `DEGRADED` 且局部匹配健康时更新**；`LOST` 期间只读不写
+（位姿不可信时写图 = 自我腐蚀）。
 
-**只在 `LOCALIZED` 且 `fitness ≥ credible_fitness` 时更新**（位姿不可信时写图 = 自我腐蚀）。
+> **为什么没有时间衰减**：`w` 衡量的是"观测一致性"，时间不是证据。
+> 三天没去的区域保留原样是**正确**的（没有证据说它变了）；搬走的货靠射线 miss 删。
+> 高 `w` 的旧货堆在搬走后的几秒内仍存在，但**不影响跟踪**（见 §3：跟踪用子图）。
 
-| 事件 | 操作 | 常量 |
-|---|---|---|
-| hit：本帧点落在体素内 | `w = min(255, w + 8)`；`last_seen = now` | `k_hit = 8` |
-| miss：**射线穿过**该体素（free-space evidence） | `w = max(0, w − 16)` | `k_miss = 16` |
-| FOV 外 / 超量程 / 被遮挡 | **不动** | — |
-| `w == 0` | 从图中删除（= 连续 16 次 miss 才能抹掉满权重） | — |
+> **`w` 分不出"临时"**：一堆货连续观测 100 次，`w` 同样到 255。这不影响正确性 ——
+> 它在的时候用它匹配是对的；它搬走时靠子图接管 + miss 掉权。
+> 若将来要"临时物即使在场也排后"，再加 `flip`（出现/消失次数），属可选增强。
 
-> **必须区分"扫不到"和"没观测"**：只认射线穿过的 free-space，不认"这一帧没在这里看到点"。
-> 否则机器人没去的区域、柱子后的墙会在几周内权重归零被删掉。
-
-## 3. 读侧
-
-```text
-fresh   = (now - last_seen) < τ                 // 临时 36h / 静态 30d
-w_eff   = fresh ? w : 0                         // 读时算，不做全图扫描（ARM 必须懒算）
-匹配目标 = { w_eff >= W_match }                  // 只有高持久几何参与 GICP
-障碍层   = { w > 0 }                            // 导航只关心"当前占据"
-```
-
-- **不改 fitness 定义**：靠"过滤目标"实现"固定物得分高、变化物得分低"，避免重标阈值链
-- 新增诊断量 `static_support` = 本帧匹配上的点中 `w_eff ≥ W_match` 的占比
-
-## 4. 会话子图 + 全局锚定
-
-"子图"不是一个实体，而是**一次查询**：
-
-```text
-session_submap(pose) = { v | dist(v, pose) < R  &&  now - v.last_seen < T_session }
-```
-
-| 量 | 作用 | 初值 |
-|---|---|---|
-| `R` | 局部半径（只在这里裁点云） | 25 m |
-| `T_session` | 会话新鲜度 | 24 h |
-| `T_global_session` | 会话层 → 全局的位姿 | 由锚定估计 |
-
-**锚定**：每 ~1 s，用「静态层高权重点 ↔ 会话层」做一次局部配准，得到 `T_gs`
-（会话系→全局）。要求连续 3 帧 `static_support ≥ τ_s` 才接受；接受时**限速回灌**：
-
-```text
-每帧位姿修正 ≤ 2 cm / 0.5°      // 防止在堆货区出口跳变
-pose_global = T_gs * pose_session
-```
-
-**进入完全变化的区域**：会话层跟着当天几何走 → 局部不丢；`T_gs` 沿用上一次 →
-全局不崩；`static_support` 掉到 `τ_s` 以下 → 状态降为 DEGRADED（不谎报 LOCALIZED）。
-
-## 5. 状态机（不扩接口）
-
-| 状态 | 判据 | 对 App |
-|---|---|---|
-| `LOCALIZED` | 会话匹配健康 **且** `static_support ≥ τ_s` | `location_status = 0` |
-| `DEGRADED`（新，仅内部） | 会话匹配健康，但 `static_support < τ_s` | **`location_status = 1`**（INIT），位姿照发 |
-| `LOST` | 会话匹配不健康（连续 `lost_patience`） | `location_status = 2` |
-
-日志（1 Hz）：`[quality] static_support=0.12 w_ratio=0.31 anchor_age=37s state=DEGRADED`。
-**不新增话题/消息字段**（`SlamInfo` 是厂商消息，加字段会改 md5，App 会直接收不到）。
-
-## 6. 评分策略可插拔（影子运行）
+## 3. 滚动子图（唯一，机器人中心）
 
 ```cpp
-class IMatchScorer {
-  virtual Score evaluate(const MatchResult&, const PersistenceView&) = 0;
+struct RollingSubmap {
+    VoxelLayer voxels;          // odom 系, 覆盖式
+    Vec3       center;          // 上次更新时的机器人位置
 };
-// Coverage          = 现状 (inliers / correspondences)
-// PersistenceWeighted = Σ w_i·inlier_i / Σ w_i
-// StaticOnly        = 只用 w ≥ W_match 的目标重算
-// Composite         = 覆盖率 + 加权 + 一致性
 ```
 
-配置 `accept.scorer` 选实现，`accept.shadow` 同时算另一个只记日志。
-**换 scorer 必须配独立的阈值组**（`accept.scorer_thresholds`），不改现有 0.85/0.80/0.75 ——
-这些是绑在"当前 fitness 语义"上的，混用会重演假锁。
+每帧更新（**不需要位姿可信**，因为它只记录"我看到了什么"）：
 
-## 7. 配置（新增段，默认不改变现有行为）
+```
+本帧点落到的体素      → 写入占据
+射线穿过但没点的体素  → 清空
+超出 R 的体素         → 丢弃
+```
+
+`R ≈ 25 m`：内存恒定（稀疏体素，几万点），走哪跟哪。
+
+**跟踪**：当前帧 ↔ 子图（odom 系）做局部 GICP → `pose_odom`。
+
+> 为什么它能"1 帧跟上变化"：子图是**覆盖式**的，不是积分。
+> 货堆搬走的下一帧，射线穿过原位置 → 子图里就是空的，不需要等任何权重下降。
+
+## 4. 锚定：`map→odom` 的门控
+
+每帧算 `static_support` = 当前匹配上的点中，落在**全局高 w 体素**里的占比。
+
+```
+static_support ≥ τ_s   → 允许更新 map→odom（限速：每次 ≤2 cm / 0.5°）
+static_support <  τ_s   → 冻结 map→odom（沿用最后有效值），anchor_age += dt
+```
+
+**大幅修正不静默应用**：若一次需要的修正 > 0.5 m，视为"重定位事件"而非"平滑拉回" ——
+记录日志，保持 DEGRADED，等操作员/全局重定位确认。避免在堆货区出口把位姿硬拽过去。
+
+## 5. 状态机（只看"锚"和"局部匹配"）
+
+| 状态 | 判据 | 输出 |
+|---|---|---|
+| `LOCALIZED` | 局部匹配健康 **且** 锚在更新（`static_support ≥ τ_s`） | `location_status = 0` |
+| `DEGRADED` | 局部匹配健康，但锚冻结（`anchor_age` 增长） | **`location_status = 1`**，位姿照发 |
+| `LOST` | 局部匹配不健康（连续 `lost_patience`） | `location_status = 2` |
+
+"突然进入堆满货的区域" = **子图继续跟 + 锚冻结 + DEGRADED**；
+"出来看到柱子" = 锚恢复更新 → `LOCALIZED`。全程没有"建子图/关子图"这个动作。
+
+日志（1 Hz）：
+```
+[quality] static_support=0.12 anchor_age=37s submap_pts=18432 state=DEGRADED
+```
+
+## 6. 配置
 
 ```yaml
 persistence:
   enabled: true
-  shadow: true                 # ★A 阶段: 只记录, 不参与决策
+  shadow: true                 # A 阶段: 只记录 w, 不参与锚定门控
   voxel_size: 0.15
   hit_gain: 8
-  miss_cost: 16
-  tau_temp_h: 36               # 临时层(货堆)
-  tau_static_d: 30             # 静态层(墙/柱)
-  w_match: 128                 # 参与匹配的门限
-  radius_m: 25                 # 会话子图查询半径
-  session_h: 24                # 会话新鲜度
-  anchor_period_s: 1.0
-  anchor_min_static_support: 0.25
-  anchor_max_corr_m: 0.02      # 限速回灌
-  anchor_max_corr_deg: 0.5
+  miss_cost: 8
+  w_anchor: 128                # 可当锚的最低可信度
+  submap_radius_m: 25          # 滚动子图半径
+
+anchor:
+  period_s: 1.0                # 锚定尝试周期
+  min_static_support: 0.25     # 允许更新 map→odom 的门槛
+  max_corr_m: 0.02             # 单次限速
+  max_corr_deg: 0.5
+  relocalize_jump_m: 0.5       # 超过此修正 -> 视为重定位事件, 不静默应用
 ```
 
-阈值链不变：`min_coverage 0.35 < lost 0.75 < credible 0.80 ≤ reloc_accept 0.85`。
+阈值链保持不变：`min_coverage 0.35 < lost 0.75 < credible 0.80 ≤ reloc_accept 0.85`。
 
-## 8. 分阶段实施与验收
+## 7. 分阶段实施与验收
 
-| 阶段 | 内容 | 改动面 | 验收指标 |
+| 阶段 | 内容 | 改动面 | 验收 |
 |---|---|---|---|
-| **A**（只记录） | sidecar 体素层 + hit/miss 更新 + 懒衰减 + 导出高权重点云 + `[quality]` 日志。**shadow=true，不参与匹配** | `overlay_map_maintainer`、`map_data.h`、io sidecar、日志 | ① 每天导出 `w_eff≥128` 的点云是否只剩立柱/墙体；② `static_support` 分布；③ 体素总量/内存实测 |
-| **B** | 会话子图查询（R/T_session）+ 子图内跟踪 | `local_map/keyframe_submap` 增加第二级目标 | 堆货区整体更换后不 LOST；连续跟踪时长 |
-| **C** | 锚定 `T_gs` + 限速回灌 + DEGRADED 状态 | `localization_pipeline` 状态机、`pose_publisher` 映射 | 出堆货区位姿跳变 ≤ 3 cm；`static_support` 与漂移的相关性 |
-| **D** | 可插拔 scorer + 独立阈值（shadow 对比） | `acceptMatch` 上层 | 同一段数据上新旧判定差异 |
+| **A**（只记录） | 全局图 `w` 更新 + 滚动子图（仅构建/统计，不参与匹配）+ `[quality]` 日志 + 导出 `w≥128` 点云 | `overlay_map_maintainer`、新增 `RollingSubmap`、sidecar 读写 | ①导出的高 w 点云是否只剩立柱/墙；②`static_support` 分布；③子图点数/内存实测 |
+| **B** | 跟踪目标切到子图（odom 系），保留全局匹配只做锚 | `localization_pipeline` 的匹配入口 | 堆货区整体更换后不 LOST；连续跟踪时长 |
+| **C** | 锚定门控 + 限速回灌 + DEGRADED 状态 | `map→odom` 更新处、`pose_publisher` 状态映射 | 出口处位姿跳变 ≤3 cm；`static_support` 与漂移的相关性 |
+| **D** | 可选：`flip` 字段、评分策略可插拔（影子对比） | `acceptMatch` 上层 | 同一段数据新旧判定差异 |
 
-A 跑一周即可给出 B/C/D 需要的参数（R、τ、τ_s），**不需要动任何决策逻辑**。
+A 跑一周即可定量出 `τ_s`、`R`、`w_anchor` 的取值。
+
+## 8. 代码落点（已核对）
+
+| 位置 | 用途 |
+|---|---|
+| `algorithms/localization/maintainer/overlay_map_maintainer.{h,cpp}` | 全局图 `w` 更新；`onLocalized(..., pose_confident)` 是现成的健康门控 |
+| `slam_core/map_data.h` → `MapData` | 挂 sidecar 持久层（不动 `xzmap` v1 格式） |
+| `slam_core/pipeline_types.h` → `Observation` | miss 射线的现成证据源 |
+| 新增 `algorithms/localization/local_map/rolling_submap.{h,cpp}` | 机器人中心子图（覆盖式） |
+| `localization_pipeline` 匹配入口 | 目标从"全局裁剪"改为"子图" |
+| `pose_publisher.cpp` / `sendTransform` / `broadcastMapOdom` | `map→odom` 门控与冻结（冻结逻辑已存在） |
 
 ## 9. 风险与回滚
 
 | 风险 | 处置 |
 |---|---|
-| 位姿不可信时写图 → 地图自我腐蚀 | 只在 `LOCALIZED && fitness ≥ credible` 时更新 |
-| 未观测区域误衰减 | 只认射线 miss；FOV/遮挡不动 |
-| 锚定修正导致位姿跳变 | 限速回灌 + 只在质量门槛满足时更新 |
-| DEGRADED 被当成功 | 映射为 `location_status=1`，日志带原因 |
-| 层数据写坏 | sidecar 单独文件 + 保存前一版，可整层回滚（不动 `xzmap`） |
+| 位姿不可信时写 `w` | 只在匹配健康时更新；`LOST` 期间只读 |
+| 未观测区域被误删 | 只认射线 miss；FOV/遮挡不动 |
+| 锚冻结期间漂移累积 | `anchor_age` 暴露 + DEGRADED；超过累计位移/时长上限如实降级 |
+| 出口大幅修正 | >0.5 m 视为重定位事件，不静默拉回 |
+| 层数据写坏 | sidecar 独立文件 + 保留上一版，可整层回滚（不动 `xzmap`） |
 
-## 10. 明确不做
+## 10. 明确不做（含原因）
 
-- **区域掩码**：需要人维护，只作为临时补丁，不做进产品
-- **改厂商 `SlamInfo`**：会破坏 md5，App 直接失效
-- **逐点短暂性概率**：每点/每体素跨天概率模型，ARM 上不划算，且治不了"匹配歧义"
-- **替代反光板**：本方案与反光板是**并行**关系；纯货堆区没有不变几何时，权重机制会让定位
-  诚实失败（LOST），而不是给出错误位姿 —— 要"能定位"仍需反光柱/立柱提供锚
+| 不做 | 原因 |
+|---|---|
+| 时间衰减 / `fresh` | "没看到就过期"违背证据原则；高 w 旧货堆不影响跟踪 |
+| 区域掩码 | 需要人维护，且货堆边界每天都在动 |
+| 区域级变更检测 | 子图覆盖式更新已经能 1 帧跟上，不需要额外仲裁 |
+| `session_id` / 子图建关状态 | 子图是滚动的，不存在"会话" |
+| 改厂商 `SlamInfo` 加字段 | 改 md5，App 直接收不到消息 |
+| 替代反光板 | 并行关系。纯货堆区没有高 w 几何时，锚只能冻结（DEGRADED），要"能锚"仍需立柱/反光柱 |
 
-## 11. 下一步
+## 11. 一句话总结
 
-A 阶段（shadow）落地顺序：
-
-1. `VoxelLayer`（hash voxel + 懒衰减）—— 独立类，先单测
-2. `OverlayMapMaintainer::onLocalized` 里接 hit/miss 更新（用现成的 `pose_confident` 门控）
-3. sidecar 读写（`map.voxel`）+ 导出高权重点云（离线看效果）
-4. `[quality]` 1 Hz 日志（`static_support` / `w_ratio` / 体素数）
-5. 影子跑一周，再决定 B/C 的参数
+> **全局图回答"哪儿可以当锚"（`w`）；子图回答"我现在周围是什么"（覆盖式、odom 系）；
+> `map→odom` 是两者之间的唯一交接点 —— 看得见锚就修正，看不见就冻结并如实降级。**
