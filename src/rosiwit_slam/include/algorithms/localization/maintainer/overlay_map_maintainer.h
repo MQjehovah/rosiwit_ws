@@ -101,7 +101,7 @@ private:
     size_t m_overlay_count = 0;
     size_t m_novel_votes = 0;       // 本帧计票的候选体素数(诊断)
     size_t m_novel_committed = 0;   // 本帧沉淀的体素数(诊断)
-    // [临时探针] collectNovel 各分支计数, 定位"新结构不进 overlay"
+    // [诊断] collectNovel 各分支计数, 定位"新结构不进 overlay"
     size_t m_dbg_scan = 0, m_dbg_seen = 0, m_dbg_base = 0, m_dbg_kd = 0, m_dbg_cluster = 0;
     uint64_t m_revision = 0;      // 内容版本号: addPoint/load 自增, 供目标缓存判失效
 

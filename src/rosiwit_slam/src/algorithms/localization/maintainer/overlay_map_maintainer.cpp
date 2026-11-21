@@ -405,7 +405,7 @@ void OverlayMapMaintainer::collectNovel(const PoseStamped& pose, const CloudType
             ++m_novel_committed;
         }
     }
-    // [临时探针] 每 100 帧打一次分支计数
+    // [诊断] 每 100 帧打一次分支计数 (定位"新结构不沉淀")
     if (m_frame % 100 == 0) {
         std::cout << "[maint] scan=" << m_dbg_scan
                   << " seen=" << m_dbg_seen
