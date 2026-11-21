@@ -928,16 +928,26 @@ def current_map_pcd(map_name):
 
         conn = sqlite3.connect(MAP_DB)
         try:
+            conn.text_factory = str
             cur = conn.cursor()
+            name = map_name
+            if not isinstance(name, type(u"")):
+                try:
+                    name = name.decode("utf-8", "replace")
+                except AttributeError:
+                    pass
             if map_name:
                 cur.execute(
-                    "select uuid from map where name=? order by id desc limit 1", (map_name,)
+                    "select uuid from map where name=? order by id desc limit 1", (name,)
                 )
             else:
                 cur.execute("select uuid from map order by id desc limit 1")
             row = cur.fetchone()
             if row and row[0]:
-                path = os.path.join(MAPS_DIR, str(row[0]), "map.pcd")
+                uuid = row[0]
+                if not isinstance(uuid, str):
+                    uuid = uuid.decode("utf-8", "replace")
+                path = os.path.join(MAPS_DIR, uuid, "map.pcd")
         finally:
             conn.close()
     except Exception as e:
