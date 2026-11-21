@@ -168,6 +168,9 @@ private:
     /// setInitPose 后首帧必须通过 global.reloc_accept_score；失败仍留在 INIT，
     /// 由 lost_patience 连续帧计数决定何时 LOST。
     bool m_seed_pending = false;
+    /// 种子观察窗剩余帧数: 进入 LOCALIZED 时置为 monitor.scrutiny_frames,
+    /// 期间每帧都要求 fitness >= reloc_accept_score, 否则退回 INIT。
+    int m_scrutiny_frames = 0;
     uint64_t m_cached_target_rev = 0;   // 建缓存时的维护层版本号(overlay 变更 -> 失效)
 
     // 全局重定位库后台构建 (2026-10-17 推行丢失事故: 懒建把 44.6s 的 FPFH 全图特征
@@ -207,13 +210,8 @@ private:
     int m_unhealthy_streak = 0;
     // 匹配位姿与融合输出持续分歧帧数 (创新过大但 ESKF 一直拒收 -> 判定定位不可信)
     int m_inconsistent_streak = 0;
-    // 种子观察窗剩余帧数: 进入 LOCALIZED 时置为 m_scrutiny_cfg_frames,
-    // 期间 fitness 掉到 reloc_accept_score 以下直接退回 INIT
-    int m_scrutiny_frames = 0;
-    // 配置 (来自 localization.monitor.*): 不放进 MonitorConfig 头文件,
-    // 避免改头文件触发核心库全量重编 (设备上 aarch64 编译很慢).
-    int m_scrutiny_cfg_frames = 0;   // 默认关闭: 本站稳态 fitness 0.80~0.87,
-                                     // 用 0.85 复核会在 0.80~0.85 抖动时反复 LOCALIZED<->INIT
+    // 阈值来自 localization.monitor.*: 匹配位姿 vs 融合输出的平移/航向分歧超过它算一帧不一致,
+    // 连续 lost_patience 帧即判 LOST (现场: GICP 每帧匹配到 ~10m 外, 但 ESKF 一直拒收)
     double m_consensus_trans_m = 1.0;
     double m_consensus_yaw_deg = 20.0;
 

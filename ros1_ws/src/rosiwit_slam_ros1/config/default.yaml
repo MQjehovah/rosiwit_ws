@@ -348,7 +348,10 @@ localization:
   # ---- 全局重定位 (relocalizer: scan_context | bbs | fpfh_ransac) ----
   global:
     min_score: 0.5
-    reloc_accept_score: 0.80  # ★联动(阈值链): ≥ credible_fitness(0.80); 低于此值保持
+    reloc_accept_score: 0.85  # ★与厂商 th_fitness_relocalization 对齐。
+                              # 2026-11-21: 0.80->0.85。0.80 时错误位姿在局部子图
+                              # (1.2万点) 上能拿到 0.80~0.84, 被判"定位成功"并锁死。
+                              # 只抬种子线, credible(0.80) 不动, 避免跟踪抖动。
                               # LOST(诚实), 不接受弱重定位进僵尸态
     top_k: 5                    # 全局重定位多候选数 (按分数降序精配, 命中 0.95+ 即停)
     # 丢失后重定位尝试间隔(帧, 节流)。30 帧(~2s)太密: 每次尝试含多起点 GICP
@@ -395,12 +398,13 @@ localization:
                              # 0.81~0.87, 0.85 会让状态在 INIT/TRACKING 间抖动。
     lost_fitness: 0.75        # 低于此值直接判为不健康帧
     localized_patience: 3     # 连续健康帧数达到此值 -> LOCALIZED
+    scrutiny_frames: 0        # 进入 LOCALIZED 后前 N 帧仍要求 >= reloc_accept_score, 撑不住退回 INIT
+                              # (治"0.80~0.84 局部自洽假锁"); 0=关闭
+                              # 2026-11-21 实机: 本站稳态 fitness 0.80~0.87, 用 0.85 复核会在
+                              # 0.80~0.85 抖动时反复 LOCALIZED<->INIT, 反而把定位抖丢, 故默认关闭.
     lost_patience: 30         # 连续不健康帧数达到此值 -> LOST (约3s, 避免LOST后HMI仍显示成功10s)
                               # (统一替代原 mediocre_patience / lost_patience_low / coast_patience;
                               #  2026-10-17 僵尸带事故: fitness 长期 0.5~0.67 时必须能判丢)
-    scrutiny_frames: 0        # 进入 LOCALIZED 后前 N 帧仍按 reloc_accept_score 复核(弱种子假锁)
-                              # 默认 0=关闭: 本站稳态 fitness 0.80~0.87, 用 0.85 复核会在
-                              # 0.80~0.85 抖动时反复 LOCALIZED<->INIT, 反而把定位抖丢.
     # 匹配位姿 vs 融合输出长期分歧 -> 判不健康(定位错了但界面仍显示成功).
     # 现场: GICP 每帧给出 ~10m 外匹配, 但 ESKF 卡方门控一直拒收, 发布位姿靠 IMU 推算
     # 不动、z 甚至掉到地下几米; fitness 仍 0.8+, 只看覆盖率永远判不了丢.

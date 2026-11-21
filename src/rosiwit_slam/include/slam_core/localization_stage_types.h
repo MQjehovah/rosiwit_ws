@@ -277,6 +277,11 @@ struct MonitorConfig {
     //   INIT/LOCALIZED -> LOST 需要连续 lost_patience 帧不健康。
     // 原 mediocre_patience / lost_patience_low / coast_patience 已合并到 lost_patience。
     int    localized_patience = 3;   // 连续健康帧数 -> LOCALIZED
+    // 种子观察窗: 刚进入 LOCALIZED 的前 N 帧, 仍要求 fitness >= reloc_accept_score
+    // (而不是只要求 >= lost_fitness)。撑不住就退回 INIT —— 专治
+    // "0.80~0.84 的局部自洽假锁": 假锁撑不过观察窗, 真锁不会掉。0=关闭。
+    int    scrutiny_frames = 0;      // 默认关闭: 本站稳态 fitness 0.80~0.87, 用 0.85 复核会抖动
+                                     // (实机 2026-11-21); 设备上如需可设 ~10 (~1s @10Hz)
     int    lost_patience = 100;      // 连续不健康帧数 -> LOST
     int    window_length = 20;       // windowed: 滑窗长度
     double window_std_k = 2.0;       // windowed: 均值±kσ 门限

@@ -290,8 +290,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_monitor_cfg.credible_fitness   = getv<double>(moc, "credible_fitness", m_monitor_cfg.credible_fitness);
         m_monitor_cfg.lost_fitness       = getv<double>(moc, "lost_fitness", m_monitor_cfg.lost_fitness);
         m_monitor_cfg.localized_patience = getv<int>(moc, "localized_patience", m_monitor_cfg.localized_patience);
+        m_monitor_cfg.scrutiny_frames    = getv<int>(moc, "scrutiny_frames", m_monitor_cfg.scrutiny_frames);
         m_monitor_cfg.lost_patience      = getv<int>(moc, "lost_patience", m_monitor_cfg.lost_patience);
-        m_scrutiny_cfg_frames = getv<int>(moc, "scrutiny_frames", m_scrutiny_cfg_frames);
         m_consensus_trans_m   = getv<double>(moc, "consensus_trans_m", m_consensus_trans_m);
         m_consensus_yaw_deg   = getv<double>(moc, "consensus_yaw_deg", m_consensus_yaw_deg);
         m_monitor_cfg.nees_threshold     = getv<double>(moc, "nees_threshold", m_monitor_cfg.nees_threshold);
@@ -521,9 +521,9 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     m_status = INIT;
     m_seed_pending = false;
     m_healthy_streak = 0;
+    m_scrutiny_frames = 0;
     m_unhealthy_streak = 0;
     m_inconsistent_streak = 0;
-    m_scrutiny_frames = 0;
     m_initialized = false;
     {
         std::lock_guard<std::mutex> lk(m_cmd_mu);
@@ -595,9 +595,9 @@ void LocalizationPipeline::setMapData(const MapData& data) {
     m_status = INIT;
     m_seed_pending = false;
     m_healthy_streak = 0;
+    m_scrutiny_frames = 0;
     m_unhealthy_streak = 0;
     m_inconsistent_streak = 0;
-    m_scrutiny_frames = 0;
     m_initialized = false;
     {
         std::lock_guard<std::mutex> lk(m_cmd_mu);
@@ -1833,7 +1833,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             if (m_status != LOCALIZED &&
                 m_healthy_streak >= std::max(1, m_monitor_cfg.localized_patience)) {
                 m_status = LOCALIZED;
-                m_scrutiny_frames = std::max(0, m_scrutiny_cfg_frames);
+                m_scrutiny_frames = std::max(0, m_monitor_cfg.scrutiny_frames);
                 {
                     std::lock_guard<std::mutex> lk(m_global_mu);
                     m_global_request = false;
