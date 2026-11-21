@@ -1,17 +1,16 @@
 # debug_hmi
 
-调试 rosiwit SLAM 机器人的浏览器前端：状态面板 + Three.js 三维视图 + 话题/服务探查。
+调试 rosiwit SLAM 机器人的浏览器前端：状态面板 + Three.js 三维视图 + RViz 风格动态话题显示。
 Vue 3 + TypeScript + Vite + Three.js。
 
-数据分两条路：
+只有一条数据通道：
 
 ```
-浏览器 ──ws(s)://…:8089──> rosbridge        TF / 定位状态 / 日志 / 控制服务（小消息）
-浏览器 ──ws(s)://…:9100──> debug_bridge    点云 / 栅格（WebSocket + protobuf）
+浏览器 ──ws(s)://…:9100──> debug_bridge（WebSocket + protobuf）
 ```
 
-`debug_bridge` 是可选的，不部署也能用 rosbridge 的 CBOR 通道；但大点云和 `/map` 在远程链路上
-基本没法用，详见 [`../debug_bridge/README.md`](../debug_bridge/README.md)。
+TF、定位状态、日志、服务调用以及所有点云 / 栅格 / 激光 / 路径话题都走这里。
+厂商的 `http_bridge`（9090）保持不动，本项目不再使用 rosbridge。
 
 ## 快速开始
 
@@ -28,7 +27,7 @@ mv ~/.local/node-v18.20.4-linux-x64 ~/.local/node
 
 ./dev.sh install       # npm install
 ./dev.sh dev           # vite，监听 0.0.0.0:5173
-./dev.sh test          # 解码 / TF / CBOR 单测（不连设备）
+./dev.sh test          # 解码 / TF / PCD 单测（不连设备）
 ./dev.sh bridge-test   # debug_bridge 端到端测试（demo + WebSocket + protobuf）
 ./dev.sh build         # vue-tsc + 生产构建
 ```
@@ -37,68 +36,55 @@ mv ~/.local/node-v18.20.4-linux-x64 ~/.local/node
 
 ### 地址配置
 
-连接地址在顶栏左侧的胶囊里改，会存到 localStorage。也可以用 `.env.local`（已被 gitignore，
-避免把隧道 token 提交）：
+连接地址在顶栏左侧的胶囊里改，会存到 localStorage。也可以用 `.env.local`（已被 gitignore）：
 
 ```bash
 cp .env.example .env.local
-# VITE_ROSBRIDGE_URL=wss://test.rosiwit.com/remote-terminal/tunnel/<SN>/<TOKEN>/127.0.0.1/8089/
+# VITE_BRIDGE_URL=wss://test.rosiwit.com/remote-terminal/tunnel/<SN>/<TOKEN>/127.0.0.1/9100/
 # VITE_TUNNEL_URL=wss://…（同上，会出现在顶栏的「远程隧道」预设里）
 ```
 
-> 端口：**8089 = rosbridge**，**9100 = debug_bridge**；9090 是厂商的 `http_bridge_node`。
+## 显示模型（RViz 风格）
 
-## 订阅模型（RViz 风格）
+- **TF 常订阅**（`/tf`、`/tf_static`），只控制坐标轴显示。
+- `/slam/info` 由前端「定位状态插件」消费：兼容数字枚举与字符串，统一翻译成可读文本。
+- 其余全部是**动态显示项**：从话题列表里选择话题 → 自动识别类型 → 选择渲染方式。
+  显示项、颜色、点大小、频率都会存到 localStorage，刷新后保留。
 
-**只有 TF 自动订阅**（`/tf`、`/tf_static`），其它全部由用户在「数据源」里显式勾选，
-选择会存到 localStorage，刷新后保留。
+| 消息类型 | 默认渲染 | 可调参数 |
+|---|---|---|
+| `sensor_msgs/PointCloud2` / `PointCloud` | 点云 | 点大小、固定色/高度着色、体素、点数上限、频率 |
+| `nav_msgs/OccupancyGrid` | 栅格 | 频率 / 单帧抓取 |
+| `sensor_msgs/LaserScan` | 激光点 | 点大小、颜色、频率 |
+| `nav_msgs/Path` | 折线 | 颜色、频率 |
+| `geometry_msgs/PolygonStamped` | 闭合线 | 颜色、频率 |
+| 其它 | JSON（右栏查看） | — |
 
-| 数据源 | 话题 | 默认 | 说明 |
-|---|---|---|---|
-| TF 坐标轴 | `/tf`, `/tf_static` | ✅ 常订阅 | 只控制坐标轴显示 |
-| 定位状态 | `/slam/info` | ⬜ | 状态面板 / 顶栏徽章 |
-| 融合诊断 | `/slam/fusion_diag` | ⬜ | |
-| 系统日志 | `/rosout_agg` | ⬜ | 右栏「日志」 |
-| 当前帧（已配准） | `/scan_f_map`（+`/curr_scan_point`） | ⬜ | map 系；走 debug_bridge 时是 `scan` 流 |
-| 激光雷达 | `/scan` | ⬜ | LaserScan |
-| 全局地图点云 | `/global_map` | ⬜ | 需要 `debug_publish: true` |
-| 2D 点云 | `/points_2d` | ⬜ | debug_bridge 有 `points_2d` 流 |
-| 机器人足迹 | `/robot_footprint` | ⬜ | 机器人本体只依赖 TF，常显示 |
-| 路径 | `/global_path`, `/local_path` | ⬜ | |
-| 雷达原始帧 | `/vanjee_points722` | ⬜ | 「抓帧」按需取一帧 |
-| 栅格地图 | `/map` | ⬜ | 「抓取」按需取一份快照 |
-| 行驶轨迹 | 本地累积 | ✅ | 不占带宽 |
+每个显示项实时显示：**速率 Hz、每帧字节、累计流量、最后更新时间、点数/格数**。
+`/map`、`/global_map` 这类大话题可以点「抓取」单帧接收，不影响其它实时流。
 
-## 大数据：debug_bridge（WebSocket + protobuf）
+## 大数据：debug_bridge
 
-[`../debug_bridge`](../debug_bridge) 在机器人本地做：
+机器人侧的 [`../debug_bridge`](../debug_bridge) 是通用话题传输层，不随前端显示逻辑改动：
 
-1. 点云体素降采样（默认 5~10cm）
-2. 坐标量化成 int16 厘米
-3. zlib
-4. **protobuf 编码后通过 WebSocket 推送**
+1. 按话题真实类型订阅（`getTopicTypes` + `roslib.message.get_message_class`）
+2. 点云体素降采样（可传 `voxel`，0 = 不降采样）
+3. 坐标量化成 int16 厘米
+4. zlib 压缩
+5. protobuf（手写 wire format，Python 2.7 无 protobuf runtime）后通过 WebSocket 推送
+
+协议见 `../debug_bridge/proto/debug_bridge.proto`，浏览器端用 `protobufjs/light` + 生成的 JSON descriptor。
 
 实测：
 
-- `/map` 4300 万格 → **1.4MB**，机器人生成 6.4s，隧道约 15s
-- `/scan_f_map` 1002 点 → **4KB/帧**，4Hz 推送
-- `/vanjee_points722` 5cm 体素后 5242 点 → **17KB**，一次性
+- `/map` 4300 万格 → **1.4MB zlib**，机器人生成 6.4s，隧道约 15s
+- `/curr_scan_point` 约 4.6k 点 → **17KB zlib/帧**
+- `/scan` LaserScan 4000 字节 ranges/帧
+- `/global_map`（设备地图 599 万点，5cm 体素）**二十多 MB zlib**
 
-浏览器端 `src/ros/bridge.ts` 用 `protobufjs/light` + 生成的 JSON descriptor 解码，
-`CloudFrame`/`GridFrame` 里的 `bytes` 按需 inflate。订阅（`scan`、`points_2d`）由服务器按
-`rate_hz` 主动推，不是轮询；`grid`/`global_map`/`vanjee` 是一次性 `REQUEST`。
+### 全局地图
 
-桥接地址默认从 rosbridge 地址推导（`8089 -> 9100`、`ws(s)` 保持），也可以在「数据源 →
-debug_bridge」里手填。远程隧道需要把目标端口改成 9100。
-
-### 没有 debug_bridge 时
-
-rosbridge 的大消息订阅用 `compression: "cbor"`（`src/ros/cbor.ts` 自带最小 CBOR 解码器）。
-点云只发原始字节，比 JSON 小，但 `/map` 仍要 1~2 分钟且期间实时数据暂停，所以是显式按钮 + 本地缓存。
-
-## 打开全局地图点云（可选）
-
-`/global_map`、`/curr_scan_point` 由 `rosiwit_slam_ros1` 的 `debug_publish` 开关控制，默认关闭：
+`/global_map` 由 `rosiwit_slam_ros1` 的 `debug_publish` 开关控制，默认关闭：
 
 ```bash
 # 设备上（xzrobot / xzyz2022!）
@@ -108,29 +94,44 @@ sudo systemctl restart xzrobot
 ```
 
 ⚠️ **会重启整个 xzrobot bringup（SLAM/导航都会中断）**，请在机器人空闲时操作。
-`/global_map` 是 latched 的，每次进模式只发一份。
+
+当前版本的 SLAM 节点只在“进模式”时尝试发一次 `/global_map`，地图还没装好时会错过。
+因此 `debug_bridge` 的 `/global_map` 单帧请求逻辑是：
+
+1. 先等 `debug_publish` 打开后的 `/global_map`；
+2. 15s 内没有消息时，读取当前地图的 `/opt/xzrobot/maps/<uuid>/map.pcd` 作为快照回退，
+   按请求的体素降采样后按同一个 `/global_map` 点云帧发送。
+
+回退的 PCD 是标准格式，前端不需要知道来源。
+
+## 本地 PCD
+
+左侧「加载 PCD 地图」直接读本机文件，支持 `ascii` / `binary` / `binary_compressed`（LZF），
+解析后限制在 120 万点并写入 IndexedDB，刷新页面自动恢复。
+
+机器上的 `map.xzmap` 可以用 `../debug_bridge/tools/xzmap_to_pcd.py` 转成标准 PCD：
+
+```bash
+python3 xzmap_to_pcd.py ~/Downloads/map.xzmap -o ~/Downloads/map_0.3m.pcd --voxel 0.3 --max 800000
+```
 
 ## 界面
 
-- **顶栏**：连接胶囊（点开改地址/局域网/远程隧道/断开）、定位状态、模式、匹配度、地图名、左右栏开关。
+- **顶栏**：连接胶囊（改地址 / 局域网 / 远程隧道 / 断开）、定位状态、模式、匹配度、地图名、左右栏开关。
 - **左栏**
-  - **定位状态**：`location_status`、`slam_state`、匹配度条 + 近 48s 趋势、地图/面积/TF 帧数，
-    以及完整位姿 **xyz（m）+ rpy（°）**。没订阅 `/slam/info` 时显示「未订阅」并提供一键订阅。
-  - **数据源**：debug_bridge 开关/地址/连接、图层勾选（勾选即订阅）、点大小、抓帧/抓取按钮、数据说明。
+  - **定位状态**：插件解析 `/slam/info`，显示状态文本、匹配度条、地图/面积/TF 帧数、xyz + rpy。
+  - **显示项**：添加话题、渲染方式、点大小、颜色、着色、体素、上限、频率、抓取、实时速率/总流量。
   - **初始位姿**、**控制**：折叠，减少干扰。
-- **中间三维视图**：拖动旋转、右键平移、滚轮缩放；双击放置初始位姿；`M` 测距、`F` 适配、`T` 顶视、`Esc` 取消；
+- **中间三维视图**：拖动旋转、右键平移、滚轮缩放；双击放置初始位姿；`M` 测距、`F` 适配、`T` 顶视；
   右下角工具条（顶视/适配/跟随/测距/截图）。
-- **右栏**
-  - 话题：默认「只看活跃」（已订阅或近期有数据），点击行临时订阅并在「消息」里查看。
-  - 日志：按级别过滤、暂停、按来源静音（点击来源名）、连续重复消息合并计数。
-  - 消息：任意话题的截断 JSON、暂停、复制。
+- **右栏**：话题速率/流量表、日志（过滤/暂停/按来源静音/重复合并）、任意话题 JSON。
 
 ## 坐标与渲染约定
 
 - Three.js 场景直接用 ROS 约定：**Z 轴向上**，`map` 系为世界原点。
 - 机器人位姿优先 `tf: map→base_link`，回退到 `/slam/info.robot_pose`。
 - 位姿显示完整的 **xyz / rpy（ZYX）**；渲染机器人时用完整四元数。
-- 点云按消息 `header.frame_id` 查 TF 后放到 map 系；`/scan_f_map` 本身就是 `map` 系。
+- 点云按消息 `header.frame_id` 查 TF 后放到 map 系。
 - 栅格地图用 `map.info.origin` 摆放，`z=0.01`；降采样按块取最大占据值，墙线保持连续。
 
 ## 目录
@@ -139,32 +140,34 @@ sudo systemctl restart xzrobot
 debug_hmi/
 ├── src/
 │   ├── ros/
-│   │   ├── client.ts    # rosbridge 客户端（JSON + CBOR、订阅/发布/服务、重连）
 │   │   ├── bridge.ts    # debug_bridge 客户端（WebSocket + protobuf）
-│   │   ├── cbor.ts      # 最小 CBOR 解码（typed-array tag）
+│   │   ├── debugRos.ts  # 内置流（TF/状态/日志）到旧话题 API 的兼容层
 │   │   ├── proto/debug_bridge.json # 由 debug_bridge/proto 生成
 │   │   ├── decode.ts    # PointCloud2 / PointCloud / OccupancyGrid / LaserScan / Path / Polygon
-│   │   ├── tf.ts        # TF 树、lookup、四元数 → rpy
+│   │   ├── mapFile.ts   # 标准 PCD 解析（ascii / binary / binary_compressed）
+│   │   ├── mapCache.ts  # PCD IndexedDB 缓存
 │   │   ├── gridCache.ts # 栅格快照 IndexedDB 缓存
-│   │   └── app.ts       # 全局状态、订阅编排、桥接、快照、服务
+│   │   ├── tf.ts        # TF 树、lookup、四元数 → rpy
+│   │   └── app.ts       # 全局状态、显示项、订阅编排、快照、服务
 │   ├── three/           # SceneView / layers / gridImage
 │   ├── components/      # ConnectionPill / ControlPanel / InspectorPanel
 │   └── App.vue, main.ts
 ├── scripts/             # gen-proto.mjs / test-ros.sh / test-bridge.sh
-├── tests/               # 解码/TF/CBOR 单测 + debug_bridge 端到端测试
+├── tests/               # 解码/TF/PCD 单测、bridge 端到端、真机探针
 └── dev.sh
 
 debug_bridge/
-├── debug_bridge.py      # ROS 侧 WebSocket + protobuf 桥
+├── debug_bridge.py      # ROS 侧 WebSocket + protobuf 桥（通用话题传输）
 ├── debug-bridge.service # systemd 单元（PartOf=xzrobot）
-├── proto/               # debug_bridge.proto（协议定义）
+├── proto/               # debug_bridge.proto
+├── tools/xzmap_to_pcd.py
 └── README.md
 ```
 
 ## 已知限制
 
-- 只支持 ROS1；换 ROS2 时替换 `ros/client.ts` / `ros/bridge.ts` 的传输层。
-- rosbridge `cbor-raw` 在设备 0.11.16 上不可用（`OutboundMessage._buff` 未填充），所以走结构化 `cbor`。
-- debug_bridge 的栅格是快照；推送订阅只覆盖 `scan` / `points_2d`。
+- 只支持 ROS1。
 - 桥接没有鉴权，默认 `0.0.0.0:9100`；建议只走隧道/内网，必要时 `--host 127.0.0.1`。
-- 位姿的 z/rpy 是 TF 真值；如果 `map→odom` 的 z 有偏移，debug_hmi 会如实显示（通常是有用的诊断信息）。
+- `/global_map` 的回退依赖设备上存在当前地图的 `map.pcd`；找不到时只返回错误。
+- 超大点云（数百万点）解码和渲染会占用较多内存，建议用体素/点数上限控制。
+- 位姿的 z/rpy 是 TF 真值；如果 `map→odom` 的 z 有偏移，debug_hmi 会如实显示。

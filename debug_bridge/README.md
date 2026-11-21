@@ -1,21 +1,21 @@
 # debug_bridge
 
-给浏览器 [debug_hmi](../debug_hmi) 用的 **WebSocket + protobuf** 数据桥。
+给浏览器 [debug_hmi](../debug_hmi) 用的 **WebSocket + protobuf** 通用话题传输桥。
 
-TF、定位状态、日志、控制服务仍然走 rosbridge；只有点云/栅格这些“原始体积太大”的话题走这里。
-机器人侧先降采样/量化/压缩，再通过 protobuf 推给浏览器。
+机器人侧只负责：按话题真实类型订阅 → 归一化 → 降采样/量化/压缩 → 推送。
+显示方式（点大小、颜色、渲染类型）完全由前端决定，后端不为每个 UI 功能加专用流。
 
 ## 为什么
 
 | 话题 | 原始 | 问题 |
 |---|---|---|
-| `/map` | 43 MB / 帧，1 Hz | rosbridge 用 JSON 要 >100MB 文本，实测 2 分钟收不完；CBOR 也要 1~2 分钟（Python 打包 4300 万格） |
+| `/map` | 43 MB / 帧，1 Hz | rosbridge JSON 要 >100MB 文本，实测 2 分钟收不完 |
 | `/vanjee_points722` | 1 MB / 帧，10 Hz | 10 MB/s，远程隧道不现实 |
-| `/scan_f_map` | 37 KB / 帧，10 Hz | 能接受，但 JSON 仍是 4 倍膨胀 |
+| `/curr_scan_point` | ~4.6k 点 / 帧 | JSON 仍会明显膨胀 |
 
 桥接在本地做三件事：
 
-1. **降采样**：点云按体素（默认 5~10cm）
+1. **降采样**：点云按体素（请求里可指定，0 = 不降采样）
 2. **量化**：坐标转 int16 厘米（3 个点 = 6 字节）
 3. **zlib**：再塞进 protobuf `bytes`
 
@@ -24,9 +24,9 @@ TF、定位状态、日志、控制服务仍然走 rosbridge；只有点云/栅�
 | 数据 | 原始 | 传输 | 耗时 |
 |---|---|---|---|
 | `/map`（7453×5782 = 43,093,246 格） | 43 MB | **1.4 MB** | 机器人生成 6.4s；隧道约 15s |
-| `/scan_f_map`（1002 点） | ~37 KB | **4.0 KB/帧** | 5 ms，4 Hz 推送 |
-| `/vanjee_points722`（5cm 体素后 5242 点） | ~1 MB | **17 KB** | 0.3 s |
-| `/global_map` | latched | 503（`debug_publish=false` 时无数据） | — |
+| `/curr_scan_point`（约 4.6k 点） | ~74 KB | **17 KB/帧** | 实时 |
+| `/scan`（LaserScan，4000 字节 ranges） | 16 KB | **16 KB/帧** | 实时 |
+| `/global_map`（599 万点，5cm 体素） | 73 MB PCD | **二十多 MB** | 单帧，数十秒 |
 
 ## 协议
 
@@ -35,15 +35,48 @@ TF、定位状态、日志、控制服务仍然走 rosbridge；只有点云/栅�
 （`node scripts/gen-proto.mjs`）。
 
 ```
-服务器 -> 浏览器：Envelope { hello | grid | cloud | status | error }
-浏览器 -> 服务器：ClientCommand { action, stream, rate_hz, voxel, max_points, refresh }
+服务器 -> 浏览器：Envelope { hello | tf | slam | log | grid | cloud | laser | path | polygon | stat | raw | status | error | ... }
+浏览器 -> 服务器：ClientCommand { action, stream, rate_hz, voxel, max_points, refresh, ... }
 ```
 
-- `SUBSCRIBE`：持续推送。目前支持 `scan`、`points_2d`，`rate_hz` 由客户端指定（0.5~20）。
+### 内置流（`stream` = 固定名字）
+
+- `tf`：`/tf` + `/tf_static`
+- `status`：`/slam/info`（SlamInfo）
+- `logs`：`/rosout_agg`
+
+### 任意话题（`stream` = 话题名，例如 `/curr_scan_point`）
+
+`SUBSCRIBE` 时服务端用 `getTopicTypes` 查真实类型，按类型归一化：
+
+| ROS 类型 | 帧 | 说明 |
+|---|---|---|
+| `sensor_msgs/PointCloud2` / `PointCloud` | `CloudFrame` | 可传体素 / 点数上限 |
+| `nav_msgs/OccupancyGrid` | `GridFrame` | zlib int8 栅格，带 `stream` 话题名 |
+| `sensor_msgs/LaserScan` | `LaserFrame` | float32 ranges，带 `stream` |
+| `nav_msgs/Path` | `PathFrame` | 带 `stream` |
+| `geometry_msgs/PolygonStamped` | `PolygonFrame` | 带 `stream` |
+| 其它 | `RawMessage` | `extract_values` → JSON，超过 300KB 截断 |
+
+命令：
+
+- `SUBSCRIBE`：按 `rate_hz` 推送最新一帧（只推新数据，不重复发同一 `stamp`）。
 - `UNSUBSCRIBE`：停止推送。
-- `REQUEST`：一次性抓取。`grid`（`/map`）、`global_map`、`vanjee_points722`，也支持 `scan`/`points_2d` 单帧。
-- `CloudFrame.xyz_cm` 是 `int16 LE [count*3]`（厘米），`compression=ZLIB` 时先解压。
-- `GridFrame.data` 是 `int8[width*height]`，`zlib` 后放在 `bytes` 里。
+- `REQUEST`：一次性抓取。`stream` 传话题名；点云/栅格/激光都能用。
+  `/global_map` 先等话题 15s，没消息时回退读取设备当前地图的 `map.pcd`。
+- `GET_TOPICS`：返回 `[name, type]`，前端用来做话题下拉框。
+- `CALL_SERVICE`：白名单服务。
+- `SET_INITIAL_POSE`：发布 `/initialpose`。
+
+### 统计
+
+服务端按客户端实际发出的帧统计，约 2Hz 推 `TopicStat`：
+
+```
+topic, count, bytes（最后一帧）, total_bytes（累计）, rate_hz, age_ms
+```
+
+前端直接用它显示速率 / 每帧大小 / 累计流量。
 
 Python 2.7（Melodic）没有 `google.protobuf` runtime，所以服务端按 protobuf wire format
 手工编码；字段编号与 `.proto` 一一对应，浏览器用生成好的 descriptor 解码。
@@ -75,21 +108,29 @@ journalctl -u debug-bridge -f
 wss://<host>/remote-terminal/tunnel/<SN>/<TOKEN>/127.0.0.1/9100/
 ```
 
-debug_hmi 会自动从 rosbridge 地址推导（`8089 -> 9100`），也可以在「数据源 → debug_bridge」里手填。
-
 ## 本地联调（不需要 ROS/设备）
 
 ```bash
 python3 debug_bridge.py --demo --port 9100
 ```
 
-会生成一块带房间的假地图和一个绕圈扫描，协议与真实模式完全一致。
-`debug_hmi/scripts/test-bridge.sh` 就是用这个模式做端到端测试（WebSocket + protobufjs 解码）。
+会生成假 TF / 状态 / 日志 / 点云 / 栅格 / 激光 / 路径 / 多边形，协议与真实模式完全一致。
+`debug_hmi/scripts/test-bridge.sh` 就是用这个模式做端到端测试。
+
+## xzmap → PCD
+
+```bash
+python3 tools/xzmap_to_pcd.py map.xzmap -o map.pcd --voxel 0.3 --max 800000
+```
+
+按关键帧位姿把机体系点云变换到世界系，体素降采样，写标准 binary PCD
+（`FIELDS x y z`，float32），RViz / PCL / debug_hmi 都能直接读。
 
 ## 限制
 
 - 订阅是推送（服务器按 `rate_hz` 发），不是轮询；慢客户端由 TCP 背压自然降频。
-- 栅格是快照，不做 1 Hz 连续更新（连续 43MB 依然不划算）；更新就再 `REQUEST` 一次。
+- 栅格按话题订阅时每个新消息都会编码；`/map` 很大，建议用 `REQUEST` 单帧。
+- `/global_map` 的回退依赖设备上存在当前地图的 `/opt/xzrobot/maps/<uuid>/map.pcd`。
 - 没有鉴权，默认绑定 `0.0.0.0:9100`。建议只走隧道/内网，必要时 `--host 127.0.0.1`。
 - 服务端编码是手写 protobuf wire format；改 `.proto` 时记得同步
   `debug_bridge.py` 的字段编号，并重新生成 `debug_bridge.json`。

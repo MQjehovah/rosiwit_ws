@@ -44,6 +44,18 @@ ws.on('open', async () => {
   const hello = await waitFor((m) => m.hello)
   console.log('hello', hello.hello.version, hello.hello.streams.map((s) => s.name).join(','))
 
+  if (process.env.ONLY_GLOBAL) {
+    send({ action: 2, stream: '/global_map', voxel: 0.1, max_points: 0 })
+    try {
+      const cloud = await waitFor((m) => m.cloud && m.cloud.stream === '/global_map', 300000)
+      console.log('global_map:', cloud.cloud.count, 'points,', cloud.cloud.xyz_cm.byteLength, 'bytes zlib')
+    } catch {
+      console.log('global_map: no frame')
+    }
+    ws.close()
+    process.exit(0)
+  }
+
   send({ action: 0, stream: 'status', rate_hz: 10 })
   const slam = await waitFor((m) => m.slam)
   console.log('slam:', JSON.stringify({

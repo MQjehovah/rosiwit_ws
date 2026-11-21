@@ -333,7 +333,7 @@ function applyTopicCloud(topic: string, cloud: CloudData): void {
   if (!d || !d.enabled || d.renderer !== 'points') return
   const entry = ensureDynamic(topic, 'points')
   if (!entry || !(entry.layer instanceof PointCloudLayer)) return
-  const colors = d.colorMode === 'height' ? heightColors(cloud.positions) : null
+  const colors = d.colorMode === 'height' && cloud.count <= 1500000 ? heightColors(cloud.positions) : null
   entry.layer.setPoints(cloud.positions, colors)
   entry.layer.setColor(hexColor(d.color))
   entry.layer.setSize(d.pointSize * state.pointScale)
@@ -811,7 +811,16 @@ watch(
 )
 
 watch(
-  () => state.displays,
+  () =>
+    state.displays.map((d) => [
+      d.id,
+      d.topic,
+      d.renderer,
+      d.enabled,
+      d.pointSize,
+      d.color,
+      d.colorMode,
+    ]),
   () => syncDisplayLayers(),
   { deep: true },
 )
