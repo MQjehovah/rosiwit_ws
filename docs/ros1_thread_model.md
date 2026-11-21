@@ -12,6 +12,7 @@
 | T4 | `pool` ×3 | `ThreadPool` | 任务 | 点云抽稀+转换+发布、栅格渲染+发布、2D 匹配、在线标定 |
 | T5 | `frontend` | `SlamAlgorithm` | 输入驱动 | 运动先验 + 匹配 + 建图前端（持 `core_mu_`） |
 | T6 | 建图后端 / `rt_grid` | 核心 / `RealtimeGrid` | 各自周期 | 后端优化、实时栅格生成 |
+| 池内长任务 | 搜索/建库 | `LocalizationPipeline` | 按需投递 | 全局重定位搜索、FPFH 建库（原来是核心自带裸线程） |
 | T7 | `tf2 listener` | tf2 | 事件 | TF buffer |
 | T8 | roscpp 内部 | roscpp | — | rosout、XMLRPC、TCPROS |
 
@@ -203,6 +204,7 @@ main:
 | `mode_switch 1 → 0` | ✅ 两次 `result: 1` |
 | `switch_map` 指向不存在的目录 | ✅ `success: False`，不挂死，切图期间心跳保持 9 Hz |
 | SIGINT 退出 | ✅ `EXITED-CLEAN`（control 先关闸，再等池任务，最后析构发布者） |
+| 核心重定位线程迁移 | ✅ 编译通过 + 全部单测通过；**池化路径需真机重定位验证**（容器无地图/激光） |
 
 **未覆盖**：`planar_mu_` 与 `/map` 发布路径需要真实地图/激光数据，容器里只做了编译与静态验证。
 
@@ -210,9 +212,14 @@ main:
 
 - **全局重定位是随机的**：`FpfhRansacGlobalLocalizer` 每轮用时钟种子抽 85% 子集，
   这是"同图多候选"的来源，也导致测试偶发（已加 `GlobalLocalizeConfig::random_seed`，测试固定种子）。
-- 核心 `LocalizationPipeline` 仍自带两条裸线程（`m_global_thread` / `m_reloc_thread`，
-  是 2026-10-17 推行丢失事故的热修）。按本模型应分别迁到 `pool` 与"重定位请求→投递"，
-  属于下一步。
+- **核心的两条裸线程已迁入 pool**（2026-11-21）：`relocBuildWorker`（FPFH 建库 ≈45 s）与
+  `globalRelocWorker`（全局搜索）原来是 `std::thread` 常驻，现改为
+  `IExecutor::submit("pool", …)` + 在途标志（有在途不重复投），任务体改为
+  `runRelocBuildOnce()` / `runGlobalRelocOnce()`。
+  * 注入点：`SlamAlgorithm` 创建核心后调 `algo_->setExecutor(executor_)`，
+    `SlamPipeline` 转发给 `ILocalization`，`LocalizationPipeline` 存指针
+  * **未注入时保持原有线程**（ROS2 与核心单测路径不受影响）
+  * 语义不变：建库期间切图会在完成后自动再投一次；全局搜索的 generation/冷却/消歧逻辑原样保留
 - `sendTransform()` 的 TF 查找失败用 `ROS_ERROR`，20 ms 心跳下会刷屏；建议改 `THROTTLE`。
 
 ## 8. 线程数对照

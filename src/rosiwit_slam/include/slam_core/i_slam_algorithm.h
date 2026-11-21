@@ -8,6 +8,8 @@
 #include "slam_core/i_localization.h"
 #include <cstdint>
 
+namespace rosiwit_common { class IExecutor; }
+
 namespace rosiwit_slam {
 
 class ISlamAlgorithm {
@@ -15,6 +17,9 @@ public:
     virtual ~ISlamAlgorithm() = default;
 
     virtual bool        init(const std::string& config_path) = 0;
+    /// 可选: 注入执行器 (线程池). 注入后核心内部的后台重活改投池执行,
+    /// 不再自己 new 线程; 不注入时保持原有行为 (ROS2 路径不受影响).
+    virtual void        setExecutor(rosiwit_common::IExecutor* /*ex*/) {}
     virtual void        onImu(const IMUSample& s) = 0;
     virtual void        onLidar(const LidarFrame& f) = 0;
     /// 图像输入（LIVO 前端使用；默认忽略，不影响纯 LIO 管线）。

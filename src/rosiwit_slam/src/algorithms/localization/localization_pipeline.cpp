@@ -451,7 +451,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_global_request = false;
         m_global_scan_valid = false;
     }
-    if (!m_global_thread.joinable()) m_global_thread = std::thread([this] { globalRelocWorker(); });
+    if (!m_executor && !m_global_thread.joinable())
+        m_global_thread = std::thread([this] { globalRelocWorker(); });
     std::cout << "[LocPipeline] " << describe() << std::endl;
     return true;
 }
@@ -572,9 +573,11 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
         m_reloc_map_snap = m_map;
         m_reloc_path_snap = m_map_path;
     }
-    if (!m_reloc_thread.joinable())
+    if (m_executor) {
+        kickRelocBuild();
+    } else if (!m_reloc_thread.joinable()) {
         m_reloc_thread = std::thread([this] { relocBuildWorker(); });
-    m_reloc_cv.notify_all();
+    }
     mark("relocalizer_bg");
     std::cout << "[LocPipeline] setMap profile(ms, 累计):" << timing
               << " total=" << std::to_string(stage_ms(t_total0)) << std::endl;
@@ -670,32 +673,67 @@ void LocalizationPipeline::setMapData(const MapData& data) {
 }
 
 void LocalizationPipeline::relocBuildWorker() {
-    std::unique_lock<std::mutex> lk(m_reloc_mu);
-    while (!m_reloc_stop) {
-        m_reloc_cv.wait(lk, [this] { return m_reloc_stop || m_reloc_request; });
-        if (m_reloc_stop) break;
-        const CloudType::Ptr map = m_reloc_map_snap;
-        const std::string path = m_reloc_path_snap;
-        m_reloc_request = false;
-        lk.unlock();
-        m_reloc_building.store(true);
-        const auto t0 = std::chrono::steady_clock::now();
-        bool ok = false;
-        if (m_relocalizer && m_relocalizer_name != "none" && map && !map->empty())
-            ok = m_relocalizer->setMap(path, map);
-        const double ms = std::chrono::duration<double, std::milli>(
-                              std::chrono::steady_clock::now() - t0).count();
-        lk.lock();
-        m_reloc_building.store(false);
-        // 构建期间又切图(request 已再次置位)则快照已更新, 循环继续重建
-        m_reloc_ready = ok && m_reloc_map_snap == map;
-        {
-            std::ostringstream os;
-            os << "global reloc map built in background, " << ms << "ms ok=" << ok;
-            diag::log('I', "LocPipeline", os.str());
-            FlightRecorder::instance().event("BG_BUILD", os.str());
+    // 兼容路径 (未注入执行器): 常驻等待请求。注入执行器时走 kickRelocBuild()。
+    while (true) {
+        if (!runRelocBuildOnce()) {
+            std::unique_lock<std::mutex> lk(m_reloc_mu);
+            m_reloc_cv.wait(lk, [this] { return m_reloc_stop || m_reloc_request; });
+            if (m_reloc_stop) break;
         }
     }
+}
+
+bool LocalizationPipeline::runRelocBuildOnce() {
+    std::unique_lock<std::mutex> lk(m_reloc_mu);
+    if (m_reloc_stop || !m_reloc_request) return false;
+    const CloudType::Ptr map = m_reloc_map_snap;
+    const std::string path = m_reloc_path_snap;
+    m_reloc_request = false;
+    lk.unlock();
+    m_reloc_building.store(true);
+    const auto t0 = std::chrono::steady_clock::now();
+    bool ok = false;
+    if (m_relocalizer && m_relocalizer_name != "none" && map && !map->empty())
+        ok = m_relocalizer->setMap(path, map);
+    const double ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - t0).count();
+    lk.lock();
+    m_reloc_building.store(false);
+    m_reloc_ready = ok && m_reloc_map_snap == map;
+    {
+        std::ostringstream os;
+        os << "global reloc map built in background, " << ms << "ms ok=" << ok;
+        diag::log('I', "LocPipeline", os.str());
+        FlightRecorder::instance().event("BG_BUILD", os.str());
+    }
+    return true;
+}
+
+void LocalizationPipeline::kickRelocBuild() {
+    if (!m_executor) {
+        // 没注入执行器: 叫醒兼容线程
+        std::lock_guard<std::mutex> lk(m_reloc_mu);
+        m_reloc_cv.notify_all();
+        return;
+    }
+    bool expected = false;
+    if (!m_reloc_job.compare_exchange_strong(expected, true)) return;   // 已有在途
+    rosiwit_common::JobOptions opt;
+    opt.name = "reloc_build";
+    const auto id = m_executor->submit(
+        "pool", opt,
+        [this](rosiwit_common::CancelToken) { runRelocBuildOnce(); },
+        [this](rosiwit_common::JobId, bool) {
+            m_reloc_job.store(false);
+            // 构建期间又切图: 快照已更新, 再投一次
+            bool again = false;
+            {
+                std::lock_guard<std::mutex> lk(m_reloc_mu);
+                again = m_reloc_request && !m_reloc_stop;
+            }
+            if (again) kickRelocBuild();
+        });
+    if (id == rosiwit_common::kInvalidJobId) m_reloc_job.store(false);
 }
 
 bool LocalizationPipeline::ensureRelocalizerMap() {
@@ -707,7 +745,7 @@ bool LocalizationPipeline::ensureRelocalizerMap() {
     m_reloc_request = true;
     m_reloc_map_snap = m_map;
     m_reloc_path_snap = m_map_path;
-    m_reloc_cv.notify_all();
+    kickRelocBuild();
     return false;
 }
 
@@ -1062,16 +1100,25 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
 }
 
 void LocalizationPipeline::globalRelocWorker() {
+    // 兼容路径 (未注入执行器): 常驻等待请求。
     while (true) {
-        CloudType::Ptr scan;
-        uint64_t generation = 0;
         {
             std::unique_lock<std::mutex> lk(m_global_mu);
             m_global_cv.wait(lk, [this] {
                 return m_global_stop || (m_global_request && m_global_scan_valid);
             });
             if (m_global_stop) break;
-            if (!m_global_request || !m_global_scan_valid) continue;
+        }
+        runGlobalRelocOnce();
+    }
+}
+
+bool LocalizationPipeline::runGlobalRelocOnce() {
+        CloudType::Ptr scan;
+        uint64_t generation = 0;
+        {
+            std::lock_guard<std::mutex> lk(m_global_mu);
+            if (m_global_stop || !m_global_request || !m_global_scan_valid) return false;
             scan = m_global_scan;
             generation = m_global_scan_generation;
             m_global_scan_valid = false;
@@ -1079,13 +1126,13 @@ void LocalizationPipeline::globalRelocWorker() {
         if (!scan || !m_relocalizer || m_relocalizer_name == "none") {
             std::lock_guard<std::mutex> lk(m_global_mu);
             m_global_request = false;
-            continue;
+            return true;
         }
         if (!ensureRelocalizerMap()) {
             // FPFH 地图还在后台构建；保留请求，等下一帧/构建完成后重试。
             std::lock_guard<std::mutex> lk(m_global_mu);
             m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
-            continue;
+            return true;
         }
         std::vector<GlobalCandidate> cands;
         const int nk = m_relocalizer->localizeTopK(
@@ -1093,7 +1140,7 @@ void LocalizationPipeline::globalRelocWorker() {
         if (nk <= 0) {
             std::lock_guard<std::mutex> lk(m_global_mu);
             m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
-            continue;
+            return true;
         }
         std::sort(cands.begin(), cands.end(),
                   [](const GlobalCandidate& a, const GlobalCandidate& b) {
@@ -1141,7 +1188,7 @@ void LocalizationPipeline::globalRelocWorker() {
             os << "global refine weak: best=" << best_fit
                << " second=" << second_fit << " -> retry";
             diag::log('W', "LocPipeline", os.str());
-            continue;
+            return true;
         }
         const double gap = (second_fit >= 0.0) ? (best_fit - second_fit) : 1.0;
         if (second_fit >= m_global_cfg.reloc_accept_score &&
@@ -1152,13 +1199,13 @@ void LocalizationPipeline::globalRelocWorker() {
             os << "global refine ambiguous: best=" << best_fit
                << " second=" << second_fit << " gap=" << gap << " -> retry";
             diag::log('W', "LocPipeline", os.str());
-            continue;
+            return true;
         }
         {
             std::lock_guard<std::mutex> lk(m_global_mu);
             if (generation != m_global_generation.load() || !m_global_request) {
                 // 地图已切换 / 本地 tracking 已自行恢复：旧候选直接丢弃。
-                continue;
+                return true;
             }
         }
         {
@@ -1177,7 +1224,32 @@ void LocalizationPipeline::globalRelocWorker() {
            << " second=" << second_fit << " gap=" << gap;
         diag::log('I', "LocPipeline", os.str());
         FlightRecorder::instance().event("GLOBAL_SEED", os.str());
+    return true;
+}
+
+void LocalizationPipeline::kickGlobalReloc() {
+    if (!m_executor) {
+        std::lock_guard<std::mutex> lk(m_global_mu);
+        m_global_cv.notify_all();
+        return;
     }
+    bool expected = false;
+    if (!m_global_job.compare_exchange_strong(expected, true)) return;
+    rosiwit_common::JobOptions opt;
+    opt.name = "global_reloc";
+    const auto id = m_executor->submit(
+        "pool", opt,
+        [this](rosiwit_common::CancelToken) { runGlobalRelocOnce(); },
+        [this](rosiwit_common::JobId, bool) {
+            m_global_job.store(false);
+            bool again = false;
+            {
+                std::lock_guard<std::mutex> lk(m_global_mu);
+                again = m_global_request && m_global_scan_valid && !m_global_stop;
+            }
+            if (again) kickGlobalReloc();
+        });
+    if (id == rosiwit_common::kInvalidJobId) m_global_job.store(false);
 }
 
 void LocalizationPipeline::onLidar(const LidarFrame& f) {

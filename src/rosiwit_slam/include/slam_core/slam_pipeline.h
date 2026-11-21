@@ -125,6 +125,7 @@ public:
     bool getRealtimeGrid(double resolution, rosiwit_slam::GridInfo& out) override;
     /// 按需触发一次全局重定位 (转发给定位流水线)
     void requestRelocalization() override;
+    void setExecutor(rosiwit_common::IExecutor* ex) override;
     bool setGridMapGenerator(const std::string& name) override;
     bool setPipelineMode(const std::string& mode) override;
     std::string getPipelineMode() const override;

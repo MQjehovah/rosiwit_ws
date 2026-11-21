@@ -4,10 +4,15 @@
 #include "slam_core/pipeline_types.h"
 #include "slam_core/map_data.h"
 
+namespace rosiwit_common { class IExecutor; }
+
 namespace rosiwit_slam {
 
 class ILocalization {
 public:
+    /// 可选: 注入执行器 (线程池); 不注入时定位流水线保持自带线程
+    virtual void setExecutor(rosiwit_common::IExecutor* /*ex*/) {}
+
     // 定位状态只有三种。原 RECOVERING 语义并入 INIT：未确认/重定位中。
     enum Status { INIT, LOCALIZED, LOST };
     virtual ~ILocalization() = default;

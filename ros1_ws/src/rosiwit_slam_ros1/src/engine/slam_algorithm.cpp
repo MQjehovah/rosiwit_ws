@@ -68,6 +68,9 @@ SlamAlgorithm::SlamAlgorithm(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     algo_ = SlamFactory::create(algo_name);
     if (!algo_) { ROS_FATAL("unknown algo: %s", algo_name.c_str()); ros::shutdown(); return; }
     algo_raw_ = algo_.get();
+    // 把线程池交给核心: 重定位建库 / 全局搜索改投池, 核心不再自己 new 线程。
+    // (未注入时核心保持原有自带线程行为)
+    if (executor_) algo_->setExecutor(executor_);
     base_ = dynamic_cast<SlamBase*>(algo_.get());
     if (!algo_->init(config_path_)) { ROS_FATAL("init failed"); ros::shutdown(); return; }
     algo_->setOutputCallback([this](const SlamOutput& o) { onOutput(o); });

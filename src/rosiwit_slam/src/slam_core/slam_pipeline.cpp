@@ -1199,6 +1199,11 @@ bool SlamPipeline::dumpMapData(const std::string& dir) {
     return m_map_mgr->dumpMapData(dir);
 }
 
+void SlamPipeline::setExecutor(rosiwit_common::IExecutor* ex)
+{
+    if (m_localization) m_localization->setExecutor(ex);
+}
+
 void SlamPipeline::requestRelocalization() {
     if (m_localization) m_localization->requestRelocalization();
 }

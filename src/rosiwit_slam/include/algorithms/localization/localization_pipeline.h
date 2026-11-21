@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <atomic>
 #include "slam_core/i_localization.h"
+#include "rosiwit_common/executor.hpp"
 #include "slam_core/i_scan_matcher.h"
 #include "slam_core/i_local_map_provider.h"
 #include "slam_core/i_motion_prior.h"
@@ -31,6 +32,8 @@ public:
 
     bool init(const std::string& config_path) override;
     void setMap(const std::string& map_name) override;
+    /// 注入线程池: 重定位建库 / 全局搜索改投池; 不注入则保持自带线程
+    void setExecutor(rosiwit_common::IExecutor* ex) override { m_executor = ex; }
     void setMapData(const MapData& data) override;
     void cancelSetMap() override { m_cancel_set_map.store(true); }
     void setInitPose(const PoseStamped& pose) override;
@@ -76,8 +79,12 @@ private:
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)
     CloudType::Ptr buildTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
     bool ensureRelocalizerMap();   // 全局重定位库就绪检查(后台构建中返回 false, 绝不阻塞)
-    void relocBuildWorker();       // 后台构建线程: FPFH 全图特征+建树(~45s, 不进回调)
-    void globalRelocWorker();      // 全局候选搜索线程: 不持 m_state_mu
+    void relocBuildWorker();       // 兼容路径(未注入执行器): 常驻等待请求
+    bool runRelocBuildOnce();      // 池任务: 构建一次重定位库
+    void kickRelocBuild();         // 投递 (有在途则不重复投)
+    void globalRelocWorker();      // 兼容路径(未注入执行器): 常驻等待请求
+    bool runGlobalRelocOnce();     // 池任务: 做一次全局搜索
+    void kickGlobalReloc();        // 投递 (有在途则不重复投)
     void updateSnapshotLocked();   // onLidar 持锁时刷新无锁读快照
 
     // 各阶段 (由配置选择)
@@ -166,6 +173,9 @@ private:
     // 全局重定位库后台构建 (2026-10-17 推行丢失事故: 懒建把 44.6s 的 FPFH 全图特征
     // 构建塞进 onLidar 回调, 单线程 spinner 冻结, 雷达停处理/界面冻住。行业惯例:
     // 重活不进实时路径 -> setMap 后立即后台线程预建, 回调只查结果)
+    rosiwit_common::IExecutor* m_executor = nullptr;
+    std::atomic<bool> m_reloc_job{false};    // 建库任务在途
+    std::atomic<bool> m_global_job{false};   // 全局搜索任务在途
     std::thread m_reloc_thread;
     std::mutex m_reloc_mu;
     std::condition_variable m_reloc_cv;
