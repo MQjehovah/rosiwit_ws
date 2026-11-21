@@ -66,6 +66,22 @@ map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
   所以"环境变了"不一定降 fitness。现在的判据是纯几何证据：
   `离底图 > delta_min` + `26 邻域最小簇` + `按 persistency_unit 计票 ≥ persist_hits`。
 
+### 实现状态（2026-11-22，设备 + 仿真已验）
+
+| 项 | 状态 |
+|---|---|
+| `anchor_ok` | 设备实测 `inl=170/vis=172` → OK；窄过道不再恒 WEAK |
+| 最小簇 | **修 bug**：邻居按"整帧扫描体素"计数，不再只看本帧新体素（`23e0893`） |
+| 沉淀判据 | 与 fitness 解耦；`persist_hits` 按 `persistency_unit` 计票 |
+| persistency `w` | 仿真 `unit=frame/gain=8/anchor=128` → `cov` 0→0.99 |
+| 会话地图 | 仿真/设备均观察到：弱锚开、好锚关 |
+| 新结构沉淀 | 仿真：地图系前方 2m 放箱子，一帧 `cand=56/commits=56`；删除后 rayCarve 回落 |
+
+**仿真注意**：地图系相对 Gazebo 世界系可能旋转（本次 ~166°），放测试物体要按
+`world = R(-yaw_map) × map_delta` 换算，否则会落到地图已覆盖区域、`novel=0`。
+**诊断字段**：`[quality]` 有 `novel_votes/novel_commits/vis`；`[maint]` 每 100 帧输出
+`scan/seen/base/kd/cand/cluster_rej/votes/commits`。
+
 ## 1. 两个结构，职责严格分开
 
 | 结构 | 内容 | 谁用 | 更新 |

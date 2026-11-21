@@ -159,3 +159,52 @@ sudo systemctl restart xzrobot
   `docs/ros1_thread_model.md` §2）。
 - 本次没跑长时间定位精度对比（需要实车走一段）；建议上机后跑 10 分钟并看
   `[locstate]` 的 `matching` 与 `location_status` 抖动。
+
+## 8. 2026-11-22 更新（0.2.2：相对锚判据 + overlay 沉淀）
+
+### 8.1 新增配置（`localization.submap` 与 `localization.maintainer`）
+
+```yaml
+localization:
+  submap:
+    anchor_min_inliers: 50     # 绝对下限(防 3 个点也当锚)
+    anchor_min_ratio: 0.5      # inliers / 匹配前可见点数(dynamic_filter 之前)
+    anchor_min_eig_ratio: 0.001
+    anchor_patience: 5         # 连续弱锚帧 -> 开会话地图
+    anchor_close_patience: 10  # 连续好锚帧 -> 关
+  maintainer:
+    persistency_unit: session  # frame|view|session|day
+    persistency_hit_gain: 8    # 每个单位 +8 -> anchor 128 = 16 个会话
+    persistency_anchor: 128
+    persist_hits: 3            # 按 unit 计票: session => 3 个会话
+    delta_min: 0.3
+    novel_min_cluster: 3       # 26 邻域最小簇(按整帧扫描体素计数)
+```
+
+### 8.2 为什么改
+
+实车窄过道整帧只有 ~176 个 0.4m 体素、inliers 最多 ~105；`anchor_min_inliers=500`
+永远不可达 → overlay 不写、`session_map` 不关。改为相对可见证据后：
+`inl=170/vis=172` → `anchor=OK`，`session_map` 10 帧后关闭，`novel_commits` 2~5/s。
+
+### 8.3 新日志字段
+
+`[quality]`（1 Hz）新增 `vis=`、`novel_votes=`、`novel_commits=`。
+`[maint]`（每 100 帧）：
+
+```
+[maint] scan=3627 seen=3088 base=262 kd=71 cand=11 cluster_rej=0 votes=11 commits=11
+```
+
+- `seen`：落在已沉淀体素的点；`base`：被底图同体素挡住；`kd`：离底图 < `delta_min`；
+- `cand`：候选体素；`cluster_rej`：被最小簇拒掉；`votes/commits`：本帧计票/写入。
+- 排查"新结构不沉淀"：看 `cand` 是否涨、`cluster_rej` 是否吃掉、`base/kd` 是否挡住。
+
+### 8.4 已知风险
+
+- **`dynamic_filter` 的选择偏差**：关掉后同一帧 fitness 从 0.86 掉到 0.72。
+  当前 `[quality]` 的 fitness 是在滤除后的点上算的；健康判定可能偏乐观。
+- **簇阈值 3** 对稀疏雷达偏严（仿真 16 线在 3~4m 处点数密度低）；设备万集 722 更密，
+  先在设备上看 `[maint] cluster_rej` 再定。
+- **`persistency_cov`** 在 `w=8/会话`、`anchor=128` 下需要 **16 个会话** 才会 >0，
+  前期一直是 0.000 属正常。
