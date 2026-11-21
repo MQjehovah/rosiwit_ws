@@ -1,4 +1,4 @@
-import { TfTree, quatToYaw } from './tf.mjs'
+import { TfTree, quatToRpy, quatToYaw } from './tf.mjs'
 import { decodePointCloud2, decodeOccupancyGrid, decodeLaserScan, decodePointCloud } from './decode.mjs'
 import { decodeCbor } from './cbor.mjs'
 import { gridToImage } from './gridImage.mjs'
@@ -49,6 +49,32 @@ assert(inv && near(quatToYaw(inv.q), -Math.PI / 2), 'inverse base_link<-map yaw'
 assert(tree.lookup('odom', 'odom') !== null, 'identity lookup')
 assert(tree.lookup('map', 'nope') === null, 'missing frame returns null')
 assert(tree.frames().sort().join(',') === 'base_link,map,odom', 'frame list')
+
+// ------------------------------------------------------------------ RPY
+
+{
+  const roll = 0.12
+  const pitch = -0.24
+  const yaw = 0.6
+  const cr = Math.cos(roll / 2)
+  const sr = Math.sin(roll / 2)
+  const cp = Math.cos(pitch / 2)
+  const sp = Math.sin(pitch / 2)
+  const cy = Math.cos(yaw / 2)
+  const sy = Math.sin(yaw / 2)
+  const q = [
+    sr * cp * cy - cr * sp * sy,
+    cr * sp * cy + sr * cp * sy,
+    cr * cp * sy - sr * sp * cy,
+    cr * cp * cy + sr * sp * sy,
+  ]
+  const rpy = quatToRpy(q)
+  assert(near(rpy[0], roll) && near(rpy[1], pitch) && near(rpy[2], yaw), 'quatToRpy round-trip')
+  assert(near(quatToYaw(q), yaw), 'quatToYaw matches rpy[2]')
+
+  const pureYaw = quatToRpy([0, 0, Math.sin(0.4), Math.cos(0.4)])
+  assert(near(pureYaw[0], 0) && near(pureYaw[1], 0) && near(pureYaw[2], 0.8), 'pure yaw rpy')
+}
 
 // ------------------------------------------------------------------ PointCloud2
 

@@ -6,6 +6,7 @@
 #   ./dev.sh build     类型检查 + 生产构建
 #   ./dev.sh typecheck 只做类型检查
 #   ./dev.sh test      纯数学/解码层单测
+#   ./dev.sh bridge-test 桥接端到端测试（自动起 demo bridge）
 #
 # 如果没有把 node 装进 WSL：
 #   curl -fsSL https://npmmirror.com/mirrors/node/v18.20.4/node-v18.20.4-linux-x64.tar.xz -o /tmp/node.tar.xz
@@ -29,8 +30,9 @@ case "$mode" in
   typecheck) npm run typecheck ;;
   preview)   npm run preview ;;
   test)      ./scripts/test-ros.sh ;;
+  bridge-test) ./scripts/test-bridge.sh ;;
   *)
-    echo "用法: $0 [install|dev|build|typecheck|preview|test]" >&2
+    echo "用法: $0 [install|dev|build|typecheck|preview|test|bridge-test]" >&2
     exit 2
     ;;
 esac

@@ -8,22 +8,42 @@
 
 import { reactive } from 'vue'
 import { RosBridgeClient, type RosStatus, type RosLogEvent, type SubscribeOptions } from './client'
+import { BridgeClient, deriveBridgeUrl } from './bridge'
+import { decodeOccupancyGrid, decodePointCloud2, type CloudData, type GridData } from './decode'
 import { TfTree } from './tf'
 
+const LAN_URL = 'ws://192.168.1.100:8089'
+/** 远程隧道地址（来自 .env.local，通常带 token，不写进源码） */
+export const TUNNEL_URL = import.meta.env.VITE_TUNNEL_URL || ''
+
+export interface UrlPreset {
+  label: string
+  url: string
+}
+
+export const urlPresets: UrlPreset[] = [
+  { label: '局域网 8089', url: LAN_URL },
+  ...(TUNNEL_URL ? [{ label: '远程隧道', url: TUNNEL_URL }] : []),
+]
+
 export const ros = new RosBridgeClient(
-  localStorage.getItem('hmi.url') || 'ws://192.168.1.100:8089',
+  localStorage.getItem('hmi.url') || import.meta.env.VITE_ROSBRIDGE_URL || LAN_URL,
 )
 export const tfTree = new TfTree()
 
 export type LayerKey =
-  | 'globalMap'
+  | 'tf'
+  | 'status'
+  | 'diag'
+  | 'logs'
   | 'scan'
+  | 'laser'
+  | 'globalMap'
   | 'points2d'
+  | 'robot'
+  | 'paths'
   | 'lidar'
   | 'grid'
-  | 'paths'
-  | 'robot'
-  | 'tf'
   | 'trail'
 
 export interface SlamInfo {
@@ -48,6 +68,20 @@ export interface LogLine {
   time: number
   level: 'info' | 'warn' | 'error'
   text: string
+  source?: string
+  /** 连续重复消息合并后的条数 */
+  count: number
+}
+
+export interface Point2 {
+  x: number
+  y: number
+}
+
+export interface MeasureState {
+  active: boolean
+  a: Point2 | null
+  b: Point2 | null
 }
 
 export interface PendingPose {
@@ -78,17 +112,31 @@ export const state = reactive({
   slamTime: 0,
   fusionDiag: '',
 
-  robot: { x: 0, y: 0, yaw: 0, source: '-' as string, stamp: 0 },
+  robot: {
+    x: 0,
+    y: 0,
+    z: 0,
+    roll: 0,
+    pitch: 0,
+    yaw: 0,
+    source: '-' as string,
+    stamp: 0,
+  },
 
   layers: {
-    globalMap: true,
-    scan: true,
-    points2d: true,
-    lidar: true,
-    grid: true,
-    paths: true,
-    robot: true,
+    // 只有 TF 默认订阅；其余像 RViz 一样由用户显式勾选
     tf: true,
+    status: false,
+    diag: false,
+    logs: false,
+    scan: false,
+    laser: false,
+    globalMap: false,
+    points2d: false,
+    robot: false,
+    paths: false,
+    lidar: false,
+    grid: false,
     trail: true,
   } as Record<LayerKey, boolean>,
 
@@ -101,9 +149,17 @@ export const state = reactive({
   logs: [] as LogLine[],
   logFilter: 'all' as 'all' | 'info' | 'warn' | 'error',
   pausedLogs: false,
+  /** 被静音的 rosout 节点名（点击日志来源切换） */
+  mutedSources: [] as string[],
 
   estimating: false,
   pendingPose: null as PendingPose | null,
+
+  measure: { active: false, a: null, b: null } as MeasureState,
+  measureDistance: 0,
+
+  /** /slam/info 的 matching_degree 采样（约 2.5Hz，最多 120 点） */
+  matchHistory: [] as number[],
 
   servicePending: false,
   lastService: '',
@@ -113,14 +169,28 @@ export const state = reactive({
   rawTime: 0,
   rawPaused: false,
 
+  /** hmi_bridge（HTTP 二进制）状态 */
+  bridge: {
+    enabled: localStorage.getItem('hmi.bridge.enabled') === '1',
+    url: localStorage.getItem('hmi.bridge.url') || '',
+    ok: false,
+    error: '',
+    checking: false,
+  },
+
   snapshotPending: false,
   snapshotTime: 0,
   snapshotPoints: 0,
 
   gridPending: false,
+  gridStartedAt: 0,
   gridCells: 0,
   gridTime: 0,
   gridBytes: 0,
+  gridFromCache: false,
+
+  /** 点云显示尺寸倍率（0.5 ~ 3） */
+  pointScale: Number(localStorage.getItem('hmi.pointScale')) || 1,
 
   view: { fit: 0, top: 0, shot: 0, follow: false },
 
@@ -130,10 +200,115 @@ export const state = reactive({
 
 // ------------------------------------------------------------------ logging
 
+export const bridge = new BridgeClient(state.bridge.url || deriveBridgeUrl(state.url))
+if (!state.bridge.url) state.bridge.url = bridge.baseUrl
+
+export function bridgeActive(): boolean {
+  return state.bridge.enabled && state.bridge.ok
+}
+
+export function setBridgeEnabled(enabled: boolean): void {
+  state.bridge.enabled = enabled
+  try {
+    localStorage.setItem('hmi.bridge.enabled', enabled ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+  if (enabled) void checkBridge(false)
+  syncSubscriptions()
+}
+
+export function setBridgeUrl(url: string): void {
+  const trimmed = url.trim()
+  state.bridge.url = trimmed || deriveBridgeUrl(state.url)
+  bridge.setBaseUrl(state.bridge.url)
+  try {
+    if (trimmed) localStorage.setItem('hmi.bridge.url', trimmed)
+    else localStorage.removeItem('hmi.bridge.url')
+  } catch {
+    /* ignore */
+  }
+  state.bridge.ok = false
+  state.bridge.error = ''
+  if (state.bridge.enabled) void checkBridge(false)
+}
+
+export async function checkBridge(verbose = true): Promise<void> {
+  if (state.bridge.checking) return
+  if (!bridge.ready) {
+    state.bridge.ok = false
+    state.bridge.error = '未配置桥接地址'
+    return
+  }
+  state.bridge.checking = true
+  try {
+    const health = await bridge.health()
+    state.bridge.ok = !!health.ok
+    state.bridge.error = ''
+    if (verbose) pushLog('info', `桥接可用（v${health.version}，已运行 ${health.uptime}s）`)
+  } catch (e) {
+    state.bridge.ok = false
+    state.bridge.error = (e as Error).message
+    if (verbose) pushLog('warn', `桥接不可用：${state.bridge.error}`)
+  } finally {
+    state.bridge.checking = false
+    syncSubscriptions()
+  }
+}
+
+
 let logId = 1
-export function pushLog(level: LogLine['level'], text: string): void {
-  state.logs.unshift({ id: logId++, time: Date.now(), level, text })
+export function pushLog(level: LogLine['level'], text: string, source?: string): void {
+  // 连续相同的消息合并计数：rosout 里 “Waiting for laser_scans...” 这种会刷屏
+  const last = state.logs[0]
+  if (
+    last &&
+    last.level === level &&
+    last.text === text &&
+    last.source === source &&
+    Date.now() - last.time < 5000
+  ) {
+    last.count++
+    last.time = Date.now()
+    return
+  }
+  state.logs.unshift({ id: logId++, time: Date.now(), level, text, source, count: 1 })
   if (state.logs.length > 400) state.logs.length = 400
+}
+
+export function muteSource(source: string): void {
+  if (!state.mutedSources.includes(source)) {
+    state.mutedSources.push(source)
+    saveMutedSources()
+  }
+}
+
+export function unmuteSource(source: string): void {
+  state.mutedSources = state.mutedSources.filter((s) => s !== source)
+  saveMutedSources()
+}
+
+export function clearMutedSources(): void {
+  state.mutedSources = []
+  saveMutedSources()
+}
+
+function saveMutedSources(): void {
+  try {
+    localStorage.setItem('hmi.mutedSources', JSON.stringify(state.mutedSources))
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadMutedSources(): string[] {
+  try {
+    const raw = localStorage.getItem('hmi.mutedSources')
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === 'string') : []
+  } catch {
+    return []
+  }
 }
 
 const ROSOUT_LEVEL: Record<number, LogLine['level']> = {
@@ -146,41 +321,46 @@ const ROSOUT_LEVEL: Record<number, LogLine['level']> = {
 
 // -------------------------------------------------------------- subscriptions
 
-const BASE_SUBS: Array<[string, SubscribeOptions]> = [
-  ['/slam/info', { throttle: 150, queue: 1 }],
-  ['/tf', { throttle: 100, queue: 100 }],
-  ['/tf_static', { queue: 1 }],
-  ['/slam/fusion_diag', { throttle: 1000, queue: 1 }],
-  ['/rosout_agg', { throttle: 500, queue: 5 }],
-]
-
 const LAYER_SUBS: Record<LayerKey, Array<[string, SubscribeOptions]>> = {
-  // /global_map 是 latched（每次进模式只发一次），用 CBOR 拿原始字节
-  globalMap: [['/global_map', { throttle: 0, queue: 1, compression: 'cbor' }]],
+  // TF 常驻订阅（只默认订阅它）；layers.tf 只控制坐标轴显示
+  tf: [
+    ['/tf', { throttle: 100, queue: 100 }],
+    ['/tf_static', { queue: 1 }],
+  ],
+  status: [['/slam/info', { throttle: 150, queue: 1 }]],
+  diag: [['/slam/fusion_diag', { throttle: 1000, queue: 1 }]],
+  logs: [['/rosout_agg', { throttle: 500, queue: 5 }]],
   scan: [
     // /scan_f_map 是旧版 PointCloud，未开 debug_publish 时也有数据，已在 map 系配准
     ['/scan_f_map', { throttle: 200, queue: 1, compression: 'cbor' }],
     ['/curr_scan_point', { throttle: 120, queue: 1, compression: 'cbor' }],
-    ['/scan', { throttle: 200, queue: 1 }],
   ],
+  laser: [['/scan', { throttle: 200, queue: 1 }]],
+  // /global_map 是 latched（每次进模式只发一次），用 CBOR 拿原始字节
+  globalMap: [['/global_map', { throttle: 0, queue: 1, compression: 'cbor' }]],
   points2d: [['/points_2d', { throttle: 500, queue: 1, compression: 'cbor' }]],
-  lidar: [],
-  grid: [],
+  robot: [['/robot_footprint', { throttle: 1000, queue: 1 }]],
   paths: [
     ['/global_path', { throttle: 1000, queue: 1 }],
     ['/local_path', { throttle: 500, queue: 1 }],
   ],
-  robot: [['/robot_footprint', { throttle: 1000, queue: 1 }]],
-  tf: [],
+  lidar: [],
+  grid: [],
   trail: [],
 }
 
+const BRIDGE_STREAM_TOPICS = new Set(['/scan_f_map', '/curr_scan_point', '/global_map', '/points_2d'])
+
 function desiredSubscriptions(): Map<string, SubscribeOptions> {
   const wanted = new Map<string, SubscribeOptions>()
-  for (const [topic, opts] of BASE_SUBS) wanted.set(topic, opts)
+  for (const [topic, opts] of LAYER_SUBS.tf) wanted.set(topic, opts)
   for (const key of Object.keys(state.layers) as LayerKey[]) {
-    if (!state.layers[key]) continue
-    for (const [topic, opts] of LAYER_SUBS[key]) wanted.set(topic, opts)
+    if (key === 'tf' || !state.layers[key]) continue
+    for (const [topic, opts] of LAYER_SUBS[key]) {
+      // 点云/栅格走桥接时不再从 rosbridge 拉原始消息
+      if (bridgeActive() && BRIDGE_STREAM_TOPICS.has(topic)) continue
+      wanted.set(topic, opts)
+    }
   }
   return wanted
 }
@@ -199,20 +379,60 @@ export function syncSubscriptions(): void {
   }
 }
 
+const LAYERS_KEY = 'hmi.layers.v2'
+
+function loadLayers(): Partial<Record<LayerKey, boolean>> {
+  try {
+    const raw = localStorage.getItem(LAYERS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    const out: Partial<Record<LayerKey, boolean>> = {}
+    for (const key of Object.keys(state.layers) as LayerKey[]) {
+      if (typeof parsed[key] === 'boolean') out[key] = parsed[key]
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function saveLayers(): void {
+  try {
+    localStorage.setItem(LAYERS_KEY, JSON.stringify(state.layers))
+  } catch {
+    /* ignore */
+  }
+}
+
 export function setLayer(key: LayerKey, value: boolean): void {
   state.layers[key] = value
+  saveLayers()
   syncSubscriptions()
 }
 
 // ----------------------------------------------------------- one-shot snapshot
 
-type SnapshotHandler = (msg: any) => void
+type CloudHandler = (cloud: CloudData) => void
+type GridHandler = (grid: GridData) => void
 
-const lidarHandlers = new Set<SnapshotHandler>()
+const lidarHandlers = new Set<CloudHandler>()
+const globalMapHandlers = new Set<CloudHandler>()
+const gridHandlers = new Set<GridHandler>()
 
-export function onLidarSnapshot(handler: SnapshotHandler): () => void {
+export function onLidarSnapshot(handler: CloudHandler): () => void {
   lidarHandlers.add(handler)
   return () => lidarHandlers.delete(handler)
+}
+
+export function onGlobalMapSnapshot(handler: CloudHandler): () => void {
+  globalMapHandlers.add(handler)
+  return () => globalMapHandlers.delete(handler)
+}
+
+export function onGridSnapshot(handler: GridHandler): () => void {
+  gridHandlers.add(handler)
+  return () => gridHandlers.delete(handler)
 }
 
 /**
@@ -221,41 +441,64 @@ export function onLidarSnapshot(handler: SnapshotHandler): () => void {
  * 原始雷达 /vanjee_points722 是 1MB/帧、10Hz（≈10MB/s），rosbridge 的 JSON 编码还会再膨胀，
  * 不适合持续订阅，所以做成手动快照。
  */
-function takeOne(topic: string, opts: SubscribeOptions, timeout: number): Promise<any> {
+function takeOne(
+  topic: string,
+  opts: SubscribeOptions,
+  timeout: number,
+): { promise: Promise<any>; cancel: () => void } {
   const already = ros.isSubscribed(topic)
   if (!already) ros.subscribe(topic, { ...opts, queue: 1 })
-  return new Promise((resolve, reject) => {
+  let cancel = () => {}
+
+  const promise = new Promise<any>((resolve, reject) => {
     let done = false
-    const off = ros.onTopic(topic, (msg) => {
+    const finish = (fn: () => void) => {
       if (done) return
       done = true
       clearTimeout(timer)
       off()
       if (!already) ros.unsubscribe(topic)
-      resolve(msg)
-    })
-    const timer = window.setTimeout(() => {
-      if (done) return
-      done = true
-      off()
-      if (!already) ros.unsubscribe(topic)
-      reject(new Error(`等待 ${topic} 超时（${timeout}ms），该话题当前可能没有数据`))
-    }, timeout)
+      fn()
+    }
+    const off = ros.onTopic(topic, (msg) => finish(() => resolve(msg)))
+    const timer = window.setTimeout(
+      () =>
+        finish(() =>
+          reject(new Error(`等待 ${topic} 超时（${timeout}ms），该话题当前可能没有数据`)),
+        ),
+      timeout,
+    )
+    cancel = () => finish(() => reject(new Error('已取消')))
   })
+
+  return { promise, cancel }
+}
+
+function emitLidar(cloud: CloudData): void {
+  state.snapshotTime = Date.now()
+  state.snapshotPoints = cloud.count
+  for (const fn of lidarHandlers) fn(cloud)
+  pushLog('info', `雷达帧：${cloud.count.toLocaleString()} 点（${cloud.frame || '未知坐标系'}）`)
 }
 
 export async function grabLidarSnapshot(): Promise<void> {
-  if (ros.status !== 'open') {
-    pushLog('warn', '未连接 rosbridge，无法抓取雷达点云')
-    return
-  }
   if (state.snapshotPending) return
   state.snapshotPending = true
-  pushLog('info', '正在抓取一帧 /vanjee_points722（约 1MB）…')
   try {
-    const msg = await takeOne('/vanjee_points722', { throttle: 0 }, 30000)
-    state.snapshotTime = Date.now()
-    for (const fn of lidarHandlers) fn(msg)
+    if (bridgeActive()) {
+      pushLog('info', '正在从桥接抓取一帧 /vanjee_points722…')
+      emitLidar(await bridge.cloud('vanjee_points722', { voxel: 0.05, max: 200000, timeout: 30000 }))
+      return
+    }
+    if (ros.status !== 'open') {
+      pushLog('warn', '未连接 rosbridge，无法抓取雷达点云')
+      return
+    }
+    pushLog('info', '正在抓取一帧 /vanjee_points722（约 1MB）…')
+    const msg = await takeOne('/vanjee_points722', { throttle: 0 }, 30000).promise
+    const cloud = decodePointCloud2(msg, { maxPoints: 120000, colorMode: 'height' })
+    if (!cloud) throw new Error('没有有效点')
+    emitLidar(cloud)
   } catch (e) {
     pushLog('warn', `雷达快照失败：${(e as Error).message}`)
   } finally {
@@ -265,49 +508,65 @@ export async function grabLidarSnapshot(): Promise<void> {
 
 // ------------------------------------------------------------------ grid snapshot
 
-const gridHandlers = new Set<SnapshotHandler>()
+let cancelGrid: (() => void) | null = null
 
-export function onGridSnapshot(handler: SnapshotHandler): () => void {
-  gridHandlers.add(handler)
-  return () => gridHandlers.delete(handler)
+export function cancelGridSnapshot(): void {
+  cancelGrid?.()
 }
 
-/**
- * /map 单帧 43MB（4300 万格，1Hz）。JSON 完全传不动，这里用 CBOR 只抓一帧就退订。
- * 仍然会占用几秒钟带宽，按钮里会先让用户确认。
- */
 export async function grabGridSnapshot(): Promise<void> {
-  if (ros.status !== 'open') {
-    pushLog('warn', '未连接 rosbridge，无法抓取栅格地图')
-    return
-  }
   if (state.gridPending) return
   state.gridPending = true
-  pushLog('info', '正在抓取 /map（单帧约 43MB，CBOR 二进制，请稍候）…')
+  state.gridStartedAt = Date.now()
   try {
-    const msg = await takeOne('/map', { throttle: 0, compression: 'cbor' }, 180000)
-    const width = Number(msg?.info?.width) || 0
-    const height = Number(msg?.info?.height) || 0
-    state.gridCells = width * height
-    state.gridBytes = Number(msg?.data?.byteLength ?? 0)
+    let grid: GridData | null = null
+    if (bridgeActive()) {
+      pushLog('info', '正在从桥接获取栅格地图（服务端已压缩）…')
+      grid = await bridge.grid(true)
+    } else {
+      if (ros.status !== 'open') {
+        pushLog('warn', '未连接 rosbridge，无法抓取栅格地图')
+        return
+      }
+      pushLog('info', '正在抓取 /map（单帧约 43MB，CBOR 二进制，请稍候）…')
+      const task = takeOne('/map', { throttle: 0, compression: 'cbor' }, 180000)
+      cancelGrid = task.cancel
+      const msg = await task.promise
+      grid = decodeOccupancyGrid(msg)
+    }
+    if (!grid) throw new Error('没有有效栅格数据')
+    state.gridCells = grid.width * grid.height
+    state.gridBytes = grid.data.byteLength
     state.gridTime = Date.now()
+    state.gridFromCache = false
     pushLog(
       'info',
-      `栅格地图已收到：${width}×${height}（${(state.gridCells / 1e6).toFixed(1)}M 格，` +
-        `${(state.gridBytes / 1e6).toFixed(1)}MB）`,
+      `栅格地图：${grid.width}×${grid.height}（${(state.gridCells / 1e6).toFixed(1)}M 格，` +
+        `${(state.gridBytes / 1e6).toFixed(1)}MB 原始 / 压缩后传输）`,
     )
-    for (const fn of gridHandlers) fn(msg)
+    for (const fn of gridHandlers) fn(grid)
   } catch (e) {
     pushLog('warn', `栅格地图抓取失败：${(e as Error).message}`)
   } finally {
+    cancelGrid = null
     state.gridPending = false
   }
 }
 
 // ------------------------------------------------------------------ global map
 
-/** /global_map 是 latched。退订再订阅一次即可让发布端重发最近一份。 */
 export function reloadGlobalMap(): void {
+  if (bridgeActive()) {
+    pushLog('info', '正在从桥接加载 /global_map（体素 0.2m）…')
+    void bridge
+      .cloud('global_map', { voxel: 0.2, max: 500000, timeout: 40000 })
+      .then((cloud) => {
+        for (const fn of globalMapHandlers) fn(cloud)
+        pushLog('info', `全局地图：${cloud.count.toLocaleString()} 点（${cloud.frame || '未知坐标系'}）`)
+      })
+      .catch((e) => pushLog('warn', `全局地图加载失败：${(e as Error).message}`))
+    return
+  }
   if (ros.status !== 'open') {
     pushLog('warn', '未连接 rosbridge')
     return
@@ -382,6 +641,8 @@ const TOPIC_CATALOG: Record<string, string> = {
 
 let handlersReady = false
 
+let lastMatchSample = 0
+
 function registerHandlers(): void {
   if (handlersReady) return
   handlersReady = true
@@ -404,6 +665,14 @@ function registerHandlers(): void {
       },
     }
     state.slamTime = Date.now()
+
+    // 匹配度趋势：约 2.5Hz 采样，保留最近 120 点（~48s）
+    const now = performance.now()
+    if (now - lastMatchSample > 400) {
+      lastMatchSample = now
+      state.matchHistory.push(state.slam.matching_degree)
+      if (state.matchHistory.length > 120) state.matchHistory.shift()
+    }
   })
 
   ros.onTopic('/slam/fusion_diag', (msg) => {
@@ -412,8 +681,10 @@ function registerHandlers(): void {
 
   ros.onTopic('/rosout_agg', (msg) => {
     if (state.pausedLogs) return
+    const source = String(msg?.name ?? 'ros')
+    if (state.mutedSources.includes(source)) return
     const level = ROSOUT_LEVEL[Number(msg?.level)] ?? 'info'
-    pushLog(level, `[${msg?.name ?? 'ros'}] ${msg?.msg ?? ''}`)
+    pushLog(level, String(msg?.msg ?? ''), source)
   })
 
   // /tf 帧列表低频刷新（面板展示用）
@@ -458,6 +729,13 @@ export function connect(url?: string): void {
     state.url = url.trim()
     localStorage.setItem('hmi.url', state.url)
   }
+  // 桥接地址默认跟随 rosbridge 地址推导（端口 8089 -> 9100）
+  if (!localStorage.getItem('hmi.bridge.url')) {
+    state.bridge.url = deriveBridgeUrl(state.url)
+    bridge.setBaseUrl(state.bridge.url)
+  }
+  state.bridge.ok = false
+  if (state.bridge.enabled) void checkBridge(false)
   ros.connect(state.url)
 }
 
@@ -502,6 +780,8 @@ export function initHmi(): void {
 
   state.topicNames = Object.keys(TOPIC_CATALOG).sort()
   state.topicTypes = { ...TOPIC_CATALOG }
+  state.mutedSources = loadMutedSources()
+  Object.assign(state.layers, loadLayers())
 
   ros.onStatus((status, detail) => {
     state.status = status
@@ -601,8 +881,53 @@ export function publishInitialPose(x: number, y: number, theta: number): void {
 // ------------------------------------------------------------------ misc
 
 export function setPendingPose(pose: PendingPose | null): void {
+  if (pose) clearMeasure()
   state.pendingPose = pose
   state.estimating = !!pose
+}
+
+// ------------------------------------------------------------------ measure
+
+export function toggleMeasure(): void {
+  if (state.measure.active) {
+    clearMeasure()
+    return
+  }
+  setPendingPose(null)
+  state.measure.active = true
+  state.measure.a = null
+  state.measure.b = null
+  state.measureDistance = 0
+  pushLog('info', '测距：在地图上点两个点（Esc 取消）')
+}
+
+export function clearMeasure(): void {
+  state.measure.active = false
+  state.measure.a = null
+  state.measure.b = null
+  state.measureDistance = 0
+}
+
+export function setMeasurePoint(x: number, y: number): void {
+  if (!state.measure.active) return
+  if (!state.measure.a || state.measure.b) {
+    state.measure.a = { x, y }
+    state.measure.b = null
+    state.measureDistance = 0
+    return
+  }
+  state.measure.b = { x, y }
+  state.measureDistance = Math.hypot(x - state.measure.a.x, y - state.measure.a.y)
+}
+
+export function setPointScale(scale: number): void {
+  const clamped = Math.min(3, Math.max(0.4, scale))
+  state.pointScale = clamped
+  try {
+    localStorage.setItem('hmi.pointScale', String(clamped))
+  } catch {
+    /* ignore */
+  }
 }
 
 export function selectRawTopic(topic: string): void {

@@ -17,14 +17,18 @@
           {{ state.topicScanning ? '扫描中…' : '扫描全部' }}
         </button>
       </div>
+      <div class="row sub-row">
+        <label class="live-toggle">
+          <input v-model="liveOnly" type="checkbox" /> 只看活跃
+        </label>
+        <span class="count">{{ visibleTopics.length }} / {{ allTopicCount }}</span>
+      </div>
       <table class="topics">
         <thead>
           <tr>
             <th>话题</th>
             <th class="num">Hz</th>
-            <th class="num">KB</th>
             <th class="num">年龄</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -36,26 +40,26 @@
           >
             <td class="name">
               <span class="live-dot" :class="{ on: topic.hz > 0 }" />
-              {{ topic.name }}
-              <div class="type">{{ topic.type || '—' }}</div>
+              <span class="topic-name">{{ topic.name }}</span>
+              <span class="type">{{ topic.type || '—' }}</span>
             </td>
             <td class="num">{{ topic.hz ? topic.hz.toFixed(1) : '—' }}</td>
-            <td class="num">{{ topic.size ? (topic.size / 1024).toFixed(1) : '—' }}</td>
             <td class="num">{{ ageText(topic.age) }}</td>
-            <td class="act">
-              <button v-if="!topic.subscribed" class="btn tiny" @click.stop="subscribe(topic.name)">订阅</button>
-            </td>
           </tr>
         </tbody>
       </table>
       <p class="note">
-        点击行 = 临时订阅并在“消息”里查看最新一条。点云类话题不建议长期开着。
-        “扫描全部”调用 <code>/rosapi/topics</code>，这台设备要 8s 以上，期间所有话题会暂停。
+        点击行订阅并在「消息」里看最新一条。点云类别长期开着；
+        「扫描全部」会让 rosbridge 停几秒。
       </p>
     </div>
 
     <!-- 日志 -->
     <div v-show="tab === 'logs'" class="tab-body">
+      <div v-if="!state.layers.logs" class="prompt">
+        未订阅 <code>/rosout_agg</code>
+        <button class="btn tiny" @click="setLayer('logs', true)">订阅</button>
+      </div>
       <div class="row">
         <select v-model="state.logFilter" class="input">
           <option value="all">全部</option>
@@ -69,11 +73,38 @@
         <button class="btn tiny" @click="state.logs = []">清空</button>
       </div>
       <div class="logs">
-        <div v-for="line in filteredLogs" :key="line.id" class="log" :class="line.level">
+        <div
+          v-for="line in filteredLogs"
+          :key="line.id"
+          class="log"
+          :class="line.level"
+        >
           <span class="time">{{ clock(line.time) }}</span>
+          <span
+            v-if="line.source"
+            class="src"
+            :title="`点击静音 ${line.source}`"
+            @click="muteSource(line.source)"
+          >
+            {{ line.source }}
+          </span>
           <span class="text">{{ line.text }}</span>
+          <span v-if="line.count > 1" class="count">×{{ line.count }}</span>
         </div>
         <div v-if="!filteredLogs.length" class="empty">暂无日志</div>
+      </div>
+      <div v-if="state.mutedSources.length" class="muted-row">
+        <span class="muted-label">已静音</span>
+        <button
+          v-for="source in state.mutedSources"
+          :key="source"
+          class="muted-chip"
+          :title="`恢复 ${source}`"
+          @click="unmuteSource(source)"
+        >
+          {{ source }} ×
+        </button>
+        <button class="muted-chip clear" @click="clearMutedSources">全部恢复</button>
       </div>
     </div>
 
@@ -107,20 +138,35 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { state, selectRawTopic, topicType, refreshTopics as refreshRosTopics, pushLog } from '../ros/app'
-import { ros } from '../ros/app'
+import {
+  clearMutedSources,
+  muteSource,
+  pushLog,
+  refreshTopics as refreshRosTopics,
+  ros,
+  selectRawTopic,
+  setLayer,
+  state,
+  topicType,
+  unmuteSource,
+} from '../ros/app'
 
 const tab = ref<'topics' | 'logs' | 'message'>('topics')
 const search = ref('')
 const messageTopic = ref(state.rawTopic || '/slam/info')
+const liveOnly = ref(true)
 
 const errorCount = computed(
   () => state.logs.filter((l) => l.level === 'error').length,
 )
 
 const filteredLogs = computed(() => {
-  if (state.logFilter === 'all') return state.logs
-  return state.logs.filter((l) => l.level === state.logFilter)
+  const muted = new Set(state.mutedSources)
+  return state.logs.filter((l) => {
+    if (state.logFilter !== 'all' && l.level !== state.logFilter) return false
+    if (l.source && muted.has(l.source)) return false
+    return true
+  })
 })
 
 interface TopicRow {
@@ -132,11 +178,8 @@ interface TopicRow {
   subscribed: boolean
 }
 
-const visibleTopics = computed<TopicRow[]>(() => {
-  const names = new Set<string>([
-    ...Object.keys(state.stats),
-    ...state.topicNames,
-  ])
+const allTopics = computed<TopicRow[]>(() => {
+  const names = new Set<string>([...Object.keys(state.stats), ...state.topicNames])
   const query = search.value.trim().toLowerCase()
   const rows: TopicRow[] = []
   for (const name of names) {
@@ -157,6 +200,15 @@ const visibleTopics = computed<TopicRow[]>(() => {
     return a.name.localeCompare(b.name)
   })
   return rows
+})
+
+const allTopicCount = computed(() => allTopics.value.length)
+
+const visibleTopics = computed<TopicRow[]>(() => {
+  if (!liveOnly.value) return allTopics.value
+  return allTopics.value.filter(
+    (row) => row.subscribed || row.hz > 0 || (row.age >= 0 && row.age < 15000),
+  )
 })
 
 function ageText(age: number): string {
@@ -301,6 +353,45 @@ onBeforeUnmount(() => tempUnsub?.())
   align-items: center;
   flex: none;
 }
+.prompt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 6px 8px;
+  border: 1px dashed #2a3d4f;
+  border-radius: 5px;
+  background: #0b141d;
+  font-size: 10px;
+  color: #7e91a4;
+}
+.prompt code {
+  color: #7dd3fc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.prompt .btn {
+  margin-left: auto;
+}
+.sub-row {
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--dim);
+}
+.live-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.live-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.count {
+  font-variant-numeric: tabular-nums;
+  color: #54687a;
+}
 .grow {
   flex: 1;
   min-width: 0;
@@ -356,9 +447,15 @@ onBeforeUnmount(() => tempUnsub?.())
   word-break: break-all;
   line-height: 1.35;
 }
+.topic-name {
+  color: #a8bccd;
+}
 .type {
-  font-size: 9.5px;
-  color: #54687a;
+  display: block;
+  margin-left: 9px;
+  font-size: 9px;
+  line-height: 1.3;
+  color: #4a5d6f;
   word-break: break-all;
 }
 .live-dot {
@@ -372,10 +469,6 @@ onBeforeUnmount(() => tempUnsub?.())
 }
 .live-dot.on {
   background: var(--ok);
-}
-.topics td.act {
-  width: 1%;
-  padding-left: 0;
 }
 
 .note {
@@ -404,8 +497,23 @@ onBeforeUnmount(() => tempUnsub?.())
   color: #4f6375;
   font-variant-numeric: tabular-nums;
 }
+.log .src {
+  flex: none;
+  color: #7dd3fc;
+  cursor: pointer;
+}
+.log .src:hover {
+  text-decoration: underline;
+}
+.log .count {
+  flex: none;
+  margin-left: auto;
+  color: #fbbf24;
+  font-variant-numeric: tabular-nums;
+}
 .log .text {
   word-break: break-word;
+  min-width: 0;
 }
 .log.warn {
   color: #fcd34d;
@@ -417,6 +525,36 @@ onBeforeUnmount(() => tempUnsub?.())
   color: var(--dim);
   padding: 12px 4px;
   font-size: 11px;
+}
+
+.muted-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex: none;
+  padding-top: 5px;
+  border-top: 1px solid rgba(30, 42, 56, 0.5);
+}
+.muted-label {
+  font-size: 9.5px;
+  color: var(--dim);
+}
+.muted-chip {
+  padding: 1px 6px;
+  border: 1px solid #2a3a4b;
+  border-radius: 9px;
+  background: #0c141d;
+  color: #7e91a4;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+.muted-chip:hover {
+  color: #cfe4f5;
+  border-color: #3a536a;
+}
+.muted-chip.clear {
+  color: #7dd3fc;
 }
 
 .meta {

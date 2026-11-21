@@ -15,6 +15,7 @@ export interface CloudData {
   total: number
   frame: string
   bbox: Vec3Box | null
+  stamp?: number
 }
 
 export interface GridData {
@@ -24,6 +25,8 @@ export interface GridData {
   origin: { x: number; y: number; theta: number }
   data: Int8Array
   frame: string
+  stamp?: number
+  step?: number
 }
 
 export type ColorMode = 'height' | 'intensity' | 'flat'

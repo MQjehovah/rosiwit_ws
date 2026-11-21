@@ -55,6 +55,10 @@ export class PointCloudLayer {
     this.object.visible = visible
   }
 
+  setSize(size: number): void {
+    this.material.size = size
+  }
+
   clear(): void {
     this.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3))
     this.geometry.setDrawRange(0, 0)
@@ -212,6 +216,10 @@ export class RobotLayer {
 
   setVisible(visible: boolean): void {
     this.object.visible = visible
+  }
+
+  setFootprintVisible(visible: boolean): void {
+    this.footprint.visible = visible
   }
 }
 

@@ -2,28 +2,31 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">rosiwit<span>HMI</span></div>
-      <div class="conn">
-        <span class="dot" :class="statusClass" />
-        <strong>{{ statusText }}</strong>
-        <span class="url">{{ state.url }}</span>
-        <span v-if="state.dataAge >= 0" class="rtt">数据 {{ ageText(state.dataAge) }}</span>
+      <ConnectionPill />
+
+      <div class="state">
+        <span class="badge" :class="locClass">{{ locText }}</span>
+        <span class="badge ghost">{{ modeText }}</span>
+        <span class="badge ghost">匹配 {{ matchPct }}%</span>
+        <span v-if="state.slam.map_name" class="map-chip" :title="state.slam.map_name">
+          {{ state.slam.map_name }}
+        </span>
       </div>
 
       <div class="spacer" />
 
-      <span class="badge" :class="locClass">{{ locText }}</span>
-      <span class="badge ghost">{{ modeText }}</span>
-      <span class="badge ghost">匹配 {{ ((state.slam.matching_degree || 0) * 100).toFixed(0) }}%</span>
-      <span class="badge ghost">{{ state.slam.map_name || '无地图' }}</span>
-
-      <button class="btn tiny" @click="showLeft = !showLeft">{{ showLeft ? '隐藏左栏' : '左栏' }}</button>
-      <button class="btn tiny" @click="showRight = !showRight">{{ showRight ? '隐藏右栏' : '右栏' }}</button>
+      <button class="panel-btn" :class="{ on: showLeft }" @click="showLeft = !showLeft" title="显示/隐藏左栏">
+        左栏
+      </button>
+      <button class="panel-btn" :class="{ on: showRight }" @click="showRight = !showRight" title="显示/隐藏右栏">
+        右栏
+      </button>
     </header>
 
     <div
       class="work"
       :style="{
-        gridTemplateColumns: `${showLeft ? '324px' : '0px'} minmax(0, 1fr) ${showRight ? '384px' : '0px'}`,
+        gridTemplateColumns: `${showLeft ? '300px' : '0px'} minmax(0, 1fr) ${showRight ? '360px' : '0px'}`,
       }"
     >
       <aside v-show="showLeft" class="left"><ControlPanel /></aside>
@@ -35,6 +38,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import ConnectionPill from './components/ConnectionPill.vue'
 import ControlPanel from './components/ControlPanel.vue'
 import InspectorPanel from './components/InspectorPanel.vue'
 import SceneView from './three/SceneView.vue'
@@ -42,23 +46,6 @@ import { initHmi, state } from './ros/app'
 
 const showLeft = ref(true)
 const showRight = ref(true)
-
-const statusText = computed(() => {
-  const map: Record<string, string> = {
-    idle: '未连接',
-    connecting: '连接中',
-    open: '已连接',
-    closed: '已断开',
-    error: '连接错误',
-  }
-  return map[state.status] ?? state.status
-})
-
-const statusClass = computed(() => ({
-  ok: state.status === 'open',
-  warn: state.status === 'connecting' || state.status === 'idle',
-  bad: state.status === 'error' || state.status === 'closed',
-}))
 
 const locText = computed(
   () => ['定位正常', '恢复中', '定位失败'][state.slam.location_status] ?? '无定位数据',
@@ -72,11 +59,9 @@ const modeText = computed(() => {
   const map: Record<number, string> = { 0: '建图中', 1: '定位模式', 2: 'SLAM 错误' }
   return map[state.slam.slam_state] ?? '模式未知'
 })
-
-function ageText(age: number): string {
-  if (age < 1000) return `${age} ms`
-  return `${(age / 1000).toFixed(1)} s`
-}
+const matchPct = computed(() =>
+  state.slamTime ? ((state.slam.matching_degree || 0) * 100).toFixed(0) : '—',
+)
 
 onMounted(() => initHmi())
 </script>
@@ -85,14 +70,14 @@ onMounted(() => initHmi())
 .app {
   height: 100%;
   display: grid;
-  grid-template-rows: 44px minmax(0, 1fr);
+  grid-template-rows: 42px minmax(0, 1fr);
   background: var(--bg);
 }
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
   background: #0b1219;
@@ -100,9 +85,9 @@ onMounted(() => initHmi())
 }
 
 .brand {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   color: #cfe4f5;
   white-space: nowrap;
 }
@@ -112,58 +97,17 @@ onMounted(() => initHmi())
   font-weight: 700;
 }
 
-.conn {
+.state {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  color: var(--dim);
+  gap: 6px;
   min-width: 0;
-}
-.conn strong {
-  font-weight: 500;
-  color: var(--text);
-  white-space: nowrap;
-}
-.conn .url {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 220px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #6f869b;
-}
-.rtt {
-  color: #6f869b;
-  font-variant-numeric: tabular-nums;
-}
-
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--dim);
-  flex: none;
-}
-.dot.ok {
-  background: var(--ok);
-  box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
-}
-.dot.warn {
-  background: var(--warn);
-}
-.dot.bad {
-  background: var(--bad);
-  box-shadow: 0 0 8px rgba(248, 113, 113, 0.5);
-}
-
-.spacer {
-  flex: 1;
 }
 
 .badge {
   font-size: 10.5px;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 4px;
   border: 1px solid var(--line);
   background: #0e1620;
@@ -187,6 +131,40 @@ onMounted(() => initHmi())
 }
 .badge.ghost {
   color: var(--dim);
+}
+
+.map-chip {
+  max-width: 130px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px dashed #23384a;
+  color: #7e91a4;
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.panel-btn {
+  padding: 3px 8px;
+  border: 1px solid #223243;
+  border-radius: 4px;
+  background: transparent;
+  color: #54687a;
+  font-size: 10px;
+  cursor: pointer;
+}
+.panel-btn:hover {
+  border-color: #33506a;
+  color: #b9d2e6;
+}
+.panel-btn.on {
+  color: #9fb4c7;
+  border-color: #2b4054;
 }
 
 .work {
@@ -213,8 +191,8 @@ onMounted(() => initHmi())
 }
 
 @media (max-width: 1100px) {
-  .conn .url,
-  .badge.ghost {
+  .badge.ghost,
+  .map-chip {
     display: none;
   }
 }

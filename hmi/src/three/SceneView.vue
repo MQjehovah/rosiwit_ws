@@ -1,27 +1,55 @@
 <template>
-  <div ref="host" class="viewport" :class="{ estimating: state.estimating }">
+  <div ref="host" class="viewport" :class="{ estimating: state.estimating, measuring: state.measure.active }">
     <div class="hud hud-tl">
       <span class="chip">FPS {{ state.fps.toFixed(0) }}</span>
-      <span class="chip">点云 {{ totalPoints.toLocaleString() }}</span>
       <span v-if="scanInfo" class="chip">{{ scanInfo }}</span>
+      <span v-if="globalPoints" class="chip">地图 {{ globalPoints }}</span>
       <span v-if="state.layers.grid && gridCells" class="chip">
         栅格 {{ (gridCells / 1e6).toFixed(1) }}M
       </span>
     </div>
     <div class="hud hud-tr">
-      <span class="chip">{{ state.robot.source }}</span>
-      <span class="chip">
-        x {{ state.robot.x.toFixed(2) }} · y {{ state.robot.y.toFixed(2) }} · θ
-        {{ ((state.robot.yaw * 180) / Math.PI).toFixed(1) }}°
+      <span class="chip">{{ sourceShort }}</span>
+      <span class="chip mono">
+        xyz {{ state.robot.x.toFixed(2) }} {{ state.robot.y.toFixed(2) }} {{ state.robot.z.toFixed(2) }}
+      </span>
+      <span class="chip mono">
+        rpy {{ deg(state.robot.roll) }} {{ deg(state.robot.pitch) }} {{ deg(state.robot.yaw) }}°
       </span>
     </div>
-    <div class="hud hud-bl">左键旋转 · 右键平移 · 滚轮缩放 · 双击地面放置初始位姿</div>
+    <div class="hud hud-bl">拖动旋转 · 右键平移 · 滚轮缩放</div>
     <div v-if="state.estimating" class="estimate-banner">
       在地面点击放置位姿，移动鼠标调整朝向，然后在左侧确认发布
     </div>
-    <div v-if="globalMapMissing" class="map-hint">
-      全局地图 <code>/global_map</code> 未发布（设备 <code>debug_publish: false</code>）；
-      当前帧来自 <code>/scan_f_map</code>，已配准在 map 系
+    <div
+      v-if="globalMapMissing"
+      class="map-hint"
+      title="设备 debug_publish: false 时 /global_map 不发布；当前帧来自 /scan_f_map（已在 map 系配准）"
+    >
+      全局地图未发布 · <code>debug_publish=false</code>
+    </div>
+    <div v-if="noSources" class="empty-hint">
+      只订阅了 TF · 在左侧「数据源」勾选要看的点云 / 地图
+    </div>
+    <div v-if="state.measure.active || state.measure.a" class="hud hud-measure">
+      <span v-if="!state.measure.a" class="chip">测距：点第一个点</span>
+      <span v-else-if="!state.measure.b" class="chip">测距：点第二个点</span>
+      <span v-else class="chip accent">
+        测距 {{ state.measureDistance.toFixed(2) }} m
+        <template v-if="state.measure.a && state.measure.b">
+          · Δx {{ Math.abs(state.measure.b.x - state.measure.a.x).toFixed(2) }} · Δy
+          {{ Math.abs(state.measure.b.y - state.measure.a.y).toFixed(2) }}
+        </template>
+      </span>
+      <button class="chip-btn" @click="clearMeasure">清除</button>
+    </div>
+
+    <div class="view-toolbar">
+      <button title="顶视 (T)" @click="topView">顶视</button>
+      <button title="适配内容 (F)" @click="fitView">适配</button>
+      <button :class="{ on: state.view.follow }" title="跟随机器人" @click="toggleFollow">跟随</button>
+      <button :class="{ on: state.measure.active }" title="测距 (M)" @click="toggleMeasure">测距</button>
+      <button title="截图" @click="screenshot">截图</button>
     </div>
   </div>
 </template>
@@ -31,23 +59,29 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import {
+  bridge,
+  clearMeasure,
+  onGlobalMapSnapshot,
   onGridSnapshot,
   onLidarSnapshot,
   pushLog,
   ros,
+  setMeasurePoint,
   setPendingPose,
   state,
   tfTree,
+  toggleMeasure,
 } from '../ros/app'
+import { loadGridCache, saveGridCache } from '../ros/gridCache'
 import {
   decodeLaserScan,
-  decodeOccupancyGrid,
   decodePath,
   decodePointCloud,
   decodePointCloud2,
   decodePolygon,
+  type CloudData,
 } from '../ros/decode'
-import { quatToYaw } from '../ros/tf'
+import { quatToRpy } from '../ros/tf'
 import {
   applyTransform,
   GridMapLayer,
@@ -83,6 +117,28 @@ const pendingGroup = new THREE.Group()
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
 const raycaster = new THREE.Raycaster()
 
+const measureGroup = new THREE.Group()
+const measureLineGeom = new THREE.BufferGeometry()
+measureLineGeom.setAttribute(
+  'position',
+  new THREE.BufferAttribute(new Float32Array([0, 0, 0.05, 0, 0, 0.05]), 3),
+)
+const measureLine = new THREE.Line(
+  measureLineGeom,
+  new THREE.LineDashedMaterial({ color: 0xfbbf24, dashSize: 0.35, gapSize: 0.2 }),
+)
+measureLine.computeLineDistances()
+const measureDots = [0, 1].map(() => {
+  const dot = new THREE.Mesh(
+    new THREE.RingGeometry(0.12, 0.2, 24),
+    new THREE.MeshBasicMaterial({ color: 0xfbbf24, side: THREE.DoubleSide }),
+  )
+  dot.position.z = 0.05
+  return dot
+})
+measureGroup.add(measureLine, ...measureDots)
+measureGroup.visible = false
+
 const unsubs: Array<() => void> = []
 const warned = new Set<string>()
 
@@ -104,22 +160,43 @@ function currentFrames(): string[] {
   return frameCache
 }
 
-const totalPoints = computed(() => {
-  const c = state.pointCounts
-  return (c.globalMap ?? 0) + (c.scan ?? 0) + (c.points2d ?? 0) + (c.laser ?? 0) + (c.lidar ?? 0)
-})
-
 const gridCells = computed(() => state.gridCells || (state.pointCounts.grid ?? 0))
 
-/** 全局地图点云完全没收到时给一个明确提示（通常是 debug_publish=false） */
+/** 勾了「全局地图」但一条都没收到（通常是 debug_publish=false） */
 const globalMapMissing = computed(
-  () => state.status === 'open' && (state.stats['/global_map']?.count ?? 0) === 0,
+  () =>
+    state.layers.globalMap &&
+    state.status === 'open' &&
+    (state.stats['/global_map']?.count ?? 0) === 0,
+)
+
+/** 除 TF 外没有勾选任何数据源 */
+const noSources = computed(() =>
+  (
+    ['status', 'diag', 'logs', 'scan', 'laser', 'globalMap', 'points2d', 'robot', 'paths', 'lidar', 'grid'] as const
+  ).every((key) => !state.layers[key]),
 )
 
 const scanInfo = computed(() => {
   const n = state.pointCounts.scan ?? 0
   return n ? `扫描 ${n.toLocaleString()}` : ''
 })
+
+const globalPoints = computed(() => {
+  const n = state.pointCounts.globalMap ?? 0
+  if (!n) return ''
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n.toLocaleString()
+})
+
+const sourceShort = computed(() => state.robot.source.replace('TF map→', 'TF '))
+
+function deg(rad: number): string {
+  return ((rad * 180) / Math.PI).toFixed(1)
+}
+
+function toggleFollow(): void {
+  state.view.follow = !state.view.follow
+}
 
 function warnOnce(key: string, text: string): void {
   if (warned.has(key)) return
@@ -158,19 +235,26 @@ function buildMarker(): void {
 
 let lastFineScan = 0
 
+function applyGlobalMap(cloud: CloudData): void {
+  globalLayer.setPoints(cloud.positions, cloud.colors)
+  placeInMap(globalLayer.object, cloud.frame)
+  state.pointCounts.globalMap = cloud.count
+  pushLog(
+    'info',
+    `全局地图：${cloud.count.toLocaleString()} 点` +
+      (cloud.total > cloud.count ? `（原始 ${cloud.total.toLocaleString()}，已抽稀）` : ''),
+  )
+}
+
 function bindTopics(): void {
+  unsubs.push(
+    onGlobalMapSnapshot((cloud) => applyGlobalMap(cloud)),
+  )
+
   unsubs.push(
     ros.onTopic('/global_map', (msg) => {
       const cloud = decodePointCloud2(msg, { maxPoints: 1200000, colorMode: 'height' })
-      if (!cloud) return
-      globalLayer.setPoints(cloud.positions, cloud.colors)
-      placeInMap(globalLayer.object, cloud.frame)
-      state.pointCounts.globalMap = cloud.count
-      pushLog(
-        'info',
-        `全局地图：${cloud.count.toLocaleString()} 点` +
-          (cloud.total > cloud.count ? `（原始 ${cloud.total.toLocaleString()}，已抽稀）` : ''),
-      )
+      if (cloud) applyGlobalMap(cloud)
     }),
   )
 
@@ -219,30 +303,21 @@ function bindTopics(): void {
   )
 
   unsubs.push(
-    onLidarSnapshot((msg) => {
-      const cloud = decodePointCloud2(msg, { maxPoints: 120000, colorMode: 'height' })
-      if (!cloud) {
-        pushLog('warn', '雷达快照解码失败（没有有效点）')
-        return
-      }
+    onLidarSnapshot((cloud) => {
       lidarLayer.setPoints(cloud.positions, cloud.colors)
       placeInMap(lidarLayer.object, cloud.frame)
       state.pointCounts.lidar = cloud.count
-      state.snapshotPoints = cloud.count
-      pushLog('info', `雷达快照：${cloud.count.toLocaleString()} 点（${cloud.frame || '未知坐标系'}）`)
     }),
   )
 
   unsubs.push(
-    onGridSnapshot((msg) => {
-      const grid = decodeOccupancyGrid(msg)
-      if (!grid) {
-        pushLog('warn', '栅格地图解码失败')
-        return
-      }
+    onGridSnapshot((grid) => {
       gridLayer.update(grid)
       state.pointCounts.grid = grid.width * grid.height
       pushLog('info', `栅格已渲染：${grid.width}×${grid.height} @ ${grid.resolution}m`)
+      void saveGridCache(grid).catch(() => {
+        /* 缓存失败不影响显示 */
+      })
     }),
   )
 
@@ -280,15 +355,122 @@ function bindTopics(): void {
 function applyVisibility(): void {
   globalLayer.setVisible(state.layers.globalMap)
   scanLayer.setVisible(state.layers.scan)
-  laserLayer.setVisible(state.layers.scan)
+  laserLayer.setVisible(state.layers.laser)
   points2dLayer.setVisible(state.layers.points2d)
   lidarLayer.setVisible(state.layers.lidar)
   gridLayer.setVisible(state.layers.grid)
   globalPath.setVisible(state.layers.paths)
   localPath.setVisible(state.layers.paths)
-  robotLayer.setVisible(state.layers.robot)
+  // 机器人本体只依赖 TF，常显示；足迹是额外订阅
+  robotLayer.setVisible(true)
+  robotLayer.setFootprintVisible(state.layers.robot)
   trailLayer.setVisible(state.layers.trail)
   tfLayer.object.visible = state.layers.tf
+}
+
+function applyPointScale(): void {
+  const s = state.pointScale
+  globalLayer.setSize(0.1 * s)
+  scanLayer.setSize(0.07 * s)
+  laserLayer.setSize(0.12 * s)
+  points2dLayer.setSize(0.1 * s)
+  lidarLayer.setSize(0.06 * s)
+}
+
+// ---------------------------------------------------------------- bridge polling
+
+let scanTimer: number | null = null
+let p2dTimer: number | null = null
+let scanBusy = false
+let p2dBusy = false
+let bridgeErrorLogged = false
+
+function stopBridgePolling(): void {
+  if (scanTimer !== null) {
+    clearInterval(scanTimer)
+    scanTimer = null
+  }
+  if (p2dTimer !== null) {
+    clearInterval(p2dTimer)
+    p2dTimer = null
+  }
+}
+
+async function pollBridgeScan(): Promise<void> {
+  if (scanBusy) return
+  scanBusy = true
+  try {
+    const cloud = await bridge.cloud('scan_f_map', {
+      voxel: 0.05,
+      max: 200000,
+      wait: 0.8,
+      timeout: 5000,
+    })
+    if (!state.bridge.ok || !state.layers.scan) return
+    scanLayer.setPoints(cloud.positions, cloud.colors)
+    placeInMap(scanLayer.object, cloud.frame)
+    state.pointCounts.scan = cloud.count
+    lastFineScan = performance.now()
+    bridgeErrorLogged = false
+  } catch (e) {
+    if (!bridgeErrorLogged) {
+      bridgeErrorLogged = true
+      pushLog('warn', `桥接扫描获取失败：${(e as Error).message}`)
+    }
+  } finally {
+    scanBusy = false
+  }
+}
+
+async function pollBridge2d(): Promise<void> {
+  if (p2dBusy) return
+  p2dBusy = true
+  try {
+    const cloud = await bridge.cloud('points_2d', {
+      voxel: 0.08,
+      max: 200000,
+      wait: 0.8,
+      timeout: 5000,
+    })
+    if (!state.bridge.ok || !state.layers.points2d) return
+    points2dLayer.setPoints(cloud.positions, cloud.colors)
+    placeInMap(points2dLayer.object, cloud.frame)
+    state.pointCounts.points2d = cloud.count
+  } catch {
+    /* 2D 点云没数据时不刷屏 */
+  } finally {
+    p2dBusy = false
+  }
+}
+
+function syncBridgePolling(): void {
+  stopBridgePolling()
+  if (!state.bridge.enabled || !state.bridge.ok) return
+  if (state.layers.scan) {
+    void pollBridgeScan()
+    scanTimer = window.setInterval(() => void pollBridgeScan(), 250)
+  }
+  if (state.layers.points2d) {
+    p2dTimer = window.setInterval(() => void pollBridge2d(), 500)
+  }
+}
+
+function syncMeasure(): void {
+  const { active, a, b } = state.measure
+  measureGroup.visible = active && !!a
+  measureDots[0].visible = !!a
+  measureDots[1].visible = !!b
+  if (a) measureDots[0].position.set(a.x, a.y, 0.05)
+  if (b) measureDots[1].position.set(b.x, b.y, 0.05)
+  if (a && b) {
+    const pos = measureLineGeom.getAttribute('position') as THREE.BufferAttribute
+    pos.setXYZ(0, a.x, a.y, 0.05)
+    pos.setXYZ(1, b.x, b.y, 0.05)
+    pos.needsUpdate = true
+    measureLineGeom.computeBoundingSphere()
+    measureLine.computeLineDistances()
+  }
+  measureLine.visible = !!(a && b)
 }
 
 function setupScene(): void {
@@ -348,10 +530,13 @@ function setupScene(): void {
     robotLayer.object,
     tfLayer.object,
     pendingGroup,
+    measureGroup,
   ]
   for (const object of all) scene.add(object)
 
   applyVisibility()
+  applyPointScale()
+  syncMeasure()
   resize()
   resizeObserver = new ResizeObserver(resize)
   resizeObserver.observe(el)
@@ -392,7 +577,15 @@ function pointerToGround(event: { clientX: number; clientY: number }): THREE.Vec
 let draggingPose = false
 
 function onPointerDown(event: PointerEvent): void {
-  if (!state.estimating || event.button !== 0) return
+  if (event.button !== 0) return
+
+  if (state.measure.active) {
+    const point = pointerToGround(event)
+    if (point) setMeasurePoint(point.x, point.y)
+    return
+  }
+
+  if (!state.estimating) return
   const point = pointerToGround(event)
   if (!point) return
   draggingPose = true
@@ -425,9 +618,26 @@ function onDoubleClick(event: MouseEvent): void {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && state.estimating) {
-    setPendingPose(null)
-    if (controls) controls.enabled = true
+  const target = event.target as HTMLElement | null
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
+    return
+  }
+  if (target?.isContentEditable) return
+
+  if (event.key === 'Escape') {
+    if (state.estimating) {
+      setPendingPose(null)
+      if (controls) controls.enabled = true
+    }
+    if (state.measure.active) clearMeasure()
+    return
+  }
+  if (event.key === 'm' || event.key === 'M') {
+    toggleMeasure()
+  } else if (event.key === 'f' || event.key === 'F') {
+    fitView()
+  } else if (event.key === 't' || event.key === 'T') {
+    topView()
   }
 }
 
@@ -512,10 +722,14 @@ function animate(): void {
     robotLayer.setTransform(tf)
     if (now - lastRobotPublish > 100) {
       lastRobotPublish = now
+      const [roll, pitch, yaw] = quatToRpy(tf.q)
       state.robot = {
         x: tf.t[0],
         y: tf.t[1],
-        yaw: quatToYaw(tf.q),
+        z: tf.t[2],
+        roll,
+        pitch,
+        yaw,
         source: tf.child === 'base_footprint' ? 'TF map→base_footprint' : 'TF map→base_link',
         stamp: Date.now(),
       }
@@ -528,6 +742,9 @@ function animate(): void {
       state.robot = {
         x: pose.x,
         y: pose.y,
+        z: 0,
+        roll: 0,
+        pitch: 0,
         yaw: pose.theta,
         source: '/slam/info',
         stamp: Date.now(),
@@ -583,6 +800,23 @@ watch(
 )
 
 watch(
+  () => [state.bridge.enabled, state.bridge.ok, state.layers.scan, state.layers.points2d] as const,
+  () => syncBridgePolling(),
+  { immediate: true },
+)
+
+watch(
+  () => state.pointScale,
+  () => applyPointScale(),
+)
+
+watch(
+  () => state.measure,
+  () => syncMeasure(),
+  { deep: true },
+)
+
+watch(
   () => state.pendingPose,
   (pose) => {
     pendingGroup.visible = !!pose
@@ -611,11 +845,30 @@ onMounted(() => {
   setupScene()
   bindTopics()
   animate()
+
+  // 恢复上次抓取的栅格（43MB / 1~2 分钟，刷新页面不必重来）
+  void loadGridCache()
+    .then((cached) => {
+      if (!cached) return
+      gridLayer.update(cached.grid)
+      state.gridCells = cached.grid.width * cached.grid.height
+      state.gridTime = cached.savedAt
+      state.gridFromCache = true
+      pushLog(
+        'info',
+        `已从缓存恢复栅格地图：${cached.grid.width}×${cached.grid.height}` +
+          `（${(state.gridCells / 1e6).toFixed(1)}M 格）`,
+      )
+    })
+    .catch(() => {
+      /* 没有缓存/被浏览器禁用都忽略 */
+    })
 })
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   resizeObserver?.disconnect()
+  stopBridgePolling()
   for (const unsub of unsubs) unsub()
   window.removeEventListener('keydown', onKeyDown)
   globalLayer.dispose()
@@ -647,6 +900,37 @@ onBeforeUnmount(() => {
 }
 .viewport.estimating {
   cursor: crosshair;
+}
+.viewport.measuring {
+  cursor: crosshair;
+}
+
+.hud-measure {
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: center;
+  pointer-events: auto;
+  z-index: 5;
+}
+.hud-measure .chip.accent {
+  color: #fcd34d;
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.12);
+  font-variant-numeric: tabular-nums;
+}
+.chip-btn {
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid #33475a;
+  background: #0d151e;
+  color: #9fb4c7;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chip-btn:hover {
+  border-color: #4b657d;
+  color: #d7e3ef;
 }
 .viewport :deep(canvas) {
   display: block;
@@ -684,6 +968,11 @@ onBeforeUnmount(() => {
   color: #9fb4c7;
   font-variant-numeric: tabular-nums;
 }
+.chip.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.01em;
+}
 
 .estimate-banner {
   position: absolute;
@@ -703,22 +992,70 @@ onBeforeUnmount(() => {
 .map-hint {
   position: absolute;
   left: 50%;
-  bottom: 34px;
+  top: 46px;
   transform: translateX(-50%);
   z-index: 4;
-  max-width: min(760px, 90%);
-  padding: 6px 12px;
-  border-radius: 6px;
-  border: 1px solid rgba(251, 191, 36, 0.35);
-  background: rgba(40, 30, 8, 0.85);
+  padding: 3px 10px;
+  border-radius: 11px;
+  border: 1px solid rgba(251, 191, 36, 0.32);
+  background: rgba(38, 29, 9, 0.88);
   color: #fcd34d;
-  font-size: 11px;
-  line-height: 1.6;
-  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: nowrap;
   pointer-events: none;
 }
 .map-hint code {
   color: #fde68a;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.empty-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  z-index: 4;
+  padding: 5px 11px;
+  border: 1px dashed #2b3d4f;
+  border-radius: 6px;
+  background: rgba(8, 13, 19, 0.82);
+  color: #7e91a4;
+  font-size: 10.5px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.view-toolbar {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 6;
+  display: flex;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid #1c2b3a;
+  background: rgba(10, 16, 22, 0.84);
+  backdrop-filter: blur(4px);
+}
+.view-toolbar button {
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #8aa0b4;
+  font-size: 10.5px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.view-toolbar button:hover {
+  background: #15202c;
+  color: #d7e3ef;
+}
+.view-toolbar button.on {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.14);
 }
 </style>

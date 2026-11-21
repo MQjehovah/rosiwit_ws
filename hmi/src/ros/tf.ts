@@ -51,6 +51,16 @@ export function quatToYaw(q: Quat): number {
   return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 }
 
+/** ROS 常用 ZYX 欧拉角（roll-pitch-yaw，弧度） */
+export function quatToRpy(q: Quat): Vec3 {
+  const [x, y, z, w] = q
+  const roll = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+  const sinPitch = Math.max(-1, Math.min(1, 2 * (w * y - z * x)))
+  const pitch = Math.asin(sinPitch)
+  const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+  return [roll, pitch, yaw]
+}
+
 /** 组合：先 b 后 a（等价于矩阵 A * B） */
 export function compose(a: TfTransform, b: TfTransform): TfTransform {
   const rt = qRotate(a.q, b.t)
