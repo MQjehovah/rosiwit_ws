@@ -80,6 +80,7 @@ bool VgicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     if (m_voxels.empty()) return false;
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
+    out.visible = static_cast<int>(src->size());   // 动态滤除前的可见点数
     if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
         CloudType::Ptr f(new CloudType());
         f->reserve(src->size());

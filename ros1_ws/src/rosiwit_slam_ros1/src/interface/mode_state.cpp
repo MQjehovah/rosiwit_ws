@@ -44,10 +44,8 @@ SlamMode Ros1SlamInterface::updateModeFromCore() {
             setMapName(std::string());
             setCurrentMapPath(std::string());
             realtime_grid_map_area_ = 0.0;
-            static_map_valid_.store(false);
             curr_pose_valid_.store(false);
             clearStaticMap();
-            last_static_map_pub_ = ros::Time();
         }
     } else {
         slam_mode_ = SlamMode::UNKNOWN;
@@ -68,7 +66,6 @@ void Ros1SlamInterface::applyModeToCore(SlamMode m) {
 
 void Ros1SlamInterface::setModeFromConfig(SlamMode m) {
     const bool changed = (slam_mode_ != m);
-    if (m != SlamMode::LOCALIZATION) static_map_valid_.store(false);
     slam_mode_ = m;
     applyModeToCore(m);
     if (changed) {

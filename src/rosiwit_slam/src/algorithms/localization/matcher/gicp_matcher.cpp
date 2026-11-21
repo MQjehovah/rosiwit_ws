@@ -39,6 +39,7 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     if (!m_target || m_target->empty()) return false;
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
+    out.visible = static_cast<int>(src->size());   // 动态滤除前的可见点数
     if (probe) ms_ds = ms_since(t0);
     const Eigen::Matrix4d guess_T = poseToMatrix(guess);
     if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {

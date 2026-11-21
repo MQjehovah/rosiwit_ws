@@ -184,7 +184,6 @@ private:
     void publishSlamInfoThrottled();
     void publishCoreStatusIfChanged();
     void publishHighRateLocalizationPose(bool info_published);
-    void publishStaticMapFallback();
     void publishLocationInfo();      // legacy.cpp:1823-1897
     /// LocalizationServer 对外契约: /localization/state (位姿+协方差+健康等级).
     /// C2b: 2D 激光约束. 只在 DEGRADED/LOST 且曾定位成功过时介入,
@@ -290,8 +289,6 @@ private:
     std::atomic<bool> have_imu_{false}, have_laser_{false};   // legacy 的 get_imu_data_/get_laser_data_
     std::atomic<bool> debug_map_published_{false};            // 每进一次模式只发一次 global_map
     std::atomic<double> realtime_grid_map_area_{0.0};   // 主线程写(1Hz), tick 读
-    std::atomic<bool> static_map_valid_{false};   // /switch_map 已加载 PGM，由 tick 兜底重发
-    ros::Time last_static_map_pub_;
     std::atomic<bool> curr_pose_valid_{false};    // 用于定位高频重发
     ros::Time last_new_pose_ros_;
     ros::Time last_high_rate_pub_;

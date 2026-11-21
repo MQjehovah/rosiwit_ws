@@ -56,9 +56,11 @@ map_maintainer: overlay    # 工厂: 非破坏性叠加(吸收半静态堆货)
 
 因此：
 
-- 写图判据从"`fitness ≥ 阈值`"升级为**锚质量三件套**
-  `anchor_ok = converged && accepted && inliers ≥ 500 && (!has_hessian || smallest_eig_ratio ≥ 1e-3)`
-  （Zhang, ICRA 2016）。`persistency_cov` 只作诊断，不参与判定。
+- 写图判据从"`fitness ≥ 阈值`"升级为**锚质量**：
+  `anchor_ok = converged && accepted && (有 Hessian 时 smallest_eig_ratio ≥ 1e-3)
+  && inliers ≥ anchor_min_inliers(50) && inliers ≥ anchor_min_ratio(0.5) × 可见点数`
+  （可观测性来自 Zhang, ICRA 2016；内点率改为**相对匹配前可见点数**，因为窄过道整帧
+  只有 ~176 个 0.4m 体素，绝对 500 永远达不到）。`persistency_cov` 只作诊断。
 - **已实现（2026-11-21）**：`anchor_ok` 同时是 overlay 写入的前置条件；并且沉积判据
   不再要求 `fitness < fitness_trigger` —— 新增点没有对应点，不会进 fitness 的分子/分母，
   所以"环境变了"不一定降 fitness。现在的判据是纯几何证据：

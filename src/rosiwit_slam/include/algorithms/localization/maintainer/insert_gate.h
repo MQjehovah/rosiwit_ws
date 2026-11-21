@@ -27,4 +27,39 @@ inline bool allowMapInsert(bool tracking, bool match_accepted,
     return true;
 }
 
+/// 锚质量输入: 一次配准结果里与"能不能把这块几何当锚/写进地图"相关的量.
+struct AnchorQuality {
+    bool   converged = false;
+    bool   accepted = false;
+    int    inliers = 0;            // 内点数
+    int    visible = 0;            // 匹配前可见点数(降采样后, 未做动态滤除); <=0 时用 correspondences
+    int    correspondences = 0;    // 有效对应数
+    bool   has_hessian = false;    // 是否提供 JtJ 特征分解
+    double smallest_eig_ratio = 0.0;
+};
+
+/// 锚质量判据 (Zhang ICRA 2016 的可观测性 + 场景相对的内点率):
+///   - 必须收敛且本帧被采纳;
+///   - 有 Hessian 时, 最小/最大特征值比 >= min_eig_ratio (退化方向不可信);
+///   - 内点数 >= min_inliers (绝对下限, 防 3 个点也当锚);
+///   - 内点数 >= min_ratio * 可见点数 (相对判据: 窄过道里可见几何只有百来个体素,
+///     绝对 500 永远达不到; 开阔区可见几千点时 0.5 又会拒掉一半都配不上的弱匹配).
+/// 注意分母用**滤除前**的可见点数, 避免 dynamic_filter 的"选择偏差"把 fitness 抬高.
+struct AnchorCriteria {
+    int    min_inliers = 50;    // 绝对下限(防 3 个点也当锚)
+    double min_ratio = 0.5;     // inliers / 可见点数(滤除前)
+    double min_eig_ratio = 1e-3;
+};
+
+inline bool anchorQualityOk(const AnchorQuality& q, const AnchorCriteria& c) {
+    if (!q.converged || !q.accepted) return false;
+    if (q.has_hessian && q.smallest_eig_ratio < c.min_eig_ratio) return false;
+    if (q.inliers < c.min_inliers) return false;
+    const int vis = q.visible > 0 ? q.visible : q.correspondences;
+    if (vis > 0 && static_cast<double>(q.inliers) < c.min_ratio * static_cast<double>(vis)) {
+        return false;   // 可见几何里有一半以上都配不上 -> 不信任
+    }
+    return true;
+}
+
 }  // namespace rosiwit_slam

@@ -40,6 +40,7 @@ bool PpIcpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     if (!m_store && (!m_target || m_target->size() < 5)) return false;
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
+    out.visible = static_cast<int>(src->size());   // 动态滤除前的可见点数
     if (!m_store && m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
         src = filterByMapProximity(src, m_kdtree, poseToMatrix(guess), m_cfg.dynamic_dist);
         if (!src || src->empty()) return false;

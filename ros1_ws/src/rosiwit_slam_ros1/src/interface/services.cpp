@@ -175,7 +175,6 @@ Ros1SlamInterface::MapSwitchContext Ros1SlamInterface::beginMapSwitch(
                   << " unknown=" << std::count(static_grid.data.begin(), static_grid.data.end(), -1)
                   << std::endl;
     }
-    static_map_valid_.store(ctx.pgm_ok);
 
     // 3. 切图默认显示地图零点，清掉上一张图的位姿/高频状态。
     {

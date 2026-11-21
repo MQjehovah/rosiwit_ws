@@ -360,6 +360,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_session_map_use_for_tracking =
             getv<bool>(subc, "use_for_tracking", m_session_map_use_for_tracking);
         m_anchor_min_inliers = getv<int>(subc, "anchor_min_inliers", m_anchor_min_inliers);
+        m_anchor_min_ratio = getv<double>(subc, "anchor_min_ratio", m_anchor_min_ratio);
         m_anchor_min_eig_ratio = getv<double>(subc, "anchor_min_eig_ratio", m_anchor_min_eig_ratio);
         m_anchor_patience = getv<int>(subc, "anchor_patience", m_anchor_patience);
         m_anchor_close_patience =
@@ -1995,6 +1996,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " fitness=" << res.fitness
                    << " anchor=" << (anchor_ok ? "OK" : "WEAK")
                    << " inl=" << res.inliers
+                   << " vis=" << res.visible
                    << " eig=" << res.smallest_eig_ratio
                    << " session_map=" << session_map_active
                    << " session_map_size=" << session_map_size
@@ -2055,10 +2057,19 @@ bool LocalizationPipeline::predictAt(double t, PoseStamped& out) {
 }
 
 bool LocalizationPipeline::anchorOk(const MatchResult& res, bool accepted) const {
-    if (!res.converged || !accepted) return false;
-    if (res.inliers < m_anchor_min_inliers) return false;
-    if (res.has_hessian && res.smallest_eig_ratio < m_anchor_min_eig_ratio) return false;
-    return true;
+    AnchorQuality q;
+    q.converged = res.converged;
+    q.accepted = accepted;
+    q.inliers = res.inliers;
+    q.visible = res.visible;
+    q.correspondences = res.correspondences;
+    q.has_hessian = res.has_hessian;
+    q.smallest_eig_ratio = res.smallest_eig_ratio;
+    AnchorCriteria c;
+    c.min_inliers = m_anchor_min_inliers;
+    c.min_ratio = m_anchor_min_ratio;
+    c.min_eig_ratio = m_anchor_min_eig_ratio;
+    return anchorQualityOk(q, c);
 }
 
 FusionDiag LocalizationPipeline::fusionDiag() const {

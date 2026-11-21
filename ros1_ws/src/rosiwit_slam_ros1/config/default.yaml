@@ -529,6 +529,19 @@ localization:
     pose_graph: false
     pg_min_keyframes: 3
 
+  # ---- 会话地图 / 锚质量 (B 阶段, 影子) ----
+  # anchor 判据 = 收敛+采纳 + (有 Hessian 时)最小/最大特征值比 + 内点数下限
+  #              + 内点数 >= anchor_min_ratio × 匹配前可见点数。
+  # 之所以用"相对可见证据": 实车窄过道整帧只覆盖 ~176 个 0.4m 体素, 绝对 500 永远
+  # 达不到; 开阔区可见几千点时, 0.5 的比例又能拒掉一半都配不上的弱匹配。
+  submap:
+    enabled: true
+    anchor_min_inliers: 50     # 绝对下限(防 3 个点也当锚)
+    anchor_min_ratio: 0.5      # 内点 / 匹配前可见点数(dynamic_filter 之前)
+    anchor_min_eig_ratio: 0.001
+    anchor_patience: 5         # 连续弱锚帧 -> 开会话地图
+    anchor_close_patience: 10  # 连续好锚帧 -> 关
+
   # ---- 统一地图存储底座 (L8): none | pcd | voxel ----
   # 设为 pcd/voxel 时, 支持 store 的配准器(pp_icp/p2p_icp)直接从 store 取近邻, 与存储解耦
   map_store: none

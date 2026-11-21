@@ -76,6 +76,7 @@ struct MatchResult {
     double rmse = -1.0;            // 平均最近邻距离(m)
     int    correspondences = 0;    // 有效对应数
     int    inliers = 0;            // 内点数
+    int    visible = 0;            // 匹配前可见点数(降采样后, 未做动态滤除); 0=配准器未填
     int    iterations = 0;         // 实际迭代次数
     bool   degenerate = false;     // 是否检测到退化方向
     int    degenerate_dirs = 0;    // 被门控的退化方向数

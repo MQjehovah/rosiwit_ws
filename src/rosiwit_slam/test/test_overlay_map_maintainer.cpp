@@ -5,6 +5,7 @@
 #include <initializer_list>
 
 #include "algorithms/localization/maintainer/overlay_map_maintainer.h"
+#include "algorithms/localization/maintainer/insert_gate.h"
 
 using namespace rosiwit_slam;
 
@@ -409,6 +410,70 @@ TEST(OverlayNovelStructure, IsolatedNovelPointRejectedByCluster)
 
     m.onLocalized(mkPose(0.0), scan, confidentMatch(), true);
     EXPECT_EQ(m.overlaySize(), 0u);
+}
+
+// ---------------- 锚质量: 相对可见证据 ----------------
+
+TEST(AnchorQuality, NarrowAisleVisibleEvidencePasses)
+{
+    AnchorQuality q;
+    q.converged = true;
+    q.accepted = true;
+    q.visible = 176;          // 窄过道: 整帧只覆盖 176 个 0.4m 体素
+    q.correspondences = 126;  // dynamic_filter 之后
+    q.inliers = 105;
+    AnchorCriteria c;
+    EXPECT_TRUE(anchorQualityOk(q, c));
+}
+
+TEST(AnchorQuality, WeakMatchInRichSceneRejected)
+{
+    AnchorQuality q;
+    q.converged = true;
+    q.accepted = true;
+    q.visible = 5000;         // 开阔区: 可见上千点, 但只配上 20%
+    q.correspondences = 4000;
+    q.inliers = 1000;
+    AnchorCriteria c;
+    EXPECT_FALSE(anchorQualityOk(q, c));
+}
+
+TEST(AnchorQuality, DegenerateHessianRejected)
+{
+    AnchorQuality q;
+    q.converged = true;
+    q.accepted = true;
+    q.visible = 1000;
+    q.correspondences = 900;
+    q.inliers = 900;
+    q.has_hessian = true;
+    q.smallest_eig_ratio = 1e-4;   // < 1e-3: 退化方向
+    AnchorCriteria c;
+    EXPECT_FALSE(anchorQualityOk(q, c));
+}
+
+TEST(AnchorQuality, BelowAbsoluteFloorRejected)
+{
+    AnchorQuality q;
+    q.converged = true;
+    q.accepted = true;
+    q.visible = 20;
+    q.correspondences = 20;
+    q.inliers = 10;           // < 绝对下限
+    AnchorCriteria c;
+    EXPECT_FALSE(anchorQualityOk(q, c));
+}
+
+TEST(AnchorQuality, RejectedFrameIsNotAnAnchor)
+{
+    AnchorQuality q;
+    q.converged = true;
+    q.accepted = false;
+    q.visible = 1000;
+    q.correspondences = 900;
+    q.inliers = 900;
+    AnchorCriteria c;
+    EXPECT_FALSE(anchorQualityOk(q, c));
 }
 
 // catkin_add_gtest 只链 GTEST_LIBRARIES (不含 gtest_main), 所以这里自带 main

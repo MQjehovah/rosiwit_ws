@@ -44,7 +44,6 @@ void Ros1SlamInterface::applyPublishResetIfRequested() {
         last_high_rate_pub_ = ros::Time();
         last_high_rate_tf_ = ros::Time();
         last_pose_stamp_ = 0.0;
-        last_static_map_pub_ = ros::Time();
     }
     if (mask & kPubResetLocStatus) {
         last_core_loc_status_ = rosiwit_slam::ILocalization::INIT;
@@ -130,7 +129,8 @@ void Ros1SlamInterface::publishCurrPose() {
 
     if (slam_mode_ == SlamMode::LOCALIZATION) {
         publishHighRateLocalizationPose(publish_info);
-        publishStaticMapFallback();
+        // /map 是 latched, 且 /switch_map 载图时已经 publish 过一次;
+        // 定位模式下地图不变, 不再按 1Hz 重发整张 43MB 栅格.
     }
 }
 
@@ -297,17 +297,6 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
         last_high_rate_tf_ = now;
     }
     last_high_rate_pub_ = now;
-}
-
-void Ros1SlamInterface::publishStaticMapFallback() {
-    if (!static_map_valid_) return;
-    const ros::Time now = ros::Time::now();
-    if (!last_static_map_pub_.isZero() && (now - last_static_map_pub_).toSec() < 1.0) return;
-    // 拿共享快照 (不是拷贝): 这张图由 1Hz 栅格任务 / 切图更新
-    const auto snap = staticMapSnapshot();
-    if (!snap || snap->data.empty()) return;
-    realtime_grid_map_puber_.publish(*snap);
-    last_static_map_pub_ = now;
 }
 
 void Ros1SlamInterface::publishZeroPoseInfo() {

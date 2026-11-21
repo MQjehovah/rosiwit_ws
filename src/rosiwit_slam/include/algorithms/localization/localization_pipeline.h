@@ -126,7 +126,8 @@ private:
     bool   m_session_map_enabled = true;
     bool   m_session_map_use_for_tracking = false;   // 真正当作匹配目标(未启用)
     // 锚质量判据 (行业标准): JtJ 最小特征值比 (Zhang, ICRA 2016) + 内点数
-    int    m_anchor_min_inliers = 500;
+    int    m_anchor_min_inliers = 50;     // 绝对下限(防 3 个点也当锚)
+    double m_anchor_min_ratio = 0.5;      // 内点 / 匹配前可见点数
     double m_anchor_min_eig_ratio = 1e-3;
     int    m_anchor_patience = 5;         // 连续弱锚帧 -> 开会话地图
     int    m_anchor_close_patience = 10;  // 连续好锚帧 -> 关
