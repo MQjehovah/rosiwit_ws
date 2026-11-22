@@ -56,14 +56,17 @@
 | `sensor_msgs/LaserScan` | `LaserFrame` | float32 ranges，带 `stream` |
 | `nav_msgs/Path` | `PathFrame` | 带 `stream` |
 | `geometry_msgs/PolygonStamped` | `PolygonFrame` | 带 `stream` |
+| `sensor_msgs/Image` | `ImageFrame` | 服务端转 JPEG（rgb8/bgr8/mono8/mono16/32FC1） |
+| `sensor_msgs/CompressedImage` | `ImageFrame` | 直接转发 jpeg/png 字节 |
 | 其它 | `RawMessage` | `extract_values` → JSON，超过 300KB 截断 |
 
 命令：
 
 - `SUBSCRIBE`：按 `rate_hz` 推送最新一帧（只推新数据，不重复发同一 `stamp`）。
+  `manual=true`（`rate_hz=0`）时只建立订阅和最新缓存，**不自动推送**。
 - `UNSUBSCRIBE`：停止推送。
-- `REQUEST`：一次性抓取。`stream` 传话题名；点云/栅格/激光都能用。
-  `/global_map` 先等话题 15s，没消息时回退读取设备当前地图的 `map.pcd`。
+- `REQUEST`：一次性抓取。`stream` 传话题名；点云/栅格/激光/路径/图像都能用；
+  手动模式就是靠它取帧。`/global_map` 先等话题 15s，没消息时回退读取设备当前地图的 `map.pcd`。
 - `GET_TOPICS`：返回 `[name, type]`，前端用来做话题下拉框。
 - `CALL_SERVICE`：白名单服务。
 - `SET_INITIAL_POSE`：发布 `/initialpose`。
@@ -76,7 +79,7 @@
 topic, count, bytes（最后一帧）, total_bytes（累计）, rate_hz, age_ms
 ```
 
-前端直接用它显示速率 / 每帧大小 / 累计流量。
+前端直接用它显示速率 / 每帧大小 / 累计流量；把所有话题的 `total_bytes`、`rate_hz` 相加就是全局总流量/总速率。
 
 Python 2.7（Melodic）没有 `google.protobuf` runtime，所以服务端按 protobuf wire format
 手工编码；字段编号与 `.proto` 一一对应，浏览器用生成好的 descriptor 解码。

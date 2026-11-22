@@ -4,6 +4,7 @@
       <span class="chip">FPS {{ state.fps.toFixed(0) }}</span>
       <span v-if="displayCount" class="chip">{{ displayCount }} 个显示项</span>
       <span v-if="globalPoints" class="chip">PCD {{ globalPoints }}</span>
+      <span v-if="state.totalBytes" class="chip mono">流量 {{ trafficText }}</span>
     </div>
     <div class="hud hud-tr">
       <span class="chip">{{ sourceShort }}</span>
@@ -185,6 +186,14 @@ const globalPoints = computed(() => {
   const n = state.loadedMapPoints || 0
   if (!n) return ''
   return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n.toLocaleString()
+})
+
+const trafficText = computed(() => {
+  const rate = state.totalRate
+  const rateText = rate >= 1024 * 1024 ? `${(rate / 1048576).toFixed(1)} MB/s` : `${(rate / 1024).toFixed(1)} KB/s`
+  const total = state.totalBytes
+  const totalText = total >= 1024 * 1024 ? `${(total / 1048576).toFixed(1)} MB` : `${(total / 1024).toFixed(0)} KB`
+  return `${rateText} · ${totalText}`
 })
 
 const sourceShort = computed(() => state.robot.source.replace('TF map→', 'TF '))

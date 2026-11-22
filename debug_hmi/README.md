@@ -58,10 +58,17 @@ cp .env.example .env.local
 | `sensor_msgs/LaserScan` | 激光点 | 点大小、颜色、频率 |
 | `nav_msgs/Path` | 折线 | 颜色、频率 |
 | `geometry_msgs/PolygonStamped` | 闭合线 | 颜色、频率 |
+| `sensor_msgs/Image` / `CompressedImage` | 图像 | 频率或手动抓取；点开缩略图看大图 |
 | 其它 | JSON（右栏查看） | — |
 
 每个显示项实时显示：**速率 Hz、每帧字节、累计流量、最后更新时间、点数/格数**。
-`/map`、`/global_map` 这类大话题可以点「抓取」单帧接收，不影响其它实时流。
+频率最低可选 **「手动」**：服务端只保持订阅和最新缓存，不自动推送，由「抓取」按钮主动要一帧。
+`/map`、`/global_map` 这类大话题也建议用「手动」+「抓取」。
+
+图像话题由服务端转成 JPEG（`Image` 支持 rgb8/bgr8/mono8/mono16/32FC1；`CompressedImage` 直接转发 jpeg/png），
+前端用缩略图或点击放大显示。
+
+面板底部显示**所有话题合计的总流量和当前总速率**（服务端按实际发送字节统计）。
 
 ## 大数据：debug_bridge
 
@@ -80,6 +87,8 @@ cp .env.example .env.local
 - `/map` 4300 万格 → **1.4MB zlib**，机器人生成 6.4s，隧道约 15s
 - `/curr_scan_point` 约 4.6k 点 → **17KB zlib/帧**
 - `/scan` LaserScan 4000 字节 ranges/帧
+- `/camera_01/color/image_raw`（640×480 rgb8）→ 服务端转 JPEG **约 17~26KB/帧**
+- `/detected/camera_02/image/compressed` → 直接转发原始 JPEG
 - `/global_map`（设备地图 599 万点，5cm 体素）**二十多 MB zlib**
 
 ### 全局地图
