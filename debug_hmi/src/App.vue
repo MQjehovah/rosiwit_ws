@@ -1,7 +1,7 @@
 <template>
   <div class="app">
     <header class="topbar">
-      <div class="brand">rosiwit<span>debug_hmi</span></div>
+      <div class="brand">rosiwit<span>debug_hmi</span><em class="build-tag">模型 v3</em></div>
       <ConnectionPill />
 
       <div class="state">
@@ -95,6 +95,17 @@ onMounted(() => initHmi())
   margin-left: 4px;
   color: var(--accent);
   font-weight: 700;
+}
+.build-tag {
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid #2a4558;
+  border-radius: 3px;
+  color: #7f9cb2;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: 0.04em;
 }
 
 .state {
