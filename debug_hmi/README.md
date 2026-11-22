@@ -93,7 +93,8 @@ cp .env.example .env.local
 
 ### 全局地图
 
-`/global_map` 由 `rosiwit_slam_ros1` 的 `debug_publish` 开关控制，默认关闭：
+`/global_map` 就是一个普通点云话题，和 `/curr_scan_point` 一样按显示项订阅 / 手动抓取。
+它由 `rosiwit_slam_ros1` 的 `debug_publish` 开关控制，默认关闭：
 
 ```bash
 # 设备上（xzrobot / xzyz2022!）
@@ -105,13 +106,7 @@ sudo systemctl restart xzrobot
 ⚠️ **会重启整个 xzrobot bringup（SLAM/导航都会中断）**，请在机器人空闲时操作。
 
 当前版本的 SLAM 节点只在“进模式”时尝试发一次 `/global_map`，地图还没装好时会错过。
-因此 `debug_bridge` 的 `/global_map` 单帧请求逻辑是：
-
-1. 先等 `debug_publish` 打开后的 `/global_map`；
-2. 15s 内没有消息时，读取当前地图的 `/opt/xzrobot/maps/<uuid>/map.pcd` 作为快照回退，
-   按请求的体素降采样后按同一个 `/global_map` 点云帧发送。
-
-回退的 PCD 是标准格式，前端不需要知道来源。
+遇到这种情况，直接在左侧加载本机 PCD 地图即可，不需要走话题。
 
 ## 本地 PCD
 
@@ -187,6 +182,6 @@ debug_bridge/
 
 - 只支持 ROS1。
 - 桥接没有鉴权，默认 `0.0.0.0:9100`；建议只走隧道/内网，必要时 `--host 127.0.0.1`。
-- `/global_map` 的回退依赖设备上存在当前地图的 `map.pcd`；找不到时只返回错误。
+- `/global_map` 和普通话题一样，设备不发布时就没有数据；可用本地 PCD 导入作为替代。
 - 超大点云（数百万点）解码和渲染会占用较多内存，建议用体素/点数上限控制。
 - 位姿的 z/rpy 是 TF 真值；如果 `map→odom` 的 z 有偏移，debug_hmi 会如实显示。

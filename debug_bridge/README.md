@@ -66,7 +66,7 @@
   `manual=true`（`rate_hz=0`）时只建立订阅和最新缓存，**不自动推送**。
 - `UNSUBSCRIBE`：停止推送。
 - `REQUEST`：一次性抓取。`stream` 传话题名；点云/栅格/激光/路径/图像都能用；
-  手动模式就是靠它取帧。`/global_map` 先等话题 15s，没消息时回退读取设备当前地图的 `map.pcd`。
+  手动模式就是靠它取帧。`/global_map` 和普通话题一样，只等话题本身，不再读设备文件。
 - `GET_TOPICS`：返回 `[name, type]`，前端用来做话题下拉框。
 - `CALL_SERVICE`：白名单服务。
 - `SET_INITIAL_POSE`：发布 `/initialpose`。
@@ -133,7 +133,7 @@ python3 tools/xzmap_to_pcd.py map.xzmap -o map.pcd --voxel 0.3 --max 800000
 
 - 订阅是推送（服务器按 `rate_hz` 发），不是轮询；慢客户端由 TCP 背压自然降频。
 - 栅格按话题订阅时每个新消息都会编码；`/map` 很大，建议用 `REQUEST` 单帧。
-- `/global_map` 的回退依赖设备上存在当前地图的 `/opt/xzrobot/maps/<uuid>/map.pcd`。
+- `/global_map` 只是普通点云话题；设备不发布时没有数据，可在前端导入本地 PCD。
 - 没有鉴权，默认绑定 `0.0.0.0:9100`。建议只走隧道/内网，必要时 `--host 127.0.0.1`。
 - 服务端编码是手写 protobuf wire format；改 `.proto` 时记得同步
   `debug_bridge.py` 的字段编号，并重新生成 `debug_bridge.json`。

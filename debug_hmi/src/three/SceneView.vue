@@ -19,13 +19,6 @@
     <div v-if="state.estimating" class="estimate-banner">
       在地面点击放置位姿，移动鼠标调整朝向，然后在左侧确认发布
     </div>
-    <div
-      v-if="globalMapMissing"
-      class="map-hint"
-      title="/global_map 是 latched 话题；机器人只在一进模式时发一次。可在左侧显示项里点“抓取”或加载 PCD。"
-    >
-      全局地图未收到 · 可在左侧抓取单帧或加载 PCD
-    </div>
     <div v-if="noSources" class="empty-hint">
       像 RViz 一样在左侧「显示项」里添加话题：点云、栅格、激光、路径都可以单独设置
     </div>
@@ -172,14 +165,6 @@ const displayCount = computed(() => state.displays.filter((d) => d.enabled).leng
 
 const previewImageData = computed(() => (state.previewImage ? state.images[state.previewImage] : null))
 
-/** 有 /global_map 显示项但一条都没收到 */
-const globalMapMissing = computed(
-  () =>
-    state.status === 'open' &&
-    state.displays.some((d) => d.topic === '/global_map' && d.enabled) &&
-    (state.pointCounts['/global_map'] ?? 0) === 0,
-)
-
 /** 没有任何显示项 */
 const noSources = computed(() => state.displays.length === 0)
 
@@ -191,9 +176,11 @@ const globalPoints = computed(() => {
 
 const trafficText = computed(() => {
   const rate = state.totalRate
-  const rateText = rate >= 1024 * 1024 ? `${(rate / 1048576).toFixed(1)} MB/s` : `${(rate / 1024).toFixed(1)} KB/s`
+  const rateText =
+    rate >= 1024 * 1024 ? `${(rate / 1048576).toFixed(2)} MB/s` : `${(rate / 1024).toFixed(2)} KB/s`
   const total = state.totalBytes
-  const totalText = total >= 1024 * 1024 ? `${(total / 1048576).toFixed(1)} MB` : `${(total / 1024).toFixed(0)} KB`
+  const totalText =
+    total >= 1024 * 1024 ? `${(total / 1048576).toFixed(2)} MB` : `${(total / 1024).toFixed(2)} KB`
   return `${rateText} · ${totalText}`
 })
 

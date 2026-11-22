@@ -130,6 +130,9 @@ export const state = reactive({
   slamTime: 0,
   /** 前端“定位状态”插件根据 /slam/info 推导出的展示文本 */
   statusText: '',
+  /** /device/robot_shadow 解析后的设备状态 */
+  robotShadow: null as Record<string, any> | null,
+  shadowTime: 0,
 
   displays: [] as DisplayItem[],
   topics: [] as Array<{ name: string; type: string }>,
@@ -428,7 +431,7 @@ export async function grabTopic(id: string): Promise<void> {
   state.displayError = ''
   pushLog('info', `抓取 ${d.topic} 单帧…`)
   try {
-    await bridge.requestAny(d.topic, d.topic === '/global_map' ? 900000 : 120000, false)
+    await bridge.requestAny(d.topic, 120000, false)
     pushLog('info', `${d.topic} 单帧已接收`)
   } catch (e) {
     state.displayError = (e as Error).message
@@ -954,6 +957,19 @@ function registerHandlers(): void {
     }
   })
 
+  ros.onTopic('/device/robot_shadow', (msg) => {
+    try {
+      const raw = typeof msg?.data === 'string' ? msg.data : msg
+      const obj = typeof raw === 'string' ? JSON.parse(raw) : raw
+      if (obj && typeof obj === 'object') {
+        state.robotShadow = obj
+        state.shadowTime = Date.now()
+      }
+    } catch (e) {
+      pushLog('warn', `robot_shadow 解析失败：${(e as Error).message}`)
+    }
+  })
+
   ros.onTopic('/rosout_agg', (msg) => {
     if (state.pausedLogs) return
     const source = String(msg?.name ?? 'ros')
@@ -963,7 +979,11 @@ function registerHandlers(): void {
   })
 
   bridge.onStat((stat) => {
-    state.topicTraffic[stat.topic] = { rate: stat.rate_hz, total: stat.total_bytes }
+    // rate_hz 是帧率；换算成字节速率用于全局流量
+    state.topicTraffic[stat.topic] = {
+      rate: stat.rate_hz * stat.bytes,
+      total: stat.total_bytes,
+    }
     let total = 0
     let rate = 0
     for (const item of Object.values(state.topicTraffic)) {
@@ -1050,6 +1070,8 @@ export function initHmi(): void {
   state.mutedSources = loadMutedSources()
   Object.assign(state.layers, loadLayers())
   loadDisplays()
+  // 设备信息插件：常驻低频订阅，不依赖显示项
+  bridge.setSubscription('/device/robot_shadow', { rate: 1, voxel: 0, max: 0 })
 
   ros.onStatus((status, detail) => {
     state.status = status

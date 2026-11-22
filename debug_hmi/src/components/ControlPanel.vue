@@ -49,6 +49,82 @@
       </div>
     </details>
 
+    <!-- 设备信息 -->
+    <details class="sec" open>
+      <summary>
+        <span class="sec-title">设备信息</span>
+        <span class="sec-meta">{{ shadowAgeText }}</span>
+      </summary>
+      <div class="sec-body">
+        <div v-if="!state.robotShadow" class="prompt">
+          等待 <code>/device/robot_shadow</code>…
+        </div>
+        <template v-else>
+          <div class="badges">
+            <span class="badge" :class="shadowOnline ? 'ok' : 'bad'">
+              {{ shadowOnline ? '在线' : '离线' }}
+            </span>
+            <span class="badge ghost">{{ shadowDevice }}</span>
+            <span class="badge ghost">{{ shadowStateText }}</span>
+          </div>
+
+          <div class="tank-grid">
+            <div class="tank">
+              <div class="tank-head"><span>电池</span><b>{{ pctText(shadowProp.bms_soc) }}</b></div>
+              <div class="tank-bar">
+                <i :class="levelClass(shadowProp.bms_soc)" :style="{ width: pctWidth(shadowProp.bms_soc) }" />
+              </div>
+            </div>
+            <div class="tank">
+              <div class="tank-head"><span>清水量</span><b>{{ pctText(shadowProp.clean_height) }}</b></div>
+              <div class="tank-bar">
+                <i class="water" :style="{ width: pctWidth(shadowProp.clean_height) }" />
+              </div>
+            </div>
+            <div class="tank">
+              <div class="tank-head"><span>污水量</span><b>{{ pctText(shadowProp.dirty_height) }}</b></div>
+              <div class="tank-bar">
+                <i class="dirty" :style="{ width: pctWidth(shadowProp.dirty_height) }" />
+              </div>
+            </div>
+          </div>
+
+          <dl class="kv2">
+            <dt>设备</dt>
+            <dd>{{ shadow.device_id || '—' }} · {{ shadow.product_id || '—' }}</dd>
+            <dt>地图</dt>
+            <dd>{{ shadow.map_name || '—' }}</dd>
+            <dt>控制</dt>
+            <dd>{{ shadow.control_mode || '—' }}</dd>
+            <dt>清洁</dt>
+            <dd>{{ shadow.clean_mode || '—' }}</dd>
+            <dt>网络</dt>
+            <dd>4G {{ shadow.state_4G || '—' }} · WiFi {{ shadow.wifi_state || '—' }}</dd>
+            <dt>充电</dt>
+            <dd>{{ shadowProp.is_charge ? '充电中' : '未充电' }} · {{ shadowProp.dock ? '已回桩' : '未回桩' }}</dd>
+            <dt>环境</dt>
+            <dd>
+              {{ num(shadowProp.Temp) }}°C · {{ num(shadowProp.Humi) }}%RH · PM2.5
+              {{ num(shadowProp.PM2_5) }}
+            </dd>
+          </dl>
+
+          <div v-if="shadowFaults.length" class="fault-box">
+            <div class="fault-head">故障 {{ shadowFaults.length }} 条</div>
+            <div v-for="(f, i) in shadowFaults.slice(0, 4)" :key="`${f.code || i}-${i}`" class="fault-item">
+              <span class="fault-level">{{ f.level || 'FAULT' }}</span>
+              <span class="fault-text" :title="f.fault_desc">{{ f.name || f.fault_desc || f.code }}</span>
+            </div>
+          </div>
+
+          <details class="sub">
+            <summary>原始 robot_shadow</summary>
+            <pre class="diag-pre">{{ shadowPretty }}</pre>
+          </details>
+        </template>
+      </div>
+    </details>
+
     <!-- 显示项（RViz 风格：任意话题动态添加） -->
     <details class="sec" open>
       <summary>
@@ -224,10 +300,6 @@
           <span v-if="gridInfo" class="dim" :title="state.gridFromCache ? '来自本地缓存' : '本会话抓取'">
             {{ gridInfo }}
           </span>
-        </div>
-        <div class="traffic-total">
-          <span>总流量 <b>{{ formatBytes(state.totalBytes) }}</b></span>
-          <span>当前 <b>{{ formatBytes(state.totalRate) }}/s</b></span>
         </div>
       </div>
     </details>
@@ -496,8 +568,8 @@ function rendererOptions(d: DisplayItem): RendererKind[] {
 
 function formatBytes(n: number): string {
   if (!n) return '0 B'
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(2)} MB`
+  if (n >= 1024) return `${(n / 1024).toFixed(2)} KB`
   return `${n} B`
 }
 
@@ -529,6 +601,59 @@ const locClass = computed(() => ({
 const busy = computed(() => state.servicePending || state.status !== 'open')
 const activeDisplays = computed(() => state.displays.filter((d) => d.enabled).length)
 const shortSource = computed(() => state.robot.source.replace('TF map→', 'TF '))
+
+// -------------------------------------------------------------- robot shadow
+
+const shadow = computed<Record<string, any>>(() => state.robotShadow || {})
+const shadowProp = computed<Record<string, any>>(() => (shadow.value.property as any) || {})
+const shadowFaults = computed<any[]>(() => (Array.isArray(shadow.value.fault) ? shadow.value.fault : []))
+const shadowOnline = computed(() => !!shadow.value.online)
+const shadowDevice = computed(
+  () =>
+    [shadow.value.product_id, shadow.value.product_sub_model].filter(Boolean).join(' ') || '—',
+)
+const shadowStateText = computed(() => {
+  const s = String(shadow.value.robot_state || '')
+  const map: Record<string, string> = {
+    ROBOT_MODE_IDLE: '空闲',
+    ROBOT_MODE_CLEAN: '清洁中',
+    ROBOT_MODE_CLEANING: '清洁中',
+    ROBOT_MODE_MAPPING: '建图中',
+    ROBOT_MODE_CHARGING: '充电中',
+    ROBOT_MODE_PAUSE: '暂停',
+    ROBOT_MODE_ERROR: '故障',
+    ROBOT_MODE_MANUAL: '手动',
+    ROBOT_MODE_RETURN: '回桩中',
+  }
+  return map[s] || s || '—'
+})
+const shadowAgeText = computed(() => {
+  if (!state.shadowTime) return '等待数据…'
+  return `${((nowTick.value - state.shadowTime) / 1000).toFixed(1)}s 前`
+})
+const shadowPretty = computed(() => JSON.stringify(shadow.value, null, 2))
+
+function pctWidth(value: unknown): string {
+  const n = Number(value)
+  return `${Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0))}%`
+}
+
+function pctText(value: unknown): string {
+  return pctWidth(value)
+}
+
+function levelClass(value: unknown): string {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return ''
+  if (n <= 20) return 'bad'
+  if (n <= 50) return 'warn'
+  return 'ok'
+}
+
+function num(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
 
 const nowTick = ref(Date.now())
 let tickTimer: number | null = null
@@ -889,6 +1014,93 @@ function onPointScale(value: number): void {
 .traffic-total b {
   color: #a9bccd;
   font-weight: 600;
+}
+
+.tank-grid {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+
+.tank-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--dim);
+  font-size: 10px;
+  margin-bottom: 3px;
+}
+
+.tank-head b {
+  color: #b9cedf;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tank-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #10202c;
+  overflow: hidden;
+}
+
+.tank-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: #38bdf8;
+  transition: width 0.25s linear;
+}
+
+.tank-bar i.ok {
+  background: #34d399;
+}
+.tank-bar i.warn {
+  background: #fbbf24;
+}
+.tank-bar i.bad {
+  background: #f87171;
+}
+.tank-bar i.water {
+  background: #38bdf8;
+}
+.tank-bar i.dirty {
+  background: #a78bfa;
+}
+
+.fault-box {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 5px;
+  background: rgba(80, 20, 20, 0.18);
+}
+
+.fault-head {
+  color: #fca5a5;
+  font-size: 10.5px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.fault-item {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 10px;
+  color: #d6b3b3;
+  line-height: 1.5;
+}
+
+.fault-level {
+  flex: none;
+  color: #fca5a5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.fault-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dpad {
