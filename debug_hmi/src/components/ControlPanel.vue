@@ -133,8 +133,8 @@
       </summary>
       <div class="sec-body">
         <p class="source-hint">
-          像 RViz 一样按需订阅任意话题。后端只负责订阅 / 压缩 / 传输（点云、栅格、激光、路径、JSON），
-          渲染参数由这里控制。
+          像 RViz 一样按需订阅任意话题。点云卡片的数据源可以切换成「本地 PCD」，
+          直接选择本机文件；后端只负责订阅 / 压缩 / 传输。
         </p>
 
         <div class="row add-topic">
@@ -145,7 +145,6 @@
             </option>
           </select>
           <button class="btn small" :disabled="!newTopic" @click="doAddDisplay">添加</button>
-          <button class="btn tiny" @click="doAddPcd">本地 PCD</button>
           <button class="btn tiny" :disabled="state.status !== 'open' || state.topicScanning" @click="doRefreshTopics">
             {{ state.topicScanning ? '…' : '刷新' }}
           </button>
@@ -172,7 +171,7 @@
           </div>
 
           <div class="display-controls">
-            <label v-if="d.renderer === 'points'">
+            <label v-if="d.type.includes('PointCloud')">
               数据源
               <select
                 class="select mini-select"
@@ -193,17 +192,17 @@
                 <option v-for="r in rendererOptions(d)" :key="r" :value="r">{{ rendererLabel(r) }}</option>
               </select>
             </label>
-            <label v-if="d.renderer === 'points' || d.renderer === 'laser'">
+            <label v-if="d.renderer === 'points' || d.renderer === 'laser'" class="point-size-row">
               点大小
               <input
-                class="input tiny-input"
-                type="number"
+                type="range"
                 min="0.01"
-                max="1"
+                max="0.5"
                 step="0.01"
                 :value="d.pointSize"
-                @change="updateDisplay(d.id, { pointSize: Number(($event.target as HTMLInputElement).value) || 0.07 })"
+                @input="setDisplayPointSize(d.id, ($event.target as HTMLInputElement).valueAsNumber)"
               />
+              <span class="mono">{{ d.pointSize.toFixed(2) }}m</span>
             </label>
             <label v-if="d.renderer !== 'json'">
               颜色
@@ -301,20 +300,8 @@
           />
         </div>
 
-        <div class="foot">
-          <label class="slider-row">
-            <span>点大小倍率</span>
-            <input
-              type="range"
-              min="0.4"
-              max="3"
-              step="0.1"
-              :value="state.pointScale"
-              @input="onPointScale(($event.target as HTMLInputElement).valueAsNumber)"
-            />
-            <span class="mono">{{ state.pointScale.toFixed(1) }}×</span>
-          </label>
-          <span v-if="gridInfo" class="dim" :title="state.gridFromCache ? '来自本地缓存' : '本会话抓取'">
+        <div v-if="gridInfo" class="foot">
+          <span class="dim" :title="state.gridFromCache ? '来自本地缓存' : '本会话抓取'">
             {{ gridInfo }}
           </span>
         </div>
@@ -459,7 +446,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   addDisplay,
-  addPcdDisplay,
   bridge,
   changeDisplaySource,
   dumpRecorder,
@@ -472,8 +458,8 @@ import {
   relocate,
   removeDisplay,
   setLayer,
+  setDisplayPointSize,
   setPendingPose,
-  setPointScale,
   state,
   stopMapOperation,
   switchSlamMode,
@@ -489,10 +475,6 @@ function doAddDisplay(): void {
   if (!newTopic.value) return
   addDisplay(newTopic.value)
   newTopic.value = ''
-}
-
-function doAddPcd(): void {
-  addPcdDisplay()
 }
 
 async function onDisplayPcd(id: string, event: Event): Promise<void> {
@@ -831,10 +813,6 @@ async function doDump(): Promise<void> {
     /* 已写入日志 */
   }
 }
-
-function onPointScale(value: number): void {
-  if (Number.isFinite(value)) setPointScale(value)
-}
 </script>
 
 <style scoped>
@@ -995,6 +973,24 @@ function onPointScale(value: number): void {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.point-size-row input[type='range'] {
+  width: 88px;
+}
+
+.point-size-row .mono {
+  width: 42px;
+  color: #b9cedf;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
+.pcd-file {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .display-stats {

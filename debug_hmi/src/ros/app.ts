@@ -218,9 +218,6 @@ export const state = reactive({
   mapLoading: false,
   mapError: '',
 
-  /** 点云显示尺寸倍率（0.5 ~ 3） */
-  pointScale: Number(localStorage.getItem('hmi.pointScale')) || 1,
-
   view: { fit: 0, top: 0, shot: 0, follow: false },
 
   fps: 0,
@@ -421,20 +418,6 @@ export function removeDisplay(id: string): void {
 }
 
 /** 新建一个“本地 PCD”显示项；随后在显示项里选择文件。 */
-export function addPcdDisplay(): string {
-  const item = displayDefaults('PCD 文件', 'local/pcd', state.displays.length)
-  item.topic = `PCD 文件 ${state.displays.length + 1}`
-  item.type = 'local/pcd'
-  item.source = 'pcd'
-  item.renderer = 'points'
-  item.rate = 0
-  item.colorMode = 'height'
-  state.displays.push(item)
-  state.displayError = ''
-  saveDisplays()
-  return item.id
-}
-
 /** 把一个本地 PCD 文件绑定到显示项。 */
 export async function loadPcdIntoDisplay(id: string, file: File): Promise<void> {
   const d = state.displays.find((x) => x.id === id)
@@ -489,6 +472,15 @@ export function updateDisplay(id: string, patch: Partial<DisplayItem>): void {
   saveDisplays()
   if (d.enabled && d.source === 'topic') subscribeDisplay(d)
   else unsubscribeDisplay(d)
+  state.pcdVersion++
+}
+
+/** 点大小拖动只改渲染，不重订阅。 */
+export function setDisplayPointSize(id: string, size: number): void {
+  const d = state.displays.find((x) => x.id === id)
+  if (!d || !Number.isFinite(size)) return
+  d.pointSize = Math.max(0.01, Math.min(0.5, size))
+  saveDisplays()
   state.pcdVersion++
 }
 
@@ -1290,16 +1282,6 @@ export function setMeasurePoint(x: number, y: number): void {
   }
   state.measure.b = { x, y }
   state.measureDistance = Math.hypot(x - state.measure.a.x, y - state.measure.a.y)
-}
-
-export function setPointScale(scale: number): void {
-  const clamped = Math.min(3, Math.max(0.4, scale))
-  state.pointScale = clamped
-  try {
-    localStorage.setItem('hmi.pointScale', String(clamped))
-  } catch {
-    /* ignore */
-  }
 }
 
 export function selectRawTopic(topic: string): void {

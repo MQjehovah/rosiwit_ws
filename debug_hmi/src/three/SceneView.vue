@@ -290,7 +290,7 @@ function ensureDynamic(topic: string, renderer: string): DynamicLayer | null {
   else if (renderer === 'path' || renderer === 'polygon') layer = new PathLayer(hexColor(d?.color || '#38bdf8'), 0.9)
   else if (renderer === 'points' || renderer === 'laser') {
     layer = new PointCloudLayer({
-      size: (d?.pointSize || 0.08) * state.pointScale,
+      size: d?.pointSize || 0.08,
       color: hexColor(d?.color || '#38bdf8'),
       opacity: 0.95,
     })
@@ -313,7 +313,7 @@ function syncDisplayLayers(): void {
     if (!entry) continue
     entry.layer.setVisible(d.enabled)
     if (entry.layer instanceof PointCloudLayer) {
-      entry.layer.setSize(d.pointSize * state.pointScale)
+      entry.layer.setSize(d.pointSize)
       entry.layer.setColor(hexColor(d.color))
       if (d.source === 'pcd') {
         const cloud = getPcdCloud(d.id)
@@ -347,7 +347,7 @@ function applyTopicCloud(topic: string, cloud: CloudData): void {
   const colors = d.colorMode === 'height' && cloud.count <= 1500000 ? heightColors(cloud.positions) : null
   entry.layer.setPoints(cloud.positions, colors)
   entry.layer.setColor(hexColor(d.color))
-  entry.layer.setSize(d.pointSize * state.pointScale)
+  entry.layer.setSize(d.pointSize)
   entry.layer.setVisible(true)
   placeInMap(entry.layer.object, cloud.frame)
   state.pointCounts[topic] = cloud.count
@@ -405,7 +405,7 @@ function applyTopicLaser(l: {
   const positions = laserPositions(l)
   entry.layer.setPoints(positions, null)
   entry.layer.setColor(hexColor(d.color))
-  entry.layer.setSize(d.pointSize * state.pointScale)
+  entry.layer.setSize(d.pointSize)
   entry.layer.setVisible(true)
   placeInMap(entry.layer.object, l.frame)
   state.pointCounts[l.stream] = positions.length / 3
@@ -469,16 +469,6 @@ function applyVisibility(): void {
   for (const d of state.displays) {
     const entry = dynamicLayers.get(d.topic)
     if (entry) entry.layer.setVisible(d.enabled)
-  }
-}
-
-function applyPointScale(): void {
-  const s = state.pointScale
-  for (const [topic, entry] of dynamicLayers) {
-    if (entry.layer instanceof PointCloudLayer) {
-      const d = state.displays.find((x) => x.topic === topic)
-      entry.layer.setSize((d?.pointSize || 0.07) * s)
-    }
   }
 }
 
@@ -558,7 +548,6 @@ function setupScene(): void {
   for (const object of all) scene.add(object)
 
   applyVisibility()
-  applyPointScale()
   syncDisplayLayers()
   syncMeasure()
   resize()
@@ -843,11 +832,6 @@ watch(
 watch(
   () => state.pcdVersion,
   () => syncDisplayLayers(),
-)
-
-watch(
-  () => state.pointScale,
-  () => applyPointScale(),
 )
 
 watch(
