@@ -199,7 +199,11 @@ bool SlamAlgorithm::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
     std::string lidar_frame = "lidar", imu_frame = "imu_link";
     pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
     pnh_.param<std::string>("imu_frame", imu_frame, imu_frame);
-    std::string fix_mode = "tf";
+    // 默认 identity: 万集驱动发布的点云本身已经在水平坐标系里(实机 up_z=1.000),
+    // 再把 URDF 的机械安装姿态(39.37deg/90deg)转进去就是转两次 —— 2026-11-22 实测
+    // 点云相对机身出现 90deg + 倾斜, 已回退。要试 TF 外参时用
+    //   <param name="extrinsic_frame_fix" value="tf"/>
+    std::string fix_mode = "identity";
     pnh_.param<std::string>("extrinsic_frame_fix", fix_mode, fix_mode);
     if (fix_mode == "identity") {
         R = Eigen::Matrix3d::Identity();
