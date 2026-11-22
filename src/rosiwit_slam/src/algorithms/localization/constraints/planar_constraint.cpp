@@ -152,6 +152,8 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
                   << " zlo=" << zlo << " zhi=" << zhi
                   << " cf=" << cf << " cc=" << cc << " floor=" << floor_sel
                   << " up_z=" << up_z << " nm_z=" << nm_z << " ang=" << ang_deg
+                  << " rpy=" << (std::atan2(pose.rot(2, 1), pose.rot(2, 2)) * 57.2957795)
+                  << "," << (std::asin(std::min(1.0, std::max(-1.0, -pose.rot(2, 0)))) * 57.2957795)
                   << " gz=" << gz << " have_g=" << (have_g ? 1 : 0)
                   << " F=" << F << " cur=" << pose.trans.z() << " dz=" << dz
                   << std::endl;
