@@ -41,6 +41,16 @@
       <button class="chip-btn" @click="clearMeasure">清除</button>
     </div>
 
+    <div v-if="previewImageData" class="image-preview" @click.self="closeImagePreview">
+      <div class="image-card">
+        <div class="image-head">
+          <span>{{ state.previewImage }}</span>
+          <button class="chip-btn" @click="closeImagePreview">关闭</button>
+        </div>
+        <img :src="previewImageData.url" :alt="state.previewImage" />
+      </div>
+    </div>
+
     <div class="view-toolbar">
       <button title="顶视 (T)" @click="topView">顶视</button>
       <button title="适配内容 (F)" @click="fitView">适配</button>
@@ -58,6 +68,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import {
   bridge,
   clearMeasure,
+  closeImagePreview,
   emitTopicCloud,
   emitTopicGrid,
   onGlobalMapSnapshot,
@@ -156,6 +167,8 @@ function currentFrames(): string[] {
 }
 
 const displayCount = computed(() => state.displays.filter((d) => d.enabled).length)
+
+const previewImageData = computed(() => (state.previewImage ? state.images[state.previewImage] : null))
 
 /** 有 /global_map 显示项但一条都没收到 */
 const globalMapMissing = computed(
@@ -1040,6 +1053,50 @@ onBeforeUnmount(() => {
   font-size: 10.5px;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.image-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 10, 0.72);
+  cursor: zoom-out;
+}
+
+.image-card {
+  max-width: 86%;
+  max-height: 82%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #24455c;
+  border-radius: 6px;
+  background: #05090d;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.image-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #9fb4c7;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.image-head button {
+  margin-left: auto;
+}
+
+.image-card img {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  background: #000;
 }
 
 .view-toolbar {

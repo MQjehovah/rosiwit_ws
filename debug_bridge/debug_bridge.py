@@ -64,6 +64,7 @@ ENV_TOPICS = 12
 ENV_STAT = 13
 ENV_RAW = 14
 ENV_SERVICE = 15
+ENV_IMAGE = 16
 
 ACTION_SUBSCRIBE = 0
 ACTION_UNSUBSCRIBE = 1
@@ -103,6 +104,7 @@ KIND_GRID = "grid"
 KIND_LASER = "laser"
 KIND_PATH = "path"
 KIND_POLYGON = "polygon"
+KIND_IMAGE = "image"
 KIND_RAW = "raw"
 
 TYPE_KIND = {
@@ -112,6 +114,8 @@ TYPE_KIND = {
     "sensor_msgs/LaserScan": KIND_LASER,
     "nav_msgs/Path": KIND_PATH,
     "geometry_msgs/PolygonStamped": KIND_POLYGON,
+    "sensor_msgs/Image": KIND_IMAGE,
+    "sensor_msgs/CompressedImage": KIND_IMAGE,
 }
 
 # 单帧请求默认超时（秒）：/global_map 整图可能很大，给足接收时间
@@ -373,6 +377,20 @@ def encode_polygon(msg, stream):
         + pb_string(3, stream)
     )
     return envelope(ENV_POLYGON, frame)
+
+
+def encode_image(msg, stream):
+    frame = (
+        pb_message(1, header(msg.get("frame"), msg.get("stamp")))
+        + pb_uint(2, msg.get("w", 0))
+        + pb_uint(3, msg.get("h", 0))
+        + pb_string(4, msg.get("encoding", ""))
+        + pb_uint(5, msg.get("step", 0))
+        + pb_bytes(6, msg.get("data", b""))
+        + pb_uint(7, next_seq())
+        + pb_string(8, stream)
+    )
+    return envelope(ENV_IMAGE, frame)
 
 
 def encode_topics(topics):
@@ -733,6 +751,71 @@ def polygon_dict(msg):
     }
 
 
+def image_dict(msg):
+    frame = msg.header.frame_id
+    stamp = msg.header.stamp.to_sec()
+    if hasattr(msg, "format"):
+        fmt = (msg.format or "").lower()
+        encoding = "jpeg" if ("jpeg" in fmt or "jpg" in fmt) else ("png" if "png" in fmt else fmt)
+        return {
+            "kind": KIND_IMAGE,
+            "frame": frame,
+            "stamp": stamp,
+            "w": 0,
+            "h": 0,
+            "encoding": encoding,
+            "step": 0,
+            "data": msg.data,
+        }
+
+    w = int(msg.width)
+    h = int(msg.height)
+    enc = (msg.encoding or "").lower()
+    try:
+        import numpy as np
+        import cv2
+
+        buf = np.frombuffer(msg.data, dtype=np.uint8)
+        img = None
+        if enc in ("bgr8", "rgb8"):
+            img = buf.reshape(h, msg.step)[:, : w * 3].reshape(h, w, 3)
+            if enc == "rgb8":
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        elif enc in ("mono8", "8uc1"):
+            img = buf.reshape(h, msg.step)[:, :w]
+        elif enc in ("mono16", "16uc1"):
+            arr = np.frombuffer(msg.data, dtype=np.uint16).reshape(h, msg.step // 2)[:, :w]
+            img = cv2.normalize(arr, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        elif enc in ("32fc1", "32fc1"):
+            arr = np.frombuffer(msg.data, dtype=np.float32).reshape(h, msg.step // 4)[:, :w]
+            img = cv2.normalize(arr, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        if img is not None:
+            ok, jpg = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if ok:
+                return {
+                    "kind": KIND_IMAGE,
+                    "frame": frame,
+                    "stamp": stamp,
+                    "w": w,
+                    "h": h,
+                    "encoding": "jpeg",
+                    "step": 0,
+                    "data": jpg.tobytes(),
+                }
+    except Exception as e:
+        log("image encode %s: %s" % (enc, e))
+    return {
+        "kind": KIND_IMAGE,
+        "frame": frame,
+        "stamp": stamp,
+        "w": w,
+        "h": h,
+        "encoding": enc,
+        "step": msg.step,
+        "data": msg.data,
+    }
+
+
 def raw_dict(topic, typ, msg):
     from rosbridge_library.internal.message_conversion import extract_values
 
@@ -768,6 +851,8 @@ def normalize_topic(topic, typ, msg):
         return path_dict(msg)
     if kind == KIND_POLYGON:
         return polygon_dict(msg)
+    if kind == KIND_IMAGE:
+        return image_dict(msg)
     return raw_dict(topic, typ, msg)
 
 
@@ -1481,6 +1566,8 @@ def encode_topic_frame(topic, data, sub):
         return encode_path(topic, data)
     if kind == KIND_POLYGON:
         return encode_polygon(data, topic)
+    if kind == KIND_IMAGE:
+        return encode_image(data, topic)
     if kind == KIND_RAW:
         return encode_raw(topic, data.get("type", ""), data.get("json", ""), data.get("stamp", 0.0))
     return None
@@ -1563,6 +1650,7 @@ class BridgeWS(websocket.WebSocketHandler):
         topic = fields.get(13, b"")
         if isinstance(topic, bytes):
             topic = topic.decode("utf-8", "replace")
+        manual = bool(fields.get(15, 0))
 
         try:
             if action == ACTION_SUBSCRIBE:
@@ -1575,7 +1663,7 @@ class BridgeWS(websocket.WebSocketHandler):
                 else:
                     default_voxel = 0.0
                     default_rate = DEFAULT_RATES.get(stream, 5.0)
-                rate = min(30.0, max(0.5, rate or default_rate))
+                rate = 0.0 if manual else min(30.0, max(0.5, rate or default_rate))
                 self.client.subs[stream] = {
                     "rate": rate,
                     "voxel": min(1.0, max(0.0, voxel if voxel > 0 else default_voxel)),
@@ -1584,7 +1672,9 @@ class BridgeWS(websocket.WebSocketHandler):
                     "last_static": 0.0,
                     "last_stamp": None,
                 }
-                self.client.send(encode_status(stream, True, "subscribed %.1fHz" % rate))
+                self.client.send(
+                    encode_status(stream, True, "manual" if manual else "subscribed %.1fHz" % rate)
+                )
             elif action == ACTION_UNSUBSCRIBE:
                 self.client.subs.pop(stream, None)
                 self.client.send(encode_status(stream, True, "unsubscribed"))
@@ -1754,6 +1844,8 @@ def publisher_loop():
             if client.closed:
                 continue
             for stream, sub in list(client.subs.items()):
+                if sub.get("rate", 0.0) <= 0:
+                    continue
                 interval = 1.0 / sub["rate"]
                 if t0 - sub["last"] < interval:
                     continue

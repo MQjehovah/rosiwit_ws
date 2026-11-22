@@ -95,6 +95,17 @@ export interface PolygonData {
   xy: Float32Array
 }
 
+export interface ImageDataFrame {
+  stream: string
+  frame: string
+  stamp: number
+  width: number
+  height: number
+  encoding: string
+  step: number
+  data: Uint8Array
+}
+
 export interface TopicStatData {
   topic: string
   count: number
@@ -179,6 +190,8 @@ export class BridgeClient {
   private pathListeners = new Set<(path: PathData) => void>()
   private laserListeners = new Set<(laser: LaserData) => void>()
   private polygonListeners = new Set<(polygon: PolygonData) => void>()
+  private imageListeners = new Set<(image: ImageDataFrame) => void>()
+  private anyWaiters = new Map<string, Waiter<any>[]>()
   private statListeners = new Set<(stat: TopicStatData) => void>()
   private rawListeners = new Set<(raw: RawData) => void>()
   private topicWaiters: Array<Waiter<TopicInfoData[]>> = []
@@ -336,6 +349,7 @@ export class BridgeClient {
       rate_hz: opts.rate,
       voxel: opts.voxel ?? 0,
       max_points: opts.max ?? 0,
+      manual: opts.rate <= 0,
     })
   }
 
@@ -360,6 +374,18 @@ export class BridgeClient {
       voxel: opts.voxel ?? 0,
       max_points: opts.max ?? 0,
       refresh: !!opts.refresh,
+    })
+  }
+
+  /** 任意类型话题单帧请求：点云/栅格/激光/路径/多边形/图像都走这里。
+   *  手动频率（rate=0）的显示项用它抓一帧。 */
+  requestAny(stream: string, timeout = 120000, refresh = false): Promise<void> {
+    const bucket = this.anyWaiters.get(stream) ?? []
+    this.anyWaiters.set(stream, bucket)
+    return this.request(bucket, timeout, {
+      action: ACTION_REQUEST,
+      stream,
+      refresh,
     })
   }
 
@@ -454,6 +480,11 @@ export class BridgeClient {
   onPolygon(fn: (polygon: PolygonData) => void): () => void {
     this.polygonListeners.add(fn)
     return () => this.polygonListeners.delete(fn)
+  }
+
+  onImage(fn: (image: ImageDataFrame) => void): () => void {
+    this.imageListeners.add(fn)
+    return () => this.imageListeners.delete(fn)
   }
 
   onStat(fn: (stat: TopicStatData) => void): () => void {
@@ -645,9 +676,11 @@ export class BridgeClient {
         yaw: Number(p.pose?.theta) || 0,
         z: Number(p.z) || 0,
       }))
+      const stream: string = msg.path.stream || ''
+      this.resolveAny(stream)
       for (const fn of this.pathListeners) {
         fn({
-          stream: msg.path.stream || '',
+          stream,
           frame: msg.path.header?.frame_id || 'map',
           stamp: Number(msg.path.header?.stamp) || 0,
           seq: Number(msg.path.seq) || 0,
@@ -660,9 +693,11 @@ export class BridgeClient {
     if (msg.laser) {
       const raw = msg.laser.ranges as Uint8Array
       const copy = raw ? raw.slice() : new Uint8Array(0)
+      const stream: string = msg.laser.stream || ''
+      this.resolveAny(stream)
       for (const fn of this.laserListeners) {
         fn({
-          stream: msg.laser.stream || '',
+          stream,
           frame: msg.laser.header?.frame_id || 'map',
           stamp: Number(msg.laser.header?.stamp) || 0,
           angle_min: Number(msg.laser.angle_min) || 0,
@@ -679,9 +714,11 @@ export class BridgeClient {
     if (msg.polygon) {
       const raw = msg.polygon.xy as Uint8Array
       const copy = raw ? raw.slice() : new Uint8Array(0)
+      const stream: string = msg.polygon.stream || ''
+      this.resolveAny(stream)
       for (const fn of this.polygonListeners) {
         fn({
-          stream: msg.polygon.stream || '',
+          stream,
           frame: msg.polygon.header?.frame_id || 'base_link',
           stamp: Number(msg.polygon.header?.stamp) || 0,
           xy: new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / 4)),
@@ -742,6 +779,8 @@ export class BridgeClient {
     }
 
     if (msg.raw) {
+      const stream: string = msg.raw.topic || ''
+      this.resolveAny(stream)
       for (const fn of this.rawListeners) {
         fn({
           topic: msg.raw.topic || '',
@@ -753,10 +792,31 @@ export class BridgeClient {
       return
     }
 
+    if (msg.image) {
+      const raw = msg.image.data as Uint8Array
+      const copy = raw ? raw.slice() : new Uint8Array(0)
+      const stream: string = msg.image.stream || ''
+      for (const fn of this.imageListeners) {
+        fn({
+          stream,
+          frame: msg.image.header?.frame_id || 'camera',
+          stamp: Number(msg.image.header?.stamp) || 0,
+          width: Number(msg.image.width) || 0,
+          height: Number(msg.image.height) || 0,
+          encoding: String(msg.image.encoding || '').toLowerCase(),
+          step: Number(msg.image.step) || 0,
+          data: copy,
+        })
+      }
+      this.resolveAny(stream)
+      return
+    }
+
     if (msg.grid) {
       try {
         const grid = await decodeGrid(msg.grid)
         const stream: string = msg.grid.stream || ''
+        this.resolveAny(stream)
         const bucket = this.gridWaiters.get(stream)
         const waiter = bucket?.shift()
         if (waiter) {
@@ -775,6 +835,7 @@ export class BridgeClient {
       try {
         const cloud = await decodeCloud(msg.cloud)
         const stream: string = msg.cloud.stream || ''
+        this.resolveAny(stream)
         const bucket = this.cloudWaiters.get(stream)
         const waiter = bucket?.shift()
         if (waiter) {
@@ -804,6 +865,14 @@ export class BridgeClient {
     if (grids?.length) this.failWaiter(grids, err)
   }
 
+  private resolveAny(stream: string): void {
+    const bucket = this.anyWaiters.get(stream)
+    const waiter = bucket?.shift()
+    if (!waiter) return
+    clearTimeout(waiter.timer)
+    waiter.resolve(undefined)
+  }
+
   private failWaiter<T>(bucket: Waiter<T>[], err: Error): void {
     const waiter = bucket.shift()
     if (!waiter) return
@@ -826,6 +895,13 @@ export class BridgeClient {
       }
     }
     this.cloudWaiters.clear()
+    for (const bucket of this.anyWaiters.values()) {
+      for (const waiter of bucket.splice(0)) {
+        clearTimeout(waiter.timer)
+        waiter.reject(err)
+      }
+    }
+    this.anyWaiters.clear()
   }
 
   private dropHelloWaiters(err: Error): void {

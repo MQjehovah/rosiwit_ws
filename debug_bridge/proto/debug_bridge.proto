@@ -95,6 +95,17 @@ message PolygonFrame {
   string stream = 3; // ROS topic
 }
 
+message ImageFrame {
+  Header header = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  string encoding = 4; // jpeg / png / bgr8 / mono8 / ...
+  uint32 step = 5;
+  bytes data = 6;
+  uint32 seq = 7;
+  string stream = 8;
+}
+
 message TopicInfo {
   string name = 1;
   string type = 2;
@@ -197,6 +208,7 @@ message ClientCommand {
   string request_id = 12;
   string topic = 13;
   string type = 14;
+  bool manual = 15; // true: 只有 REQUEST 才发，不按 rate_hz 推送
 }
 
 message Envelope {
@@ -216,5 +228,6 @@ message Envelope {
     TopicStat stat = 13;
     RawMessage raw = 14;
     ServiceResult service = 15;
+    ImageFrame image = 16;
   }
 }

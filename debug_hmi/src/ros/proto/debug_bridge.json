@@ -250,6 +250,42 @@
             }
           }
         },
+        "ImageFrame": {
+          "fields": {
+            "header": {
+              "type": "Header",
+              "id": 1
+            },
+            "width": {
+              "type": "uint32",
+              "id": 2
+            },
+            "height": {
+              "type": "uint32",
+              "id": 3
+            },
+            "encoding": {
+              "type": "string",
+              "id": 4
+            },
+            "step": {
+              "type": "uint32",
+              "id": 5
+            },
+            "data": {
+              "type": "bytes",
+              "id": 6
+            },
+            "seq": {
+              "type": "uint32",
+              "id": 7
+            },
+            "stream": {
+              "type": "string",
+              "id": 8
+            }
+          }
+        },
         "TopicInfo": {
           "fields": {
             "name": {
@@ -529,6 +565,10 @@
             "type": {
               "type": "string",
               "id": 14
+            },
+            "manual": {
+              "type": "bool",
+              "id": 15
             }
           },
           "nested": {
@@ -564,7 +604,8 @@
                 "topics",
                 "stat",
                 "raw",
-                "service"
+                "service",
+                "image"
               ]
             }
           },
@@ -628,6 +669,10 @@
             "service": {
               "type": "ServiceResult",
               "id": 15
+            },
+            "image": {
+              "type": "ImageFrame",
+              "id": 16
             }
           }
         }

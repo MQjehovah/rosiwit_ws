@@ -185,6 +185,7 @@
                 :value="d.rate"
                 @change="updateDisplay(d.id, { rate: Number(($event.target as HTMLSelectElement).value) || 2 })"
               >
+                <option :value="0">手动</option>
                 <option :value="1">1Hz</option>
                 <option :value="2">2Hz</option>
                 <option :value="5">5Hz</option>
@@ -196,14 +197,22 @@
           </div>
 
           <div class="display-stats">
-            <span>{{ d.stats.hz.toFixed(1) }} Hz</span>
+            <span v-if="d.rate === 0" class="manual-tag">手动</span>
+            <span v-else>{{ d.stats.hz.toFixed(1) }} Hz</span>
             <span>{{ formatBytes(d.stats.bytes) }}/帧</span>
             <span>累计 {{ formatBytes(d.stats.total) }}</span>
             <span v-if="d.stats.age >= 0">{{ (d.stats.age / 1000).toFixed(1) }}s 前</span>
-            <span v-if="state.pointCounts[d.topic]">
+            <span v-if="d.renderer !== 'image' && state.pointCounts[d.topic]">
               {{ state.pointCounts[d.topic].toLocaleString() }} 点/格
             </span>
           </div>
+          <img
+            v-if="d.renderer === 'image' && state.images[d.topic]"
+            class="topic-thumb"
+            :src="state.images[d.topic].url"
+            :alt="d.topic"
+            @click="openImage(d.topic)"
+          />
         </div>
 
         <div class="row map-file">
@@ -233,6 +242,10 @@
           <span v-if="gridInfo" class="dim" :title="state.gridFromCache ? '来自本地缓存' : '本会话抓取'">
             {{ gridInfo }}
           </span>
+        </div>
+        <div class="traffic-total">
+          <span>总流量 <b>{{ formatBytes(state.totalBytes) }}</b></span>
+          <span>当前 <b>{{ formatBytes(state.totalRate) }}/s</b></span>
         </div>
       </div>
     </details>
@@ -299,6 +312,7 @@ import {
   dumpRecorder,
   grabTopic,
   loadMapFile,
+  openImagePreview,
   publishInitialPose,
   pushLog,
   refreshTopics,
@@ -328,6 +342,10 @@ function doRefreshTopics(): void {
   void refreshTopics()
 }
 
+function openImage(topic: string): void {
+  openImagePreview(topic)
+}
+
 function shortType(type: string): string {
   return type ? type.split('/').pop() || type : '?'
 }
@@ -339,9 +357,10 @@ function rendererOptions(d: DisplayItem): RendererKind[] {
   if (d.type.includes('LaserScan')) return ['laser', 'json']
   if (d.type.endsWith('/Path')) return ['path', 'json']
   if (d.type.includes('Polygon')) return ['polygon', 'json']
+  if (d.type.includes('Image')) return ['image', 'json']
   if (d.type.includes('SlamInfo')) return ['status', 'json']
   // 类型未知时允许手动选择，方便接入自定义消息
-  return ['points', 'grid', 'laser', 'path', 'polygon', ...base, 'status']
+  return ['points', 'grid', 'laser', 'path', 'polygon', 'image', ...base, 'status']
 }
 
 function formatBytes(n: number): string {
@@ -688,6 +707,38 @@ function onPointScale(value: number): void {
   color: #7f97ab;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+}
+
+.manual-tag {
+  color: #fbbf24;
+}
+
+.topic-thumb {
+  display: block;
+  width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #05090d;
+  cursor: zoom-in;
+}
+
+.traffic-total {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+  color: #7f97ab;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.traffic-total b {
+  color: #a9bccd;
+  font-weight: 600;
 }
 
 .mini.danger {

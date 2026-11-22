@@ -40,7 +40,7 @@ export const tfTree = new TfTree()
 
 export type LayerKey = 'tf' | 'status' | 'logs' | 'trail'
 
-export type RendererKind = 'points' | 'grid' | 'laser' | 'path' | 'polygon' | 'json' | 'status'
+export type RendererKind = 'points' | 'grid' | 'laser' | 'path' | 'polygon' | 'json' | 'status' | 'image'
 
 export interface DisplayStats {
   hz: number
@@ -135,6 +135,13 @@ export const state = reactive({
   topics: [] as Array<{ name: string; type: string }>,
   topicQuery: '',
   displayError: '',
+  /** 图像话题最新帧（Blob URL） */
+  images: {} as Record<string, { url: string; width: number; height: number; stamp: number; encoding: string }>,
+  previewImage: '',
+  /** 全局流量：所有已发送话题的累计字节与当前速率 */
+  topicTraffic: {} as Record<string, { rate: number; total: number }>,
+  totalBytes: 0,
+  totalRate: 0,
 
   robot: {
     x: 0,
@@ -330,6 +337,7 @@ export function rendererForType(type: string): RendererKind {
   if (type === 'sensor_msgs/LaserScan') return 'laser'
   if (type === 'nav_msgs/Path') return 'path'
   if (type === 'geometry_msgs/PolygonStamped') return 'polygon'
+  if (type === 'sensor_msgs/Image' || type === 'sensor_msgs/CompressedImage') return 'image'
   if (type === 'xzrobot_ros_dependency/SlamInfo') return 'status'
   return 'json'
 }
@@ -342,7 +350,7 @@ function displayDefaults(topic: string, type: string, index: number): DisplayIte
     type,
     renderer,
     enabled: true,
-    rate: renderer === 'points' ? 2 : renderer === 'laser' ? 5 : renderer === 'grid' ? 1 : 2,
+    rate: renderer === 'points' ? 2 : renderer === 'laser' ? 5 : renderer === 'grid' ? 1 : renderer === 'image' ? 1 : 2,
     voxel: renderer === 'points' ? 0.05 : 0,
     max: renderer === 'points' ? 300000 : 0,
     pointSize: renderer === 'laser' ? 0.12 : 0.07,
@@ -417,30 +425,22 @@ export async function grabTopic(id: string): Promise<void> {
     return
   }
   state.displayError = ''
-  const prev = d.enabled
   pushLog('info', `抓取 ${d.topic} 单帧…`)
   try {
-    if (d.renderer === 'grid') {
-      const grid = await bridge.requestGrid(d.topic, true, 180000)
-      emitTopicGrid(d.topic, grid)
-    } else if (d.renderer === 'points') {
-      const cloud = await bridge.requestCloud(d.topic, {
-        voxel: 0.05,
-        max: 0,
-        timeout: d.topic === '/global_map' ? 900000 : 120000,
-      })
-      emitTopicCloud(d.topic, cloud)
-    } else {
-      state.displayError = '这类话题是连续发布的，订阅后直接看实时帧即可'
-      return
-    }
+    await bridge.requestAny(d.topic, d.topic === '/global_map' ? 900000 : 120000, false)
     pushLog('info', `${d.topic} 单帧已接收`)
   } catch (e) {
     state.displayError = (e as Error).message
     pushLog('warn', `${d.topic} 抓取失败：${(e as Error).message}`)
-  } finally {
-    if (!prev) d.enabled = false
   }
+}
+
+export function openImagePreview(topic: string): void {
+  state.previewImage = topic
+}
+
+export function closeImagePreview(): void {
+  state.previewImage = ''
 }
 
 function saveDisplays(): void {
@@ -794,6 +794,129 @@ function describeLocationStatus(slamState: unknown, location: unknown): string {
   return [mode, loc].filter(Boolean).join(' · ') || '状态未知'
 }
 
+function imageMime(encoding: string): string {
+  if (encoding === 'jpeg' || encoding === 'jpg') return 'image/jpeg'
+  if (encoding === 'png') return 'image/png'
+  return 'application/octet-stream'
+}
+
+function rawImageUrl(frame: {
+  width: number
+  height: number
+  encoding: string
+  step: number
+  data: Uint8Array
+}): string | null {
+  const { width, height, encoding, step, data } = frame
+  if (!width || !height) return null
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  const out = ctx.createImageData(width, height)
+  const dst = out.data
+  if (encoding === 'bgr8' || encoding === 'rgb8') {
+    const swap = encoding === 'bgr8'
+    for (let y = 0; y < height; y++) {
+      const row = y * step
+      for (let x = 0; x < width; x++) {
+        const s = row + x * 3
+        const d = (y * width + x) * 4
+        dst[d] = data[swap ? s + 2 : s]
+        dst[d + 1] = data[s + 1]
+        dst[d + 2] = data[swap ? s : s + 2]
+        dst[d + 3] = 255
+      }
+    }
+  } else if (encoding === 'mono8' || encoding === '8uc1') {
+    for (let y = 0; y < height; y++) {
+      const row = y * step
+      for (let x = 0; x < width; x++) {
+        const v = data[row + x]
+        const d = (y * width + x) * 4
+        dst[d] = dst[d + 1] = dst[d + 2] = v
+        dst[d + 3] = 255
+      }
+    }
+  } else if (encoding === 'mono16' || encoding === '16uc1') {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    let min = 65535
+    let max = 0
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const v = view.getUint16(y * step + x * 2, true)
+        if (v < min) min = v
+        if (v > max) max = v
+      }
+    }
+    const span = max - min || 1
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const v = ((view.getUint16(y * step + x * 2, true) - min) / span) * 255
+        const d = (y * width + x) * 4
+        dst[d] = dst[d + 1] = dst[d + 2] = v
+        dst[d + 3] = 255
+      }
+    }
+  } else if (encoding === '32fc1') {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    let min = Infinity
+    let max = -Infinity
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const v = view.getFloat32(y * step + x * 4, true)
+        if (Number.isFinite(v)) {
+          if (v < min) min = v
+          if (v > max) max = v
+        }
+      }
+    }
+    const span = max - min || 1
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const raw = view.getFloat32(y * step + x * 4, true)
+        const v = Number.isFinite(raw) ? ((raw - min) / span) * 255 : 0
+        const d = (y * width + x) * 4
+        dst[d] = dst[d + 1] = dst[d + 2] = v
+        dst[d + 3] = 255
+      }
+    }
+  } else {
+    return null
+  }
+  ctx.putImageData(out, 0, 0)
+  return canvas.toDataURL('image/jpeg', 0.85)
+}
+
+function emitTopicImage(topic: string, frame: {
+  width: number
+  height: number
+  encoding: string
+  step: number
+  data: Uint8Array
+  stamp: number
+}): void {
+  let url: string | null = null
+  const mime = imageMime(frame.encoding)
+  if (mime.startsWith('image/')) {
+    url = URL.createObjectURL(new Blob([frame.data], { type: mime }))
+  } else {
+    url = rawImageUrl(frame)
+  }
+  if (!url) return
+  const prev = state.images[topic]
+  if (prev?.url.startsWith('blob:')) URL.revokeObjectURL(prev.url)
+  state.images[topic] = {
+    url,
+    width: frame.width,
+    height: frame.height,
+    stamp: frame.stamp,
+    encoding: frame.encoding,
+  }
+  state.pointCounts[topic] = 1
+}
+
 function registerHandlers(): void {
   if (handlersReady) return
   handlersReady = true
@@ -839,6 +962,15 @@ function registerHandlers(): void {
   })
 
   bridge.onStat((stat) => {
+    state.topicTraffic[stat.topic] = { rate: stat.rate_hz, total: stat.total_bytes }
+    let total = 0
+    let rate = 0
+    for (const item of Object.values(state.topicTraffic)) {
+      total += item.total
+      rate += item.rate
+    }
+    state.totalBytes = total
+    state.totalRate = rate
     const d = state.displays.find((x) => x.topic === stat.topic)
     if (d) {
       d.stats = {
@@ -849,6 +981,8 @@ function registerHandlers(): void {
       }
     }
   })
+
+  bridge.onImage((frame) => emitTopicImage(frame.stream, frame))
 
   // /tf 帧列表低频刷新（面板展示用）
   window.setInterval(() => {
