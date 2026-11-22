@@ -103,11 +103,12 @@ void Ros1SlamInterface::publishCurrPose() {
         }
     }
 
-    // 核心输出 IMU body；对外发布前统一换到 base_link。
+    // 核心位姿是雷达的(r_il=单位阵); 对外发布前按 base_link <- lidar 换到 base_link。
+    // 以前用 baseImu 换算, 与输入侧的車底->雷达不对称, 高度对不上。
     if (have_out) {
         computeLidarToBase();
-        if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseImu().valid) {
-            out.pose = composeRightInv(out.pose, engine_.baseImu());
+        if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseLidar().valid) {
+            out.pose = composeRightInv(out.pose, engine_.baseLidar());
         }
     }
 

@@ -167,9 +167,6 @@ void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped
                                bool count_as_jump) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return;
-    // 初始位姿的"换算目标系": lidar(默认, 点云/位姿都在雷达系) | imu
-    std::string init_frame = "lidar";
-    pnh_.param<std::string>("init_pose_frame", init_frame, init_frame);
     // 只有"坐标系真的换了"才计数; 内部 2D 小纠偏 (0.1~0.3m) 不算跳变
     if (count_as_jump) { ++pose_jump_seq_; }
     double x = in.pose.pose.position.x;
@@ -203,29 +200,53 @@ void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped
     // 缺省 map/IMU zero 位姿已经在上面的分支直通，不能再次叠加安装角。
     if (default_map_pose) {
         if (force_z_zero) p.trans.z() = 0.0;
-    } else if (computeBaseFrames(/*blocking=*/true) &&
-               ((init_frame == "lidar") ? baseLidar().valid : baseImu().valid)) {
-        // 默认按 lidar: 本节点的点云与位姿都在雷达系(r_il 单位阵), 用 base_link<-lidar
-        // 这条静态 TF 换算 —— 地面 z=0 时, 位姿 z 直接就是雷达离地高(0.07+0.914)。
-        // 不做任何"检测地面"的动作, 纯 TF 赋值。
-        const RigidTransform base = (init_frame == "lidar") ? baseLidar() : baseImu();
-        const double yaw_b = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
-        const double z_b = p.trans.z();
-        const M3D rot0 = p.rot;
-        p = composeRight(p, base);
-        // 只取**平移**: App 给的是车体位姿, 姿态(航向)不变 —— 安装 yaw(89.9deg) 已经
-        // 包含在扫描自身坐标系里, 再叠一次会让机器人整体转 90deg。
-        p.rot = rot0;
-        const double yaw_a = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
-        char b[256];
-        std::snprintf(b, sizeof(b),
-                      "[slam_algo] init pose converted base->%s: z_before=%.3f z_after=%.3f "
-                      "yaw_before=%.1fdeg yaw_after=%.1fdeg",
-                      init_frame.c_str(), z_b, p.trans.z(), yaw_b, yaw_a);
-        std::cout << b << std::endl;
     } else {
-        if (force_z_zero) p.trans.z() = 0.0;
-        ROS_WARN_STREAM("[slam_algo] base_link <- imu unavailable; init pose left in base frame");
+        // 车底贴地: App/服务给的 z 是"车体底面"(z=0 = 地面), 核心位姿是雷达系,
+        // 两者只差一个**安装高度**。高度值从 TF(base_footprint <- lidar) 取 ——
+        // 不写死常量(不同机型安装高度不同), 也不调用 computeBaseFrames()
+        // (那个调用会把 base_lidar/base_imu 激活, 连带开启 self_filter 与位姿换算,
+        //  等于把 39deg/90deg 安装外参整套打开; 2026-11-22 实机就是这样出错的)。
+        if (!init_z_known_) {
+            std::string lidar_frame = "lidar", base_frame = "base_link";
+            pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
+            pnh_.param<std::string>("base_frame", base_frame, base_frame);
+            if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
+            if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+            for (int i = 0; i < 20; ++i) {
+                try {
+                    const geometry_msgs::TransformStamped tf = tf_buffer_->lookupTransform(
+                        base_frame, lidar_frame, ros::Time(0), ros::Duration(0.1));
+                    Eigen::Quaterniond q(tf.transform.rotation.w, tf.transform.rotation.x,
+                                         tf.transform.rotation.y, tf.transform.rotation.z);
+                    q.normalize();
+                    init_base_lidar_.R = q.toRotationMatrix();
+                    init_base_lidar_.t = Eigen::Vector3d(tf.transform.translation.x,
+                                                         tf.transform.translation.y,
+                                                         tf.transform.translation.z);
+                    init_base_lidar_.valid = true;
+                    init_z_offset_ = init_base_lidar_.t.z();
+                    init_z_known_ = true;
+                    break;
+                } catch (const tf2::TransformException&) {
+                    ros::Duration(0.05).sleep();
+                }
+            }
+        }
+        if (init_z_known_) {
+            const double z_b = p.trans.z();
+            const double yaw_b = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
+            // 完整换算 (旋转+平移): 核心位姿是雷达系, App 给的是 base_link。
+            p = composeRight(p, init_base_lidar_);
+            const double yaw_a = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
+            char b[224];
+            std::snprintf(b, sizeof(b),
+                          "[slam_algo] init pose base->lidar: z %.3f->%.3f (+%.3f) yaw %.1f->%.1f",
+                          z_b, p.trans.z(), init_z_offset_, yaw_b, yaw_a);
+            std::cout << b << std::endl;
+        } else {
+            ROS_WARN_STREAM("[slam_algo] TF base_link <- lidar unavailable; "
+                            "init pose left as given");
+        }
     }
     algo_raw_->setInitPose(p);
 }
