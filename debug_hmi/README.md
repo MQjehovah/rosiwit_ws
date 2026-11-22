@@ -112,9 +112,7 @@ sudo systemctl restart xzrobot
 
 点云显示项（`PointCloud2` / `PointCloud`）的数据源可以切换成「本地 PCD」，
 直接在卡片里选择本机文件，不需要设备端配合。支持 `ascii` / `binary` / `binary_compressed`（LZF），
-解析后限制在 120 万点；点大小、颜色、高度着色都按这个显示项自己的设置渲染。
-
-刷新页面后需要重新选择文件（文件内容不写入 localStorage）。
+解析后限制在 120 万点，并按显示项写入 IndexedDB；刷新页面自动恢复，不需要重新选择文件。
 
 机器上的 `map.xzmap` 可以用 `../debug_bridge/tools/xzmap_to_pcd.py` 转成标准 PCD：
 

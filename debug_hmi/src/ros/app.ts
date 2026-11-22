@@ -15,7 +15,7 @@ import {
 } from './debugRos'
 import type { CloudData, GridData } from './decode'
 import { limitCloud, parseMapFile } from './mapFile'
-import { loadMapCache, saveMapCache } from './mapCache'
+import { deleteDisplayMapCache, loadDisplayMapCache, saveDisplayMapCache } from './mapCache'
 import { TfTree } from './tf'
 
 const LAN_URL = 'ws://192.168.1.100:9100'
@@ -210,13 +210,6 @@ export const state = reactive({
   gridTime: 0,
   gridBytes: 0,
   gridFromCache: false,
-
-  /** 本地加载的 PCD 地图 */
-  loadedMapName: '',
-  loadedMapPoints: 0,
-  loadedMapTime: 0,
-  mapLoading: false,
-  mapError: '',
 
   view: { fit: 0, top: 0, shot: 0, follow: false },
 
@@ -414,6 +407,9 @@ export function removeDisplay(id: string): void {
   PCD_CLOUDS.delete(id)
   delete state.pcdCounts[id]
   state.pcdVersion++
+  void deleteDisplayMapCache(id).catch(() => {
+    /* 缓存删除失败不影响移除 */
+  })
   saveDisplays()
 }
 
@@ -444,6 +440,9 @@ export async function loadPcdIntoDisplay(id: string, file: File): Promise<void> 
     state.pcdVersion++
     unsubscribeDisplay(d)
     saveDisplays()
+    void saveDisplayMapCache(id, loaded, loaded.positions).catch(() => {
+      /* 缓存失败不影响显示 */
+    })
     pushLog(
       'info',
       `本地 PCD 已载入：${loaded.name}（${loaded.count.toLocaleString()} 点）`,
@@ -451,6 +450,35 @@ export async function loadPcdIntoDisplay(id: string, file: File): Promise<void> 
   } catch (e) {
     state.displayError = (e as Error).message
     pushLog('error', `加载 PCD 失败：${state.displayError}`)
+  }
+}
+
+/** 刷新后从 IndexedDB 恢复所有本地 PCD 显示项。 */
+export async function restorePcdDisplays(): Promise<void> {
+  const targets = state.displays.filter((d) => d.source === 'pcd')
+  for (const d of targets) {
+    try {
+      const cached = await loadDisplayMapCache(d.id)
+      if (!cached) continue
+      const positions =
+        cached.positions instanceof Float32Array
+          ? cached.positions
+          : new Float32Array(cached.positions as unknown as ArrayLike<number>)
+      PCD_CLOUDS.set(d.id, {
+        positions,
+        colors: null,
+        count: cached.count,
+        total: cached.count,
+        frame: 'map',
+        bbox: null,
+      })
+      state.pcdCounts[d.id] = cached.count
+      if (!d.pcdName) d.pcdName = cached.name
+      state.pcdVersion++
+      pushLog('info', `已恢复本地 PCD：${d.pcdName}（${cached.count.toLocaleString()} 点）`)
+    } catch {
+      /* 单个缓存失败不影响其它显示项 */
+    }
   }
 }
 
@@ -606,88 +634,6 @@ export function setLayer(key: LayerKey, value: boolean): void {
   syncSubscriptions()
 }
 
-// ----------------------------------------------------------- one-shot snapshot
-
-type CloudHandler = (cloud: CloudData) => void
-type GridHandler = (grid: GridData) => void
-
-const lidarHandlers = new Set<CloudHandler>()
-const globalMapHandlers = new Set<CloudHandler>()
-const gridHandlers = new Set<GridHandler>()
-
-export function onLidarSnapshot(handler: CloudHandler): () => void {
-  lidarHandlers.add(handler)
-  return () => lidarHandlers.delete(handler)
-}
-
-export function onGlobalMapSnapshot(handler: CloudHandler): () => void {
-  globalMapHandlers.add(handler)
-  return () => globalMapHandlers.delete(handler)
-}
-
-export function onGridSnapshot(handler: GridHandler): () => void {
-  gridHandlers.add(handler)
-  return () => gridHandlers.delete(handler)
-}
-
-function emitLidar(cloud: CloudData): void {
-  state.snapshotTime = Date.now()
-  state.snapshotPoints = cloud.count
-  for (const fn of lidarHandlers) fn(cloud)
-  pushLog('info', `雷达帧：${cloud.count.toLocaleString()} 点（${cloud.frame || '未知坐标系'}）`)
-}
-
-export async function grabLidarSnapshot(): Promise<void> {
-  if (state.snapshotPending) return
-  state.snapshotPending = true
-  try {
-    if (ros.status !== 'open') {
-      pushLog('warn', 'debug_bridge 未连接')
-      return
-    }
-    pushLog('info', '正在通过 debug_bridge 抓取一帧 /vanjee_points722…')
-    emitLidar(await bridge.requestCloud('vanjee_points722', { voxel: 0.05, max: 200000, timeout: 30000 }))
-  } catch (e) {
-    pushLog('warn', `雷达快照失败：${(e as Error).message}`)
-  } finally {
-    state.snapshotPending = false
-  }
-}
-
-// ------------------------------------------------------------------ grid snapshot
-
-export function cancelGridSnapshot(): void {
-  bridge.cancelGrid()
-}
-
-export async function grabGridSnapshot(): Promise<void> {
-  if (state.gridPending) return
-  state.gridPending = true
-  state.gridStartedAt = Date.now()
-  try {
-    if (ros.status !== 'open') {
-      pushLog('warn', 'debug_bridge 未连接')
-      return
-    }
-    pushLog('info', '正在通过 debug_bridge 获取栅格地图（服务端 zlib）…')
-    const grid = await bridge.requestGrid('/map', true, 180000)
-    if (!grid) throw new Error('没有有效栅格数据')
-    state.gridCells = grid.width * grid.height
-    state.gridBytes = grid.data.byteLength
-    state.gridTime = Date.now()
-    state.gridFromCache = false
-    pushLog(
-      'info',
-      `栅格地图：${grid.width}×${grid.height}（${(state.gridCells / 1e6).toFixed(1)}M 格）`,
-    )
-    for (const fn of gridHandlers) fn(grid)
-  } catch (e) {
-    pushLog('warn', `栅格地图抓取失败：${(e as Error).message}`)
-  } finally {
-    state.gridPending = false
-  }
-}
-
 // ------------------------------------------------------------------ topic frames
 
 type TopicCloudHandler = (topic: string, cloud: CloudData) => void
@@ -714,70 +660,6 @@ export function emitTopicCloud(topic: string, cloud: CloudData): void {
 export function emitTopicGrid(topic: string, grid: GridData): void {
   state.pointCounts[topic] = grid.width * grid.height
   for (const fn of topicGridHandlers) fn(topic, grid)
-}
-
-// ------------------------------------------------------------------ global map
-
-function emitLoadedMap(cloud: CloudData): void {
-  state.pointCounts.globalMap = cloud.count
-  for (const fn of globalMapHandlers) fn(cloud)
-}
-
-/** 浏览器本地加载标准 PCD（不经过机器人） */
-export async function loadMapFile(file: File): Promise<void> {
-  if (state.mapLoading) return
-  state.mapLoading = true
-  state.mapError = ''
-  try {
-    // 先让 UI 渲染“解析中”
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-    const parsed = await parseMapFile(file)
-    const cloud = limitCloud(parsed, 1200000)
-    const data: CloudData = {
-      positions: cloud.positions,
-      colors: null,
-      count: cloud.count,
-      total: cloud.count,
-      frame: cloud.frame || 'map',
-      bbox: null,
-    }
-    state.loadedMapName = cloud.name
-    state.loadedMapPoints = cloud.count
-    state.loadedMapTime = Date.now()
-    emitLoadedMap(data)
-    void saveMapCache(cloud).catch(() => {
-      /* 缓存失败不影响显示 */
-    })
-    pushLog('info', `已加载地图文件 ${cloud.name}：${cloud.count.toLocaleString()} 点`)
-  } catch (e) {
-    state.mapError = (e as Error).message
-    pushLog('error', `加载地图失败：${state.mapError}`)
-  } finally {
-    state.mapLoading = false
-  }
-}
-
-/** 刷新页面后恢复上次加载的 PCD */
-export async function restoreMapCache(): Promise<void> {
-  try {
-    const cached = await loadMapCache()
-    if (!cached) return
-    const data: CloudData = {
-      positions: cached.positions,
-      colors: null,
-      count: cached.count,
-      total: cached.count,
-      frame: cached.frame || 'map',
-      bbox: null,
-    }
-    state.loadedMapName = cached.name
-    state.loadedMapPoints = cached.count
-    state.loadedMapTime = cached.savedAt
-    emitLoadedMap(data)
-    pushLog('info', `已恢复地图缓存：${cached.name}（${cached.count.toLocaleString()} 点）`)
-  } catch {
-    /* ignore */
-  }
 }
 
 // ------------------------------------------------------------------ handlers
@@ -1147,6 +1029,7 @@ export function initHmi(): void {
   state.mutedSources = loadMutedSources()
   Object.assign(state.layers, loadLayers())
   loadDisplays()
+  void restorePcdDisplays()
   // 设备信息插件：常驻低频订阅，不依赖显示项
   bridge.setSubscription('/device/robot_shadow', { rate: 1, voxel: 0, max: 0 })
 

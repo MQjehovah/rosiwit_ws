@@ -1,14 +1,15 @@
 import type { LoadedMap } from './mapFile'
 
 /**
- * PCD 地图缓存：浏览器里加载一次后，刷新页面不再需要重新选文件。
- * 存的是降采样后的 Float32Array（约几 MB）。
+ * 本地 PCD 缓存（IndexedDB）。
+ *
+ * 每个显示项按 id 存一份，刷新页面后自动恢复，不需要重新选择文件。
+ * 和栅格缓存一样，存的是前端已经降采样后的 Float32Array。
  */
 
 const DB_NAME = 'debug_hmi_map'
 const DB_VERSION = 1
 const STORE = 'map'
-const KEY = 'latest'
 const SCHEMA = 1
 
 interface CachedMap {
@@ -32,32 +33,38 @@ function openDb(): Promise<IDBDatabase> {
   })
 }
 
-export async function saveMapCache(map: LoadedMap): Promise<void> {
+export async function saveDisplayMapCache(
+  id: string,
+  map: LoadedMap,
+  positions: Float32Array,
+): Promise<void> {
   if (typeof indexedDB === 'undefined') return
   const record: CachedMap = {
     schema: SCHEMA,
     savedAt: Date.now(),
     name: map.name,
-    frame: map.frame,
+    frame: map.frame || 'map',
     count: map.count,
-    positions: map.positions,
+    positions,
   }
   const db = await openDb()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite')
-    tx.objectStore(STORE).put(record, KEY)
+    tx.objectStore(STORE).put(record, id)
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('map cache write failed'))
   })
   db.close()
 }
 
-export async function loadMapCache(): Promise<(LoadedMap & { savedAt: number }) | null> {
+export async function loadDisplayMapCache(
+  id: string,
+): Promise<(LoadedMap & { savedAt: number }) | null> {
   if (typeof indexedDB === 'undefined') return null
   const db = await openDb()
   const record = await new Promise<CachedMap | null>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly')
-    const req = tx.objectStore(STORE).get(KEY)
+    const req = tx.objectStore(STORE).get(id)
     req.onsuccess = () => resolve((req.result as CachedMap) ?? null)
     req.onerror = () => reject(req.error ?? new Error('map cache read failed'))
   })
@@ -72,12 +79,12 @@ export async function loadMapCache(): Promise<(LoadedMap & { savedAt: number }) 
   }
 }
 
-export async function clearMapCache(): Promise<void> {
+export async function deleteDisplayMapCache(id: string): Promise<void> {
   if (typeof indexedDB === 'undefined') return
   const db = await openDb()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite')
-    tx.objectStore(STORE).delete(KEY)
+    tx.objectStore(STORE).delete(id)
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('map cache delete failed'))
   })
