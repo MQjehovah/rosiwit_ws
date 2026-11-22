@@ -503,6 +503,10 @@ export class BridgeClient {
     return this.sendCommand({ action: 3, x, y, yaw })
   }
 
+  setTwist(linear: number, angular: number): boolean {
+    return this.sendCommand({ action: 8, linear_x: linear, angular_z: angular })
+  }
+
   callService(name: string, args: Record<string, unknown>, timeout = 15000): Promise<any> {
     const id = `svc-${Date.now()}-${Math.floor(Math.random() * 1000)}`
     return new Promise((resolve, reject) => {

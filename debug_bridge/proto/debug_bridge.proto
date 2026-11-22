@@ -193,6 +193,7 @@ message ClientCommand {
     GET_TOPICS = 5;
     RAW_SUBSCRIBE = 6;
     RAW_UNSUBSCRIBE = 7;
+    PUBLISH_TWIST = 8;
   }
   Action action = 1;
   string stream = 2;
@@ -209,6 +210,8 @@ message ClientCommand {
   string topic = 13;
   string type = 14;
   bool manual = 15; // true: 只有 REQUEST 才发，不按 rate_hz 推送
+  float linear_x = 16;
+  float angular_z = 17;
 }
 
 message Envelope {

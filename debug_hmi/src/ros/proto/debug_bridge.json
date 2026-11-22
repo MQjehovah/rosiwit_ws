@@ -569,6 +569,14 @@
             "manual": {
               "type": "bool",
               "id": 15
+            },
+            "linear_x": {
+              "type": "float",
+              "id": 16
+            },
+            "angular_z": {
+              "type": "float",
+              "id": 17
             }
           },
           "nested": {
@@ -581,7 +589,8 @@
                 "CALL_SERVICE": 4,
                 "GET_TOPICS": 5,
                 "RAW_SUBSCRIBE": 6,
-                "RAW_UNSUBSCRIBE": 7
+                "RAW_UNSUBSCRIBE": 7,
+                "PUBLISH_TWIST": 8
               }
             }
           }

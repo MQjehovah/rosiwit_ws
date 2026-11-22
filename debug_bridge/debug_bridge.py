@@ -74,6 +74,7 @@ ACTION_CALL_SERVICE = 4
 ACTION_GET_TOPICS = 5
 ACTION_RAW_SUBSCRIBE = 6
 ACTION_RAW_UNSUBSCRIBE = 7
+ACTION_PUBLISH_TWIST = 8
 
 COMP_NONE = 0
 COMP_ZLIB = 1
@@ -1146,6 +1147,22 @@ class RosSource(object):
         self.grid_lock = threading.Lock()
         self.topic_types = {}
         self.types_at = 0.0
+        self.twist_pub = None
+
+    def set_twist(self, linear, angular):
+        import rospy
+        from geometry_msgs.msg import Twist
+
+        with self.lock:
+            if self.twist_pub is None:
+                self.twist_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
+                time.sleep(0.15)
+        msg = Twist()
+        msg.linear.x = float(linear)
+        msg.angular.z = float(angular)
+        self.twist_pub.publish(msg)
+        CACHE.touch("/cmd_vel", 32)
+        return True
 
     # --- subscriptions -----------------------------------------------------
 
@@ -1519,6 +1536,10 @@ class DemoSource(object):
         CACHE.add_log(2, "/demo", "initial pose %.2f %.2f %.2f" % (x, y, yaw), now())
         return True
 
+    def set_twist(self, linear, angular):
+        CACHE.add_log(2, "/demo", "twist %.2f %.2f" % (linear, angular), now())
+        return True
+
     def call_service(self, name, args_json):
         return {"ok": True, "service": name, "args": json.loads(args_json or "{}")}
 
@@ -1577,6 +1598,8 @@ class Client(object):
         self.last_stats = 0.0
         self.sent = {}  # topic -> {count, total, size, last}
         self.stat_prev = {}
+        self.last_twist = 0.0
+        self.twist_active = False
 
     def send(self, payload):
         if self.closed:
@@ -1733,6 +1756,8 @@ class BridgeWS(websocket.WebSocketHandler):
         if isinstance(topic, bytes):
             topic = topic.decode("utf-8", "replace")
         manual = bool(fields.get(15, 0))
+        linear_x = fields.get(16, 0.0)
+        angular_z = fields.get(17, 0.0)
 
         try:
             if action == ACTION_SUBSCRIBE:
@@ -1765,6 +1790,10 @@ class BridgeWS(websocket.WebSocketHandler):
             elif action == ACTION_SET_INITIAL_POSE:
                 SOURCE.set_initial_pose(x, y, yaw)
                 self.client.send(encode_status("initialpose", True, "published"))
+            elif action == ACTION_PUBLISH_TWIST:
+                SOURCE.set_twist(linear_x, angular_z)
+                self.client.last_twist = now()
+                self.client.twist_active = abs(linear_x) > 1e-4 or abs(angular_z) > 1e-4
             elif action == ACTION_CALL_SERVICE:
                 self._service(self.client, service, args_json, request_id)
             elif action == ACTION_GET_TOPICS:
@@ -1911,6 +1940,11 @@ class BridgeWS(websocket.WebSocketHandler):
 
     def on_close(self):
         self.client.closed = True
+        if self.client.twist_active:
+            try:
+                SOURCE.set_twist(0.0, 0.0)
+            except Exception:
+                pass
         self.client.close_raw()
         with CLIENTS_LOCK:
             if self.client in CLIENTS:
@@ -1943,6 +1977,13 @@ def publisher_loop():
                         client.send_topic(target, f)
             if t0 - client.last_send > 10.0:
                 client.send(encode_status("heartbeat", True, "alive"))
+            # 手动控制看门狗：超过 0.5s 没收到新速度就发 0
+            if client.twist_active and t0 - client.last_twist > 0.5:
+                try:
+                    SOURCE.set_twist(0.0, 0.0)
+                except Exception as e:
+                    log("twist stop: %s" % e)
+                client.twist_active = False
             # 话题速率 / 流量统计（约 2Hz）
             if t0 - client.last_stats >= 0.5:
                 dt = t0 - client.last_stats

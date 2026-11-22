@@ -250,6 +250,85 @@
       </div>
     </details>
 
+    <!-- 设备控制 -->
+    <details class="sec" open>
+      <summary>
+        <span class="sec-title">设备控制</span>
+        <span class="sec-meta">{{ motionText }}</span>
+      </summary>
+      <div class="sec-body">
+        <div class="dpad">
+          <button
+            class="dpad-btn up"
+            :class="{ active: activeDir === 'forward' }"
+            :disabled="state.status !== 'open'"
+            @pointerdown.prevent="startMotion('forward')"
+            @pointerup="stopMotion"
+            @pointerleave="stopMotion"
+            @pointercancel="stopMotion"
+            @contextmenu.prevent
+          >
+            ↑
+          </button>
+          <button
+            class="dpad-btn left"
+            :class="{ active: activeDir === 'left' }"
+            :disabled="state.status !== 'open'"
+            @pointerdown.prevent="startMotion('left')"
+            @pointerup="stopMotion"
+            @pointerleave="stopMotion"
+            @pointercancel="stopMotion"
+            @contextmenu.prevent
+          >
+            ←
+          </button>
+          <button class="dpad-btn stop" :disabled="state.status !== 'open'" @click="stopMotion">停</button>
+          <button
+            class="dpad-btn right"
+            :class="{ active: activeDir === 'right' }"
+            :disabled="state.status !== 'open'"
+            @pointerdown.prevent="startMotion('right')"
+            @pointerup="stopMotion"
+            @pointerleave="stopMotion"
+            @pointercancel="stopMotion"
+            @contextmenu.prevent
+          >
+            →
+          </button>
+          <button
+            class="dpad-btn down"
+            :class="{ active: activeDir === 'back' }"
+            :disabled="state.status !== 'open'"
+            @pointerdown.prevent="startMotion('back')"
+            @pointerup="stopMotion"
+            @pointerleave="stopMotion"
+            @pointercancel="stopMotion"
+            @contextmenu.prevent
+          >
+            ↓
+          </button>
+        </div>
+
+        <div class="speed-row">
+          <label>
+            线速度
+            <input v-model.number="linearSpeed" type="range" min="0.05" max="0.5" step="0.05" />
+            <span class="mono">{{ linearSpeed.toFixed(2) }} m/s</span>
+          </label>
+          <label>
+            角速度
+            <input v-model.number="angularSpeed" type="range" min="0.1" max="1.5" step="0.1" />
+            <span class="mono">{{ angularSpeed.toFixed(1) }} rad/s</span>
+          </label>
+        </div>
+
+        <p class="note">
+          按住方向键持续运动，松开立即停；断线、切换页面或 0.5s 没收到新指令时服务端也会自动发零速。
+          直接发布 <code>/cmd_vel</code>，使用前请先停止导航任务并确认周围安全。
+        </p>
+      </div>
+    </details>
+
     <!-- 初始位姿 -->
     <details class="sec">
       <summary>
@@ -309,6 +388,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   addDisplay,
+  bridge,
   dumpRecorder,
   grabTopic,
   loadMapFile,
@@ -344,6 +424,61 @@ function doRefreshTopics(): void {
 
 function openImage(topic: string): void {
   openImagePreview(topic)
+}
+
+// -------------------------------------------------------------- device control
+
+type MoveDir = '' | 'forward' | 'back' | 'left' | 'right'
+
+const activeDir = ref<MoveDir>('')
+const linearSpeed = ref(0.15)
+const angularSpeed = ref(0.6)
+let motionTimer: number | null = null
+
+const motionText = computed(() => {
+  if (!activeDir.value) return '按住运动'
+  const label = { forward: '前进', back: '后退', left: '左转', right: '右转' }[activeDir.value]
+  return `${label}中…`
+})
+
+function publishMotion(): void {
+  const dir = activeDir.value
+  if (!dir) return
+  let linear = 0
+  let angular = 0
+  if (dir === 'forward') linear = linearSpeed.value
+  else if (dir === 'back') linear = -linearSpeed.value
+  else if (dir === 'left') angular = angularSpeed.value
+  else if (dir === 'right') angular = -angularSpeed.value
+  bridge.setTwist(linear, angular)
+}
+
+function startMotion(dir: Exclude<MoveDir, ''>): void {
+  if (state.status !== 'open') return
+  if (motionTimer !== null) {
+    window.clearInterval(motionTimer)
+    motionTimer = null
+  }
+  activeDir.value = dir
+  publishMotion()
+  motionTimer = window.setInterval(publishMotion, 100)
+}
+
+function stopMotion(): void {
+  if (motionTimer !== null) {
+    window.clearInterval(motionTimer)
+    motionTimer = null
+  }
+  if (state.status === 'open') bridge.setTwist(0, 0)
+  activeDir.value = ''
+}
+
+function onGlobalStop(): void {
+  if (activeDir.value) stopMotion()
+}
+
+function onVisibilityChange(): void {
+  if (document.hidden) onGlobalStop()
 }
 
 function shortType(type: string): string {
@@ -419,9 +554,18 @@ onMounted(() => {
   tickTimer = window.setInterval(() => {
     nowTick.value = Date.now()
   }, 500)
+  window.addEventListener('pointerup', onGlobalStop)
+  window.addEventListener('pointercancel', onGlobalStop)
+  window.addEventListener('blur', onGlobalStop)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 onBeforeUnmount(() => {
   if (tickTimer !== null) clearInterval(tickTimer)
+  stopMotion()
+  window.removeEventListener('pointerup', onGlobalStop)
+  window.removeEventListener('pointercancel', onGlobalStop)
+  window.removeEventListener('blur', onGlobalStop)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 
 const slamAgeText = computed(() => {
@@ -753,6 +897,87 @@ function onPointScale(value: number): void {
 .traffic-total b {
   color: #a9bccd;
   font-weight: 600;
+}
+
+.dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 46px);
+  grid-template-rows: repeat(3, 38px);
+  gap: 4px;
+  justify-content: center;
+  margin: 4px auto 10px;
+  touch-action: none;
+  user-select: none;
+}
+
+.dpad-btn {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #0b141d;
+  color: #b9cedf;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.dpad-btn:hover:not(:disabled) {
+  border-color: #3b6d8d;
+  color: #e2f3ff;
+}
+
+.dpad-btn.active {
+  background: #1d4f6a;
+  border-color: #38bdf8;
+  color: #e0f2fe;
+}
+
+.dpad-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.dpad-btn.up {
+  grid-column: 2;
+  grid-row: 1;
+}
+.dpad-btn.left {
+  grid-column: 1;
+  grid-row: 2;
+}
+.dpad-btn.stop {
+  grid-column: 2;
+  grid-row: 2;
+  color: #fca5a5;
+  border-color: #5b2b2b;
+}
+.dpad-btn.right {
+  grid-column: 3;
+  grid-row: 2;
+}
+.dpad-btn.down {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.speed-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.speed-row label {
+  display: grid;
+  grid-template-columns: 46px 1fr 68px;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+
+.speed-row input[type='range'] {
+  width: 100%;
 }
 
 .mini.danger {
