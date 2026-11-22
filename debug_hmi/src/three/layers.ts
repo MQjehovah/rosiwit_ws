@@ -164,8 +164,21 @@ export class RobotLayer {
   private footprintGeom = new THREE.BufferGeometry()
   private placeholder = new THREE.Group()
   private modelRoot: THREE.Object3D | null = null
+  private groundShadow: THREE.Mesh
+  private groundShadowMat: THREE.MeshBasicMaterial
 
   constructor() {
+    this.groundShadowMat = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.3,
+      depthWrite: false,
+    })
+    this.groundShadow = new THREE.Mesh(new THREE.CircleGeometry(0.62, 48), this.groundShadowMat)
+    this.groundShadow.position.z = 0.002
+    this.groundShadow.renderOrder = 1
+    this.object.add(this.groundShadow)
+
     const bodyMat = new THREE.MeshLambertMaterial({
       color: 0x0e7490,
       transparent: true,
