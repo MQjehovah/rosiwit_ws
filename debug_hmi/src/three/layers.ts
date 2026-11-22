@@ -212,16 +212,9 @@ export class RobotLayer {
     const root: THREE.Object3D = gltf.scene
     root.updateMatrixWorld(true)
 
-    let box = new THREE.Box3().setFromObject(root)
-    let size = box.getSize(new THREE.Vector3())
-    // KeyShot 导出的是毫米；大于 20m 的一律按毫米处理
-    const unitScale = Math.max(size.x, size.y, size.z) > 20 ? 0.001 : 1
-    root.scale.multiplyScalar(unitScale)
-    root.updateMatrixWorld(true)
-
-    box = new THREE.Box3().setFromObject(root)
+    // 不缩放：GLB 根节点已经带 0.001（毫米→米），直接使用模型自身尺寸
+    const box = new THREE.Box3().setFromObject(root)
     const center = box.getCenter(new THREE.Vector3())
-    size = box.getSize(new THREE.Vector3())
 
     // 先把模型中心移到原点，再做姿态变换
     root.position.set(-center.x, -center.y, -center.z)
