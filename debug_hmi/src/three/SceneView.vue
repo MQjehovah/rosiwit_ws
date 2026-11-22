@@ -3,7 +3,6 @@
     <div class="hud hud-tl">
       <span class="chip">FPS {{ state.fps.toFixed(0) }}</span>
       <span v-if="displayCount" class="chip">{{ displayCount }} 个显示项</span>
-      <span v-if="globalPoints" class="chip">PCD {{ globalPoints }}</span>
       <span v-if="state.totalBytes" class="chip mono">流量 {{ trafficText }}</span>
     </div>
     <div class="hud hud-tr">
@@ -65,11 +64,10 @@ import {
   closeImagePreview,
   emitTopicCloud,
   emitTopicGrid,
-  onGlobalMapSnapshot,
+  getPcdCloud,
   onTopicCloud,
   onTopicGrid,
   pushLog,
-  restoreMapCache,
   ros,
   setMeasurePoint,
   setPendingPose,
@@ -100,8 +98,7 @@ let raf = 0
 let resizeObserver: ResizeObserver | null = null
 let floorGrid: THREE.GridHelper | null = null
 
-/** 本地 PCD / 文件地图专用层；ROS 话题全部走 dynamicLayers */
-const mapLayer = new PointCloudLayer({ size: 0.1, opacity: 0.9 })
+/** 本地 PCD 文件不再单独占用固定图层，全部作为显示项渲染 */
 const robotLayer = new RobotLayer()
 const tfLayer = new TfLayer()
 const trailLayer = new TrailLayer(0x38bdf8)
@@ -168,12 +165,6 @@ const previewImageData = computed(() => (state.previewImage ? state.images[state
 /** 没有任何显示项 */
 const noSources = computed(() => state.displays.length === 0)
 
-const globalPoints = computed(() => {
-  const n = state.loadedMapPoints || 0
-  if (!n) return ''
-  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n.toLocaleString()
-})
-
 const trafficText = computed(() => {
   const rate = state.totalRate
   const rateText =
@@ -235,17 +226,6 @@ function buildMarker(): void {
   arrow.position.set(0.75, 0, 0)
   pendingGroup.add(ring, disc, arrow)
   pendingGroup.visible = false
-}
-
-function applyGlobalMap(cloud: CloudData): void {
-  mapLayer.setPoints(cloud.positions, cloud.colors)
-  placeInMap(mapLayer.object, cloud.frame)
-  state.pointCounts.globalMap = cloud.count
-  pushLog(
-    'info',
-    `PCD 地图：${cloud.count.toLocaleString()} 点` +
-      (cloud.total > cloud.count ? `（原始 ${cloud.total.toLocaleString()}，已抽稀）` : ''),
-  )
 }
 
 // ---------------------------------------------------------------- dynamic layers
@@ -335,6 +315,19 @@ function syncDisplayLayers(): void {
     if (entry.layer instanceof PointCloudLayer) {
       entry.layer.setSize(d.pointSize * state.pointScale)
       entry.layer.setColor(hexColor(d.color))
+      if (d.source === 'pcd') {
+        const cloud = getPcdCloud(d.id)
+        if (cloud) {
+          const colors =
+            d.colorMode === 'height' && cloud.count <= 1500000 ? heightColors(cloud.positions) : null
+          entry.layer.setPoints(cloud.positions, colors)
+          entry.layer.setVisible(d.enabled)
+          placeInMap(entry.layer.object, 'map')
+        } else {
+          entry.layer.clear()
+          entry.layer.setVisible(false)
+        }
+      }
     } else if (entry.layer instanceof PathLayer) {
       entry.layer.setColor(hexColor(d.color))
     } else if (entry.layer instanceof GridMapLayer) {
@@ -458,7 +451,6 @@ function applyTopicPolygon(p: { stream: string; frame: string; xy: Float32Array 
 }
 
 function bindTopics(): void {
-  unsubs.push(onGlobalMapSnapshot((cloud) => applyGlobalMap(cloud)))
   unsubs.push(bridge.onCloud((topic, cloud) => applyTopicCloud(topic, cloud)))
   unsubs.push(bridge.onGrid((topic, grid) => applyTopicGrid(topic, grid)))
   unsubs.push(bridge.onLaser((l) => applyTopicLaser(l)))
@@ -482,7 +474,6 @@ function applyVisibility(): void {
 
 function applyPointScale(): void {
   const s = state.pointScale
-  mapLayer.setSize(0.1 * s)
   for (const [topic, entry] of dynamicLayers) {
     if (entry.layer instanceof PointCloudLayer) {
       const d = state.displays.find((x) => x.topic === topic)
@@ -558,7 +549,6 @@ function setupScene(): void {
 
   buildMarker()
   const all = [
-    mapLayer.object,
     trailLayer.object,
     robotLayer.object,
     tfLayer.object,
@@ -684,7 +674,6 @@ function contentBox(): THREE.Box3 {
     const b = new THREE.Box3().setFromObject(object)
     if (!b.isEmpty()) box.union(b)
   }
-  include(mapLayer.object)
   for (const entry of dynamicLayers.values()) include(entry.layer.object)
   if (state.robot.source !== '-') {
     box.expandByPoint(new THREE.Vector3(state.robot.x, state.robot.y, 0))
@@ -839,6 +828,8 @@ watch(
     state.displays.map((d) => [
       d.id,
       d.topic,
+      d.source,
+      d.pcdName,
       d.renderer,
       d.enabled,
       d.pointSize,
@@ -847,6 +838,11 @@ watch(
     ]),
   () => syncDisplayLayers(),
   { deep: true },
+)
+
+watch(
+  () => state.pcdVersion,
+  () => syncDisplayLayers(),
 )
 
 watch(
@@ -920,8 +916,6 @@ onMounted(() => {
     .catch(() => {
       /* 没有缓存/被浏览器禁用都忽略 */
     })
-
-  void restoreMapCache()
 })
 
 onBeforeUnmount(() => {
@@ -929,7 +923,6 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   for (const unsub of unsubs) unsub()
   window.removeEventListener('keydown', onKeyDown)
-  mapLayer.dispose()
   for (const topic of [...dynamicLayers.keys()]) disposeDynamic(topic)
   controls?.dispose()
   renderer?.dispose()

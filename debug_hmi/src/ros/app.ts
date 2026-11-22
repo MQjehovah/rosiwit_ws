@@ -53,6 +53,9 @@ export interface DisplayItem {
   id: string
   topic: string
   type: string
+  /** topic = 订阅 ROS 话题；pcd = 本地 PCD 文件 */
+  source: 'topic' | 'pcd'
+  pcdName: string
   renderer: RendererKind
   enabled: boolean
   rate: number
@@ -138,6 +141,9 @@ export const state = reactive({
   topics: [] as Array<{ name: string; type: string }>,
   topicQuery: '',
   displayError: '',
+  /** 本地 PCD 显示项的点数 / 版本（用于触发重绘） */
+  pcdCounts: {} as Record<string, number>,
+  pcdVersion: 0,
   /** 图像话题最新帧（Blob URL） */
   images: {} as Record<string, { url: string; width: number; height: number; stamp: number; encoding: string }>,
   previewImage: '',
@@ -333,6 +339,11 @@ export function syncSubscriptions(): void {
 
 const DISPLAYS_KEY = 'hmi.displays.v3'
 const PALETTE = ['#38bdf8', '#fbbf24', '#34d399', '#f472b6', '#a78bfa', '#fb923c', '#22d3ee', '#f87171']
+const PCD_CLOUDS = new Map<string, CloudData>()
+
+export function getPcdCloud(id: string): CloudData | undefined {
+  return PCD_CLOUDS.get(id)
+}
 
 export function rendererForType(type: string): RendererKind {
   if (type === 'sensor_msgs/PointCloud2' || type === 'sensor_msgs/PointCloud') return 'points'
@@ -351,6 +362,8 @@ function displayDefaults(topic: string, type: string, index: number): DisplayIte
     id: `${topic}#${Date.now().toString(36)}`,
     topic,
     type,
+    source: 'topic',
+    pcdName: '',
     renderer,
     enabled: true,
     rate: renderer === 'points' ? 2 : renderer === 'laser' ? 5 : renderer === 'grid' ? 1 : renderer === 'image' ? 1 : 2,
@@ -364,6 +377,7 @@ function displayDefaults(topic: string, type: string, index: number): DisplayIte
 }
 
 function subscribeDisplay(d: DisplayItem): void {
+  if (d.source !== 'topic') return
   if (!d.topic.startsWith('/') || d.renderer === 'status') return
   bridge.setSubscription(d.topic, {
     rate: d.rate,
@@ -400,7 +414,72 @@ export function removeDisplay(id: string): void {
   if (i < 0) return
   const [item] = state.displays.splice(i, 1)
   unsubscribeDisplay(item)
+  PCD_CLOUDS.delete(id)
+  delete state.pcdCounts[id]
+  state.pcdVersion++
   saveDisplays()
+}
+
+/** 新建一个“本地 PCD”显示项；随后在显示项里选择文件。 */
+export function addPcdDisplay(): string {
+  const item = displayDefaults('PCD 文件', 'local/pcd', state.displays.length)
+  item.topic = `PCD 文件 ${state.displays.length + 1}`
+  item.type = 'local/pcd'
+  item.source = 'pcd'
+  item.renderer = 'points'
+  item.rate = 0
+  item.colorMode = 'height'
+  state.displays.push(item)
+  state.displayError = ''
+  saveDisplays()
+  return item.id
+}
+
+/** 把一个本地 PCD 文件绑定到显示项。 */
+export async function loadPcdIntoDisplay(id: string, file: File): Promise<void> {
+  const d = state.displays.find((x) => x.id === id)
+  if (!d) return
+  state.displayError = ''
+  try {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    const parsed = await parseMapFile(file)
+    const loaded = limitCloud(parsed, 1200000)
+    const cloud: CloudData = {
+      positions: loaded.positions,
+      colors: null,
+      count: loaded.count,
+      total: loaded.count,
+      frame: 'map',
+      bbox: null,
+    }
+    PCD_CLOUDS.set(id, cloud)
+    d.pcdName = loaded.name
+    d.source = 'pcd'
+    d.renderer = 'points'
+    d.enabled = true
+    state.pcdCounts[id] = loaded.count
+    state.pcdVersion++
+    unsubscribeDisplay(d)
+    saveDisplays()
+    pushLog(
+      'info',
+      `本地 PCD 已载入：${loaded.name}（${loaded.count.toLocaleString()} 点）`,
+    )
+  } catch (e) {
+    state.displayError = (e as Error).message
+    pushLog('error', `加载 PCD 失败：${state.displayError}`)
+  }
+}
+
+/** 切换数据源：话题 / 本地 PCD。 */
+export function changeDisplaySource(id: string, source: 'topic' | 'pcd'): void {
+  const d = state.displays.find((x) => x.id === id)
+  if (!d) return
+  d.source = source
+  if (source === 'topic') subscribeDisplay(d)
+  else unsubscribeDisplay(d)
+  saveDisplays()
+  state.pcdVersion++
 }
 
 export function updateDisplay(id: string, patch: Partial<DisplayItem>): void {
@@ -408,22 +487,28 @@ export function updateDisplay(id: string, patch: Partial<DisplayItem>): void {
   if (!d) return
   Object.assign(d, patch)
   saveDisplays()
-  if (d.enabled) subscribeDisplay(d)
+  if (d.enabled && d.source === 'topic') subscribeDisplay(d)
+  else unsubscribeDisplay(d)
+  state.pcdVersion++
 }
 
 export function toggleDisplay(id: string): void {
   const d = state.displays.find((x) => x.id === id)
   if (!d) return
   d.enabled = !d.enabled
-  if (d.enabled) subscribeDisplay(d)
+  if (d.enabled && d.source === 'topic') subscribeDisplay(d)
   else unsubscribeDisplay(d)
   saveDisplays()
 }
 
-/** 单帧抓取：点云/栅格/激光/path/polygon 都能用（/global_map 允许很大）。 */
+/** 单帧抓取：点云/栅格/激光/path/polygon 都能用。 */
 export async function grabTopic(id: string): Promise<void> {
   const d = state.displays.find((x) => x.id === id)
   if (!d) return
+  if (d.source === 'pcd') {
+    state.displayError = '本地 PCD 显示项请重新选择文件刷新'
+    return
+  }
   if (ros.status !== 'open') {
     state.displayError = 'debug_bridge 未连接'
     return

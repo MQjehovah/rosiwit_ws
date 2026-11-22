@@ -145,6 +145,7 @@
             </option>
           </select>
           <button class="btn small" :disabled="!newTopic" @click="doAddDisplay">添加</button>
+          <button class="btn tiny" @click="doAddPcd">本地 PCD</button>
           <button class="btn tiny" :disabled="state.status !== 'open' || state.topicScanning" @click="doRefreshTopics">
             {{ state.topicScanning ? '…' : '刷新' }}
           </button>
@@ -171,6 +172,17 @@
           </div>
 
           <div class="display-controls">
+            <label v-if="d.renderer === 'points'">
+              数据源
+              <select
+                class="select mini-select"
+                :value="d.source"
+                @change="changeDisplaySource(d.id, ($event.target as HTMLSelectElement).value as any)"
+              >
+                <option value="topic">话题</option>
+                <option value="pcd">本地 PCD</option>
+              </select>
+            </label>
             <label>
               渲染
               <select
@@ -236,7 +248,7 @@
                 @change="updateDisplay(d.id, { max: Number(($event.target as HTMLInputElement).value) || 0 })"
               />
             </label>
-            <label>
+            <label v-if="d.source === 'topic'">
               频率
               <select
                 class="select mini-select"
@@ -251,10 +263,26 @@
                 <option :value="20">20Hz</option>
               </select>
             </label>
-            <button class="mini" :disabled="state.status !== 'open'" @click="grabTopic(d.id)">抓取</button>
+            <button
+              v-if="d.source === 'topic'"
+              class="mini"
+              :disabled="state.status !== 'open'"
+              @click="grabTopic(d.id)"
+            >
+              抓取
+            </button>
+            <label v-if="d.source === 'pcd'" class="btn tiny file-btn pcd-file">
+              {{ d.pcdName || '选择 PCD 文件' }}
+              <input type="file" accept=".pcd" @change="onDisplayPcd(d.id, $event)" />
+            </label>
           </div>
 
-          <div class="display-stats">
+          <div v-if="d.source === 'pcd'" class="display-stats">
+            <span>本地 PCD</span>
+            <span v-if="state.pcdCounts[d.id]">{{ state.pcdCounts[d.id].toLocaleString() }} 点</span>
+            <span v-else>未选择文件</span>
+          </div>
+          <div v-else class="display-stats">
             <span v-if="d.rate === 0" class="manual-tag">手动</span>
             <span v-else>{{ d.stats.hz.toFixed(1) }} Hz</span>
             <span>{{ formatBytes(d.stats.bytes) }}/帧</span>
@@ -272,17 +300,6 @@
             @click="openImage(d.topic)"
           />
         </div>
-
-        <div class="row map-file">
-          <label class="btn small file-btn" :class="{ disabled: state.mapLoading }">
-            {{ state.mapLoading ? '解析中…' : '加载 PCD 地图' }}
-            <input type="file" accept=".pcd" :disabled="state.mapLoading" @change="onMapFile" />
-          </label>
-          <span v-if="state.loadedMapName" class="inline-info" :title="state.loadedMapName">
-            {{ state.loadedMapName }} · {{ state.loadedMapPoints.toLocaleString() }} 点
-          </span>
-        </div>
-        <p v-if="state.mapError" class="error-text">{{ state.mapError }}</p>
 
         <div class="foot">
           <label class="slider-row">
@@ -442,10 +459,12 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   addDisplay,
+  addPcdDisplay,
   bridge,
+  changeDisplaySource,
   dumpRecorder,
   grabTopic,
-  loadMapFile,
+  loadPcdIntoDisplay,
   openImagePreview,
   publishInitialPose,
   pushLog,
@@ -470,6 +489,21 @@ function doAddDisplay(): void {
   if (!newTopic.value) return
   addDisplay(newTopic.value)
   newTopic.value = ''
+}
+
+function doAddPcd(): void {
+  addPcdDisplay()
+}
+
+async function onDisplayPcd(id: string, event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    await loadPcdIntoDisplay(id, file)
+  } finally {
+    input.value = ''
+  }
 }
 
 function doRefreshTopics(): void {
@@ -795,17 +829,6 @@ async function doDump(): Promise<void> {
     await dumpRecorder()
   } catch {
     /* 已写入日志 */
-  }
-}
-
-async function onMapFile(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  try {
-    await loadMapFile(file)
-  } finally {
-    input.value = ''
   }
 }
 
