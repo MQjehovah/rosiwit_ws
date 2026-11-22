@@ -120,7 +120,7 @@
                 :value="d.renderer"
                 @change="updateDisplay(d.id, { renderer: ($event.target as HTMLSelectElement).value as any })"
               >
-                <option v-for="r in rendererOptions(d)" :key="r" :value="r">{{ r }}</option>
+                <option v-for="r in rendererOptions(d)" :key="r" :value="r">{{ rendererLabel(r) }}</option>
               </select>
             </label>
             <label v-if="d.renderer === 'points' || d.renderer === 'laser'">
@@ -183,7 +183,7 @@
               <select
                 class="select mini-select"
                 :value="d.rate"
-                @change="updateDisplay(d.id, { rate: Number(($event.target as HTMLSelectElement).value) || 2 })"
+                @change="updateDisplay(d.id, { rate: Number(($event.target as HTMLSelectElement).value) })"
               >
                 <option :value="0">手动</option>
                 <option :value="1">1Hz</option>
@@ -350,13 +350,27 @@ function shortType(type: string): string {
   return type ? type.split('/').pop() || type : '?'
 }
 
+function rendererLabel(r: RendererKind): string {
+  const labels: Record<RendererKind, string> = {
+    points: '点云',
+    grid: '栅格',
+    laser: '激光',
+    path: '路径',
+    polygon: '多边形',
+    image: '图像',
+    status: '状态',
+    json: 'JSON',
+  }
+  return labels[r] ?? r
+}
+
 function rendererOptions(d: DisplayItem): RendererKind[] {
   const base: RendererKind[] = ['json']
-  if (d.type.includes('PointCloud')) return ['points', 'json']
-  if (d.type.includes('OccupancyGrid')) return ['grid', 'json']
-  if (d.type.includes('LaserScan')) return ['laser', 'json']
-  if (d.type.endsWith('/Path')) return ['path', 'json']
-  if (d.type.includes('Polygon')) return ['polygon', 'json']
+  if (d.type.includes('PointCloud')) return ['points', 'image', 'json']
+  if (d.type.includes('OccupancyGrid')) return ['grid', 'image', 'json']
+  if (d.type.includes('LaserScan')) return ['laser', 'image', 'json']
+  if (d.type.endsWith('/Path')) return ['path', 'image', 'json']
+  if (d.type.includes('Polygon')) return ['polygon', 'image', 'json']
   if (d.type.includes('Image')) return ['image', 'json']
   if (d.type.includes('SlamInfo')) return ['status', 'json']
   // 类型未知时允许手动选择，方便接入自定义消息

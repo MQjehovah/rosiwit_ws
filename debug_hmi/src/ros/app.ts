@@ -383,7 +383,8 @@ export function addDisplay(topic: string, type?: string): void {
     return
   }
   const known = state.topics.find((t) => t.name === clean)
-  const typ = type || known?.type || ''
+  let typ = type || known?.type || state.topicTypes[clean] || ''
+  if (!typ && /image/i.test(clean)) typ = 'sensor_msgs/Image'
   const item = displayDefaults(clean, typ, state.displays.length)
   state.displays.push(item)
   state.displayError = ''
