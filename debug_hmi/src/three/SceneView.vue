@@ -766,7 +766,7 @@ function animate(): void {
     // base_footprint 才是接地点；用它的 z 把模型放到地面，而不是 base_link 车体中心
     robotLayer.setPose(tf.t[0], tf.t[1], yaw, tf.t[2])
     if (floorGrid) {
-      const z = tf.t[2] - 0.02
+      const z = tf.t[2] - 0.005
       if (Math.abs(floorGrid.position.z - z) > 0.002) floorGrid.position.z = z
     }
     if (now - lastRobotPublish > 100) {
