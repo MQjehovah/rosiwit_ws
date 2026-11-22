@@ -141,7 +141,7 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
     std::nth_element(zs.begin(), zs.begin() + hi_i, zs.end());
     const float zhi = zs[hi_i];
 
-    auto fitBand = [&](double lo, double hi, Eigen::Vector3d& n, int& cnt) {
+    auto fitBand = [&](double lo, double hi, Eigen::Vector3d& n, int& cnt, double& mean_z) {
         Eigen::Vector3d sum = Eigen::Vector3d::Zero();
         Eigen::Matrix3d sq = Eigen::Matrix3d::Zero();
         cnt = 0;
@@ -159,15 +159,18 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
         if (es.info() != Eigen::Success) return false;
         n = es.eigenvectors().col(0);
         if (n.z() < 0) n = -n;   // 统一朝上
+        mean_z = mean.z();
         return true;
     };
 
     Eigen::Vector3d nf, nc;
     int cf = 0, cc = 0;
-    const bool okf = fitBand(zlo - 0.2, zlo + 0.35, nf, cf);
-    const bool okc = fitBand(zhi - 0.35, zhi + 0.2, nc, cc);
+    double zf = 0.0, zc = 0.0;
+    const bool okf = fitBand(zlo - 0.2, zlo + 0.35, nf, cf, zf);
+    const bool okc = fitBand(zhi - 0.35, zhi + 0.2, nc, cc, zc);
     Eigen::Vector3d up;
-    if (okc && (!okf || cc >= cf)) up = nc;
+    const bool use_floor = okf && (!okc || cf + 100 >= cc);   // 地板更可靠时优先
+    if (okc && !use_floor) up = nc;
     else if (okf) up = nf;
     else return;
 
@@ -179,13 +182,34 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
     if (n_m.z() < cos_tilt) return;
     const double ang = std::acos(std::min(1.0, std::max(-1.0, n_m.z())));
     if (ang * 180.0 / M_PI > m_cfg.max_correction_deg) return;   // 跳变: 不信
-    if (ang < 1e-4) return;
+    if (ang >= 1e-4) {
+        Eigen::Vector3d axis = n_m.cross(Eigen::Vector3d::UnitZ());
+        const double s = axis.norm();
+        if (s < 1e-9) return;
+        axis /= s;
+        pose.rot = Eigen::AngleAxisd(ang, axis).toRotationMatrix() * pose.rot;
+    }
 
-    Eigen::Vector3d axis = n_m.cross(Eigen::Vector3d::UnitZ());
-    const double s = axis.norm();
-    if (s < 1e-9) return;
-    axis /= s;
-    pose.rot = Eigen::AngleAxisd(ang, axis).toRotationMatrix() * pose.rot;
+    // z: 只在"地板可靠"时, 用 地图地面 + 传感器离地高 修正 (限幅防跳)
+    if (!use_floor || !okf || cf < 100) return;
+    double gz = 0.0;
+    bool have_g = false;
+    if (m_store) {
+        Eigen::Vector3d gn;
+        if (m_store->groundAt(pose.trans.x(), pose.trans.y(), gz, gn)) have_g = true;
+    }
+    if (!have_g) {
+        const Cell* c = query(pose.trans.x(), pose.trans.y());
+        if (c) { gz = c->z; have_g = true; }
+    }
+    if (!have_g) return;
+    const double h = std::max(0.2, -zf);      // 传感器离地高
+    const double target = gz + h;
+    const double max_dz = 0.3;
+    double dz = target - pose.trans.z();
+    if (dz > max_dz) dz = max_dz;
+    if (dz < -max_dz) dz = -max_dz;
+    pose.trans.z() += dz;
 }
 
 } // namespace rosiwit_slam

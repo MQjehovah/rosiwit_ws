@@ -82,6 +82,50 @@ TEST(ScanPlaneConstraint, SkipsCorrectionAboveLimit) {
         for (int c = 0; c < 3; ++c) EXPECT_NEAR(pose.rot(r, c), R0(r, c), 1e-6);
 }
 
+TEST(ScanPlaneConstraint, PullsZToMapGround) {
+    PlanarConstraint pc;
+    pc.configure(cfg("scan_plane"));
+
+    // 地图地面 z=0 (1m 格)
+    CloudType::Ptr map(new CloudType());
+    for (double x = -3.0; x <= 3.0; x += 0.1)
+        for (double y = -3.0; y <= 3.0; y += 0.1) {
+            PointType p;
+            p.x = static_cast<float>(x);
+            p.y = static_cast<float>(y);
+            p.z = 0.0f;
+            map->push_back(p);
+        }
+    map->width = static_cast<uint32_t>(map->size());
+    map->height = 1;
+    pc.setMap(map);
+
+    // 扫描: 地板在 -0.8 (传感器离地 0.8), 天花板在 +1.5
+    CloudType::Ptr scan(new CloudType());
+    for (double x = -2.0; x <= 2.0; x += 0.1)
+        for (double y = -2.0; y <= 2.0; y += 0.1) {
+            PointType pf;
+            pf.x = static_cast<float>(x);
+            pf.y = static_cast<float>(y);
+            pf.z = -0.8f;
+            scan->push_back(pf);
+            PointType pc2;
+            pc2.x = static_cast<float>(x);
+            pc2.y = static_cast<float>(y);
+            pc2.z = 1.5f;
+            scan->push_back(pc2);
+        }
+    scan->width = static_cast<uint32_t>(scan->size());
+    scan->height = 1;
+
+    PoseStamped pose;
+    pose.trans = V3D(0.0, 0.0, -1.5);   // 掉到地下
+    pose.rot = M3D::Identity();
+    for (int i = 0; i < 12; ++i) pc.apply(pose, scan);
+
+    EXPECT_NEAR(pose.trans.z(), 0.8, 0.12) << "z should converge to map ground + sensor height";
+}
+
 TEST(ScanPlaneConstraint, NoneModeDoesNothing) {
     PlanarConstraint pc;
     pc.configure(cfg("none"));
