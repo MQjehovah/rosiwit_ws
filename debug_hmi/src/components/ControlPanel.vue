@@ -17,14 +17,14 @@
             <span class="badge ghost">匹配 {{ percent(state.slam.matching_degree) }}</span>
           </div>
 
-          <div class="meter">
-            <div
-              class="meter-fill"
-              :class="locClass"
-              :style="{ width: Math.max(0, Math.min(1, state.slam.matching_degree)) * 100 + '%' }"
-            />
-            <div class="meter-mark" title="credible 0.80" />
+          <div v-if="state.matchHistory.length > 1" class="spark-wrap">
+            <svg class="spark" viewBox="0 0 120 24" preserveAspectRatio="none">
+              <line class="spark-threshold" x1="0" y1="4.8" x2="120" y2="4.8" />
+              <polyline :points="sparkPoints" />
+            </svg>
+            <span class="spark-label">{{ sparkSeconds }}s</span>
           </div>
+          <div v-else class="spark-empty">等待匹配度曲线…</div>
 
           <dl class="kv2">
             <dt>地图</dt>
@@ -36,24 +36,6 @@
             <dt>来源</dt>
             <dd>{{ shortSource }}</dd>
           </dl>
-
-          <div class="pose" :title="`位姿来源：${state.robot.source}`">
-            <div>
-              <span class="k">xyz</span>
-              <span class="v">
-                {{ state.robot.x.toFixed(2) }} {{ state.robot.y.toFixed(2) }}
-                {{ state.robot.z.toFixed(2) }}
-              </span>
-              <span class="u">m</span>
-            </div>
-            <div>
-              <span class="k">rpy</span>
-              <span class="v">
-                {{ deg(state.robot.roll) }} {{ deg(state.robot.pitch) }} {{ deg(state.robot.yaw) }}
-              </span>
-              <span class="u">°</span>
-            </div>
-          </div>
 
           <details class="sub">
             <summary>定位状态插件</summary>
@@ -607,9 +589,19 @@ function percent(value: number): string {
   return `${(Math.max(0, Math.min(1, value || 0)) * 100).toFixed(0)}%`
 }
 
-function deg(rad: number): string {
-  return ((rad * 180) / Math.PI).toFixed(1)
-}
+const sparkPoints = computed(() => {
+  const h = state.matchHistory
+  if (h.length < 2) return ''
+  const n = h.length
+  return h
+    .map((v, i) => {
+      const y = 24 - Math.min(1, Math.max(0, v)) * 24
+      return `${((i / (n - 1)) * 120).toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+})
+
+const sparkSeconds = computed(() => Math.round(state.matchHistory.length * 0.4))
 
 function ageText(age: number): string {
   if (age < 0) return '—'
@@ -1113,6 +1105,15 @@ function onPointScale(value: number): void {
   top: -4px;
   font-size: 9px;
   color: #54687a;
+}
+.spark-empty {
+  margin: 0 0 7px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+  color: #54687a;
+  font-size: 10px;
+  text-align: center;
 }
 
 .kv2 {
