@@ -830,6 +830,86 @@ def raw_dict(topic, typ, msg):
     return {"kind": KIND_RAW, "type": typ, "json": text, "stamp": stamp}
 
 
+# --------------------------------------------------------------------------- 点云观感修正
+# 万集驱动把点云去旋转成"重力对齐"系, 但 frame_id 仍是 vanjee_lidar, TF 树里没有
+# 这个 frame; 前端查不到 TF 时会把点云放在地图原点且不旋转 -> 画面上和地图差一个
+# 大角度(约等于机器人 yaw). 这里统一转到 map 系: 平移用 lidar 的位置, 旋转用
+# base_link 的姿态(重力对齐), 这样任何前端拿到的都是地图系点云.
+try:
+    import numpy as _np
+except Exception:
+    _np = None
+
+
+def _quat_mat(q):
+    x, y, z, w = float(q[0]), float(q[1]), float(q[2]), float(q[3])
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    return [
+        [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+        [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+        [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+    ]
+
+
+def _mm(A, B):
+    return [[sum(A[i][k] * B[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+
+def _mv(A, v):
+    return [sum(A[i][k] * v[k] for k in range(3)) for i in range(3)]
+
+
+def _chain_to_map(leaf):
+    """leaf -> map 的 (R, t); 查不到返回 None."""
+    edges = {}
+    with CACHE.lock:
+        for src in (CACHE.tf_static, CACHE.tf_dynamic):
+            for e in src.values():
+                edges[e["child"]] = e
+    R = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    t = [0.0, 0.0, 0.0]
+    cur = leaf
+    for _ in range(8):
+        if cur in ("map", "world"):
+            return R, t
+        e = edges.get(cur)
+        if not e:
+            return None
+        Re = _quat_mat(e.get("q") or [0.0, 0.0, 0.0, 1.0])
+        te = e.get("t") or [0.0, 0.0, 0.0]
+        R = _mm(Re, R)                              # T = T_edge * T (子 -> 父)
+        t = [a + b for a, b in zip(_mv(Re, t), te)]
+        cur = e.get("parent") or ""
+    return None
+
+
+def cloud_to_map(points, frame):
+    """把"重力对齐但 frame 不在 TF 里"的点云转到 map 系."""
+    if not points or not frame or frame in ("map", "world"):
+        return points, frame
+    if frame not in ("vanjee_lidar", "lidar"):
+        return points, frame
+    rt = _chain_to_map("lidar")
+    rb = _chain_to_map("base_link")
+    if not rt or not rb:
+        return points, frame
+    R, t = rb[0], rt[1]   # 姿态跟随 base_link(水平), 位置用雷达
+    if _np is not None:
+        arr = _np.asarray(points, dtype=_np.float64)
+        out = arr.dot(_np.asarray(R).T) + _np.asarray(t)
+        return [tuple(p) for p in out.tolist()], "map"
+    out = []
+    for p in points:
+        out.append((
+            R[0][0] * p[0] + R[0][1] * p[1] + R[0][2] * p[2] + t[0],
+            R[1][0] * p[0] + R[1][1] * p[1] + R[1][2] * p[2] + t[1],
+            R[2][0] * p[0] + R[2][1] * p[1] + R[2][2] * p[2] + t[2],
+        ))
+    return out, "map"
+
+
 def normalize_topic(topic, typ, msg):
     kind = TYPE_KIND.get(typ)
     if kind == KIND_CLOUD:
@@ -837,10 +917,12 @@ def normalize_topic(topic, typ, msg):
             pts = pc2_points(msg)
         else:
             pts = pc_points(msg)
+        frame = msg.header.frame_id or "map"
+        pts, frame = cloud_to_map(pts, frame)
         return {
             "kind": KIND_CLOUD,
             "points": pts,
-            "frame": msg.header.frame_id or "map",
+            "frame": frame,
             "stamp": msg.header.stamp.to_sec(),
         }
     if kind == KIND_GRID:
