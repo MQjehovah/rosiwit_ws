@@ -223,11 +223,22 @@ export class RobotLayer {
     const center = box.getCenter(new THREE.Vector3())
     size = box.getSize(new THREE.Vector3())
 
-    // 模型原点归到脚底中心；gt.glb 的前保险杠在 -X，转 180° 对齐 ROS +X
-    root.position.set(-center.x, -center.y, -box.min.z)
+    // 先把模型中心移到原点，再做姿态变换
+    root.position.set(-center.x, -center.y, -center.z)
     const wrapper = new THREE.Group()
-    wrapper.rotation.z = Math.PI
+    const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
+    const qz = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI)
+    // 先绕 X 转 90°，再绕 Z 转 180°（gt.glb 的实际姿态）
+    wrapper.quaternion.copy(qz).multiply(qx)
     wrapper.add(root)
+    wrapper.updateMatrixWorld(true)
+
+    // 旋转后再把脚底对齐 z=0、水平居中
+    const wbox = new THREE.Box3().setFromObject(wrapper)
+    const wcenter = wbox.getCenter(new THREE.Vector3())
+    wrapper.position.set(-wcenter.x, -wcenter.y, -wbox.min.z)
+    wrapper.updateMatrixWorld(true)
+
     wrapper.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) obj.frustumCulled = false
     })
@@ -236,7 +247,8 @@ export class RobotLayer {
     this.modelRoot = wrapper
     this.placeholder.visible = false
     this.object.add(wrapper)
-    return { width: size.x, height: size.z, depth: size.y }
+    const wsize = wbox.getSize(new THREE.Vector3())
+    return { width: wsize.x, height: wsize.z, depth: wsize.y }
   }
 
   setPose(x: number, y: number, yaw: number): void {

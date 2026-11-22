@@ -138,10 +138,11 @@ python3 xzmap_to_pcd.py ~/Downloads/map.xzmap -o ~/Downloads/map_0.3m.pcd --voxe
 ## 机器人模型
 
 三维视图默认加载 `public/models/robot.glb`（由 `gt.glb` 优化而来：29MB → 3.5MB，约 30 万三角面 → 12 万）。
-模型按毫米单位自动缩放，脚底对齐 `z=0`，并旋转 180° 让前保险杠朝 ROS `+X`。
+模型按毫米单位自动缩放，脚底对齐 `z=0`，并绕 X 轴转 90°、再绕 Z 轴转 180°，
+让前保险杠朝 ROS `+X`、机身高度的方向与真实机器人一致。
 
-替换模型：把新的 GLB 放到 `public/models/robot.glb` 即可；如果前进方向相反，改
-`src/three/layers.ts` 里 `loadModel()` 的 `wrapper.rotation.z`。
+替换模型：把新的 GLB 放到 `public/models/robot.glb` 即可；如果姿态不对，改
+`src/three/layers.ts` 里 `loadModel()` 的 `qx` / `qz` 旋转。
 
 ## 坐标与渲染约定
 
