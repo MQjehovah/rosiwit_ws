@@ -19,6 +19,13 @@ public:
     void setStore(IMapStore* store) { m_store = store; }
     void setMap(const CloudType::Ptr& base_map);   // 从底图构建地面模型
     void apply(PoseStamped& pose, const CloudType::Ptr& scan = nullptr);  // 约束位姿(原地)
+
+    /// 用"当前扫描的水平面" × "地图地面" 求位姿的 z 偏置 (初值用).
+    /// 只依赖扫描里的地面/天花板带 + 地图地面高度, 不看竖墙(墙对 z 不敏感),
+    /// 所以能在墙主导的小房间里把 z 一次贴到地面。返回 false=测不到(视野里没有水平面)。
+    bool estimateGroundDz(const PoseStamped& pose, const CloudType& scan,
+                          double& dz, double& z_floor_body) const;
+
 private:
     /// scan_plane: 从扫描里提"地板/天花板"主平面, 在 map 系把它的法向转回竖直.
     /// 只修 roll/pitch, 与雷达安装角无关(不在雷达系里做).

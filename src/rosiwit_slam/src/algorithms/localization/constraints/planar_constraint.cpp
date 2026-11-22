@@ -211,7 +211,10 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
 
     const double cos_tilt = std::cos(m_cfg.max_tilt_deg * M_PI / 180.0);
     up_z = up.z();
-    if (up_z < cos_tilt) { report("band_tilt"); return; }   // 本身不是一个可靠的水平面
+    // 只做"它是不是一个水平面"的粗筛(墙面法向≈0), 不用 35° 那么严:
+    // 雷达俯装 39° 时, 车体系里的地面法向本来就偏离 z 轴 ~39°(up_z≈0.78),
+    // 真正"是否竖直"由 map 系的 nm_z 判断。
+    if (up_z < 0.5) { report("band_tilt"); return; }
 
     // 位姿把它转到 map 系后, 还应该保持竖直
     const Eigen::Vector3d n_m = pose.rot * up;
@@ -229,7 +232,7 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
     }
 
     // z: 只要"地板可靠"就修, 与"转动用哪个面"无关 (小房间天花板常比地面点多)
-    if (!okf || cf < 50 || nf.z() < cos_tilt) { report("z_no_floor"); return; }
+    if (!okf || cf < 50 || nf.z() < 0.5) { report("z_no_floor"); return; }
     if (m_store) {
         Eigen::Vector3d gn;
         if (m_store->groundAt(pose.trans.x(), pose.trans.y(), gz, gn)) have_g = true;
@@ -256,6 +259,67 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
     if (dz < -max_dz) dz = -max_dz;
     report("z_apply");
     pose.trans.z() += dz;
+}
+
+bool PlanarConstraint::estimateGroundDz(const PoseStamped& pose, const CloudType& scan,
+                                        double& dz, double& z_floor_body) const {
+    if (scan.size() < 200) return false;
+
+    std::vector<float> zs;
+    zs.reserve(scan.size());
+    for (const auto& p : scan.points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        zs.push_back(p.z);
+    }
+    if (zs.size() < 200) return false;
+    const size_t lo_i = zs.size() / 20;   // 5%
+    std::nth_element(zs.begin(), zs.begin() + lo_i, zs.end());
+    const float zlo = zs[lo_i];
+
+    // 地面带: 最低 5% 附近, PCA 取法向; 必须本身是水平面(排除墙/货架)
+    Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d sq = Eigen::Matrix3d::Zero();
+    int cnt = 0;
+    for (const auto& p : scan.points) {
+        if (!std::isfinite(p.z) || p.z < zlo - 0.2 || p.z > zlo + 0.35) continue;
+        const Eigen::Vector3d v(p.x, p.y, p.z);
+        sum += v;
+        sq += v * v.transpose();
+        ++cnt;
+    }
+    if (cnt < 50) return false;
+    const Eigen::Vector3d mean = sum / static_cast<double>(cnt);
+    Eigen::Matrix3d cov = sq / static_cast<double>(cnt) - mean * mean.transpose();
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
+    if (es.info() != Eigen::Success) return false;
+    Eigen::Vector3d n = es.eigenvectors().col(0);
+    if (n.z() < 0) n = -n;
+    if (n.z() < 0.5) return false;
+    z_floor_body = mean.z() - (n.x() * mean.x() + n.y() * mean.y()) / n.z();
+
+    // 地面平面在 map 系、机器人 (x,y) 处的高度
+    const Eigen::Vector3d c_m = pose.rot * mean + pose.trans;
+    const Eigen::Vector3d n_m = pose.rot * n;
+    if (n_m.z() < 0.5) return false;
+    const double F = c_m.z() - (n_m.x() * (pose.trans.x() - c_m.x()) +
+                                n_m.y() * (pose.trans.y() - c_m.y())) / n_m.z();
+
+    // 地图地面 (优先统一底座, 退回本类的地面模型)
+    double gz = 0.0;
+    bool have = false;
+    if (m_store) {
+        Eigen::Vector3d gn;
+        if (m_store->groundAt(pose.trans.x(), pose.trans.y(), gz, gn)) have = true;
+    }
+    if (!have) {
+        const Cell* c = query(pose.trans.x(), pose.trans.y());
+        if (c) { gz = c->z; have = true; }
+    }
+    if (!have) return false;
+
+    dz = gz - F;
+    if (!std::isfinite(dz) || std::fabs(dz) > 5.0) return false;
+    return true;
 }
 
 } // namespace rosiwit_slam

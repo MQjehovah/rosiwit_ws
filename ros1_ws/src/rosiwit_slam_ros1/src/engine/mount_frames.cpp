@@ -9,6 +9,8 @@
 // ============================================================================
 #include "slam_algorithm.h"
 
+#include <vector>
+
 #include <ros/package.h>
 
 #include <yaml-cpp/yaml.h>
@@ -186,14 +188,28 @@ bool SlamAlgorithm::imuFromChild(const std::string& child_frame, RigidTransform&
 
 bool SlamAlgorithm::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
                                        std::string& source) {
-    // 帧名可配; 默认都是 lidar —— 本机点云与 IMU 由同一个万集 SDK 节点发布, frame_id 相同
-    std::string lidar_frame = "lidar", imu_frame = "lidar";
+    // 帧名可配; 默认 lidar -> imu_link。
+    // 2026-11-22 实机: 万集的点云 frame_id 是 lidar, 而 URDF 里
+    //   base_link -> lidar: xyz=(0.4145, 0.0193, 0.9144) rpy=(39.37deg, 1.13deg, 89.9deg)
+    // 也就是说雷达(含内置 IMU)是**俯装 39°、抬升 0.914m、yaw 90°** 的。
+    // 以前默认 lidar_frame == imu_frame == "lidar" -> 恒等阵, 等于把雷达系当车体系:
+    //   - 位姿比地面低 ~1.2m, 点云整体下沉
+    //   - scan_plane 看到 "位姿歪 40°" (nm_z=0.762 < cos35°), 每帧 why=map_tilt, z 永不修
+    // 这里改成按 TF 求 T_(imu <- lidar), 允许帧名有别名。
+    std::string lidar_frame = "lidar", imu_frame = "imu_link";
     pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
     pnh_.param<std::string>("imu_frame", imu_frame, imu_frame);
+    std::string fix_mode = "tf";
+    pnh_.param<std::string>("extrinsic_frame_fix", fix_mode, fix_mode);
+    if (fix_mode == "identity") {
+        R = Eigen::Matrix3d::Identity();
+        t = Eigen::Vector3d::Zero();
+        source = "identity (extrinsic_frame_fix=identity)";
+        return true;
+    }
 
     if (lidar_frame == imu_frame) {
         // **同一个 frame 就是同一个坐标系** -> 恒等变换。
-        // 雷达内置 IMU 正是这种情形 (frame_id 都是 lidar), 此时任何旋转都是错的。
         R = Eigen::Matrix3d::Identity();
         t = Eigen::Vector3d::Zero();
         source = std::string("identity (lidar_frame == imu_frame == '") + lidar_frame + "')";
@@ -203,21 +219,29 @@ bool SlamAlgorithm::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
     // 独立 IMU: 从 TF 取 T_(imu <- lidar)。启动时 /tf_static 可能还没到, 等最多 3 秒。
     if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
     if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    // 帧名别名: 实车上点云/URDF 的命名不完全一致, 依次尝试
+    std::vector<std::string> lidar_cands{lidar_frame, "lidar", "vanjee_lidar", "laser"};
+    std::vector<std::string> imu_cands{imu_frame, "imu_link", "base_link"};
     for (int i = 0; i < 30; ++i) {
-        try {
-            const geometry_msgs::TransformStamped tf =
-                tf_buffer_->lookupTransform(imu_frame, lidar_frame, ros::Time(0), ros::Duration(0.1));
-            Eigen::Quaterniond q(tf.transform.rotation.w, tf.transform.rotation.x,
-                                 tf.transform.rotation.y, tf.transform.rotation.z);
-            q.normalize();
-            R = q.toRotationMatrix();
-            t = Eigen::Vector3d(tf.transform.translation.x, tf.transform.translation.y,
-                                tf.transform.translation.z);
-            source = "TF lookupTransform('" + imu_frame + "' <- '" + lidar_frame + "')";
-            return true;
-        } catch (const tf2::TransformException&) {
-            ros::Duration(0.05).sleep();
+        for (const auto& lf : lidar_cands) {
+            for (const auto& imf : imu_cands) {
+                if (lf == imf) continue;
+                try {
+                    const geometry_msgs::TransformStamped tf =
+                        tf_buffer_->lookupTransform(imf, lf, ros::Time(0), ros::Duration(0.05));
+                    Eigen::Quaterniond q(tf.transform.rotation.w, tf.transform.rotation.x,
+                                         tf.transform.rotation.y, tf.transform.rotation.z);
+                    q.normalize();
+                    R = q.toRotationMatrix();
+                    t = Eigen::Vector3d(tf.transform.translation.x, tf.transform.translation.y,
+                                        tf.transform.translation.z);
+                    source = "TF lookupTransform('" + imf + "' <- '" + lf + "')";
+                    return true;
+                } catch (const tf2::TransformException&) {
+                }
+            }
         }
+        ros::Duration(0.1).sleep();
     }
     ROS_WARN_STREAM("[slam_algo] TF '" << imu_frame << "' <- '" << lidar_frame
                     << "' unavailable within 3s; keeping r_il/t_il from the core yaml");

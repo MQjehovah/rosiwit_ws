@@ -212,6 +212,11 @@ private:
     /// 切图第一阶段：停旧核心/清旧输出/发预览/重置本层状态，服务可以立即返回。
     MapSwitchContext beginMapSwitch(const std::string& base,
                                     const xzrobot_ros_dependency::SwitchMap::Request& req);
+    /// 通知 robot_move_base 载入全局地图 (/switch_map_pro)。
+    /// nav 的全局地图**不是**订阅 /map, 而是这个服务; map_dir 必须是 `<base>.yaml`
+    /// (传目录或 pgm 都会 "读取文件路径异常", 实机验证)。
+    void notifyNavSwitchMap(const std::string& base,
+                            const xzrobot_ros_dependency::SwitchMap::Request& in);
     /// 切图第二阶段：在**控制线程**上同步装载 (与存图/切模式串行)
     bool runMapLoadInline(const MapSwitchContext& ctx,
                           const geometry_msgs::PoseWithCovarianceStamped& init_pose);

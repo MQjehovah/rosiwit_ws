@@ -72,6 +72,54 @@ bool Ros1SlamInterface::callSwitchMapPro(xzrobot_ros_dependency::SwitchMap::Requ
     return false;
 }
 
+void Ros1SlamInterface::notifyNavSwitchMap(
+    const std::string& base, const xzrobot_ros_dependency::SwitchMap::Request& in) {
+    const std::string yaml_path = base + ".yaml";
+    struct stat st {};
+    if (::stat(yaml_path.c_str(), &st) != 0) {
+        ROS_WARN_STREAM("[ros1_slam] nav switch skipped, no map yaml: " << yaml_path);
+        return;
+    }
+
+    xzrobot_ros_dependency::SwitchMap::Request req;
+    req.map_name = in.map_name;
+    req.map_dir = yaml_path;            // nav 只认 yaml (自己解析 image/resolution/origin)
+    req.initial_pose = in.initial_pose;
+    req.vir_obs = in.vir_obs;
+    if (req.initial_pose.header.frame_id.empty()) req.initial_pose.header.frame_id = kMapFrame;
+
+    // 默认沿用 App 请求; yaml 里有的字段以 yaml 为准 (盘上元数据才是 nav 真正要用的)。
+    req.map_resolution = in.map_resolution;
+    req.map_origin = in.map_origin;
+    req.map_negate = in.map_negate;
+    req.map_occupied_thresh = in.map_occupied_thresh;
+    req.map_free_thresh = in.map_free_thresh;
+    try {
+        const YAML::Node y = YAML::LoadFile(yaml_path);
+        if (y["resolution"]) req.map_resolution = y["resolution"].as<double>();
+        if (y["negate"]) req.map_negate = (y["negate"].as<int>() != 0);
+        if (y["occupied_thresh"]) req.map_occupied_thresh = y["occupied_thresh"].as<double>();
+        if (y["free_thresh"]) req.map_free_thresh = y["free_thresh"].as<double>();
+        if (y["origin"] && y["origin"].IsSequence() && y["origin"].size() >= 2) {
+            req.map_origin.resize(3, 0.0);
+            for (size_t i = 0; i < 3 && i < y["origin"].size(); ++i) {
+                req.map_origin[i] = y["origin"][i].as<double>();
+            }
+        }
+    } catch (const std::exception& e) {
+        ROS_WARN_STREAM("[ros1_slam] nav switch: map yaml parse failed (" << yaml_path
+                        << "): " << e.what() << ", fallback to request fields");
+    }
+
+    // nav 载一张 43M 栅格的大图约 1.5~2s, 同步等待; 与本次切图串行, 不影响 io 线程。
+    const bool ok = callSwitchMapPro(req);
+    std::cout << "[ros1_slam] /switch_map_pro" << (ok ? " ok: " : " FAILED: ")
+              << yaml_path << " res=" << req.map_resolution
+              << " origin=(" << (req.map_origin.size() > 0 ? req.map_origin[0] : 0.0) << ","
+              << (req.map_origin.size() > 1 ? req.map_origin[1] : 0.0) << ")"
+              << std::endl;
+}
+
 // ---------------------------------------------------------------- [T8] 8 个 server
 void Ros1SlamInterface::applyInitPose(
     const geometry_msgs::PoseWithCovarianceStamped& in, bool zero_if_insane,
@@ -271,6 +319,8 @@ bool Ros1SlamInterface::handleSwitchMap(
                     return false;   // 需要真的重载
                 }
                 applyInitPose(cmd.initial_pose, true);
+                // 同一张图也补一次 nav 载图: nav 可能比 SLAM 晚重启, 不能只靠首次切图。
+                notifyNavSwitchMap(xzMapBase(cmd.map_dir), cmd);
                 return true;
             };
 
@@ -283,6 +333,9 @@ bool Ros1SlamInterface::handleSwitchMap(
                     ? static_cast<double>(st.st_mtime) : 0.0);
             }
             MapSwitchContext ctx = beginMapSwitch(xzMapBase(cmd.map_dir), cmd);
+            // 先把 nav 的全局地图切过去 (nav 载图 ~2s), 再做 SLAM 侧 xzmap 重解析,
+            // 这样 App 12s 超时返回"已受理"后马上发目标时 nav 已经有图。
+            notifyNavSwitchMap(ctx.base, cmd);
             const bool loaded = runMapLoadInline(ctx, cmd.initial_pose);
             // 与旧行为一致: PGM 发布成功即算"换图受理", 完整装载失败另看日志
             ok->store(loaded || ctx.pgm_ok);

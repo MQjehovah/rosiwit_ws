@@ -181,6 +181,10 @@ private:
     /// 避免运动先验在无修正情况下一直积分, 越漂越远(实机曾漂到离图 96m, 从此再也匹配不上)。
     PoseStamped m_last_accepted;
     bool m_have_last_accepted = false;
+    // 初值 z 是否已经按"地图地面"贴过地。重定位/手动置初值/丢失后复位。
+    // 竖墙对 z 无约束, 初值 z 错了就再也修不回来 (2026-11-22 实机: 初值 z=0,
+    // 地图地面在 0, 但雷达装高 0.9m -> 一上来就"在车下", 之后只能靠地面约束)。
+    bool m_z_seeded = false;
     bool m_deskew_enabled = true;
     double m_deskew_max_gap = 0.30;       // 上一接受帧到当前帧起始的最大间隔(s)
     double m_deskew_min_angle_deg = 0.2;  // 小于此旋转量不做补偿
