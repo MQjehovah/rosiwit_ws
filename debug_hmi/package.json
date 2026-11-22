@@ -4,11 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "description": "rosiwit 调试用 HMI（Vue 3 + Three.js + rosbridge + debug_bridge）",
+  "author": "rosiwit",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "electron:dev": "node scripts/electron-dev.mjs",
+    "electron:start": "npm run build && electron .",
+    "electron:pack:win": "npm run build && electron-packager . debug_hmi --platform=win32 --arch=x64 --out=release --overwrite --asar --prune=true --executable-name=debug_hmi --ignore=\"^/src\" --ignore=\"^/tests\" --ignore=\"^/scripts\" --ignore=\"^/public\" --ignore=\"^/node_modules\" --ignore=\"^/release\" --ignore=\"^/\\.git\""
   },
   "dependencies": {
     "protobufjs": "^7.4.0",
@@ -16,11 +21,14 @@
     "vue": "^3.4.38"
   },
   "devDependencies": {
+    "@electron/packager": "^18.3.6",
     "@types/three": "^0.160.0",
     "@vitejs/plugin-vue": "^5.1.3",
+    "electron": "^31.7.7",
     "typescript": "~5.5.4",
     "vite": "^5.4.3",
     "vue-tsc": "^2.0.29",
     "ws": "^8.18.0"
   }
 }
+

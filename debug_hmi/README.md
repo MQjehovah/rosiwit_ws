@@ -143,6 +143,40 @@ python3 xzmap_to_pcd.py ~/Downloads/map.xzmap -o ~/Downloads/map_0.3m.pcd --voxe
 替换模型：把新的 GLB 放到 `public/models/robot.glb` 即可；如果姿态不对，改
 `src/three/layers.ts` 里 `loadModel()` 的 `qx` 旋转。
 
+## Electron 桌面端
+
+```
+electron/
+├── main.cjs       # 主进程；开发加载 Vite，生产用本地 HTTP 服务加载 dist
+└── preload.cjs    # 只暴露 hmiDesktop 版本信息
+scripts/electron-dev.mjs
+```
+
+命令：
+
+```bash
+./dev.sh install          # 或 npm install
+npm run electron:dev      # 起 127.0.0.1:5178 的 Vite + Electron
+npm run electron:pack:win # 构建 Windows x64 免安装目录
+```
+
+产物：
+
+```
+release/debug_hmi-win32-x64/debug_hmi.exe
+```
+
+生产模式不直接用 `file://`，而是由主进程在本机随机端口起一个只监听 `127.0.0.1` 的静态服务，
+这样 IndexedDB（PCD / 栅格缓存）、WebSocket 和 `public/models/robot.glb` 都按正常 HTTP 页面工作。
+窗口大小会记录到 Electron 的 `userData`。
+
+如果从 WSL 打包 Windows 时 Electron 下载很慢，可以先用 npm 镜像：
+
+```bash
+export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+npm run electron:pack:win
+```
+
 ## 坐标与渲染约定
 
 - Three.js 场景直接用 ROS 约定：**Z 轴向上**，`map` 系为世界原点。
