@@ -1161,6 +1161,13 @@ class RosSource(object):
         msg.linear.x = float(linear)
         msg.angular.z = float(angular)
         self.twist_pub.publish(msg)
+        try:
+            log(
+                "twist %.2f %.2f conns=%d"
+                % (linear, angular, self.twist_pub.get_num_connections())
+            )
+        except Exception:
+            pass
         CACHE.touch("/cmd_vel", 32)
         return True
 
