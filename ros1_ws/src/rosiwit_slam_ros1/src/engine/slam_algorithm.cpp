@@ -211,8 +211,11 @@ void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped
         const RigidTransform base = (init_frame == "lidar") ? baseLidar() : baseImu();
         const double yaw_b = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
         const double z_b = p.trans.z();
+        const M3D rot0 = p.rot;
         p = composeRight(p, base);
-        if (force_z_zero) p.trans.z() = 0.0;
+        // 只取**平移**: App 给的是车体位姿, 姿态(航向)不变 —— 安装 yaw(89.9deg) 已经
+        // 包含在扫描自身坐标系里, 再叠一次会让机器人整体转 90deg。
+        p.rot = rot0;
         const double yaw_a = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
         char b[256];
         std::snprintf(b, sizeof(b),
