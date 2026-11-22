@@ -378,6 +378,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_planar_cfg.cell          = getv<double>(plc, "cell", m_planar_cfg.cell);
         m_planar_cfg.ground_band   = getv<double>(plc, "ground_band", m_planar_cfg.ground_band);
         m_planar_cfg.max_tilt_deg  = getv<double>(plc, "max_tilt_deg", m_planar_cfg.max_tilt_deg);
+        m_planar_cfg.max_correction_deg = getv<double>(plc, "max_correction_deg", m_planar_cfg.max_correction_deg);
     }
     auto hpc = loc["hypothesis"];
     if (hpc) {
@@ -1639,7 +1640,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         if (m_smoother.getPose(sp)) out_pose = sp;
     }
     // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
-    m_planar.apply(out_pose);
+    m_planar.apply(out_pose, scan);
     if (accepted) {
         {
             std::lock_guard<std::mutex> prior_lk(m_prior_mu);

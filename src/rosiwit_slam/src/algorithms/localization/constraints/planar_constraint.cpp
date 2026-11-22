@@ -1,5 +1,6 @@
 // src/algorithms/localization/constraints/planar_constraint.cpp
 #include "algorithms/localization/constraints/planar_constraint.h"
+#include <algorithm>
 #include <cmath>
 #include <unordered_map>
 #include <vector>
@@ -76,13 +77,18 @@ const PlanarConstraint::Cell* PlanarConstraint::query(double x, double y) const 
     return best;
 }
 
-void PlanarConstraint::apply(PoseStamped& pose) {
+void PlanarConstraint::apply(PoseStamped& pose, const CloudType::Ptr& scan) {
     if (m_cfg.mode == "none") return;
 
     if (m_cfg.mode == "lock_zrp") {
         const double yaw = std::atan2(pose.rot(1, 0), pose.rot(0, 0));
         pose.rot = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix();
         pose.trans.z() = m_cfg.z;
+        return;
+    }
+
+    if (m_cfg.mode == "scan_plane") {
+        applyScanPlane(pose, scan);
         return;
     }
 
@@ -115,6 +121,71 @@ void PlanarConstraint::apply(PoseStamped& pose) {
     Eigen::Quaterniond qa;
     qa.setFromTwoVectors(up, gn);
     pose.rot = qa.toRotationMatrix() * pose.rot;
+}
+
+void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& scan) {
+    if (!scan || scan->size() < 200) return;
+
+    // 按 z 分位取地板/天花板带 (小房间里天花板通常比地板点更多)
+    std::vector<float> zs;
+    zs.reserve(scan->size());
+    for (const auto& p : scan->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        zs.push_back(p.z);
+    }
+    if (zs.size() < 200) return;
+    const size_t lo_i = zs.size() / 20;             // 5%
+    const size_t hi_i = zs.size() * 19 / 20;        // 95%
+    std::nth_element(zs.begin(), zs.begin() + lo_i, zs.end());
+    const float zlo = zs[lo_i];
+    std::nth_element(zs.begin(), zs.begin() + hi_i, zs.end());
+    const float zhi = zs[hi_i];
+
+    auto fitBand = [&](double lo, double hi, Eigen::Vector3d& n, int& cnt) {
+        Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+        Eigen::Matrix3d sq = Eigen::Matrix3d::Zero();
+        cnt = 0;
+        for (const auto& p : scan->points) {
+            if (!std::isfinite(p.z) || p.z < lo || p.z > hi) continue;
+            const Eigen::Vector3d v(p.x, p.y, p.z);
+            sum += v;
+            sq += v * v.transpose();
+            ++cnt;
+        }
+        if (cnt < 50) return false;
+        const Eigen::Vector3d mean = sum / static_cast<double>(cnt);
+        Eigen::Matrix3d cov = sq / static_cast<double>(cnt) - mean * mean.transpose();
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
+        if (es.info() != Eigen::Success) return false;
+        n = es.eigenvectors().col(0);
+        if (n.z() < 0) n = -n;   // 统一朝上
+        return true;
+    };
+
+    Eigen::Vector3d nf, nc;
+    int cf = 0, cc = 0;
+    const bool okf = fitBand(zlo - 0.2, zlo + 0.35, nf, cf);
+    const bool okc = fitBand(zhi - 0.35, zhi + 0.2, nc, cc);
+    Eigen::Vector3d up;
+    if (okc && (!okf || cc >= cf)) up = nc;
+    else if (okf) up = nf;
+    else return;
+
+    const double cos_tilt = std::cos(m_cfg.max_tilt_deg * M_PI / 180.0);
+    if (up.z() < cos_tilt) return;   // 本身不是一个可靠的水平面
+
+    // 位姿把它转到 map 系后, 还应该保持竖直
+    const Eigen::Vector3d n_m = pose.rot * up;
+    if (n_m.z() < cos_tilt) return;
+    const double ang = std::acos(std::min(1.0, std::max(-1.0, n_m.z())));
+    if (ang * 180.0 / M_PI > m_cfg.max_correction_deg) return;   // 跳变: 不信
+    if (ang < 1e-4) return;
+
+    Eigen::Vector3d axis = n_m.cross(Eigen::Vector3d::UnitZ());
+    const double s = axis.norm();
+    if (s < 1e-9) return;
+    axis /= s;
+    pose.rot = Eigen::AngleAxisd(ang, axis).toRotationMatrix() * pose.rot;
 }
 
 } // namespace rosiwit_slam

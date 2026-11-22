@@ -18,7 +18,11 @@ public:
     void configure(const PlanarConstraintConfig& cfg) { m_cfg = cfg; }
     void setStore(IMapStore* store) { m_store = store; }
     void setMap(const CloudType::Ptr& base_map);   // 从底图构建地面模型
-    void apply(PoseStamped& pose);                 // 约束位姿(原地); 首帧自动标定安装高
+    void apply(PoseStamped& pose, const CloudType::Ptr& scan = nullptr);  // 约束位姿(原地)
+private:
+    /// scan_plane: 从扫描里提"地板/天花板"主平面, 在 map 系把它的法向转回竖直.
+    /// 只修 roll/pitch, 与雷达安装角无关(不在雷达系里做).
+    void applyScanPlane(PoseStamped& pose, const CloudType::Ptr& scan);
 
 private:
     struct Cell {

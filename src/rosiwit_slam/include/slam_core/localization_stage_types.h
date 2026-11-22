@@ -327,6 +327,7 @@ struct PlanarConstraintConfig {
     double cell = 1.0;           // 地面模型网格单元(m)
     double ground_band = 0.3;    // 地面点带厚度(m, 取每格最低点附近为地面)
     double max_tilt_deg = 35.0;  // 地面法向与竖直夹角上限, 超过则本帧不约束(异常/跳变)
+    double max_correction_deg = 15.0;  // scan_plane: 单帧允许修正的最大倾角(超过视为跳变, 跳过)
 };
 
 // ==================== 绝对约束融合 (L19) ====================

@@ -880,6 +880,17 @@ def _chain_to_map(leaf):
     return None
 
 
+_CM_LAST = {}
+
+
+def _cm_log(tag, msg):
+    t = now()
+    if t - _CM_LAST.get(tag, 0.0) < 2.0:
+        return
+    _CM_LAST[tag] = t
+    log(msg)
+
+
 def cloud_to_map(points, frame):
     """把"重力对齐但 frame 不在 TF 里"的点云转到 map 系."""
     if not points or not frame or frame in ("map", "world"):
@@ -889,8 +900,12 @@ def cloud_to_map(points, frame):
     rt = _chain_to_map("lidar")
     rb = _chain_to_map("base_link")
     if not rt or not rb:
+        _cm_log(frame, "cloud_to_map %s: TF not ready (lidar=%s base=%s)" % (
+            frame, rt is not None, rb is not None))
         return points, frame
     R, t = rb[0], rt[1]   # 姿态跟随 base_link(水平), 位置用雷达
+    _cm_log(frame, "cloud_to_map %s -> map pts=%d t=(%.2f,%.2f,%.2f)" % (
+        frame, len(points), t[0], t[1], t[2]))
     if _np is not None:
         arr = _np.asarray(points, dtype=_np.float64)
         out = arr.dot(_np.asarray(R).T) + _np.asarray(t)
