@@ -40,6 +40,7 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     CloudType::Ptr src = downsampleCloud(scan, m_cfg.voxel_resolution);
     if (!src || src->empty()) return false;
     out.visible = static_cast<int>(src->size());   // 动态滤除前的可见点数
+    CloudType::Ptr src_all = src;                  // 诚实覆盖率用(不剔除)
     if (probe) ms_ds = ms_since(t0);
     const Eigen::Matrix4d guess_T = poseToMatrix(guess);
     if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
@@ -72,6 +73,11 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     const auto t2 = std::chrono::steady_clock::now();
     const CoverageStats cs = evaluateCoverage(m_kdtree, *src, T, m_cfg.inlier_dist);
     out.fitness = cs.coverage;
+    // 诚实覆盖率: 同一阈值, 但分母是未做动态剔除的全部降采样点
+    if (src_all && src_all != src)
+        out.fitness_all = evaluateCoverage(m_kdtree, *src_all, T, m_cfg.inlier_dist).coverage;
+    else
+        out.fitness_all = cs.coverage;
     out.rmse = cs.mean_dist;
     out.inliers = cs.inliers;
     out.correspondences = cs.total;

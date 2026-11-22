@@ -25,10 +25,12 @@
 #     ★ 想"只接受高置信"改这里, 不要改 min_coverage —— 对应厂家 th_fitness_relocalization。
 #   观察 min_coverage 是否卡得太死: grep 'LocProbe' <log> | grep -i reject
 #  [匹配捕获-滤波螺旋]
-#   matcher.dynamic_dist(0.4) ↔ matcher.max_correspondence_dist(2.5) ↔ local_map.cache_move(0.5):
+#   matcher.dynamic_dist(0.4) ↔ matcher.max_correspondence_dist(1.2) ↔ local_map.cache_move(0.5):
 #   预测滞后一旦超过 dynamic_dist, 动态滤波开始删"离目标太远"的点 —— 删掉的恰是
 #   证明真实位置的证据(2026-10-17 推行螺旋: src 393→130)。推行场景靠 motion_prior
 #   融合 odom 让预测跟上(见 odom_mode: fuse)。
+#   2026-11-22 补充: 位姿自己偏了的结构(天花板/地面偏 1.2m)也会被这样删掉, 于是
+#   fitness 只统计留下来的墙(152 点 0.92), 全点其实是 0.47 —— 评分别用删后的点。
 #   matcher.min_match_points(50): 调小有 PCL GICP 段错误风险(<20 点必崩, 有单测)。
 #  [odom 开关]
 #   global.input.use_odom            = 接口层是否订阅 /odom;

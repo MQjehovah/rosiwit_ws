@@ -79,6 +79,17 @@ const PlanarConstraint::Cell* PlanarConstraint::query(double x, double y) const 
 }
 
 void PlanarConstraint::apply(PoseStamped& pose, const CloudType::Ptr& scan) {
+    {
+        // 启动后打 3 条: 确认到底调没调进来、mode 是什么 (现场排查用)
+        static int once = 0;
+        if (once < 3) {
+            ++once;
+            std::cout << "[planar] enter mode=" << m_cfg.mode
+                      << " scan=" << (scan ? scan->size() : 0)
+                      << " max_tilt=" << m_cfg.max_tilt_deg
+                      << " max_correction=" << m_cfg.max_correction_deg << std::endl;
+        }
+    }
     if (m_cfg.mode == "none") return;
 
     if (m_cfg.mode == "lock_zrp") {
@@ -125,7 +136,29 @@ void PlanarConstraint::apply(PoseStamped& pose, const CloudType::Ptr& scan) {
 }
 
 void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& scan) {
-    if (!scan || scan->size() < 200) return;
+    // 诊断: 每 10 次一条, 所有返回路径都打 why=..., 现场不用再猜卡在哪一步
+    float zlo = 0.0f, zhi = 0.0f;
+    int cf = 0, cc = 0, floor_sel = 0;
+    double up_z = 0.0, nm_z = 0.0, ang_deg = 0.0;
+    double gz = 0.0, F = 0.0, dz = 0.0;
+    bool have_g = false;
+    auto report = [&](const char* why) {
+        static int n = 0;
+        if (++n % 10 != 0) return;
+        std::cout.setf(std::ios::fixed);
+        std::cout.precision(3);
+        std::cout << "[planar] why=" << why
+                  << " n=" << (scan ? scan->size() : 0)
+                  << " zlo=" << zlo << " zhi=" << zhi
+                  << " cf=" << cf << " cc=" << cc << " floor=" << floor_sel
+                  << " up_z=" << up_z << " nm_z=" << nm_z << " ang=" << ang_deg
+                  << " gz=" << gz << " have_g=" << (have_g ? 1 : 0)
+                  << " F=" << F << " cur=" << pose.trans.z() << " dz=" << dz
+                  << std::endl;
+        std::cout.unsetf(std::ios::fixed);
+    };
+
+    if (!scan || scan->size() < 200) { report("no_scan"); return; }
 
     // 按 z 分位取地板/天花板带 (小房间里天花板通常比地板点更多)
     std::vector<float> zs;
@@ -134,13 +167,13 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         zs.push_back(p.z);
     }
-    if (zs.size() < 200) return;
+    if (zs.size() < 200) { report("few_z"); return; }
     const size_t lo_i = zs.size() / 20;             // 5%
     const size_t hi_i = zs.size() * 19 / 20;        // 95%
     std::nth_element(zs.begin(), zs.begin() + lo_i, zs.end());
-    const float zlo = zs[lo_i];
+    zlo = zs[lo_i];
     std::nth_element(zs.begin(), zs.begin() + hi_i, zs.end());
-    const float zhi = zs[hi_i];
+    zhi = zs[hi_i];
 
     auto fitBand = [&](double lo, double hi, Eigen::Vector3d& n, int& cnt,
                        Eigen::Vector3d& centroid) {
@@ -167,52 +200,36 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
 
     Eigen::Vector3d nf, nc;
     Eigen::Vector3d meanf = Eigen::Vector3d::Zero(), meanc = Eigen::Vector3d::Zero();
-    int cf = 0, cc = 0;
     const bool okf = fitBand(zlo - 0.2, zlo + 0.35, nf, cf, meanf);
     const bool okc = fitBand(zhi - 0.35, zhi + 0.2, nc, cc, meanc);
     Eigen::Vector3d up;
     const bool use_floor = okf && (!okc || cf + 100 >= cc);   // 地板更可靠时优先
     if (okc && !use_floor) up = nc;
     else if (okf) up = nf;
-    else return;
+    else { report("no_band"); return; }
+    floor_sel = use_floor ? 1 : 0;
 
     const double cos_tilt = std::cos(m_cfg.max_tilt_deg * M_PI / 180.0);
-    if (up.z() < cos_tilt) return;   // 本身不是一个可靠的水平面
+    up_z = up.z();
+    if (up_z < cos_tilt) { report("band_tilt"); return; }   // 本身不是一个可靠的水平面
 
     // 位姿把它转到 map 系后, 还应该保持竖直
     const Eigen::Vector3d n_m = pose.rot * up;
-    if (n_m.z() < cos_tilt) return;
-    const double ang = std::acos(std::min(1.0, std::max(-1.0, n_m.z())));
-    if (ang * 180.0 / M_PI > m_cfg.max_correction_deg) return;   // 跳变: 不信
+    nm_z = n_m.z();
+    if (nm_z < cos_tilt) { report("map_tilt"); return; }
+    const double ang = std::acos(std::min(1.0, std::max(-1.0, nm_z)));
+    ang_deg = ang * 180.0 / M_PI;
+    if (ang_deg > m_cfg.max_correction_deg) { report("jump"); return; }   // 跳变: 不信
     if (ang >= 1e-4) {
         Eigen::Vector3d axis = n_m.cross(Eigen::Vector3d::UnitZ());
         const double s = axis.norm();
-        if (s < 1e-9) return;
+        if (s < 1e-9) { report("axis0"); return; }
         axis /= s;
         pose.rot = Eigen::AngleAxisd(ang, axis).toRotationMatrix() * pose.rot;
     }
 
     // z: 只要"地板可靠"就修, 与"转动用哪个面"无关 (小房间天花板常比地面点多)
-    auto logZ = [&](const char* what, double gz, double F, double dz) {
-        static int n = 0;
-        if (++n % 10 != 0) return;
-        std::cout.setf(std::ios::fixed);
-        std::cout.precision(3);
-        std::cout << "[planar] " << what
-                  << " zlo=" << zlo << " zhi=" << zhi
-                  << " cf=" << cf << " cc=" << cc
-                  << " tilt=" << (up.z() >= cos_tilt ? "ok" : "bad") << " floor=" << (use_floor ? 1 : 0)
-                  << " gz=" << gz << " F=" << F << " cur=" << pose.trans.z()
-                  << " dz=" << dz << std::endl;
-        std::cout.unsetf(std::ios::fixed);
-    };
-
-    if (!okf || cf < 50 || nf.z() < cos_tilt) {
-        logZ("z-skip", 0.0, 0.0, 0.0);
-        return;
-    }
-    double gz = 0.0;
-    bool have_g = false;
+    if (!okf || cf < 50 || nf.z() < cos_tilt) { report("z_no_floor"); return; }
     if (m_store) {
         Eigen::Vector3d gn;
         if (m_store->groundAt(pose.trans.x(), pose.trans.y(), gz, gn)) have_g = true;
@@ -221,30 +238,23 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
         const Cell* c = query(pose.trans.x(), pose.trans.y());
         if (c) { gz = c->z; have_g = true; }
     }
-    if (!have_g) {
-        logZ("z-noground", 0.0, 0.0, 0.0);
-        return;
-    }
+    if (!have_g) { report("z_no_ground"); return; }
 
     // 把地板平面转到 map 系, 求它在机器人 (x,y) 处的高度 F。
     // 用 F 与地图地面 gz 对齐, 不需要"传感器离地高"这种假设量(实机该量会随
     // 安装/外参变化, 且符号极易搞反): 点云地板落到地图地面上, z 就是对的。
     const Eigen::Vector3d c_m = pose.rot * meanf + pose.trans;
     const Eigen::Vector3d n_m_f = pose.rot * nf;
-    if (n_m_f.z() < cos_tilt) return;   // 地板在 map 系也应水平
-    const double F = c_m.z() - (n_m_f.x() * (pose.trans.x() - c_m.x()) +
-                                n_m_f.y() * (pose.trans.y() - c_m.y())) / n_m_f.z();
+    if (n_m_f.z() < cos_tilt) { report("z_floor_tilt"); return; }   // 地板在 map 系也应水平
+    F = c_m.z() - (n_m_f.x() * (pose.trans.x() - c_m.x()) +
+                   n_m_f.y() * (pose.trans.y() - c_m.y())) / n_m_f.z();
 
-    const double dz_target = gz - F;
-    if (!std::isfinite(dz_target) || std::fabs(dz_target) > 5.0) {
-        logZ("z-jump", gz, F, dz_target);
-        return;   // 超过 5m 一定是数据异常(别把车甩飞)
-    }
+    dz = gz - F;
+    if (!std::isfinite(dz) || std::fabs(dz) > 5.0) { report("z_jump"); return; }   // 数据异常, 别把车甩飞
     const double max_dz = 0.3;
-    double dz = dz_target;
     if (dz > max_dz) dz = max_dz;
     if (dz < -max_dz) dz = -max_dz;
-    logZ("z-apply", gz, F, dz);
+    report("z_apply");
     pose.trans.z() += dz;
 }
 

@@ -1998,6 +1998,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " anchor=" << (anchor_ok ? "OK" : "WEAK")
                    << " inl=" << res.inliers
                    << " vis=" << res.visible
+                    << " cov_all=" << (res.fitness_all >= 0.0 ? res.fitness_all : -1.0)
                    << " eig=" << res.smallest_eig_ratio
                    << " session_map=" << session_map_active
                    << " session_map_size=" << session_map_size

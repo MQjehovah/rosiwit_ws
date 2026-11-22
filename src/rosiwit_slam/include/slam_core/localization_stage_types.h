@@ -77,6 +77,10 @@ struct MatchResult {
     int    correspondences = 0;    // 有效对应数
     int    inliers = 0;            // 内点数
     int    visible = 0;            // 匹配前可见点数(降采样后, 未做动态滤除); 0=配准器未填
+    // 诚实覆盖率: 分母用**未做动态剔除**的全部降采样点, 阈值同 inlier_dist。
+    // 动态剔除会让"位姿自己偏了的结构"在评分前消失(2026-11-22 实机: 删后 152 点
+    // fitness 0.92, 不删 168 点只有 0.47) —— 判丢/锚点应该看这个数。<0=未计算。
+    double fitness_all = -1.0;
     int    iterations = 0;         // 实际迭代次数
     bool   degenerate = false;     // 是否检测到退化方向
     int    degenerate_dirs = 0;    // 被门控的退化方向数
