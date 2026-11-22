@@ -135,6 +135,14 @@ python3 xzmap_to_pcd.py ~/Downloads/map.xzmap -o ~/Downloads/map_0.3m.pcd --voxe
   右下角工具条（顶视/适配/跟随/测距/截图）。
 - **右栏**：话题速率/流量表、日志（过滤/暂停/按来源静音/重复合并）、任意话题 JSON。
 
+## 机器人模型
+
+三维视图默认加载 `public/models/robot.glb`（由 `gt.glb` 优化而来：29MB → 3.5MB，约 30 万三角面 → 12 万）。
+模型按毫米单位自动缩放，脚底对齐 `z=0`，并旋转 180° 让前保险杠朝 ROS `+X`。
+
+替换模型：把新的 GLB 放到 `public/models/robot.glb` 即可；如果前进方向相反，改
+`src/three/layers.ts` 里 `loadModel()` 的 `wrapper.rotation.z`。
+
 ## 坐标与渲染约定
 
 - Three.js 场景直接用 ROS 约定：**Z 轴向上**，`map` 系为世界原点。

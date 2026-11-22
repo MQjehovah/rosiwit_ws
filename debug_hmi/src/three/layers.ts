@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { GridData } from '../ros/decode'
 import type { TfTransform } from '../ros/tf'
 import { gridToImage } from './gridImage'
@@ -161,6 +162,8 @@ export class RobotLayer {
   readonly object = new THREE.Group()
   private footprint: THREE.LineLoop
   private footprintGeom = new THREE.BufferGeometry()
+  private placeholder = new THREE.Group()
+  private modelRoot: THREE.Object3D | null = null
 
   constructor() {
     const bodyMat = new THREE.MeshLambertMaterial({
@@ -175,7 +178,7 @@ export class RobotLayer {
       new THREE.LineBasicMaterial({ color: 0x67e8f9 }),
     )
     edges.position.copy(body.position)
-    this.object.add(body, edges)
+    this.placeholder.add(body, edges)
 
     const nose = new THREE.Mesh(
       new THREE.ConeGeometry(0.14, 0.34, 4),
@@ -183,20 +186,57 @@ export class RobotLayer {
     )
     nose.rotation.z = -Math.PI / 2
     nose.position.set(0.62, 0, 0.16)
-    this.object.add(nose)
+    this.placeholder.add(nose)
 
     const mast = new THREE.Mesh(
       new THREE.CylinderGeometry(0.05, 0.05, 0.55, 8),
       new THREE.MeshLambertMaterial({ color: 0x94a3b8 }),
     )
     mast.position.set(0.05, 0, 0.45)
-    this.object.add(mast)
+    this.placeholder.add(mast)
+
+    this.object.add(this.placeholder)
 
     this.footprint = new THREE.LineLoop(
       this.footprintGeom,
       new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.9 }),
     )
     this.object.add(this.footprint)
+  }
+
+  /** 加载 GLB 机器人模型；加载失败时保留简易占位盒。 */
+  async loadModel(url: string): Promise<{ width: number; height: number; depth: number } | null> {
+    const gltf = await new Promise<any>((resolve, reject) => {
+      new GLTFLoader().load(url, resolve, undefined, reject)
+    })
+    const root: THREE.Object3D = gltf.scene
+    root.updateMatrixWorld(true)
+
+    let box = new THREE.Box3().setFromObject(root)
+    let size = box.getSize(new THREE.Vector3())
+    // KeyShot 导出的是毫米；大于 20m 的一律按毫米处理
+    const unitScale = Math.max(size.x, size.y, size.z) > 20 ? 0.001 : 1
+    root.scale.multiplyScalar(unitScale)
+    root.updateMatrixWorld(true)
+
+    box = new THREE.Box3().setFromObject(root)
+    const center = box.getCenter(new THREE.Vector3())
+    size = box.getSize(new THREE.Vector3())
+
+    // 模型原点归到脚底中心；gt.glb 的前保险杠在 -X，转 180° 对齐 ROS +X
+    root.position.set(-center.x, -center.y, -box.min.z)
+    const wrapper = new THREE.Group()
+    wrapper.rotation.z = Math.PI
+    wrapper.add(root)
+    wrapper.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) obj.frustumCulled = false
+    })
+
+    if (this.modelRoot) this.object.remove(this.modelRoot)
+    this.modelRoot = wrapper
+    this.placeholder.visible = false
+    this.object.add(wrapper)
+    return { width: size.x, height: size.z, depth: size.y }
   }
 
   setPose(x: number, y: number, yaw: number): void {

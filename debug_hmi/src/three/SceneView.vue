@@ -896,6 +896,18 @@ onMounted(() => {
   bindTopics()
   animate()
 
+  void robotLayer
+    .loadModel(`${import.meta.env.BASE_URL}models/robot.glb`)
+    .then((size) => {
+      if (size) {
+        pushLog(
+          'info',
+          `机器人模型已加载：${size.width.toFixed(2)} × ${size.depth.toFixed(2)} × ${size.height.toFixed(2)} m`,
+        )
+      }
+    })
+    .catch((e) => pushLog('warn', `机器人模型加载失败，使用简易模型：${(e as Error).message}`))
+
   // 恢复上次抓取的栅格（43MB / 1~2 分钟，刷新页面不必重来）
   void loadGridCache()
     .then((cached) => {
