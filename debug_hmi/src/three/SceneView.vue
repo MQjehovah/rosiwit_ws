@@ -218,7 +218,15 @@ function placeInMap(object: THREE.Object3D, frame: string): void {
     object.quaternion.identity()
     return
   }
-  const tf = tfTree.lookup('map', frame)
+  let tf = tfTree.lookup('map', frame)
+  if (!tf && frame === 'vanjee_lidar') {
+    // 万集驱动把点云去旋转成"重力对齐"系, 但 frame_id 仍是 vanjee_lidar,
+    // 而 TF 树里只有 lidar(物理安装角 39°). 直接查会失败, 点云会停在原点不旋转.
+    // 点云原点=雷达位置, 姿态=重力对齐(与 base_link 一致): 用 lidar 的平移 + base_link 的旋转.
+    const lidar = tfTree.lookup('map', 'lidar')
+    const base = tfTree.lookup('map', 'base_link')
+    if (lidar && base) tf = { parent: 'map', child: frame, t: lidar.t, q: base.q }
+  }
   if (tf) applyTransform(object, tf)
 }
 
