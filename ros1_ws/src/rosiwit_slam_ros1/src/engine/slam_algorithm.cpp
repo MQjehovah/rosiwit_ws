@@ -206,45 +206,23 @@ void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped
         // 不写死常量(不同机型安装高度不同), 也不调用 computeBaseFrames()
         // (那个调用会把 base_lidar/base_imu 激活, 连带开启 self_filter 与位姿换算,
         //  等于把 39deg/90deg 安装外参整套打开; 2026-11-22 实机就是这样出错的)。
-        if (!init_z_known_) {
-            std::string lidar_frame = "lidar", base_frame = "base_link";
-            pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
-            pnh_.param<std::string>("base_frame", base_frame, base_frame);
-            if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
-            if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-            for (int i = 0; i < 20; ++i) {
-                try {
-                    const geometry_msgs::TransformStamped tf = tf_buffer_->lookupTransform(
-                        base_frame, lidar_frame, ros::Time(0), ros::Duration(0.1));
-                    Eigen::Quaterniond q(tf.transform.rotation.w, tf.transform.rotation.x,
-                                         tf.transform.rotation.y, tf.transform.rotation.z);
-                    q.normalize();
-                    init_base_lidar_.R = q.toRotationMatrix();
-                    init_base_lidar_.t = Eigen::Vector3d(tf.transform.translation.x,
-                                                         tf.transform.translation.y,
-                                                         tf.transform.translation.z);
-                    init_base_lidar_.valid = true;
-                    init_z_offset_ = init_base_lidar_.t.z();
-                    init_z_known_ = true;
-                    break;
-                } catch (const tf2::TransformException&) {
-                    ros::Duration(0.05).sleep();
-                }
-            }
-        }
-        if (init_z_known_) {
+        // 车底贴地 + 坐标系换算: App 给的位姿是 base_footprint(车底, z=0=地面),
+        // 核心位姿是雷达系; 用 T_base_footprint<-lidar(TF) 做一次完整换算
+        // (旋转+平移), 与输出侧的 composeRightInv 严格互逆, 不写死任何常量。
+        const RigidTransform base = baseFootprintLidar();
+        if (base.valid) {
             const double z_b = p.trans.z();
             const double yaw_b = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
-            // 完整换算 (旋转+平移): 核心位姿是雷达系, App 给的是 base_link。
-            p = composeRight(p, init_base_lidar_);
+            p = composeRight(p, base);
             const double yaw_a = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
             char b[224];
             std::snprintf(b, sizeof(b),
-                          "[slam_algo] init pose base->lidar: z %.3f->%.3f (+%.3f) yaw %.1f->%.1f",
-                          z_b, p.trans.z(), init_z_offset_, yaw_b, yaw_a);
+                          "[slam_algo] init pose footprint->lidar: z %.3f->%.3f (+%.3f) "
+                          "yaw %.1f->%.1f",
+                          z_b, p.trans.z(), base.t.z(), yaw_b, yaw_a);
             std::cout << b << std::endl;
         } else {
-            ROS_WARN_STREAM("[slam_algo] TF base_link <- lidar unavailable; "
+            ROS_WARN_STREAM("[slam_algo] TF base_footprint <- lidar unavailable; "
                             "init pose left as given");
         }
     }

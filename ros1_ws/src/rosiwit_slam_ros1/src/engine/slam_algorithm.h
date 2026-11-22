@@ -359,6 +359,9 @@ public:
         const auto p = base_lidar_slot_.load();
         return p ? *p : RigidTransform();
     }
+    /// T_base_footprint <- lidar (车底 -> 雷达). 输入初值与输出位姿都用它, 严格互逆.
+    /// 由 TF(base_footprint <- lidar) 求得并缓存; 与 baseLidar() 只差那 7cm。
+    RigidTransform baseFootprintLidar();
     bool hasBaseImu() const { return base_imu_slot_.has_value(); }
     /// 把 odom/VO 的 child frame 换到核心 IMU body; 静态外参查询一次后缓存.
     bool imuFromChild(const std::string& child_frame, RigidTransform& out);
@@ -366,14 +369,9 @@ public:
 private:
     // 解析结果只通过快照槽对外提供; 解析过程本身由 mount_mu_ 串行
     rosiwit_common::SnapshotSlot<RigidTransform> base_imu_slot_;    // T_base_link_imu
-    // "车底 -> 雷达"的安装高度(m), 从 TF(base_footprint <- lidar) 取, 不写死.
-    // 只在 applyInitPose 里用到; **不**走 computeBaseFrames, 避免连带激活 self_filter
-    // / 位姿换算 (2026-11-22 实机: 那条链路会把 39deg/90deg 的安装外参整套打开)。
-    bool   init_z_known_ = false;
-    double init_z_offset_ = 0.0;
-    // 完整的 T_base_link<-lidar (含旋转): 输入换算用; 与输出侧的 composeRightInv
-    // 严格互逆, 所以 App 的位姿一来一回不变。
-    RigidTransform init_base_lidar_;
+    // 缓存 T_base_footprint <- lidar (车底 -> 雷达), 输入初值/输出位姿共用.
+    RigidTransform fp_lidar_;
+    bool fp_lidar_valid_ = false;
     rosiwit_common::SnapshotSlot<RigidTransform> base_lidar_slot_;  // T_base_link_lidar
     std::timed_mutex mount_mu_;            // 保护 tf_buffer_/tf_listener_/mount_*_frame/child_to_imu_
     mutable std::mutex child_mu_;          // child_to_imu_ 缓存

@@ -57,8 +57,8 @@ Ros1OutputsInterface::PreparedPose Ros1OutputsInterface::preparePose(const SlamO
     // 核心位姿是**雷达**的(r_il=单位阵), 所以对外要按 base_link <- lidar 换算;
     // 以前按 baseImu 换算(差 0.9m/39deg), 与输入侧的"車底->雷达"不对称,
     // 一来一回就把高度差算丢了。
-    if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseLidar().valid) {
-        p.pose = composeRightInv(out.pose, engine_.baseLidar());
+    if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseFootprintLidar().valid) {
+        p.pose = composeRightInv(out.pose, engine_.baseFootprintLidar());
     }
 
     p.stamp = (p.pose.time > 0) ? ros::Time(p.pose.time) : ros::Time::now();

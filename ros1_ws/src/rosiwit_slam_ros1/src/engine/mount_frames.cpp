@@ -252,4 +252,42 @@ bool SlamAlgorithm::computeXz3dExtrinsic(Eigen::Matrix3d& R, Eigen::Vector3d& t,
     return false;
 }
 
+RigidTransform SlamAlgorithm::baseFootprintLidar() {
+    if (fp_lidar_valid_) return fp_lidar_;
+    std::string lidar_frame = "lidar", base_frame = "base_footprint";
+    pnh_.param<std::string>("lidar_frame", lidar_frame, lidar_frame);
+    pnh_.param<std::string>("base_frame", base_frame, base_frame);
+    if (!tf_buffer_) tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
+    if (!tf_listener_) tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    for (int i = 0; i < 10; ++i) {
+        try {
+            const geometry_msgs::TransformStamped tf = tf_buffer_->lookupTransform(
+                base_frame, lidar_frame, ros::Time(0), ros::Duration(0.1));
+            Eigen::Quaterniond q(tf.transform.rotation.w, tf.transform.rotation.x,
+                                 tf.transform.rotation.y, tf.transform.rotation.z);
+            q.normalize();
+            fp_lidar_.R = q.toRotationMatrix();
+            fp_lidar_.t = Eigen::Vector3d(tf.transform.translation.x,
+                                          tf.transform.translation.y,
+                                          tf.transform.translation.z);
+            fp_lidar_.valid = true;
+            fp_lidar_valid_ = true;
+            return fp_lidar_;
+        } catch (const tf2::TransformException&) {
+            ros::Duration(0.05).sleep();
+        }
+    }
+    // 退回: base_link <- lidar, 再补 base_footprint -> base_link 的竖直偏移
+    const RigidTransform bl = baseLidar();
+    if (bl.valid) {
+        fp_lidar_.R = bl.R;
+        fp_lidar_.t = bl.t + Eigen::Vector3d(0.0, 0.0, 0.07);
+        fp_lidar_.valid = true;
+        fp_lidar_valid_ = true;
+        ROS_WARN_STREAM("[slam_algo] TF base_footprint <- lidar unavailable; "
+                        "using base_link + 0.07 fallback");
+    }
+    return fp_lidar_;
+}
+
 } // namespace rosiwit_slam_ros1

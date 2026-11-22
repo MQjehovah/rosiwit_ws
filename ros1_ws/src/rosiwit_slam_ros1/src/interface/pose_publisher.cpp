@@ -107,8 +107,8 @@ void Ros1SlamInterface::publishCurrPose() {
     // 以前用 baseImu 换算, 与输入侧的車底->雷达不对称, 高度对不上。
     if (have_out) {
         computeLidarToBase();
-        if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseLidar().valid) {
-            out.pose = composeRightInv(out.pose, engine_.baseLidar());
+        if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseFootprintLidar().valid) {
+            out.pose = composeRightInv(out.pose, engine_.baseFootprintLidar());
         }
     }
 
