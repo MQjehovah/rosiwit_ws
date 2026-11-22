@@ -1028,6 +1028,8 @@ export function initHmi(): void {
   state.topicTypes = { ...TOPIC_CATALOG }
   state.mutedSources = loadMutedSources()
   Object.assign(state.layers, loadLayers())
+  // 日志面板常驻在底部，默认保持订阅
+  state.layers.logs = true
   loadDisplays()
   void restorePcdDisplays()
   // 设备信息插件：常驻低频订阅，不依赖显示项
