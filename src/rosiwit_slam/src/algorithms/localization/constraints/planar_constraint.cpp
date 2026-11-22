@@ -2,6 +2,7 @@
 #include "algorithms/localization/constraints/planar_constraint.h"
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <unordered_map>
 #include <vector>
 
@@ -141,7 +142,8 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
     std::nth_element(zs.begin(), zs.begin() + hi_i, zs.end());
     const float zhi = zs[hi_i];
 
-    auto fitBand = [&](double lo, double hi, Eigen::Vector3d& n, int& cnt, double& mean_z) {
+    auto fitBand = [&](double lo, double hi, Eigen::Vector3d& n, int& cnt,
+                       Eigen::Vector3d& centroid) {
         Eigen::Vector3d sum = Eigen::Vector3d::Zero();
         Eigen::Matrix3d sq = Eigen::Matrix3d::Zero();
         cnt = 0;
@@ -159,15 +161,15 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
         if (es.info() != Eigen::Success) return false;
         n = es.eigenvectors().col(0);
         if (n.z() < 0) n = -n;   // 统一朝上
-        mean_z = mean.z();
+        centroid = mean;
         return true;
     };
 
     Eigen::Vector3d nf, nc;
+    Eigen::Vector3d meanf = Eigen::Vector3d::Zero(), meanc = Eigen::Vector3d::Zero();
     int cf = 0, cc = 0;
-    double zf = 0.0, zc = 0.0;
-    const bool okf = fitBand(zlo - 0.2, zlo + 0.35, nf, cf, zf);
-    const bool okc = fitBand(zhi - 0.35, zhi + 0.2, nc, cc, zc);
+    const bool okf = fitBand(zlo - 0.2, zlo + 0.35, nf, cf, meanf);
+    const bool okc = fitBand(zhi - 0.35, zhi + 0.2, nc, cc, meanc);
     Eigen::Vector3d up;
     const bool use_floor = okf && (!okc || cf + 100 >= cc);   // 地板更可靠时优先
     if (okc && !use_floor) up = nc;
@@ -190,8 +192,25 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
         pose.rot = Eigen::AngleAxisd(ang, axis).toRotationMatrix() * pose.rot;
     }
 
-    // z: 只在"地板可靠"时, 用 地图地面 + 传感器离地高 修正 (限幅防跳)
-    if (!use_floor || !okf || cf < 100) return;
+    // z: 只要"地板可靠"就修, 与"转动用哪个面"无关 (小房间天花板常比地面点多)
+    auto logZ = [&](const char* what, double gz, double F, double dz) {
+        static int n = 0;
+        if (++n % 10 != 0) return;
+        std::cout.setf(std::ios::fixed);
+        std::cout.precision(3);
+        std::cout << "[planar] " << what
+                  << " zlo=" << zlo << " zhi=" << zhi
+                  << " cf=" << cf << " cc=" << cc
+                  << " tilt=" << (up.z() >= cos_tilt ? "ok" : "bad") << " floor=" << (use_floor ? 1 : 0)
+                  << " gz=" << gz << " F=" << F << " cur=" << pose.trans.z()
+                  << " dz=" << dz << std::endl;
+        std::cout.unsetf(std::ios::fixed);
+    };
+
+    if (!okf || cf < 50 || nf.z() < cos_tilt) {
+        logZ("z-skip", 0.0, 0.0, 0.0);
+        return;
+    }
     double gz = 0.0;
     bool have_g = false;
     if (m_store) {
@@ -202,13 +221,30 @@ void PlanarConstraint::applyScanPlane(PoseStamped& pose, const CloudType::Ptr& s
         const Cell* c = query(pose.trans.x(), pose.trans.y());
         if (c) { gz = c->z; have_g = true; }
     }
-    if (!have_g) return;
-    const double h = std::max(0.2, -zf);      // 传感器离地高
-    const double target = gz + h;
+    if (!have_g) {
+        logZ("z-noground", 0.0, 0.0, 0.0);
+        return;
+    }
+
+    // 把地板平面转到 map 系, 求它在机器人 (x,y) 处的高度 F。
+    // 用 F 与地图地面 gz 对齐, 不需要"传感器离地高"这种假设量(实机该量会随
+    // 安装/外参变化, 且符号极易搞反): 点云地板落到地图地面上, z 就是对的。
+    const Eigen::Vector3d c_m = pose.rot * meanf + pose.trans;
+    const Eigen::Vector3d n_m_f = pose.rot * nf;
+    if (n_m_f.z() < cos_tilt) return;   // 地板在 map 系也应水平
+    const double F = c_m.z() - (n_m_f.x() * (pose.trans.x() - c_m.x()) +
+                                n_m_f.y() * (pose.trans.y() - c_m.y())) / n_m_f.z();
+
+    const double dz_target = gz - F;
+    if (!std::isfinite(dz_target) || std::fabs(dz_target) > 5.0) {
+        logZ("z-jump", gz, F, dz_target);
+        return;   // 超过 5m 一定是数据异常(别把车甩飞)
+    }
     const double max_dz = 0.3;
-    double dz = target - pose.trans.z();
+    double dz = dz_target;
     if (dz > max_dz) dz = max_dz;
     if (dz < -max_dz) dz = -max_dz;
+    logZ("z-apply", gz, F, dz);
     pose.trans.z() += dz;
 }
 

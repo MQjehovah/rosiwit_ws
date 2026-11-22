@@ -296,10 +296,20 @@ localization:
     degeneracy_gate: true
     degeneracy_eig_ratio: 0.001
     min_correspondences: 20
-    # 动态/变化物剔除: 只保留贴近静态地图的点 (人来人往/叉车/未入图的新堆货被剔除)
-    # ★联动: 预测滞后 > dynamic_dist 时会删掉真实位置的证据(推行螺旋), 由
-    #        localization.odom_mode: fuse 的平移预测保证滞后不超限
-    dynamic_filter: true       # 工厂: 人/叉车多
+    # ---------------- 三个"距离"参数各管一段, 别混 ----------------
+    #   dynamic_dist (0.4)           配准**前**, 按 guess 位姿把"离地图 > 0.4m 的点"
+    #                                从源点云里**删掉**(人/叉车/新堆货)。
+    #                                副作用: 位姿自己错了的结构(天花板/地面)也会被
+    #                                当成动态物删掉 -> 这类错误既看不见也改不了,
+    #                                所以**评分不能用删后的点**(2026-11-22 实测:
+    #                                删后 152 点 fitness 0.92, 不删 168 点只有 0.47)
+    #   max_correspondence_dist (1.2)  优化**迭代内**每个点最多能拉多远(捕获范围)。
+    #                                超了本轮不建对应, 但点不删, 位姿挪过来还能配上
+    #   inlier_dist (0.3)              收敛后"算不算配上"的判据, 比捕获范围更严(故意)
+    # ★联动: max_correspondence_dist 必须 > 2×dynamic_dist, 否则"删证据"快于"纠正"
+    #        -> 螺旋(越删越错)。0.4 没有测量推导, 只按"预测滞后不能超过它"定。
+    # 人/叉车多 -> 开; 只在静态仓库里跑、又需要 z 被天花板/地面约束时可关。
+    dynamic_filter: true
     dynamic_dist: 0.4
     # 2.5D 平面 NDT (matcher: ndt2d)
     ndt2d_cell: 0.5
@@ -460,17 +470,22 @@ localization:
 
   # ---- 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane ----
   planar:
-    # 实机: 我们的"body"是**雷达系**, 而本机雷达俯装 41.67° -> ground_plane/lock_zrp
-    # 强行把 roll/pitch 拉平 = 把扫描整体转 42° -> 只有 ~43% 的点能找到对应面
-    # (fitness=cs.coverage 实测 0.434)。先用 none 验证因果, 若确认再改成
-    # "在车身系做平面约束"(需按安装角换算), 而不是直接丢掉这个能力。
+    # mode:
+    #   scan_plane  每帧从扫描 z 分位取地面/天花板带 -> PCA 法向 -> 在 **map 系**
+    #               把 roll/pitch 转回竖直(不动 yaw/不动 39° 安装角); 地板可靠时
+    #               把"点云地板平面"对齐到"地图地面"(dz = gz - F, 每帧<=0.3m)。
+    #               实机 2026-11-22: 天花板倾角 10.6° -> 0.5°, z 偏低 1.2m 由它拉回
+    #   ground_plane / lock_zrp  在**雷达系**里拉平 -> 俯装 39° 时等于把扫描整体转
+    #               42°, 只有 ~43% 点能找到对应面(fitness 0.43), 实机已弃用
+    #   none        不约束 (姿态/z 都交给 ICP)
+    # 注: sensor_height 只在 ground_plane/lock_zrp 用; scan_plane 不需要"离地高"
     mode: scan_plane
     z: 0.0                    # lock_zrp 目标高度
     sensor_height: 0.0        # 传感器离地高(m); 0=首帧自动标定
     cell: 1.0
     ground_band: 0.3
-    max_tilt_deg: 35.0
-    max_correction_deg: 15.0
+    max_tilt_deg: 35.0        # 平面法向与竖直夹角超此值 -> 本帧不约束
+    max_correction_deg: 15.0  # scan_plane 单帧最大转动修正(超过视为跳变, 跳过)
 
   # ---- 多假设跟踪 (aliasing): 重定位歧义时保留 Top-K 并按每帧适应度淘汰 ----
   hypothesis:

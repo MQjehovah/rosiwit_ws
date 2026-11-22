@@ -126,6 +126,52 @@ TEST(ScanPlaneConstraint, PullsZToMapGround) {
     EXPECT_NEAR(pose.trans.z(), 0.8, 0.12) << "z should converge to map ground + sensor height";
 }
 
+// 实机场景: 位姿 z 掉到地板以下时, 扫描里的"地板"位于传感器上方(+0.8)。
+// 这种情况下"传感器离地高"是负数, 用 gz+h 会算错 —— 必须用"地板平面 == 地图地面"
+// 的判据, 收敛结果应让点云地板落在 z=0, 即 pose.z = -0.8。
+TEST(ScanPlaneConstraint, PullsZWhenFloorIsAboveSensor) {
+    PlanarConstraint pc;
+    pc.configure(cfg("scan_plane"));
+
+    CloudType::Ptr map(new CloudType());
+    for (double x = -3.0; x <= 3.0; x += 0.1)
+        for (double y = -3.0; y <= 3.0; y += 0.1) {
+            PointType p;
+            p.x = static_cast<float>(x);
+            p.y = static_cast<float>(y);
+            p.z = 0.0f;
+            map->push_back(p);
+        }
+    map->width = static_cast<uint32_t>(map->size());
+    map->height = 1;
+    pc.setMap(map);
+
+    CloudType::Ptr scan(new CloudType());
+    for (double x = -2.0; x <= 2.0; x += 0.1)
+        for (double y = -2.0; y <= 2.0; y += 0.1) {
+            PointType pf;
+            pf.x = static_cast<float>(x);
+            pf.y = static_cast<float>(y);
+            pf.z = 0.8f;      // 地板在传感器上方 (位姿过低)
+            scan->push_back(pf);
+            PointType pc2;
+            pc2.x = static_cast<float>(x);
+            pc2.y = static_cast<float>(y);
+            pc2.z = 3.0f;
+            scan->push_back(pc2);
+        }
+    scan->width = static_cast<uint32_t>(scan->size());
+    scan->height = 1;
+
+    PoseStamped pose;
+    pose.trans = V3D(0.0, 0.0, -1.5);
+    pose.rot = M3D::Identity();
+    for (int i = 0; i < 12; ++i) pc.apply(pose, scan);
+
+    // 点云地板 F = pose.z + 0.8 应落到地图地面 0
+    EXPECT_NEAR(pose.trans.z() + 0.8, 0.0, 0.12) << "scan floor should land on map ground";
+}
+
 TEST(ScanPlaneConstraint, NoneModeDoesNothing) {
     PlanarConstraint pc;
     pc.configure(cfg("none"));
