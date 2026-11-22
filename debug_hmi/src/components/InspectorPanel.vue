@@ -2,10 +2,6 @@
   <div class="inspector">
     <div class="tabs">
       <button :class="{ active: tab === 'topics' }" @click="tab = 'topics'">话题</button>
-      <button :class="{ active: tab === 'logs' }" @click="tab = 'logs'">
-        日志
-        <span v-if="errorCount" class="tab-badge">{{ errorCount }}</span>
-      </button>
       <button :class="{ active: tab === 'message' }" @click="tab = 'message'">消息</button>
     </div>
 
@@ -54,60 +50,6 @@
       </p>
     </div>
 
-    <!-- 日志 -->
-    <div v-show="tab === 'logs'" class="tab-body">
-      <div v-if="!state.layers.logs" class="prompt">
-        未订阅 <code>/rosout_agg</code>
-        <button class="btn tiny" @click="setLayer('logs', true)">订阅</button>
-      </div>
-      <div class="row">
-        <select v-model="state.logFilter" class="input">
-          <option value="all">全部</option>
-          <option value="info">info</option>
-          <option value="warn">warn</option>
-          <option value="error">error</option>
-        </select>
-        <button class="btn tiny" :class="{ primary: state.pausedLogs }" @click="state.pausedLogs = !state.pausedLogs">
-          {{ state.pausedLogs ? '继续' : '暂停' }}
-        </button>
-        <button class="btn tiny" @click="state.logs = []">清空</button>
-      </div>
-      <div class="logs">
-        <div
-          v-for="line in filteredLogs"
-          :key="line.id"
-          class="log"
-          :class="line.level"
-        >
-          <span class="time">{{ clock(line.time) }}</span>
-          <span
-            v-if="line.source"
-            class="src"
-            :title="`点击静音 ${line.source}`"
-            @click="muteSource(line.source)"
-          >
-            {{ line.source }}
-          </span>
-          <span class="text">{{ line.text }}</span>
-          <span v-if="line.count > 1" class="count">×{{ line.count }}</span>
-        </div>
-        <div v-if="!filteredLogs.length" class="empty">暂无日志</div>
-      </div>
-      <div v-if="state.mutedSources.length" class="muted-row">
-        <span class="muted-label">已静音</span>
-        <button
-          v-for="source in state.mutedSources"
-          :key="source"
-          class="muted-chip"
-          :title="`恢复 ${source}`"
-          @click="unmuteSource(source)"
-        >
-          {{ source }} ×
-        </button>
-        <button class="muted-chip clear" @click="clearMutedSources">全部恢复</button>
-      </div>
-    </div>
-
     <!-- 消息 -->
     <div v-show="tab === 'message'" class="tab-body">
       <div class="row">
@@ -139,35 +81,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  clearMutedSources,
-  muteSource,
   pushLog,
   refreshTopics as refreshRosTopics,
   ros,
   selectRawTopic,
-  setLayer,
   state,
   topicType,
-  unmuteSource,
 } from '../ros/app'
 
-const tab = ref<'topics' | 'logs' | 'message'>('topics')
+const tab = ref<'topics' | 'message'>('topics')
 const search = ref('')
 const messageTopic = ref(state.rawTopic || '/slam/info')
 const liveOnly = ref(true)
-
-const errorCount = computed(
-  () => state.logs.filter((l) => l.level === 'error').length,
-)
-
-const filteredLogs = computed(() => {
-  const muted = new Set(state.mutedSources)
-  return state.logs.filter((l) => {
-    if (state.logFilter !== 'all' && l.level !== state.logFilter) return false
-    if (l.source && muted.has(l.source)) return false
-    return true
-  })
-})
 
 interface TopicRow {
   name: string
@@ -215,12 +140,6 @@ function ageText(age: number): string {
   if (age < 0) return '—'
   if (age < 1000) return `${age}ms`
   return `${(age / 1000).toFixed(1)}s`
-}
-
-function clock(time: number): string {
-  const d = new Date(time)
-  const pad = (n: number, w = 2) => String(n).padStart(w, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
 }
 
 let tempUnsub: (() => void) | null = null

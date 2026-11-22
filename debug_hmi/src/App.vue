@@ -30,7 +30,10 @@
       }"
     >
       <aside v-show="showLeft" class="left"><ControlPanel /></aside>
-      <main class="center"><SceneView /></main>
+      <main class="center">
+        <div class="scene"><SceneView /></div>
+        <LogPanel />
+      </main>
       <aside v-show="showRight" class="right"><InspectorPanel /></aside>
     </div>
   </div>
@@ -41,6 +44,7 @@ import { computed, onMounted, ref } from 'vue'
 import ConnectionPill from './components/ConnectionPill.vue'
 import ControlPanel from './components/ControlPanel.vue'
 import InspectorPanel from './components/InspectorPanel.vue'
+import LogPanel from './components/LogPanel.vue'
 import SceneView from './three/SceneView.vue'
 import { initHmi, state } from './ros/app'
 
@@ -181,6 +185,14 @@ onMounted(() => initHmi())
 }
 .center {
   min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.scene {
+  flex: 1;
   min-height: 0;
   position: relative;
 }

@@ -164,10 +164,10 @@ export const state = reactive({
   },
 
   layers: {
-    // 只有 TF 默认订阅；日志/定位面板按需打开
+    // 只有 TF 默认订阅；日志面板始终可见，所以日志也默认订阅
     tf: true,
     status: true,
-    logs: false,
+    logs: true,
     trail: true,
   } as Record<LayerKey, boolean>,
 

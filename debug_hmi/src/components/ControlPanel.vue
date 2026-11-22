@@ -1317,7 +1317,7 @@ async function doDump(): Promise<void> {
 .spark {
   display: block;
   width: 100%;
-  height: 26px;
+  height: 60px;
 }
 .spark polyline {
   fill: none;
