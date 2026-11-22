@@ -64,7 +64,7 @@
 global:
   startup_mode: free # 启动模式 mapping|localization|free|idle (free/idle = 不自建图也不定位, 等 App 切模式)
   is_debug: false # 调试日志开关
-  debug_publish: false # 发布调试话题 (world_cloud/body_cloud 等)
+  debug_publish: true # 发布调试话题 (world_cloud/body_cloud 等)
   modules:
     frontend: "fast_lio2_frontend"
     backend: "ceres_pose_graph" # 机器人上没有 gtsam (apt 里也没有 libgtsam-dev), gtsam_isam2 会解析成 null;
@@ -359,7 +359,7 @@ localization:
     # 丢失后重定位尝试间隔(帧, 节流)。30 帧(~2s)太密: 每次尝试含多起点 GICP
     # (预算 3s), 连续尝试会把单线程 spinner 独占, /relocation 等服务排队数十秒。
     # 45 帧 ≈ 3s, 与单次尝试预算相当。
-    retry_interval: 45
+    retry_interval: 300
     voxel_resolution: 0.3      # BBS 搜索栅格(不是 pgm 的 0.05; 0.2 实测反而更差)
     ambiguity_margin: 0.02     # 冷启动 top1-top2 精配分差 < 此值 => 保留多假设(重复结构消歧)
     reseed_radius: 5.0         # 跟踪期重播种候选离当前位姿的最大距离(m, 0=不限制; 31m 瞬移教训)
@@ -464,12 +464,13 @@ localization:
     # 强行把 roll/pitch 拉平 = 把扫描整体转 42° -> 只有 ~43% 的点能找到对应面
     # (fitness=cs.coverage 实测 0.434)。先用 none 验证因果, 若确认再改成
     # "在车身系做平面约束"(需按安装角换算), 而不是直接丢掉这个能力。
-    mode: none
+    mode: scan_plane
     z: 0.0                    # lock_zrp 目标高度
     sensor_height: 0.0        # 传感器离地高(m); 0=首帧自动标定
     cell: 1.0
     ground_band: 0.3
     max_tilt_deg: 35.0
+    max_correction_deg: 15.0
 
   # ---- 多假设跟踪 (aliasing): 重定位歧义时保留 Top-K 并按每帧适应度淘汰 ----
   hypothesis:
