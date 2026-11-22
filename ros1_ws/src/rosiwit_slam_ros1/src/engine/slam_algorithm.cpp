@@ -167,6 +167,9 @@ void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped
                                bool count_as_jump) {
     std::lock_guard<std::mutex> core_lk(core_mu_);
     if (!algo_raw_) return;
+    // 初始位姿的"换算目标系": lidar(默认, 点云/位姿都在雷达系) | imu
+    std::string init_frame = "lidar";
+    pnh_.param<std::string>("init_pose_frame", init_frame, init_frame);
     // 只有"坐标系真的换了"才计数; 内部 2D 小纠偏 (0.1~0.3m) 不算跳变
     if (count_as_jump) { ++pose_jump_seq_; }
     double x = in.pose.pose.position.x;
@@ -200,16 +203,22 @@ void SlamAlgorithm::applyInitPose(const geometry_msgs::PoseWithCovarianceStamped
     // 缺省 map/IMU zero 位姿已经在上面的分支直通，不能再次叠加安装角。
     if (default_map_pose) {
         if (force_z_zero) p.trans.z() = 0.0;
-    } else if (computeBaseFrames(/*blocking=*/true) && baseImu().valid) {
-        const RigidTransform base_imu = baseImu();
+    } else if (computeBaseFrames(/*blocking=*/true) &&
+               ((init_frame == "lidar") ? baseLidar().valid : baseImu().valid)) {
+        // 默认按 lidar: 本节点的点云与位姿都在雷达系(r_il 单位阵), 用 base_link<-lidar
+        // 这条静态 TF 换算 —— 地面 z=0 时, 位姿 z 直接就是雷达离地高(0.07+0.914)。
+        // 不做任何"检测地面"的动作, 纯 TF 赋值。
+        const RigidTransform base = (init_frame == "lidar") ? baseLidar() : baseImu();
         const double yaw_b = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
-        p = composeRight(p, base_imu);
+        const double z_b = p.trans.z();
+        p = composeRight(p, base);
         if (force_z_zero) p.trans.z() = 0.0;
         const double yaw_a = std::atan2(p.rot(1, 0), p.rot(0, 0)) * 180 / M_PI;
         char b[256];
         std::snprintf(b, sizeof(b),
-                      "[slam_algo] init pose converted base->imu: yaw_before=%.1fdeg yaw_after=%.1fdeg",
-                      yaw_b, yaw_a);
+                      "[slam_algo] init pose converted base->%s: z_before=%.3f z_after=%.3f "
+                      "yaw_before=%.1fdeg yaw_after=%.1fdeg",
+                      init_frame.c_str(), z_b, p.trans.z(), yaw_b, yaw_a);
         std::cout << b << std::endl;
     } else {
         if (force_z_zero) p.trans.z() = 0.0;

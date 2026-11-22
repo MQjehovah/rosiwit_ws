@@ -807,7 +807,6 @@ void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
         m_global_request = false;
     }
     m_status = INIT;
-    m_z_seeded = false;   // 新的初值 -> 重新按地面贴一次 z
 }
 
 void LocalizationPipeline::onImu(const IMUSample& s) {
@@ -836,7 +835,6 @@ void LocalizationPipeline::requestRelocalization() {
     }
     // 重定位属于 INIT：等待健康帧累计到 localized_patience 才进入 LOCALIZED。
     m_status = INIT;
-    m_z_seeded = false;
     std::cout << "[LocPipeline] relocalization requested by service" << std::endl;
 }
 
@@ -1643,24 +1641,6 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
     // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
     m_planar.apply(out_pose, scan);
-
-    // 初值 z: 重定位/切换地图/手动置初值给的 z 不可信(App 是 2D, z 常为 0)。
-    // 竖墙对 z 没有约束, 初值错了之后永远修不回来 —— 这里用**当帧点云的水平面**
-    // 与**地图地面**算一次偏移, 一次性贴地; 只做一次, 之后交给每帧 planar。
-    if (!m_z_seeded && scan && scan->size() >= 200) {
-        double dz = 0.0, zf = 0.0;
-        if (m_planar.estimateGroundDz(out_pose, *scan, dz, zf)) {
-            out_pose.trans.z() += dz;
-            m_z_seeded = true;
-            std::ostringstream zs;
-            zs.setf(std::ios::fixed);
-            zs.precision(3);
-            zs << "z-seed dz=" << dz << " floor_in_body=" << zf
-               << " -> z=" << out_pose.trans.z();
-            diag::log('I', "LocPipeline", zs.str());
-            FlightRecorder::instance().event("Z_SEED", zs.str());
-        }
-    }
     if (accepted) {
         {
             std::lock_guard<std::mutex> prior_lk(m_prior_mu);
