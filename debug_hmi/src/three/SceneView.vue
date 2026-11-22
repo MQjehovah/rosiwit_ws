@@ -105,6 +105,7 @@ let camera: THREE.PerspectiveCamera | null = null
 let controls: OrbitControls | null = null
 let raf = 0
 let resizeObserver: ResizeObserver | null = null
+let floorGrid: THREE.GridHelper | null = null
 
 /** 本地 PCD / 文件地图专用层；ROS 话题全部走 dynamicLayers */
 const mapLayer = new PointCloudLayer({ size: 0.1, opacity: 0.9 })
@@ -552,6 +553,7 @@ function setupScene(): void {
   controls.update()
 
   const grid = new THREE.GridHelper(400, 80, 0x1e3a4d, 0x132029)
+  floorGrid = grid
   grid.rotation.x = Math.PI / 2
   grid.position.z = -0.02
   ;(grid.material as THREE.Material).transparent = true
@@ -758,12 +760,17 @@ function animate(): void {
   }
 
   // 机器人位姿：优先 TF map→base_link，回退 /slam/info
-  const tf = tfTree.lookup('map', 'base_link') ?? tfTree.lookup('map', 'base_footprint')
+  const tf = tfTree.lookup('map', 'base_footprint') ?? tfTree.lookup('map', 'base_link')
   if (tf) {
-    robotLayer.setTransform(tf)
+    const [roll, pitch, yaw] = quatToRpy(tf.q)
+    // base_footprint 才是接地点；用它的 z 把模型放到地面，而不是 base_link 车体中心
+    robotLayer.setPose(tf.t[0], tf.t[1], yaw, tf.t[2])
+    if (floorGrid) {
+      const z = tf.t[2] - 0.02
+      if (Math.abs(floorGrid.position.z - z) > 0.002) floorGrid.position.z = z
+    }
     if (now - lastRobotPublish > 100) {
       lastRobotPublish = now
-      const [roll, pitch, yaw] = quatToRpy(tf.q)
       state.robot = {
         x: tf.t[0],
         y: tf.t[1],

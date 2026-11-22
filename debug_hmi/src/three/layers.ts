@@ -227,9 +227,8 @@ export class RobotLayer {
     root.position.set(-center.x, -center.y, -center.z)
     const wrapper = new THREE.Group()
     const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
-    const qz = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI)
-    // 先绕 X 转 90°，再绕 Z 转 180°（gt.glb 的实际姿态）
-    wrapper.quaternion.copy(qz).multiply(qx)
+    // 机身立起来：绕 X +90°。Z 轴再转 180° 会让车头朝后，所以这里不加 Z 旋转。
+    wrapper.quaternion.copy(qx)
     wrapper.add(root)
     wrapper.updateMatrixWorld(true)
 
@@ -251,8 +250,8 @@ export class RobotLayer {
     return { width: wsize.x, height: wsize.z, depth: wsize.y }
   }
 
-  setPose(x: number, y: number, yaw: number): void {
-    this.object.position.set(x, y, 0)
+  setPose(x: number, y: number, yaw: number, z = 0): void {
+    this.object.position.set(x, y, z)
     this.object.rotation.z = yaw
   }
 
