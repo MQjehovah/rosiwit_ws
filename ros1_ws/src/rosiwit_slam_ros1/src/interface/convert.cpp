@@ -181,9 +181,9 @@ rosiwit_slam::CloudType::Ptr scanShape(const rosiwit_slam::CloudType& in,
     // 表现就是"看不清点云和墙体的贴合情况"。这里改成相对地面过滤, 与栅格同带。
     for (const auto& p : in) {
         const double z = p.z - z_ref;
-        // 下界默认 0(旧语义); scan_f_map 传 0.1 —— z_ref 实测可偏差 ~7cm(标定 -0.898
+        // 下界默认 0(旧语义); scan_f_map 传 0.15 —— z_ref 实测可偏差 ~7cm(标定 -0.898
         // vs 实测地面 -0.83), 下界含 0 会把贴地点放进界面(用户报告"非墙体点云")。
-        // 0.1 与栅格提取的 0.1~2.0m 高度带对齐。
+        // 0.15 是 2026-11-22 现场确定的显示带下界 (上界 1.5m)。
         if (!use_z || (z > z_min && z < z_max)) {
             if (scan_count % down_sample == 0) out->push_back(p);
         }

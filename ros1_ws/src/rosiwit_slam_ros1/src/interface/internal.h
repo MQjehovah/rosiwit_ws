@@ -10,12 +10,14 @@ namespace rosiwit_slam_ros1 {
 namespace interface_internal {
 
 constexpr const char* kMapFrame = "map";
-// 旧实现的 z 过滤上界: 定位 2.0 (legacy.cpp:989) / 建图 1.0 (legacy.cpp:1078)
-constexpr double kLocZMax = 2.0;
-constexpr double kMapZMax = 1.0;
-// scan_f_map 高度带下界(相对地面): 与栅格提取的 0.1~2.0m 对齐。
-// 0 会放行贴地点(z_ref 标定偏差 ~7cm 时地面直接漏进界面, 2026-10-17 用户报告)。
-constexpr double kScanZMin = 0.1;
+// scan_f_map 的 z 过滤上界 (相对地面): 定位/建图统一 1.5m。
+// 2026-11-22 现场要求: 显示带统一为 0.15~1.5m (原 定位 2.0 / 建图 1.0)。
+constexpr double kLocZMax = 1.5;
+constexpr double kMapZMax = 1.5;
+// scan_f_map 高度带下界(相对地面)。
+// 0 会放行贴地点(z_ref 标定偏差 ~7cm 时地面直接漏进界面, 2026-10-17 用户报告),
+// 所以保留下界; 与上界一起构成 0.15~1.5m 的显示带。
+constexpr double kScanZMin = 0.15;
 
 inline const char* modeName(SlamMode m) {
     switch (m) {
