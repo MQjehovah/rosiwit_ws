@@ -279,7 +279,7 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
         pred = composeRightInv(pred, engine_.baseFootprintLidar());
     }
     const bool fresh = !last_new_pose_ros_.isZero() &&
-                       (now - last_new_pose_ros_).toSec() <= 0.30;
+                       (now - last_new_pose_ros_).toSec() <= 1.0;
     const bool due = last_high_rate_pub_.isZero() ||
                      (now - last_high_rate_pub_).toSec() >= 0.02;
     if (!fresh || !due) {
@@ -316,7 +316,7 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
         pose_puber_.publish(ps);
         if (use_tf_ && (last_high_rate_tf_.isZero() ||
                         (now - last_high_rate_tf_).toSec() >= 0.05)) {
-            sendTransform();
+            sendTransform(have_pred ? &pred : nullptr);
             last_high_rate_tf_ = now;
         }
     }
@@ -442,7 +442,7 @@ void Ros1SlamInterface::publishLocationInfo() {
 
 
 // ---------------------------------------------------------------- [T7] 告警
-void Ros1SlamInterface::sendTransform() {
+void Ros1SlamInterface::sendTransform(const rosiwit_slam::PoseStamped* pred) {
     // legacy.cpp:1899-1936 逐行:
     //   Tfo = lookupTransform("base_footprint", "odom", Time(0))     = T(base_footprint <- odom)
     //   Tmf = (origin=(x, y, z), rot=AngleAxis(-yaw, Z))             = T(map <- base_footprint)
@@ -464,21 +464,30 @@ void Ros1SlamInterface::sendTransform() {
         return;
     }
     // 与服务线程 (publishZeroPoseInfo) 共享, 取锁内快照
+    // 高频路径传入预测位姿 (已合成 base_footprint), 否则 map->odom 只在 10Hz 匹配帧更新,
+    // TF 消费者(RViz/HMI/导航)会看到一跳一跳.
     const Xz3dPose pose = currentPoseSnapshot();
     if (!std::isfinite(pose.x) || !std::isfinite(pose.y) ||
         !std::isfinite(pose.yaw)) {
         return;
+    }
+    double px = pose.x, py = pose.y, pz = pose.z;
+    Eigen::Matrix3d R_pose = pose.q.normalized().toRotationMatrix();
+    if (pred != nullptr) {
+        px = pred->trans.x();
+        py = pred->trans.y();
+        pz = pred->trans.z();
+        R_pose = pred->rot;
     }
 
     // 用 Eigen 直接做刚体复合: T(a<-b) * T(b<-c) = T(a<-c), 与 tf2::Transform 的 A*B 同义。
     // 这样不必为一次乘法引入 tf2_geometry_msgs 依赖。
     // 注意这里必须用 xzYawFromRot(q)(= -标准航向) 再取负, 与旧实现成对出现 ——
     // 直接用 curr_pose_.yaw 会把符号弄反。
-    const double yaw =
-        xzYawFromRot(pose.q.normalized().toRotationMatrix());
+    const double yaw = xzYawFromRot(R_pose);
     const Eigen::Matrix3d R_f =
         Eigen::AngleAxisd(-yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-    const Eigen::Vector3d t_f(pose.x, pose.y, pose.z);
+    const Eigen::Vector3d t_f(px, py, pz);
 
     const Eigen::Quaterniond q_o(tfo_msg.transform.rotation.w, tfo_msg.transform.rotation.x,
                                  tfo_msg.transform.rotation.y, tfo_msg.transform.rotation.z);

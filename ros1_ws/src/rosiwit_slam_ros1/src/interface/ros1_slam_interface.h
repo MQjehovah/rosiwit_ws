@@ -261,7 +261,7 @@ private:
     bool applyModeSwitch(int mode);
 
     // ---- [T9] 动态 map->odom TF ----
-    void sendTransform();   // legacy.cpp:1899-1936, 更新并广播
+    void sendTransform(const rosiwit_slam::PoseStamped* pred = nullptr);   // legacy.cpp:1899-1936, 更新并广播
     void broadcastMapOdom(); // 定位 LOST 时冻结最后有效 map->odom 并持续广播
 
     ros::NodeHandle nh_, pnh_;
