@@ -1206,6 +1206,13 @@ void SlamPipeline::setExecutor(rosiwit_common::IExecutor* ex)
     if (m_localization) m_localization->setExecutor(ex);
 }
 
+void SlamPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar,
+                                     const Eigen::Matrix3d& r_il,
+                                     const Eigen::Vector3d& t_il,
+                                     const Eigen::Vector3d& t_base_lidar) {
+    if (m_localization) m_localization->setMountExtrinsic(r_base_lidar, r_il, t_il, t_base_lidar);
+}
+
 void SlamPipeline::requestRelocalization() {
     if (m_localization) m_localization->requestRelocalization();
 }

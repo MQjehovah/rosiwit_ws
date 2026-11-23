@@ -73,6 +73,7 @@ SlamAlgorithm::SlamAlgorithm(ros::NodeHandle& nh, ros::NodeHandle& pnh,
     if (executor_) algo_->setExecutor(executor_);
     base_ = dynamic_cast<SlamBase*>(algo_.get());
     if (!algo_->init(config_path_)) { ROS_FATAL("init failed"); ros::shutdown(); return; }
+    applyMountToCore();   // 安装外参(URDF/TF)注入核心: 扫描变换 + 偏航轴统一来源
     algo_->setOutputCallback([this](const SlamOutput& o) { onOutput(o); });
 
     // 输入订阅由 SlamRosNode 统一负责 (本类只暴露 onXxxMsg), 避免"一个进程两处订阅"。

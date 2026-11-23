@@ -13,6 +13,14 @@ public:
     /// 可选: 注入执行器 (线程池); 不注入时定位流水线保持自带线程
     virtual void setExecutor(rosiwit_common::IExecutor* /*ex*/) {}
 
+    /// 运行时注入安装外参 (与 ISlamAlgorithm::setMountExtrinsic 同一来源).
+    /// 定位链路的扫描变换与偏航轴 (up_body) 统一用它, 不假设雷达正装.
+    /// t_base_lidar: 雷达在 base 系的安装平移 (杆臂, 原地自转的轨道项).
+    virtual void setMountExtrinsic(const Eigen::Matrix3d& /*r_base_lidar*/,
+                                   const Eigen::Matrix3d& /*r_il*/,
+                                   const Eigen::Vector3d& /*t_il*/,
+                                   const Eigen::Vector3d& /*t_base_lidar*/) {}
+
     // 定位状态只有三种。原 RECOVERING 语义并入 INIT：未确认/重定位中。
     enum Status { INIT, LOCALIZED, LOST };
     virtual ~ILocalization() = default;

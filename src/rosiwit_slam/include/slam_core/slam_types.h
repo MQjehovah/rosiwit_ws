@@ -1,6 +1,7 @@
 // include/slam_core/slam_types.h
 #pragma once
 #include <Eigen/Eigen>
+#include <cmath>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
 #include <opencv2/core.hpp>
@@ -104,5 +105,41 @@ struct GridInfo {
     double origin_x = 0, origin_y = 0;
     std::vector<int8_t> data;
 };
+
+// ============================================================================
+// IMU 轴向换算 (唯一入口)
+//
+// 2026-11-23 实机事故: IMU 随雷达俯装 ~38°, 某处直接拿 gyro.z 当偏航角速度,
+// 每转一圈少算 ~19% (实测转 349°, gyro.z 积分 284°, 投影 ω·up_body 362°)。
+// 转弯时先验跟不上 -> 匹配锁错 yaw -> "一转弯就丢定位"。
+//
+// 约定: 需要偏航角速度的地方一律 imuYawRate(), 不允许直接写 gyro.z();
+//       up_body 由安装外参 (URDF/TF/参数) 推导, 或由加速度自动估计.
+// ============================================================================
+inline double imuYawRate(const V3D& gyro, const V3D& up_body) {
+    return gyro.dot(up_body);
+}
+
+/// up_body = R^T·(0,0,1): R 为 IMU->世界 旋转 (列向量是 IMU 各轴在世界系的表示)
+inline V3D upBodyFromMount(const M3D& r_imu_to_world) {
+    return r_imu_to_world.row(2).transpose().normalized();
+}
+
+/// 杆臂 ρ = R_base_lidarᵀ·t_base_lidar (传感器系常值): 雷达原点相对 base 原点
+/// 的位置矢量在传感器系的表达. 原地绕 base 自转时雷达位置绕 base 划弧:
+///   ṗ_lidar = R·(R_blᵀ·v_base + ω_s × ρ)
+/// 缺了 ω_s×ρ 项, 转弯位置误差 = 2|ρ_xy|·sin(θ/2) (本机 |ρ_xy|≈0.41m, 180° 达 0.83m),
+/// 静止时无影响 —— 2026-11-23 "一转弯就丢定位"根因.
+inline V3D leverArmSensorFrame(const M3D& r_base_lidar, const V3D& t_base_lidar) {
+    return r_base_lidar.transpose() * t_base_lidar;
+}
+
+/// 用加速度计估计 up_body (静止/匀速有效). false = 当前样本不可用.
+inline bool accelUpBody(const V3D& acc, double gravity, double tol, V3D& up) {
+    const double n = acc.norm();
+    if (!(n > 1e-3) || std::fabs(n - gravity) > tol) return false;
+    up = acc / n;
+    return true;
+}
 
 } // namespace rosiwit_slam

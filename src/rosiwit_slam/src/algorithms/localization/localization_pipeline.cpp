@@ -12,8 +12,10 @@
 #include <Eigen/Geometry>
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/transforms.h>
 
@@ -26,6 +28,13 @@
 
 namespace rosiwit_slam {
 using diag::FlightRecorder;
+
+// ---- 诊断探针开关 (环境变量; 默认静默: 生产不刷屏、不写盘) ----
+//   ROSIWIT_LOC_PROBE=1  : 逐帧 [LocProbe]/[RejectProbe]/[DeskewDiag]/[FitSweep]
+//   ROSIWIT_DUMP_FRAME=1 : 首个好帧/坏帧转储 PCD 到 /tmp/slamdump{,_good} (离线对账)
+// 回放/实车排查时给节点置位即可, 不用重编 (逐帧对账: /tmp/frame_lag.py).
+static const bool kLocProbe = std::getenv("ROSIWIT_LOC_PROBE") != nullptr;
+static const bool kDumpFrame = std::getenv("ROSIWIT_DUMP_FRAME") != nullptr;
 
 namespace {
 // 底图-only 匹配度用的 KD 树/目标云: 放在 .cpp 里(单实例), 避免头文件引 pcl
@@ -122,6 +131,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         auto fc = loc["fusion"];
         if (fc) {
             m_fusion_cfg.gain_trans              = getv<double>(fc, "gain_trans", m_fusion_cfg.gain_trans);
+            m_fusion_cfg.gravity                 = getv<double>(fc, "gravity", m_fusion_cfg.gravity);
+            m_fusion_cfg.gravity_tol             = getv<double>(fc, "gravity_tol", m_fusion_cfg.gravity_tol);
             m_fusion_cfg.gain_rot                = getv<double>(fc, "gain_rot", m_fusion_cfg.gain_rot);
             m_fusion_cfg.max_correction_trans    = getv<double>(fc, "max_correction_trans", m_fusion_cfg.max_correction_trans);
             m_fusion_cfg.max_correction_rot_deg  = getv<double>(fc, "max_correction_rot_deg", m_fusion_cfg.max_correction_rot_deg);
@@ -176,6 +187,9 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_matcher_cfg.min_correspondences     = getv<int>(mc, "min_correspondences", m_matcher_cfg.min_correspondences);
         m_matcher_cfg.dynamic_filter          = getv<bool>(mc, "dynamic_filter", m_matcher_cfg.dynamic_filter);
         m_matcher_cfg.dynamic_dist            = getv<double>(mc, "dynamic_dist", m_matcher_cfg.dynamic_dist);
+        m_matcher_cfg.match_z_filter          = getv<bool>(mc, "match_z_filter", m_matcher_cfg.match_z_filter);
+        m_matcher_cfg.match_z_min             = getv<double>(mc, "match_z_min", m_matcher_cfg.match_z_min);
+        m_matcher_cfg.match_z_max             = getv<double>(mc, "match_z_max", m_matcher_cfg.match_z_max);
         m_matcher_cfg.ndt2d_z_min             = getv<double>(mc, "ndt2d_z_min", m_matcher_cfg.ndt2d_z_min);
         m_matcher_cfg.ndt2d_z_max             = getv<double>(mc, "ndt2d_z_max", m_matcher_cfg.ndt2d_z_max);
         m_matcher_cfg.ndt2d_cell              = getv<double>(mc, "ndt2d_cell", m_matcher_cfg.ndt2d_cell);
@@ -216,6 +230,45 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_motion_cfg.use_gravity = getv<bool>(mpc, "use_gravity", m_motion_cfg.use_gravity);
         m_motion_cfg.gravity = getv<double>(mpc, "gravity", m_motion_cfg.gravity);
         m_motion_cfg.gravity_gain = getv<double>(mpc, "gravity_gain", m_motion_cfg.gravity_gain);
+    }
+    // ---- IMU 安装姿态 → up_body (统一入口, 见 slam_types.h: imuYawRate) ----
+    // 安装外参可能来自 TF/URDF/启动参数; 由上层解析后写成下面任一参数即可.
+    // 都没有时 fusion/motion_prior 用加速度自动估计 up_body, 不依赖写死的安装角.
+    {
+        const char* mount_keys[] = {"mount_r_base_lidar", "bbs_mount_r"};
+        for (const char* key : mount_keys) {
+            const YAML::Node n = root[key];
+            if (n && n.IsSequence() && n.size() == 9) {
+                Eigen::Matrix3d R;
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 3; ++c) R(r, c) = n[r * 3 + c].as<double>();
+                const V3D up = upBodyFromMount(R);
+                m_fusion_cfg.up_body = up;
+                m_fusion_cfg.up_body_valid = true;
+                m_motion_cfg.up_body = up;
+                m_motion_cfg.up_body_valid = true;
+                m_matcher_cfg.crop_r = R;
+                m_matcher_cfg.crop_r_valid = true;
+                m_base_r = R;
+                m_base_r_valid = true;
+                std::cout << "[LocPipeline] imu up_body from yaml '" << key << "' = ["
+                          << up.x() << ", " << up.y() << ", " << up.z() << "]" << std::endl;
+                break;
+            }
+        }
+    }
+    // ---- 地面约束开关: localization.planar.mode = none | mount_lock ----
+    // mount_lock: 位姿只解 x/y/yaw, roll/pitch 保持安装外参, z 锁安装高度.
+    // (scan_plane/lock_zrp 仍由 ROS1 层 PlanarConstraint 处理; 本开关只控制核心侧)
+    {
+        const YAML::Node pl = loc["planar"];
+        if (pl && pl["mode"]) {
+            const std::string pm = pl["mode"].as<std::string>("none");
+            // lock_zrp: 先扣安装角 -> 锁 body 的 z/roll/pitch -> 再贴回安装角.
+            // (旧实现直接令 roll=pitch=0, 等于把雷达安装角抹掉, 对俯装/侧装 IMU 是错的)
+            m_fix_planar = (pm == "lock_zrp" || pm == "mount_lock");
+        }
+        if (pl && pl["z"]) m_planar_z = pl["z"].as<double>(0.0);
     }
     // ---- 定位 odom: 单一开关 localization.odom_mode (none | fuse) ----
     // fuse 同时打开两处 odom 输入, 不再需要单独配 motion_prior.use_odom:
@@ -573,6 +626,64 @@ void LocalizationPipeline::setMap(const std::string& map_name) {
     setMapImpl(map_name);
 }
 
+void LocalizationPipeline::planarizePose(PoseStamped& p) const {
+    // 地面机器人: body(雷达)->map 只允许 yaw 变化, roll/pitch 固定为安装姿态, z 固定为安装高度.
+    // 竖直墙 + 无地面点地图 => z/roll/pitch 弱观测; 漂 5deg 就足以让 10m 外墙面点错开 ~0.9m.
+    if (!m_fix_planar || !m_base_r_valid) return;
+    const M3D R_base = p.rot * m_base_r.transpose();      // base_footprint -> map
+    const double yaw = std::atan2(R_base(1, 0), R_base(0, 0));
+    p.rot = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix() * m_base_r;
+    if (m_fixed_z > 0.0) p.trans.z() = m_fixed_z;
+}
+
+void LocalizationPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar,
+                                             const Eigen::Matrix3d& r_il,
+                                             const Eigen::Vector3d& t_il,
+                                             const Eigen::Vector3d& t_base_lidar) {
+    // 安装外参只有一个来源 (URDF/TF/启动参数, 由 ROS 层解析). 这里统一落到:
+    //   1) 扫描 lidar->imu 变换
+    //   2) 偏航轴 up_body (slam_types.h: upBodyFromMount) —— fusion 与 motion_prior 共用
+    //   3) 杆臂 lever_arm (slam_types.h: leverArmSensorFrame) —— 原地自转轨道项
+    // 任何一处都不允许假设"雷达正装"。
+    const V3D up = upBodyFromMount(r_base_lidar);
+    const V3D lever = leverArmSensorFrame(r_base_lidar, t_base_lidar);
+    {
+        std::lock_guard<std::mutex> lk(m_prior_mu);
+        m_motion_cfg.up_body = up;
+        m_motion_cfg.up_body_valid = true;
+        m_motion_cfg.lever_arm = lever;
+        m_motion_cfg.lever_valid = true;
+        m_motion_cfg.r_base_lidar = r_base_lidar;
+        if (m_prior) m_prior->configure(m_motion_cfg);
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_fusion_mu);
+        m_fusion_cfg.up_body = up;
+        m_fusion_cfg.up_body_valid = true;
+        m_fusion_cfg.lever_arm = lever;
+        m_fusion_cfg.lever_valid = true;
+        m_fusion_cfg.r_base_lidar = r_base_lidar;
+        if (m_fusion) m_fusion->configure(m_fusion_cfg);
+    }
+    m_lidar_to_imu.setIdentity();
+    m_lidar_to_imu.block<3, 3>(0, 0) = r_il.cast<float>();
+    m_lidar_to_imu.block<3, 1>(0, 3) = t_il.cast<float>();
+    m_lidar_to_imu_valid = true;
+    // 高度带裁剪的坐标系同样来自安装外参 (lidar->base_footprint, 旋转+平移), 与位姿 z 解耦.
+    // 平移项 = 雷达安装高度, 裁剪面才落在真实的离地 0.15m 而不是 0.99m.
+    m_matcher_cfg.crop_r = r_base_lidar;
+    m_matcher_cfg.crop_t = t_base_lidar;
+    m_matcher_cfg.crop_r_valid = true;
+    if (m_matcher) m_matcher->configure(m_matcher_cfg);
+    if (m_global_matcher) m_global_matcher->configure(m_matcher_cfg);
+    m_base_r = r_base_lidar;
+    m_base_r_valid = true;
+    diag::log('I', "LocPipeline", "mount injected: up_body=(" + std::to_string(up.x()) + ", " +
+                                      std::to_string(up.y()) + ", " + std::to_string(up.z()) +
+                                      ") lever=(" + std::to_string(lever.x()) + ", " +
+                                      std::to_string(lever.y()) + ", " + std::to_string(lever.z()) + ")");
+}
+
 void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     // 换图会替换 local_map/matcher/store/maintainer; 与 onLidar 互斥.
     std::lock_guard<std::mutex> state_lk(m_state_mu);
@@ -829,6 +940,8 @@ bool LocalizationPipeline::ensureRelocalizerMap() {
 void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
     // 服务线程只入命令队列；onLidar worker 消费，避免全局重定位持锁时
     // /relocation 等待 m_state_mu 而卡住 ROS spinner。
+    // body(车底) 目标高度 = planar.z (地面=0); 雷达高度 = 该值 + 安装高度(由 init pose 带入)
+    if (m_fix_planar && pose.trans.z() > 0.0) m_fixed_z = m_planar_z + pose.trans.z();
     {
         std::lock_guard<std::mutex> lk(m_cmd_mu);
         m_pending_init = pose;
@@ -906,10 +1019,15 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
     const PoseStamped& start_pose = *start;
     const double span = f.end_time - f.start_time;
     const double gap = f.start_time - start_pose.time;
+    static int dsn = 0;
+    const bool dg = kLocProbe && (++dsn % 20 == 0);
     if (span <= 1e-3 || start_pose.time < 0.0 ||
         gap < -0.05 || gap > m_deskew_max_gap ||
-        end_pose.time <= start_pose.time)
+        end_pose.time <= start_pose.time) {
+        if (dg) std::cout << "[DeskewDiag] skip=validity span=" << span << " gap=" << gap
+                          << " max_gap=" << m_deskew_max_gap << std::endl;
         return f.cloud;
+    }
 
     // 检查逐点时间是否真的可用; 全 0 说明驱动/ROS 层没填时间, 不能盲目补偿.
     double max_curv = 0.0;
@@ -918,6 +1036,7 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
             max_curv = p.curvature;
     }
     if (max_curv <= 1e-3) {
+        if (dg) std::cout << "[DeskewDiag] skip=no_per_point_time" << std::endl;
         static bool warned = false;
         if (!warned) {
             warned = true;
@@ -927,16 +1046,50 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
         return f.cloud;
     }
 
-    Eigen::Quaterniond q0(start_pose.rot);
-    Eigen::Quaterniond q1(end_pose.rot);
+    // **姿态约定必须统一**: guess(帧末) 已被 lock_zrp 平面化, 而 start(上一帧输出/融合)
+    // 可能还是 rpyToRot 的混合姿态。混用会让 qrel 混进 roll/pitch, deskew 把点云拧斜 ——
+    // 静止时看不出来, 一转弯覆盖率就从 0.95 掉到 0.4 (2026-11-23 根因)。
+    PoseStamped s_pose = start_pose;
+    PoseStamped e_pose = end_pose;
+    planarizePose(s_pose);
+    planarizePose(e_pose);
+    Eigen::Quaterniond q0(s_pose.rot);
+    Eigen::Quaterniond q1(e_pose.rot);
     q0.normalize();
     q1.normalize();
-    Eigen::Quaterniond qrel = q0.conjugate() * q1;
+    // **帧内相对旋转优先用陀螺自由积分**: 位姿链上的锚定/拒绝会让姿态滞后
+    // (实测转弯中先验落后真值 20°), 拿位姿差做帧内插值 => 去畸变欠补偿
+    // (真实 5° 只补 1°) => 扫描被抹开 => 覆盖率天花板 0.65 < 接受线 0.7
+    // => 拒帧 => 更滞后 (2026-11-23 死亡螺旋根因).
+    // 陀螺 0.1s 帧内相对误差 ~0.2°, 与绝对滞后无关.
+    Eigen::Quaterniond dq_gyro;
+    const bool gyro_ok = [this, &f, &dq_gyro] {
+        std::lock_guard<std::mutex> lk(m_prior_mu);
+        return m_prior && m_prior->gyroDelta(f.start_time, f.end_time, dq_gyro);
+    }();
+    const double total = e_pose.time - s_pose.time;
+    double a0 = (total > 1e-6) ? (f.start_time - s_pose.time) / total : 0.0;
+    a0 = std::max(0.0, std::min(1.0, a0));
+    Eigen::Quaterniond qf;
+    if (gyro_ok) {
+        // start = end·Δ⁻¹: 帧内几何严格等于陀螺增量, 绝对误差只表现为整体旋转
+        qf = (q1 * dq_gyro.conjugate()).normalized();
+    } else {
+        qf = q0.slerp(a0, q1);
+    }
+    const V3D tf = (1.0 - a0) * s_pose.trans + a0 * e_pose.trans;
+    Eigen::Quaterniond qrel = qf.conjugate() * q1;
     qrel.normalize();
     const double angle = 2.0 * std::acos(std::min(1.0, std::fabs(qrel.w())));
-    if (angle * 57.2957795 < m_deskew_min_angle_deg) return f.cloud;
-    // 单帧估计不应有这么大旋转; 先验跳变时宁可不去畸变, 也不要主动把点云转坏.
-    if (angle > 0.8) return f.cloud;
+    if (angle * 57.2957795 < m_deskew_min_angle_deg) {
+        if (dg) std::cout << "[DeskewDiag] skip=small_angle angle=" << angle * 57.2957795 << std::endl;
+        return f.cloud;
+    }
+    // 单帧内实际旋转过大 -> 先验跳变, 宁可不去畸变, 也不要主动把点云转坏.
+    if (angle > 0.8) {
+        if (dg) std::cout << "[DeskewDiag] skip=big_angle angle=" << angle * 57.2957795 << std::endl;
+        return f.cloud;
+    }
 
     CloudType::Ptr out(new CloudType());
     out->header = f.cloud->header;
@@ -946,11 +1099,11 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
         if (!pcl::isFinite(p)) continue;
         double alpha = (std::isfinite(p.curvature) ? p.curvature : 0.0) / span_ms;
         alpha = std::max(0.0, std::min(1.0, alpha));
-        const Eigen::Quaterniond qt = q0.slerp(alpha, q1);
+        const Eigen::Quaterniond qt = qf.slerp(alpha, q1);
         const M3D rt = qt.toRotationMatrix();
-        const V3D tt = (1.0 - alpha) * start_pose.trans + alpha * end_pose.trans;
+        const V3D tt = (1.0 - alpha) * tf + alpha * e_pose.trans;
         const V3D pw = rt * V3D(p.x, p.y, p.z) + tt;
-        const V3D pe = q1.conjugate() * (pw - end_pose.trans);
+        const V3D pe = q1.conjugate() * (pw - e_pose.trans);
 
         PointType q = p;
         q.x = static_cast<float>(pe.x());
@@ -965,6 +1118,10 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
         }
         out->push_back(q);
     }
+    if (dg) std::cout << "[DeskewDiag] run span=" << span << " gap=" << gap << " a0=" << a0
+                      << " gyro=" << (gyro_ok ? 1 : 0)
+                      << " angle=" << angle * 57.2957795 << " maxcurv=" << max_curv
+                      << " in=" << f.cloud->size() << " out=" << out->size() << std::endl;
     if (out->empty()) return f.cloud;
     out->width = static_cast<uint32_t>(out->size());
     out->height = 1;
@@ -987,7 +1144,7 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
         CloudType::Ptr ov = m_maintainer->getOverlay(pose);
         if (ov && !ov->empty()) {
             // 锚定在底图上时目标只用底图 (overlay/子图是"底图锚不住"时的桥接):
-            // 混进去会自引用, 位姿漂了分数还满分 (实机 fitness/cov_all=1.000)。
+            // 混进去会自引用, 位姿漂了分数还满分 (实机 fitness/fitness_all=1.000)。
             if (!m_anchor_on_base) {
                 if (m_maintainer_cfg.override_base)
                     suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
@@ -1038,8 +1195,10 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
                 PoseStamped g = m_pose;
                 g.trans += V3D(dx, dy, 0.0);
                 g.rot = m_pose.rot * Eigen::AngleAxisd(yd * M_PI / 180.0, V3D::UnitZ()).toRotationMatrix();
+                planarizePose(g);
                 MatchResult r;
                 if (m_matcher->match(scan, g, r) && r.converged && r.fitness > best_fit) {
+                    planarizePose(r.pose);
                     best_fit = r.fitness;
                     best = r.pose;
                     found = true;
@@ -1171,17 +1330,19 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
         if (reject_reason) *reject_reason = "accepted";
         return true;
     }
-    // [LocProbe] 拒绝原因 (每 10 帧一行): 定位"匹配成功但不输出"时靠它定位是哪道门限
-    {
-        static int probe_n = 0;
-        if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
-            std::cout << "[LocProbe] rejected fitness=" << res.fitness
-                      << " min_coverage=" << m_accept_cfg.min_coverage
-                      << " residual_improvement=" << improve
-                      << " residual_margin=" << m_accept_cfg.residual_margin
-                      << " consistent_frames=" << m_consistent_cnt << "/"
-                      << m_accept_cfg.consistent_frames << std::endl;
-        }
+    // [RejectProbe] 拒绝原因 (帧时间): 定位"匹配成功但不输出"时是哪道门限.
+    // ROSIWIT_LOC_PROBE=1 逐帧, 否则 50 帧一条.
+    static int probe_n = 0;
+    if (kLocProbe || ++probe_n % 50 == 0) {
+        std::ostringstream os;
+        os << std::fixed << std::setprecision(3) << "[RejectProbe] t=" << res.pose.time
+           << " fitness=" << std::setprecision(4) << res.fitness
+           << " min_coverage=" << m_accept_cfg.min_coverage
+           << " residual_improvement=" << improve
+           << " residual_margin=" << m_accept_cfg.residual_margin
+           << " consistent_frames=" << m_consistent_cnt << "/"
+           << m_accept_cfg.consistent_frames;
+        std::cout << os.str() << std::endl;
     }
     return reject("consistent_frames");
 }
@@ -1434,14 +1595,24 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
         guess = m_prior->predict(f.end_time);
+        planarizePose(guess);   // 先验也只保留 yaw, 不回传 z/roll/pitch 漂移
     }
     // coast 重锚: matcher 连续失败后先验(尤其 IMU-only)每帧漂 0.1~0.3m,
     // 漂出对应距离(2m)后 correspondences=0, 从此永久失配。连续失败超过
     // m_coast_reanchor_frames 帧时, 匹配初值改用最后被接受的位姿, 给 ICP
     // 一个未被漂移污染的起点; 匹配成功后 onMatch 会把先验拉回来。
     if (m_have_last_accepted && m_coast_count >= m_coast_reanchor_frames) {
-        guess.trans = m_last_accepted.trans;
-        guess.rot = m_last_accepted.rot;
+        // 只重锚 **base 的位置**: IMU 投影积分的姿态可靠, 拉回旧姿态会让转弯永久冻住.
+        // 雷达位置 = base 位置 + R·ρ (杆臂): 原地转弯时雷达绕 base 划弧, 直接把雷达
+        // 平移拉回锚点会造出"位置在转前、姿态在转后"的矛盾位姿, 永远匹配不上
+        // (2026-11-23 回放复现: 转到 120° 后 fitness 卡 0.47, 输出冻结).
+        if (m_motion_cfg.lever_valid) {
+            const V3D base_la =
+                m_last_accepted.trans - m_last_accepted.rot * m_motion_cfg.lever_arm;
+            guess.trans = base_la + guess.rot * m_motion_cfg.lever_arm;
+        } else {
+            guess.trans = m_last_accepted.trans;
+        }
         guess.time = f.end_time;
     }
     // 定位路径原来直接用原始点云做 GICP；建图前端有 IMU 去畸变, 定位路径没有,
@@ -1533,7 +1704,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             // 这里回退到最近一次被接受的位姿并复位运动先验, 让下一次仍有匹配机会。
             if (!target || target->empty()) {
                 if (m_have_last_accepted) {
-                    m_pose = m_last_accepted;
+                    // 逸出回退同样"只拉 base 位置, 保留当前积分姿态": 转弯中把姿态
+                    // 重置回锚点 = yaw 冻结, 之后永远追不上 (与 coast 重锚同源).
+                    if (m_motion_cfg.lever_valid) {
+                        const V3D base_la =
+                            m_last_accepted.trans - m_last_accepted.rot * m_motion_cfg.lever_arm;
+                        m_pose.trans = base_la + m_pose.rot * m_motion_cfg.lever_arm;
+                    } else {
+                        m_pose = m_last_accepted;
+                    }
                     {
                         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
                         if (m_prior) m_prior->reset(m_pose);
@@ -1542,7 +1721,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         std::lock_guard<std::mutex> fk(m_fusion_mu);
                         if (m_fusion) m_fusion->reset(m_pose);
                     }
-                    out_pose = m_last_accepted;
+                    out_pose = m_pose;
                 } else {
                     out_pose = guess;
                 }
@@ -1556,16 +1735,64 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_matcher->setTarget(target);
         }
         const bool ok = m_matcher->match(scan, guess, res);
-        // [LocProbe] 诊断: 输入扫描点数 / 匹配结果 (NO Effective Points 排查)
-        {
-            static int probe_n = 0;
-            if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
-                std::cout << "[LocProbe] scan_points=" << (scan ? scan->size() : 0)
-                          << " target_points=" << (m_cached_target ? m_cached_target->size() : 0)
-                          << " match_ok=" << (ok ? 1 : 0)
-                          << " converged=" << (res.converged ? 1 : 0)
-                          << " fitness=" << res.fitness << std::endl;
+        // [DumpFrame] (ROSIWIT_DUMP_FRAME=1 时) 转储好帧(first fitness>=0.9 ->
+        // /tmp/slamdump_good) 与坏帧 (first fitness<0.6 -> /tmp/slamdump), 离线对比
+        // z 分布/覆盖率/位姿 (2026-11-23 地面裁剪与 guess 滞后对账). 默认不写盘.
+        auto dump_frame = [&](const char* tag, const char* subdir) {
+            const std::string dir = std::string("/tmp/") + subdir;
+            (void)system(("mkdir -p " + dir).c_str());
+            try {
+                pcl::io::savePCDFileBinary(dir + "/scan.pcd", *scan);
+                if (m_cached_target) pcl::io::savePCDFileBinary(dir + "/target.pcd", *m_cached_target);
+                std::ofstream df(dir + "/poses.txt");
+                df << "fitness " << res.fitness << "\n";
+                df << "guess_time " << std::fixed << std::setprecision(6) << guess.time << "\n";
+                df << "guess_trans " << guess.trans.transpose() << "\n";
+                df << "guess_rot " << Eigen::Quaterniond(guess.rot).coeffs().transpose() << "\n";
+                df << "res_trans " << res.pose.trans.transpose() << "\n";
+                df << "res_rot " << Eigen::Quaterniond(res.pose.rot).coeffs().transpose() << "\n";
+                df << "frame_start " << std::fixed << std::setprecision(6) << f.start_time << "\n";
+                df << "frame_end " << f.end_time << "\n";
+            } catch (const std::exception&) {}
+            std::cout << "[DumpFrame] " << tag << " fitness=" << res.fitness
+                      << " scan=" << scan->size() << std::endl;
+        };
+        if (kDumpFrame) {
+            static bool dumped_good = false;
+            static bool dumped_bad = false;
+            if (scan && !scan->empty()) {
+                if (!dumped_good && res.fitness >= 0.9) {
+                    dumped_good = true;
+                    dump_frame("good", "slamdump_good");
+                }
+                if (!dumped_bad && res.fitness > 0.0 && res.fitness < 0.6) {
+                    dumped_bad = true;
+                    dump_frame("bad", "slamdump");
+                }
             }
+        }
+        // 匹配结果同样锁成 x/y/yaw + 固定安装姿态 (z/roll/pitch 弱观测, 不允许漂)
+        if (ok && res.converged) planarizePose(res.pose);
+        // [LocProbe] 逐帧诊断: 帧时间 + 可见点/参与点/内点 + fitness + guess/res 完整位姿;
+        // 离线对 odom 真值算每帧滞后 (/tmp/frame_lag.py). ROSIWIT_LOC_PROBE=1 逐帧,
+        // 否则 50 帧一条.
+        static int probe_n = 0;
+        if (kLocProbe || ++probe_n % 50 == 0) {
+            std::ostringstream os;
+            os << std::fixed << std::setprecision(3)
+               << "[LocProbe] t=" << f.end_time
+               << " vis=" << res.visible << " used=" << res.correspondences
+               << " inl=" << res.inliers
+               << " ok=" << (ok ? 1 : 0) << " conv=" << (res.converged ? 1 : 0)
+               << " fit=" << std::setprecision(4) << res.fitness
+               << " fitall=" << res.fitness_all
+               << " gx=" << guess.trans.x() << " gy=" << guess.trans.y()
+               << " gz=" << guess.trans.z()
+               << " gyaw=" << std::atan2(guess.rot(1, 0), guess.rot(0, 0)) * 57.2957795
+               << " rx=" << res.pose.trans.x() << " ry=" << res.pose.trans.y()
+               << " rz=" << res.pose.trans.z()
+               << " ryaw=" << std::atan2(res.pose.rot(1, 0), res.pose.rot(0, 0)) * 57.2957795;
+            std::cout << os.str() << std::endl;
         }
         reject_reason = ok ? "accepted" : "matcher_failed";
         accepted = ok && acceptMatch(res, scan, guess, &reject_reason);
@@ -1745,8 +1972,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     //   target_points 变化说明目标子图换源/关键帧覆盖缺口。
     if (res.fitness < 0.90 || !accepted) {
         const double lag = (out_pose.trans - guess.trans).norm();
-        std::cout << "[DropProbe] fitness=" << res.fitness
+        std::cout << "[DropProbe] t=" << std::fixed << std::setprecision(3) << f.end_time
+                  << " fitness=" << std::setprecision(4) << res.fitness
                   << " correction_m=" << lag
+                  << " correction_deg="
+                  << std::acos(std::max(-1.0, std::min(1.0,
+                         (out_pose.rot.transpose() * guess.rot).trace() * 0.5 - 0.5))) * 57.2957795
                   << " correspondences=" << res.correspondences
                   << " inliers=" << res.inliers
                   << " target_points=" << (m_has_cached_target && m_cached_target ? m_cached_target->size() : 0)
@@ -2134,7 +2365,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " anchor=" << (anchor_ok ? "OK" : "WEAK")
                    << " inl=" << res.inliers
                    << " vis=" << res.visible
-                    << " cov_all=" << (res.fitness_all >= 0.0 ? res.fitness_all : -1.0)
+                    << " fitness_all=" << (res.fitness_all >= 0.0 ? res.fitness_all : -1.0)
                    << " eig=" << res.smallest_eig_ratio
                    << " session_map=" << session_map_active
                    << " session_map_size=" << session_map_size

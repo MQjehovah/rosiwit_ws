@@ -43,7 +43,7 @@ namespace {
 
 /// 给核心写一份 override YAML: 文本复制基底, 末尾追加实际生效的 r_il/t_il / bbs_mount_r。
 /// legacy profile 额外写 `map_directory: "/"` (M8/D9); 新接口不写, 保持原有相对路径语义。
-std::string writeXz3dOverrideYaml(const std::string& base_yaml,
+[[maybe_unused]] std::string writeXz3dOverrideYaml(const std::string& base_yaml,
                                     const Eigen::Matrix3d& r_il,
                                     const Eigen::Vector3d& t_il,
                                     bool write_extrinsic,
@@ -341,9 +341,41 @@ void SlamAlgorithm::prepareCoreConfig() {
             std::cout << "[compat] mount extra rpy(deg)=[" << ex_roll << " " << ex_pitch
                       << " " << ex_yaw << "] applied (experimental)" << std::endl;
         }
-        config_path_ = writeXz3dOverrideYaml(base, r_il, t_il, have_extr,
-                                              base_lidar.valid ? &r_bl_used : nullptr,
-                                              /*write_map_dir=*/true);
+        // 不再生成 compat_legacy.yaml: 核心直接吃全局 default.yaml (参数唯一来源).
+        // 安装外参可能来自 TF/URDF/启动参数, 这里只做"yaml 参数 vs 运行时解析值"的一致性提示,
+        // 绝不把推导值写死/写回配置文件.
+        config_path_ = base;
+        // 安装外参只有一个来源 (URDF/TF/启动参数): 保存下来, 建核心/重建核心后注入.
+        // 高度带裁剪用 base_footprint<-lidar (地面 z=0), 与位姿 z 无关.
+        const RigidTransform bf = baseFootprintLidar();
+        mount_r_bl_ = bf.valid ? bf.R : r_bl_used;
+        mount_t_bl_ = bf.valid ? bf.t : base_lidar.t;
+        mount_r_il_ = r_il;
+        mount_t_il_ = t_il;
+        mount_valid_ = base_lidar.valid;
+        try {
+            const YAML::Node cy = YAML::LoadFile(base);
+            auto max_diff = [](const YAML::Node& n, const Eigen::Matrix3d& M) -> double {
+                if (!n || !n.IsSequence() || n.size() != 9) return -1.0;
+                double d = 0.0;
+                for (int i = 0; i < 9; ++i)
+                    d = std::max(d, std::fabs(n[i].as<double>() - M(i / 3, i % 3)));
+                return d;
+            };
+            const double d_il = have_extr ? max_diff(cy["r_il"], r_il) : -1.0;
+            const YAML::Node mount_node = cy["mount_r_base_lidar"] ? cy["mount_r_base_lidar"]
+                                                                : cy["bbs_mount_r"];
+            const double d_bl = base_lidar.valid ? max_diff(mount_node, r_bl_used) : -1.0;
+            if (d_il >= 0.0 && d_il > 0.02)
+                std::cout << "[compat] WARN r_il(yaml) vs TF max diff=" << d_il
+                          << " -> 外参请在 default.yaml 参数里更新" << std::endl;
+            if (d_bl >= 0.0 && d_bl > 0.02)
+                std::cout << "[compat] WARN mount_r_base_lidar(yaml) vs TF max diff=" << d_bl
+                          << " -> 安装姿态参数与 URDF/TF 不一致 (偏航轴会按 yaml 参数走)"
+                          << std::endl;
+        } catch (const std::exception&) {
+            // yaml 读失败不阻塞启动: 核心自己会报错
+        }
         std::cout << "[compat] extrinsic source = " << extr_src << std::endl;
         if (have_extr) {
             char eb[320];

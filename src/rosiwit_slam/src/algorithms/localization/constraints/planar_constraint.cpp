@@ -93,9 +93,8 @@ void PlanarConstraint::apply(PoseStamped& pose, const CloudType::Ptr& scan) {
     if (m_cfg.mode == "none") return;
 
     if (m_cfg.mode == "lock_zrp") {
-        const double yaw = std::atan2(pose.rot(1, 0), pose.rot(0, 0));
-        pose.rot = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix();
-        pose.trans.z() = m_cfg.z;
+        // 由核心 LocalizationPipeline::planarizePose() 每帧执行:
+        // 先扣安装角, 锁 body 的 z/roll/pitch, 再贴回安装角 (不再在这里抹掉安装角).
         return;
     }
 

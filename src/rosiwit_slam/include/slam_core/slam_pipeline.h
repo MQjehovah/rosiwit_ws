@@ -126,6 +126,11 @@ public:
     /// 按需触发一次全局重定位 (转发给定位流水线)
     void requestRelocalization() override;
     void setExecutor(rosiwit_common::IExecutor* ex) override;
+    /// 运行时注入安装外参: 转发给定位流水线 (扫描变换 + 偏航轴 up_body + 杆臂).
+    void setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar,
+                           const Eigen::Matrix3d& r_il,
+                           const Eigen::Vector3d& t_il,
+                           const Eigen::Vector3d& t_base_lidar) override;
     bool setGridMapGenerator(const std::string& name) override;
     bool setPipelineMode(const std::string& mode) override;
     std::string getPipelineMode() const override;

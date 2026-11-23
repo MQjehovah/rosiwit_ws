@@ -134,6 +134,23 @@ struct ScanMatcherConfig {
     bool   dynamic_filter = false;
     double dynamic_dist = 1.0;              // 与地图最近距离阈值(m), 超过视为动态
 
+    // 参与匹配的点高度带裁剪 (map 系, 相对地面).
+    // 地图没有地面点 -> 扫描地面点永远配不上, 只会撑大 coverage 分母 (实测 ~13%).
+    // 默认只裁地面: [match_z_min, match_z_max) = [0.15, 10000), 天花板不裁.
+    // 2026-11-23 现场要求: 地面在地图系 z≈0, 下界 0.15m 足够去掉地面/贴地点.
+    bool   match_z_filter = true;
+    double match_z_min = 0.15;              // 下界(m, 相对地面)
+    double match_z_max = 10000.0;           // 上界(m), 默认不裁天花板
+    // 裁剪坐标系: 由安装外参 (URDF/TF/参数) 注入 lidar->base_footprint 的**旋转+平移**.
+    // 地面在 base_footprint 系 z=0, 因此裁剪**与位姿 z 无关** —— 重定位/位姿 z 漂了也不会裁错.
+    // valid=false 时才退回用 guess 投到 map 系 (不推荐, 依赖位姿 z).
+    Eigen::Matrix3d crop_r = Eigen::Matrix3d::Identity();
+    bool   crop_r_valid = false;
+    // 雷达原点在 base_footprint 系的位置. **平移项不能省**: 点的离地高度 = (R·p + t).z,
+    // 只转不平移时裁剪面落在"雷达安装高度 + 阈值" —— 本机 0.844+0.15 = 0.99m, 把墙裙/
+    // 货架腿等近场约束点也裁掉了 (2026-11-23 回放对账: 实际裁掉 16~19% 而非预期的 ~13%).
+    Eigen::Vector3d crop_t = Eigen::Vector3d::Zero();
+
     // 2.5D 平面 NDT (matcher: ndt2d): 在 (x,y,yaw) 求解, z/roll/pitch 取自初值
     double ndt2d_cell = 0.5;                // 2D 高斯格尺寸(m), 通常比 3D 体素粗
     double ndt2d_z_min = -1.0;              // 参与 2D 投影的 z 下界(m)
@@ -160,6 +177,15 @@ struct MotionPriorConfig {
     double max_dt = 0.2;             // IMU 积分最大间隔(s)
     double max_vel = 10.0;           // 常速外推速度上限(m/s)
     bool   use_odom = false;         // 融合轮式里程计(默认关: 洗地机打滑不可信)
+    // 机体系 up 方向 (IMU 系): 由安装姿态参数给出 (TF/URDF/启动参数解析);
+    // false 时由加速度静态标定自动估计. 偏航角速度统一 = ω·up_body (slam_types.h: imuYawRate).
+    V3D    up_body = V3D::UnitZ();
+    bool   up_body_valid = false;
+    // 杆臂 (传感器系, slam_types.h: leverArmSensorFrame): 原地绕 base 自转时
+    // 雷达绕 base 划弧, 位置积分需要 ω×ρ 轨道项; false = 未注入, 保持旧行为.
+    V3D    lever_arm = V3D::Zero();
+    bool   lever_valid = false;
+    M3D    r_base_lidar = M3D::Identity();  // 体系速度(base系) -> 传感器系
     double slip_yaw_thresh = 0.3;    // 打滑判据: |odom_yaw_rate - imu_yaw_rate| 与它比较, 决定 odom 平移的权重
     double max_odom_speed = 3.0;     // odom 平移速度物理上限(m/s), 超出 = 打滑/毛刺样本, 降权
     // ---- imu_ekf 先验 (误差状态 EKF, 状态=[vx,vy] 体系速度) ----
@@ -248,6 +274,17 @@ struct PoseFusionConfig {
     double gain_rot = 0.8;                // 旋转增益上限
     double max_correction_trans = 0.15;   // 单帧最大平移修正 (m)
     double max_correction_rot_deg = 3.0;  // 单帧最大旋转修正 (deg)
+    double gravity = 9.81;                // 重力加速度 (m/s^2), 用于 up_body 自动估计
+    double gravity_tol = 0.5;             // 加速度模长与 g 的容差 (m/s^2)
+    // 机体系 up 方向 (IMU 系): 由安装外参参数给出 (URDF/TF/启动参数注入);
+    // false 时用加速度自动估计. 偏航角速度统一 = ω·up_body (slam_types.h: imuYawRate).
+    V3D    up_body = V3D::UnitZ();
+    bool   up_body_valid = false;
+    // 杆臂 (传感器系, slam_types.h: leverArmSensorFrame): 位置积分的 ω×ρ 轨道项,
+    // 与 EkfMotionPrior 同源; false = 未注入, 保持旧行为.
+    V3D    lever_arm = V3D::Zero();
+    bool   lever_valid = false;
+    M3D    r_base_lidar = M3D::Identity();  // 体系速度(base系) -> 传感器系
     double trans_cov_floor = 0.02;        // 匹配平移协方差下限 (m^2)
     double rot_cov_floor = 0.001;         // 匹配旋转协方差下限 (rad^2)
     double process_trans = 0.05;          // 每帧位置过程噪声 (m^2)

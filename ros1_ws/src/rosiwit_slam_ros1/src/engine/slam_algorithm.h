@@ -299,6 +299,14 @@ private:
     Cfg cfg_;
 
     std::string config_path_;
+    // 安装外参 (来源 URDF/TF/启动参数): 启动时解析一次, 建核心/重建核心后统一注入.
+    // 禁止任何转换假设"雷达正装" —— 偏航轴 up_body 也由它推导 (slam_types.h: imuYawRate).
+    Eigen::Matrix3d mount_r_bl_ = Eigen::Matrix3d::Identity();
+    Eigen::Matrix3d mount_r_il_ = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d mount_t_il_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d mount_t_bl_ = Eigen::Vector3d::Zero();  // 杆臂: 原地自转轨道项
+    bool mount_valid_ = false;
+    void applyMountToCore();
     std::unique_ptr<rosiwit_slam::ISlamAlgorithm> algo_;
     rosiwit_slam::ISlamAlgorithm* algo_raw_ = nullptr;
     rosiwit_slam::SlamBase* base_ = nullptr;

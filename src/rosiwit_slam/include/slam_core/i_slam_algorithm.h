@@ -20,6 +20,15 @@ public:
     /// 可选: 注入执行器 (线程池). 注入后核心内部的后台重活改投池执行,
     /// 不再自己 new 线程; 不注入时保持原有行为 (ROS2 路径不受影响).
     virtual void        setExecutor(rosiwit_common::IExecutor* /*ex*/) {}
+
+    /// 运行时注入安装外参 (雷达/IMU 安装姿态; 来源可以是 URDF / TF / 启动参数)。
+    /// **所有坐标与偏航轴转换必须从这里取**, 禁止任何地方假设"雷达正装"。
+    /// t_base_lidar: 雷达在 base 系的安装平移 (杆臂, 原地自转的轨道项)。
+    /// 未注入时退回配置默认值 (仅用于无 ROS 环境的单测/仿真)。
+    virtual void setMountExtrinsic(const Eigen::Matrix3d& /*r_base_lidar*/,
+                                   const Eigen::Matrix3d& /*r_il*/,
+                                   const Eigen::Vector3d& /*t_il*/,
+                                   const Eigen::Vector3d& /*t_base_lidar*/) {}
     virtual void        onImu(const IMUSample& s) = 0;
     virtual void        onLidar(const LidarFrame& f) = 0;
     /// 图像输入（LIVO 前端使用；默认忽略，不影响纯 LIO 管线）。

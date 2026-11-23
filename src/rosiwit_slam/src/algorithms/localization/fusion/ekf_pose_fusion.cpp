@@ -69,6 +69,14 @@ void EkfPoseFusion::reset(const PoseStamped& pose) {
     m_have_prev_match = false;
     m_odom_slip_weight = 1.0;
     m_diag = FusionDiag{};
+    m_hist.clear();
+    {
+        PoseStamped h;
+        h.time = pose.time;
+        h.trans = m_p;
+        h.rot = m_R;
+        m_hist.emplace_back(pose.time, h);
+    }
 }
 
 void EkfPoseFusion::resetRelative() {
@@ -78,30 +86,80 @@ void EkfPoseFusion::resetRelative() {
 
 void EkfPoseFusion::onImu(const IMUSample& s) {
     if (!m_valid) return;
+    // 机体 up 方向 (IMU 系): IMU 可能随雷达俯装 (TF/URDF/参数里定义), gyro.z 不是偏航角速度.
+    // 偏航角速度必须投影: yaw_rate = ω·up_body (统一走 slam_types.h: imuYawRate, 不允许写死 gyro.z).
+    // 首次直接取加速度方向; 之后极慢跟踪, 只跟安装漂移, 不跟运动加速度.
+    V3D up;
+    if (m_cfg.up_body_valid) {
+        // 参数优先: 安装姿态来自 TF/URDF/启动参数, 由定位管线解析后写进 config.
+        m_up_body = m_cfg.up_body;
+        m_up_valid = true;
+    } else if (accelUpBody(s.acc, m_cfg.gravity, m_cfg.gravity_tol, up)) {
+        if (!m_up_valid) { m_up_body = up; m_up_valid = true; }
+        else m_up_body = (0.9999 * m_up_body + 0.0001 * up).normalized();
+    }
+    if (!m_up_valid) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cout << "[EkfPoseFusion] WARN up_body unknown (无安装外参且加速度不可用), "
+                         "暂时按 IMU z 轴积分" << std::endl;
+        }
+    }
+    const double yaw_rate = imuYawRate(s.gyro, m_up_body);
+
     if (!m_have_imu) {
         m_last_imu_time = s.time;
         m_have_imu = true;
-        m_gyro_z = s.gyro.z();
+        m_gyro_z = yaw_rate;
         return;
     }
     const double dt = s.time - m_last_imu_time;
     if (dt <= 0.0 || dt > 0.2) {
         m_last_imu_time = s.time;
-        m_gyro_z = s.gyro.z();
+        m_gyro_z = yaw_rate;
         return;
     }
     // 姿态: 只积分 yaw; roll/pitch 由匹配与重力约束保持 (v1 简化, 见设计文档)
-    m_theta.z() = normAngle(m_theta.z() + (s.gyro.z() - m_gyro_bias_z) * dt);
+    m_theta.z() = normAngle(m_theta.z() + (yaw_rate - m_gyro_bias_z) * dt);
+    m_diag_yaw_int += yaw_rate * dt;
+    {
+        static int dn = 0;
+        if (++dn % 400 == 0) {   // 2s @200Hz
+            std::cout << "[ImuDiag] fusion_yaw=" << m_theta.z() * 57.2957795
+                      << " proj_int=" << m_diag_yaw_int * 57.2957795
+                      << " gz=" << s.gyro.z() << " yaw_rate=" << yaw_rate
+                      << " up=(" << m_up_body.x() << "," << m_up_body.y() << "," << m_up_body.z() << ")"
+                      << std::endl;
+        }
+    }
     m_R = rpyToRot(m_theta);
-    // 位置: 体体系速度 -> 世界系
-    m_p += m_R * Eigen::Vector3d(m_v.x(), m_v.y(), 0.0) * dt;
+    // 位置: ṗ_lidar = R·(R_blᵀ·v_base + ω_s×ρ) —— 与 EkfMotionPrior 同款杆臂轨道项
+    // (slam_types.h: leverArmSensorFrame). 缺它时原地转 180° 位置误差 ≈0.83m.
+    m_w_s = s.gyro;
+    {
+        const Eigen::Vector3d v_sensor = m_cfg.lever_valid
+            ? m_cfg.r_base_lidar.transpose() * Eigen::Vector3d(m_v.x(), m_v.y(), 0.0)
+            : Eigen::Vector3d(m_v.x(), m_v.y(), 0.0);
+        const Eigen::Vector3d orbit = m_cfg.lever_valid
+            ? m_w_s.cross(m_cfg.lever_arm) : Eigen::Vector3d::Zero();
+        m_p += m_R * (v_sensor + orbit) * dt;
+    }
     // 协方差扩散
     m_P.head<3>().array() += m_cfg.process_rot * dt;
     m_P.tail<3>().array() += m_cfg.process_trans * dt;
     m_v_cov += Eigen::Matrix2d::Identity() * (0.5 * dt);
     m_last_imu_time = s.time;
     m_time = s.time;
-    m_gyro_z = s.gyro.z();
+    {
+        PoseStamped h;
+        h.time = s.time;
+        h.trans = m_p;
+        h.rot = m_R;
+        m_hist.emplace_back(s.time, h);
+        while (m_hist.size() > 600) m_hist.pop_front();
+    }
+    m_gyro_z = yaw_rate;
 }
 
 void EkfPoseFusion::onOdom(const PoseStamped& odom) {
@@ -179,9 +237,26 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
         reset(pose);
         return;
     }
-    // ---- 新息 ----
-    const Eigen::Vector3d e_rot = rotLog(pose.rot * m_R.transpose());
-    const Eigen::Vector3d e_trans = pose.trans - m_p;
+    // ---- 延迟观测: 先把状态退回到匹配时刻 t_a (2026-11-23) ----
+    // IMU 从回调线程实时积分, 匹配到达时状态已在 now = 最新 IMU 时刻, 晚于帧末
+    // t_a (处理延迟 0.1~0.4s). 旧实现直接拿 pose(t_a) 与 now 的状态比, 转弯时
+    // 新息里混着 ω·(now - t_a) (回放 ~10°), 被当成误差往回拉 -> 融合 yaw 恒落后
+    // IMU 积分 ([ImuDiag] 实测少 35°), 发布位姿的 yaw 跟不上转弯.
+    // 相对运动与锚点无关: 退回 t_a -> 算新息/修正 -> 把 (t_a, now] 的相对运动接回.
+    PoseStamped S_a;                                  // t_a 时刻的滤波器状态
+    Eigen::Matrix3d dR_rel = Eigen::Matrix3d::Identity();   // t_a -> now 相对旋转
+    Eigen::Vector3d dp_rel = Eigen::Vector3d::Zero();       // t_a -> now 相对位移 (t_a 系)
+    const bool delayed = histAt(pose.time, S_a);
+    if (delayed) {
+        dR_rel = S_a.rot.transpose() * m_R;
+        dp_rel = S_a.rot.transpose() * (m_p - S_a.trans);
+    } else {
+        S_a.trans = m_p;
+        S_a.rot = m_R;
+    }
+    // ---- 新息 (与匹配同时刻) ----
+    const Eigen::Vector3d e_rot = rotLog(pose.rot * S_a.rot.transpose());
+    const Eigen::Vector3d e_trans = pose.trans - S_a.trans;
     // ---- 观测噪声 (rot 在前, trans 在后) + 下限 ----
     Eigen::Matrix<double, 6, 1> Rdiag;
     for (int i = 0; i < 3; ++i) {
@@ -235,14 +310,32 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
         d_trans.setZero();
         ++m_diag.rejected_in_place;
     }
-    // ---- 应用 ----
-    m_p += d_trans;
+    // ---- 应用: 先修到 t_a 的状态, 再把 (t_a, now] 的相对运动接回来 ----
+    const Eigen::Vector3d p_fix = S_a.trans + d_trans;
     Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
     if (d_rot.norm() > 1e-12) axis = d_rot / d_rot.norm();
     const Eigen::Matrix3d dR = Eigen::AngleAxisd(d_rot.norm(), axis).toRotationMatrix();
-    m_R = dR * m_R;
+    const Eigen::Matrix3d R_fix = dR * S_a.rot;
+    if (delayed) {
+        m_p = p_fix + R_fix * dp_rel;
+        m_R = R_fix * dR_rel;
+    } else {
+        m_p = p_fix;
+        m_R = R_fix;
+    }
     m_R = Eigen::Quaterniond(m_R).normalized().toRotationMatrix();
     m_theta = rotToRpy(m_R);
+    // 历史尾部同步重锚 (下一次延迟观测要用修正后的链)
+    if (delayed) {
+        for (auto& e : m_hist) {
+            if (e.first <= pose.time) continue;
+            const Eigen::Vector3d rel_p = S_a.rot.transpose() * (e.second.trans - S_a.trans);
+            const Eigen::Matrix3d rel_R = S_a.rot.transpose() * e.second.rot;
+            e.second.trans = p_fix + R_fix * rel_p;
+            e.second.rot = R_fix * rel_R;
+        }
+        while (!m_hist.empty() && m_hist.front().first < pose.time) m_hist.pop_front();
+    }
     // ---- 协方差更新 ----
     for (int i = 0; i < 6; ++i) {
         m_P(i) = (1.0 - gain(i)) * m_P(i);
@@ -346,15 +439,53 @@ void EkfPoseFusion::onRelative(const PoseStamped& pose,
     anchor();   // 修正后重新锚定 (等价于滤波器的观测更新)
 }
 
+bool EkfPoseFusion::histAt(double t, PoseStamped& out) const {
+    if (m_hist.size() < 2) return false;
+    if (t < m_hist.front().first || t > m_hist.back().first) return false;
+    size_t lo = 0, hi = m_hist.size() - 1;
+    while (hi - lo > 1) {
+        const size_t mid = (lo + hi) / 2;
+        if (m_hist[mid].first <= t) lo = mid; else hi = mid;
+    }
+    const auto& a = m_hist[lo];
+    const auto& b = m_hist[hi];
+    const double d = b.first - a.first;
+    const double u = (d > 1e-9) ? std::max(0.0, std::min(1.0, (t - a.first) / d)) : 0.0;
+    Eigen::Quaterniond qa(a.second.rot), qb(b.second.rot);
+    qa.normalize();
+    qb.normalize();
+    out = a.second;
+    out.rot = qa.slerp(u, qb).toRotationMatrix();
+    out.trans = (1.0 - u) * a.second.trans + u * b.second.trans;
+    out.time = t;
+    return true;
+}
+
 PoseStamped EkfPoseFusion::predict(double t) const {
     PoseStamped out;
-    out.time = t;
-    out.trans = m_p;
-    out.rot = m_R;
-    out.vel = m_R * Eigen::Vector3d(m_v.x(), m_v.y(), 0.0);
+    // **过去时刻: 历史插值** (2026-11-23). 延迟观测修正后状态始终在"最新 IMU 时刻",
+    // 帧末 t_a 比它早一个处理延迟; 直接返回当前状态 = 拿"现在"的位姿盖 t_a 的时间戳,
+    // 转弯 40°/s × 0.2s 就差 8°. 历史尾部已随观测重锚, 插值出来的就是修正后的位姿.
+    const bool past = histAt(t, out);
+    if (!past) {
+        out.time = t;
+        out.trans = m_p;
+        out.rot = m_R;
+    }
+    const Eigen::Vector3d v_sensor = m_cfg.lever_valid
+        ? m_cfg.r_base_lidar.transpose() * Eigen::Vector3d(m_v.x(), m_v.y(), 0.0)
+        : Eigen::Vector3d(m_v.x(), m_v.y(), 0.0);
+    out.vel = out.rot * v_sensor;
     const double dt = (m_last_imu_time > 0.0) ? (t - m_last_imu_time) : 0.0;
-    if (dt > 0.0 && dt < 0.5) {
-        out.trans += m_R * Eigen::Vector3d(m_v.x(), m_v.y(), 0.0) * dt;
+    if (!past && dt > 0.0 && dt < 0.5) {
+        const Eigen::Vector3d orbit = m_cfg.lever_valid
+            ? m_w_s.cross(m_cfg.lever_arm) : Eigen::Vector3d::Zero();
+        // 姿态同样外推: 帧末比最新 IMU 晚几 ms~几十 ms, 不外推 = 每帧固定落后 ω·dt
+        const Eigen::Vector3d dw = m_w_s * dt;
+        const double an = dw.norm();
+        if (an > 1e-12)
+            out.rot = m_R * Eigen::AngleAxisd(an, dw / an).toRotationMatrix();
+        out.trans += m_R * (v_sensor + orbit) * dt;
     }
     return out;
 }

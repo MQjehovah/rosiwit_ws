@@ -3,8 +3,12 @@
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/registration_metrics.h"
 #include <chrono>
+#include <cstdlib>
 
 namespace rosiwit_slam {
+
+// 诊断探针开关 (与 localization_pipeline.cpp 同一环境变量, 默认静默)
+static const bool kLocProbe = std::getenv("ROSIWIT_LOC_PROBE") != nullptr;
 
 void GicpMatcher::configure(const ScanMatcherConfig& cfg) {
     m_cfg = cfg;
@@ -43,6 +47,34 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     CloudType::Ptr src_all = src;                  // 诚实覆盖率用(不剔除)
     if (probe) ms_ds = ms_since(t0);
     const Eigen::Matrix4d guess_T = poseToMatrix(guess);
+    // 高度带裁剪 (map 系): 去掉地面/贴地点, 上界默认 10000 = 不裁天花板.
+    // 地图没有地面点, 扫描地面点参与配准只会永远"配不上", 把 coverage 分母撑大
+    // (实测地面约占降采样后源点的 13%, 匹配度因此被压低 ~10 个百分点).
+    // 注意: 裁剪按**猜测位姿**投到 map 系, 与后面配准用的是同一个 T, 不会引入额外误差.
+    if (m_cfg.match_z_filter && m_cfg.match_z_max > m_cfg.match_z_min) {
+        CloudType::Ptr kept(new CloudType());
+        kept->reserve(src->size());
+        if (m_cfg.crop_r_valid) {
+            // 安装外参已注入: 转到 base_footprint 系裁剪 (地面 z=0), 与位姿 z 无关.
+            // 离地高度 = (R·p + t).z: 平移项 t 是雷达安装高度 (本机 0.844m), 不能省 ——
+            // 省了裁剪面就在 0.99m 而不是 0.15m (2026-11-23).
+            const Eigen::Matrix3d& R = m_cfg.crop_r;
+            const double z_off = m_cfg.crop_t.z();
+            for (const auto& p : src->points) {
+                const double zf = R(2, 0) * p.x + R(2, 1) * p.y + R(2, 2) * p.z + z_off;
+                if (zf > m_cfg.match_z_min && zf < m_cfg.match_z_max) kept->push_back(p);
+            }
+        } else {
+            // 兜底(无外参): 按 guess 投到 map 系; 依赖位姿 z, 仅用于单测/仿真.
+            const Eigen::Matrix3d Rz = guess_T.block<3, 3>(0, 0);
+            const double tz = guess_T(2, 3);
+            for (const auto& p : src->points) {
+                const double wz = Rz(2, 0) * p.x + Rz(2, 1) * p.y + Rz(2, 2) * p.z + tz;
+                if (wz > m_cfg.match_z_min && wz < m_cfg.match_z_max) kept->push_back(p);
+            }
+        }
+        src = kept;
+    }
     if (m_cfg.dynamic_filter && m_cfg.dynamic_dist > 0) {
         // 源点在雷达系, 目标地图在世界系; 必须用 guess 变换后再查地图.
         src = filterByMapProximity(src, m_kdtree, guess_T, m_cfg.dynamic_dist);
@@ -73,6 +105,41 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     const auto t2 = std::chrono::steady_clock::now();
     const CoverageStats cs = evaluateCoverage(m_kdtree, *src, T, m_cfg.inlier_dist);
     out.fitness = cs.coverage;
+    // [FitSweep] 低分帧诊断: 以当前位姿为中心, 在 yaw/roll/pitch 上小范围扫描覆盖率,
+    // 判断偏差主轴 —— 哪个轴能把覆盖率救回来, 偏的就是哪个轴 (约定/时序/安装角).
+    if (kLocProbe && out.fitness < 0.6 && m_target && !m_target->empty()) {
+        static int sweep_n = 0;
+        if (++sweep_n % 5 == 0) {
+            std::cout << "[FitSweep] base=" << out.fitness;
+            for (double dy : {-10.0, -5.0, -2.0, 0.0, 2.0, 5.0, 10.0}) {
+                Eigen::Matrix4d Tp = T;
+                Tp.block<3,3>(0,0) =
+                    Eigen::AngleAxisd(dy * M_PI / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix()
+                    * T.block<3,3>(0,0);
+                std::cout << " yaw" << dy << "="
+                          << evaluateCoverage(m_kdtree, *src, Tp, m_cfg.inlier_dist).coverage;
+            }
+            for (double dx : {-0.5, -0.25, 0.25, 0.5}) {
+                Eigen::Matrix4d Tp = T;
+                Tp(0,3) += dx;
+                std::cout << " x" << dx << "="
+                          << evaluateCoverage(m_kdtree, *src, Tp, m_cfg.inlier_dist).coverage;
+            }
+            for (double dy : {-0.5, -0.25, 0.25, 0.5}) {
+                Eigen::Matrix4d Tp = T;
+                Tp(1,3) += dy;
+                std::cout << " y" << dy << "="
+                          << evaluateCoverage(m_kdtree, *src, Tp, m_cfg.inlier_dist).coverage;
+            }
+            for (double dz : {-0.2, 0.2}) {
+                Eigen::Matrix4d Tp = T;
+                Tp(2,3) += dz;
+                std::cout << " z" << dz << "="
+                          << evaluateCoverage(m_kdtree, *src, Tp, m_cfg.inlier_dist).coverage;
+            }
+            std::cout << std::endl;
+        }
+    }
     // 诚实覆盖率: 同一阈值, 但分母是未做动态剔除的全部降采样点
     if (src_all && src_all != src)
         out.fitness_all = evaluateCoverage(m_kdtree, *src_all, T, m_cfg.inlier_dist).coverage;

@@ -100,7 +100,9 @@ void ImuMotionPrior::onImu(const IMUSample& s) {
     }
 
     m_last_imu_time = s.time;
-    m_gyro_yaw_rate = s.gyro.z();   // 机体系偏航角速度(用于打滑判据)
+    // 机体系偏航角速度(用于打滑判据): 投影到重力轴, 俯装 IMU 的 gyro.z 只有真实转速 ~81%.
+    const V3D up_axis = m_cfg.up_body_valid ? m_cfg.up_body : m_up_body;
+    m_gyro_yaw_rate = imuYawRate(s.gyro, up_axis);
 }
 
 void ImuMotionPrior::onOdom(const PoseStamped& odom) {

@@ -31,6 +31,7 @@ public:
     void onOdom(const PoseStamped& odom) override;
     PoseStamped predict(double t) override;
     void onMatch(const PoseStamped& pose) override;
+    bool gyroDelta(double t0, double t1, Eigen::Quaterniond& dq) override;
 
     // 测试/诊断
     Eigen::Vector2d velocity() const { return m_v; }
@@ -44,6 +45,11 @@ public:
 
 private:
     bool velocityUpdate(const Eigen::Vector2d& z, double r_var);
+    /// 历史插值: t ∈ [front, back] 时返回该时刻位姿, 否则 false.
+    bool histAt(double t, PoseStamped& out) const;
+    /// 延迟锚定: 把位姿锚到 pose(时刻 t_a ≤ 最新 IMU 时刻), 并把旧历史链上
+    /// (t_a, now] 的**相对运动**整体接到新锚点上 (历史尾部重锚).
+    void reanchorHistory(const PoseStamped& pose);
     MotionPriorConfig m_cfg;
     PoseStamped m_pose;
 
@@ -65,6 +71,15 @@ private:
     double m_odom_z_vs_v_deg = 0.0;
     int m_odom_probe = 0;
 
+    // IMU 姿态历史: 雷达帧 end_time 常比"最新 IMU 时刻"早 0.1~0.2s,
+    // predict(t) 对过去时刻必须插值历史; 否则返回的是未来姿态, 转弯时超前
+    // (45°/s × 0.2s = 9°, 10m 处错 1.5m -> 匹配度从 0.95 掉到 0.4).
+    std::deque<std::pair<double, PoseStamped>> m_hist;
+    // 自由陀螺积分 (不受 onMatch 锚定/reset 影响): deskew 帧内相对旋转的唯一来源.
+    // 位姿链滞后(实测转弯落后 20°)时, 用位姿差做帧内插值会欠去畸变(5° 只补 1°),
+    // 扫描被抹开 -> 覆盖率天花板 0.65 < 接受线 0.7 -> 拒帧 -> 更滞后 (死亡螺旋).
+    Eigen::Quaterniond m_q_free = Eigen::Quaterniond::Identity();
+    std::deque<std::pair<double, Eigen::Quaterniond>> m_qhist;
     // IMU 积分
     double m_last_imu_time = -1.0;
     bool m_first_imu = false;
@@ -79,6 +94,8 @@ private:
     // match 间隔 (速度弱观测)
     double m_last_match_time = -1.0;
     V3D m_last_match_trans = V3D::Zero();
+    M3D m_last_match_rot = M3D::Identity();  // 杆臂换算用: base 原点位移 = Δp_lidar - (R'-R)·ρ
+    V3D m_last_w = V3D::Zero();              // 最近传感器系角速度 (predict 外推的轨道项用)
 
     // L11 静止标定 + 重力姿态校正 (与 ImuMotionPrior 同款实现)
     V3D m_gyro_bias = V3D::Zero();

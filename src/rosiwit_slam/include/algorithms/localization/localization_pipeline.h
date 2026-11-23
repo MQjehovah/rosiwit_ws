@@ -36,6 +36,14 @@ public:
     /// 注入线程池: 重定位建库 / 全局搜索改投池; 不注入则保持自带线程
     void setExecutor(rosiwit_common::IExecutor* ex) override { m_executor = ex; }
     void setMapData(const MapData& data) override;
+    /// 运行时注入安装外参 (来自 URDF/TF/启动参数); 统一驱动扫描变换与偏航轴 up_body.
+    void setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar,
+                           const Eigen::Matrix3d& r_il,
+                           const Eigen::Vector3d& t_il,
+                           const Eigen::Vector3d& t_base_lidar) override;
+    /// 地面机器人约束: 位姿 = x/y/yaw + 固定安装姿态 (R=Rz(yaw)*R_mount, z=安装高度).
+    /// 竖直墙 + 无地面地图下, z/roll/pitch 是弱观测, 漂了会让远处墙点全部错开.
+    void planarizePose(PoseStamped& p) const;
     void cancelSetMap() override { m_cancel_set_map.store(true); }
     void setInitPose(const PoseStamped& pose) override;
     void onImu(const IMUSample& s) override;
@@ -116,6 +124,11 @@ private:
     // 建图前端在内部做了这个变换, 定位路径没有; 实机雷达前倾 43 度时,
     // 不改会把雷达系点云直接和 IMU/车体系的图做匹配, 永远收敛不了。
     bool m_lidar_to_imu_valid = false;
+    Eigen::Matrix3d m_base_r = Eigen::Matrix3d::Identity();  // base_footprint <- lidar 安装旋转
+    bool   m_base_r_valid = false;
+    double m_fixed_z = -1.0;                                  // 雷达在地图系的目标高度, <0 = 未设
+    double m_planar_z = 0.0;                                   // planar.z: body(车底) 目标高度
+    bool   m_fix_planar = true;                               // 地面约束开关
     Eigen::Matrix4f m_lidar_to_imu = Eigen::Matrix4f::Identity();
     MaintainerConfig    m_maintainer_cfg;
 

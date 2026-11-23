@@ -30,6 +30,10 @@ public:
     /// 配准/重定位观测反馈, 校正先验状态
     virtual void onMatch(const PoseStamped& pose) = 0;
 
+    /// 陀螺自由积分的帧内相对旋转: dq = q(t0)⁻¹·q(t1) (传感器系, 不受匹配锚定影响).
+    /// deskew 用它做帧内插值 —— 位姿链滞后时不污染去畸变. false = 未实现/时间超界.
+    virtual bool gyroDelta(double /*t0*/, double /*t1*/, Eigen::Quaterniond& /*dq*/) { return false; }
+
     virtual void configure(const MotionPriorConfig& /*cfg*/) {}
 
     /// 先验的等效不确定度 (米 / 弧度). <0 表示不可用 (实现未提供).

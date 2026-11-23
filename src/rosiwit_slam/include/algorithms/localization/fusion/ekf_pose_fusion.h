@@ -1,6 +1,7 @@
 // include/algorithms/localization/fusion/ekf_pose_fusion.h
 #pragma once
 #include <Eigen/Eigen>
+#include <deque>
 #include <string>
 #include "slam_core/i_pose_fusion.h"
 
@@ -42,8 +43,14 @@ public:
 private:
     static void yawOf(const Eigen::Matrix3d& R, double& yaw);
     static Eigen::Matrix3d yawToRot(double yaw);
+    /// 延迟观测用: 历史插值, t ∈ [front, back] 时返回该时刻的滤波器状态
+    bool histAt(double t, PoseStamped& out) const;
 
     PoseFusionConfig m_cfg;
+
+    // 状态历史 (~3s @200Hz): 匹配观测属于帧末时刻 t_a, 到达时 IMU 已积到 now.
+    // 延迟观测必须先把状态退回 t_a (2026-11-23, 见 onMatch)
+    std::deque<std::pair<double, PoseStamped>> m_hist;
 
     bool   m_valid = false;
     double m_time = -1.0;
@@ -62,6 +69,13 @@ private:
     bool   m_have_imu = false;
     double m_gyro_z = 0.0;
     double m_gyro_bias_z = 0.0;
+    Eigen::Vector3d m_w_s = Eigen::Vector3d::Zero();  // 传感器系角速度 (杆臂轨道项用)
+    // 机体 up 方向 (IMU 系). 本车 IMU 随雷达俯装 ~38°, gyro.z **不是**偏航角速度,
+    // 必须投影: yaw_rate = ω·up_body. 直接用 gyro.z 会让转弯转速少算 ~22%
+    // (转 180° 丢 38°) —— 2026-11-23 实机"一转弯就丢定位"的根因.
+    Eigen::Vector3d m_up_body = Eigen::Vector3d::UnitZ();
+    bool m_up_valid = false;
+    double m_diag_yaw_int = 0.0;   // 诊断: 融合层投影积分累计(rad)
 
     PoseStamped m_last_odom;
     double m_last_odom_time = -1.0;

@@ -27,6 +27,10 @@ inline Eigen::Matrix2d yawRot(double th) {
 }   // namespace
 
 void EkfMotionPrior::reset(const PoseStamped& pose) {
+    m_hist.clear();
+    m_hist.emplace_back(pose.time, pose);
+    m_q_free = Eigen::Quaterniond::Identity();
+    m_qhist.clear();
     m_pose = pose;
     m_v.setZero();
     m_P = Eigen::Matrix2d::Identity() * 1.0;   // 初值不确定度 1 m/s
@@ -35,6 +39,8 @@ void EkfMotionPrior::reset(const PoseStamped& pose) {
     m_first_imu = false;
     m_have_odom = false;
     m_odom_time = -1.0;
+    m_last_w = V3D::Zero();
+    m_last_match_rot = pose.rot;
     m_last_match_time = pose.time;
     m_last_match_trans = pose.trans;
     m_gyro_bias.setZero();
@@ -82,14 +88,33 @@ void EkfMotionPrior::onImu(const IMUSample& s) {
     if (dt <= 0.0 || dt > m_cfg.max_dt) { m_last_imu_time = s.time; return; }
 
     // ---- 姿态: 陀螺积分(去零偏) ----
-    const V3D angle_inc = (s.gyro - m_gyro_bias) * dt;
+    const V3D w_s = s.gyro - m_gyro_bias;   // 传感器系角速度
+    const V3D angle_inc = w_s * dt;
     const double an = angle_inc.norm();
     if (an > 1e-12)
         m_pose.rot = m_pose.rot * Eigen::AngleAxisd(an, angle_inc / an).toRotationMatrix();
 
-    // ---- 位置: R(θ)·v·dt ----
-    m_pose.trans += m_pose.rot * V3D(m_v.x(), m_v.y(), 0.0) * dt;
-    m_pose.vel = m_pose.rot * V3D(m_v.x(), m_v.y(), 0.0);
+    // ---- 自由陀螺积分: deskew 帧内相对旋转 (与锚定无关, 见头文件注释) ----
+    if (an > 1e-12)
+        m_q_free = m_q_free * Eigen::Quaterniond(Eigen::AngleAxisd(an, angle_inc / an));
+    else
+        m_q_free = m_q_free * Eigen::Quaterniond(1.0, angle_inc.x() * 0.5, angle_inc.y() * 0.5,
+                                                 angle_inc.z() * 0.5);
+    m_q_free.normalize();
+    m_qhist.emplace_back(s.time, m_q_free);
+    while (m_qhist.size() > 500) m_qhist.pop_front();
+
+    // ---- 位置: ṗ_lidar = R·(R_blᵀ·v_base + ω_s×ρ) ----
+    // v 是体系(base)速度, 需先转到传感器系; ω_s×ρ 是绕 base 自转时雷达绕 base
+    // 划弧的轨道项 (slam_types.h: leverArmSensorFrame). 缺它时原地转 180° 位置
+    // 误差 2|ρ_xy|≈0.83m 且方向随转向旋转 —— 2026-11-23 "一转弯就丢"根因.
+    m_last_w = w_s;
+    const V3D v_sensor = m_cfg.lever_valid
+                             ? m_cfg.r_base_lidar.transpose() * V3D(m_v.x(), m_v.y(), 0.0)
+                             : V3D(m_v.x(), m_v.y(), 0.0);
+    const V3D orbit = m_cfg.lever_valid ? w_s.cross(m_cfg.lever_arm) : V3D::Zero();
+    m_pose.trans += m_pose.rot * (v_sensor + orbit) * dt;
+    m_pose.vel = m_pose.rot * v_sensor;
 
     // ---- 协方差扩散 (速度随机游走) ----
     m_P += Eigen::Matrix2d::Identity() * (m_cfg.ekf_q_v * dt);
@@ -112,7 +137,12 @@ void EkfMotionPrior::onImu(const IMUSample& s) {
     }
 
     m_last_imu_time = s.time;
-    m_gyro_yaw_rate = s.gyro.z();
+    // 机体系偏航角速度: 必须投影到重力轴 —— 本车 IMU 俯装 ~38°, gyro.z 只有真实转速的 ~81%.
+    const V3D up_axis = m_cfg.up_body_valid ? m_cfg.up_body : m_up_body;
+    m_gyro_yaw_rate = imuYawRate(s.gyro, up_axis);
+    // 姿态历史 (~2s @200Hz): 供 predict(t) 对"过去时刻"插值
+    m_hist.emplace_back(s.time, m_pose);
+    while (m_hist.size() > 500) m_hist.pop_front();
 }
 
 void EkfMotionPrior::onOdom(const PoseStamped& odom) {
@@ -195,17 +225,109 @@ bool EkfMotionPrior::velocityUpdate(const Eigen::Vector2d& z, double r_var) {
     return true;
 }
 
+bool EkfMotionPrior::gyroDelta(double t0, double t1, Eigen::Quaterniond& dq) {
+    if (m_qhist.size() < 2 || t1 <= t0) return false;
+    if (t0 < m_qhist.front().first || t1 > m_qhist.back().first) return false;
+    auto interp = [&](double t, Eigen::Quaterniond& q) -> bool {
+        size_t lo = 0, hi = m_qhist.size() - 1;
+        while (hi - lo > 1) {
+            const size_t mid = (lo + hi) / 2;
+            if (m_qhist[mid].first <= t) lo = mid; else hi = mid;
+        }
+        const auto& a = m_qhist[lo];
+        const auto& b = m_qhist[hi];
+        const double d = b.first - a.first;
+        const double u = (d > 1e-9) ? std::max(0.0, std::min(1.0, (t - a.first) / d)) : 0.0;
+        q = a.second.slerp(u, b.second);
+        return true;
+    };
+    Eigen::Quaterniond qa, qb;
+    if (!interp(t0, qa) || !interp(t1, qb)) return false;
+    dq = (qa.conjugate() * qb).normalized();
+    return std::isfinite(dq.w()) && std::isfinite(dq.x()) && std::isfinite(dq.y()) &&
+           std::isfinite(dq.z());
+}
+
 PoseStamped EkfMotionPrior::predict(double t) {
-    PoseStamped p = m_pose;
-    // 外推到 t: 两次 IMU 之间/之后用当前速度推进 (接口契约是"t 时刻位姿";
+    // **过去时刻: 用历史插值** (雷达帧 end_time 比最新 IMU 早 0.1~0.2s).
+    // 只做向前外推会把"未来姿态"当成帧末姿态: 转弯 45°/s 时超前 0.2s*45=9°,
+    // 10m 处错 1.5m -> 匹配度 0.95 -> 0.4 (2026-11-23 根因).
+    PoseStamped p;
+    if (histAt(t, p)) return p;
+    if (!m_hist.empty() && t <= m_hist.front().first) return m_hist.front().second;
+
+    // 未来时刻: 从最新积分位姿外推 (两次 IMU 之间/之后; 接口契约是"t 时刻位姿";
     // 2026-10-17 单测抓到旧实现只返回最后积分位姿, 不外推)
+    p = m_pose;
     const double dt = t - m_last_imu_time;
+    // 前向外推同样要带杆臂轨道项 (与 onImu 一致), 否则转弯中外推位置脱离圆弧.
+    const V3D v_sensor = m_cfg.lever_valid
+                             ? m_cfg.r_base_lidar.transpose() * V3D(m_v.x(), m_v.y(), 0.0)
+                             : V3D(m_v.x(), m_v.y(), 0.0);
+    const V3D orbit = m_cfg.lever_valid ? m_last_w.cross(m_cfg.lever_arm) : V3D::Zero();
     if (dt > 0.0 && dt < 0.5) {
-        p.trans += m_pose.rot * V3D(m_v.x(), m_v.y(), 0.0) * dt;
+        // 姿态也必须外推 (2026-11-23): 帧末比最新 IMU 晚几 ms~几十 ms 是常态,
+        // 姿态原样返回 = 每帧固定落后 ω·dt (45°/s × 20ms ≈ 1°), 白白抬高 GICP 初值误差.
+        const V3D dw = m_last_w * dt;
+        const double an = dw.norm();
+        if (an > 1e-12)
+            p.rot = m_pose.rot * Eigen::AngleAxisd(an, dw / an).toRotationMatrix();
+        p.trans += m_pose.rot * (v_sensor + orbit) * dt;
     }
     p.time = t;
-    p.vel = m_pose.rot * V3D(m_v.x(), m_v.y(), 0.0);
+    p.vel = m_pose.rot * v_sensor;
     return p;
+}
+
+bool EkfMotionPrior::histAt(double t, PoseStamped& out) const {
+    if (m_hist.size() < 2) return false;
+    if (t < m_hist.front().first || t > m_hist.back().first) return false;
+    size_t lo = 0, hi = m_hist.size() - 1;
+    while (hi - lo > 1) {
+        const size_t mid = (lo + hi) / 2;
+        if (m_hist[mid].first <= t) lo = mid; else hi = mid;
+    }
+    const auto& a = m_hist[lo];
+    const auto& b = m_hist[hi];
+    const double d = b.first - a.first;
+    const double u = (d > 1e-9) ? std::max(0.0, std::min(1.0, (t - a.first) / d)) : 0.0;
+    Eigen::Quaterniond qa(a.second.rot), qb(b.second.rot);
+    qa.normalize();
+    qb.normalize();
+    out = a.second;
+    out.rot = qa.slerp(u, qb).toRotationMatrix();
+    out.trans = (1.0 - u) * a.second.trans + u * b.second.trans;
+    out.time = t;
+    return true;
+}
+
+void EkfMotionPrior::reanchorHistory(const PoseStamped& pose) {
+    // **延迟锚定必须补回 (t_a, now] 的相对运动** (2026-11-23 "一转弯就丢" 根因).
+    // IMU 从回调线程实时积分; 一帧处理完 (0.1~0.4s) 再 onMatch 时, 最新 IMU 时刻
+    // now 已晚于帧末 t_a. 旧实现直接 m_pose = pose, 等于丢掉这段陀螺积分 ->
+    // 下一步预测缺 ω·(now - t_a): 回放逐帧对账 guess 每步只转 +2~4° 而真值
+    // -9~-11° (35°/s × 0.3s ≈ 10°/帧), 滞后累积到 GICP 吞不下 -> 拒帧 ->
+    // 之后恒差 18° 永久丢失. 处理越慢/转得越快越严重 —— 与现象完全一致.
+    // 相对运动与锚点无关, 所以直接把旧链上 (t_a, now] 的相对位姿接到新锚点.
+    if (m_hist.size() < 2 || pose.time >= m_hist.back().first) {
+        m_pose = pose;   // 锚点不早于最新 IMU: 无需补, 后续 IMU 从锚点起积
+        return;
+    }
+    PoseStamped ref;
+    if (!histAt(pose.time, ref)) {
+        m_pose = pose;
+        return;
+    }
+    for (auto& e : m_hist) {
+        if (e.first <= pose.time) continue;
+        const M3D dR = ref.rot.transpose() * e.second.rot;                  // 旧链相对旋转
+        const V3D dp = ref.rot.transpose() * (e.second.trans - ref.trans);  // 旧链相对位移
+        e.second.rot = pose.rot * dR;
+        e.second.trans = pose.trans + pose.rot * dp;
+    }
+    // t_a 之前的旧链条目与新链在 t_a 处不连续: 丢弃, 过去时刻一律夹到新锚点
+    while (!m_hist.empty() && m_hist.front().first < pose.time) m_hist.pop_front();
+    m_pose = m_hist.back().second;   // now 时刻 = 新锚点 + 已积入的相对运动
 }
 
 void EkfMotionPrior::onMatch(const PoseStamped& pose) {
@@ -213,15 +335,26 @@ void EkfMotionPrior::onMatch(const PoseStamped& pose) {
     if (m_last_match_time >= 0.0 && pose.time > m_last_match_time) {
         const double dt = pose.time - m_last_match_time;
         if (dt > 1e-3) {
-            const V3D dp_w = pose.trans - m_last_match_trans;
+            // 位移换算到 base 原点 (去杆臂): 雷达位移含绕 base 的轨道运动,
+            // 转弯时高达 |ρ_xy|·ω ≈ 0.4m/s, 直接当体系速度会把位置往切向推歪.
+            V3D dp_w = pose.trans - m_last_match_trans;
+            if (m_cfg.lever_valid)
+                dp_w -= pose.rot * m_cfg.lever_arm - m_last_match_rot * m_cfg.lever_arm;
+            // 体系速度是 base 系的, 旋转也要用 base 的 yaw (雷达 yaw 差安装角).
+            const M3D R_mb = m_cfg.lever_valid ? m_pose.rot * m_cfg.r_base_lidar.transpose()
+                                               : m_pose.rot;
             const Eigen::Vector2d z =
-                yawRot(std::atan2(m_pose.rot(1, 0), m_pose.rot(0, 0))).transpose() *
+                yawRot(std::atan2(R_mb(1, 0), R_mb(0, 0))).transpose() *
                 dp_w.head<2>() / dt;
             velocityUpdate(z, m_cfg.ekf_r_match * m_cfg.ekf_r_match);
 
             // 陀螺零偏在线微调 (航向新息; 与 ImuMotionPrior 同款, 该部分实机验证过)
             const double dtb = std::min(dt, 0.5);
-            const M3D dR = m_pose.rot.transpose() * pose.rot;
+            // 新息必须同时刻: 旧实现拿先验"现在"的姿态与 t_a 的匹配姿态比, 两者差
+            // ω·(now - t_a) (回放 ~10°), 会被错记成零偏把真实转速吃掉.
+            PoseStamped prior_at;
+            const M3D R_prior = histAt(pose.time, prior_at) ? prior_at.rot : m_pose.rot;
+            const M3D dR = R_prior.transpose() * pose.rot;
             Eigen::Quaterniond qe(dR);
             if (qe.w() < 0.0) qe.coeffs() *= -1.0;
             m_gyro_bias -= dtb * m_cfg.gyro_bias_gain * (qe.w() * qe.vec());
@@ -229,11 +362,15 @@ void EkfMotionPrior::onMatch(const PoseStamped& pose) {
                               .cwiseMin(m_cfg.gyro_bias_max);
         }
     }
-    // 锚定绝对位姿 (先验只管帧间预测, 绝对位姿归匹配层)
-    m_pose = pose;
-    m_pose.vel = m_pose.rot * V3D(m_v.x(), m_v.y(), 0.0);
+    // 锚定绝对位姿 (先验只管帧间预测, 绝对位姿归匹配层).
+    // 延迟锚定: 补回 (t_a, now] 的相对运动, 见 reanchorHistory.
+    reanchorHistory(pose);
+    m_pose.vel = m_pose.rot * (m_cfg.lever_valid
+                                   ? m_cfg.r_base_lidar.transpose() * V3D(m_v.x(), m_v.y(), 0.0)
+                                   : V3D(m_v.x(), m_v.y(), 0.0));
     m_last_match_time = pose.time;
     m_last_match_trans = pose.trans;
+    m_last_match_rot = pose.rot;
     // 诊断用: map 与 odom 的朝向差 (本机应≈-90°)。只打印, 不参与计算 ——
     // odom 的体系速度用的是 odom 自己的 yaw, 与这个差值无关。
     if (m_cfg.use_odom && m_have_odom) {

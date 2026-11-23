@@ -291,6 +291,7 @@ bool SlamAlgorithm::resetCore() {
     }
     // 旧实现切模式时会删掉建图/定位实例; 我们重建核心模块达到同样效果。
     const bool ok = algo_raw_->resetForNewMapping(config_path_);
+    if (ok && mount_valid_) applyMountToCore();   // 重建后重新注入安装外参
     std::cout << "[slam_algo] resetCore -> " << (ok ? "ok" : "unsupported/failed") << std::endl;
     return ok;
 }
@@ -307,6 +308,11 @@ rosiwit_slam::ILocalization::Status SlamAlgorithm::localizationStatus() const {
 
 bool SlamAlgorithm::priorUncertainty(double& xy_sigma, double& yaw_sigma) const {
     return algo_raw_ ? algo_raw_->priorUncertainty(xy_sigma, yaw_sigma) : false;
+}
+
+void SlamAlgorithm::applyMountToCore() {
+    if (!algo_raw_ || !mount_valid_) return;
+    algo_raw_->setMountExtrinsic(mount_r_bl_, mount_r_il_, mount_t_il_, mount_t_bl_);
 }
 
 } // namespace rosiwit_slam_ros1
