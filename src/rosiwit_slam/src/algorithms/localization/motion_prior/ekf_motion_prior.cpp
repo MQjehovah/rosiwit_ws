@@ -173,13 +173,29 @@ void EkfMotionPrior::onOdom(const PoseStamped& odom) {
                 m_odom_time = odom.time;
                 return;
             }
-            // EKF 更新: 体系速度观测 z = R(θ_odom)ᵀ·Δp_odom/dt
-            // ★ 2026-10-31 修正: 以前用 map 系的 θ 去转 odom 系位移, 而两者一般
-            //   差一个恒定刚性变换 (本机 map→odom 的 yaw ≈ -90°), 等于把"直行"
-            //   观测成"横移". 体系速度必须用 **odom 自己的朝向** 转, 与地图无关;
-            //   这样重定位改变 map→odom 也不会污染 odom 观测。
-            const double odom_yaw = std::atan2(odom.rot(1, 0), odom.rot(0, 0));
-            const Eigen::Vector2d z = yawRot(odom_yaw).transpose() * dp_odom.head<2>() / dt;
+            // EKF 更新: 体系速度观测.
+            // ★ 2026-10-31: 体系速度必须用 odom 自己的朝向转, 与地图无关 (重定位不污染).
+            // ★ 2026-11-23 修正: ROS 层送来的 odom 是 **IMU/雷达体**在 odom 系的位姿
+            //   (composeRight(p, T_base<-imu)). 按雷达体朝向转回的是**雷达体系**速度;
+            //   而传播 (R_blᵀ·v + ω×ρ) 与匹配位移观测都把 m_v 当 **base 系**速度 ——
+            //   安装偏航 89.9° 下直行被观测成沿雷达 -y, 再被 R_blᵀ 转一次, 预测速度
+            //   指向车尾偏左 (实车: 发布位姿落后匹配且方向偏 15~20°; 转弯每帧位置差
+            //   0.414·Δθ). 有安装外参时换算到 base: 减掉雷达绕 base 的轨道位移,
+            //   再用 base 在 odom 系的朝向转回体系. 这样也不再把轨道运动重复计入.
+            Eigen::Vector2d z;
+            if (m_cfg.lever_valid) {
+                const M3D R_ob_prev = m_odom.rot * m_cfg.r_base_lidar.transpose();   // base -> odom
+                const M3D R_ob = odom.rot * m_cfg.r_base_lidar.transpose();
+                const V3D t_bl = m_cfg.r_base_lidar * m_cfg.lever_arm;                // 雷达原点 (base 系)
+                const V3D dp_b = dp_odom - (R_ob - R_ob_prev) * t_bl;                 // base 原点位移
+                const double psi = std::atan2(R_ob_prev(1, 0), R_ob_prev(0, 0));
+                const double cps = std::cos(psi), sps = std::sin(psi);
+                z = Eigen::Vector2d(cps * dp_b.x() + sps * dp_b.y(),
+                                    -sps * dp_b.x() + cps * dp_b.y()) / dt;
+            } else {
+                const double odom_yaw = std::atan2(odom.rot(1, 0), odom.rot(0, 0));
+                z = yawRot(odom_yaw).transpose() * dp_odom.head<2>() / dt;
+            }
             // 诊断: 观测与滤波速度的夹角 (正常行驶应≈0°; 稳定在 ±90° 说明两源不一致)
             {
                 const double nz = z.norm(), nv = m_v.norm();

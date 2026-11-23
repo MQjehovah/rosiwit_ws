@@ -105,6 +105,15 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     const auto t2 = std::chrono::steady_clock::now();
     const CoverageStats cs = evaluateCoverage(m_kdtree, *src, T, m_cfg.inlier_dist);
     out.fitness = cs.coverage;
+    // 退化扫描打折 (2026-11-23): 参与配准的点太少时 "覆盖率" 没有统计意义 ——
+    // 被近处物体包围 (实车: 雷达四面 0.6~3.7m 全是遮挡, 降采样后仅 240 点) 时任何位姿
+    // 都能拿 1.000, 节点据此判 "localized after 3 healthy frames" 并把位姿冻住.
+    // 按点数线性下调, 让分数诚实; 正常扫描 (4400~5100 点) 不受影响.
+    if (m_cfg.min_coverage_points > 0 &&
+        src->size() < static_cast<size_t>(m_cfg.min_coverage_points)) {
+        out.fitness = cs.coverage * static_cast<double>(src->size()) /
+                      static_cast<double>(m_cfg.min_coverage_points);
+    }
     // [FitSweep] 低分帧诊断: 以当前位姿为中心, 在 yaw/roll/pitch 上小范围扫描覆盖率,
     // 判断偏差主轴 —— 哪个轴能把覆盖率救回来, 偏的就是哪个轴 (约定/时序/安装角).
     if (kLocProbe && out.fitness < 0.6 && m_target && !m_target->empty()) {

@@ -85,6 +85,10 @@ private:
     // 最近一次被采信的匹配, 用于原地旋转判定 (本帧航向变化)
     double m_last_match_yaw = 0.0;
     bool   m_have_last_match = false;
+    // 激光位移速度观测的锚点 (与 odom 无关, odom_mode=none 时是唯一速度来源)
+    bool        m_lv_have_prev = false;
+    PoseStamped m_lv_prev_pose;
+    double      m_last_match_time = -1.0;   // 平移限幅随间隔放宽用
 
     // ---- 相对位姿观测 (LIO) 的锚点 ----
     bool        m_have_rel_prev = false;

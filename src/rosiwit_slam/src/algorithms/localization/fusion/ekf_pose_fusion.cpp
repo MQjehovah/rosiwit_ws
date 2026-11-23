@@ -62,6 +62,8 @@ void EkfPoseFusion::reset(const PoseStamped& pose) {
     m_have_odom = false;
     m_last_odom_time = -1.0;
     m_have_last_match = false;
+    m_lv_have_prev = false;
+    m_last_match_time = -1.0;
     m_odom_yaw = rotToRpy(pose.rot).z();
     m_have_rel_prev = false;
     m_rel_prev_state_R = Eigen::Matrix3d::Identity();
@@ -212,11 +214,23 @@ void EkfPoseFusion::onOdom(const PoseStamped& odom) {
     weight = std::max(m_cfg.odom_weight_min, std::min(1.0, weight));
     m_diag.odom_weight = weight;
 
-    // 体体系速度观测: 用 odom 自己的朝向转 (2026-10-31 已验证 z-v 夹角≈0.7°)
-    const double c = std::cos(m_odom_yaw), s = std::sin(m_odom_yaw);
-    Eigen::Matrix2d R_odom_T;
-    R_odom_T << c, s, -s, c;
-    const Eigen::Vector2d z = R_odom_T * dp.head<2>() / dt;
+    // 体系速度观测 (2026-11-23 修正, 与 EkfMotionPrior::onOdom 同款): ROS 层送来的 odom 是
+    // IMU/雷达体在 odom 系的位姿. 有安装外参时换算到 base: 减掉雷达绕 base 的轨道位移,
+    // 用 base 在 odom 系的朝向转回体系. (以前按雷达体朝向转, 得到雷达体系速度, 却被
+    // 当 base 系速度用于 R_blᵀ·v —— 安装偏航 89.9° 下预测速度指向车尾偏左.)
+    Eigen::Vector2d z;
+    if (m_cfg.lever_valid) {
+        const M3D R_ob_prev = m_last_odom.rot * m_cfg.r_base_lidar.transpose();   // base -> odom
+        const M3D R_ob = odom.rot * m_cfg.r_base_lidar.transpose();
+        const V3D t_bl = m_cfg.r_base_lidar * m_cfg.lever_arm;                    // 雷达原点 (base 系)
+        const V3D dp_b = dp - (R_ob - R_ob_prev) * t_bl;                         // base 原点位移
+        const double psi = std::atan2(R_ob_prev(1, 0), R_ob_prev(0, 0));
+        const double c = std::cos(psi), s = std::sin(psi);
+        z = Eigen::Vector2d(c * dp_b.x() + s * dp_b.y(), -s * dp_b.x() + c * dp_b.y()) / dt;
+    } else {
+        const double c = std::cos(m_odom_yaw), s = std::sin(m_odom_yaw);
+        z = Eigen::Vector2d(c * dp.x() + s * dp.y(), -s * dp.x() + c * dp.y()) / dt;
+    }
     // 权重 w 等价于把观测噪声放大 1/w²
     const double r = 0.15 * 0.15 / std::max(weight * weight, 1e-6);
     for (int i = 0; i < 2; ++i) {
@@ -303,8 +317,14 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
     if (d_rot.norm() > max_rot && d_rot.norm() > 1e-12) {
         d_rot *= max_rot / d_rot.norm();
     }
-    if (d_trans.norm() > m_cfg.max_correction_trans && d_trans.norm() > 1e-12) {
-        d_trans *= m_cfg.max_correction_trans / d_trans.norm();
+    // 平移限幅随 "距上次匹配的时间内按当前速度能走的距离" 放宽 (2026-11-23): 固定
+    // 0.15 m/帧的限幅在持续运动下等价于给输出加一个稳态滞后 (滞后 ≈ 限幅/增益),
+    // 越快越落后 —— 实车推车 0.6 m/s 时发布位姿落后匹配 0.5~1.4 m.
+    const double dtm = (m_last_match_time > 0.0 && pose.time > m_last_match_time)
+                           ? std::min(pose.time - m_last_match_time, 1.0) : 0.0;
+    const double max_trans_eff = m_cfg.max_correction_trans + m_v.norm() * dtm;
+    if (d_trans.norm() > max_trans_eff && d_trans.norm() > 1e-12) {
+        d_trans *= max_trans_eff / d_trans.norm();
     }
     if (in_place) {
         d_trans.setZero();
@@ -347,6 +367,37 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
     m_diag.last_gain_rot = gain(0);
     m_diag.applied_trans = d_trans.norm();
     m_diag.applied_rot_deg = d_rot.norm() * 180.0 / M_PI;
+    // ---- 激光位移速度观测 (2026-11-23): 相邻两次被接受匹配的位移 -> 体系速度 ----
+    // odom_mode=none 时这是融合层**唯一**的速度来源: 没有它, 位置只能靠限幅修正挪动
+    // (0.15 m/帧 ≈ 0.75 m/s), 1~2 m/s 的推行必然落后, 再被马氏门限拒掉 (实车复现).
+    // 与 EkfMotionPrior::onMatch 同款: 去杆臂 (雷达绕 base 划弧不是平移), 用 base yaw
+    // 转回体系. 原地旋转时杆臂误差会伪装成速度, 跳过. 有 odom 时它的权重自然较低.
+    if (m_cfg.match_vel_r > 0.0) {
+        if (m_lv_have_prev && !in_place && pose.time > m_lv_prev_pose.time &&
+            pose.time - m_lv_prev_pose.time < 1.0) {
+            const double dtv = pose.time - m_lv_prev_pose.time;
+            V3D dpw = pose.trans - m_lv_prev_pose.trans;
+            if (m_cfg.lever_valid)
+                dpw -= pose.rot * m_cfg.lever_arm - m_lv_prev_pose.rot * m_cfg.lever_arm;
+            const M3D R_mb = m_cfg.lever_valid ? pose.rot * m_cfg.r_base_lidar.transpose()
+                                               : pose.rot;
+            const double cy = std::atan2(R_mb(1, 0), R_mb(0, 0));
+            const double c = std::cos(cy), s = std::sin(cy);
+            const Eigen::Vector2d z((c * dpw.x() + s * dpw.y()) / dtv,
+                                    (-s * dpw.x() + c * dpw.y()) / dtv);
+            const double r = m_cfg.match_vel_r * m_cfg.match_vel_r;
+            if (z.allFinite()) {
+                for (int i = 0; i < 2; ++i) {
+                    const double k = m_v_cov(i, i) / (m_v_cov(i, i) + r);
+                    m_v(i) += k * (z(i) - m_v(i));
+                    m_v_cov(i, i) = (1.0 - k) * m_v_cov(i, i);
+                }
+            }
+        }
+        m_lv_have_prev = true;
+        m_lv_prev_pose = pose;
+    }
+    m_last_match_time = pose.time;
     // ---- 打滑门控锚点 (只有被接受的匹配才更新) ----
     if (m_have_odom) {
         // 独立对照: 两次匹配之间的真实位移 vs 同区间 odom 位移

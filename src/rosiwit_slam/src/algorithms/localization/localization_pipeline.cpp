@@ -111,6 +111,13 @@ bool LocalizationPipeline::init(const std::string& config_path) {
                   << "], scan will be transformed to IMU frame" << std::endl;
     }
 
+    // 自转中心 (转动瞬心) 在 base 系的 xy: 差速底盘的轮速模型假设 base 原点就是瞬心,
+    // 实车不一定 (本机实测在原点后方 0.13m, 见 setMountExtrinsic). 标定方法见 yaml 注释.
+    if (loc["rotation_center"] && loc["rotation_center"].IsSequence() &&
+        loc["rotation_center"].size() >= 2) {
+        m_rot_center.x() = loc["rotation_center"][0].as<double>(0.0);
+        m_rot_center.y() = loc["rotation_center"][1].as<double>(0.0);
+    }
     YAML::Node pipe = loc["pipeline"];
     m_relocalizer_name = getv<std::string>(pipe, "relocalizer", m_relocalizer_name);
     m_prior_name       = getv<std::string>(pipe, "motion_prior", m_prior_name);
@@ -150,6 +157,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
             m_fusion_cfg.odom_weight_min         = getv<double>(fc, "odom_weight_min", m_fusion_cfg.odom_weight_min);
             m_fusion_cfg.rel_max_gap             = getv<double>(fc, "rel_max_gap", m_fusion_cfg.rel_max_gap);
             m_fusion_cfg.rel_max_step            = getv<double>(fc, "rel_max_step", m_fusion_cfg.rel_max_step);
+            m_fusion_cfg.match_vel_r             = getv<double>(fc, "match_vel_r", m_fusion_cfg.match_vel_r);
         }
     }
 
@@ -190,6 +198,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_matcher_cfg.match_z_filter          = getv<bool>(mc, "match_z_filter", m_matcher_cfg.match_z_filter);
         m_matcher_cfg.match_z_min             = getv<double>(mc, "match_z_min", m_matcher_cfg.match_z_min);
         m_matcher_cfg.match_z_max             = getv<double>(mc, "match_z_max", m_matcher_cfg.match_z_max);
+        m_matcher_cfg.min_coverage_points     = getv<int>(mc, "min_coverage_points", m_matcher_cfg.min_coverage_points);
         m_matcher_cfg.ndt2d_z_min             = getv<double>(mc, "ndt2d_z_min", m_matcher_cfg.ndt2d_z_min);
         m_matcher_cfg.ndt2d_z_max             = getv<double>(mc, "ndt2d_z_max", m_matcher_cfg.ndt2d_z_max);
         m_matcher_cfg.ndt2d_cell              = getv<double>(mc, "ndt2d_cell", m_matcher_cfg.ndt2d_cell);
@@ -403,6 +412,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_accept_cfg.mahalanobis_trans_floor = getv<double>(ac, "mahalanobis_trans_floor", m_accept_cfg.mahalanobis_trans_floor);
         m_accept_cfg.mahalanobis_rot_floor = getv<double>(ac, "mahalanobis_rot_floor", m_accept_cfg.mahalanobis_rot_floor);
         m_accept_cfg.mahalanobis_ref_points = getv<int>(ac, "mahalanobis_ref_points", m_accept_cfg.mahalanobis_ref_points);
+        m_accept_cfg.mahalanobis_coast_widen = getv<double>(ac, "mahalanobis_coast_widen", m_accept_cfg.mahalanobis_coast_widen);
+        m_accept_cfg.max_trans_innov         = getv<double>(ac, "max_trans_innov", m_accept_cfg.max_trans_innov);
         m_accept_cfg.degeneracy_partial_update = getv<bool>(ac, "degeneracy_partial_update", m_accept_cfg.degeneracy_partial_update);
         m_accept_cfg.degeneracy_ratio_soft = getv<double>(ac, "degeneracy_ratio_soft", m_accept_cfg.degeneracy_ratio_soft);
     }
@@ -646,7 +657,11 @@ void LocalizationPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar
     //   3) 杆臂 lever_arm (slam_types.h: leverArmSensorFrame) —— 原地自转轨道项
     // 任何一处都不允许假设"雷达正装"。
     const V3D up = upBodyFromMount(r_base_lidar);
-    const V3D lever = leverArmSensorFrame(r_base_lidar, t_base_lidar);
+    // 杆臂从**自转中心**量起, 不是 base 原点 (2026-11-23): 底盘绕轮轴中心自转, 实车瞬心
+    // 在 base 原点后方 ~0.13m (回放匹配位姿圆拟合: 半径 0.535m, 残差 1.5cm, 三次一致).
+    // 从原点量起, 轨道项每帧差 0.13 × 帧内转角 (快转 0.02~0.06m). 默认 [0,0] = base 原点.
+    const V3D lever = leverArmSensorFrame(
+        r_base_lidar, t_base_lidar - V3D(m_rot_center.x(), m_rot_center.y(), 0.0));
     {
         std::lock_guard<std::mutex> lk(m_prior_mu);
         m_motion_cfg.up_body = up;
@@ -681,7 +696,9 @@ void LocalizationPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar
     diag::log('I', "LocPipeline", "mount injected: up_body=(" + std::to_string(up.x()) + ", " +
                                       std::to_string(up.y()) + ", " + std::to_string(up.z()) +
                                       ") lever=(" + std::to_string(lever.x()) + ", " +
-                                      std::to_string(lever.y()) + ", " + std::to_string(lever.z()) + ")");
+                                      std::to_string(lever.y()) + ", " + std::to_string(lever.z()) +
+                                      ") rot_center=(" + std::to_string(m_rot_center.x()) + ", " +
+                                      std::to_string(m_rot_center.y()) + ")");
 }
 
 void LocalizationPipeline::setMapImpl(const std::string& map_name) {
@@ -1272,8 +1289,12 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
         for (int k = 0; k < 3; ++k) C(k, k) += rf;
         for (int k = 3; k < 6; ++k) C(k, k) += tf;
         Eigen::LDLT<Eigen::Matrix<double, 6, 6>> ldlt(C);
+        // 连续拒绝 (coast) 后门限按 ×(1 + k·coast) 放宽 (2026-11-23): 预测一旦偏出门限,
+        // 即使匹配一直正确也永远被拒 -> 死锁 (实车: 1.9m 创新量 d²=17.5 对门限 16.81,
+        // 卡死到人工重锁). 跟踪正常时 coast=0, 门限不变.
+        const double widen = 1.0 + m_accept_cfg.mahalanobis_coast_widen * m_coast_count;
         const double d2 = e.dot(ldlt.solve(e));
-        if (std::isfinite(d2) && d2 > m_accept_cfg.mahalanobis_chi2) {
+        if (std::isfinite(d2) && d2 > m_accept_cfg.mahalanobis_chi2 * widen) {
             // [MahalanobisProbe] 定位"点数少时好修正被误杀": 打印创新量与协方差
             static int probe_n = 0;
             if (++probe_n % 10 == 0) {
@@ -1290,6 +1311,13 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
                           << std::endl;
             }
             return reject("mahalanobis");
+        }
+        // 位置创新量绝对上限 (2026-11-23): 协方差门限在点云充分时允许 ~1.9m, 挡不住两个
+        // 相似结构之间 0.5~0.9m 的"中间解" (实车推车: 输出位姿被拽歪、来回跳).
+        // 同样随 coast 放宽: 真实的大偏差连续被拒几帧后仍能被接受, 不会死锁.
+        if (m_accept_cfg.max_trans_innov > 0.0 &&
+            e.tail<3>().norm() > m_accept_cfg.max_trans_innov * std::sqrt(widen)) {
+            return reject("innov_trans");
         }
     }
     if (m_accept_cfg.mode == 0) {
@@ -1847,7 +1875,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 0.8 左右的“看起来不错”分数并被接受；这里用独立、可配置的门限阻断。
     // 失败仍保持 INIT，交给统一的 lost_patience 连续帧计数判丢。
     bool seed_failed = false;
-    if (m_seed_pending) {
+    if (m_seed_pending && res.correspondences > 0 &&
+        res.correspondences < m_matcher_cfg.min_coverage_points) {
+        // 退化帧 (参与配准的点太少) 不裁决种子 (2026-11-23): 这种帧的分数与位姿都没有
+        // 统计意义 —— 实车重锁时雷达正被近处物体包围, 238 点的"满分"匹配把正确的种子
+        // 判成 "漂离 1.7m" 而拒掉, 节点停在 INIT. 保持 pending, 等一帧点数足够的扫描.
+    } else if (m_seed_pending) {
         m_seed_pending = false;
         if (!res.converged || res.fitness < m_global_cfg.reloc_accept_score) {
             seed_failed = true;
@@ -1958,6 +1991,26 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             // eskf: 下游看到的位姿改用融合输出 (单帧修正有界)
             if (m_fusion && m_fusion->name() != "direct") {
                 out_pose = m_fusion->predict(out_pose.time);
+                // [FusProbe] (ROSIWIT_LOC_PROBE=1) 融合层内部状态: 平面锁之前的姿态
+                // (roll/pitch 是否被匹配修正带歪)、位置 vs 匹配、修正量与门控诊断
+                if (kLocProbe) {
+                    const FusionDiag fd = m_fusion->diag();
+                    const M3D& Rf = out_pose.rot;
+                    std::ostringstream os;
+                    os << std::fixed << std::setprecision(3) << "[FusProbe] t=" << out_pose.time
+                       << " fx=" << out_pose.trans.x() << " fy=" << out_pose.trans.y()
+                       << " fz=" << out_pose.trans.z()
+                       << " mx=" << res.pose.trans.x() << " my=" << res.pose.trans.y()
+                       << " roll=" << std::setprecision(2)
+                       << std::atan2(Rf(2, 1), Rf(2, 2)) * 57.2957795
+                       << " pitch=" << std::asin(std::max(-1.0, std::min(1.0, -Rf(2, 0)))) * 57.2957795
+                       << " yaw=" << std::atan2(Rf(1, 0), Rf(0, 0)) * 57.2957795
+                       << " applied_t=" << fd.applied_trans << " gain_t=" << fd.last_gain_trans
+                       << " chi2=" << fd.last_chi2 << " odom_w=" << fd.odom_weight
+                       << " acc=" << fd.accepted << " rej_chi2=" << fd.rejected_chi2
+                       << " rej_inplace=" << fd.rejected_in_place;
+                    std::cout << os.str() << std::endl;
+                }
             }
         }
         m_last_accepted = out_pose;      // 逸出保护用的回退锚点
