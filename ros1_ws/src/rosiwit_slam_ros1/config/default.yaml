@@ -295,7 +295,11 @@ localization:
     degeneracy_gate: true
     degeneracy_eig_ratio: 0.001
     min_correspondences: 20
-    dynamic_filter: true       # 是否删除远离静态地图的离群点(人/叉车/新堆货)
+    # 2026-11-23 关闭: 实机(14003AO7)错位姿在 27m 外, 删点后仍显示 96 分
+    # (152 点自匹配), 全点参与后如实显示 12 分并触发重定位 —— 分数必须诚实。
+    # 代价: 人/叉车会参与匹配 (robust_kernel=cauchy 有一定抑制); 人多的现场
+    # 若发现位姿被动态物拉走, 优先调小 dynamic_dist 或恢复此开关, 而不是改评分。
+    dynamic_filter: false      # 是否删除远离静态地图的离群点(人/叉车/新堆货)
     dynamic_dist: 0.4          # 多远算"远离"(m): 离地图超过它就从源点云删掉
     # 注意: 位姿本身偏了的结构(天花板/地面)也会被当离群点删掉 -> 评分别用删后的点
     # 2.5D 平面 NDT (matcher: ndt2d)
