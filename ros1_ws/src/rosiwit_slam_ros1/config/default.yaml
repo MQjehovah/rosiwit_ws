@@ -230,6 +230,11 @@ localization:
   # 从激光位移慢学(观测噪声 0.8m/s), 推车一加速预测位置就以 1~2m/s 跑飞, 差 1.9m 后被
   # 马氏门限拒掉并死锁. 推行场景必须 fuse (见文件头 [匹配捕获-滤波螺旋]).
   odom_mode: fuse
+  # 自转中心 (转动瞬心) 在 base 系的 xy (m). 差速轮速模型假设 base 原点就是瞬心, 实车不一定:
+  # 杆臂/轨道项从瞬心量起, 否则每帧预测差 |瞬心偏移| × 帧内转角.
+  # 标定: 原地转一圈, 用匹配位姿(雷达)拟合圆, 圆心相对 base 的位置. 本机 2026-11-23 三次
+  # 回放一致: 后方 0.13m / 右侧 0.04m (半径 0.535m, 残差 1.5cm). URDF 里没有轮子, 只能标定.
+  rotation_center: [-0.13, -0.04]
   # ---- LIO 相对观测 (LIO 常开作预测源; 默认关闭 = 改造前行为) ----
   # frontend 必须已配置 (modules.frontend); 缺失时自动退回 odom + S2M。
   use_lio_relative: false
@@ -278,6 +283,9 @@ localization:
     rel_max_gap: 0.6            # 最大时间间隔 (s)
     rel_max_step: 3.0           # 单步相对位移上限 (m); 检出跳变用, 不是速度限制
     rel_chi2_gate: 16.0         # 相对观测卡方门限 (3DoF, 99.9%≈16.3); 0=关
+    match_vel_r: 0.3            # 激光位移速度观测噪声(m/s): 相邻被接受匹配的位移->体系速度.
+                                # odom_mode=none 时这是融合层唯一的速度来源 (没有它位置只能靠
+                                # 每帧 0.15m 限幅修正挪动, 1~2m/s 推行必然落后); 有 odom 时权重低. 0=关
 
   # ---- 配准器 (matcher: gicp | pp_icp | p2p_icp | vgicp) ----
   matcher:
@@ -322,6 +330,9 @@ localization:
     match_z_filter: true       # 参与配准前按 map 系 z 裁剪
     match_z_min: 0.15          # 下界(m): 本图地面在地图系 z≈0, 0.15 去掉地面/贴地点
     match_z_max: 10000         # 上界(m): 默认不裁天花板
+    # 退化扫描打折: 裁剪后参与配准的点数低于该值, fitness 按点数比例下调 (正常 4400~5100).
+    # 雷达被近处物体包围时 (实测 240 点) 任何位姿都能拿 1.000, 节点会误判 "已定位". 0=关
+    min_coverage_points: 800
     # 注意: 位姿本身偏了的结构(天花板/地面)也会被当离群点删掉 -> 评分别用删后的点
     # 2.5D 平面 NDT (matcher: ndt2d)
     ndt2d_cell: 0.5
@@ -474,6 +485,10 @@ localization:
     mahalanobis_chi2: 16.81   # 6DoF 99% 卡方阈值
     mahalanobis_trans_floor: 0.20  # m; GICP 残差协方差的平移下限
     mahalanobis_rot_floor: 0.05    # rad; GICP 残差协方差的旋转下限
+    mahalanobis_coast_widen: 0.5   # 连续拒绝后马氏门限 ×(1+k·coast) 放宽 (防死锁: 预测偏出
+                                   # 门限后匹配再准也进不来, 实车卡死到人工重锁). 0=关
+    max_trans_innov: 0.6           # 单帧位置创新量绝对上限(m), 同样随 coast 放宽 (协方差门限
+                                   # 在点云充分时允许 ~1.9m, 挡不住相似结构间 0.5~0.9m 的中间解). 0=关
     # ★退化方向部分更新 (2026-11-19 打开): 用 JtJ 特征分解按可观测度缩放修正量,
     # 弱观测方向(长廊的沿墙方向)增益趋 0 => 只信先验, 不再让"沿长墙滑动"整体生效。
     # 实测未开时: 转弯单帧修正 2.5~5.8m 仍被判 accepted, fitness 0.75~0.87。
