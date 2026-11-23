@@ -26,15 +26,17 @@
           </div>
           <div v-else class="spark-empty">等待匹配度曲线…</div>
 
-          <div v-if="state.slam.location_status === 2" class="lost-box">
-            <span class="badge bad">定位丢失</span>
+          <div v-if="state.slam.location_status === 1 || state.slam.location_status === 2" class="lost-box">
+            <span class="badge" :class="state.slam.location_status === 2 ? 'bad' : 'warn'">
+              {{ state.slam.location_status === 2 ? '定位丢失' : '初始化/恢复中' }}
+            </span>
             <span class="mono">
               x {{ state.slam.robot_pose.x.toFixed(2) }} · y
               {{ state.slam.robot_pose.y.toFixed(2) }} · yaw
               {{ ((state.slam.robot_pose.theta * 180) / Math.PI).toFixed(0) }}°
             </span>
-            <span>
-              置信度 {{ percent(state.slam.matching_degree) }}{{ state.matchStale ? '（丢失前）' : '' }}
+            <span title="核心当前帧的匹配度，非丢失前缓存的数值">
+              当前匹配度 {{ percent(state.slam.matching_degree) }}
             </span>
           </div>
 
