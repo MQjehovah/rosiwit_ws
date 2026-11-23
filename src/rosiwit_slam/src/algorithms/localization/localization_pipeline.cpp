@@ -7,6 +7,26 @@
 #include "algorithms/map_store/map_store_factory.h"
 #include <unordered_map>
 
+
+#include <cmath>
+#include <Eigen/Geometry>
+#include <iostream>
+#include <fstream>
+#include <algorithm>
+#include <chrono>
+#include <pcl/io/pcd_io.h>
+#include <pcl/common/transforms.h>
+
+#ifndef YAML_CPP_DISABLED
+#include <yaml-cpp/yaml.h>
+#endif
+
+#include "slam_core/diagnostics.h"
+#include <sstream>
+
+namespace rosiwit_slam {
+using diag::FlightRecorder;
+
 namespace {
 // 底图-only 匹配度用的 KD 树/目标云: 放在 .cpp 里(单实例), 避免头文件引 pcl
 CloudType::Ptr g_base_only_target;
@@ -37,25 +57,6 @@ CloudType::Ptr voxelDownsample(const CloudType::Ptr& in, float voxel) {
     return out;
 }
 } // namespace
-
-#include <cmath>
-#include <Eigen/Geometry>
-#include <iostream>
-#include <fstream>
-#include <algorithm>
-#include <chrono>
-#include <pcl/io/pcd_io.h>
-#include <pcl/common/transforms.h>
-
-#ifndef YAML_CPP_DISABLED
-#include <yaml-cpp/yaml.h>
-#endif
-
-#include "slam_core/diagnostics.h"
-#include <sstream>
-
-namespace rosiwit_slam {
-using diag::FlightRecorder;
 
 namespace {
 #ifndef YAML_CPP_DISABLED
