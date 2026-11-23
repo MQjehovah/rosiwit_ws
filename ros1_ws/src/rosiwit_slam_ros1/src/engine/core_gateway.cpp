@@ -214,6 +214,11 @@ void SlamAlgorithm::requestRelocalization() {
     if (algo_raw_) algo_raw_->requestRelocalization();
 }
 
+bool SlamAlgorithm::getHighRatePose(double t, rosiwit_slam::PoseStamped& out) {
+    if (algo_raw_) return algo_raw_->getHighRatePose(t, out);
+    return false;
+}
+
 std::string SlamAlgorithm::dumpFlightRecorder(const std::string& reason) {
     return diag::FlightRecorder::instance().dump(reason);
 }

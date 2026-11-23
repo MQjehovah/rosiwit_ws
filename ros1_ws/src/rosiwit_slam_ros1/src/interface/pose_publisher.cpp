@@ -266,6 +266,11 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
         return;
     }
     const ros::Time now = ros::Time::now();
+    // 高频输出用 ESKF 传播到"现在"的位姿, 而不是零阶保持上一帧匹配结果:
+    // 匹配是 10Hz, 保持会造成 100~200ms 滞后和阶梯感.
+    rosiwit_slam::PoseStamped pred;
+    const bool have_pred =
+        (slam_mode_ == SlamMode::LOCALIZATION) && engine_.getHighRatePose(now.toSec(), pred);
     const bool fresh = !last_new_pose_ros_.isZero() &&
                        (now - last_new_pose_ros_).toSec() <= 0.30;
     const bool due = last_high_rate_pub_.isZero() ||
@@ -279,13 +284,25 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
         geometry_msgs::PoseStamped ps;
         ps.header.frame_id = kMapFrame;
         ps.header.stamp = now;
-        ps.pose.position.x = p.x;
-        ps.pose.position.y = p.y;
-        ps.pose.position.z = p.z;
-        ps.pose.orientation.x = p.q.x();
-        ps.pose.orientation.y = p.q.y();
-        ps.pose.orientation.z = p.q.z();
-        ps.pose.orientation.w = p.q.w();
+        if (have_pred) {
+            ps.pose.position.x = pred.trans.x();
+            ps.pose.position.y = pred.trans.y();
+            ps.pose.position.z = pred.trans.z();
+            Eigen::Quaterniond pq(pred.rot);
+            pq.normalize();
+            ps.pose.orientation.x = pq.x();
+            ps.pose.orientation.y = pq.y();
+            ps.pose.orientation.z = pq.z();
+            ps.pose.orientation.w = pq.w();
+        } else {
+            ps.pose.position.x = p.x;
+            ps.pose.position.y = p.y;
+            ps.pose.position.z = p.z;
+            ps.pose.orientation.x = p.q.x();
+            ps.pose.orientation.y = p.q.y();
+            ps.pose.orientation.z = p.q.z();
+            ps.pose.orientation.w = p.q.w();
+        }
         pose_puber_.publish(ps);
         if (use_tf_ && (last_high_rate_tf_.isZero() ||
                         (now - last_high_rate_tf_).toSec() >= 0.05)) {
