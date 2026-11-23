@@ -3,7 +3,35 @@
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/maintainer/insert_gate.h"
+#include "algorithms/localization/registration_metrics.h"
 #include "algorithms/map_store/map_store_factory.h"
+#include <unordered_map>
+
+namespace {
+// 简单体素降采样 (底图-only 覆盖率用): 与 matcher 的口径一致即可, 不必完全相同
+CloudType::Ptr voxelDownsample(const CloudType::Ptr& in, float voxel) {
+    CloudType::Ptr out(new CloudType());
+    std::unordered_map<uint64_t, int> seen;
+    const float inv = 1.0f / std::max(0.05f, voxel);
+    out->reserve(in->size() / 4 + 8);
+    for (const auto& p : in->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const int32_t ix = static_cast<int32_t>(std::floor(p.x * inv));
+        const int32_t iy = static_cast<int32_t>(std::floor(p.y * inv));
+        const int32_t iz = static_cast<int32_t>(std::floor(p.z * inv));
+        const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(ix)) * 73856093ull) ^
+                             (static_cast<uint64_t>(static_cast<uint32_t>(iy)) * 19349663ull) ^
+                             (static_cast<uint64_t>(static_cast<uint32_t>(iz)) * 83492791ull);
+        if (seen.find(key) != seen.end()) continue;
+        seen.emplace(key, 0);
+        out->push_back(p);
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    return out;
+}
+} // namespace
+
 #include <cmath>
 #include <Eigen/Geometry>
 #include <iostream>
@@ -953,10 +981,19 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     if (m_maintainer) {
         CloudType::Ptr ov = m_maintainer->getOverlay(pose);
         if (ov && !ov->empty()) {
-            if (m_maintainer_cfg.override_base)
-                suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
-            *target += *ov;
+            // 锚定在底图上时目标只用底图 (overlay/子图是"底图锚不住"时的桥接):
+            // 混进去会自引用, 位姿漂了分数还满分 (实机 fitness/cov_all=1.000)。
+            if (!m_anchor_on_base) {
+                if (m_maintainer_cfg.override_base)
+                    suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
+                *target += *ov;
+            }
         }
+    }
+    // 子图 (会话地图): 只在"底图锚不住"时参与匹配; 常驻自更新, 不关闭。
+    if (!m_anchor_on_base && m_session_map.active()) {
+        CloudType::Ptr sub = m_session_map.pointsWorld();
+        if (sub && !sub->empty()) *target += *sub;
     }
     return target;
 }
@@ -1640,7 +1677,43 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         if (m_smoother.getPose(sp)) out_pose = sp;
     }
     // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
+    {
+        // [pose_cmp] 追踪 33deg 倾角在哪一步出现/消失 (每 20 帧一条, 纯打印)
+        static int cmp_n = 0;
+        if (++cmp_n % 20 == 0) {
+            auto rpy = [](const M3D& R) {
+                Eigen::Vector3d v;
+                v.x() = std::atan2(R(2, 1), R(2, 2)) * 57.2957795;
+                v.y() = std::asin(std::max(-1.0, std::min(1.0, -R(2, 0)))) * 57.2957795;
+                v.z() = std::atan2(R(1, 0), R(0, 0)) * 57.2957795;
+                return v;
+            };
+            const Eigen::Vector3d rm = rpy(res.pose.rot);
+            const Eigen::Vector3d rg = rpy(guess.rot);
+            const Eigen::Vector3d ro = rpy(out_pose.rot);
+            std::cout.setf(std::ios::fixed);
+            std::cout.precision(2);
+            std::cout << "[pose_cmp] accepted=" << accepted
+                      << " match=(" << rm.x() << "," << rm.y() << "," << rm.z() << ")"
+                      << " guess=(" << rg.x() << "," << rg.y() << "," << rg.z() << ")"
+                      << " out=(" << ro.x() << "," << ro.y() << "," << ro.z() << ")"
+                      << " z=" << out_pose.trans.z() << std::endl;
+            std::cout.unsetf(std::ios::fixed);
+        }
+    }
     m_planar.apply(out_pose, scan);
+    {
+        static int cmp_n = 0;
+        if (++cmp_n % 20 == 0) {
+            const double r = std::atan2(out_pose.rot(2, 1), out_pose.rot(2, 2)) * 57.2957795;
+            const double pi_ = std::asin(std::max(-1.0, std::min(1.0, -out_pose.rot(2, 0)))) * 57.2957795;
+            std::cout.setf(std::ios::fixed);
+            std::cout.precision(2);
+            std::cout << "[pose_cmp] after_planar rpy=(" << r << "," << pi_
+                      << ") z=" << out_pose.trans.z() << std::endl;
+            std::cout.unsetf(std::ios::fixed);
+        }
+    }
     if (accepted) {
         {
             std::lock_guard<std::mutex> prior_lk(m_prior_mu);
@@ -1875,6 +1948,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             if (m_status != LOCALIZED &&
                 m_healthy_streak >= std::max(1, m_monitor_cfg.localized_patience)) {
                 m_status = LOCALIZED;
+                m_ever_localized = true;   // 只有真正定位成功过, 才允许开会话地图
                 m_scrutiny_frames = std::max(0, m_monitor_cfg.scrutiny_frames);
                 {
                     std::lock_guard<std::mutex> lk(m_global_mu);
@@ -1937,6 +2011,56 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                       << " rejection=" << reject_reason << std::endl;
             // A 阶段(影子): 体素可信度统计, 只观测不决策. 每天按 w>=persistency_anchor 导出点云,
             // 看是否只剩立柱/墙体, 并对比正常段 / 假锁段 / 堆货区 的 persistency_cov 分布.
+            // ---- 底图-only 匹配度 (锚定判据) ----
+            // 会话地图/overlay 参与匹配后, 总 fitness 会自我确认(自己配自己)。
+            // "锚是否恢复"必须看对**底图**(不含子图/overlay)的覆盖率:
+            //   cov_base 高 -> 底图锚得住 -> 关闭子图
+            //   cov_base 低 -> 底图锚不住 -> 子图自更新
+            if (m_session_map_enabled && m_ever_localized && scan && !scan->empty() &&
+                m_local_map) {
+                if (!m_base_only_valid || ++m_base_only_age >= 30) {
+                    m_base_only_age = 0;
+                    CloudType::Ptr base_crop = m_local_map->getLocalMap(out_pose);
+                    if (base_crop && base_crop->size() >= 100) {
+                        m_base_only_kdtree.setInputCloud(base_crop);
+                        m_base_only_valid = true;
+                    } else {
+                        m_base_only_valid = false;
+                    }
+                }
+                if (m_base_only_valid) {
+                    CloudType::Ptr ds = voxelDownsample(scan, 0.4f);
+                    if (ds && ds->size() >= 50) {
+                        Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+                        T.block<3, 3>(0, 0) = out_pose.rot;
+                        T.block<3, 1>(0, 3) = out_pose.trans;
+                        const CoverageStats cs =
+                            evaluateCoverage(m_base_only_kdtree, *ds, T, m_matcher_cfg.inlier_dist);
+                        m_cov_base = (cs.total > 0) ? cs.coverage : -1.0;
+                    }
+                }
+                if (m_cov_base >= m_monitor_cfg.credible_fitness) ++m_cov_base_ok_streak;
+                else m_cov_base_ok_streak = 0;
+
+                // ---- 锚定开关 ----
+                //   底图匹配度高 -> 位姿锚在底图 (目标 = 底图, 不混子图/overlay)
+                //   底图匹配度低 -> 子图桥接 (目标 = 底图 + 子图/overlay), 子图自更新
+                // 切换时使目标缓存失效, 下一帧重建。
+                if (m_cov_base >= 0.0) {
+                    const bool on_base = (m_cov_base >= m_monitor_cfg.credible_fitness);
+                    if (on_base != m_anchor_on_base) {
+                        m_anchor_on_base = on_base;
+                        m_has_cached_target = false;
+                        std::cout << "[anchor] switch to "
+                                  << (on_base ? "BASE map (anchored)" : "submap (bridging)")
+                                  << " cov_base=" << m_cov_base << std::endl;
+                    }
+                }
+            } else {
+                m_cov_base = -1.0;
+                m_cov_base_ok_streak = 0;
+            }
+
             if (m_maintainer) {
                 int anchor_age = 0;
                 size_t persistency_pts = 0;
@@ -1961,19 +2085,25 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 if (m_session_map_enabled) {
                     std::lock_guard<std::mutex> lk(m_session_map_mu);
                     const double now_s = (res.pose.time > 0.0) ? res.pose.time : f.end_time;
-                    if (!m_session_map.active()) {
-                        if (!anchor_ok && m_anchor_weak_streak >= m_anchor_patience &&
-                            m_status.load() != LOST) {
-                            m_session_map.reset(m_pose, now_s);
-                            std::cout << "[session_map] open (anchor WEAK inl=" << res.inliers
-                                      << " eig=" << res.smallest_eig_ratio << ")" << std::endl;
-                        }
+                    // 会话地图: 真正定位过才开; 开了之后**常驻自更新**, 不关闭。
+                    // "锚定在哪"由 cov_base 决定(见上), 只影响 buildTarget 的目标组成:
+                    //   底图匹配度高 -> 位姿锚在底图上;  底图匹配度低 -> 子图桥接并自更新。
+                    if (!m_ever_localized) {
+                        if (m_session_map.active()) m_session_map.deactivate();
                     } else {
-                        if (f.cloud && !f.cloud->empty()) m_session_map.update(*f.cloud, m_pose);
-                        if (anchor_ok && m_anchor_ok_streak >= m_anchor_close_patience) {
-                            std::cout << "[session_map] close (anchor OK, age="
-                                      << m_session_map.ageS(now_s) << "s)" << std::endl;
-                            m_session_map.deactivate();
+                        if (!m_session_map.active()) {
+                            if (!anchor_ok && m_anchor_weak_streak >= m_anchor_patience &&
+                                m_status.load() != LOST &&
+                                m_cov_base >= 0.0 && m_cov_base < m_monitor_cfg.credible_fitness) {
+                                m_session_map.reset(m_pose, now_s);
+                                std::cout << "[session_map] open (anchor WEAK inl=" << res.inliers
+                                          << " cov_base=" << m_cov_base << ")" << std::endl;
+                            }
+                        }
+                        // 自更新: 匹配被接受且置信度达标就写 (锚定态也写, 供"底图低"时桥接)
+                        if (accepted && res.fitness >= m_monitor_cfg.credible_fitness &&
+                            f.cloud && !f.cloud->empty()) {
+                            m_session_map.update(*f.cloud, m_pose);
                         }
                     }
                     session_map_active = m_session_map.active() ? 1 : 0;
@@ -1987,6 +2117,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 if (ss < 0.0) qs << "n/a"; else qs << ss;
                 qs << " anchor_age=" << anchor_age
                    << " persistency_pts=" << persistency_pts
+                   << " cov_base=" << (m_cov_base >= 0.0 ? m_cov_base : -1.0)
                    << " novel_votes=" << m_maintainer->lastNovelVotes()
                    << " novel_commits=" << m_maintainer->lastNovelCommitted()
                    << " state="

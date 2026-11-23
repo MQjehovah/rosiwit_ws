@@ -130,6 +130,19 @@ private:
     double m_anchor_min_ratio = 0.5;      // 内点 / 匹配前可见点数
     double m_anchor_min_eig_ratio = 1e-3;
     int    m_anchor_patience = 5;         // 连续弱锚帧 -> 开会话地图
+    bool   m_ever_localized = false;      // 至少成功定位过一次 (之后才允许开会话地图/锚定)
+    // ---- 底图-only 匹配度: 锚定/恢复的判据 (子图自更新时防止自引用) ----
+    // 会话地图参与匹配后, 总 fitness 会自我确认(自己配自己); 判断"锚是否恢复"
+    // 必须看**对底图(不含子图/overlay)的覆盖率**:
+    //   cov_base 高 -> 底图能锚住 -> 关闭子图
+    //   cov_base 低 -> 底图锚不住 -> 子图自更新
+    CloudType::Ptr m_base_only_target;
+    pcl::KdTreeFLANN<PointType> m_base_only_kdtree;
+    bool   m_base_only_valid = false;
+    int    m_base_only_age = 0;           // 帧计数, 每 30 帧重建一次底图 crop
+    double m_cov_base = -1.0;             // 最近一帧的底图覆盖率 (<0 = 未算)
+    int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
+    bool   m_anchor_on_base = true;       // true=位姿锚在底图(目标只用底图); false=子图桥接
     int    m_anchor_close_patience = 10;  // 连续好锚帧 -> 关
     int    m_anchor_weak_streak = 0;
     int    m_anchor_ok_streak = 0;
