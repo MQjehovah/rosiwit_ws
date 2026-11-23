@@ -26,7 +26,10 @@
           </div>
           <div v-else class="spark-empty">等待匹配度曲线…</div>
 
-          <div v-if="state.slam.location_status === 1 || state.slam.location_status === 2" class="lost-box">
+          <div
+            v-if="state.slam.location_status === 2 || (state.slam.location_status === 1 && state.slam.map_area > 0)"
+            class="lost-box"
+          >
             <span class="badge" :class="state.slam.location_status === 2 ? 'bad' : 'warn'">
               {{ state.slam.location_status === 2 ? '定位丢失' : '初始化/恢复中' }}
             </span>
