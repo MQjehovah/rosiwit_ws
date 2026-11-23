@@ -63,8 +63,12 @@ void Ros1SlamInterface::startPub() {
     if (debug_publish_ && !debug_map_published_.load() &&
         (mode == SlamMode::LOCALIZATION ||
          (mode == SlamMode::MAPPING && have_imu_.load() && have_laser_.load()))) {
-        debug_map_published_.store(true);
-        scheduleGlobalMapJob();
+        // 失败(取不到图) 不能置位, 否则一次失败就永远不再重试 -> 定位模式下 /global_map 永远为空
+        const double now_wall = ros::WallTime::now().toSec();
+        if (now_wall >= next_debug_map_try_) {
+            next_debug_map_try_ = now_wall + 2.0;   // 失败每 2s 重试, 成功由 worker 置位
+            scheduleGlobalMapJob();
+        }
     }
 }
 

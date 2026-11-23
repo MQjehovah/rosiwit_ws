@@ -54,6 +54,10 @@ public:
     virtual Status getStatus() = 0;
     virtual bool getPose(PoseStamped& out) = 0;
 
+    /// 先验地图点云快照 (只读). 供 /global_map 等调试出口在定位模式下使用.
+    /// 默认不支持; 支持的实现返回 false 时调用方应自行降级.
+    virtual bool getMapCloud(PointVec& /*out*/) { return false; }
+
     /// 高频预测: 在 t 时刻给出位姿(基于最后校正 + 运动先验传播), 供高频输出.
     virtual bool predictAt(double /*t*/, PoseStamped& /*out*/) { return false; }
 

@@ -878,6 +878,15 @@ void LocalizationPipeline::setMapData(const MapData& data) {
     m_reloc_cv.notify_all();
 }
 
+bool LocalizationPipeline::getMapCloud(PointVec& out) {
+    std::lock_guard<std::mutex> lk(m_state_mu);
+    if (!m_map || m_map->empty()) return false;
+    out.clear();
+    out.reserve(m_map->size());
+    for (const auto& p : *m_map) out.push_back(p);
+    return true;
+}
+
 void LocalizationPipeline::relocBuildWorker() {
     // 兼容路径 (未注入执行器): 常驻等待请求。注入执行器时走 kickRelocBuild()。
     while (true) {

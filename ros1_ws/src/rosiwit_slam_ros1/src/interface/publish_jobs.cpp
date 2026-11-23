@@ -12,6 +12,8 @@
 // ============================================================================
 #include "ros1_slam_interface.h"
 
+#include <pcl/filters/voxel_grid.h>
+
 #include <memory>
 
 #include <ros/ros.h>
@@ -156,7 +158,15 @@ void Ros1SlamInterface::buildGlobalMapMessage() {
     for (auto& p : pts) cloud.push_back(p);
     cloud.width = static_cast<uint32_t>(cloud.size());
     cloud.height = 1;
-    point_map_puber_.publish(toPointCloud2(cloud, kMapFrame, ros::Time::now()));
+    // debug 出口: 600 万点直接发会把 RViz(WSLg 软渲染) 拖死, 先按 0.3 m 抽稀
+    CloudType::Ptr ds(new CloudType());
+    pcl::VoxelGrid<PointType> vg;
+    vg.setLeafSize(0.3f, 0.3f, 0.3f);
+    vg.setInputCloud(cloud.makeShared());
+    vg.filter(*ds);
+    ensureCloudDims(*ds);
+    point_map_puber_.publish(toPointCloud2(*ds, kMapFrame, ros::Time::now()));
+    debug_map_published_.store(true);   // 只有真正发出去才算完成, 失败留给 startPub 重试
 }
 
 void Ros1SlamInterface::waitForAuxJobs() { aux_jobs_.shutdown("Ros1SlamInterface"); }

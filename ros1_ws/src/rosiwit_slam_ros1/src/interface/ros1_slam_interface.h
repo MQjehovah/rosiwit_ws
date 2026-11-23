@@ -295,6 +295,7 @@ private:
     ros::Time last_high_rate_tf_;
     geometry_msgs::TransformStamped last_map_odom_;  // 最后有效 map->odom
     bool have_map_odom_ = false;
+    double next_debug_map_try_ = 0.0;   // global_map 失败重试节流 (墙钟秒)
     ros::Time last_map_odom_pub_;
     std::atomic<bool> relocating_{false};           // 旧 relocating_ (legacy.cpp:1843-1853)
     bool reset_on_mode_switch_ = true;              // 默认开: 与旧实现一致, 切建图即清空上一轮地图

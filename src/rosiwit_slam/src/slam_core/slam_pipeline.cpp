@@ -977,7 +977,12 @@ void SlamPipeline::accumulateRgbMap(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr
 }
 
 bool SlamPipeline::getGlobalMap(PointVec& out) {
-    if (m_mode == PipelineMode::LOCALIZATION && m_map_mgr) return m_map_mgr->getGlobalMap(out);
+    if (m_mode == PipelineMode::LOCALIZATION) {
+        // 定位模式: map_manager 里只有建图期缓存, 先验图在定位管线里
+        if (m_map_mgr && m_map_mgr->getGlobalMap(out) && !out.empty()) return true;
+        if (m_localization && m_localization->getMapCloud(out) && !out.empty()) return true;
+        return false;
+    }
     // mapping: 优先发布后端修正版全局地图(map_manager 关键帧重建), 使回环修正实时可见
     if (m_mode == PipelineMode::MAPPING && m_map_mgr) {
         PointVec m;
