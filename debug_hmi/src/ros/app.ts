@@ -131,6 +131,9 @@ export const state = reactive({
 
   slam: { ...initialSlam } as SlamInfo,
   slamTime: 0,
+  /** 丢失前最后一次有效匹配度；定位丢失时继续显示 */
+  lastGoodMatch: 0,
+  matchStale: false,
   /** 前端“定位状态”插件根据 /slam/info 推导出的展示文本 */
   statusText: '',
   /** /device/robot_shadow 解析后的设备状态 */
@@ -891,10 +894,16 @@ function registerHandlers(): void {
     const slam = msg?.slam ?? msg
     const stateRaw = slam?.slam_state
     const locRaw = slam?.location_status
+    const loc = numeric(locRaw)
+    const rawMatch = numeric(slam?.matching_degree, 0)
+    if (rawMatch > 0) state.lastGoodMatch = rawMatch
+    // 定位丢失时如果后端仍给 0，就保留丢失前最后一次有效置信度
+    const effectiveMatch = loc === 2 && rawMatch <= 0 ? state.lastGoodMatch : rawMatch
+    state.matchStale = loc === 2 && rawMatch <= 0 && state.lastGoodMatch > 0
     state.slam = {
       slam_state: numeric(stateRaw),
-      location_status: numeric(locRaw),
-      matching_degree: numeric(slam?.matching_degree, 0),
+      location_status: loc,
+      matching_degree: effectiveMatch,
       update_request: numeric(slam?.update_request, 0),
       map_name: String(slam?.map_name ?? ''),
       map_area: numeric(slam?.map_area, 0),

@@ -345,8 +345,13 @@ void Ros1SlamInterface::publishLocationInfo() {
                 case rosiwit_slam::ILocalization::LOST:        location_status = 2; break;
             }
             relocating_ = (st == rosiwit_slam::ILocalization::INIT);
-            if (st == rosiwit_slam::ILocalization::LOCALIZED) {
+            // LOCALIZED / LOST 都输出核心当前（或最后）的 fitness，HMI 才能在丢失时
+            // 继续显示置信度；INIT 重定位中没有可信值，保持 0。
+            if (st == rosiwit_slam::ILocalization::LOCALIZED ||
+                st == rosiwit_slam::ILocalization::LOST) {
                 matching_degree = static_cast<float>(engine_.getMatchingDegree());
+            }
+            if (st == rosiwit_slam::ILocalization::LOCALIZED) {
                 core_ever_localized_ = true;
                 planar_ever_locked_ = true;
             }

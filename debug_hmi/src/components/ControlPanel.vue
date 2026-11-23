@@ -26,6 +26,18 @@
           </div>
           <div v-else class="spark-empty">等待匹配度曲线…</div>
 
+          <div v-if="state.slam.location_status === 2" class="lost-box">
+            <span class="badge bad">定位丢失</span>
+            <span class="mono">
+              x {{ state.slam.robot_pose.x.toFixed(2) }} · y
+              {{ state.slam.robot_pose.y.toFixed(2) }} · yaw
+              {{ ((state.slam.robot_pose.theta * 180) / Math.PI).toFixed(0) }}°
+            </span>
+            <span>
+              置信度 {{ percent(state.slam.matching_degree) }}{{ state.matchStale ? '（丢失前）' : '' }}
+            </span>
+          </div>
+
           <dl class="kv2">
             <dt>地图</dt>
             <dd>{{ state.slam.map_name || '—' }}</dd>
@@ -1345,6 +1357,26 @@ async function doDump(): Promise<void> {
   color: #54687a;
   font-size: 10px;
   text-align: center;
+}
+
+.lost-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 5px 7px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 5px;
+  background: rgba(80, 20, 20, 0.18);
+  color: #d6b3b3;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.lost-box .mono {
+  color: #fca5a5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .kv2 {

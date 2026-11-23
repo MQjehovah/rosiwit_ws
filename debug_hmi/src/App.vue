@@ -7,7 +7,13 @@
       <div class="state">
         <span class="badge" :class="locClass">{{ locText }}</span>
         <span class="badge ghost">{{ modeText }}</span>
-        <span class="badge ghost">匹配 {{ matchPct }}%</span>
+        <span
+          class="badge"
+          :class="state.matchStale ? 'warn' : 'ghost'"
+          :title="state.matchStale ? '定位丢失，显示丢失前最后一次有效匹配度' : ''"
+        >
+          匹配 {{ matchPct }}%{{ state.matchStale ? '*' : '' }}
+        </span>
         <span v-if="state.slam.map_name" class="map-chip" :title="state.slam.map_name">
           {{ state.slam.map_name }}
         </span>
