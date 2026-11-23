@@ -2098,14 +2098,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     if (!m_ever_localized) {
                         if (m_session_map.active()) m_session_map.deactivate();
                     } else {
-                        if (!m_session_map.active()) {
-                            if (!anchor_ok && m_anchor_weak_streak >= m_anchor_patience &&
-                                m_status.load() != LOST &&
-                                m_cov_base >= 0.0 && m_cov_base < m_monitor_cfg.credible_fitness) {
-                                m_session_map.reset(m_pose, now_s);
-                                std::cout << "[session_map] open (anchor WEAK inl=" << res.inliers
-                                          << " cov_base=" << m_cov_base << ")" << std::endl;
-                            }
+                        // 只要定位成功且覆盖率高, 就立刻开子图并**一直在建**:
+                        // 底图某天完全变化锚不住时, 已建好的子图立即顶上 (边建图边定位),
+                        // 而不是临时去建 (临时建的子图自身就是错的, 顶不住)。
+                        if (!m_session_map.active() && m_status.load() == LOCALIZED &&
+                            accepted && res.fitness >= m_monitor_cfg.credible_fitness) {
+                            m_session_map.reset(m_pose, now_s);
+                            std::cout << "[session_map] open (base anchored, building ahead)"
+                                      << std::endl;
                         }
                         // 自更新: 匹配被接受且置信度达标就写 (锚定态也写, 供"底图低"时桥接)
                         if (accepted && res.fitness >= m_monitor_cfg.credible_fitness &&
