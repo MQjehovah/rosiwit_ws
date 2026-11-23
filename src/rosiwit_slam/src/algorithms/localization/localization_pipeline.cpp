@@ -392,8 +392,6 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     auto subc = loc["submap"];
     if (subc) {
         m_session_map_enabled = getv<bool>(subc, "enabled", m_session_map_enabled);
-        m_session_map_use_for_tracking =
-            getv<bool>(subc, "use_for_tracking", m_session_map_use_for_tracking);
         m_anchor_min_inliers = getv<int>(subc, "anchor_min_inliers", m_anchor_min_inliers);
         m_anchor_min_ratio = getv<double>(subc, "anchor_min_ratio", m_anchor_min_ratio);
         m_anchor_min_eig_ratio = getv<double>(subc, "anchor_min_eig_ratio", m_anchor_min_eig_ratio);

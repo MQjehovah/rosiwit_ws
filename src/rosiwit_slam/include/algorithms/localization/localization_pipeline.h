@@ -124,7 +124,6 @@ private:
     SessionMap m_session_map;
     mutable std::mutex m_session_map_mu;   // onLidar 与 setMap/setInitPose 都会碰子图
     bool   m_session_map_enabled = true;
-    bool   m_session_map_use_for_tracking = false;   // 真正当作匹配目标(未启用)
     // 锚质量判据 (行业标准): JtJ 最小特征值比 (Zhang, ICRA 2016) + 内点数
     int    m_anchor_min_inliers = 50;     // 绝对下限(防 3 个点也当锚)
     double m_anchor_min_ratio = 0.5;      // 内点 / 匹配前可见点数
