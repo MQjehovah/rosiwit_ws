@@ -131,13 +131,7 @@ private:
     double m_anchor_min_eig_ratio = 1e-3;
     int    m_anchor_patience = 5;         // 连续弱锚帧 -> 开会话地图
     bool   m_ever_localized = false;      // 至少成功定位过一次 (之后才允许开会话地图/锚定)
-    // ---- 底图-only 匹配度: 锚定/恢复的判据 (子图自更新时防止自引用) ----
-    // 会话地图参与匹配后, 总 fitness 会自我确认(自己配自己); 判断"锚是否恢复"
-    // 必须看**对底图(不含子图/overlay)的覆盖率**:
-    //   cov_base 高 -> 底图能锚住 -> 关闭子图
-    //   cov_base 低 -> 底图锚不住 -> 子图自更新
-    CloudType::Ptr m_base_only_target;
-    pcl::KdTreeFLANN<PointType> m_base_only_kdtree;
+    // 底图-only 匹配度的状态; KD 树/目标云放在 .cpp 匿名命名空间(避免头文件引 pcl)
     bool   m_base_only_valid = false;
     int    m_base_only_age = 0;           // 帧计数, 每 30 帧重建一次底图 crop
     double m_cov_base = -1.0;             // 最近一帧的底图覆盖率 (<0 = 未算)

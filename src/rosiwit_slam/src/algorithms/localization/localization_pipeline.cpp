@@ -8,6 +8,12 @@
 #include <unordered_map>
 
 namespace {
+// 底图-only 匹配度用的 KD 树/目标云: 放在 .cpp 里(单实例), 避免头文件引 pcl
+CloudType::Ptr g_base_only_target;
+pcl::KdTreeFLANN<PointType> g_base_only_kdtree;
+bool g_base_only_valid = false;
+int g_base_only_age = 0;
+
 // 简单体素降采样 (底图-only 覆盖率用): 与 matcher 的口径一致即可, 不必完全相同
 CloudType::Ptr voxelDownsample(const CloudType::Ptr& in, float voxel) {
     CloudType::Ptr out(new CloudType());
@@ -2018,24 +2024,24 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             //   cov_base 低 -> 底图锚不住 -> 子图自更新
             if (m_session_map_enabled && m_ever_localized && scan && !scan->empty() &&
                 m_local_map) {
-                if (!m_base_only_valid || ++m_base_only_age >= 30) {
+                if (!g_base_only_valid || ++g_base_only_age >= 30) {
                     m_base_only_age = 0;
                     CloudType::Ptr base_crop = m_local_map->getLocalMap(out_pose);
                     if (base_crop && base_crop->size() >= 100) {
-                        m_base_only_kdtree.setInputCloud(base_crop);
-                        m_base_only_valid = true;
+                        g_base_only_kdtree.setInputCloud(base_crop);
+                        g_base_only_valid = true;
                     } else {
-                        m_base_only_valid = false;
+                        g_base_only_valid = false;
                     }
                 }
-                if (m_base_only_valid) {
+                if (g_base_only_valid) {
                     CloudType::Ptr ds = voxelDownsample(scan, 0.4f);
                     if (ds && ds->size() >= 50) {
                         Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
                         T.block<3, 3>(0, 0) = out_pose.rot;
                         T.block<3, 1>(0, 3) = out_pose.trans;
                         const CoverageStats cs =
-                            evaluateCoverage(m_base_only_kdtree, *ds, T, m_matcher_cfg.inlier_dist);
+                            evaluateCoverage(g_base_only_kdtree, *ds, T, m_matcher_cfg.inlier_dist);
                         m_cov_base = (cs.total > 0) ? cs.coverage : -1.0;
                     }
                 }
