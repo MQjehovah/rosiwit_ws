@@ -111,8 +111,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
                   << "], scan will be transformed to IMU frame" << std::endl;
     }
 
-    // 自转中心 (转动瞬心) 在 base 系的 xy: 差速底盘的轮速模型假设 base 原点就是瞬心,
-    // 实车不一定 (本机实测在原点后方 0.13m, 见 setMountExtrinsic). 标定方法见 yaml 注释.
+    // 自转中心 (转动瞬心) 在 base 系的 xy: 差速底盘的轮速模型假设 base 原点就是瞬心;
+    // 若 base 原点不在轮轴中点上则会差一个固定偏移. 标定方法见 yaml 注释 (必须用自转数据).
     if (loc["rotation_center"] && loc["rotation_center"].IsSequence() &&
         loc["rotation_center"].size() >= 2) {
         m_rot_center.x() = loc["rotation_center"][0].as<double>(0.0);
@@ -657,9 +657,10 @@ void LocalizationPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar
     //   3) 杆臂 lever_arm (slam_types.h: leverArmSensorFrame) —— 原地自转轨道项
     // 任何一处都不允许假设"雷达正装"。
     const V3D up = upBodyFromMount(r_base_lidar);
-    // 杆臂从**自转中心**量起, 不是 base 原点 (2026-11-23): 底盘绕轮轴中心自转, 实车瞬心
-    // 在 base 原点后方 ~0.13m (回放匹配位姿圆拟合: 半径 0.535m, 残差 1.5cm, 三次一致).
-    // 从原点量起, 轨道项每帧差 0.13 × 帧内转角 (快转 0.02~0.06m). 默认 [0,0] = base 原点.
+    // 杆臂从**自转中心**量起 (2026-11-23), 默认即 base 原点. 若底盘实际绕轮轴中点自转而
+    // base 原点不在其上, 从原点量起会让轨道项每帧差 |偏移| × 帧内转角 (二阶量).
+    // 偏移是标定值 (localization.rotation_center), 必须用机器人自转的数据标: 手动推的
+    // 轨迹瞬心随手法漂移 (手动 bag 拟合出"后方 0.13m", 未采信, 见 yaml 注释).
     const V3D lever = leverArmSensorFrame(
         r_base_lidar, t_base_lidar - V3D(m_rot_center.x(), m_rot_center.y(), 0.0));
     {

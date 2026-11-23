@@ -128,7 +128,8 @@ private:
     bool   m_base_r_valid = false;
     double m_fixed_z = -1.0;                                  // 雷达在地图系的目标高度, <0 = 未设
     // 自转中心 (转动瞬心) 在 base 系的 xy, 标定值; 默认 base 原点.
-    // 差速底盘的轮速模型假设 base 原点就是瞬心, 实车不一定 (本机在原点后方 0.13m).
+    // 差速底盘的轮速模型假设 base 原点就是瞬心. 标定必须用机器人**自转**的数据
+    // (手动推的轨迹瞬心随手法漂移), 方法见 default.yaml 的 rotation_center 注释.
     Eigen::Vector2d m_rot_center = Eigen::Vector2d::Zero();
     double m_planar_z = 0.0;                                   // planar.z: body(车底) 目标高度
     bool   m_fix_planar = true;                               // 地面约束开关
