@@ -50,6 +50,7 @@ public:
   /// 世界系子图点云（T_GS * pts），供匹配目标使用。
   CloudType::Ptr pointsWorld() const;
 
+
   /// 关闭并清空（重新看到高可信几何时调用）
   void deactivate() {
     active_ = false;
