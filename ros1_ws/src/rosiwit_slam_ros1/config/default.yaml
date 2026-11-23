@@ -1,4 +1,4 @@
-# rosiwit_slam - Default Configuration (2026-10-18 分层重构)
+﻿# rosiwit_slam - Default Configuration (2026-10-18 分层重构)
 # 默认 mapping 模式, 可通过 service (set_slam_mode) 切换到 localization / idle
 #
 # 分层导航:
@@ -186,8 +186,8 @@ mapping:
     min_overlap: 0.35 # ICP 配准后源点云最近邻命中率下限
     odom_gate_m: 10.0 # 里程计门控: 相距超过此距离的候选不做 ICP
   map_manager:
-    max_correction_trans_m: 15 # 后端修正允许的最大平移跳变(m)
-    max_correction_rot_deg: 150 # 后端修正允许的最大旋转跳变(deg)
+    max_correction_trans_m: 0.6 # 后端修正允许的最大平移跳变(m)
+    max_correction_rot_deg: 5 # 后端修正允许的最大旋转跳变(deg)
   backend:
     loop_loss_scale: 5.0 # 回环因子 Cauchy 核尺度(m); 尺度内保留拉力, 几十米假回环强降权
     max_optimization_trans_m: 20 # 含新约束的单次优化最大平移修正; 超过则回滚本次约束

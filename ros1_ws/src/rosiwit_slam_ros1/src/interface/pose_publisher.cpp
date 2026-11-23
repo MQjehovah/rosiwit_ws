@@ -260,6 +260,7 @@ void Ros1SlamInterface::publishSlamInfoThrottled() {
 }
 
 void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
+    (void)info_published;   // 高频输出不再依赖本 tick 是否发了 /slam/info
     const Xz3dPose p = currentPoseSnapshot();   // 只读快照 (写侧在服务线程也可能动)
     if (!curr_pose_valid_) {
         broadcastMapOdom();
@@ -269,8 +270,14 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
     // 高频输出用 ESKF 传播到"现在"的位姿, 而不是零阶保持上一帧匹配结果:
     // 匹配是 10Hz, 保持会造成 100~200ms 滞后和阶梯感.
     rosiwit_slam::PoseStamped pred;
-    const bool have_pred =
+    bool have_pred =
         (slam_mode_ == SlamMode::LOCALIZATION) && engine_.getHighRatePose(now.toSec(), pred);
+    // 预测位姿在雷达/IMU 系下, 对外发布的是 base_footprint 系:
+    // 必须和 10Hz 主路径一样做一次安装外参合成, 否则会差一个安装 yaw (实测 ~90°).
+    if (have_pred && engine_.computeBaseFrames(/*blocking=*/false) &&
+        engine_.baseFootprintLidar().valid) {
+        pred = composeRightInv(pred, engine_.baseFootprintLidar());
+    }
     const bool fresh = !last_new_pose_ros_.isZero() &&
                        (now - last_new_pose_ros_).toSec() <= 0.30;
     const bool due = last_high_rate_pub_.isZero() ||
@@ -280,7 +287,10 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
         return;
     }
 
-    if (!info_published) {
+    // 50Hz 输出: 不论本 tick 是否发了 /slam/info, 都用预测位姿发一次.
+    // (原来只在 info_published=false 时发, 而 LOCALIZATION 下每 tick 都 info_published=true,
+    //  导致这段高频预测从来没生效过, 实际输出还是 10Hz. )
+    {
         geometry_msgs::PoseStamped ps;
         ps.header.frame_id = kMapFrame;
         ps.header.stamp = now;
@@ -309,10 +319,6 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
             sendTransform();
             last_high_rate_tf_ = now;
         }
-    } else if (use_tf_ && (last_high_rate_tf_.isZero() ||
-                           (now - last_high_rate_tf_).toSec() >= 0.05)) {
-        sendTransform();
-        last_high_rate_tf_ = now;
     }
     last_high_rate_pub_ = now;
 }
