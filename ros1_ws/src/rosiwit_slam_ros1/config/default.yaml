@@ -226,7 +226,10 @@ localization:
   # 定位链路的 odom 用法: none | fuse. 单一开关 (合并原 motion_prior.use_odom):
   # fuse = motion_prior 吸收 /odom 平移 + pose_fusion=eskf 吸收 odom 速度观测.
   # 仍需 global.input.use_odom 负责订阅.
-  odom_mode: none
+  # 2026-11-23 教训: 排查转弯问题时临时改成 none 后忘了恢复 —— 没有 odom 速度, 先验只能
+  # 从激光位移慢学(观测噪声 0.8m/s), 推车一加速预测位置就以 1~2m/s 跑飞, 差 1.9m 后被
+  # 马氏门限拒掉并死锁. 推行场景必须 fuse (见文件头 [匹配捕获-滤波螺旋]).
+  odom_mode: fuse
   # ---- LIO 相对观测 (LIO 常开作预测源; 默认关闭 = 改造前行为) ----
   # frontend 必须已配置 (modules.frontend); 缺失时自动退回 odom + S2M。
   use_lio_relative: false
