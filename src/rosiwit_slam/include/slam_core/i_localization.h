@@ -58,6 +58,10 @@ public:
     /// 默认不支持; 支持的实现返回 false 时调用方应自行降级.
     virtual bool getMapCloud(PointVec& /*out*/) { return false; }
 
+    /// 地图自更新的 overlay 快照 / 会话地图快照 (调试出口, 默认不支持).
+    virtual bool getOverlayCloud(PointVec& /*out*/) { return false; }
+    virtual bool getSessionMapCloud(PointVec& /*out*/) { return false; }
+
     /// 高频预测: 在 t 时刻给出位姿(基于最后校正 + 运动先验传播), 供高频输出.
     virtual bool predictAt(double /*t*/, PoseStamped& /*out*/) { return false; }
 

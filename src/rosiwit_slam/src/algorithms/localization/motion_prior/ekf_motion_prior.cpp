@@ -136,6 +136,14 @@ void EkfMotionPrior::onImu(const IMUSample& s) {
         }
     }
 
+    // 车体水平加速度 EMA: 打滑判据的独立参照 (与轮速推出的加速度比较).
+    {
+        const V3D a = s.acc - m_acc_bias;
+        const V3D up = m_cfg.up_body_valid ? m_cfg.up_body : m_up_body;
+        const V3D a_h = a - a.dot(up) * up;
+        m_imu_acc_h = 0.9 * m_imu_acc_h + 0.1 * a_h.norm();
+    }
+
     m_last_imu_time = s.time;
     // 机体系偏航角速度: 必须投影到重力轴 —— 本车 IMU 俯装 ~38°, gyro.z 只有真实转速的 ~81%.
     const V3D up_axis = m_cfg.up_body_valid ? m_cfg.up_body : m_up_body;
@@ -204,16 +212,36 @@ void EkfMotionPrior::onOdom(const PoseStamped& odom) {
                     m_odom_z_vs_v_deg = std::acos(c) * 180.0 / M_PI;
                 }
             }
-            if (velocityUpdate(z, m_cfg.ekf_r_odom * m_cfg.ekf_r_odom)) {
-                ++m_odom_accepted;
-            } else {
-                ++m_odom_rejected;
-                ++m_odom_rejected_chi2;
+            {
+                // 打滑判据: 轮速推出来的加速度远大于车体实际加速度 => 打滑/抱死/编码器跳变.
+                // 用 IMU 水平加速度做独立参照 (m_imu_acc_h, onImu 里更新).
+                double a_win = 0.0;
+                m_z_hist.emplace_back(odom.time, z);
+                while (!m_z_hist.empty() && odom.time - m_z_hist.front().first > 0.45) {
+                    m_z_hist.pop_front();
+                }
+                if (!m_z_hist.empty() && odom.time - m_z_hist.front().first >= 0.25) {
+                    // 0.25~0.45s 滑窗内的平均加速度: 单帧差分会被轮速量化噪声放大
+                    a_win = (z - m_z_hist.front().second).norm() /
+                            (odom.time - m_z_hist.front().first);
+                }
+                const bool slip = (a_win > 4.0 && m_imu_acc_h < 1.0);
+                if (slip) {
+                    ++m_odom_rejected;
+                    ++m_odom_rejected_slip;
+                } else if (velocityUpdate(z, m_cfg.ekf_r_odom * m_cfg.ekf_r_odom,
+                                          /*use_gate=*/false)) {
+                    ++m_odom_accepted;
+                } else {
+                    ++m_odom_rejected;
+                    ++m_odom_rejected_chi2;
+                }
             }
             if (++m_odom_probe % 100 == 0) {
                 std::cout << "[odom] acc=" << m_odom_accepted
-                          << " rej(speed/yaw/chi2)=" << m_odom_rejected_speed << "/"
-                          << m_odom_rejected_yaw << "/" << m_odom_rejected_chi2
+                          << " rej(speed/yaw/slip/chi2)=" << m_odom_rejected_speed << "/"
+                          << m_odom_rejected_yaw << "/" << m_odom_rejected_slip << "/"
+                          << m_odom_rejected_chi2
                           << " z-v=" << m_odom_z_vs_v_deg << "deg"
                           << " v=(" << m_v.x() << "," << m_v.y() << ")"
                           << " z=(" << z.x() << "," << z.y() << ")"
@@ -227,17 +255,22 @@ void EkfMotionPrior::onOdom(const PoseStamped& odom) {
     m_have_odom = true;
 }
 
-bool EkfMotionPrior::velocityUpdate(const Eigen::Vector2d& z, double r_var) {
+bool EkfMotionPrior::velocityUpdate(const Eigen::Vector2d& z, double r_var, bool use_gate) {
     // H = I; S = P + R; 卡方门控 (2 自由度, 95% = 5.99)
     const Eigen::Matrix2d S = m_P + Eigen::Matrix2d::Identity() * r_var;
     const Eigen::Vector2d nu = z - m_v;
     const double chi2 = nu.transpose() * S.ldlt().solve(nu);
-    if (m_cfg.ekf_chi2 > 0 && chi2 > m_cfg.ekf_chi2) {
+    if (use_gate && m_cfg.ekf_chi2 > 0 && chi2 > m_cfg.ekf_chi2) {
         return false;   // 新息与协差不一致: 打滑/外力, 拒绝该观测 (计数由调用方区分来源)
     }
     const Eigen::Matrix2d K = m_P * S.inverse();
     m_v += K * nu;
     m_P = (Eigen::Matrix2d::Identity() - K) * m_P;
+    // A: 协方差下限 —— 防止对"静止"过度自信, 否则真实起步会被门限当成异常永远进不来.
+    const double kFloor = 0.02;   // (m/s)^2
+    for (int i = 0; i < 2; ++i) {
+        if (m_P(i, i) < kFloor) m_P(i, i) = kFloor;
+    }
     return true;
 }
 

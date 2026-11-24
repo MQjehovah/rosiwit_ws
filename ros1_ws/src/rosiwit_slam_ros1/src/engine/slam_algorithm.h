@@ -136,6 +136,10 @@ public:
     /// 高频位姿预测 (ESKF 传播到 t), 用于消除"等匹配结果"造成的输出滞后.
     bool getHighRatePose(double t, rosiwit_slam::PoseStamped& out);
 
+    /// 地图自更新 overlay / 会话地图快照 (调试话题)
+    bool getOverlayCloud(rosiwit_slam::PointVec& out);
+    bool getSessionMapCloud(rosiwit_slam::PointVec& out);
+
     // ==================== 核心结构操作 (线程安全入口) ====================
     // 为什么需要这一层: 接口层以前直接拿 algo() 裸指针调"会替换核心内部对象"的操作
     // (重建模块、装载定位地图、改流水线模式、导出/读整图), 而重建发生在 ROS 回调线程,

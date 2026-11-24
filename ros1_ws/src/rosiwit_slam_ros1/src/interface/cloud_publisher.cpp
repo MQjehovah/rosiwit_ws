@@ -59,6 +59,36 @@ void Ros1SlamInterface::startPub() {
         (mode == SlamMode::MAPPING && have_imu_.load() && have_laser_.load());
     if (scan_wanted) scheduleScanJob();
 
+    // 1Hz 调试出口: 地图自更新 overlay / 会话地图 (latched, 有订阅者才构建)
+    if (debug_publish_ && mode == SlamMode::LOCALIZATION &&
+        (overlay_map_puber_.getNumSubscribers() > 0 ||
+         session_map_puber_.getNumSubscribers() > 0)) {
+        const ros::Time now = ros::Time::now();
+        if (last_aux_map_pub_.isZero() || (now - last_aux_map_pub_).toSec() >= 1.0) {
+            last_aux_map_pub_ = now;
+            if (overlay_map_puber_.getNumSubscribers() > 0) {
+                rosiwit_slam::PointVec pts;
+                if (engine_.getOverlayCloud(pts) && !pts.empty()) {
+                    CloudType cloud;
+                    cloud.reserve(pts.size());
+                    for (const auto& p : pts) cloud.push_back(p);
+                    ensureCloudDims(cloud);
+                    overlay_map_puber_.publish(toPointCloud2(cloud, kMapFrame, now));
+                }
+            }
+            if (session_map_puber_.getNumSubscribers() > 0) {
+                rosiwit_slam::PointVec pts;
+                if (engine_.getSessionMapCloud(pts) && !pts.empty()) {
+                    CloudType cloud;
+                    cloud.reserve(pts.size());
+                    for (const auto& p : pts) cloud.push_back(p);
+                    ensureCloudDims(cloud);
+                    session_map_puber_.publish(toPointCloud2(cloud, kMapFrame, now));
+                }
+            }
+        }
+    }
+
     // 整图只在 debug 打开时发, 每个模式一次 (legacy.cpp:936)
     if (debug_publish_ && !debug_map_published_.load() &&
         (mode == SlamMode::LOCALIZATION ||

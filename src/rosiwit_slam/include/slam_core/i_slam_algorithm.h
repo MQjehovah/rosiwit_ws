@@ -94,6 +94,10 @@ public:
                             const Eigen::Matrix<double, 6, 6>& /*cov*/) {}
     /// 高频预测位姿 (定位模式; 供高频输出/TF; 默认不支持)
     virtual bool getHighRatePose(double /*t*/, PoseStamped& /*out*/) { return false; }
+
+    /// 地图自更新 overlay / 会话地图快照 (调试出口; 默认不支持)
+    virtual bool getOverlayCloud(PointVec& /*out*/) { return false; }
+    virtual bool getSessionMapCloud(PointVec& /*out*/) { return false; }
     /// 位姿 + 协方差 (order [rot(3),trans(3)]; 默认不支持)
     virtual bool getPoseCov(PoseStamped& /*out*/, Eigen::Matrix<double, 6, 6>& /*cov*/) { return false; }
     /// 定位匹配度 [0,1] (定位模式下才有意义; 默认 0).

@@ -110,6 +110,8 @@ public:
     void onImage(const ImageFrame& f) override;
     std::string name() const override { return m_pipeline_name; }
     bool getGlobalMap(PointVec& out) override;
+    bool getOverlayCloud(PointVec& out) override;
+    bool getSessionMapCloud(PointVec& out) override;
     SlamState state() const override;
 
     bool saveMap(const std::string& path) override;

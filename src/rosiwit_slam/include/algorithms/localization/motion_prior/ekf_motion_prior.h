@@ -44,7 +44,7 @@ public:
     double odomZvsVDeg() const { return m_odom_z_vs_v_deg; }
 
 private:
-    bool velocityUpdate(const Eigen::Vector2d& z, double r_var);
+    bool velocityUpdate(const Eigen::Vector2d& z, double r_var, bool use_gate = true);
     /// 历史插值: t ∈ [front, back] 时返回该时刻位姿, 否则 false.
     bool histAt(double t, PoseStamped& out) const;
     /// 延迟锚定: 把位姿锚到 pose(时刻 t_a ≤ 最新 IMU 时刻), 并把旧历史链上
@@ -66,6 +66,9 @@ private:
     // 观测质量计数 (现场只调参、看不到这些数就没法判断 odom 是否在起作用)
     int m_odom_accepted = 0;
     int m_odom_rejected_speed = 0;
+    int m_odom_rejected_slip = 0;    // 打滑判据拒绝 (轮加速度 >> 车体加速度)
+    std::deque<std::pair<double, Eigen::Vector2d>> m_z_hist;   // odom 速度滑窗 (打滑判据, ~0.3s)
+    double m_imu_acc_h = 0.0;        // 车体水平加速度 EMA (m/s^2)
     int m_odom_rejected_yaw = 0;
     int m_odom_rejected_chi2 = 0;
     double m_odom_z_vs_v_deg = 0.0;

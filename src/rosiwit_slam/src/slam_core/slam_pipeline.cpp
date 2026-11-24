@@ -996,6 +996,16 @@ bool SlamPipeline::getGlobalMap(PointVec& out) {
     return false;
 }
 
+bool SlamPipeline::getOverlayCloud(PointVec& out) {
+    if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) return false;
+    return m_localization->getOverlayCloud(out);
+}
+
+bool SlamPipeline::getSessionMapCloud(PointVec& out) {
+    if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) return false;
+    return m_localization->getSessionMapCloud(out);
+}
+
 SlamState SlamPipeline::state() const {
     if (m_mode == PipelineMode::IDLE) return SlamState::READY;
     return SlamState::RUNNING;

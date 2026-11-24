@@ -38,6 +38,8 @@ public:
     void setMapData(const MapData& data) override;
     /// 先验地图快照 (定位模式下 /global_map 的数据源)
     bool getMapCloud(PointVec& out) override;
+    bool getOverlayCloud(PointVec& out) override;
+    bool getSessionMapCloud(PointVec& out) override;
     /// 运行时注入安装外参 (来自 URDF/TF/启动参数); 统一驱动扫描变换与偏航轴 up_body.
     void setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar,
                            const Eigen::Matrix3d& r_il,

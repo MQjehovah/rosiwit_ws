@@ -355,6 +355,18 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
             e.second.rot = R_fix * rel_R;
         }
         while (!m_hist.empty() && m_hist.front().first < pose.time) m_hist.pop_front();
+        // 在缓冲起点补一条"匹配时刻、修正后"的状态: predict(t_a) 必须精确回到 t_a.
+        // 否则 t_a 落在起点之前, predict 只能回退到最新状态 = now, 转弯时位姿超前
+        // 一个处理延迟 (墙歪的根因).
+        PoseStamped at_a;
+        at_a.time = pose.time;
+        at_a.trans = p_fix;
+        at_a.rot = R_fix;
+        if (!m_hist.empty() && m_hist.front().first == pose.time) {
+            m_hist.front().second = at_a;
+        } else {
+            m_hist.push_front(std::make_pair(pose.time, at_a));
+        }
     }
     // ---- 协方差更新 ----
     for (int i = 0; i < 6; ++i) {
@@ -517,7 +529,17 @@ PoseStamped EkfPoseFusion::predict(double t) const {
     // **过去时刻: 历史插值** (2026-11-23). 延迟观测修正后状态始终在"最新 IMU 时刻",
     // 帧末 t_a 比它早一个处理延迟; 直接返回当前状态 = 拿"现在"的位姿盖 t_a 的时间戳,
     // 转弯 40°/s × 0.2s 就差 8°. 历史尾部已随观测重锚, 插值出来的就是修正后的位姿.
-    const bool past = histAt(t, out);
+    bool past = histAt(t, out);
+    if (!past && !m_hist.empty() && t <= m_hist.front().first) {
+        // t 早于缓冲起点: onMatch 会把 <= 匹配时刻的条目裁掉, 于是"帧末时间戳"经常
+        // 刚好落在缓冲起点之前. 这时**必须用起点那条状态**(它离 t 只有一个 IMU 周期),
+        // 不能回退到 m_p/m_R: 那是 IMU 的 now, 比帧末晚一个完整处理延迟, 转弯时
+        // 直接差出 ω·Δt (现场实测 match_deg=28° @ 0.43 rad/s), 而扫描是按帧末去畸变的,
+        // 位姿一超前, 写进会话地图/overlay 就是"转弯墙歪".
+        out = m_hist.front().second;
+        out.time = t;
+        past = true;
+    }
     if (!past) {
         out.time = t;
         out.trans = m_p;

@@ -1,4 +1,4 @@
-// src/algorithms/localization/localization_pipeline.cpp
+﻿// src/algorithms/localization/localization_pipeline.cpp
 #include "algorithms/localization/localization_pipeline.h"
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_utils.h"
@@ -884,6 +884,23 @@ bool LocalizationPipeline::getMapCloud(PointVec& out) {
     out.clear();
     out.reserve(m_map->size());
     for (const auto& p : *m_map) out.push_back(p);
+    return true;
+}
+
+bool LocalizationPipeline::getOverlayCloud(PointVec& out) {
+    if (!m_maintainer) return false;
+    const CloudType::Ptr c = m_maintainer->snapshotOverlay();
+    if (!c || c->empty()) return false;
+    out.assign(c->begin(), c->end());
+    return true;
+}
+
+bool LocalizationPipeline::getSessionMapCloud(PointVec& out) {
+    std::lock_guard<std::mutex> lk(m_session_map_mu);
+    if (!m_session_map.active()) return false;
+    const CloudType::Ptr c = m_session_map.pointsWorld();
+    if (!c || c->empty()) return false;
+    out.assign(c->begin(), c->end());
     return true;
 }
 
@@ -2070,6 +2087,37 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 插入比定位更严格: 错误位姿写进先验地图后会变成"地图的一部分", 更难恢复。
     // - LOCALIZED 会跨过 lost_patience 保持, 所以再要求本帧 fitness 达到可信阈值
     // - LIO 残差只在新鲜时参与 (LIO 停掉/只重锚时不拿旧值一直拦住插入)
+    // 写图一致性观测: 点云按 guess(帧末预测)去畸变后已经落在"帧末 body 系", 写入时用的是
+    // out_pose/m_pose. 两者之差 = 本帧的预测误差; 但真正会被烙进图里的是"最终位姿 vs 匹配
+    // 位姿(res.pose)"的差: 匹配位姿才是让这片点云对上先验地图的那个位姿.
+    const M3D R_corr = out_pose.rot * guess.rot.transpose();
+    const double corr_deg =
+        std::acos(std::max(-1.0, std::min(1.0, (R_corr.trace() - 1.0) * 0.5))) * 57.2957795;
+    const double corr_m = (out_pose.trans - guess.trans).norm();
+    const M3D R_mm = out_pose.rot * res.pose.rot.transpose();
+    const double match_deg =
+        std::acos(std::max(-1.0, std::min(1.0, (R_mm.trace() - 1.0) * 0.5))) * 57.2957795;
+    const double match_m = (out_pose.trans - res.pose.trans).norm();
+    static int insert_probe_n = 0;
+    static PoseStamped prev_insert;
+    static bool have_prev_insert = false;
+    double yaw_rate = 0.0;
+    if (have_prev_insert && out_pose.time > prev_insert.time + 1e-6) {
+        const double dy = std::atan2(
+            (out_pose.rot * prev_insert.rot.transpose())(1, 0),
+            (out_pose.rot * prev_insert.rot.transpose())(0, 0));
+        yaw_rate = dy / (out_pose.time - prev_insert.time);
+    }
+    prev_insert = out_pose;
+    have_prev_insert = true;
+    if (kLocProbe && (++insert_probe_n % 10 == 0) && (corr_deg > 1.0 || match_deg > 0.5)) {
+        std::cout << "[InsertProbe] corr_deg=" << corr_deg << " corr_m=" << corr_m
+                  << " match_deg=" << match_deg << " match_m=" << match_m
+                  << " yawrate=" << yaw_rate
+                  << " fitness=" << res.fitness << " accepted=" << (accepted ? 1 : 0)
+                  << std::endl;
+    }
+
     if (m_maintainer) {
         const FusionDiag fd = fusionDiag();
         double divergence = 0.0;
@@ -2080,9 +2128,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             (!m_monitor_cfg.enabled || res.fitness >= m_monitor_cfg.credible_fitness);
         // 插入比定位更严格: 位姿必须通过"锚质量"判据 (内点 + JtJ 最小特征值比),
         // 只看 fitness 会把 0.80~0.84 的假锁当成可信, 把错误几何写进 overlay.
+        // 写图用**匹配位姿 res.pose**, 不用融合后的 out_pose: 匹配位姿才是"让这片
+        // 去畸变点云对上先验地图"的那个位姿, 与地图几何天然一致; 融合位姿带滤波/限幅
+        // 滞后 (转弯时实测差 28°), 直接写进去就是墙歪/叠图, 而且会被当成地图的一部分.
         if (allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg) &&
             anchorOk(res, accepted)) {
-            m_maintainer->onLocalized(out_pose, scan, m_last_match, true);
+            m_maintainer->onLocalized(res.pose, scan, m_last_match, true);
         }
     }
 
@@ -2400,9 +2451,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                                       << std::endl;
                         }
                         // 自更新: 匹配被接受且置信度达标就写 (锚定态也写, 供"底图低"时桥接)
+                        // 与 overlay 同理: 用匹配位姿 res.pose 落点, 保证会话地图与先验
+                        // 地图几何一致 (融合位姿在转弯时有滤波滞后, 会把整片点云转一个角).
                         if (accepted && res.fitness >= m_monitor_cfg.credible_fitness &&
-                            f.cloud && !f.cloud->empty()) {
-                            m_session_map.update(*f.cloud, m_pose);
+                            scan && !scan->empty()) {
+                            m_session_map.update(*scan, res.pose);
                         }
                     }
                     session_map_active = m_session_map.active() ? 1 : 0;

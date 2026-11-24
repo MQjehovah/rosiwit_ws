@@ -356,7 +356,10 @@ private:
 
     // ---- 发布器 (legacy.cpp:282-297 的名字/类型/queue/latch 逐字照抄) ----
     ros::Publisher point_map_puber_;          // global_map        PointCloud2  1  latch
-    ros::Publisher grip_map_puber_;           // global_grid_map   OccupancyGrid 1 latch (/map 兼容别名, debug 才发一帧)
+    ros::Publisher grip_map_puber_;
+    ros::Publisher overlay_map_puber_;        // debug/overlay_map  地图自更新叠加层 (latched, 1Hz)
+    ros::Publisher session_map_puber_;        // debug/session_map  会话地图       (latched, 1Hz)
+    ros::Time last_aux_map_pub_;           // global_grid_map   OccupancyGrid 1 latch (/map 兼容别名, debug 才发一帧)
     ros::Publisher realtime_grid_map_puber_;  // /map              OccupancyGrid 10
     ros::Publisher pointcloud_puber_;         // curr_scan_point   PointCloud2  10
     ros::Publisher ros1_pointcloud_puber_;    // scan_f_map        PointCloud   10

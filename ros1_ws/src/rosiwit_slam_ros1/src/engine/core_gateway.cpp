@@ -219,6 +219,16 @@ bool SlamAlgorithm::getHighRatePose(double t, rosiwit_slam::PoseStamped& out) {
     return false;
 }
 
+bool SlamAlgorithm::getOverlayCloud(rosiwit_slam::PointVec& out) {
+    if (algo_raw_) return algo_raw_->getOverlayCloud(out);
+    return false;
+}
+
+bool SlamAlgorithm::getSessionMapCloud(rosiwit_slam::PointVec& out) {
+    if (algo_raw_) return algo_raw_->getSessionMapCloud(out);
+    return false;
+}
+
 std::string SlamAlgorithm::dumpFlightRecorder(const std::string& reason) {
     return diag::FlightRecorder::instance().dump(reason);
 }

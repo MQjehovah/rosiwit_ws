@@ -1,4 +1,4 @@
-﻿# rosiwit_slam - Default Configuration (2026-10-18 分层重构)
+# rosiwit_slam - Default Configuration (2026-10-18 分层重构)
 # 默认 mapping 模式, 可通过 service (set_slam_mode) 切换到 localization / idle
 #
 # 分层导航:
@@ -268,7 +268,7 @@ localization:
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
-    map_maintainer: none       # 2026-11-23 排查: 先关 overlay
+    map_maintainer: overlay       # 2026-11-23 排查: 先关 overlay
     pose_fusion: eskf         # eskf(限幅 + 多源加权, 默认) | direct(直通, 可回退)
 
   # ---- 位姿融合参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效 ----
@@ -437,10 +437,10 @@ localization:
   # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
   # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
   session_map:
-    enabled: false   # 2026-11-23 排查: 先关 session map
+    enabled: true    # 2026-12-01: 打开会话地图 (用录包验证)
     use_for_tracking: false
     radius_m: 25.0
-    voxel: 0.15
+    voxel: 0.2
     open_persistency_cov: 0.20
     close_persistency_cov: 0.30
 
@@ -557,7 +557,7 @@ localization:
     override_base: true       # 结构被移除/替换时压制原图旧点
     # ---- A 阶段: 体素可信度 w (影子模式, 只统计不决策) ----
     persistency_anchor: 128             # w>=此值视为"高可信静态几何" (0~255; 观测 +8 / 雕刻 -8 / 0 删除)
-    shadow: true              # true: w 只进 [quality] 日志, 不影响定位/插入 (B/C 阶段再启用)
+    shadow: false            # 打开写入, 用录包验证自更新效果              # true: w 只进 [quality] 日志, 不影响定位/插入 (B/C 阶段再启用)
     # 插入门控: LIO 相对观测与 S2M 残差超过此值则不写入 (0=关闭该条)
     max_insert_divergence: 0.2
     delta_min: 0.3            # 只沉淀"离原图 > 该距离(m)"的新结构(变化增量), 不重复静态
