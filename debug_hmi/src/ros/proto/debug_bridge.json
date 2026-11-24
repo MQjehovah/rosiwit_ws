@@ -444,6 +444,10 @@
             "stream": {
               "type": "string",
               "id": 7
+            },
+            "intensity": {
+              "type": "bytes",
+              "id": 10
             }
           }
         },

@@ -319,8 +319,13 @@ function syncDisplayLayers(): void {
         const cloud = getPcdCloud(d.id)
         if (cloud) {
           const colors =
-            d.colorMode === 'height' && cloud.count <= 1500000 ? heightColors(cloud.positions) : null
+            d.colorMode === 'intensity'
+              ? cloud.colors
+              : d.colorMode === 'height' && cloud.count <= 1500000
+                ? heightColors(cloud.positions)
+                : null
           entry.layer.setPoints(cloud.positions, colors)
+          if (!colors) entry.layer.setColor(hexColor(d.color))
           entry.layer.setVisible(d.enabled)
           placeInMap(entry.layer.object, 'map')
         } else {
@@ -344,9 +349,16 @@ function applyTopicCloud(topic: string, cloud: CloudData): void {
   if (!d || !d.enabled || d.renderer !== 'points') return
   const entry = ensureDynamic(topic, 'points')
   if (!entry || !(entry.layer instanceof PointCloudLayer)) return
-  const colors = d.colorMode === 'height' && cloud.count <= 1500000 ? heightColors(cloud.positions) : null
+  // intensity: 用服务端带来的 uint8 标量 (overlay 的持久度 w / 雷达强度) 着色,
+  // 固定色标不随 min/max 拉伸; height: 本地按 z 上色; flat: 用条目颜色.
+  const colors =
+    d.colorMode === 'intensity'
+      ? cloud.colors
+      : d.colorMode === 'height' && cloud.count <= 1500000
+        ? heightColors(cloud.positions)
+        : null
   entry.layer.setPoints(cloud.positions, colors)
-  entry.layer.setColor(hexColor(d.color))
+  if (!colors) entry.layer.setColor(hexColor(d.color))
   entry.layer.setSize(d.pointSize)
   entry.layer.setVisible(true)
   placeInMap(entry.layer.object, cloud.frame)

@@ -559,16 +559,32 @@ CloudType::Ptr OverlayMapMaintainer::snapshotOverlay() {
 bool OverlayMapMaintainer::save(const std::string& path) {
     CloudType::Ptr all = snapshotOverlay();
     if (!all || all->empty()) return false;
-    return pcl::io::savePCDFileBinary(path, *all) == 0;
+    // 只存 x/y/z/intensity(=A 阶段持久度 w), 与调试话题字段一致:
+    // normal_*/curvature 在叠加层里恒为 0 (从不算法向量), 存了只是误导 + 文件翻倍.
+    pcl::PointCloud<pcl::PointXYZI> out;
+    out.reserve(all->size());
+    for (const auto& p : all->points) {
+        pcl::PointXYZI q;
+        q.x = p.x;
+        q.y = p.y;
+        q.z = p.z;
+        q.intensity = p.intensity;
+        out.push_back(q);
+    }
+    out.width = static_cast<uint32_t>(out.size());
+    out.height = 1;
+    out.is_dense = false;
+    return pcl::io::savePCDFileBinary(path, out) == 0;
 }
 
 bool OverlayMapMaintainer::load(const std::string& path) {
-    CloudType in;
+    // 兼容旧文件: 旧的 8 字段 PCD (含 normal_*/curvature) 也能按 xyzi 读出来.
+    pcl::PointCloud<pcl::PointXYZI> in;
     if (pcl::io::loadPCDFile(path, in) != 0) return false;
     for (const auto& p : in.points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         addPoint(Eigen::Vector3d(p.x, p.y, p.z));
-        // 恢复持久度: 新版 PCD 把 A 阶段 w 存在 intensity 里 (旧文件是 0 -> 保持本次记的 1 票).
+        // 恢复持久度: PCD 的 intensity 就是 A 阶段 w (旧文件是 0 -> 保持本次记的 1 票).
         // 不恢复的话 w 只活在内存里, 每次重启都从 1 票开始, "跨会话确认"永远攒不到 anchor.
         if (p.intensity > 0.0f) {
             const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),

@@ -238,6 +238,7 @@
                 @change="updateDisplay(d.id, { colorMode: ($event.target as HTMLSelectElement).value as any })"
               >
                 <option value="height">高度</option>
+                <option value="intensity">强度/持久度</option>
                 <option value="flat">固定</option>
               </select>
             </label>

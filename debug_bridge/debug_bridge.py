@@ -442,6 +442,13 @@ def encode_cloud(stream, c, voxel, max_points):
         + pb_uint(6, next_seq())
         + pb_string(7, stream)
     )
+    # 强度/标量通道 (uint8, 与 xyz 同顺序): 有才发, 没有就完全不占带宽.
+    if c.get("has_intensity"):
+        iw = bytearray(len(pts))
+        for i, p in enumerate(pts):
+            v = float(p[3]) if len(p) > 3 else 0.0
+            iw[i] = 0 if v < 0.0 else (255 if v > 255.0 else int(round(v)))
+        frame += pb_bytes(10, zlib.compress(bytes(iw), 6))
     return envelope(ENV_CLOUD, frame)
 
 
@@ -579,10 +586,11 @@ def get_topic_data(topic):
         return TOPIC_DATA.get(topic)
 
 
-def set_cloud(topic, points, frame, stamp):
+def set_cloud(topic, points, frame, stamp, has_intensity=False):
     with STORE_LOCK:
-        CLOUDS[topic] = {"points": points, "frame": frame, "stamp": stamp, "recv": now()}
-    CACHE.touch(topic, len(points) * 6)
+        CLOUDS[topic] = {"points": points, "frame": frame, "stamp": stamp,
+                         "recv": now(), "has_intensity": has_intensity}
+    CACHE.touch(topic, len(points) * 7)
 
 
 def get_cloud(topic):
@@ -639,17 +647,24 @@ class OneShot(object):
 def pc2_points(msg, max_points=0):
     fields = dict((f.name, f) for f in msg.fields)
     if not all(k in fields for k in ("x", "y", "z")):
-        return []
+        return [], False
     step = msg.point_step
     data = msg.data
     fmt = {1: "b", 2: "B", 3: "h", 4: "H", 5: "i", 6: "I", 7: "f", 8: "d"}
     fx, fy, fz = fields["x"], fields["y"], fields["z"]
     if fx.datatype not in fmt or fy.datatype not in fmt or fz.datatype not in fmt:
-        return []
+        return [], False
     cx = "<" + fmt[fx.datatype]
     cy = "<" + fmt[fy.datatype]
     cz = "<" + fmt[fz.datatype]
     ox, oy, oz = fx.offset, fy.offset, fz.offset
+    # 强度/标量: 有 intensity 字段就按 uint8 带上 (雷达强度、overlay 的持久度 w).
+    fi = fields.get("intensity")
+    ci = None
+    oi = 0
+    if fi is not None and fi.datatype in fmt:
+        ci = "<" + fmt[fi.datatype]
+        oi = fi.offset
     n = msg.width * msg.height
     stride = int(math.ceil(float(n) / max_points)) if max_points and n > max_points else 1
     out = []
@@ -663,10 +678,16 @@ def pc2_points(msg, max_points=0):
                 continue
             if math.isinf(x) or math.isinf(y) or math.isinf(z):
                 continue
-            out.append((x, y, z))
+            if ci is None:
+                out.append((x, y, z))
+            else:
+                iv = struct.unpack_from(ci, data, base + oi)[0]
+                if math.isnan(iv) or math.isinf(iv):
+                    iv = 0.0
+                out.append((x, y, z, iv))
     except struct.error:
         pass
-    return out
+    return out, (ci is not None)
 
 
 def pc_points(msg, max_points=0):
@@ -908,15 +929,18 @@ def cloud_to_map(points, frame):
         frame, len(points), t[0], t[1], t[2]))
     if _np is not None:
         arr = _np.asarray(points, dtype=_np.float64)
-        out = arr.dot(_np.asarray(R).T) + _np.asarray(t)
-        return [tuple(p) for p in out.tolist()], "map"
+        xyz = arr[:, :3].dot(_np.asarray(R).T) + _np.asarray(t)
+        if arr.shape[1] > 3:
+            xyz = _np.hstack([xyz, arr[:, 3:4]])   # 强度列原样保留
+        return [tuple(p) for p in xyz.tolist()], "map"
     out = []
     for p in points:
-        out.append((
+        q = (
             R[0][0] * p[0] + R[0][1] * p[1] + R[0][2] * p[2] + t[0],
             R[1][0] * p[0] + R[1][1] * p[1] + R[1][2] * p[2] + t[1],
             R[2][0] * p[0] + R[2][1] * p[1] + R[2][2] * p[2] + t[2],
-        ))
+        )
+        out.append(q + (p[3],) if len(p) > 3 else q)
     return out, "map"
 
 
@@ -924,9 +948,10 @@ def normalize_topic(topic, typ, msg):
     kind = TYPE_KIND.get(typ)
     if kind == KIND_CLOUD:
         if typ == "sensor_msgs/PointCloud2":
-            pts = pc2_points(msg)
+            pts, has_i = pc2_points(msg)
         else:
             pts = pc_points(msg)
+            has_i = False
         frame = msg.header.frame_id or "map"
         pts, frame = cloud_to_map(pts, frame)
         return {
@@ -934,6 +959,7 @@ def normalize_topic(topic, typ, msg):
             "points": pts,
             "frame": frame,
             "stamp": msg.header.stamp.to_sec(),
+            "has_intensity": has_i,
         }
     if kind == KIND_GRID:
         return grid_dict(msg)

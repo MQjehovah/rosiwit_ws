@@ -158,6 +158,9 @@ message CloudFrame {
   bytes xyz_cm = 5; // int16 LE [count*3], centimeters, zlib when ZLIB
   uint32 seq = 6;
   string stream = 7;
+  // 每个点的标量强度 uint8 [count], 与 xyz_cm 同一顺序, zlib when ZLIB.
+  // 雷达点云是 intensity; overlay 调试云是持久度 w(0~255). 空 = 该流没有强度.
+  bytes intensity = 10;
 }
 
 message StreamInfo {

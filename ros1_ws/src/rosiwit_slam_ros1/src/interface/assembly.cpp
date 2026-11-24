@@ -135,8 +135,6 @@ void Ros1SlamInterface::initPub() {
     point_map_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("global_map", 1, true);
     grip_map_puber_ = nh_.advertise<nav_msgs::OccupancyGrid>("global_grid_map", 1, true);
     overlay_map_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("slam/debug/overlay_map", 1, true);
-    overlay_confirmed_puber_ =
-        nh_.advertise<sensor_msgs::PointCloud2>("slam/debug/overlay_map_confirmed", 1, true);
     session_map_puber_ = nh_.advertise<sensor_msgs::PointCloud2>("slam/debug/session_map", 1, true);
     // [偏离 legacy] 这里加 latching: 厂商原版是非 latched, 靠 1Hz 重发兜底,
     // 但 App/导航在两次重发之间启动会短暂"地图空白"。latching 对消费端无副作用。

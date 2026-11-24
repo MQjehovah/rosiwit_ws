@@ -59,42 +59,36 @@ void Ros1SlamInterface::startPub() {
         (mode == SlamMode::MAPPING && have_imu_.load() && have_laser_.load());
     if (scan_wanted) scheduleScanJob();
 
-    // 1Hz 调试出口: 地图自更新 overlay / 已确认 overlay / 会话地图 (latched, 有订阅者才构建)
+    // 1Hz 调试出口: 地图自更新 overlay / 会话地图 (latched, 有订阅者才构建)
     if (debug_publish_ && mode == SlamMode::LOCALIZATION &&
         (overlay_map_puber_.getNumSubscribers() > 0 ||
-         overlay_confirmed_puber_.getNumSubscribers() > 0 ||
          session_map_puber_.getNumSubscribers() > 0)) {
         const ros::Time now = ros::Time::now();
         if (last_aux_map_pub_.isZero() || (now - last_aux_map_pub_).toSec() >= 1.0) {
             last_aux_map_pub_ = now;
-            const bool want_ov = overlay_map_puber_.getNumSubscribers() > 0;
-            const bool want_conf = overlay_confirmed_puber_.getNumSubscribers() > 0;
-            if (want_ov || want_conf) {
+            if (overlay_map_puber_.getNumSubscribers() > 0) {
                 rosiwit_slam::PointVec pts;
                 if (engine_.getOverlayCloud(pts) && !pts.empty()) {
-                    // intensity = A 阶段持久度 w(0~255), rgb = 按 w 上色:
-                    // 灰=无记录/刚提交, 红=1 票, 橙/黄=中间, 绿>=anchor(已确认), 青=满票.
-                    if (want_ov) {
-                        CloudType cloud;
-                        cloud.reserve(pts.size());
-                        for (const auto& p : pts) cloud.push_back(p);
-                        ensureCloudDims(cloud);
-                        overlay_map_puber_.publish(
-                            toPointCloud2Weighted(cloud, kMapFrame, now, overlay_anchor_));
+                    // 只发 x/y/z/intensity, intensity = A 阶段持久度 w(0~255);
+                    // 着色交给客户端 (RViz Intensity / CloudCompare 标量场), 这里不烤颜色.
+                    pcl::PointCloud<pcl::PointXYZI> cloud;
+                    cloud.reserve(pts.size());
+                    for (const auto& p : pts) {
+                        pcl::PointXYZI q;
+                        q.x = p.x;
+                        q.y = p.y;
+                        q.z = p.z;
+                        q.intensity = p.intensity;
+                        cloud.push_back(q);
                     }
-                    if (want_conf) {
-                        // 只发 w >= maintainer.persistency_anchor 的点: 拿掉"只看过一两次"的
-                        // 弱证据, 只留跨会话确认过的变化结构 (干净的一片绿).
-                        // 即使为空也发 (点数 0): 订阅端能明确区分"没有已确认结构"和"话题没起来".
-                        CloudType conf;
-                        conf.reserve(pts.size());
-                        for (const auto& p : pts) {
-                            if (p.intensity >= overlay_anchor_) conf.push_back(p);
-                        }
-                        ensureCloudDims(conf);
-                        overlay_confirmed_puber_.publish(
-                            toPointCloud2Weighted(conf, kMapFrame, now, overlay_anchor_));
-                    }
+                    cloud.width = static_cast<uint32_t>(cloud.size());
+                    cloud.height = 1;
+                    cloud.is_dense = false;
+                    sensor_msgs::PointCloud2 msg;
+                    pcl::toROSMsg(cloud, msg);
+                    msg.header.frame_id = kMapFrame;
+                    msg.header.stamp = now;
+                    overlay_map_puber_.publish(msg);
                     static int wlog = 0;
                     if (++wlog % 10 == 1) {   // 约 10s 一次, 打 w 的分布
                         float wmin = 1e9f, wmax = -1e9f;

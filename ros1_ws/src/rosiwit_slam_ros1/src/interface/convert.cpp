@@ -6,7 +6,6 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <sensor_msgs/point_cloud2_iterator.h>
 #include <sensor_msgs/point_cloud_conversion.h>
 
 #include <cmath>
@@ -133,77 +132,6 @@ sensor_msgs::PointCloud2 toPointCloud2(const rosiwit_slam::CloudType& c,
     pcl::toROSMsg(c, m);
     m.header.frame_id = frame;
     m.header.stamp = stamp;
-    return m;
-}
-
-namespace {
-// 持久度 w(0~255) -> RGB. 分段线性, 刻度跟 anchor(=maintainer.persistency_anchor, 默认 128):
-//   0 灰(无记录) / 8 红(只有 1 票, 刚提交) / anchor*0.5 橙 / anchor*0.875 黄 /
-//   anchor 绿(已确认) / 255 青
-// w 每票 +persistency_hit_gain(默认 8), anchor=128 即"16 票才算高可信".
-inline void weightColor(float w, double anchor, uint8_t& r, uint8_t& g, uint8_t& b) {
-    if (!(anchor > 16.0)) anchor = 128.0;
-    if (anchor > 254.0) anchor = 254.0;
-    struct Stop { float w; uint8_t r, g, b; };
-    const Stop kStops[] = {
-        {0.0f, 140, 140, 140}, {8.0f, 225, 40, 40},
-        {static_cast<float>(anchor * 0.5), 235, 140, 30},
-        {static_cast<float>(anchor * 0.875), 240, 220, 50},
-        {static_cast<float>(anchor), 40, 215, 70}, {255.0f, 60, 210, 255}};
-    const int n = static_cast<int>(sizeof(kStops) / sizeof(kStops[0]));
-    if (w <= kStops[0].w) { r = kStops[0].r; g = kStops[0].g; b = kStops[0].b; return; }
-    for (int i = 1; i < n; ++i) {
-        if (w <= kStops[i].w) {
-            const float span = kStops[i].w - kStops[i - 1].w;
-            const float u = (span > 1e-6f) ? (w - kStops[i - 1].w) / span : 1.0f;
-            auto mix = [u](uint8_t a, uint8_t c2) {
-                return static_cast<uint8_t>(a + (static_cast<int>(c2) - static_cast<int>(a)) * u);
-            };
-            r = mix(kStops[i - 1].r, kStops[i].r);
-            g = mix(kStops[i - 1].g, kStops[i].g);
-            b = mix(kStops[i - 1].b, kStops[i].b);
-            return;
-        }
-    }
-    r = kStops[n - 1].r; g = kStops[n - 1].g; b = kStops[n - 1].b;
-}
-}  // namespace
-
-sensor_msgs::PointCloud2 toPointCloud2Weighted(const rosiwit_slam::CloudType& c,
-                                               const std::string& frame,
-                                               const ros::Time& stamp,
-                                               double anchor) {
-    sensor_msgs::PointCloud2 m;
-    sensor_msgs::PointCloud2Modifier mod(m);
-    mod.setPointCloud2Fields(5,
-        "x", 1, sensor_msgs::PointField::FLOAT32,
-        "y", 1, sensor_msgs::PointField::FLOAT32,
-        "z", 1, sensor_msgs::PointField::FLOAT32,
-        "intensity", 1, sensor_msgs::PointField::FLOAT32,
-        "rgb", 1, sensor_msgs::PointField::FLOAT32);
-    mod.resize(c.size());
-    m.header.frame_id = frame;
-    m.header.stamp = stamp;
-    m.height = 1;
-    m.is_dense = true;
-    sensor_msgs::PointCloud2Iterator<float> ix(m, "x");
-    sensor_msgs::PointCloud2Iterator<float> iy(m, "y");
-    sensor_msgs::PointCloud2Iterator<float> iz(m, "z");
-    sensor_msgs::PointCloud2Iterator<float> iw(m, "intensity");
-    sensor_msgs::PointCloud2Iterator<uint8_t> ic(m, "rgb");
-    for (size_t k = 0; k < c.size(); ++k, ++ix, ++iy, ++iz, ++iw, ++ic) {
-        const auto& p = c[k];
-        *ix = p.x;
-        *iy = p.y;
-        *iz = p.z;
-        const float w = p.intensity;   // overlay: 由 maintainer 填成持久度 w
-        *iw = w;
-        uint8_t r = 0, g = 0, b = 0;
-        weightColor(w, anchor, r, g, b);
-        ic[0] = b;   // PCL 的 rgb 字段是 0x00RRGGBB, 小端下字节序为 b,g,r
-        ic[1] = g;
-        ic[2] = r;
-    }
     return m;
 }
 

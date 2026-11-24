@@ -32,6 +32,27 @@ export interface GridData {
 
 export type ColorMode = 'height' | 'intensity' | 'flat'
 
+/** 固定 0~255 色标 (深蓝 -> 青 -> 绿 -> 黄 -> 红), 不做 min/max 自动拉伸:
+ *  overlay 的持久度 w / 雷达 intensity 都按原始值着色, 跨帧颜色稳定. */
+export function intensityColors(values: Uint8Array | null, count: number): Float32Array | null {
+  if (!values || values.length < count || !count) return null
+  const lut = new Float32Array(256 * 3)
+  for (let v = 0; v < 256; v++) {
+    const [r, g, b] = rampColor(v / 255)
+    lut[v * 3] = r
+    lut[v * 3 + 1] = g
+    lut[v * 3 + 2] = b
+  }
+  const colors = new Float32Array(count * 3)
+  for (let i = 0; i < count; i++) {
+    const o = values[i] * 3
+    colors[i * 3] = lut[o]
+    colors[i * 3 + 1] = lut[o + 1]
+    colors[i * 3 + 2] = lut[o + 2]
+  }
+  return colors
+}
+
 // ------------------------------------------------------------------ base64
 
 export function base64ToBytes(input: string): Uint8Array {

@@ -43,6 +43,8 @@ export class PointCloudLayer {
         this.material.vertexColors = true
         this.material.needsUpdate = true
       }
+      // 顶点色生效时材质系数必须是白色, 否则会被条目颜色二次染色
+      this.material.color.setHex(0xffffff)
     } else if (this.colored) {
       this.geometry.deleteAttribute('color')
       this.colored = false

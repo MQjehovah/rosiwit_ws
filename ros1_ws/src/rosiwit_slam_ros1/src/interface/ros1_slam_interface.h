@@ -358,9 +358,8 @@ private:
     ros::Publisher point_map_puber_;          // global_map        PointCloud2  1  latch
     ros::Publisher grip_map_puber_;
     ros::Publisher overlay_map_puber_;        // debug/overlay_map  地图自更新叠加层 (latched, 1Hz)
-    ros::Publisher overlay_confirmed_puber_;  // debug/overlay_map_confirmed 只含 w>=anchor 的叠加层
     ros::Publisher session_map_puber_;        // debug/session_map  会话地图       (latched, 1Hz)
-    double overlay_anchor_ = 128.0;           // maintainer.persistency_anchor (w 阈值)
+    double overlay_anchor_ = 128.0;           // maintainer.persistency_anchor (只用于日志统计)
     ros::Time last_aux_map_pub_;           // global_grid_map   OccupancyGrid 1 latch (/map 兼容别名, debug 才发一帧)
     ros::Publisher realtime_grid_map_puber_;  // /map              OccupancyGrid 10
     ros::Publisher pointcloud_puber_;         // curr_scan_point   PointCloud2  10

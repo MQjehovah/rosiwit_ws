@@ -8,6 +8,7 @@
 
 import protobuf from 'protobufjs/light'
 import descriptor from './proto/debug_bridge.json'
+import { intensityColors } from './decode'
 import type { CloudData, GridData } from './decode'
 
 const root = protobuf.Root.fromJSON(descriptor as any)
@@ -1023,9 +1024,18 @@ async function decodeCloud(frame: any): Promise<CloudData> {
     if (z < minZ) minZ = z
     if (z > maxZ) maxZ = z
   }
+  // 强度/持久度通道 (可选): uint8 [count], 与 xyz 同顺序; 没有就是 null.
+  let colors: Float32Array | null = null
+  const iv = frame.intensity
+  if (iv && iv.byteLength) {
+    const rawI = Number(frame.compression) === 1 ? await inflate(iv) : iv
+    if (rawI && rawI.byteLength >= count) {
+      colors = intensityColors(rawI as Uint8Array, count)
+    }
+  }
   return {
     positions,
-    colors: null,
+    colors,
     count,
     total: count,
     frame: frame.header?.frame_id || 'map',

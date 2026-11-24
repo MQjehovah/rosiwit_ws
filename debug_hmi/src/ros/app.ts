@@ -63,7 +63,7 @@ export interface DisplayItem {
   max: number
   pointSize: number
   color: string
-  colorMode: 'flat' | 'height'
+  colorMode: 'flat' | 'height' | 'intensity'
   stats: DisplayStats
 }
 
@@ -361,7 +361,12 @@ function displayDefaults(topic: string, type: string, index: number): DisplayIte
     max: renderer === 'points' ? 300000 : 0,
     pointSize: renderer === 'laser' ? 0.12 : 0.07,
     color: PALETTE[index % PALETTE.length],
-    colorMode: renderer === 'laser' || renderer === 'path' || renderer === 'polygon' ? 'flat' : 'height',
+    colorMode:
+      renderer === 'laser' || renderer === 'path' || renderer === 'polygon'
+        ? 'flat'
+        : topic.indexOf('/slam/debug/overlay') === 0
+          ? 'intensity'
+          : 'height',
     stats: { hz: 0, bytes: 0, total: 0, age: -1 },
   }
 }

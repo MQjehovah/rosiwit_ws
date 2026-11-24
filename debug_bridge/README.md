@@ -51,7 +51,7 @@
 
 | ROS 类型 | 帧 | 说明 |
 |---|---|---|
-| `sensor_msgs/PointCloud2` / `PointCloud` | `CloudFrame` | 可传体素 / 点数上限 |
+| `sensor_msgs/PointCloud2` / `PointCloud` | `CloudFrame` | 可传体素 / 点数上限；源点云有 `intensity` 时额外带强度通道 |
 | `nav_msgs/OccupancyGrid` | `GridFrame` | zlib int8 栅格，带 `stream` 话题名 |
 | `sensor_msgs/LaserScan` | `LaserFrame` | float32 ranges，带 `stream` |
 | `nav_msgs/Path` | `PathFrame` | 带 `stream` |
@@ -59,6 +59,10 @@
 | `sensor_msgs/Image` | `ImageFrame` | 服务端转 JPEG（rgb8/bgr8/mono8/mono16/32FC1） |
 | `sensor_msgs/CompressedImage` | `ImageFrame` | 直接转发 jpeg/png 字节 |
 | 其它 | `RawMessage` | `extract_values` → JSON，超过 300KB 截断 |
+
+`CloudFrame.intensity`（field 10）是 uint8，与 `xyz_cm` 同顺序、zlib 压缩，只在源点云含
+`intensity` 字段时出现：雷达是反射强度，`/slam/debug/overlay_map` 是持久度 `w`(0~255)。
+服务端只传数值，不烤颜色；客户端自己上色。
 
 命令：
 
