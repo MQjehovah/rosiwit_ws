@@ -110,7 +110,8 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     // 都能拿 1.000, 节点据此判 "localized after 3 healthy frames" 并把位姿冻住.
     // 按点数线性下调, 让分数诚实; 正常扫描 (4400~5100 点) 不受影响.
     if (m_cfg.min_coverage_points > 0 &&
-        src->size() < static_cast<size_t>(m_cfg.min_coverage_points)) {
+        src->size() < static_cast<size_t>(m_cfg.min_coverage_points) &&
+        cs.inliers < m_cfg.min_inliers_full_score) {   // 绝对内点够多 -> 不打折
         out.fitness = cs.coverage * static_cast<double>(src->size()) /
                       static_cast<double>(m_cfg.min_coverage_points);
     }

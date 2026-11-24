@@ -222,6 +222,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_matcher_cfg.match_z_min             = getv<double>(mc, "match_z_min", m_matcher_cfg.match_z_min);
         m_matcher_cfg.match_z_max             = getv<double>(mc, "match_z_max", m_matcher_cfg.match_z_max);
         m_matcher_cfg.min_coverage_points     = getv<int>(mc, "min_coverage_points", m_matcher_cfg.min_coverage_points);
+        m_matcher_cfg.min_inliers_full_score  = getv<int>(mc, "min_inliers_full_score", m_matcher_cfg.min_inliers_full_score);
         m_matcher_cfg.ndt2d_z_min             = getv<double>(mc, "ndt2d_z_min", m_matcher_cfg.ndt2d_z_min);
         m_matcher_cfg.ndt2d_z_max             = getv<double>(mc, "ndt2d_z_max", m_matcher_cfg.ndt2d_z_max);
         m_matcher_cfg.ndt2d_cell              = getv<double>(mc, "ndt2d_cell", m_matcher_cfg.ndt2d_cell);
