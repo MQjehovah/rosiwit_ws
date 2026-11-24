@@ -32,23 +32,65 @@ export interface GridData {
 
 export type ColorMode = 'height' | 'intensity' | 'flat'
 
-/** 固定 0~255 色标 (深蓝 -> 青 -> 绿 -> 黄 -> 红), 不做 min/max 自动拉伸:
- *  overlay 的持久度 w / 雷达 intensity 都按原始值着色, 跨帧颜色稳定. */
-export function intensityColors(values: Uint8Array | null, count: number): Float32Array | null {
-  if (!values || values.length < count || !count) return null
-  const lut = new Float32Array(256 * 3)
+/** 256 级色标缓存 (深蓝 -> 青 -> 绿 -> 黄 -> 红), 全局只生成一次. */
+let rampLut: Float32Array | null = null
+function lut(): Float32Array {
+  if (rampLut) return rampLut
+  const out = new Float32Array(256 * 3)
   for (let v = 0; v < 256; v++) {
     const [r, g, b] = rampColor(v / 255)
-    lut[v * 3] = r
-    lut[v * 3 + 1] = g
-    lut[v * 3 + 2] = b
+    out[v * 3] = r
+    out[v * 3 + 1] = g
+    out[v * 3 + 2] = b
   }
+  rampLut = out
+  return out
+}
+
+/** 固定 0~255 色标: 服务端带来的 uint8 标量 (overlay 的持久度 w / 雷达强度)
+ *  按原始值着色, 跨帧颜色稳定, 不做 min/max 自动拉伸. */
+export function intensityColors(values: Uint8Array | null, count: number): Float32Array | null {
+  if (!values || values.length < count || !count) return null
+  const table = lut()
   const colors = new Float32Array(count * 3)
   for (let i = 0; i < count; i++) {
     const o = values[i] * 3
-    colors[i * 3] = lut[o]
-    colors[i * 3 + 1] = lut[o + 1]
-    colors[i * 3 + 2] = lut[o + 2]
+    colors[i * 3] = table[o]
+    colors[i * 3 + 1] = table[o + 1]
+    colors[i * 3 + 2] = table[o + 2]
+  }
+  return colors
+}
+
+/** PCD 里 intensity 是 float, 不是 bridge 的 uint8.
+ *  - 全部落在 0~255: 当作持久度/反射强度, 用固定色标 (与话题一致, w>=128 是绿~红);
+ *  - 超出这个范围: 按本文件 min/max 自动拉伸, 避免整片落在同一档. */
+export function floatIntensityColors(
+  values: Float32Array | null,
+  count: number,
+): Float32Array | null {
+  if (!values || values.length < count || !count) return null
+  let min = Infinity
+  let max = -Infinity
+  for (let i = 0; i < count; i++) {
+    const v = values[i]
+    if (!Number.isFinite(v)) continue
+    if (v < min) min = v
+    if (v > max) max = v
+  }
+  if (!Number.isFinite(min)) return null
+  const fixed = min >= 0 && max <= 255
+  const lo = fixed ? 0 : min
+  const span = fixed ? 255 : max - min || 1
+  const table = lut()
+  const colors = new Float32Array(count * 3)
+  for (let i = 0; i < count; i++) {
+    const v = values[i]
+    const t = Number.isFinite(v) ? (v - lo) / span : 0
+    const k = Math.max(0, Math.min(255, Math.round(t * 255))) * 3
+    colors[i * 3] = table[k]
+    colors[i * 3 + 1] = table[k + 1]
+    colors[i * 3 + 2] = table[k + 2]
   }
   return colors
 }

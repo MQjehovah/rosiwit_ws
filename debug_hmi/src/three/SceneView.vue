@@ -110,6 +110,9 @@ interface DynamicLayer {
 
 const dynamicLayers = new Map<string, DynamicLayer>()
 const lastGrid = new Map<string, GridData>()
+/** 最近一帧话题点云：切着色模式 / 手动抓取后没有新帧时也能立即重上色 */
+const lastTopicCloud = new Map<string, CloudData>()
+const warnedIntensity = new Set<string>()
 
 const pendingGroup = new THREE.Group()
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
@@ -278,6 +281,7 @@ function disposeDynamic(topic: string): void {
   else if (entry.layer instanceof PathLayer) entry.layer.dispose()
   else entry.layer.clear()
   dynamicLayers.delete(topic)
+  lastTopicCloud.delete(topic)
 }
 
 function ensureDynamic(topic: string, renderer: string): DynamicLayer | null {
@@ -303,6 +307,26 @@ function ensureDynamic(topic: string, renderer: string): DynamicLayer | null {
   return entry
 }
 
+/** 按显示项当前着色模式生成顶点色；null = 用条目颜色平涂 */
+function cloudColors(d: { colorMode: string }, cloud: CloudData): Float32Array | null {
+  if (d.colorMode === 'intensity') return cloud.colors
+  if (d.colorMode === 'height' && cloud.count <= 1500000) return heightColors(cloud.positions)
+  return null
+}
+
+function warnMissingIntensity(d: { id: string; topic: string; source: string }): void {
+  const key = `${d.source}:${d.id}`
+  if (warnedIntensity.has(key)) return
+  warnedIntensity.add(key)
+  pushLog(
+    'warn',
+    `${d.topic}：没有 intensity 通道，无法按「强度/持久度」着色。` +
+      (d.source === 'pcd'
+        ? '该 PCD 不含 intensity 字段；若这是旧缓存，请重新选择文件。'
+        : '请确认设备上的 debug_bridge 已更新到 v4（2026-11-24 之后，带 CloudFrame.intensity），且点云本身带 intensity 字段。'),
+  )
+}
+
 function syncDisplayLayers(): void {
   const alive = new Set(state.displays.map((d) => d.topic))
   for (const topic of [...dynamicLayers.keys()]) {
@@ -314,24 +338,20 @@ function syncDisplayLayers(): void {
     entry.layer.setVisible(d.enabled)
     if (entry.layer instanceof PointCloudLayer) {
       entry.layer.setSize(d.pointSize)
-      entry.layer.setColor(hexColor(d.color))
-      if (d.source === 'pcd') {
-        const cloud = getPcdCloud(d.id)
-        if (cloud) {
-          const colors =
-            d.colorMode === 'intensity'
-              ? cloud.colors
-              : d.colorMode === 'height' && cloud.count <= 1500000
-                ? heightColors(cloud.positions)
-                : null
-          entry.layer.setPoints(cloud.positions, colors)
-          if (!colors) entry.layer.setColor(hexColor(d.color))
-          entry.layer.setVisible(d.enabled)
-          placeInMap(entry.layer.object, 'map')
-        } else {
-          entry.layer.clear()
-          entry.layer.setVisible(false)
-        }
+      const cloud = d.source === 'pcd' ? getPcdCloud(d.id) : lastTopicCloud.get(d.topic)
+      if (cloud) {
+        if (d.colorMode === 'intensity' && !cloud.colors) warnMissingIntensity(d)
+        else if (cloud.colors) warnedIntensity.delete(`${d.source}:${d.id}`)
+        const colors = cloudColors(d, cloud)
+        entry.layer.setPoints(cloud.positions, colors)
+        if (!colors) entry.layer.setColor(hexColor(d.color))
+        entry.layer.setVisible(d.enabled)
+        placeInMap(entry.layer.object, cloud.frame || 'map')
+      } else if (d.source === 'pcd') {
+        entry.layer.clear()
+        entry.layer.setVisible(false)
+      } else {
+        entry.layer.setColor(hexColor(d.color))
       }
     } else if (entry.layer instanceof PathLayer) {
       entry.layer.setColor(hexColor(d.color))
@@ -349,14 +369,12 @@ function applyTopicCloud(topic: string, cloud: CloudData): void {
   if (!d || !d.enabled || d.renderer !== 'points') return
   const entry = ensureDynamic(topic, 'points')
   if (!entry || !(entry.layer instanceof PointCloudLayer)) return
+  lastTopicCloud.set(topic, cloud)
+  if (d.colorMode === 'intensity' && !cloud.colors) warnMissingIntensity(d)
+  else if (cloud.colors) warnedIntensity.delete(`topic:${d.id}`)
   // intensity: 用服务端带来的 uint8 标量 (overlay 的持久度 w / 雷达强度) 着色,
   // 固定色标不随 min/max 拉伸; height: 本地按 z 上色; flat: 用条目颜色.
-  const colors =
-    d.colorMode === 'intensity'
-      ? cloud.colors
-      : d.colorMode === 'height' && cloud.count <= 1500000
-        ? heightColors(cloud.positions)
-        : null
+  const colors = cloudColors(d, cloud)
   entry.layer.setPoints(cloud.positions, colors)
   if (!colors) entry.layer.setColor(hexColor(d.color))
   entry.layer.setSize(d.pointSize)

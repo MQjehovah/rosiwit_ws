@@ -9,6 +9,8 @@
 
 export interface LoadedMap {
   positions: Float32Array
+  /** 与 positions 同顺序的强度/持久度标量; 源文件没有 intensity 字段时为 null */
+  intensity: Float32Array | null
   count: number
   frame: string
   name: string
@@ -78,12 +80,14 @@ function parsePcd(bytes: Uint8Array, name: string): LoadedMap {
   const ix = fields.indexOf('x')
   const iy = fields.indexOf('y')
   const iz = fields.indexOf('z')
+  const ii = fields.indexOf('intensity') >= 0 ? fields.indexOf('intensity') : fields.indexOf('i')
   if (ix < 0 || iy < 0 || iz < 0) throw new Error('PCD 缺少 x/y/z 字段')
   if (!points) throw new Error('PCD 点数为 0')
 
   if (dataType === 'ascii') {
     const lines = new TextDecoder().decode(bytes.subarray(offset)).trim().split('\n')
     const out = new Float32Array(lines.length * 3)
+    const inten = ii >= 0 ? new Float32Array(lines.length) : null
     let n = 0
     for (const line of lines) {
       if (!line.trim()) continue
@@ -91,9 +95,16 @@ function parsePcd(bytes: Uint8Array, name: string): LoadedMap {
       out[n * 3] = Number(vals[ix]) || 0
       out[n * 3 + 1] = Number(vals[iy]) || 0
       out[n * 3 + 2] = Number(vals[iz]) || 0
+      if (inten) inten[n] = Number(vals[ii]) || 0
       n++
     }
-    return { positions: out.slice(0, n * 3), count: n, frame: 'map', name }
+    return {
+      positions: out.slice(0, n * 3),
+      intensity: inten ? inten.slice(0, n) : null,
+      count: n,
+      frame: 'map',
+      name,
+    }
   }
 
   if (dataType === 'binary') {
@@ -105,11 +116,9 @@ function parsePcd(bytes: Uint8Array, name: string): LoadedMap {
     }
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
     const out = new Float32Array(points * 3)
-    const read = (base: number, idx: number): number => {
-      const o = base + offsets[idx]
-      if (types[idx] === 'F' && sizes[idx] === 8) return view.getFloat64(o, true)
-      return view.getFloat32(o, true)
-    }
+    const inten = ii >= 0 ? new Float32Array(points) : null
+    const read = (base: number, idx: number): number =>
+      readField(view, base + offsets[idx], types[idx], sizes[idx] || 4)
     let n = 0
     for (let i = 0; i < points; i++) {
       const base = offset + i * pointStep
@@ -117,9 +126,16 @@ function parsePcd(bytes: Uint8Array, name: string): LoadedMap {
       out[n * 3] = read(base, ix)
       out[n * 3 + 1] = read(base, iy)
       out[n * 3 + 2] = read(base, iz)
+      if (inten) inten[n] = read(base, ii)
       n++
     }
-    return { positions: out.slice(0, n * 3), count: n, frame: 'map', name }
+    return {
+      positions: out.slice(0, n * 3),
+      intensity: inten ? inten.slice(0, n) : null,
+      count: n,
+      frame: 'map',
+      name,
+    }
   }
 
   if (dataType === 'binary_compressed') {
@@ -137,13 +153,7 @@ function parsePcd(bytes: Uint8Array, name: string): LoadedMap {
       const count = counts[i] || 1
       const byteLen = points * elemSize * count
       if (byteLen > raw.byteLength - cursor) break
-      if (count === 1 && (elemSize === 4 || elemSize === 8)) {
-        const copy = raw.slice(cursor, cursor + byteLen)
-        arrays[fields[i]] =
-          elemSize === 8
-            ? new Float32Array(new Float64Array(copy.buffer))
-            : new Float32Array(copy.buffer, 0, points)
-      }
+      if (count === 1) arrays[fields[i]] = decodeSoA(raw, cursor, points, elemSize, types[i])
       cursor += byteLen
     }
     const x = arrays.x
@@ -156,10 +166,45 @@ function parsePcd(bytes: Uint8Array, name: string): LoadedMap {
       out[i * 3 + 1] = y[i]
       out[i * 3 + 2] = z[i]
     }
-    return { positions: out, count: points, frame: 'map', name }
+    return {
+      positions: out,
+      intensity: ii >= 0 ? (arrays[fields[ii]] ?? null) : null,
+      count: points,
+      frame: 'map',
+      name,
+    }
   }
 
   throw new Error(`不支持的 PCD DATA=${dataType}`)
+}
+
+/** 按 PCD 的 TYPE/SIZE 读一个标量，x/y/z/intensity 共用。 */
+function readField(view: DataView, offset: number, type: string, size: number): number {
+  if (type === 'F') return size === 8 ? view.getFloat64(offset, true) : view.getFloat32(offset, true)
+  if (type === 'I') {
+    if (size === 1) return view.getInt8(offset)
+    if (size === 2) return view.getInt16(offset, true)
+    if (size === 8) return Number(view.getBigInt64(offset, true))
+    return view.getInt32(offset, true)
+  }
+  if (size === 1) return view.getUint8(offset)
+  if (size === 2) return view.getUint16(offset, true)
+  if (size === 8) return Number(view.getBigUint64(offset, true))
+  return view.getUint32(offset, true)
+}
+
+/** binary_compressed 的 SoA 段 → 每点一个 float（顺便把整型/float64 统一成 float）。 */
+function decodeSoA(
+  raw: Uint8Array,
+  offset: number,
+  points: number,
+  elemSize: number,
+  type: string,
+): Float32Array {
+  const out = new Float32Array(points)
+  const view = new DataView(raw.buffer, raw.byteOffset + offset, points * elemSize)
+  for (let i = 0; i < points; i++) out[i] = readField(view, i * elemSize, type, elemSize)
+  return out
 }
 
 /** 太大的文件按步长抽稀，保证渲染流畅 */
@@ -168,12 +213,19 @@ export function limitCloud(cloud: LoadedMap, maxPoints = 1200000): LoadedMap {
   const stride = Math.ceil(cloud.count / maxPoints)
   const count = Math.ceil(cloud.count / stride)
   const positions = new Float32Array(count * 3)
+  const intensity = cloud.intensity ? new Float32Array(count) : null
   let n = 0
   for (let i = 0; i < cloud.count; i += stride) {
     positions[n * 3] = cloud.positions[i * 3]
     positions[n * 3 + 1] = cloud.positions[i * 3 + 1]
     positions[n * 3 + 2] = cloud.positions[i * 3 + 2]
+    if (intensity && cloud.intensity) intensity[n] = cloud.intensity[i]
     n++
   }
-  return { ...cloud, positions: positions.slice(0, n * 3), count: n }
+  return {
+    ...cloud,
+    positions: positions.slice(0, n * 3),
+    intensity: intensity ? intensity.slice(0, n) : null,
+    count: n,
+  }
 }

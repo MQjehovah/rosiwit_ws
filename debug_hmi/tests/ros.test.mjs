@@ -1,5 +1,5 @@
 import { TfTree, quatToRpy, quatToYaw } from './tf.mjs'
-import { decodePointCloud2, decodeOccupancyGrid, decodeLaserScan, decodePointCloud } from './decode.mjs'
+import { decodePointCloud2, decodeOccupancyGrid, decodeLaserScan, decodePointCloud, floatIntensityColors } from './decode.mjs'
 import { gridToImage } from './gridImage.mjs'
 
 function assert(cond, msg) {
@@ -109,6 +109,23 @@ assert(cloud && cloud.count === 3, 'pointcloud point count')
 assert(cloud && near(cloud.positions[0], 1) && near(cloud.positions[4], 0.5), 'pointcloud xyz')
 assert(cloud && cloud.colors && cloud.colors.length === 9, 'pointcloud intensity colors')
 assert(cloud && cloud.frame === 'map', 'pointcloud frame')
+
+// PCD 的 float intensity: 0~255 用固定色标，超出范围按 min/max 拉伸
+const fixed = floatIntensityColors(new Float32Array([0, 128, 255]), 3)
+assert(fixed && fixed.length === 9, 'float intensity colors')
+assert(
+  fixed && fixed[0] < 0.4 && fixed[2] > 0.4 && fixed[6] > 0.8 && fixed[8] < 0.2,
+  'float intensity fixed 0..255 ramp',
+)
+const stretched = floatIntensityColors(new Float32Array([100, 200, 300]), 3)
+assert(
+  fixed &&
+    stretched &&
+    Math.abs(stretched[0] - fixed[0]) < 1e-6 &&
+    Math.abs(stretched[6] - fixed[6]) < 1e-6,
+  'float intensity out-of-range auto stretch',
+)
+assert(floatIntensityColors(null, 3) === null, 'float intensity missing -> null')
 
 // 全 0 字节 = 三个 0 坐标，属于有效点
 assert(

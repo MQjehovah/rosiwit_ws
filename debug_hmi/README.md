@@ -53,7 +53,7 @@ cp .env.example .env.local
 
 | 消息类型 | 默认渲染 | 可调参数 |
 |---|---|---|
-| `sensor_msgs/PointCloud2` / `PointCloud` | 点云 | 点大小、固定色/高度着色、体素、点数上限、频率 |
+| `sensor_msgs/PointCloud2` / `PointCloud` | 点云 | 点大小、固定色/高度/强度着色、体素、点数上限、频率 |
 | `nav_msgs/OccupancyGrid` | 栅格 | 频率 / 单帧抓取 |
 | `sensor_msgs/LaserScan` | 激光点 | 点大小、颜色、频率 |
 | `nav_msgs/Path` | 折线 | 颜色、频率 |
@@ -113,6 +113,9 @@ sudo systemctl restart xzrobot
 点云显示项（`PointCloud2` / `PointCloud`）的数据源可以切换成「本地 PCD」，
 直接在卡片里选择本机文件，不需要设备端配合。支持 `ascii` / `binary` / `binary_compressed`（LZF），
 解析后限制在 120 万点，并按显示项写入 IndexedDB；刷新页面自动恢复，不需要重新选择文件。
+PCD 里的 `intensity` 会一起保留（`x y z intensity` 或 `x y z i`）：
+显示项「着色」选「强度/持久度」即可按该标量上色。值全部落在 0~255 时用固定色标
+（与 overlay 的持久度 `w` 一致），超出范围时按文件 min/max 自动拉伸。
 
 机器上的 `map.xzmap` 可以用 `../debug_bridge/tools/xzmap_to_pcd.py` 转成标准 PCD：
 

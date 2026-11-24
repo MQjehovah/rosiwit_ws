@@ -19,6 +19,8 @@ interface CachedMap {
   frame: string
   count: number
   positions: Float32Array
+  /** 旧缓存没有这一项；新版才有，用于「强度/持久度」着色 */
+  intensity?: Float32Array | null
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -46,6 +48,7 @@ export async function saveDisplayMapCache(
     frame: map.frame || 'map',
     count: map.count,
     positions,
+    intensity: map.intensity ?? null,
   }
   const db = await openDb()
   await new Promise<void>((resolve, reject) => {
@@ -75,6 +78,10 @@ export async function loadDisplayMapCache(
     frame: record.frame || 'map',
     count: record.count,
     positions: record.positions,
+    intensity:
+      record.intensity instanceof Float32Array && record.intensity.length >= record.count
+        ? record.intensity
+        : null,
     savedAt: record.savedAt,
   }
 }

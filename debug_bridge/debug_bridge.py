@@ -46,7 +46,7 @@ try:
 except NameError:
     TEXT_TYPE = str
 
-VERSION = "3"
+VERSION = "4"
 
 ENV_HELLO = 1
 ENV_GRID = 2
@@ -1538,12 +1538,15 @@ def frames_for_stream(stream, sub, client):
         data = get_topic_data(stream)
         if not data or now() - data["recv"] > 10.0:
             return out
-        stamp = data.get("stamp", 0.0)
-        if stamp and sub.get("last_stamp") == stamp:
+        # 去重键用 recv (桥接收到 ROS 消息的本地时间), 不用 header.stamp:
+        # /curr_scan_point 这类话题的 header.stamp 可能冻结(定位位姿时间不更新),
+        # 只比 stamp 会把之后所有新帧都丢掉, HMI 看起来就是 0Hz 不刷新。
+        recv = data.get("recv", 0.0)
+        if sub.get("last_recv") == recv:
             return out
         frame = encode_topic_frame(stream, data, sub)
         if frame is not None:
-            sub["last_stamp"] = stamp
+            sub["last_recv"] = recv
             out.append(frame)
     return out
 
@@ -1614,7 +1617,7 @@ class BridgeWS(websocket.WebSocketHandler):
                     "max": max_points or 0,
                     "last": 0.0,
                     "last_static": 0.0,
-                    "last_stamp": None,
+                    "last_recv": None,
                 }
                 self.client.send(
                     encode_status(stream, True, "manual" if manual else "subscribed %.1fHz" % rate)

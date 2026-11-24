@@ -14,6 +14,8 @@ import {
   type SubscribeOptions,
 } from './debugRos'
 import type { CloudData, GridData } from './decode'
+import { floatIntensityColors } from './decode'
+import type { LoadedMap } from './mapFile'
 import { limitCloud, parseMapFile } from './mapFile'
 import { deleteDisplayMapCache, loadDisplayMapCache, saveDisplayMapCache } from './mapCache'
 import { TfTree } from './tf'
@@ -335,6 +337,18 @@ export function getPcdCloud(id: string): CloudData | undefined {
   return PCD_CLOUDS.get(id)
 }
 
+/** 本地 PCD → CloudData：有 intensity 就先算好固定色标顶点色，切到「强度/持久度」立即生效。 */
+function cloudFromLoadedMap(loaded: LoadedMap): CloudData {
+  return {
+    positions: loaded.positions,
+    colors: floatIntensityColors(loaded.intensity, loaded.count),
+    count: loaded.count,
+    total: loaded.count,
+    frame: loaded.frame || 'map',
+    bbox: null,
+  }
+}
+
 export function rendererForType(type: string): RendererKind {
   if (type === 'sensor_msgs/PointCloud2' || type === 'sensor_msgs/PointCloud') return 'points'
   if (type === 'nav_msgs/OccupancyGrid') return 'grid'
@@ -428,15 +442,7 @@ export async function loadPcdIntoDisplay(id: string, file: File): Promise<void> 
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
     const parsed = await parseMapFile(file)
     const loaded = limitCloud(parsed, 1200000)
-    const cloud: CloudData = {
-      positions: loaded.positions,
-      colors: null,
-      count: loaded.count,
-      total: loaded.count,
-      frame: 'map',
-      bbox: null,
-    }
-    PCD_CLOUDS.set(id, cloud)
+    PCD_CLOUDS.set(id, cloudFromLoadedMap(loaded))
     d.pcdName = loaded.name
     d.source = 'pcd'
     d.renderer = 'points'
@@ -450,7 +456,9 @@ export async function loadPcdIntoDisplay(id: string, file: File): Promise<void> 
     })
     pushLog(
       'info',
-      `本地 PCD 已载入：${loaded.name}（${loaded.count.toLocaleString()} 点）`,
+      `本地 PCD 已载入：${loaded.name}（${loaded.count.toLocaleString()} 点${
+        loaded.intensity ? '，带 intensity' : ''
+      }）`,
     )
   } catch (e) {
     state.displayError = (e as Error).message
@@ -469,14 +477,19 @@ export async function restorePcdDisplays(): Promise<void> {
         cached.positions instanceof Float32Array
           ? cached.positions
           : new Float32Array(cached.positions as unknown as ArrayLike<number>)
-      PCD_CLOUDS.set(d.id, {
-        positions,
-        colors: null,
-        count: cached.count,
-        total: cached.count,
-        frame: 'map',
-        bbox: null,
-      })
+      PCD_CLOUDS.set(
+        d.id,
+        cloudFromLoadedMap({
+          positions,
+          intensity:
+            cached.intensity instanceof Float32Array && cached.intensity.length >= cached.count
+              ? cached.intensity
+              : null,
+          count: cached.count,
+          frame: cached.frame || 'map',
+          name: cached.name,
+        }),
+      )
       state.pcdCounts[d.id] = cached.count
       if (!d.pcdName) d.pcdName = cached.name
       state.pcdVersion++
