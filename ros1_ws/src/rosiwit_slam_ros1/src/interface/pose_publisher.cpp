@@ -123,15 +123,20 @@ void Ros1SlamInterface::publishCurrPose() {
         publishMappingPose(out, have_out);
     }
 
-    if (publish_info) publishSlamInfoThrottled();
-
     // 建图时 TF 跟随位姿定时器；定位时由高频发布块统一节流。
     if (slam_mode_ == SlamMode::MAPPING && use_tf_) sendTransform();
 
     if (slam_mode_ == SlamMode::LOCALIZATION) {
+        // ★2026-11-24: 顺序反过来 —— 先发高频位姿/TF, 它会把 curr_pose_ 更新成
+        // "预测到 now" 的位姿, 再发 /slam/info。导航同时吃 TF 和 /slam/info,
+        // 之前 info 用的是 10Hz 匹配位姿(最多落后 100ms), TF 用的是预测位姿,
+        // 两者差一个 v·100ms / ω·100ms -> 现场报"tf 和 slam/info 不同步", 走起来画龙.
         publishHighRateLocalizationPose(publish_info);
+        if (publish_info) publishSlamInfoThrottled();
         // /map 是 latched, 且 /switch_map 载图时已经 publish 过一次;
         // 定位模式下地图不变, 不再按 1Hz 重发整张 43MB 栅格.
+    } else if (publish_info) {
+        publishSlamInfoThrottled();
     }
 }
 
@@ -253,8 +258,10 @@ void Ros1SlamInterface::publishCoreStatusIfChanged() {
 
 void Ros1SlamInterface::publishSlamInfoThrottled() {
     const ros::Time now = ros::Time::now();
+    // 2026-11-24: 0.1 -> 0.05 (10Hz -> 20Hz). 导航订的是 /slam/info 的位姿,
+    // 而 robot_pose 是 ESKF 传播到"现在"的预测值, 每次都是新值(不是零阶保持重复发).
     if (!last_location_info_pub_.isZero() &&
-        (now - last_location_info_pub_).toSec() < 0.1) return;
+        (now - last_location_info_pub_).toSec() < 0.04) return;
     publishLocationInfo();
     last_location_info_pub_ = now;
 }
@@ -284,6 +291,7 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
                      (now - last_high_rate_pub_).toSec() >= 0.02;
     if (!fresh || !due) {
         broadcastMapOdom();
+        if (!fresh) publishSlamInfoThrottled();   // 位姿不新鲜(丢定位/切图)时 info 仍要发
         return;
     }
 
@@ -318,6 +326,16 @@ void Ros1SlamInterface::publishHighRateLocalizationPose(bool info_published) {
                         (now - last_high_rate_tf_).toSec() >= 0.05)) {
             sendTransform(have_pred ? &pred : nullptr);
             last_high_rate_tf_ = now;
+        }
+        if (have_pred && curr_pose_valid_) {
+            // TF / curr_localization_pose / slam/info 三者统一用这一份预测位姿
+            std::lock_guard<std::mutex> lk(pose_mu_);
+            curr_pose_.x = ps.pose.position.x;
+            curr_pose_.y = ps.pose.position.y;
+            curr_pose_.z = ps.pose.position.z;
+            curr_pose_.yaw = stdYawFromRot(pred.rot);
+            curr_pose_.q = Eigen::Quaterniond(pred.rot);
+            curr_pose_.q.normalize();
         }
     }
     last_high_rate_pub_ = now;

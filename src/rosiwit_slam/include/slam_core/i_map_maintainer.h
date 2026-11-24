@@ -48,6 +48,10 @@ public:
     /// 取出并清空"自上次调用以来新增"的 overlay 点 (供存储底座增量插入)
     virtual void popOverlayDelta(CloudType::Ptr& out) { out.reset(); }
 
+    /// 回收已删除体素的残留点(工作图落盘时刻调用; 默认无操作)
+    virtual void reclaim() {}
+
+
     /// 持久化/载入 overlay (原图不变)
     virtual bool save(const std::string& /*path*/) { return false; }
     virtual bool load(const std::string& /*path*/) { return false; }

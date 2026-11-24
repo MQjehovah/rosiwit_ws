@@ -241,6 +241,12 @@ struct GlobalLocalizeConfig {
     //  并以 fitness 0.96 "锁定"在错位姿上 -> 假定位.)
     double seed_max_drift = 1.0;       // m
     double seed_max_yaw_deg = 15.0;    // deg
+    // 种子"邻域最优性"校验: 在 ±trans / ±yaw 的候选里做同一帧匹配, 若有明显更优解,
+    // 说明种子落在局部最优(实车: 偏 0.5m 也能拿 0.9+ 分), 宁可拒绝等人工也不锁死。
+    bool   seed_neighbor_check = true;
+    double seed_check_trans_m = 0.5;
+    double seed_check_yaw_deg = 5.0;
+    double seed_check_margin = 0.03;
     // ScanContext
     int    sc_num_rings = 20;
     int    sc_num_sectors = 60;
@@ -448,6 +454,13 @@ struct MaintainerConfig {
     int    persistency_miss_confirm = 3;    // 连续 free 证据帧数 -> 判定消失(去抖)
     int    persistency_miss_action = 0;     // 0=删除  1=按 persistency_hit_gain 递减
     int    persistency_session_hours = 12;  // 会话超时自动换新(防长期不重启)
+    bool   shadow = true;            // true: w 只用于 persistency_cov 观测, 不影响定位/插入
+    // 写图要求匹配残差小 (rmse = 平均最近邻距离, m): 位姿不确定时不落图。
+    // 0 = 关闭该条。
+    double max_rmse = 0.06;
+    // 参与匹配的最低可信度: w < 此值的 overlay 点只当"虚影", 不进匹配目标。
+    // 默认 = persistency_anchor(128): 只有被反复确认(≈16 个 view)的结构才参与定位。
+    int    match_w_min = 128;
     bool   override_base = false;    // 叠加层压制同位置的原图点(处理"结构被移除/被替换")
     double delta_min = 0.3;          // 只沉淀"离原图 > 该距离(m)"的新结构(变化增量)
     int    novel_min_cluster = 3;    // 新结构最小簇(26 邻域内本帧新颖体素数, 含自身)

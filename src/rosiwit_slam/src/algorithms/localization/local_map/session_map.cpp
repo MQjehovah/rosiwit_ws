@@ -21,6 +21,8 @@ void SessionMap::reset(const PoseStamped& anchor, double now_s) {
   active_ = true;
   have_robot_ = false;
   capacity_warned_ = false;
+  cache_.reset();
+  cache_dirty_ = true;
   std::cout << "[submap] opened: anchor=(" << anchor.trans.x() << ", "
             << anchor.trans.y() << ") radius=" << cfg_.radius << std::endl;
 }
@@ -96,16 +98,20 @@ void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_worl
     }
   }
 
+  cache_dirty_ = true;   // 有点写入 -> 世界系缓存失效
   // 机器人走出一段距离后清扫一次（避免每帧 O(n) 全扫）
   if (have_robot_ && (robot_anchor_ - sweep_origin_).norm() > std::max(1.0, 0.4 * r)) {
     sweepFar();
   }
 }
 
-CloudType::Ptr SessionMap::pointsWorld() const {
-  CloudType::Ptr out(new CloudType());
-  if (!active_ || pts_.empty()) return out;
-  out->reserve(pts_.size());
+const CloudType::Ptr& SessionMap::cachedWorld() const {
+  if (!cache_) cache_.reset(new CloudType());
+  if (!cache_dirty_) return cache_;
+  cache_->clear();
+  cache_dirty_ = false;
+  if (!active_ || pts_.empty()) return cache_;
+  cache_->reserve(pts_.size());
   for (const auto& kv : pts_) {
     const V3D w = anchor_.rot * kv.second + anchor_.trans;
     PointType p;
@@ -113,7 +119,27 @@ CloudType::Ptr SessionMap::pointsWorld() const {
     p.y = static_cast<float>(w.y());
     p.z = static_cast<float>(w.z());
     p.intensity = 0.0f;
-    out->push_back(p);
+    cache_->push_back(p);
+  }
+  return cache_;
+}
+
+CloudType::Ptr SessionMap::pointsWorld() const {
+  if (!active_ || pts_.empty()) return CloudType::Ptr(new CloudType());
+  return cachedWorld();   // 直接共享只读缓存 (位姿不动时不重复 30 万次旋转/拷贝)
+}
+
+CloudType::Ptr SessionMap::pointsWorld(const Eigen::Vector3d& center, double radius) const {
+  if (!(radius > 0.0)) return pointsWorld();
+  CloudType::Ptr out(new CloudType());
+  if (!active_ || pts_.empty()) return out;
+  const CloudType::Ptr& all = cachedWorld();
+  const double r2 = radius * radius;
+  out->reserve(all->size());
+  for (const auto& p : all->points) {
+    const double dx = p.x - center.x();
+    const double dy = p.y - center.y();
+    if (dx * dx + dy * dy <= r2) out->push_back(p);
   }
   out->width = static_cast<uint32_t>(out->size());
   out->height = 1;

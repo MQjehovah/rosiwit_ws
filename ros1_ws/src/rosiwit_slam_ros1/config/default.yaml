@@ -12,7 +12,7 @@
 # ★ 参数联动关系表 (改一个必须想一圈; 不变量由 LocPipeline 启动时校验并告警)
 # ============================================================================
 #  [fitness 阈值链 —— 2026-10-17 僵尸带事故的教训]
-#   accept.min_coverage(0.35) < monitor.lost_fitness(0.75)
+#   accept.min_coverage(0.60) = monitor.lost_fitness(0.60)
 #     < monitor.credible_fitness(0.85) ≤ global.reloc_accept_score(0.85)   必须保持此序!
 #   2026-11-19: 阈值链保持原值(0.35 / 0.75 / 0.85 / 0.85);
 #   本次只新增 GenZ 加权开关与地面约束开关的显式写法, 不动阈值。
@@ -263,12 +263,12 @@ localization:
     # (建库已优化为 1m/3m/2 线程, 6M 点图实测约 11s)
     relocalizer: none
     motion_prior: imu_ekf   # odom+IMU 误差状态EKF (2026-10-17); 退回旧版改 imu
-    local_map: radius_submap
+    local_map: keyframe_submap
     matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
-    map_maintainer: overlay       # 2026-11-23 排查: 先关 overlay
+    map_maintainer: none          # 2026-11-24: 现场先关 overlay(自更新层仍在调试, 改录包离线验证)
     pose_fusion: eskf         # eskf(限幅 + 多源加权, 默认) | direct(直通, 可回退)
 
   # ---- 位姿融合参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效 ----
@@ -346,7 +346,7 @@ localization:
     voxel_resolution: 0.3
     radius: 60.0
     cell_size: 10.0
-    max_keyframes: 15   # keyframe_submap: 最近关键帧数上限
+    max_keyframes: 24   # keyframe_submap: 最近关键帧数上限 (15->24: 兼顾子图覆盖与单帧耗时)
     cache_move: 0.5     # 位姿移动小于该值复用上一帧局部地图(m, 提速)
     # ---- 子图窗口锚 (2026-11-25, 默认关闭) ----
     # 想法: 只让"已验证帧"挪窗口中心, 防弱匹配把子图窗口带偏.
@@ -400,6 +400,13 @@ localization:
                               # 只抬种子线, credible(0.80) 不动, 避免跟踪抖动。
                               # LOST(诚实), 不接受弱重定位进僵尸态
     top_k: 5                    # 全局重定位多候选数 (按分数降序精配, 命中 0.95+ 即停)
+    # 种子/重定位"邻域最优性"校验: 接受前在 ±trans/±yaw 候选里各做一次匹配,
+    # 若存在明显更优解(>margin), 说明种子落在局部最优(实车: 偏 0.5m 也能拿 0.9 分),
+    # 拒绝并保持 INIT。宁可让现场重给位姿, 也不锁死在一张偏了的地图上。
+    seed_neighbor_check: true
+    seed_check_trans_m: 0.5
+    seed_check_yaw_deg: 5.0
+    seed_check_margin: 0.03
     # 丢失后重定位尝试间隔(帧, 节流)。30 帧(~2s)太密: 每次尝试含多起点 GICP
     # (预算 3s), 连续尝试会把单线程 spinner 独占, /relocation 等服务排队数十秒。
     # 45 帧 ≈ 3s, 与单次尝试预算相当。
@@ -446,10 +453,18 @@ localization:
   # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
   # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
   session_map:
-    enabled: true    # 2026-12-01: 打开会话地图 (用录包验证)
+    enabled: false   # 2026-11-24: 现场先关会话子图(会自证漂移, 改录包离线验证)
     use_for_tracking: false
-    radius_m: 25.0
-    voxel: 0.2
+    # 2026-11-24: 25 -> 35. 实测雷达点水平距离 p50=27.6 / p90=33.0 / p95=35.6,
+    # 25m 只用上 36% 的点 (25~35m 的长墙对抑制 yaw 漂移最有用); 35m 覆盖 94.5%.
+    radius_m: 35.0            # 存储半径: 子图保留机器人周围这么大的点
+    match_radius_m: 35.0      # 参与匹配的半径(<=0=全部), 源云也裁到同一半径
+    # 子图写入(瞬时补丁)专用门槛: 桥接态对先验的 fitness 天然只有 0.4~0.5,
+    # 若沿用 overlay 的门槛(0.85/rmse 6cm), 子图永远写不进去 -> 桥接态没图可配。
+    write_fitness_bridging: 0.35
+    write_max_corr_m: 0.25
+    write_max_corr_deg: 3.0
+    voxel: 0.3                # 0.2->0.3: 半径 1.96x 面积增长由 2.25x 体素减点抵消
     open_persistency_cov: 0.20
     close_persistency_cov: 0.30
 
@@ -458,7 +473,10 @@ localization:
     credible_fitness: 0.85   # 健康线: ≥ 此为健康帧; 有界恢复达标线 (2026-11-23 0.80 -> 0.85)
                              # 2026-11-19: 0.85->0.80。本车+本图实测稳态 fitness
                              # 0.81~0.87, 0.85 会让状态在 INIT/TRACKING 间抖动。
-    lost_fitness: 0.75        # 低于此值直接判为不健康帧
+    lost_fitness: 0.60        # 2026-11-24: 0.75 -> 0.60, 与 accept.min_coverage 对齐。
+                              # 语义: "匹配还能被采用就继续定位, 连续 lost_patience 帧连
+                              # 接受线都拿不到才判丢". 原来 0.75 会把 0.65~0.74 这种
+                              # 位姿正常、只是场景变了的过渡段直接判丢。
     localized_patience: 3     # 连续健康帧数达到此值 -> LOCALIZED
     scrutiny_frames: 0        # 进入 LOCALIZED 后前 N 帧仍要求 >= reloc_accept_score, 撑不住退回 INIT
                               # (治"0.80~0.84 局部自洽假锁"); 0=关闭
@@ -489,7 +507,7 @@ localization:
     # 实测覆盖率典型 0.43（范围 0.43~0.99）。0.5 就会拒掉有效匹配 -> 保持 0.35。
     # 想"只接受高置信重定位"改 localization.global.reloc_accept_score，
     # 对应厂家 xz_3d_slam 的 th_fitness_relocalization(=0.89)。
-    min_coverage: 0.7    # ★2026-11-23: 正确匹配实测 0.93~0.96, 转弯错帧 0.39~0.54
+    min_coverage: 0.6    # ★2026-11-24: 0.7->0.6 (0.65~0.7 不再冻结位姿); 2026-11-23: 正确匹配实测 0.93~0.96, 转弯错帧 0.39~0.54
     residual_margin: 0.10
     consistent_frames: 2
     mahalanobis_gate: true    # 用匹配协方差做 Mahalanobis 门控
@@ -561,7 +579,7 @@ localization:
   maintainer:
     # w 的计票单位: frame(每帧, 与扫描频率耦合, 仅 A/B) | view(每次重新进入视野)
     #              | session(每个任务会话) | day(每个自然日)
-    persistency_unit: session
+    persistency_unit: view      # 2026-11-24: session -> view (要写进去, 不能等 3 个会话)
     persistency_hit_gain: 8          # 每个计票单位 +8 -> anchor 128 = 16 个会话(或 16 帧)
     persistency_miss_confirm: 3      # 连续 free 证据帧数 -> 删除(去抖)
     persistency_miss_action: 0       # 0=删除  1=按 persistency_hit_gain 递减
@@ -578,17 +596,23 @@ localization:
     radius: 60.0
     voxel: 0.3
     cell: 10.0
-    persist_hits: 3           # 新结构确认票数(按 persistency_unit 计): session => 3 个会话
+    persist_hits: 3           # 新结构确认票数(按 persistency_unit 计): view => 3 次重新进入视野
     # 工作图落盘: 只有一张全量工作图 (map.overlay.pcd), 1 小时一次, 没变化不写。
     refresh_frames: 300       # ★联动: 周期性用叠加层刷新全局重定位库(环境变化防失效)
     decay_frames: 0            # ★A 阶段: 交给体素可信度 w 软删除, 不再按帧龄硬删 (0=不衰减)
     override_base: true       # 结构被移除/替换时压制原图旧点
     # ---- A 阶段: 体素可信度 w (影子模式, 只统计不决策) ----
     persistency_anchor: 128             # w>=此值视为"高可信静态几何" (0~255; 观测 +8 / 雕刻 -8 / 0 删除)
-    shadow: false            # 打开写入, 用录包验证自更新效果              # true: w 只进 [quality] 日志, 不影响定位/插入 (B/C 阶段再启用)
+    shadow: false            # 打开写入, 用录包验证自更新效果
+    # 参与匹配的最低可信度 w: 低于它只当"虚影"(只留在调试云), 不进匹配目标;
+    # 高 w 的结构通过密度占比自然"多算"。128 = persistency_anchor(≈16 次确认)。
+    match_w_min: 128           # 低于它的 overlay 点只当虚影, 不参与匹配(128 = persistency_anchor)
+    max_rmse: 0.06             # 写图要求匹配残差(平均最近邻,m) <= 此值; 0=关闭
     # 插入门控: LIO 相对观测与 S2M 残差超过此值则不写入 (0=关闭该条)
     max_insert_divergence: 0.2
-    delta_min: 0.3            # 只沉淀"离原图 > 该距离(m)"的新结构(变化增量), 不重复静态
+    delta_min: 0.5            # 2026-11-24: 0.3 -> 0.5。底图 z p50=6.38m(70% 在 4m 以上),
+                              # 高远处点受 39° 外参/测距误差影响, 最近邻常态 >0.3m,
+                              # 0.3 会把天花板/高货架反复判成"新结构"(虚影)。
     novel_min_cluster: 3      # 新结构最小簇(26 邻域内本帧新颖体素数), 滤孤立噪点
     carve_stride: 20          # 自由空间雕刻抽样步长 (看到空 -> 从叠加层移除鬼影)
     # L13 位姿图维护 (可选): 变化关键帧缓冲后用 GTSAM 平滑再写入

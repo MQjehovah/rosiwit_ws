@@ -48,8 +48,21 @@ public:
   /// 体素去重；距机器人超过 radius 的点丢弃。
   void update(const CloudType& scan_body, const PoseStamped& pose_world);
 
-  /// 世界系子图点云（T_GS * pts），供匹配目标使用。
+  /// 世界系刚性修正: 把整张子图按 (dR, dT) 搬到新位姿解上 (T_GS' = Δ ∘ T_GS)。
+  /// 用于"桥接态发生大修正但绝不能清空子图"的场合: 点不动, 只改锚变换, 一次缓存重建。
+  void applyWorldCorrection(const Eigen::Matrix3d& dR, const Eigen::Vector3d& dT) {
+    if (!active_) return;
+    anchor_.rot = dR * anchor_.rot;
+    anchor_.trans = dR * anchor_.trans + dT;
+    cache_dirty_ = true;
+  }
+
+  /// 世界系子图点云（T_GS * pts），供匹配目标使用。带缓存: update/reset 后重建一次。
   CloudType::Ptr pointsWorld() const;
+
+  /// 只取 center 周围 radius 内的世界系点（radius<=0 = 全部）。走同一份缓存, 只做距离筛选,
+  /// 用于"存图半径大、参与匹配的半径小"——存 40m 备着, 匹配只喂 25m, 不让目标云膨胀。
+  CloudType::Ptr pointsWorld(const Eigen::Vector3d& center, double radius) const;
 
 
   /// 关闭并清空（重新看到高可信几何时调用）
@@ -57,6 +70,8 @@ public:
     active_ = false;
     pts_.clear();
     have_robot_ = false;
+    cache_.reset();
+    cache_dirty_ = true;
   }
 
   /// zip-up 修正: C 为 world 系修正变换 (子图锚系旧值 -> 重锚后的新值),
@@ -73,6 +88,9 @@ private:
   double created_s_ = 0.0;
 
   std::unordered_map<int64_t, Eigen::Vector3d> pts_;  // anchor 系
+  mutable CloudType::Ptr cache_;      // 世界系缓存 (pointsWorld 复用, 避免每帧重建 30 万点)
+  mutable bool cache_dirty_ = true;
+  const CloudType::Ptr& cachedWorld() const;
   Eigen::Vector3d robot_anchor_ = Eigen::Vector3d::Zero();  // 机器人在 anchor 系
   Eigen::Vector3d sweep_origin_ = Eigen::Vector3d::Zero();  // 上次清扫时的机器人位置
   bool have_robot_ = false;

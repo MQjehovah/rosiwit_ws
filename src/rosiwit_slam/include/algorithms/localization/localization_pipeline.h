@@ -96,6 +96,14 @@ private:
     CloudType::Ptr buildTarget(const PoseStamped& pose);
     /// 锚定模式目标: 底图 crop + overlay (压制同区域旧点) —— 探测重锚/正常锚定用
     CloudType::Ptr buildAnchoredTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
+    /// 扫描预处理: 按给定帧末位姿去畸变 + 雷达->IMU + 高度带裁剪。
+    /// 匹配用 guess 版本; 写地图必须用"匹配解 res.pose"再算一遍, 否则点云会被
+    /// 转差 corr_deg 那几度, 同一面墙写两次就是两层(实车叠图根因之一)。
+    CloudType::Ptr prepareScan(const LidarFrame& f, const PoseStamped& end_pose);
+
+    /// 子图 vs 先验图 的一致性观测 (只测不改): 把子图刚性地对齐到先验图,
+    /// 输出残余刚体变换 (Δt, Δyaw)。Δt≈0 => 两者一致; 明显非零 => 子图已经偏了。
+    void checkSubmapPriorConsistency();
     bool ensureRelocalizerMap();   // 全局重定位库就绪检查(后台构建中返回 false, 绝不阻塞)
     void relocBuildWorker();       // 兼容路径(未注入执行器): 常驻等待请求
     bool runRelocBuildOnce();      // 池任务: 构建一次重定位库
@@ -153,12 +161,16 @@ private:
     double m_anchor_min_eig_ratio = 1e-3;
     int    m_anchor_patience = 5;         // 连续弱锚帧 -> 开会话地图
     bool   m_ever_localized = false;      // 至少成功定位过一次 (之后才允许开会话地图/锚定)
-    // 底图-only 匹配度的状态; KD 树/目标云放在 .cpp 匿名命名空间(避免头文件引 pcl)
+    // 先验图-only 匹配度(fitness_base)的状态; KD 树/目标云放在 .cpp 匿名命名空间(避免头文件引 pcl)
     bool   m_base_only_valid = false;
     int    m_base_only_age = 0;           // 帧计数, 每 30 帧重建一次底图 crop
     double m_cov_base = -1.0;             // 最近一帧的底图覆盖率 (<0 = 未算)
     int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
     // 锚定状态只有 m_on_submap 一个 (m_anchor_on_base 已合并, 见下)
+    int    m_consistency_tick = 0;        // 子图↔先验一致性观测的节拍 (机器人侧新增)
+    // 软着陆: 种子/重定位刚生效后的前 N 帧限制单帧修正量(1°/5cm),
+    // 防止首帧跳变把点云写岔成两层(机器人侧新增, 锚定切换路径由 zip-up 即时搬移, 不再使用)
+    int    m_soft_land_frames = 0;
     int    m_anchor_close_patience = 10;  // 连续好锚帧 -> 关
     // ---- 子图桥接模式 ----
     bool m_on_submap = false;             // true = 目标=子图, 边建图边定位
@@ -167,6 +179,13 @@ private:
     int    m_anchor_weak_streak = 0;
     int    m_anchor_ok_streak = 0;
     double m_session_map_radius = 25.0;
+    double m_session_map_match_radius = 25.0;   // 参与匹配的子图半径(<=0=全部); 存储仍用 radius_m
+    // 子图是"瞬时补丁", 写入门槛必须比 overlay 低: 变化区里 fitness(对先验) 天然低,
+    // 若还要求和先验匹配得上, 就永远写不进去 -> 桥接时没有跟踪源 -> 必丢(2026-11-24 实机)。
+    double m_sm_write_fitness = 0.35;   // 桥接态写子图的最低 fitness
+    double m_sm_write_corr_m = 0.25;    // 允许的单帧修正
+    double m_sm_write_corr_deg = 3.0;
+
     double m_session_map_voxel = 0.15;
     size_t m_session_map_max_points = 300000;
     /// 服务/换图线程调用: 加锁清空子图, 并退出子图桥接模式

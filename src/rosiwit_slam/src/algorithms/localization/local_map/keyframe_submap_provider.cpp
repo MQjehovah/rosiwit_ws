@@ -32,6 +32,10 @@ void KeyframeSubmapProvider::setKeyframes(const std::vector<LocalKeyframe>& keyf
             w.z = static_cast<float>(q.z());
             k.world->push_back(w);
         }
+        // 先按 voxel 降采样再存: 1607 个关键帧原样存世界系副本会吃掉 ~2GB,
+        // 而 getLocalMap 合并后本来就要降采样到同一体素 —— 提前做一次, 内存和建目标都省.
+        if (m_cfg.voxel_resolution > 0 && !k.world->empty())
+            k.world = downsampleCloud(k.world, m_cfg.voxel_resolution);
         m_kfs.push_back(std::move(k));
     }
     m_have_injected = true;

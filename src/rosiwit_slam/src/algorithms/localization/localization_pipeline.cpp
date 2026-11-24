@@ -1,5 +1,7 @@
 ﻿// src/algorithms/localization/localization_pipeline.cpp
 #include "algorithms/localization/localization_pipeline.h"
+
+#include <malloc.h>
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/maintainer/insert_gate.h"
@@ -19,6 +21,7 @@
 #include <cstdio>
 #include <sys/stat.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/registration/gicp.h>
 #include <pcl/common/transforms.h>
 
 #ifndef YAML_CPP_DISABLED
@@ -40,7 +43,7 @@ static const bool kDumpFrame = std::getenv("ROSIWIT_DUMP_FRAME") != nullptr;
 
 namespace {
 // 底图-only 匹配度用的 KD 树/目标云: 放在 .cpp 里(单实例), 避免头文件引 pcl
-CloudType::Ptr g_base_only_target;
+CloudType::Ptr g_base_only_target;         // 底图-only 裁剪缓存
 pcl::KdTreeFLANN<PointType> g_base_only_kdtree;
 bool g_base_only_valid = false;
 int g_base_only_age = 0;
@@ -363,6 +366,14 @@ bool LocalizationPipeline::init(const std::string& config_path) {
             getv<double>(gc, "seed_max_drift", m_global_cfg.seed_max_drift);
         m_global_cfg.seed_max_yaw_deg =
             getv<double>(gc, "seed_max_yaw_deg", m_global_cfg.seed_max_yaw_deg);
+        m_global_cfg.seed_neighbor_check =
+            getv<bool>(gc, "seed_neighbor_check", m_global_cfg.seed_neighbor_check);
+        m_global_cfg.seed_check_trans_m =
+            getv<double>(gc, "seed_check_trans_m", m_global_cfg.seed_check_trans_m);
+        m_global_cfg.seed_check_yaw_deg =
+            getv<double>(gc, "seed_check_yaw_deg", m_global_cfg.seed_check_yaw_deg);
+        m_global_cfg.seed_check_margin =
+            getv<double>(gc, "seed_check_margin", m_global_cfg.seed_check_margin);
         m_ambiguity_margin = getv<double>(gc, "ambiguity_margin", m_ambiguity_margin);
         m_reseed_radius    = getv<double>(gc, "reseed_radius", m_reseed_radius);
         m_global_cfg.retry_interval     = getv<int>(gc, "retry_interval", m_global_cfg.retry_interval);
@@ -475,6 +486,9 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
             getv<double>(mtc, "max_insert_divergence", m_maintainer_cfg.max_insert_divergence);
         // A 阶段: 体素可信度 w (影子: 只统计, 不参与决策)
         m_maintainer_cfg.persistency_anchor = getv<int>(mtc, "persistency_anchor", m_maintainer_cfg.persistency_anchor);
+        m_maintainer_cfg.shadow   = getv<bool>(mtc, "shadow", m_maintainer_cfg.shadow);
+        m_maintainer_cfg.match_w_min = getv<int>(mtc, "match_w_min", m_maintainer_cfg.match_w_min);
+        m_maintainer_cfg.max_rmse = getv<double>(mtc, "max_rmse", m_maintainer_cfg.max_rmse);
         const std::string wu = getv<std::string>(mtc, "persistency_unit", "session");
         if (wu == "frame")        m_maintainer_cfg.persistency_unit = 0;
         else if (wu == "view")    m_maintainer_cfg.persistency_unit = 1;
@@ -496,7 +510,22 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_anchor_close_patience =
             getv<int>(subc, "anchor_close_patience", m_anchor_close_patience);
         m_session_map_radius = getv<double>(subc, "radius_m", m_session_map_radius);
+        m_session_map_match_radius =
+            getv<double>(subc, "match_radius_m", m_session_map_match_radius);
         m_session_map_voxel = getv<double>(subc, "voxel", m_session_map_voxel);
+    }
+    // ★2026-11-24 修正: radius_m / voxel / match_radius_m 在
+    // yaml 里写在 `localization.session_map`, 但这里原来只读 `submap` 段 ->
+    // 一直是代码默认值 (radius 25 / voxel 0.15), 改 yaml 根本不生效.
+    if (auto smc = loc["session_map"]) {
+        m_session_map_enabled = getv<bool>(smc, "enabled", m_session_map_enabled);
+        m_session_map_radius = getv<double>(smc, "radius_m", m_session_map_radius);
+        m_session_map_voxel = getv<double>(smc, "voxel", m_session_map_voxel);
+        m_session_map_match_radius =
+            getv<double>(smc, "match_radius_m", m_session_map_match_radius);
+        m_sm_write_fitness = getv<double>(smc, "write_fitness_bridging", m_sm_write_fitness);
+        m_sm_write_corr_m = getv<double>(smc, "write_max_corr_m", m_sm_write_corr_m);
+        m_sm_write_corr_deg = getv<double>(smc, "write_max_corr_deg", m_sm_write_corr_deg);
     }
     m_session_map.configure(SessionMap::Config{
         m_session_map_radius, m_session_map_voxel, m_session_map_max_points});
@@ -1132,6 +1161,38 @@ void LocalizationPipeline::resetRelativeAnchor() {
     if (m_fusion) m_fusion->resetRelative();
 }
 
+CloudType::Ptr LocalizationPipeline::prepareScan(const LidarFrame& f,
+                                                const PoseStamped& end_pose) {
+    CloudType::Ptr scan = deskewScan(f, end_pose);
+    // 雷达系 -> IMU 系 (定位路径不经过建图前端, 需要自己做)
+    if (m_lidar_to_imu_valid && scan && !scan->empty()) {
+        CloudType::Ptr body(new CloudType);
+        pcl::transformPointCloud(*scan, *body, m_lidar_to_imu);
+        body->header = scan->header;
+        scan = body;
+    }
+    // 高度带裁剪: 与 matcher 用同一 z 带和同一套安装外参 (地面/贴地点不参与,
+    // 也不写进 overlay/子图 —— 否则地面会被当成"新结构")。
+    if (m_matcher_cfg.match_z_filter &&
+        m_matcher_cfg.match_z_max > m_matcher_cfg.match_z_min &&
+        m_matcher_cfg.crop_r_valid && scan && !scan->empty()) {
+        CloudType::Ptr kept(new CloudType());
+        kept->reserve(scan->size());
+        const Eigen::Matrix3d& R = m_matcher_cfg.crop_r;
+        const double z_off = m_matcher_cfg.crop_t.z();
+        for (const auto& p : scan->points) {
+            const double zf = R(2, 0) * p.x + R(2, 1) * p.y + R(2, 2) * p.z + z_off;
+            if (zf > m_matcher_cfg.match_z_min && zf < m_matcher_cfg.match_z_max)
+                kept->push_back(p);
+        }
+        if (!kept->empty()) {
+            kept->header = scan->header;
+            scan = kept;
+        }
+    }
+    return scan;
+}
+
 CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseStamped& end_pose) {
     if (!m_deskew_enabled || !f.cloud || f.cloud->empty()) return f.cloud;
     if (!m_have_last_accepted && m_pose.time < 0.0) return f.cloud;
@@ -1251,6 +1312,44 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
     out->height = 1;
     out->is_dense = f.cloud->is_dense;
     return out;
+}
+
+// "子图 vs 先验图 的一致性观测 (只测不改)": 把子图刚性地对齐到先验图,
+// 输出残余刚体变换 (Δt, Δyaw)。Δt≈0 => 两者一致; 明显非零 => 子图已经偏了。
+// 先验图 = 底图 + overlay(工作站架构里的 buildAnchoredTarget, 与匹配锚定目标同源)。
+void LocalizationPipeline::checkSubmapPriorConsistency() {
+    if (!m_session_map_enabled) return;
+    CloudType::Ptr sub;
+    {
+        std::lock_guard<std::mutex> lk(m_session_map_mu);
+        if (!m_session_map.active()) return;
+        sub = m_session_map.pointsWorld(m_pose.trans, m_session_map_match_radius);
+    }
+    if (!sub || sub->size() < 3000) return;
+    CloudType::Ptr prior = buildAnchoredTarget(m_pose);
+    if (!prior || prior->size() < 3000) return;
+    CloudType::Ptr A = downsampleCloud(sub, 0.4);
+    CloudType::Ptr B = downsampleCloud(prior, 0.4);
+    if (!A || !B || A->size() < 1500 || B->size() < 1500) return;
+
+    pcl::GeneralizedIterativeClosestPoint<PointType, PointType> gicp;
+    gicp.setInputSource(A);
+    gicp.setInputTarget(B);
+    gicp.setMaximumIterations(30);
+    gicp.setMaxCorrespondenceDistance(1.0);
+    gicp.setTransformationEpsilon(1e-6);
+    CloudType aligned;
+    gicp.align(aligned);
+    if (!gicp.hasConverged()) return;
+    const Eigen::Matrix4f T = gicp.getFinalTransformation();
+    const double dx = T(0, 3), dy = T(1, 3);
+    const double dt = std::sqrt(dx * dx + dy * dy);
+    const double dyaw = std::atan2(T(1, 0), T(0, 0)) * 57.2957795;
+    const double fit = gicp.getFitnessScore(0.3);
+    std::cout << "[submap-prior] n=" << A->size() << "/" << B->size()
+              << " fit=" << fit << " residual=" << dt << "m/" << dyaw << "deg -> "
+              << ((dt > 0.20 || std::fabs(dyaw) > 1.5) ? "OFFSET" : "CONSISTENT")
+              << std::endl;
 }
 
 CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
@@ -1776,14 +1875,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 转圈时一帧 100ms 内的旋转会让扫描在时间上被拉斜, 表现为 fitness 从 0.9
     // 掉到 0.4~0.7、inlier 比例骤降, 但 accepted 仍为 1. 这里按逐点时间戳和
     // 帧首/帧末位姿先补偿到帧末坐标系.
-    CloudType::Ptr scan = deskewScan(f, guess);
-    // 扫描从雷达系转到 IMU 系 (定位路径不经过建图前端, 需要自己做这一步)
-    if (m_lidar_to_imu_valid && scan && !scan->empty()) {
-        CloudType::Ptr body(new CloudType);
-        pcl::transformPointCloud(*scan, *body, m_lidar_to_imu);
-        body->header = scan->header;
-        scan = body;
-    }
+    CloudType::Ptr scan = prepareScan(f, guess);
 
     // relocalizer=none 时 globalRelocWorker 对重定位请求不做任何事(直接丢弃),
     // LOST 后没有任何恢复路径。这里在 tracking 线程里接上已有的
@@ -1802,6 +1894,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 std::lock_guard<std::mutex> lk(m_global_mu);
                 m_global_request = false;
                 m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
+            }
+            if (!recovered) {
+                // 有界恢复每 retry_interval 秒建一次 27 个多起点假设, glibc 会把释放的
+                // 临时点云留在 arena 里 (实机 LOST 时 RSS 涨到 2GB). 失败后主动 trim.
+                malloc_trim(0);
             }
             if (recovered) {
                 m_status = INIT;
@@ -1902,6 +1999,28 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_matcher->setTarget(target);
         }
         const bool ok = m_matcher->match(scan, guess, res);
+        // 软着陆: 目标组成刚变(锚定<->桥接)时, 匹配解可能相对预测跳 3~5°.
+        // 直接把跳变写进位姿, 会让"跳变前/跳变后"写进地图的点岔开几度(实车叠图).
+        // 这里把单帧修正限到 1°/5cm, 用 10 帧爬到新解; 位姿连续 -> 地图不再分两层.
+        if (m_soft_land_frames > 0 && res.converged) {
+            V3D dt_sl;
+            double da_sl = 0.0;
+            poseDelta(res.pose, guess, dt_sl, da_sl);
+            const double max_t = 0.05;                       // m/frame
+            const double max_a = 1.0 * M_PI / 180.0;          // rad/frame
+            const double nt = dt_sl.norm();
+            const bool over = (nt > max_t) || (std::fabs(da_sl) > max_a);
+            if (over) {
+                const double kt = (nt > 1e-9) ? std::min(1.0, max_t / nt) : 1.0;
+                const double ka = (std::fabs(da_sl) > 1e-9) ? std::min(1.0, max_a / std::fabs(da_sl)) : 1.0;
+                const double k = std::min(kt, ka);
+                res.pose.trans = guess.trans + k * dt_sl;
+                res.pose.rot =
+                    guess.rot * Eigen::AngleAxisd(k * da_sl, V3D::UnitZ()).toRotationMatrix();
+                planarizePose(res.pose);
+            }
+            --m_soft_land_frames;
+        }
         // [DumpFrame] (ROSIWIT_DUMP_FRAME=1 时) 转储好帧(first fitness>=0.9 ->
         // /tmp/slamdump_good) 与坏帧 (first fitness<0.6 -> /tmp/slamdump), 离线对比
         // z 分布/覆盖率/位姿 (2026-11-23 地面裁剪与 guess 滞后对账). 默认不写盘.
@@ -2085,6 +2204,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // 判成 "漂离 1.7m" 而拒掉, 节点停在 INIT. 保持 pending, 等一帧点数足够的扫描.
     } else if (m_seed_pending) {
         m_seed_pending = false;
+        m_soft_land_frames = 20;   // 种子刚生效: 前 20 帧限幅, 别让首帧跳变写进地图
         if (!res.converged || res.fitness < m_global_cfg.reloc_accept_score) {
             seed_failed = true;
             m_status = INIT;
@@ -2117,8 +2237,52 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 FlightRecorder::instance().event("SEED_REJECT", os.str());
                 m_last_match = res;
                 m_last_match.pose = guess;
+            } else if (m_global_cfg.seed_neighbor_check && m_matcher && scan && !scan->empty() &&
+                       res.fitness < 0.95) {
+            // 邻域最优性校验: 在种子解附近做 ±trans/±yaw 的候选匹配。
+            // 只要有一个候选明显更优(> margin), 说明种子落在局部最优的"错误一侧",
+            // 拒绝并保持 INIT —— 宁可让现场重新给位姿, 也不锁死在一张偏了的地图上。
+            const double dtc = m_global_cfg.seed_check_trans_m;
+            const double dac = m_global_cfg.seed_check_yaw_deg * M_PI / 180.0;
+            double best_fit = res.fitness;
+            PoseStamped best_pose = res.pose;
+            const double offs[4][2] = {{dtc, 0}, {-dtc, 0}, {0, dtc}, {0, -dtc}};
+            for (const auto& off : offs) {
+                PoseStamped g = res.pose;
+                g.trans += V3D(off[0], off[1], 0.0);
+                planarizePose(g);
+                MatchResult r2;
+                if (m_matcher->match(scan, g, r2) && r2.converged && r2.fitness > best_fit) {
+                    best_fit = r2.fitness;
+                    best_pose = r2.pose;
+                }
+            }
+            for (double dy : {dac, -dac}) {
+                PoseStamped g = res.pose;
+                g.rot = res.pose.rot * Eigen::AngleAxisd(dy, V3D::UnitZ()).toRotationMatrix();
+                planarizePose(g);
+                MatchResult r2;
+                if (m_matcher->match(scan, g, r2) && r2.converged && r2.fitness > best_fit) {
+                    best_fit = r2.fitness;
+                    best_pose = r2.pose;
+                }
+            }
+            if (best_fit > res.fitness + m_global_cfg.seed_check_margin) {
+                seed_failed = true;
+                accepted = false;
+                out_pose = guess;
+                m_status = INIT;
+                std::ostringstream os;
+                os << "initial seed rejected: neighbor better fitness=" << best_fit
+                   << " vs seed " << res.fitness << " (offset "
+                   << (best_pose.trans - res.pose.trans).norm() << "m) -> INIT";
+                diag::log('W', "LocPipeline", os.str());
+                FlightRecorder::instance().event("SEED_REJECT", os.str());
+                m_last_match = res;
+                m_last_match.pose = guess;
             }
         }
+    }
     }
 
     out_pose.time = f.end_time;
@@ -2360,6 +2524,25 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
     prev_insert = out_pose;
     have_prev_insert = true;
+    // 大修正(>0.3m / >5°)后, 之前写进会话子图的点在世界系里就"错位"了: 不清掉的话,
+    // 目标和调试云里都会出现新旧两层墙(实车"叠图"). 子图是临时补丁, 重建代价很低。
+    if (m_session_map.active() && (corr_m > 0.15 || corr_deg > 1.5)) {
+        // 不管当前是锚定还是桥接, 一律"刚性搬移": 清空子图在任何状态下都可能把
+        // 唯一的跟踪源丢掉; 而点不动、只改 anchor 变换(T_GS' = Δ∘T_GS)是等价且无损的。
+        // Δ = res ∘ guess⁻¹ (作用在世界系)。
+        const M3D dR = res.pose.rot * guess.rot.transpose();
+        const V3D dT = res.pose.trans - dR * guess.trans;
+        {
+            std::lock_guard<std::mutex> lk(m_session_map_mu);
+            m_session_map.applyWorldCorrection(dR, dT);
+        }
+        static int reanchor_log = 0;
+        if (++reanchor_log % 20 == 1) {
+            std::cout << "[session_map] re-anchor by correction corr_m=" << corr_m
+                      << " corr_deg=" << corr_deg << " pts=" << m_session_map.size()
+                      << std::endl;
+        }
+    }
     if (kLocProbe && (++insert_probe_n % 10 == 0) && (corr_deg > 1.0 || match_deg > 0.5)) {
         std::cout << "[InsertProbe] corr_deg=" << corr_deg << " corr_m=" << corr_m
                   << " match_deg=" << match_deg << " match_m=" << match_m
@@ -2367,6 +2550,17 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                   << " fitness=" << res.fitness << " accepted=" << (accepted ? 1 : 0)
                   << std::endl;
     }
+
+    // ★写图专用点云: 用匹配解 res.pose 重新去畸变。
+    // deskew 是按预测位姿 guess 做的, 与匹配解差 corr_deg(常态 0.1~3°) 时, 整片点云
+    // 会被转差那几度 —— 匹配用的是"转过的点云 vs 地图", 还能对上; 但写进世界系时
+    // 同一面墙就分成了两层(建图模式不会, 因为它用同一套位姿做去畸变和写图)。
+    CloudType::Ptr scan_write;
+    if ((m_maintainer || m_session_map_enabled) && res.converged) {
+        scan_write = prepareScan(f, res.pose);
+    }
+    const CloudType::Ptr& scan_map =
+        (scan_write && !scan_write->empty()) ? scan_write : scan;
 
     if (m_maintainer) {
         const FusionDiag fd = fusionDiag();
@@ -2382,17 +2576,24 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // 去畸变点云对上先验地图"的那个位姿, 与地图几何天然一致; 融合位姿带滤波/限幅
         // 滞后 (转弯时实测差 28°), 直接写进去就是墙歪/叠图, 而且会被当成地图的一部分.
         //
-        // T4 (2026-11-25): 写图必须锚在**底图**上, 不能拿"含 overlay/子图的目标"判胜
+        // T4 (2026-11-25, 工作站): 写图必须锚在**底图**上, 不能拿"含 overlay/子图的目标"判胜
         // (自引用): 桥接期目标就是子图, 位姿由子图自身算出, 再写回 overlay = 自证;
         // cov_base 有效时要求达到可信阈值 (底图真的配上了); cov_base 还没算出来 (-1,
         // 底图 KD 未就绪) 时退回 anchorOk, 否则起步阶段完全学不到东西。
         // 注: cov_base 在本帧稍后才更新, 这里用的是上一帧的值 (1 帧滞后, 可接受)。
         const bool base_anchored = !m_on_submap &&
             (m_cov_base < 0.0 || m_cov_base >= m_monitor_cfg.credible_fitness);
-        if (base_anchored &&
+        // 机器人侧补充 (2026-11-24): 位姿稳定性门 —— 刚发生 >10cm/>1° 修正的帧、
+        // coast 帧(预测顶着的)位姿不可信, rmse 超标说明残余大; 写进去会和原有结构
+        // 岔成两层(实车叠图)。与 T4 正交, 叠加生效。
+        const bool rmse_ok = (res.rmse < 0.0 || m_maintainer_cfg.max_rmse <= 0.0 ||
+                              res.rmse <= m_maintainer_cfg.max_rmse);
+        const bool pose_stable = (corr_m <= 0.10 && corr_deg <= 1.0 && rmse_ok);
+        if (base_anchored && !m_maintainer_cfg.shadow &&
+            m_coast_count == 0 && pose_stable &&
             allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg) &&
             anchorOk(res, accepted)) {
-            m_maintainer->onLocalized(res.pose, scan, m_last_match, true);
+            m_maintainer->onLocalized(res.pose, scan_map, m_last_match, true);
         }
     }
 
@@ -2534,6 +2735,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             // 只在真正进入 LOST 的那一帧记录/落盘; 之前这里每帧调用，
             // 一次丢定位会在 /tmp/slam_flight 生成上千个 100KB+ 文件并拖慢系统.
             if (!was_lost) {
+                resetSessionMap();   // 判丢后清掉临时子图, 避免下次桥接直接锁死
                 std::ostringstream os;
                 os << "unhealthy frames=" << m_unhealthy_streak
                    << " >= " << m_monitor_cfg.lost_patience
@@ -2620,11 +2822,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                       << " rejection=" << reject_reason << std::endl;
             // A 阶段(影子): 体素可信度统计, 只观测不决策. 每天按 w>=persistency_anchor 导出点云,
             // 看是否只剩立柱/墙体, 并对比正常段 / 假锁段 / 堆货区 的 persistency_cov 分布.
-            // ---- 底图-only 匹配度 (锚定判据) ----
-            // 会话地图/overlay 参与匹配后, 总 fitness 会自我确认(自己配自己)。
-            // "锚是否恢复"必须看对**底图**(不含子图/overlay)的覆盖率:
-            //   cov_base 高 -> 底图锚得住 -> 关闭子图
-            //   cov_base 低 -> 底图锚不住 -> 子图自更新
+            // ---- 先验图(底图+overlay)匹配度 (锚定判据) ----
+            // 会话子图参与匹配后, 总 fitness 会自我确认(本会话自己写的点配自己)。
+            // "锚是否恢复"必须看对**先验图**的覆盖率 —— 但先验图 = 底图 + overlay:
+            // overlay 是跨会话确认过的结构, 属于地图; 只有会话子图是本会话自证的部分。
+            //   cov_prior 高 -> 先验图锚得住 -> 关闭子图
+            //   cov_prior 低 -> 先验图锚不住 -> 子图自更新
             if (m_session_map_enabled && m_ever_localized && scan && !scan->empty() &&
                 m_local_map) {
                 // 成本: 全点降采样 + 全图 KD 查询 ~几 ms。诊断用途, 每 5 帧算一次即可
@@ -2670,6 +2873,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_cov_base = -1.0;
                 m_cov_base_ok_streak = 0;
             }
+            // ★机器人侧新增: 子图↔先验一致性观测 (只测不改)。必须在 m_session_map_mu
+            // 作用域之外调用(函数内部自己加锁, 非递归 mutex 二次加锁 = 死锁; 实机踩过)。
+            if (m_session_map_enabled && (++m_consistency_tick % 30 == 0)) {
+                checkSubmapPriorConsistency();
+            }
+            }
 
             if (m_maintainer) {
                 int anchor_age = 0;
@@ -2708,7 +2917,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     std::lock_guard<std::mutex> lk(m_session_map_mu);
                     const double now_s = (res.pose.time > 0.0) ? res.pose.time : f.end_time;
                     // 会话地图: 真正定位过才开; 开了之后**常驻自更新**, 不关闭。
-                    // "锚定在哪"由 cov_base 决定(见上), 只影响 buildTarget 的目标组成:
+                    // "锚定在哪"由 fitness_base 决定(见上), 只影响 buildTarget 的目标组成:
                     //   底图匹配度高 -> 位姿锚在底图上;  底图匹配度低 -> 子图桥接并自更新。
                     if (!m_ever_localized) {
                         if (m_session_map.active()) m_session_map.deactivate();
@@ -2716,18 +2925,31 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         // 只要定位成功且覆盖率高, 就立刻开子图并**一直在建**:
                         // 底图某天完全变化锚不住时, 已建好的子图立即顶上 (边建图边定位),
                         // 而不是临时去建 (临时建的子图自身就是错的, 顶不住)。
+                        // 桥接态放宽到 lost_fitness: 降级带里也要能开/建, 否则子图冻结越走越对不上。
+                        // 桥接态写入用**子图专用低门槛**(默认 0.35): 变化区里对先验的
+                        // fitness 天然只有 0.4~0.5, 若还要求 0.6/0.85, 就会死锁
+                        // —— 需要子图才能提分, 又因为分不够不让写子图(2026-11-24 实机:
+                        // submap_size 一直是 0, 桥接态等于没图可配, 30 帧后必丢)。
+                        const double write_bar = !m_on_submap
+                                                     ? m_monitor_cfg.credible_fitness
+                                                     : m_sm_write_fitness;
                         if (!m_session_map.active() && m_status.load() == LOCALIZED &&
-                            accepted && res.fitness >= m_monitor_cfg.credible_fitness) {
+                            accepted && res.fitness >= write_bar) {
                             m_session_map.reset(m_pose, now_s);
-                            std::cout << "[session_map] open (base anchored, building ahead)"
-                                      << std::endl;
+                            std::cout << "[session_map] open ("
+                                      << (!m_on_submap ? "base anchored" : "bridging")
+                                      << ", building ahead) fitness=" << res.fitness << std::endl;
                         }
                         // 自更新: 匹配被接受且置信度达标就写 (锚定态也写, 供"底图低"时桥接)
                         // 与 overlay 同理: 用匹配位姿 res.pose 落点, 保证会话地图与先验
                         // 地图几何一致 (融合位姿在转弯时有滤波滞后, 会把整片点云转一个角).
-                        if (accepted && res.fitness >= m_monitor_cfg.credible_fitness &&
-                            scan && !scan->empty()) {
-                            m_session_map.update(*scan, res.pose);
+                        // 子图只要求"位姿没跳"即可, 不套 overlay 的 rmse 门控:
+                        // 变化区里残差本来就大, 套上就永远写不进去。
+                        const bool pose_stable_sm =
+                            (corr_m <= m_sm_write_corr_m && corr_deg <= m_sm_write_corr_deg);
+                        if (accepted && res.converged && pose_stable_sm &&
+                            res.fitness >= write_bar && scan_map && !scan_map->empty()) {
+                            m_session_map.update(*scan_map, res.pose);
                         }
                     }
                     session_map_active = m_session_map.active() ? 1 : 0;
@@ -2777,6 +2999,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                             wm_saving.store(false);
                         }).detach();
                     }
+                // ★必须在 m_session_map_mu 作用域之外调用(函数内部会自己加锁,
+                // 非递归 mutex 在同一线程二次加锁 = 死锁; 2026-11-24 实机踩过)。
+                if (m_session_map_enabled && (++m_consistency_tick % 30 == 0)) {
+                    checkSubmapPriorConsistency();
                 }
                 std::ostringstream qs;
                 qs.setf(std::ios::fixed);

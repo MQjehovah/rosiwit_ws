@@ -546,7 +546,15 @@ CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
                     const int vx = static_cast<int>(std::floor(p.x / m_voxel));
                     const int vy = static_cast<int>(std::floor(p.y / m_voxel));
                     const int vz = static_cast<int>(std::floor(p.z / m_voxel));
-                    if (!m_voxel_seen.count(voxelKey(vx, vy, vz))) continue;  // 已衰减/被雕刻
+                    const int64_t vk = voxelKey(vx, vy, vz);
+                    if (!m_voxel_seen.count(vk)) continue;      // 已衰减/被雕刻
+                    // 只让"高可信度"的 overlay 点参与匹配 (w>=match_w_min);
+                    // 低于门槛的是虚影/单次观测, 只留在调试云里, 不进目标。
+                    if (m_cfg.match_w_min > 0) {
+                        auto pit = m_persistency.find(vk);
+                        if (pit == m_persistency.end() ||
+                            static_cast<int>(pit->second.w) < m_cfg.match_w_min) continue;
+                    }
                     const double ddx = p.x - pose.trans.x();
                     const double ddy = p.y - pose.trans.y();
                     const double ddz = p.z - pose.trans.z();

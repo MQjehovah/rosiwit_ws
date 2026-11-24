@@ -339,7 +339,7 @@ private:
     mutable std::mutex path_mu_;                    // mapping_path_msg_ 跨线程 (tick 写 / 发布读)
     double last_mapping_path_time_ = -1.0;          // 轨迹去重: 同一个核心位姿不重复入队
     ros::Time last_mapping_path_pub_;               // 轨迹整条重发节流 (10Hz -> 1Hz)
-    ros::Time last_location_info_pub_;              // slam/info 节流 (最高 10Hz)
+    ros::Time last_location_info_pub_;              // slam/info 节流 (最高 20Hz, 0.05s)
     static constexpr size_t kMaxMappingPathPoses = 10000;
 
     // 定位状态唯一来源是核心 localizationStatus()；这里只保存上一帧用于 LOST 边沿告警。
