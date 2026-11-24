@@ -542,7 +542,15 @@ CloudType::Ptr OverlayMapMaintainer::snapshotOverlay() {
             const int vx = static_cast<int>(std::floor(p.x / m_voxel));
             const int vy = static_cast<int>(std::floor(p.y / m_voxel));
             const int vz = static_cast<int>(std::floor(p.z / m_voxel));
-            if (m_voxel_seen.count(voxelKey(vx, vy, vz))) out->push_back(p);
+            const int64_t vk = voxelKey(vx, vy, vz);
+            if (!m_voxel_seen.count(vk)) continue;
+            // intensity 带 A 阶段持久度 w(0~255): 0=无记录/刚提交, >=persistency_anchor
+            // (默认 128) 才算"高可信静态几何". 调试可视化按它上色, 落盘 PCD 也带这个值.
+            PointType q = p;
+            auto wit = m_persistency.find(vk);
+            q.intensity = (wit == m_persistency.end())
+                              ? 0.0f : static_cast<float>(wit->second.w);
+            out->push_back(q);
         }
     }
     return out;

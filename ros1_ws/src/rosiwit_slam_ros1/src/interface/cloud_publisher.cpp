@@ -73,7 +73,30 @@ void Ros1SlamInterface::startPub() {
                     cloud.reserve(pts.size());
                     for (const auto& p : pts) cloud.push_back(p);
                     ensureCloudDims(cloud);
-                    overlay_map_puber_.publish(toPointCloud2(cloud, kMapFrame, now));
+                    // intensity = A 阶段持久度 w(0~255), rgb = 按 w 上色:
+                    // 灰=无记录/刚提交, 红<64 弱, 黄<128, 绿>=128(达到 persistency_anchor), 青=255.
+                    overlay_map_puber_.publish(toPointCloud2Weighted(cloud, kMapFrame, now));
+                    static int wlog = 0;
+                    if (++wlog % 10 == 1) {   // 约 10s 一次, 打 w 的分布
+                        float wmin = 1e9f, wmax = -1e9f;
+                        std::vector<float> ws;
+                        ws.reserve(pts.size());
+                        for (const auto& p : pts) {
+                            const float w = p.intensity;
+                            wmin = std::min(wmin, w);
+                            wmax = std::max(wmax, w);
+                            ws.push_back(w);
+                        }
+                        std::nth_element(ws.begin(), ws.begin() + ws.size() / 2, ws.end());
+                        const float wmed = ws[ws.size() / 2];
+                        size_t confirmed = 0;
+                        for (size_t i = 0; i < ws.size(); ++i) {
+                            if (ws[i] >= 128.0f) ++confirmed;
+                        }
+                        std::cout << "[overlay] pts=" << pts.size()
+                                  << " w[min/med/max]=" << wmin << "/" << wmed << "/" << wmax
+                                  << " w>=128:" << confirmed << std::endl;
+                    }
                 }
             }
             if (session_map_puber_.getNumSubscribers() > 0) {
