@@ -568,6 +568,17 @@ bool OverlayMapMaintainer::load(const std::string& path) {
     for (const auto& p : in.points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         addPoint(Eigen::Vector3d(p.x, p.y, p.z));
+        // 恢复持久度: 新版 PCD 把 A 阶段 w 存在 intensity 里 (旧文件是 0 -> 保持本次记的 1 票).
+        // 不恢复的话 w 只活在内存里, 每次重启都从 1 票开始, "跨会话确认"永远攒不到 anchor.
+        if (p.intensity > 0.0f) {
+            const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
+                                        static_cast<int>(std::floor(p.y / m_voxel)),
+                                        static_cast<int>(std::floor(p.z / m_voxel)));
+            auto it = m_persistency.find(vk);
+            if (it != m_persistency.end()) {
+                it->second.w = static_cast<uint8_t>(std::min(255.0f, p.intensity));
+            }
+        }
     }
     return m_overlay_count > 0;
 }

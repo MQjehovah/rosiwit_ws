@@ -64,10 +64,12 @@ sensor_msgs::PointCloud2 toPointCloud2(const rosiwit_slam::CloudType& c,
 
 /// overlay 调试用: 在 x/y/z 之外带 intensity = 持久度 w(0~255) 和 rgb(按 w 上色),
 /// 这样 RViz 选 Intensity 或 RGB8 都能直接看出哪些点是"已确认的变化结构".
-/// 0=灰(无记录/刚提交), 红<64(弱), 黄<128, 绿>=128(达到 persistency_anchor), 青=255.
+/// 0=灰(无记录/刚提交), 红=1 票, 橙/黄=中间, 绿>=anchor(达到 persistency_anchor), 青=255.
+/// anchor 传 maintainer.persistency_anchor, 不传则按默认 128.
 sensor_msgs::PointCloud2 toPointCloud2Weighted(const rosiwit_slam::CloudType& c,
                                                const std::string& frame,
-                                               const ros::Time& stamp);
+                                               const ros::Time& stamp,
+                                               double anchor = 128.0);
 
 /// 旧的 `scan_f_map` 用的老类型。旧实现走的是
 /// `pcl::toROSMsg` + `sensor_msgs::convertPointCloud2ToPointCloud` (legacy.cpp:1005/1096),

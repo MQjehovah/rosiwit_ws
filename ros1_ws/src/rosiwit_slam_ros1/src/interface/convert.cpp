@@ -137,14 +137,19 @@ sensor_msgs::PointCloud2 toPointCloud2(const rosiwit_slam::CloudType& c,
 }
 
 namespace {
-// 持久度 w(0~255) -> RGB. 分段线性, 刻度与 maintainer.persistency_anchor(默认 128) 对齐:
-//   0 灰(无记录) / 8 红(只有 1 票, 刚提交) / 64 橙 / 112 黄 / 128 绿(已确认) / 255 青
+// 持久度 w(0~255) -> RGB. 分段线性, 刻度跟 anchor(=maintainer.persistency_anchor, 默认 128):
+//   0 灰(无记录) / 8 红(只有 1 票, 刚提交) / anchor*0.5 橙 / anchor*0.875 黄 /
+//   anchor 绿(已确认) / 255 青
 // w 每票 +persistency_hit_gain(默认 8), anchor=128 即"16 票才算高可信".
-inline void weightColor(float w, uint8_t& r, uint8_t& g, uint8_t& b) {
+inline void weightColor(float w, double anchor, uint8_t& r, uint8_t& g, uint8_t& b) {
+    if (!(anchor > 16.0)) anchor = 128.0;
+    if (anchor > 254.0) anchor = 254.0;
     struct Stop { float w; uint8_t r, g, b; };
-    static const Stop kStops[] = {
-        {0.0f, 140, 140, 140}, {8.0f, 225, 40, 40}, {64.0f, 235, 140, 30},
-        {112.0f, 240, 220, 50}, {128.0f, 40, 215, 70}, {255.0f, 60, 210, 255}};
+    const Stop kStops[] = {
+        {0.0f, 140, 140, 140}, {8.0f, 225, 40, 40},
+        {static_cast<float>(anchor * 0.5), 235, 140, 30},
+        {static_cast<float>(anchor * 0.875), 240, 220, 50},
+        {static_cast<float>(anchor), 40, 215, 70}, {255.0f, 60, 210, 255}};
     const int n = static_cast<int>(sizeof(kStops) / sizeof(kStops[0]));
     if (w <= kStops[0].w) { r = kStops[0].r; g = kStops[0].g; b = kStops[0].b; return; }
     for (int i = 1; i < n; ++i) {
@@ -166,7 +171,8 @@ inline void weightColor(float w, uint8_t& r, uint8_t& g, uint8_t& b) {
 
 sensor_msgs::PointCloud2 toPointCloud2Weighted(const rosiwit_slam::CloudType& c,
                                                const std::string& frame,
-                                               const ros::Time& stamp) {
+                                               const ros::Time& stamp,
+                                               double anchor) {
     sensor_msgs::PointCloud2 m;
     sensor_msgs::PointCloud2Modifier mod(m);
     mod.setPointCloud2Fields(5,
@@ -193,7 +199,7 @@ sensor_msgs::PointCloud2 toPointCloud2Weighted(const rosiwit_slam::CloudType& c,
         const float w = p.intensity;   // overlay: 由 maintainer 填成持久度 w
         *iw = w;
         uint8_t r = 0, g = 0, b = 0;
-        weightColor(w, r, g, b);
+        weightColor(w, anchor, r, g, b);
         ic[0] = b;   // PCL 的 rgb 字段是 0x00RRGGBB, 小端下字节序为 b,g,r
         ic[1] = g;
         ic[2] = r;
