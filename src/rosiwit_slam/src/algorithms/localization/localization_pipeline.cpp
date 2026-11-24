@@ -427,6 +427,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_monitor_cfg.enabled            = getv<bool>(moc, "enabled", m_monitor_cfg.enabled);
         m_monitor_cfg.credible_fitness   = getv<double>(moc, "credible_fitness", m_monitor_cfg.credible_fitness);
         m_monitor_cfg.lost_fitness       = getv<double>(moc, "lost_fitness", m_monitor_cfg.lost_fitness);
+        m_min_evidence_points = getv<int>(moc, "min_evidence_points", m_min_evidence_points);
+        m_low_evidence_limit  = getv<int>(moc, "low_evidence_limit", m_low_evidence_limit);
         m_monitor_cfg.localized_patience = getv<int>(moc, "localized_patience", m_monitor_cfg.localized_patience);
         m_monitor_cfg.scrutiny_frames    = getv<int>(moc, "scrutiny_frames", m_monitor_cfg.scrutiny_frames);
         m_monitor_cfg.lost_patience      = getv<int>(moc, "lost_patience", m_monitor_cfg.lost_patience);
@@ -2719,7 +2721,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     if (m_status == LOCALIZED) {
         // 跟踪阶段只要不低于 lost_fitness 就继续运行；不要求达到 credible_fitness。
         // 但"匹配与融合输出持续分歧"同样算不健康, 否则错位姿会一直报成功.
-        if (hard_unhealthy || consensus_unhealthy) {
+        // ★证据不足(靠站/贴墙, 扫描只剩一两百点): 本帧既不加也不减, 只累计中性帧数;
+        //   超过 low_evidence_limit 仍按不健康处理(不能无限 coast)。
+        const bool low_evidence = (res.visible > 0 && res.visible < m_min_evidence_points);
+        if (low_evidence) ++m_low_evidence_frames;
+        else m_low_evidence_frames = 0;
+        const bool neutral = low_evidence && m_low_evidence_frames < m_low_evidence_limit;
+        if (neutral) {
+            // 不改变 m_unhealthy_streak
+        } else if (hard_unhealthy || consensus_unhealthy) {
             ++m_unhealthy_streak;
         } else {
             m_unhealthy_streak = 0;

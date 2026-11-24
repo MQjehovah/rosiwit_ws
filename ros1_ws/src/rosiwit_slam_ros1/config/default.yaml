@@ -337,7 +337,7 @@ localization:
     min_coverage_points: 800
     # 打折豁免: 绝对内点 >= 此值时不打折。小房间降采样后可能只剩 ~380 点,
     # 但内点 374、覆盖率 0.99 是可信的; 11-23 那次"240 点满分"的内点只有一百多。
-    min_inliers_full_score: 300
+    min_inliers_full_score: 150
     # 注意: 位姿本身偏了的结构(天花板/地面)也会被当离群点删掉 -> 评分别用删后的点
     # 2.5D 平面 NDT (matcher: ndt2d)
     ndt2d_cell: 0.5
@@ -476,6 +476,10 @@ localization:
     credible_fitness: 0.85   # 健康线: ≥ 此为健康帧; 有界恢复达标线 (2026-11-23 0.80 -> 0.85)
                              # 2026-11-19: 0.85->0.80。本车+本图实测稳态 fitness
                              # 0.81~0.87, 0.85 会让状态在 INIT/TRACKING 间抖动。
+    # 证据不足帧(靠站/贴墙时只剩一两百点): 本帧中性, 不累计"不健康";
+    # 连续超过 low_evidence_limit 才按不健康处理(不能无限 coast)。
+    min_evidence_points: 150
+    low_evidence_limit: 300
     lost_fitness: 0.60        # 2026-11-24: 0.75 -> 0.60, 与 accept.min_coverage 对齐。
                               # 语义: "匹配还能被采用就继续定位, 连续 lost_patience 帧连
                               # 接受线都拿不到才判丢". 原来 0.75 会把 0.65~0.74 这种

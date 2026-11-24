@@ -158,7 +158,7 @@ struct ScanMatcherConfig {
     // 退化扫描打折的豁免线: 绝对内点数够多时, 点数少也不打折。
     // 小房间(雷达四面近墙)降采样后可能只有 379 点, 但 374 个内点、覆盖率 0.99 是可信的;
     // 而 2026-11-23 那次"240 点拿 1.000"的内点只有一百多, 仍应打折。
-    int    min_inliers_full_score = 300;
+    int    min_inliers_full_score = 150;
 
     // 2.5D 平面 NDT (matcher: ndt2d): 在 (x,y,yaw) 求解, z/roll/pitch 取自初值
     double ndt2d_cell = 0.5;                // 2D 高斯格尺寸(m), 通常比 3D 体素粗

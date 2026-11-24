@@ -171,6 +171,10 @@ private:
     // 软着陆: 种子/重定位刚生效后的前 N 帧限制单帧修正量(1°/5cm),
     // 防止首帧跳变把点云写岔成两层(机器人侧新增, 锚定切换路径由 zip-up 即时搬移, 不再使用)
     int    m_soft_land_frames = 0;
+    // "证据不足"帧(靠站/贴墙时扫描只剩一两百点)不该算"不健康": 没有证据 != 证据不好。
+    int    m_low_evidence_frames = 0;
+    int    m_min_evidence_points = 150;    // 可见点数低于此 -> 本帧中性(不累计不健康)
+    int    m_low_evidence_limit = 300;     // 中性最多持续这么多帧(约30s), 超过仍判不健康
     int    m_anchor_close_patience = 10;  // 连续好锚帧 -> 关
     // ---- 子图桥接模式 ----
     bool m_on_submap = false;             // true = 目标=子图, 边建图边定位
