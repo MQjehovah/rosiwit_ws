@@ -52,6 +52,17 @@ public:
     virtual bool save(const std::string& /*path*/) { return false; }
     virtual bool load(const std::string& /*path*/) { return false; }
 
+    // ---- 统一工作图 (Phase A): 底图也进同一套 w 账本 ----
+    /// 载入的底图云是否是"工作图"(map.overlay.pcd): 是则 intensity 就是 w。
+    /// 必须在 setBaseMap 之前调用 (setBaseMap 用它解释 intensity)。
+    virtual void setBaseEmbeddedWeights(bool /*on*/) {}
+    /// 把 w 写进 intensity 并丢弃 w==0 的点 (工作图落盘前调用)。
+    virtual void annotateBaseWeights(CloudType& /*cloud*/) const {}
+    /// 剔除 w 已降到 0 的底图点 (匹配目标用); 无死亡体素时原样返回。
+    virtual CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const { return cloud; }
+    /// 回收已删除体素的点 (落盘时刻调用一次, 批量压缩)。
+    virtual void reclaim() {}
+
     /// A 阶段(影子): 最近一次"位姿可信"帧的扫描点里, 落在 overlay 体素上的点中
     /// w >= maintainer.persistency_anchor 的占比 (0~1)。只统计, 不参与决策。
     /// @param anchor_age 出参: 命中锚点体素中"最久未再观测"的帧龄; 无锚点则 0

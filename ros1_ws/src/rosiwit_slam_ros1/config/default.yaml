@@ -567,6 +567,10 @@ localization:
     persistency_miss_action: 0       # 0=删除  1=按 persistency_hit_gain 递减
     persistency_session_hours: 12    # 会话超时自动换新
     target_w_min: 16           # 匹配目标里 overlay 点的最低 w: 固定物体参与, 动态/未确认忽略
+    # ---- 统一工作图: 底图点也进同一套 w 账本 (工作图文件里 intensity = w) ----
+    # 底图点初始 w: 128 = 16 次"射线穿过"证据才判死 (miss 去抖 3 帧 -> 约 5s 连续穿过)。
+    # 调大更保守(墙要更久才被吸收), 调小更容易改图。原图 map.pcd 永不修改, 可回滚。
+    base_voxel_w: 128
     enabled: true
     fitness_trigger: 0.5      # fitness 低于此判为环境变化
     min_keyframe_dist: 1.0    # 叠加关键帧最小间距(m)
@@ -575,7 +579,7 @@ localization:
     voxel: 0.3
     cell: 10.0
     persist_hits: 3           # 新结构确认票数(按 persistency_unit 计): session => 3 个会话
-    autosave_frames: 300      # 周期性落盘叠加层
+    # 工作图落盘: 只有一张全量工作图 (map.overlay.pcd), 1 小时一次, 没变化不写。
     refresh_frames: 300       # ★联动: 周期性用叠加层刷新全局重定位库(环境变化防失效)
     decay_frames: 0            # ★A 阶段: 交给体素可信度 w 软删除, 不再按帧龄硬删 (0=不衰减)
     override_base: true       # 结构被移除/替换时压制原图旧点

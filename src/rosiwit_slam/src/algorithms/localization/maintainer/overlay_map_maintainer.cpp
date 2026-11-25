@@ -49,8 +49,44 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     m_has_base = false;
     m_base_voxels.clear();
     m_base_indexed = false;
-    // 尝试载入已存在的叠加层 (原图不变, 叠加层单独落盘)
-    if (!map_path.empty()) load(map_path + ".overlay.pcd");
+    m_dead_base.clear();
+    // ---- 统一工作图 (Phase A): 底图体素进同一套 w 账本 ----
+    // 底图点不复制进 m_cells (几何仍走底图云的 KD 树, 性能不变), 账本只记 w:
+    //   射线穿过 -> w 递减, 到 0 -> 进 m_dead_base -> 匹配目标里剔除对应的底图点
+    //   (墙挪了/拆了会被自由空间证据自然吸收 = 方案 §3 的"底图小错可修")
+    //   被观测命中 -> w 累积 (固定结构权重随时间变大 = T2 的"固定物体权重更大")
+    // 底图与 overlay 同一体素网格 (都是 0.3m), 账本 ≈ 1:1 对应底图点, 不是额外一份几何。
+    // 工作图文件 (map.overlay.pcd) 里 intensity 就是 w (w==0 的点落盘时已丢弃);
+    // 原图 map.pcd 的 intensity 是反射率, 不能当 w -> 此时全部按 base_voxel_w 播种。
+    if (m_base_raw && !m_base_raw->empty()) {
+        const int w0 = std::min(255, m_cfg.base_voxel_w > 0 ? m_cfg.base_voxel_w : 128);
+        const double v = m_voxel;
+        size_t seeded = 0, dead = 0;
+        for (const auto& p : m_base_raw->points) {
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+            const int vx = static_cast<int>(std::floor(p.x / v));
+            const int vy = static_cast<int>(std::floor(p.y / v));
+            const int vz = static_cast<int>(std::floor(p.z / v));
+            const int64_t vk = voxelKey(vx, vy, vz);
+            if (m_persistency.find(vk) != m_persistency.end()) continue;
+            PersistencyVoxel pv;
+            pv.from_base = true;
+            if (m_base_embedded) {
+                const int w = static_cast<int>(std::min(255.0f, std::max(0.0f, p.intensity)));
+                if (w <= 0) { ++dead; continue; }   // 理论上不会: 落盘已剔除
+                pv.w = static_cast<uint8_t>(w);
+            } else {
+                pv.w = static_cast<uint8_t>(w0);
+            }
+            m_persistency.emplace(vk, pv);
+            ++seeded;
+        }
+        std::cout << "[overlay] base voxels in w ledger: " << seeded
+                  << " (dead=" << dead << ", ledger=" << m_persistency.size()
+                  << ", embedded_weights=" << (m_base_embedded ? 1 : 0) << ")" << std::endl;
+    }
+    // 没有增量日志: 只有一个全量工作图文件 (map.overlay.pcd, 1h 落盘),
+    // 加载时它整体就是底图 (intensity = w)。这里不再读旧的 overlay 增量文件。
 }
 
 void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
@@ -173,12 +209,14 @@ void OverlayMapMaintainer::missVoxel(int64_t vk) {
         return;
     }
     PersistencyVoxel& v = it->second;
+    const bool from_base = v.from_base;
     const int need = m_cfg.persistency_miss_confirm > 0 ? m_cfg.persistency_miss_confirm : 1;
     if (++v.miss < need) return;
     if (m_cfg.persistency_miss_action == 0) {
         m_persistency.erase(it);
         m_voxel_seen.erase(vk);
-        m_pending_remove.insert(vk);   // 记账: 点从 m_cells 批量回收 (#6)
+        if (from_base) m_dead_base.insert(vk);      // 底图体素: 记入死亡集, 目标里剔除
+        else m_pending_remove.insert(vk);           // overlay 体素: 点从 m_cells 回收
     } else {
         const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
         v.w = (v.w > gain) ? static_cast<uint8_t>(v.w - gain) : 0;
@@ -186,7 +224,8 @@ void OverlayMapMaintainer::missVoxel(int64_t vk) {
         if (v.w == 0) {
             m_persistency.erase(it);
             m_voxel_seen.erase(vk);
-            m_pending_remove.insert(vk);   // w 降到 0 = 删除, 点一起回收 (#6)
+            if (from_base) m_dead_base.insert(vk);
+            else m_pending_remove.insert(vk);
         }
     }
 }
@@ -274,10 +313,7 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
             m_session_start_s = pose.time;
         }
     }
-    if (m_cfg.autosave_frames > 0 && !m_map_path.empty() &&
-        m_frame % m_cfg.autosave_frames == 0) {
-        save(m_map_path + ".overlay.pcd");
-    }
+    // 落盘只有一条路径: 管道在 1h 定时器里调用 reclaim() 并写全量工作图 (map.overlay.pcd)。
 
     // 过桥/漂移期(位姿不可信): 不写、不雕刻, 避免污染地图
     if (!pose_confident) { m_low_count = 0; return; }
@@ -615,6 +651,13 @@ bool OverlayMapMaintainer::load(const std::string& path) {
     if (pcl::io::loadPCDFile(path, in) != 0) return false;
     for (const auto& p : in.points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const int64_t vk0 = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
+                                     static_cast<int>(std::floor(p.y / m_voxel)),
+                                     static_cast<int>(std::floor(p.z / m_voxel)));
+        // 统一工作图: 该体素已在底图账本里 (from_base) = 该结构已经烘焙进工作图文件,
+        // 不再作为 overlay 重复加入 (否则同一结构两套点, 目标里双层冗余)。
+        auto bit = m_persistency.find(vk0);
+        if (bit != m_persistency.end() && bit->second.from_base) continue;
         addPoint(Eigen::Vector3d(p.x, p.y, p.z));
         // 恢复持久度: PCD 的 intensity 就是 A 阶段 w (旧文件是 0 -> 保持本次记的 1 票).
         // 不恢复的话 w 只活在内存里, 每次重启都从 1 票开始, "跨会话确认"永远攒不到 anchor.
@@ -629,6 +672,47 @@ bool OverlayMapMaintainer::load(const std::string& path) {
         }
     }
     return m_overlay_count > 0;
+}
+
+// ---- 统一工作图: 一个文件同时装几何和权重 (intensity = w) ----
+// 落盘前调用: 给底图点写上它所在体素的 w, 丢弃 w==0 的点 -> 跨会话"删除"生效,
+// 不需要额外的 sidecar 文件 (w 就在 PCD 里, 和 overlay 的表示完全一致)。
+void OverlayMapMaintainer::annotateBaseWeights(CloudType& cloud) const {
+    if (m_voxel <= 0.0) return;
+    const int w_default = m_cfg.base_voxel_w > 0 ? m_cfg.base_voxel_w : 128;
+    CloudType kept;
+    kept.reserve(cloud.size());
+    for (const auto& p : cloud.points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
+                                    static_cast<int>(std::floor(p.y / m_voxel)),
+                                    static_cast<int>(std::floor(p.z / m_voxel)));
+        int w = w_default;
+        auto it = m_persistency.find(vk);
+        if (it != m_persistency.end()) w = it->second.w;
+        if (w <= 0) continue;                       // 已删除: 不写进工作图
+        PointType q = p;
+        q.intensity = static_cast<float>(std::min(255, w));
+        kept.push_back(q);
+    }
+    cloud.swap(kept);
+}
+
+// 匹配目标用: 剔除 w 已降到 0 的底图点 (墙挪了/拆了 -> 射线证据判死)。
+// 无死亡体素时原样返回, 不复制。
+CloudType::Ptr OverlayMapMaintainer::filterDeadBase(const CloudType::Ptr& cloud) const {
+    if (!cloud || m_dead_base.empty() || m_voxel <= 0.0) return cloud;
+    CloudType::Ptr out(new CloudType());
+    out->reserve(cloud->size());
+    for (const auto& p : cloud->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
+                                    static_cast<int>(std::floor(p.y / m_voxel)),
+                                    static_cast<int>(std::floor(p.z / m_voxel)));
+        if (m_dead_base.count(vk)) continue;
+        out->push_back(p);
+    }
+    return out;
 }
 
 } // namespace rosiwit_slam

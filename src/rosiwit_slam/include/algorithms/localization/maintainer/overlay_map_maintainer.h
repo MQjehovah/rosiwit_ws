@@ -43,9 +43,17 @@ public:
     size_t lastNovelCommitted() const override { return m_novel_committed; }
 
     size_t overlaySize() const { return m_overlay_count; }
+    /// 统一工作图 Phase A: 底图体素的 w 账本查询 (目标里剔除已衰减的底图点)
+    const std::unordered_set<int64_t>& deadBaseVoxels() const { return m_dead_base; }
+    double voxelSize() const { return m_voxel; }
+    static int64_t voxelKeyOf(int cx, int cy, int cz) { return voxelKey(cx, cy, cz); }
+    // 统一工作图: 工作图文件里 intensity = w
+    void setBaseEmbeddedWeights(bool on) override { m_base_embedded = on; }
+    void annotateBaseWeights(CloudType& cloud) const override;
+    CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const override;
     /// 回收已删除体素的点 (w 降到 0 / 硬删的那些): 由落盘时刻调用 (1h 一次)。
     /// 逐条删除要扫整格点云, 太贵; 攒到落盘时全量扫一遍, 成本可忽略。
-    void reclaim() { compactCells(); }
+    void reclaim() override { compactCells(); }
     uint64_t revision() const override { return m_revision; }
 
 private:
@@ -90,8 +98,14 @@ private:
         uint8_t  miss = 0;       // 连续 free 证据帧数 (去抖)
         uint32_t last_key = 0;   // 上次计票的单位键 (session/day)
         uint32_t last_frame = 0; // 上次 hit 的帧号 (view 单位用)
+        bool     from_base = false;  // 该体素来自底图 (点不在 m_cells, 死亡时进 m_dead_base)
     };
     std::unordered_map<int64_t, PersistencyVoxel> m_persistency;
+    /// 底图云是否已是"工作图"(intensity = w, 已烘焙之前的 overlay)
+    bool m_base_embedded = false;
+    /// 底图体素 w 衰减到 0 的集合: 匹配目标里要剔除这些体素里的底图点
+    /// (墙挪了/拆了 = 射线穿过 -> w 递减为 0)。落盘时也剔除, 跨会话持久。
+    std::unordered_set<int64_t> m_dead_base;
     uint32_t m_session_id = 1;     // 计票单位 = session
     uint32_t m_day_index = 0;      // 计票单位 = day (pose.time/86400)
     double   m_session_start_s = -1.0;

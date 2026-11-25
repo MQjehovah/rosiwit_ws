@@ -36,9 +36,11 @@ w (0~255) = 体素的持久度证据
 ## 2. 三张图与一条状态机
 
 ```
-map.pcd            原始底图备份。只读，永不修改（回滚随时可行）。
-map.overlay.map    工作图 = 底图 + w 持久度体素。**匹配目标的数据源**。
-    每 1h 且 overlay 有变化 → 后台落盘（无变化不写盘）。
+map.pcd            原始底图备份（稠密，如 6cm）。只读，永不修改（回滚随时可行）。
+map.overlay.pcd    工作图 = 底图(降采样 0.3) + overlay，**每个点 intensity = w**。
+                   **匹配目标的数据源**；w==0 的点不写盘（跨会话删除生效）。
+    每 1h 且几何/权重有变化 → 后台全量落盘（无变化不写盘）。只有这一张工作图，
+    没有增量日志文件；旧版 `map.overlay.map` / `map.pcd.overlay.pcd` 启动时自动清理。
 子图 (session)     机器人中心滚动子图（odom 系，覆盖式更新）。
     定位成功即开建、一直在建；只在"工作图锚不住"时作为匹配目标顶上。
 
@@ -87,19 +89,25 @@ map.overlay.map    工作图 = 底图 + w 持久度体素。**匹配目标的数
 | ELite | 我们的对应 | 状态 |
 |---|---|---|
 | 局部 ephemeral ε_l（会话内） | 子图（覆盖式，无 w） | ✅ 已有 |
-| 全局 ephemeral ε_g（跨会话） | 工作图体素的 w | 🔧 本方案落地 |
-| 式 5 距离衰减 hit/miss | 定长 ±8 | P1 升级 |
-| 式 8 目标度 γ | min_cluster 二值 | P2 升级 |
-| 式 4 ε_g 加权 GICP | w_match_min 过滤（离散化） | P4 |
-| 会话批量合并（五分类） | 逐帧在线 + 每 1h 落盘 | 在线是我们的硬需求 |
-| 双向 zip-up 会话对齐 | 桥接重锚 zip-up（单点） | P5 扩展为段级 |
+| 持久底图 + 全局 ephemeral ε_g（跨会话） | **单一工作图**：0.3 底图与 overlay 同一账本，点+`intensity=w` | ✅ 2026-11-25 落地 |
+| 底图小错由证据修正（地图不是冻结的） | 底图体素 w=128 → 射线穿过递减到 0 → 目标剔除 + 不落盘 | ✅ 2026-11-25 落地 |
+| 式 5 距离衰减 hit/miss | 定长 ±8（`persistency_hit_gain`） | ⏳ 后续移植（P1） |
+| 式 8 目标度 γ | `min_cluster` 二值 | ⏳ 后续移植（P2/T6） |
+| 式 4 ε_g 加权 GICP | `target_w_min` 过滤（离散化） | ⏳ 后续移植（P4） |
+| 会话批量合并（五分类） | 逐帧在线 + 每 1h 全量落盘 | 在线是我们的硬需求 |
+| 双向 zip-up 会话对齐 | 桥接重锚 zip-up（单点） | ⏳ 段级扩展（P5） |
 | —（无实时定位回路） | cov_base/static_support 锚定 + 子图桥接 | 我们独有 ✅ |
+
+**对齐说明**：ELite 的"持久地图不是冻结的，而是带可信度、由 hit/miss 证据持续修正"这一点，
+现在体现在我们的单一工作图上——底图不再是一份只读的死图，而是和 overlay 同处一个 w 账本，
+墙挪了/拆了会被自由空间证据自然吸收。剩余差距是**证据的加权方式**（P1/P2）和
+**地图与配准的耦合方式**（P4/P5），这些都是可后置移植的策略，不需要再改文件模型。
 
 ## 6. 落地状态与路线
 
 ### 已落地（0.2.16，设备在跑）
 - 车底贴地：初值/输出按 `T(base_footprint←lidar)` 互逆换算（z=0=车底）
-- 工作图 `map.overlay.map`：加载/生成/1h 落盘/无变化不写
+- 工作图 `map.overlay.pcd`（0.3 底图+overlay，点+intensity=w，单文件）：加载/1h 全量落盘/无变化不写；旧版残留启动时自动清理
 - `dynamic_filter: false`：评分诚实
 - overlay 计票/雕刻机制（rayCarve/observeHits/collectNovel/decay）
 
@@ -128,6 +136,40 @@ map.overlay.map    工作图 = 底图 + w 持久度体素。**匹配目标的数
 3. **评分永不静默美化**：`dynamic_filter` 保持关闭；动态物干扰的解法是
    w 过滤/robust kernel，而不是删点改分。
 
+### 决议：单一工作图文件（2026-11-25 晚，用户拍板）
+
+**文件模型**（磁盘上只有两份相关文件，运行只读其中一份）：
+
+```
+map.pcd            原始稠密底图（如 6cm）。只读备份，永不修改，运行时不加载。
+map.overlay.pcd    工作图 = 底图(0.3) + overlay，每个点 intensity = w。
+                   运行时的唯一数据源。1h 全量落盘一次，无变化不写。
+```
+
+1. **首次载入即生成工作图**：`map.pcd` 降采样到 0.3，每个体素赋初值
+   `base_voxel_w`（128），写入 `intensity` → 落成 `map.overlay.pcd`；
+   本次会话也改用这张 0.3 图（和下次加载完全一致）。
+2. **之后只加载工作图**：0.3 体素 + w 一体，不再加载稠密原图。
+   （匹配本来也是 0.3：`local_map.voxel_resolution` / matcher 都是 0.3，
+   其他消费方 FPFH 0.5、BBS 0.5、planar 1m 格，都在 0.3 之上。）
+3. **不做增量日志**：删除 20s autosave、析构落盘、`map.pcd.overlay.pcd` 增量文件、
+   `autosave_frames` 配置。代价：崩溃最多丢 1 小时学习量（几何不丢，
+   `map.pcd` 永远在）。
+4. **w 的持久化就是 PCD 的 intensity**：不需要额外 sidecar；`w==0` 的点落盘时
+   直接不写 → 跨会话"删除"自动生效。注意 `map.pcd` 的 intensity 是反射率，
+   只有工作图的 intensity 才当 w 解释（由加载路径决定）。
+5. **底图网格与 overlay 同源**：落盘/首次生成都先降到 0.3，账本 ≈ 1:1 对应底图点，
+   不复制第二份几何。
+6. **原图更新的处理**：工作图 mtime 早于 `map.pcd`（同名地图被重新导入）→
+   工作图作废，从原图重新生成。
+7. **旧文件自动清理**：启动时删除旧版 `<stem>.overlay.map` 与 `map.pcd.overlay.pcd`。
+8. **不改评分口径**：底图点仍参与 fitness；死亡体素（w=0）只从匹配目标剔除。
+9. **体素回收时机**：删除时只记账（`m_pending_remove`），落盘时 `reclaim()`
+   全量压缩一次（逐条删要扫整格点云，太贵）。
+10. **待实测再定**：底图点（体素中心）与 overlay 点（扫描端点）可能落相邻体素，
+    先靠"同帧先 carve 后 hit" + `override_base` 兜底；若实测残留，
+    再把死亡体素膨胀到 26 邻域。`save()/load()`（overlay-only）保留为工具，主路径不用。
+
 ## 7. 与并行工作流的关系（重要）
 
 现场 14003AO7 的配置由另一条工作流维护：`map_maintainer: none`、
@@ -151,6 +193,8 @@ map.overlay.map    工作图 = 底图 + w 持久度体素。**匹配目标的数
 | `maintainer.persist_hits` | 3 | novel 升格票数 |
 | `maintainer.novel_min_cluster` | - | 最小簇 |
 | `maintainer.delta_min` | 0.3 | 离底图多远算"新"（本方案建议由 w 衰减取代） |
+| `maintainer.base_voxel_w` | 128 | 底图点（体素）的 w 初值；归零才会从目标剔除 |
+| `maintainer.target_w_min` | 16 | 匹配目标里 overlay 点最低 w（固定物参与，动态/未确认忽略） |
 | `w_anchor`（建议新增） | 128 | 可当锚的最低 w |
 | `w_match_min`（建议新增） | 0 | 参与匹配的最低 w（0=不过滤） |
 | `static_support_min`（建议新增） | 0.25 | 锚更新门限（LOCALIZATION_ANCHOR §4） |

@@ -433,7 +433,6 @@ struct MaintainerConfig {
     double voxel = 0.3;              // 叠加层体素(去重)
     double cell = 10.0;              // 叠加层空间分块边长(m)
     int    persist_hits = 1;         // 体素需被观测到的最少次数才并入(>1 过滤瞬态, 长期用)
-    int    autosave_frames = 0;      // 每 N 帧自动落盘叠加层 (0=仅析构时)
     int    refresh_frames = 0;       // 每 N 帧用叠加层刷新全局重定位器 (0=关闭)
     int    decay_frames = 0;         // 叠加层体素超过该帧数未再观测则移除 (0=不衰减)
     // ---- A 阶段: 体素可信度 w (方案 v3 §3) ----
@@ -453,6 +452,7 @@ struct MaintainerConfig {
     double delta_min = 0.3;          // 只沉淀"离原图 > 该距离(m)"的新结构(变化增量)
     int    novel_min_cluster = 3;    // 新结构最小簇(26 邻域内本帧新颖体素数, 含自身)
     int    carve_stride = 20;        // 自由空间雕刻时扫描点抽样步长
+    int    base_voxel_w = 128;       // 统一工作图 Phase A: 底图体素初始 w (射线穿过可递减)
     int    target_w_min = 16;        // 匹配目标里 overlay 点的最低 w(0=不过滤):
                                      // 只让确认结构(固定物体)参与/压制, 动态与未确认忽略
                                      // (ELite 式4 的离散化; w 单位=hit_gain, 16=2 个计票单位)

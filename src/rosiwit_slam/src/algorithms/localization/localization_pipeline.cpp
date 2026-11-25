@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
+#include <sys/stat.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/transforms.h>
 
@@ -43,15 +45,22 @@ pcl::KdTreeFLANN<PointType> g_base_only_kdtree;
 bool g_base_only_valid = false;
 int g_base_only_age = 0;
 
-// map.pcd -> map.overlay.map (工作图文件路径): overlay 直接代替底图,
-// map.pcd 只做原图备份, 永不修改 —— 回滚随时可行。
+// map.pcd -> map.overlay.pcd (工作图文件路径): 工作图 = 底图(0.3) + overlay,
+// 每个点 intensity = 持久度 w。map.pcd 只做原图备份, 永不修改 —— 回滚随时可行。
+// 只有这一个工作文件 (全量, 1 小时落盘一次), 没有增量日志。
 std::string workingMapPath(const std::string& map_path) {
     const std::string suffix = ".pcd";
+    const std::string work_suffix = ".overlay.pcd";
+    if (map_path.size() > work_suffix.size() &&
+        map_path.compare(map_path.size() - work_suffix.size(), work_suffix.size(),
+                         work_suffix) == 0) {
+        return map_path;   // 已经是工作图, 不再叠一层 .overlay
+    }
     if (map_path.size() > suffix.size() &&
         map_path.compare(map_path.size() - suffix.size(), suffix.size(), suffix) == 0) {
-        return map_path.substr(0, map_path.size() - suffix.size()) + ".overlay.map";
+        return map_path.substr(0, map_path.size() - suffix.size()) + work_suffix;
     }
-    return map_path + ".overlay.map";
+    return map_path + work_suffix;
 }
 
 // 简单体素降采样 (底图-only 覆盖率用): 与 matcher 的口径一致即可, 不必完全相同
@@ -451,7 +460,6 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.voxel            = getv<double>(mtc, "voxel", m_maintainer_cfg.voxel);
         m_maintainer_cfg.cell             = getv<double>(mtc, "cell", m_maintainer_cfg.cell);
         m_maintainer_cfg.persist_hits     = getv<int>(mtc, "persist_hits", m_maintainer_cfg.persist_hits);
-        m_maintainer_cfg.autosave_frames  = getv<int>(mtc, "autosave_frames", m_maintainer_cfg.autosave_frames);
         m_maintainer_cfg.refresh_frames   = getv<int>(mtc, "refresh_frames", m_maintainer_cfg.refresh_frames);
         m_maintainer_cfg.decay_frames     = getv<int>(mtc, "decay_frames", m_maintainer_cfg.decay_frames);
         m_maintainer_cfg.override_base    = getv<bool>(mtc, "override_base", m_maintainer_cfg.override_base);
@@ -459,6 +467,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.novel_min_cluster = getv<int>(mtc, "novel_min_cluster", m_maintainer_cfg.novel_min_cluster);
         m_maintainer_cfg.carve_stride     = getv<int>(mtc, "carve_stride", m_maintainer_cfg.carve_stride);
         m_maintainer_cfg.target_w_min     = getv<int>(mtc, "target_w_min", m_maintainer_cfg.target_w_min);
+        m_maintainer_cfg.base_voxel_w     = getv<int>(mtc, "base_voxel_w", m_maintainer_cfg.base_voxel_w);
         m_maintainer_cfg.pose_graph       = getv<bool>(mtc, "pose_graph", m_maintainer_cfg.pose_graph);
         m_maintainer_cfg.pg_min_keyframes = getv<int>(mtc, "pg_min_keyframes", m_maintainer_cfg.pg_min_keyframes);
         m_maintainer_cfg.max_voxels       = getv<int>(mtc, "max_voxels", m_maintainer_cfg.max_voxels);
@@ -632,8 +641,8 @@ LocalizationPipeline::~LocalizationPipeline() {
     }
     m_global_cv.notify_all();
     if (m_global_thread.joinable()) m_global_thread.join();
-    // 非破坏性: 叠加层单独落盘, 原图不改
-    if (m_maintainer && !m_map_path.empty()) m_maintainer->save(m_map_path + ".overlay.pcd");
+    // 工作图 (map.overlay.pcd) 由 1 小时定时器全量落盘, 析构时不再单独写 overlay
+    // (只剩一个工作文件, 没有增量日志)。
 }
 
 std::string LocalizationPipeline::describe() const {
@@ -759,10 +768,23 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     resetSessionMap();
     m_map_path = map_name;
     ++m_global_generation;
-    // ---- 工作图 = map.overlay.map (overlay 直接代替底图) ----
-    //   有则加载 (含之前学到的几何); 没有则从 map.pcd 生成并落盘。
+    // ---- 工作图 = map.overlay.pcd (底图 0.3 + overlay, 点 + intensity=w) ----
+    //   首次载入: 把 map.pcd 降采样到 0.3 + 赋 w 初值 -> 生成工作图;
+    //   之后每次只加载工作图 (0.3 体素 + w), 不再碰稠密的 map.pcd。
     //   map.pcd 只做原图备份, 永不修改 —— 回滚随时可行。
+    //   工作图比原图旧 (同名地图被重新导入) 时自动作废重生成。
     const std::string working_map = workingMapPath(map_name);
+    // 清理旧版本残留 (现在只有一张全量工作图):
+    //   <stem>.overlay.map     —— 旧工作图名
+    //   <map>.overlay.pcd      —— 旧的 overlay 增量日志 (map.pcd.overlay.pcd)
+    {
+        std::string legacy_map = working_map;
+        if (legacy_map.size() > 4) {
+            legacy_map = legacy_map.substr(0, legacy_map.size() - 4) + ".map";
+            std::remove(legacy_map.c_str());
+        }
+        std::remove((map_name + ".overlay.pcd").c_str());
+    }
     {
         std::lock_guard<std::mutex> lk(m_global_mu);
         m_global_request = false;
@@ -770,25 +792,27 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     }
     m_map.reset(new CloudType());
     bool loaded_working = false;
-    if (pcl::io::loadPCDFile(working_map, *m_map) >= 0) {
-        loaded_working = true;
-        std::cout << "[LocPipeline] loaded WORKING map: " << working_map << " ("
-                  << m_map->size() << " pts)" << std::endl;
-    } else if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
-        std::cerr << "[LocPipeline] failed to load PCD map: " << map_name << std::endl;
-        m_map.reset();
-        return;
-    } else {
-        // 首次: 从原图生成工作图 (map.pcd 只做备份)
-        pcl::io::savePCDFileBinary(working_map, *m_map);
-        std::cout << "[LocPipeline] working map generated from original: " << working_map
-                  << " (" << m_map->size() << " pts)" << std::endl;
+    {
+        // 工作图比原图旧 (同名地图被重新导入) -> 工作图作废, 从原图重新生成。
+        struct stat sb_map{}, sb_work{};
+        const bool has_map = (stat(map_name.c_str(), &sb_map) == 0);
+        const bool has_work = (stat(working_map.c_str(), &sb_work) == 0);
+        const bool work_fresh = has_work && (!has_map || sb_work.st_mtime >= sb_map.st_mtime);
+        if (work_fresh && pcl::io::loadPCDFile(working_map, *m_map) >= 0) {
+            loaded_working = true;
+            std::cout << "[LocPipeline] loaded WORKING map: " << working_map << " ("
+                      << m_map->size() << " pts)" << std::endl;
+        } else if (has_work) {
+            std::cout << "[LocPipeline] working map older than original map -> regenerate"
+                      << std::endl;
+        }
     }
     if (!loaded_working) {
-        // overlay.pcd 里可能还有上一会话未烘焙的增量; 工作图首次生成时先并入,
-        // 避免同一结构在目标里出现两份。失败(无文件)则跳过。
-        std::cout << "[LocPipeline] working map seeded from original: " << map_name
-                  << " -> " << working_map << std::endl;
+        if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
+            std::cerr << "[LocPipeline] failed to load PCD map: " << map_name << std::endl;
+            m_map.reset();
+            return;
+        }
     }
     mark("parse");
     if (m_cancel_set_map.load()) { std::cout << "[LocPipeline] setMap canceled after parse" << std::endl; return; }
@@ -801,7 +825,21 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
         m_planar.setStore(m_store.get());
     }
     mark("store");
-    if (m_maintainer) m_maintainer->setBaseMap(map_name, m_map);
+    if (m_maintainer) {
+        m_maintainer->setBaseEmbeddedWeights(loaded_working);
+        m_maintainer->setBaseMap(map_name, m_map);
+        if (!loaded_working) {
+            // 首次载入: 生成工作图 = 底图降采样到 0.3 + w 初值 (intensity=w)。
+            // 之后所有会话只加载这个 0.3 文件, 不再碰稠密的 map.pcd。
+            const double vox = m_maintainer_cfg.voxel > 0 ? m_maintainer_cfg.voxel : 0.3;
+            CloudType::Ptr wm = voxelDownsample(m_map, static_cast<float>(vox));
+            m_maintainer->annotateBaseWeights(*wm);
+            pcl::io::savePCDFileBinary(working_map, *wm);
+            std::cout << "[LocPipeline] working map generated: " << working_map << " ("
+                      << wm->size() << " pts @ " << vox << "m, intensity=w)" << std::endl;
+            m_map = wm;   // 本次会话也用 0.3, 与下次加载的完全一致
+        }
+    }
     mark("maintainer");
 
     mark("kfs");
@@ -1238,6 +1276,8 @@ CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose
         }
     }
     if (m_maintainer) {
+        // 统一工作图: 剔除 w 已降到 0 的底图点 (墙挪了/拆了, 射线证据判死)。
+        target = m_maintainer->filterDeadBase(target);
         CloudType::Ptr ov = m_maintainer->getOverlay(pose);
         // w 过滤 (T2): overlay 点的 intensity 就是持久度 w。
         // 只让确认结构 (w >= target_w_min) 参与匹配/压制 —— 固定物体权重更大,
@@ -1266,6 +1306,7 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     // 出口重锁: 在推算位姿附近做有界局部多起点配准(优于全局检索; 叠加层帮助在新货环境重锁)
     if (!m_local_map || !m_matcher) return false;
     CloudType::Ptr target = m_local_map->getLocalMap(m_pose);
+    if (m_maintainer) target = m_maintainer->filterDeadBase(target);
     if (m_maintainer) {
         CloudType::Ptr ov = m_maintainer->getOverlay(m_pose);
         if (ov && !ov->empty()) *target += *ov;
@@ -2686,9 +2727,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }
 
                 // ---- 工作图定期落盘 (后台线程): 1 小时一次, 没变化不写盘 ----
-                // overlay 直接代替底图: 工作图 = 底图 + overlay 快照 → map.overlay.map。
+                // 只有一张全量工作图: 底图(0.3) + overlay → map.overlay.pcd,
+                // 每点 intensity = w (w==0 的点不写)。没有增量日志。
                 // map.pcd 只做原图备份, 永不修改。
-                // 变化判据 = maintainer revision() (overlay 有增删才 +1)。
+                // 变化判据 = maintainer revision() (几何/权重有增删才 +1)。
                 if (m_ever_localized && m_map &&
                     !m_map->empty() && m_initialized && accepted) {
                     static std::atomic<bool> wm_saving(false);
@@ -2706,11 +2748,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         // 存图时刻回收已删除体素的点 (#6): 1h 一次, 全量扫描成本可忽略,
                         // 之后 snapshotOverlay / 工作图落盘都是干净的。
                         m_maintainer->reclaim();
-                        CloudType::Ptr base_snap(new CloudType(*m_map));
+                        // 全量工作图只有一张: 底图先降采样到 voxel(0.3) —— 与 overlay 同网格、
+                        // 与匹配口径一致; 再写 intensity=w (w==0 的点不写 = 跨会话删除生效)。
+                        const double vox = m_maintainer_cfg.voxel > 0 ? m_maintainer_cfg.voxel : 0.3;
+                        CloudType::Ptr base_snap =
+                            voxelDownsample(m_map, static_cast<float>(vox));
+                        if (m_maintainer) m_maintainer->annotateBaseWeights(*base_snap);
                         CloudType::Ptr ov = m_maintainer ? m_maintainer->snapshotOverlay()
                                                          : nullptr;
                         const std::string working_map = workingMapPath(m_map_path);
-                        const double vox = m_maintainer_cfg.voxel;
                         std::thread([base_snap, ov, working_map, vox]() mutable {
                             if (ov && !ov->empty()) {
                                 suppressBaseByOverlay(base_snap, ov, vox);
