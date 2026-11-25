@@ -46,7 +46,7 @@ try:
 except NameError:
     TEXT_TYPE = str
 
-VERSION = "4"
+VERSION = "6"
 
 ENV_HELLO = 1
 ENV_GRID = 2
@@ -980,6 +980,7 @@ class RosSource(object):
 
         self.rospy = rospy
         self.subs = {}
+        self.sub_specs = {}
         self.lock = threading.Lock()
         self.grid_lock = threading.Lock()
         self.topic_types = {}
@@ -1004,13 +1005,57 @@ class RosSource(object):
     # --- subscriptions -----------------------------------------------------
 
     def start(self):
-        pass
+        t = threading.Thread(target=self._watchdog)
+        t.daemon = True
+        t.start()
 
     def _sub(self, topic, cls, cb, buff_size=2 ** 22):
         with self.lock:
             if topic in self.subs:
                 return
             self.subs[topic] = self.rospy.Subscriber(topic, cls, cb, queue_size=1, buff_size=buff_size)
+            self.sub_specs[topic] = (cls, cb, buff_size)
+
+    def _resubscribe(self, topic):
+        """rospy 的 TCPROS 线程在节点重启时偶尔会异常退出，订阅从此收不到数据。
+        重新创建一个 Subscriber（同 topic/类型/回调）即可恢复。"""
+        with self.lock:
+            sub = self.subs.pop(topic, None)
+            spec = self.sub_specs.get(topic)
+        if sub is not None:
+            try:
+                sub.unregister()
+            except Exception:
+                pass
+        if not spec:
+            return
+        cls, cb, buff_size = spec
+        with self.lock:
+            self.subs[topic] = self.rospy.Subscriber(topic, cls, cb, queue_size=1, buff_size=buff_size)
+        # 重置计时，避免新连接还在握手时下一轮 watchdog 又把它拆掉
+        CACHE.touch(topic, 0)
+        log("watchdog: resubscribed %s" % topic)
+
+    def _watchdog(self):
+        # 只盯持续高频的内置话题：/slam/info 10Hz、/tf 50Hz+。
+        # /tf_static 是 latched、/rosout_agg 可能长时间安静，不能按“无数据”重建。
+        limits = {"/slam/info": 4.0, "/tf": 4.0}
+        while not STOP.is_set():
+            STOP.wait(2.0)
+            if STOP.is_set():
+                break
+            try:
+                for topic, limit in limits.items():
+                    with self.lock:
+                        has_sub = topic in self.subs
+                    if not has_sub:
+                        continue
+                    stat = CACHE.stat(topic)
+                    if not stat or stat[1] <= limit:
+                        continue
+                    self._resubscribe(topic)
+            except Exception as e:
+                log("watchdog: %s" % e)
 
     def ensure_stream(self, stream):
         from sensor_msgs.msg import PointCloud2, LaserScan
@@ -1056,6 +1101,7 @@ class RosSource(object):
                 queue_size=1,
                 buff_size=2 ** 24,
             )
+            self.sub_specs[topic] = (cls, lambda m: self._on_topic(topic, typ, m), 2 ** 24)
 
     def topic_data(self, topic):
         return get_topic_data(topic)
@@ -1775,7 +1821,12 @@ def publisher_loop():
         for client in clients:
             if client.closed:
                 continue
-            for stream, sub in list(client.subs.items()):
+            # 内置流 (tf/status/logs) 优先：大点云编码很慢 (ARM 上单帧可到秒级)，
+            # 不能让 /slam/info 排在大点云后面被饿死。
+            for stream, sub in sorted(
+                client.subs.items(),
+                key=lambda kv: 0 if kv[0] in BUILTIN_STREAMS else 1,
+            ):
                 if sub.get("rate", 0.0) <= 0:
                     continue
                 interval = 1.0 / sub["rate"]
