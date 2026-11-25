@@ -137,6 +137,8 @@ python3 tools/xzmap_to_pcd.py map.xzmap -o map.pcd --voxel 0.3 --max 800000
 
 - 单帧点云进入缓存前最多保留 **100 万点**（`DEBUG_BRIDGE_MAX_CLOUD_POINTS` 可调，0 = 不限）。`/global_map` 这类 600 万点话题全量 Python 对象会吃掉 1.5GB+ 内存，HMI 显示上限通常只有 30 万，100 万已经足够。
 - 没有客户端再订阅的普通话题会自动 `unregister` ROS 订阅并释放缓存；避免点过一次 `/global_map` 后永久占用内存和 CPU。
+- 点云归一化/降采样/量化优先走 numpy（机器人 numpy 1.13 即可），百万点不再逐点 `struct.unpack`。
+- zlib 压缩级别默认 **1**（`DEBUG_BRIDGE_ZLIB_LEVEL`，0~9）：CPU 比默认 6 低很多，包略大；走窄带隧道可调到 3~6。
 - 订阅是推送（服务器按 `rate_hz` 发），不是轮询；慢客户端由 TCP 背压自然降频。
 - 栅格按话题订阅时每个新消息都会编码；`/map` 很大，建议用 `REQUEST` 单帧。
 - `/global_map` 只是普通点云话题；设备不发布时没有数据，可在前端导入本地 PCD。

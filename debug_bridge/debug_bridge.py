@@ -47,11 +47,13 @@ try:
 except NameError:
     TEXT_TYPE = str
 
-VERSION = "7"
+VERSION = "9"
 # 单帧点云进入缓存前最多保留多少点（/global_map 有 600 万点，全量 Python tuple
 # 会吃掉 1.5GB+ 内存和大量 CPU）。HMI 显示上限通常 30 万，100 万足够；
 # 需要全量时用 DEBUG_BRIDGE_MAX_CLOUD_POINTS=0 关闭上限。
 MAX_CLOUD_POINTS = int(os.environ.get("DEBUG_BRIDGE_MAX_CLOUD_POINTS", "1000000"))
+# zlib 级别：1 比默认 6 快很多，包略大；隧道吃带宽的话可调到 3~6。
+ZLIB_LEVEL = max(0, min(9, int(os.environ.get("DEBUG_BRIDGE_ZLIB_LEVEL", "1"))))
 
 ENV_HELLO = 1
 ENV_GRID = 2
@@ -425,35 +427,51 @@ def encode_service(request_id, service, ok, text):
 
 def encode_cloud(stream, c, voxel, max_points):
     pts = voxelize(c["points"], voxel, max_points)
-    raw = bytearray(len(pts) * 6)
-    off = 0
-    for p in pts:
-        struct.pack_into(
-            "<hhh",
-            raw,
-            off,
-            clamp_int(int(round(p[0] * 100.0)), -32768, 32767),
-            clamp_int(int(round(p[1] * 100.0)), -32768, 32767),
-            clamp_int(int(round(p[2] * 100.0)), -32768, 32767),
-        )
-        off += 6
-    body = zlib.compress(bytes(raw), 6)
+    count = len(pts)
+    iw = None
+    if _np is not None and isinstance(pts, _np.ndarray):
+        xyz = _np.asarray(pts[:, :3], dtype=_np.float64)
+        xyz_cm = _np.clip(_np.round(xyz * 100.0), -32768, 32767).astype("<i2")
+        body = zlib.compress(xyz_cm.tobytes(), ZLIB_LEVEL)
+        if c.get("has_intensity"):
+            if pts.shape[1] > 3:
+                iv = _np.asarray(pts[:, 3], dtype=_np.float64)
+                iv = _np.where(_np.isfinite(iv), iv, 0.0)
+            else:
+                iv = _np.zeros(count, dtype=_np.float64)
+            iv = _np.clip(_np.round(iv), 0, 255).astype("u1")
+            iw = zlib.compress(iv.tobytes(), ZLIB_LEVEL)
+    else:
+        raw = bytearray(count * 6)
+        off = 0
+        for p in pts:
+            struct.pack_into(
+                "<hhh",
+                raw,
+                off,
+                clamp_int(int(round(p[0] * 100.0)), -32768, 32767),
+                clamp_int(int(round(p[1] * 100.0)), -32768, 32767),
+                clamp_int(int(round(p[2] * 100.0)), -32768, 32767),
+            )
+            off += 6
+        body = zlib.compress(bytes(raw), ZLIB_LEVEL)
+        if c.get("has_intensity"):
+            iwr = bytearray(count)
+            for i, p in enumerate(pts):
+                v = float(p[3]) if len(p) > 3 else 0.0
+                iwr[i] = 0 if v < 0.0 else (255 if v > 255.0 else int(round(v)))
+            iw = zlib.compress(bytes(iwr), ZLIB_LEVEL)
     frame = (
         pb_message(1, header(c.get("frame"), c.get("stamp")))
-        + pb_uint(2, len(pts))
+        + pb_uint(2, count)
         + pb_float(3, voxel or 0.0)
         + pb_uint(4, COMP_ZLIB)
         + pb_bytes(5, body)
         + pb_uint(6, next_seq())
         + pb_string(7, stream)
     )
-    # 强度/标量通道 (uint8, 与 xyz 同顺序): 有才发, 没有就完全不占带宽.
-    if c.get("has_intensity"):
-        iw = bytearray(len(pts))
-        for i, p in enumerate(pts):
-            v = float(p[3]) if len(p) > 3 else 0.0
-            iw[i] = 0 if v < 0.0 else (255 if v > 255.0 else int(round(v)))
-        frame += pb_bytes(10, zlib.compress(bytes(iw), 6))
+    if iw is not None:
+        frame += pb_bytes(10, iw)
     return envelope(ENV_CLOUD, frame)
 
 
@@ -465,7 +483,7 @@ def encode_grid(g, stream):
         raw = raw.tostring()
     elif not isinstance(raw, (bytes, bytearray)):
         raw = bytes(bytearray(raw))
-    body = zlib.compress(raw, 6)
+    body = zlib.compress(raw, ZLIB_LEVEL)
     frame = (
         pb_message(1, header(g.get("frame"), g.get("stamp")))
         + pb_uint(2, g["w"])
@@ -493,6 +511,18 @@ def next_seq():
 def voxelize(points, voxel, max_points):
     if not voxel or voxel <= 0:
         return points[: max_points or len(points)]
+    if _np is not None and isinstance(points, _np.ndarray):
+        try:
+            inv = 1.0 / voxel
+            keys = _np.floor(points[:, :3] * inv).astype(_np.int64)
+            _, idx = _np.unique(keys, axis=0, return_index=True)
+            idx.sort()              # 保持原始点序，取每个体素第一次出现的点
+            out = points[idx]
+            if max_points and out.shape[0] > max_points:
+                out = out[:max_points]
+            return out
+        except Exception:
+            points = points.tolist()
     seen = set()
     out = []
     inv = 1.0 / voxel
@@ -649,7 +679,77 @@ class OneShot(object):
         return None
 
 
+_NP_FMT = {1: "i1", 2: "u1", 3: "i2", 4: "u2", 5: "i4", 6: "u4", 7: "f4", 8: "f8"}
+
+
+def _np_dtype_str(code, big):
+    s = _NP_FMT.get(code)
+    if s is None:
+        return None
+    if s in ("i1", "u1"):
+        return s
+    return (">" if big else "<") + s
+
+
+def pc2_points_np(msg, max_points=0):
+    """PointCloud2 -> numpy (N,3) 或 (N,4=[x,y,z,intensity])，避免百万级 Python tuple。"""
+    fields = dict((f.name, f) for f in msg.fields)
+    empty = _np.zeros((0, 3), dtype=_np.float64)
+    if not all(k in fields for k in ("x", "y", "z")):
+        return empty, False
+    specs = []
+    for name in ("x", "y", "z"):
+        f = fields[name]
+        if f.count != 1:
+            return empty, False
+        s = _np_dtype_str(f.datatype, msg.is_bigendian)
+        if s is None:
+            return empty, False
+        specs.append((name, s, f.offset))
+    fi = fields.get("intensity") or fields.get("i")
+    i_name = None
+    if fi is not None and fi.count == 1:
+        s = _np_dtype_str(fi.datatype, msg.is_bigendian)
+        if s is not None:
+            i_name = fi.name
+            specs.append((i_name, s, fi.offset))
+    step = int(msg.point_step)
+    if step <= 0:
+        return empty, i_name is not None
+    dt = _np.dtype(
+        {
+            "names": [s[0] for s in specs],
+            "formats": [s[1] for s in specs],
+            "offsets": [s[2] for s in specs],
+            "itemsize": step,
+        }
+    )
+    n = int(msg.width) * int(msg.height)
+    n = min(n, len(msg.data) // step)
+    if n <= 0:
+        return empty, i_name is not None
+    arr = _np.frombuffer(msg.data, dtype=dt, count=n)
+    if max_points and n > max_points:
+        stride = int(math.ceil(float(n) / max_points))
+        arr = arr[::stride]
+    x = arr["x"].astype(_np.float64)
+    y = arr["y"].astype(_np.float64)
+    z = arr["z"].astype(_np.float64)
+    mask = _np.isfinite(x) & _np.isfinite(y) & _np.isfinite(z)
+    xyz = _np.column_stack((x[mask], y[mask], z[mask]))
+    if i_name is not None:
+        iv = arr[i_name].astype(_np.float64)
+        iv = _np.where(_np.isfinite(iv), iv, 0.0)
+        return _np.column_stack((xyz, iv[mask])), True
+    return xyz, False
+
+
 def pc2_points(msg, max_points=0):
+    if _np is not None:
+        try:
+            return pc2_points_np(msg, max_points)
+        except Exception:
+            pass
     fields = dict((f.name, f) for f in msg.fields)
     if not all(k in fields for k in ("x", "y", "z")):
         return [], False
@@ -664,7 +764,7 @@ def pc2_points(msg, max_points=0):
     cz = "<" + fmt[fz.datatype]
     ox, oy, oz = fx.offset, fy.offset, fz.offset
     # 强度/标量: 有 intensity 字段就按 uint8 带上 (雷达强度、overlay 的持久度 w).
-    fi = fields.get("intensity")
+    fi = fields.get("intensity") or fields.get("i")
     ci = None
     oi = 0
     if fi is not None and fi.datatype in fmt:
@@ -697,6 +797,16 @@ def pc2_points(msg, max_points=0):
 
 def pc_points(msg, max_points=0):
     pts = msg.points
+    if _np is not None:
+        try:
+            n = len(pts)
+            if not n:
+                return _np.zeros((0, 3), dtype=_np.float64)
+            stride = int(math.ceil(float(n) / max_points)) if max_points and n > max_points else 1
+            arr = _np.asarray([[p.x, p.y, p.z] for p in pts[::stride]], dtype=_np.float64)
+            return arr[_np.isfinite(arr).all(axis=1)]
+        except Exception:
+            pass
     stride = int(math.ceil(float(len(pts)) / max_points)) if max_points and len(pts) > max_points else 1
     out = []
     for i in range(0, len(pts), stride):
@@ -919,7 +1029,7 @@ def _cm_log(tag, msg):
 
 def cloud_to_map(points, frame):
     """把"重力对齐但 frame 不在 TF 里"的点云转到 map 系."""
-    if not points or not frame or frame in ("map", "world"):
+    if points is None or len(points) == 0 or not frame or frame in ("map", "world"):
         return points, frame
     if frame not in ("vanjee_lidar", "lidar"):
         return points, frame
@@ -937,7 +1047,7 @@ def cloud_to_map(points, frame):
         xyz = arr[:, :3].dot(_np.asarray(R).T) + _np.asarray(t)
         if arr.shape[1] > 3:
             xyz = _np.hstack([xyz, arr[:, 3:4]])   # 强度列原样保留
-        return [tuple(p) for p in xyz.tolist()], "map"
+        return xyz, "map"
     out = []
     for p in points:
         q = (
