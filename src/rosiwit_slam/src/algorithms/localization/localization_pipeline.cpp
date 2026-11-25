@@ -458,6 +458,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_maintainer_cfg.delta_min        = getv<double>(mtc, "delta_min", m_maintainer_cfg.delta_min);
         m_maintainer_cfg.novel_min_cluster = getv<int>(mtc, "novel_min_cluster", m_maintainer_cfg.novel_min_cluster);
         m_maintainer_cfg.carve_stride     = getv<int>(mtc, "carve_stride", m_maintainer_cfg.carve_stride);
+        m_maintainer_cfg.target_w_min     = getv<int>(mtc, "target_w_min", m_maintainer_cfg.target_w_min);
         m_maintainer_cfg.pose_graph       = getv<bool>(mtc, "pose_graph", m_maintainer_cfg.pose_graph);
         m_maintainer_cfg.pg_min_keyframes = getv<int>(mtc, "pg_min_keyframes", m_maintainer_cfg.pg_min_keyframes);
         m_maintainer_cfg.max_voxels       = getv<int>(mtc, "max_voxels", m_maintainer_cfg.max_voxels);
@@ -1236,6 +1237,17 @@ CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose
     }
     if (m_maintainer) {
         CloudType::Ptr ov = m_maintainer->getOverlay(pose);
+        // w 过滤 (T2): overlay 点的 intensity 就是持久度 w。
+        // 只让确认结构 (w >= target_w_min) 参与匹配/压制 —— 固定物体权重更大,
+        // 动态物与未确认结构忽略 (它们 w 低/衰减快, 自然被滤掉)。
+        if (ov && !ov->empty() && m_maintainer_cfg.target_w_min > 0) {
+            CloudType::Ptr f(new CloudType());
+            f->reserve(ov->size());
+            for (const auto& p : ov->points)
+                if (p.intensity >= static_cast<float>(m_maintainer_cfg.target_w_min))
+                    f->push_back(p);
+            ov = f;
+        }
         if (ov && !ov->empty()) {
             // 底图与 overlay 的并集是双层冗余 (稍一错位两层都能配上, 评分虚高)。
             // 在 overlay 有点的区域, 用它**替代**底图的旧结构 (suppressBaseByOverlay),

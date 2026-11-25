@@ -550,7 +550,7 @@ localization:
 
   # ---- 绝对约束融合 (L19): 门控互补融合 ----
   absolute:
-    enabled: false  # 是否启用绝对约束
+    enabled: true   # 是否启用绝对约束 (反光板节点发 /absolute_pose)
     topic: /absolute_pose # 绝对位姿话题
     window: 0.5               # 观测有效窗口(s)
     alpha: 0.5                # 融合权重
@@ -566,6 +566,7 @@ localization:
     persistency_miss_confirm: 3      # 连续 free 证据帧数 -> 删除(去抖)
     persistency_miss_action: 0       # 0=删除  1=按 persistency_hit_gain 递减
     persistency_session_hours: 12    # 会话超时自动换新
+    target_w_min: 16           # 匹配目标里 overlay 点的最低 w: 固定物体参与, 动态/未确认忽略
     enabled: true
     fitness_trigger: 0.5      # fitness 低于此判为环境变化
     min_keyframe_dist: 1.0    # 叠加关键帧最小间距(m)

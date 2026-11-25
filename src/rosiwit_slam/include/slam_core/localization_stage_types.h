@@ -453,6 +453,9 @@ struct MaintainerConfig {
     double delta_min = 0.3;          // 只沉淀"离原图 > 该距离(m)"的新结构(变化增量)
     int    novel_min_cluster = 3;    // 新结构最小簇(26 邻域内本帧新颖体素数, 含自身)
     int    carve_stride = 20;        // 自由空间雕刻时扫描点抽样步长
+    int    target_w_min = 16;        // 匹配目标里 overlay 点的最低 w(0=不过滤):
+                                     // 只让确认结构(固定物体)参与/压制, 动态与未确认忽略
+                                     // (ELite 式4 的离散化; w 单位=hit_gain, 16=2 个计票单位)
     // ---- L13 位姿图维护 (可选) ----
     bool   pose_graph = false;       // true: 变化关键帧缓冲后用 GTSAM 位姿图平滑再写入
     int    pg_min_keyframes = 3;     // 触发一次位姿图优化的最少关键帧数
