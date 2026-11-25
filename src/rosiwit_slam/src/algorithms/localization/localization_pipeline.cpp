@@ -3122,14 +3122,25 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         CloudType::Ptr ov = m_maintainer ? m_maintainer->snapshotOverlay()
                                                          : nullptr;
                         const std::string working_map = workingMapPath(m_map_path);
-                        std::thread([base_snap, ov, working_map, vox]() mutable {
-                            if (ov && !ov->empty()) {
-                                suppressBaseByOverlay(base_snap, ov, vox);
-                                *base_snap += *ov;
+                        std::thread([base_snap, ov, working_map, vox, wm_saving]() mutable {
+                            // ★detached 线程里绝不能让异常逃逸: 一旦抛出 = std::terminate
+                            // = 整个进程 abort (2026-11-25 实机: sudo 恢复的工作图属主 root,
+                            // open 失败 -> pcl::IOException -> 节点自杀, curr_scan_point/
+                            // slam/info 全部消失)。任何失败只记日志, 本帧放弃落盘。
+                            try {
+                                if (ov && !ov->empty()) {
+                                    suppressBaseByOverlay(base_snap, ov, vox);
+                                    *base_snap += *ov;
+                                }
+                                pcl::io::savePCDFileBinary(working_map, *base_snap);
+                                std::cout << "[working_map] saved: " << working_map << " ("
+                                          << base_snap->size() << " pts)" << std::endl;
+                            } catch (const std::exception& e) {
+                                std::cerr << "[working_map] save FAILED: " << e.what()
+                                          << " (检查文件属主/磁盘空间)" << std::endl;
+                            } catch (...) {
+                                std::cerr << "[working_map] save FAILED (unknown)" << std::endl;
                             }
-                            pcl::io::savePCDFileBinary(working_map, *base_snap);
-                            std::cout << "[working_map] saved: " << working_map << " ("
-                                      << base_snap->size() << " pts)" << std::endl;
                             wm_saving.store(false);
                         }).detach();
                     }

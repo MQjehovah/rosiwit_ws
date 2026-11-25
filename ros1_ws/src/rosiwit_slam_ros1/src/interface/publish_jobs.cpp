@@ -158,6 +158,7 @@ void Ros1SlamInterface::buildGridMessage() {
 }
 
 void Ros1SlamInterface::buildGlobalMapMessage() {
+    try {
     PointVec pts;
     if (!engine_.getGlobalMap(pts) || pts.empty()) return;
     CloudType cloud;
@@ -174,11 +175,17 @@ void Ros1SlamInterface::buildGlobalMapMessage() {
     ensureCloudDims(*ds);
     point_map_puber_.publish(toPointCloud2(*ds, kMapFrame, ros::Time::now()));
     debug_map_published_.store(true);   // 只有真正发出去才算完成, 失败留给 startPub 重试
+    } catch (const std::exception& e) {
+        std::cerr << "[global_map] publish FAILED: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "[global_map] publish FAILED (unknown)" << std::endl;
+    }
 }
 
 // /slam/debug/overlay_map: 统一工作图 (底图 0.3 体素 + overlay, intensity=**当前** w,
 // 含本会话新提交的持久度)。触发 = 首次进定位模式 + revision 变化, 限频 1min (见 startPub)。
 void Ros1SlamInterface::buildOverlayMapMessage() {
+    try {
     PointVec pts;
     if (!engine_.getWorkingMapCloud(pts) || pts.empty()) return;
     CloudType cloud;
@@ -196,6 +203,11 @@ void Ros1SlamInterface::buildOverlayMapMessage() {
     overlay_map_last_rev_.store(engine_.workingMapRevision());
     overlay_map_have_rev_.store(true);
     overlay_map_last_pub_wall_.store(ros::WallTime::now().toSec());
+    } catch (const std::exception& e) {
+        std::cerr << "[overlay_map] publish FAILED: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "[overlay_map] publish FAILED (unknown)" << std::endl;
+    }
 }
 
 void Ros1SlamInterface::waitForAuxJobs() { aux_jobs_.shutdown("Ros1SlamInterface"); }
