@@ -436,9 +436,10 @@ struct MaintainerConfig {
     int    autosave_frames = 0;      // 每 N 帧自动落盘叠加层 (0=仅析构时)
     int    refresh_frames = 0;       // 每 N 帧用叠加层刷新全局重定位器 (0=关闭)
     int    decay_frames = 0;         // 叠加层体素超过该帧数未再观测则移除 (0=不衰减)
-    // ---- A 阶段: 体素可信度 w (方案 v3 §3, 影子模式) ----
+    // ---- A 阶段: 体素可信度 w (方案 v3 §3) ----
     // w 是每个 overlay 体素的"高可信几何"权重: 被观测为占据 +8, 被自由空间雕刻 -8,
-    // 0 时删除该体素。只统计、不参与任何决策 (shadow=true)。
+    // 0 时删除该体素。**参与决策**: 匹配目标按 target_w_min 过滤 (T2), 低 w 的
+    // 动态/未确认结构不参与匹配。
     int    persistency_anchor = 128;
     // ---- w 的计票单位 (同一个体素在每个单位内最多 +1) ----
     // 0=frame(每帧) 1=view(每次重新进入视野) 2=session(每个任务会话) 3=day(每个自然日)
@@ -448,7 +449,6 @@ struct MaintainerConfig {
     int    persistency_miss_confirm = 3;    // 连续 free 证据帧数 -> 判定消失(去抖)
     int    persistency_miss_action = 0;     // 0=删除  1=按 persistency_hit_gain 递减
     int    persistency_session_hours = 12;  // 会话超时自动换新(防长期不重启)
-    bool   shadow = true;            // true: w 只用于 persistency_cov 观测, 不影响定位/插入
     bool   override_base = false;    // 叠加层压制同位置的原图点(处理"结构被移除/被替换")
     double delta_min = 0.3;          // 只沉淀"离原图 > 该距离(m)"的新结构(变化增量)
     int    novel_min_cluster = 3;    // 新结构最小簇(26 邻域内本帧新颖体素数, 含自身)

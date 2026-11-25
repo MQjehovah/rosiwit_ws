@@ -466,7 +466,6 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
             getv<double>(mtc, "max_insert_divergence", m_maintainer_cfg.max_insert_divergence);
         // A 阶段: 体素可信度 w (影子: 只统计, 不参与决策)
         m_maintainer_cfg.persistency_anchor = getv<int>(mtc, "persistency_anchor", m_maintainer_cfg.persistency_anchor);
-        m_maintainer_cfg.shadow   = getv<bool>(mtc, "shadow", m_maintainer_cfg.shadow);
         const std::string wu = getv<std::string>(mtc, "persistency_unit", "session");
         if (wu == "frame")        m_maintainer_cfg.persistency_unit = 0;
         else if (wu == "view")    m_maintainer_cfg.persistency_unit = 1;
@@ -1219,7 +1218,10 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
 CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     // ---- 子图桥接模式: 目标 = 子图 (临时图, 边建图边定位) ----
     // overlay 锚不住时用子图维持; 周期性对 overlay 探测重锚 (见 onLidar)。
-    if (m_on_submap) return m_session_map.pointsWorld();
+    if (m_on_submap) {
+        std::lock_guard<std::mutex> lk(m_session_map_mu);   // 与 reset/update 互斥
+        return m_session_map.pointsWorld();
+    }
     // ---- overlay 锚定模式: 目标 = 底图 crop + overlay (压制同区域旧点) ----
     return buildAnchoredTarget(pose);
 }
@@ -1810,7 +1812,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         const PoseStamped& target_center =
             (m_local_map_cfg.anchor_hold && m_have_submap_anchor) ? m_submap_anchor : guess;
         const uint64_t maint_rev = m_maintainer ? m_maintainer->revision() : 0;
-        if (m_has_cached_target && maint_rev == m_cached_target_rev &&
+        if (m_on_submap) {
+            // 桥接: 目标 = 子图, 而子图每帧都在更新(SessionMap 没有 revision)。
+            // 不强制刷新会一直用旧目标 -> 刚建的内容配不上。每 5 帧重建一次。
+            static int sub_rebuild_n = 0;
+            rebuild_target = (!m_has_cached_target) || (++sub_rebuild_n % 5 == 0);
+        } else if (m_has_cached_target && maint_rev == m_cached_target_rev &&
             (m_local_map_name == "global" ||
              (target_center.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
             rebuild_target = false;
@@ -2111,7 +2118,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 Eigen::Matrix4d C = Eigen::Matrix4d::Identity();
                 C.block<3, 3>(0, 0) = pr.pose.rot * out_pose.rot.transpose();
                 C.block<3, 1>(0, 3) = pr.pose.trans - C.block<3, 3>(0, 0) * out_pose.trans;
-                m_session_map.applyCorrection(C);
+                {
+                    std::lock_guard<std::mutex> lk(m_session_map_mu);   // 与 reset/update 互斥
+                    m_session_map.applyCorrection(C);
+                }
                 out_pose = pr.pose;
                 res = pr;
                 accepted = true;
@@ -2567,7 +2577,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             //   cov_base 低 -> 底图锚不住 -> 子图自更新
             if (m_session_map_enabled && m_ever_localized && scan && !scan->empty() &&
                 m_local_map) {
-                if (!g_base_only_valid || ++g_base_only_age >= 30) {
+                // 成本: 全点降采样 + 全图 KD 查询 ~几 ms。诊断用途, 每 5 帧算一次即可
+                // (锚定切换用的是 m_on_submap 的弱锚 streak, 不依赖这个值的实时性)。
+                static int cov_n = 0;
+                const bool do_cov = (++cov_n % 5 == 0);
+                if (do_cov && (!g_base_only_valid || ++g_base_only_age >= 30)) {
                     m_base_only_age = 0;
                     CloudType::Ptr base_crop = m_local_map->getLocalMap(out_pose);
                     if (base_crop && base_crop->size() >= 100) {
@@ -2577,7 +2591,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         g_base_only_valid = false;
                     }
                 }
-                if (g_base_only_valid) {
+                if (do_cov && g_base_only_valid) {
                     CloudType::Ptr ds = voxelDownsample(scan, 0.4f);
                     if (ds && ds->size() >= 50) {
                         Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
@@ -2723,7 +2737,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " state="
                    << (m_status.load() == LOST ? "LOST"
                        : (m_status.load() == LOCALIZED ? "LOCALIZED" : "INIT"))
-                   << " shadow=" << (m_maintainer_cfg.shadow ? 1 : 0)
+                  
                    << " persistency_anchor=" << m_maintainer_cfg.persistency_anchor
                    << " fitness=" << res.fitness
                    << " anchor=" << (anchor_ok ? "OK" : "WEAK")

@@ -72,6 +72,28 @@ void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_worl
       if (r2 > 0.0 && (a - robot_anchor_).squaredNorm() > r2) continue;  // 半径外直接丢
       pts_.emplace(key(a.x(), a.y(), a.z()), a);                          // 体素去重
     }
+
+    // 自由空间清除 (方案 v2 §3): 沿"传感器原点 -> 端点"射线前进, 途经的体素判为自由
+    // 并删除。否则搬走的货/走过的动态物会一直留在子图里 (子图是覆盖式, 不清就叫
+    // 积分式, 搬走的东西永远在)。与 overlay 的 rayCarve 同一原理, 采样步长=体素。
+    const V3D origin_a = R_gs_inv * (t_wb - t_gs);
+    const int stride = std::max(1, cfg_.clear_stride);
+    const int n = static_cast<int>(scan_body.points.size());
+    const double step = std::max(0.05, cfg_.voxel);
+    for (int i = 0; i < n; i += stride) {
+      const auto& p = scan_body.points[i];
+      if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+      const V3D end = R_gs_inv * (R_wb * V3D(p.x, p.y, p.z) + t_wb - t_gs);
+      const V3D dir = end - origin_a;
+      const double len = dir.norm();
+      if (len < step * 3) continue;                     // 太近: 全是端点, 不清
+      const V3D u = dir / len;
+      // 从 1 个体素开始, 到端点前 1 个体素结束 (端点本身是占据, 不能清)
+      for (double d = step; d < len - step; d += step) {
+        const V3D q = origin_a + u * d;
+        pts_.erase(key(q.x(), q.y(), q.z()));
+      }
+    }
   }
 
   // 机器人走出一段距离后清扫一次（避免每帧 O(n) 全扫）

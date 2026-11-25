@@ -29,6 +29,7 @@ public:
     double radius = 25.0;      // 机器人周围保留半径 (m)
     double voxel = 0.15;       // 去重体素 (m)
     size_t max_points = 300000;  // 容量上限 (超过后停止插入并告警)
+    int clear_stride = 20;       // 自由空间清除: 扫描点抽样步长 (每 N 个点走一条射线)
   };
 
   void configure(const Config& c) { cfg_ = c; }
