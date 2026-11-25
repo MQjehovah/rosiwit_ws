@@ -397,6 +397,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_global_cfg.sc_candidate_ratio = getv<double>(gc, "sc_candidate_ratio", m_global_cfg.sc_candidate_ratio);
         m_global_cfg.sc_z_cap           = getv<double>(gc, "sc_z_cap", m_global_cfg.sc_z_cap);
         m_global_cfg.sc_min_overlap_cells = getv<int>(gc, "sc_min_overlap_cells", m_global_cfg.sc_min_overlap_cells);
+        m_global_cfg.sc_use_coverage_score = getv<bool>(gc, "sc_use_coverage_score", m_global_cfg.sc_use_coverage_score);
         m_global_cfg.sc_db_radius       = getv<double>(gc, "sc_db_radius", m_global_cfg.sc_db_radius);
         m_global_cfg.sc_db_spacing      = getv<double>(gc, "sc_db_spacing", m_global_cfg.sc_db_spacing);
         m_global_cfg.sc_db_max_places   = getv<int>(gc, "sc_db_max_places", m_global_cfg.sc_db_max_places);
