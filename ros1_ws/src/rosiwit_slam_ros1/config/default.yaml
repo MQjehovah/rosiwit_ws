@@ -271,6 +271,7 @@ localization:
     map_maintainer: overlay       # 2026-11-25: 开 overlay 自更新 (统一工作图 map.overlay.pcd)
     # 工作图落盘周期 (分钟, revision 有变化才写盘)。2026-11-25 临时 10 分钟验证, 验证完回 60。
     working_map_save_min: 10
+
     pose_fusion: eskf         # eskf(限幅 + 多源加权, 默认) | direct(直通, 可回退)
 
   # ---- 位姿融合参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效 ----
@@ -305,7 +306,12 @@ localization:
     min_match_points: 50
     max_correspondence_dist: 1.2   # 优化时每个点最多能配多远(m); 超了本轮不建对应(点不删)
     transformation_epsilon: 0.000001
-    inlier_dist: 0.3               # 算"配上"的距离(m), 比上面更严
+    inlier_dist: 0.3               # 算"配上"的距离(m), 比上面更严。
+                                   # 注: coverage 对"沿墙滑动"天然钝感 (转几度点仍在墙上),
+                                   # 2026-11-25 试过 0.18 提区分度, 但所有阈值 (accept/lost/
+                                   # credible 0.85/T4 写图门) 都是按 0.3 标定的, 收紧会把
+                                   # fitness 天花板压到门槛附近, 回退。区分度问题的正解是
+                                   # 法向感知的 coverage (TODO), 不是改圈。
     # pp_icp 专用
     use_corr_decay: true
     corr_dist_init: 4.0
