@@ -2643,8 +2643,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // cov_base 有效时要求达到可信阈值 (底图真的配上了); cov_base 还没算出来 (-1,
         // 底图 KD 未就绪) 时退回 anchorOk, 否则起步阶段完全学不到东西。
         // 注: cov_base 在本帧稍后才更新, 这里用的是上一帧的值 (1 帧滞后, 可接受)。
+        // ★门槛用 res.fitness 本身 (2026-11-25 修订): 锚定态的目标 = 底图 + overlay(无子图),
+        // 所以 res.fitness 就是"对先验图的匹配度", 口径与 matching_degree 一致。
+        // 原实现拿 cov_base 当门槛 —— 那是每 5 帧一次、融合位姿、0.4 体素降采样的粗测,
+        // 实测把 0.93 的真实匹配读成 0.67, 门槛被焊死 (novel_votes 恒 0, overlay 写不进)。
+        // overlay 自证的风险由既有约束兜住: 进目标的 overlay 点需 w>=target_w_min/match_w_min,
+        // 写入需 rmse<=max_rmse + corr<=10cm/1° + anchorOk。
         const bool base_anchored = !m_on_submap &&
-            (m_cov_base < 0.0 || m_cov_base >= m_monitor_cfg.credible_fitness);
+            res.fitness >= m_monitor_cfg.credible_fitness;
         // 机器人侧补充 (2026-11-24): 位姿稳定性门 —— 刚发生 >10cm/>1° 修正的帧、
         // coast 帧(预测顶着的)位姿不可信, rmse 超标说明残余大; 写进去会和原有结构
         // 岔成两层(实车叠图)。与 T4 正交, 叠加生效。
