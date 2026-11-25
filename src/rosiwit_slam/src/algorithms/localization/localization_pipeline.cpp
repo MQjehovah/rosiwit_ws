@@ -210,6 +210,11 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_local_map_cfg.cell_size        = getv<double>(lmc, "cell_size", m_local_map_cfg.cell_size);
         m_local_map_cfg.max_keyframes    = getv<int>(lmc, "max_keyframes", m_local_map_cfg.max_keyframes);
         m_local_map_cfg.cache_move       = getv<double>(lmc, "cache_move", m_local_map_cfg.cache_move);
+        m_local_map_cfg.anchor_hold        = getv<bool>(lmc, "anchor_hold", m_local_map_cfg.anchor_hold);
+        m_local_map_cfg.anchor_max_lag     = getv<double>(lmc, "anchor_max_lag", m_local_map_cfg.anchor_max_lag);
+        m_local_map_cfg.anchor_min_fitness = getv<double>(lmc, "anchor_min_fitness", m_local_map_cfg.anchor_min_fitness);
+        m_local_map_cfg.anchor_min_eig_ratio =
+            getv<double>(lmc, "anchor_min_eig_ratio", m_local_map_cfg.anchor_min_eig_ratio);
     }
     auto dkc = loc["deskew"];
     if (dkc) {
@@ -1595,6 +1600,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_last_accepted = pending_pose;
             m_have_last_accepted = false;
             m_coast_count = 0;
+            m_have_submap_anchor = false;   // 子图窗口锚一起失效
             m_has_cached_target = false;   // 旧缓存目标建在旧位姿附近
             // 注入位姿后的门限放行 (见 acceptMatch): 让被 reset 掉的先验偏置重新学回来.
             m_maha_bypass_frames = 5;
@@ -1745,14 +1751,19 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // 只在真正写入新点时变(revision 自增), 静态环境基本不增长; 而每帧重建 10k 目标
         // 的降采样+建树是把位姿输出拖到 10Hz 的主因之一(雷达 15.8Hz, 2026-10-17 实测)。
         bool rebuild_target = true;
+        // 窗口中心 = 子图锚(只在已验证帧上跟随), 不是当前估计。
+        // 这样弱帧(贴墙/稀疏/退化)的漂移不会立刻把 24 关键帧窗口带偏。
+        // anchor_hold=false 时退回旧行为(直接用预测位姿建图), 便于 A/B 与现场回滚.
+        const PoseStamped& target_center =
+            (m_local_map_cfg.anchor_hold && m_have_submap_anchor) ? m_submap_anchor : guess;
         const uint64_t maint_rev = m_maintainer ? m_maintainer->revision() : 0;
         if (m_has_cached_target && maint_rev == m_cached_target_rev &&
             (m_local_map_name == "global" ||
-             (guess.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
+             (target_center.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
             rebuild_target = false;
         }
         if (!m_matcher->usesStore() && rebuild_target) {
-            CloudType::Ptr target = buildTarget(guess);
+            CloudType::Ptr target = buildTarget(target_center);
             // **逸出保护 (fail fast)**: 局部地图为空 => 猜测位姿已经在图外(或该处无关键帧)。
             // 以前会拿空目标去匹配: 空 KD-tree 报错、ok=0、然后运动先验继续积分 ->
             // 位姿越漂越远(实机漂到 -96m), 从此永远匹配不上, 界面上角标彻底冻结。
@@ -1784,7 +1795,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 return;      // 本次判定为未定位, 让上层报"丢失"而不是静默
             }
             m_cached_target = target;
-            m_cached_target_pose = guess;
+            m_cached_target_pose = target_center;
             m_cached_target_rev = m_maintainer ? m_maintainer->revision() : 0;
             m_has_cached_target = true;
             m_matcher->setTarget(target);
@@ -2046,6 +2057,49 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
+    // ---- 子图窗口锚 (2026-11-25) ----
+    // 判据都不看点数(对接工位只有 ~200 点但位姿是对的):
+    //   1) 本帧被接受且收敛;
+    //   2) 可观测性够 == 不是"沿墙/沿走廊"退化(③-1 给 gicp 补的 eig; 无 Hessian 时跳过);
+    //   3) fitness 达到 anchor_min_fitness (默认 0 = 不看 fitness: 本环境正常帧只有 0.6~0.88);
+    //   4) 与预测的创新量不超限(不是被硬拉过去的)  <-- 真正起作用的判据.
+    // 其余帧保持旧锚点; 滞后超过 anchor_max_lag(默认 1m) 必须跟随, 否则窗口会跑空.
+    // **默认关闭**: 同包回归里开它反而更容易丢(窗口滞后会把匹配往后拽), 详见 default.yaml.
+    const double innov_t = (res.pose.trans - guess.trans).norm();
+    const double anchor_lag = m_have_submap_anchor
+        ? (guess.trans - m_submap_anchor.trans).norm() : -1.0;
+    if (m_local_map_cfg.anchor_hold) {
+        const bool eig_ok = !res.has_hessian ||
+            res.smallest_eig_ratio >= m_local_map_cfg.anchor_min_eig_ratio;
+        const bool verified = accepted && res.converged && eig_ok &&
+            res.fitness >= m_local_map_cfg.anchor_min_fitness &&
+            (m_accept_cfg.max_trans_innov <= 0.0 || innov_t <= m_accept_cfg.max_trans_innov);
+        // 强制跟随只把窗口中心拉回"预测位姿"(不动位姿本身), 保证锚点不会永久跑空.
+        const bool forced = anchor_lag > m_local_map_cfg.anchor_max_lag;
+        if (!m_have_submap_anchor || verified) {
+            m_submap_anchor = res.pose;
+            m_have_submap_anchor = true;
+        } else if (forced) {
+            m_submap_anchor = guess;
+        }
+    }
+    // [ObsProbe] 方向可观测性 (2026-11-25): gicp 首次真正算出 λmin/λmax 与退化方向数.
+    // 与 anchor_hold 无关, 只要 ROSIWIT_LOC_PROBE=1 就每 20 帧打一条, 用于现场标定
+    // degeneracy_ratio_soft / anchor eig 门限 (以前 gicp 不填, 日志里恒为 1.000/0).
+    {
+        static int obs_probe_n = 0;
+        if (kLocProbe && (++obs_probe_n % 20 == 0)) {
+            std::cout << "[ObsProbe] t=" << f.end_time
+                      << " eig=" << res.smallest_eig_ratio
+                      << " dirs=" << res.degenerate_dirs
+                      << " hess=" << (res.has_hessian ? 1 : 0)
+                      << " fit=" << res.fitness
+                      << " innov=" << innov_t
+                      << " anchor_lag=" << anchor_lag
+                      << " anchor_hold=" << (m_local_map_cfg.anchor_hold ? 1 : 0)
+                      << std::endl;
+        }
+    }
     // [DropProbe] 低 fitness 或被拒绝帧逐帧打印（正常帧仍走 10 帧一条的 LocProbe）。
     //   correction_m = |匹配位姿 - 先验猜测|：持续增大说明预测跟不上；
     //   correspondences 骤降说明动态滤波把真实位置证据删掉；
@@ -2400,6 +2454,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     const bool on_base = (m_cov_base >= m_monitor_cfg.credible_fitness);
                     if (on_base != m_anchor_on_base) {
                         m_anchor_on_base = on_base;
+                        m_have_submap_anchor = false;   // 子图窗口锚一起失效
                         m_has_cached_target = false;
                         std::cout << "[anchor] switch to "
                                   << (on_base ? "BASE map (anchored)" : "submap (bridging)")

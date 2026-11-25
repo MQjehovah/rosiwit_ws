@@ -169,6 +169,18 @@ struct LocalMapConfig {
     double cell_size = 10.0;         // radius_submap: 体素哈希单元边长(m)
     int    max_keyframes = 15;       // keyframe_submap: 最近关键帧数上限
     double cache_move = 0.5;         // 位姿移动小于该值时复用上一帧局部地图(m)
+    // ---- 子图窗口锚 (2026-11-25 实验后默认关闭) ----
+    // 想法: 只有"已验证帧"才把窗口中心吸附到匹配位姿, 弱帧保持旧锚点, 防止弱匹配
+    // 把子图窗口带偏. 实测(同包 A/E 对照, 见 docs/LOCALIZATION_ANCHOR_2026-11-25.md):
+    //   开 lag=8m + credible_fitness(0.85): 74/81 帧 hold, 窗口滞后 6.7m -> SUCCESS 85.6%;
+    //   开 lag=1m + min_fitness 0:            开局 4.7s 就 LOST, 191s 未恢复;
+    //   关闭:                                 98.5~99.8%, 无 LOST, 与基线逐帧一致.
+    // 原因: 窗口滞后会把匹配"往后拽", anchor 再跟着被拉偏的位姿走 -> 自洽漂移.
+    // 保留开关仅供后续实验; 现场不要开.
+    bool   anchor_hold = false;          // 总开关; false = 按当前估计建图(旧行为)
+    double anchor_max_lag = 1.0;         // 窗口中心允许的最大滞后(m)
+    double anchor_min_eig_ratio = 1e-3;  // 视为"可观测"的最小 λmin/λmax
+    double anchor_min_fitness = 0.0;     // 视为"可信帧"的最低 fitness (0=只看创新量)
 };
 
 // ==================== 关键帧 (keyframe_submap 输入) ====================

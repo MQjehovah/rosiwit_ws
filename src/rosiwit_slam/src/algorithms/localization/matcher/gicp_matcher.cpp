@@ -159,6 +159,31 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     out.correspondences = cs.total;
     out.residual = evaluatePoint2PlaneResidual(m_kdtree, *src, T,
                                                m_cfg.max_correspondence_dist);
+    // ---- 方向可观测性 (2026-11-25): gicp 本身不提供 JtJ, 所以 degeneracy 相关
+    // 判据在 gicp 下一直是空转(日志里 eig 恒为 1.000 = 默认值). 这里用内点的局部
+    // 平面法向补算一个 6x6 信息矩阵并上报, 先用于诊断/标定; 不置 has_hessian
+    // (原因见下面的注释). 有效平面点不足时保持原行为.
+    {
+        Eigen::Matrix<double, 6, 1> lam;
+        Eigen::Matrix<double, 6, 6> vecs;
+        double ratio = 1.0;
+        int dirs = 0;
+        if (evaluateObservability(m_kdtree, *src, T,
+                                  m_cfg.max_correspondence_dist, m_cfg.inlier_dist,
+                                  lam, vecs, ratio, dirs)) {
+            // **故意不置 out.has_hessian** (2026-11-25 回归实测):
+            // 置位后 pipeline 的 degeneracy_partial_update 会立刻按
+            // degeneracy_ratio_soft(0.05) 削最弱方向; 而本估计器在正常帧算出的
+            // λmin/λmax 只有 ~4e-3 (>=0.05 的帧为 0%), 于是每帧都把修正压到 ~8%,
+            // 位姿跟不上 -> SUCCESS 99.8% 掉到 85.6%. 两者量纲/加权口径不同,
+            // 要启用必须先用现场数据重标定 soft 门限, 不能直接打开.
+            out.hess_eigvals = lam;
+            out.hess_eigvecs = vecs;
+            out.smallest_eig_ratio = ratio;
+            out.degenerate_dirs = dirs;
+            out.degenerate = (ratio < 2e-3);
+        }
+    }
     if (probe) {
         ms_eval = ms_since(t2);
         std::cout << "[MatchProbe] match_index=" << probe_n

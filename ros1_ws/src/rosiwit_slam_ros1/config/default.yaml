@@ -348,6 +348,15 @@ localization:
     cell_size: 10.0
     max_keyframes: 15   # keyframe_submap: 最近关键帧数上限
     cache_move: 0.5     # 位姿移动小于该值复用上一帧局部地图(m, 提速)
+    # ---- 子图窗口锚 (2026-11-25, 默认关闭) ----
+    # 想法: 只让"已验证帧"挪窗口中心, 防弱匹配把子图窗口带偏. 实测(同包对照, 见
+    # docs/LOCALIZATION_ANCHOR_2026-11-25.md): 打开后反而更容易丢
+    #   (lag=8m: SUCCESS 99.8%->85.6%; lag=1m: 开局就 LOST 且不恢复),
+    # 因为窗口滞后会把匹配"往后拽", 自己制造自洽漂移. 现场不要开, 仅留作实验开关.
+    anchor_hold: false
+    anchor_max_lag: 1.0          # 窗口中心允许滞后(m); 超了强制拉回预测位姿
+    anchor_min_fitness: 0.0      # 可信帧最低 fitness (0=不看; 本环境正常帧只有 0.6~0.88)
+    anchor_min_eig_ratio: 0.001  # 视为可观测的最小 λmin/λmax (gicp 未填 Hessian 时跳过)
 
   # ---- 定位扫描运动补偿 (逐点时间戳 -> 帧末位姿) ----
   # 建图前端已有 IMU 去畸变; 定位路径原来直接用原始点云, 转圈时扫描被拉斜,

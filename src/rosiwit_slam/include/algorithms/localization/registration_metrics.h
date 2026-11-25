@@ -40,6 +40,31 @@ CloudType::Ptr filterByMapProximity(const CloudType::Ptr& scan,
                                     const Eigen::Matrix4d& T,
                                     double max_dist);
 
+/// 方向可观测性 (gicp 等不提供 JtJ 的匹配器用):
+/// 用"已配上的内点"的局部平面法向构造 6x6 信息矩阵 (order: [rot(3), trans(3)]):
+///   J = [ ((p_w - t) x n)^T , n^T ]   ->   H = sum J J^T
+/// 注意旋转项用"相对传感器"的点 (与 pp_icp 的 R*bp 同量纲); 用绝对世界点会让
+/// 6D 特征值比恒为 ~1e-5, 把正常帧误判成严重退化.
+/// 特征值升序; smallest_ratio = λmin/λmax; degenerate_dirs = λ/λmax < 1e-3 的个数.
+/// 用途(2026-11-25): gicp 以前不填 has_hessian, 所以 degeneracy_gate /
+/// degeneracy_partial_update / anchor 的 eig 判据一直是空转(eig 恒 1.0).
+/// 本例只"上报"这组量用于诊断: 用本估计器算出的 λmin/λmax 在正常帧只有 ~4e-3,
+/// 与 degeneracy_ratio_soft(0.05) 量纲不匹配, 直接把 has_hessian 置位会让
+/// partial_update 把正常帧的修正压到 ~8% -> 实测 14% LOST. 要启用必须先按现场
+/// 数据重新标定 soft 门限 (见 docs/HANDOVER_2026-11-25_device_sync.md).
+/// 返回 false = 有效平面点不足(<30), 不可判定 (此时调用方应保持原行为).
+bool evaluateObservability(const pcl::KdTreeFLANN<PointType>& kdtree,
+                           const CloudType& scan,
+                           const Eigen::Matrix4d& T,
+                           double neigh_dist,
+                           double plane_tol,
+                           Eigen::Matrix<double, 6, 1>& eigvals,
+                           Eigen::Matrix<double, 6, 6>& eigvecs,
+                           double& smallest_ratio,
+                           int& degenerate_dirs,
+                           int max_points = 400,
+                           double plane_valid_thr = 0.10);
+
 // ---- 存储底座(IMapStore)版本 (P3: 存储与算法解耦) ----
 CoverageStats evaluateCoverageStore(const IMapStore& store, const CloudType& scan,
                                     const Eigen::Matrix4d& T, double inlier_dist,

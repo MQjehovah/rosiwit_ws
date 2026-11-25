@@ -167,6 +167,7 @@ private:
     void resetSessionMap() {
         std::lock_guard<std::mutex> lk(m_session_map_mu);
         m_session_map.deactivate();
+        m_have_submap_anchor = false;   // 换图/重置后子图窗口锚必须重来
     }
     PlanarConstraintConfig m_planar_cfg;
     std::string m_relocalizer_name = "none";
@@ -226,6 +227,10 @@ private:
     /// 期间每帧都要求 fitness >= reloc_accept_score, 否则退回 INIT。
     int m_scrutiny_frames = 0;
     uint64_t m_cached_target_rev = 0;   // 建缓存时的维护层版本号(overlay 变更 -> 失效)
+    // 子图窗口锚 (2026-11-25): 只有"已验证帧"才把窗口中心吸附到匹配位姿,
+    // 弱帧(贴墙/稀疏/退化)保持旧锚点, 防止弱匹配把子图窗口带偏 -> 自洽锁歪.
+    PoseStamped m_submap_anchor;
+    bool m_have_submap_anchor = false;
 
     // 全局重定位库后台构建 (2026-10-17 推行丢失事故: 懒建把 44.6s 的 FPFH 全图特征
     // 构建塞进 onLidar 回调, 单线程 spinner 冻结, 雷达停处理/界面冻住。行业惯例:
