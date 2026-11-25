@@ -1240,6 +1240,22 @@ CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose
     return target;
 }
 
+CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose) {
+    CloudType::Ptr target = m_local_map->getLocalMap(pose);
+    if (m_maintainer) {
+        CloudType::Ptr ov = m_maintainer->getOverlay(pose);
+        if (ov && !ov->empty()) {
+            // 底图与 overlay 的并集是双层冗余 (稍一错位两层都能配上, 评分虚高)。
+            // 在 overlay 有点的区域, 用它**替代**底图的旧结构 (suppressBaseByOverlay),
+            // 目标收敛为"当前几何"。
+            if (m_maintainer_cfg.override_base)
+                suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
+            *target += *ov;
+        }
+    }
+    return target;
+}
+
 bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     // 出口重锁: 在推算位姿附近做有界局部多起点配准(优于全局检索; 叠加层帮助在新货环境重锁)
     if (!m_local_map || !m_matcher) return false;

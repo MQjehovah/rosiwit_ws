@@ -93,7 +93,9 @@ private:
     /// 按逐点时间戳把一帧扫描补偿到帧末位姿; 旋转时避免点云在时间上被拉斜.
     CloudType::Ptr deskewScan(const LidarFrame& f, const PoseStamped& end_pose);
     bool tryBoundedRecovery(const CloudType::Ptr& scan);   // 出口重锁(有界局部重定位)
-    CloudType::Ptr buildTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
+    CloudType::Ptr buildTarget(const PoseStamped& pose);
+    /// 锚定模式目标: 底图 crop + overlay (压制同区域旧点) —— 探测重锚/正常锚定用
+    CloudType::Ptr buildAnchoredTarget(const PoseStamped& pose);   // 局部地图 + 叠加层(含压制)
     bool ensureRelocalizerMap();   // 全局重定位库就绪检查(后台构建中返回 false, 绝不阻塞)
     void relocBuildWorker();       // 兼容路径(未注入执行器): 常驻等待请求
     bool runRelocBuildOnce();      // 池任务: 构建一次重定位库

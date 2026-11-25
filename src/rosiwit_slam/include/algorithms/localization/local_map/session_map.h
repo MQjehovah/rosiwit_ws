@@ -58,6 +58,10 @@ public:
     have_robot_ = false;
   }
 
+  /// zip-up 修正: C 为 world 系修正变换 (子图锚系旧值 -> 重锚后的新值),
+  /// 作用于子图全部点与锚。桥接结束重锚回 overlay 时调用 (ELite 式)。
+  void applyCorrection(const Eigen::Matrix4d& C);
+
 private:
   int64_t key(double x, double y, double z) const;
   void sweepFar();

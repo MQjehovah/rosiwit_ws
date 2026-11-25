@@ -99,4 +99,13 @@ CloudType::Ptr SessionMap::pointsWorld() const {
   return out;
 }
 
+void SessionMap::applyCorrection(const Eigen::Matrix4d& C) {
+  if (!active_ || pts_.empty()) return;
+  const Eigen::Matrix3d dR = C.block<3, 3>(0, 0);
+  const Eigen::Vector3d dt = C.block<3, 1>(0, 3);
+  for (auto& kv : pts_) kv.second = dR * kv.second + dt;
+  anchor_.rot = dR * anchor_.rot;
+  anchor_.trans = dR * anchor_.trans + dt;
+}
+
 }  // namespace rosiwit_slam
