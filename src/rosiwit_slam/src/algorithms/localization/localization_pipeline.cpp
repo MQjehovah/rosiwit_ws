@@ -962,6 +962,26 @@ void LocalizationPipeline::setMapData(const MapData& data) {
         m_map.reset();
         return;
     }
+    // ★统一工作图消费 (w-map P1, 2026-11-25): xzmap/MapData 路径此前只写不读
+    // map.overlay.pcd —— 落盘每小时在写, 加载却从不读回 -> 每次重启 w 全部回到
+    // base_voxel_w (HMI 全绿), 已提交的 overlay 几何随内存清零 ("变动丢失"根因)。
+    // fresh 工作图存在时用它替换底图云: intensity 就是 w,
+    // 账本按文件播种 (见下方 setBaseEmbeddedWeights), 重启后持久度/雕刻状态延续。
+    bool using_working_map = false;
+    {
+        const std::string working_map = workingMapPath(m_map_path);
+        struct stat sb_map{}, sb_work{};
+        const bool has_map = (stat(m_map_path.c_str(), &sb_map) == 0);
+        const bool has_work = (stat(working_map.c_str(), &sb_work) == 0);
+        const bool work_fresh = has_work && (!has_map || sb_work.st_mtime >= sb_map.st_mtime);
+        CloudType::Ptr wm(new CloudType());
+        if (work_fresh && pcl::io::loadPCDFile(working_map, *wm) >= 0 && !wm->empty()) {
+            m_map = wm;
+            using_working_map = true;
+            std::cout << "[LocPipeline] setMapData: using WORKING map " << working_map
+                      << " (" << m_map->size() << " pts, intensity=w)" << std::endl;
+        }
+    }
     std::cout << "[LocPipeline] setMapData: " << m_map->size() << " pts, "
               << lkfs.size() << " keyframes" << std::endl;
 
@@ -973,7 +993,10 @@ void LocalizationPipeline::setMapData(const MapData& data) {
         if (m_matcher) m_matcher->setStore(m_store.get());
         m_planar.setStore(m_store.get());
     }
-    if (m_maintainer) m_maintainer->setBaseMap(m_map_path, m_map);
+    if (m_maintainer) {
+        m_maintainer->setBaseEmbeddedWeights(using_working_map);
+        m_maintainer->setBaseMap(m_map_path, m_map);
+    }
     if (m_local_map && !lkfs.empty()) {
         m_local_map->setKeyframes(lkfs);
         std::cout << "[LocPipeline] setMapData keyframes=" << lkfs.size() << std::endl;
