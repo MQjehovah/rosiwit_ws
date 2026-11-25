@@ -14,6 +14,12 @@ struct CoverageStats {
     double mean_dist = -1.0;  // 平均最近邻距离(m)
     int    inliers = 0;
     int    total = 0;
+    // ---- P4: w 加权口径 (2026-11-26) ----
+    // w_support = Σ(内点落点的 w)/Σ(可见点的 w) —— 位姿被"已确认结构(w>=128)"
+    // 支撑的比例: 高 w 几何反复确认过, 残差可信; 低 w (新提交/瞬态) 拉扯位姿的
+    // 权重低。配准解的锚定质量用它判定, 而不只是内点个数。
+    double w_support = 0.0;
+    int    inl128 = 0;        // 内点中落在 w>=128 (高可信) 体素上的个数
 };
 
 /// 将 scan 按 T 变换后, 统计到 target 的 1-NN 覆盖率.

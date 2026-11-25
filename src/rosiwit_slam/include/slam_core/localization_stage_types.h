@@ -85,6 +85,8 @@ struct MatchResult {
     bool   degenerate = false;     // 是否检测到退化方向
     int    degenerate_dirs = 0;    // 被门控的退化方向数
     double smallest_eig_ratio = 1.0; // 最小/最大特征值比 (可观测性)
+    // P4: 位姿被"已确认结构(w>=128)"支撑的比例 [0,1] —— 加权锚定判据 (2026-11-26)
+    double w_support = -1.0;       // <0 = 配准器未填
     // JtJ 6x6 Hessian 的特征分解 (order: [rot(3), trans(3)]): 供上层做
     // 退化方向的部分更新 (弱观测方向保留先验). 小配准器可能不填.
     bool   has_hessian = false;

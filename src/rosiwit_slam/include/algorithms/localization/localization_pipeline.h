@@ -176,6 +176,8 @@ private:
     bool   m_out_lim_valid = false;
     PoseStamped m_out_lim_prev;
     double m_out_v_max = 2.0;             // 输出位姿平移速度上限 (m/s)
+    // P4 加权锚定: 静态支撑 (内点落在 w>=128 体素的占比) 下限
+    double m_anchor_w_support_min = 0.30;
     double m_out_wz_max = 1.6;            // 输出位姿偏航角速度上限 (rad/s ≈91°/s)
     // 软着陆: 种子/重定位刚生效后的前 N 帧限制单帧修正量(1°/5cm),
     // 防止首帧跳变把点云写岔成两层(机器人侧新增, 锚定切换路径由 zip-up 即时搬移, 不再使用)

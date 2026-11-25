@@ -227,6 +227,7 @@ void SlamAlgorithm::loadInputConfig(bool& vo_enabled, bool& odom_enabled,
                 cfg_.body_frame  = gf("body_frame").as<std::string>(cfg_.body_frame);
                 cfg_.world_frame = gf("world_frame").as<std::string>(cfg_.world_frame);
                 cfg_.scan_period_ms = gi("scan_period_ms").as<float>(cfg_.scan_period_ms);
+                cfg_.gyro_spike_max = gi("gyro_spike_max").as<double>(cfg_.gyro_spike_max);
                 // 原本在 legacy JSON 的项: 现在只认 YAML (不再兼容旧键名)
                 cfg_.rt_grid_map_publish_hz =
                     gi("rt_grid_map_publish_hz").as<double>(cfg_.rt_grid_map_publish_hz);

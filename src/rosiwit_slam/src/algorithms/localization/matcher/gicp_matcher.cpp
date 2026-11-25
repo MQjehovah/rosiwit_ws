@@ -157,6 +157,7 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
         out.fitness_all = cs.coverage;
     out.rmse = cs.mean_dist;
     out.inliers = cs.inliers;
+    out.w_support = cs.w_support;   // P4: 加权锚定判据 (已确认结构支撑比例)
     out.correspondences = cs.total;
     out.residual = evaluatePoint2PlaneResidual(m_kdtree, *src, T,
                                                m_cfg.max_correspondence_dist);

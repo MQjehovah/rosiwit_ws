@@ -515,6 +515,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_anchor_min_ratio = getv<double>(subc, "anchor_min_ratio", m_anchor_min_ratio);
         m_anchor_min_eig_ratio = getv<double>(subc, "anchor_min_eig_ratio", m_anchor_min_eig_ratio);
         m_anchor_patience = getv<int>(subc, "anchor_patience", m_anchor_patience);
+        m_anchor_w_support_min = getv<double>(subc, "anchor_w_support_min", m_anchor_w_support_min);
         m_anchor_close_patience =
             getv<int>(subc, "anchor_close_patience", m_anchor_close_patience);
         m_session_map_radius = getv<double>(subc, "radius_m", m_session_map_radius);
@@ -1000,6 +1001,12 @@ void LocalizationPipeline::setMapData(const MapData& data) {
     if (m_maintainer) {
         m_maintainer->setBaseEmbeddedWeights(using_working_map);
         m_maintainer->setBaseMap(m_map_path, m_map);
+        // ★w-map: 新结构升格回调 —— 提交的点当场进工作图云 + 分块缓存 (当帧参与匹配)
+        m_maintainer->setCommitHook([this](const Eigen::Vector3d& pt, float w) {
+            if (m_local_map) m_local_map->addWorldPoint(
+                static_cast<float>(pt.x()), static_cast<float>(pt.y()),
+                static_cast<float>(pt.z()), w);
+        });
     }
     if (using_working_map) {
         // ★w-map (2026-11-25): 工作图就是图, 匹配目标直接从它分块生成
@@ -1487,27 +1494,11 @@ CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose
     if (m_maintainer) {
         // 统一工作图: 剔除 w 已降到 0 的底图点 (墙挪了/拆了, 射线证据判死)。
         target = m_maintainer->filterDeadBase(target);
-        CloudType::Ptr ov = m_maintainer->getOverlay(pose);
-        // w 过滤 (T2): overlay 点的 intensity 就是持久度 w。
-        // 只让确认结构 (w >= target_w_min) 参与匹配/压制 —— 固定物体权重更大,
-        // 动态物与未确认结构忽略 (它们 w 低/衰减快, 自然被滤掉)。
-        if (ov && !ov->empty() && m_maintainer_cfg.target_w_min > 0) {
-            CloudType::Ptr f(new CloudType());
-            f->reserve(ov->size());
-            for (const auto& p : ov->points)
-                if (p.intensity >= static_cast<float>(m_maintainer_cfg.target_w_min))
-                    f->push_back(p);
-            ov = f;
-        }
-        if (ov && !ov->empty()) {
-            // 底图与 overlay 的并集是双层冗余 (稍一错位两层都能配上, 评分虚高)。
-            // 在 overlay 有点的区域, 用它**替代**底图的旧结构 (suppressBaseByOverlay),
-            // 目标收敛为"当前几何"。
-            if (m_maintainer_cfg.override_base)
-                suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
-            *target += *ov;
-        }
     }
+    // ★w-map (2026-11-26): 匹配目标 = 工作图本体 (含已提交并升格的结构),
+    // 不再有独立的 overlay 增量层 —— 新结构提交时直接进工作图云 (见
+    // maintainer addPoint 的 commit sink), 配准锚定按 w 加权 (anchorOk 的
+    // static_support 判据 + [quality] sup= 字段)。
     return target;
 }
 
@@ -2601,6 +2592,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         if (kLocProbe && (++obs_probe_n % 20 == 0)) {
             std::cout << "[ObsProbe] t=" << f.end_time
                       << " eig=" << res.smallest_eig_ratio
+                   << " sup=" << (res.w_support >= 0.0 ? res.w_support : -1.0)
                       << " dirs=" << res.degenerate_dirs
                       << " hess=" << (res.has_hessian ? 1 : 0)
                       << " fit=" << res.fitness
@@ -3309,10 +3301,12 @@ bool LocalizationPipeline::anchorOk(const MatchResult& res, bool accepted) const
     q.correspondences = res.correspondences;
     q.has_hessian = res.has_hessian;
     q.smallest_eig_ratio = res.smallest_eig_ratio;
+    q.static_support = res.w_support;   // P4: 加权锚定 (已确认结构支撑比例)
     AnchorCriteria c;
     c.min_inliers = m_anchor_min_inliers;
     c.min_ratio = m_anchor_min_ratio;
     c.min_eig_ratio = m_anchor_min_eig_ratio;
+    c.min_static_support = m_anchor_w_support_min;
     return anchorQualityOk(q, c);
 }
 

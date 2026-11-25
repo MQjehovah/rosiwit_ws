@@ -17,6 +17,8 @@ public:
     void setMap(const std::string& map_path, const CloudType::Ptr& global_map) override;
     void setKeyframes(const std::vector<LocalKeyframe>& keyframes) override;
     CloudType::Ptr getLocalMap(const PoseStamped& pose) override;
+    /// w-map: 提交的新结构直接进分块缓存 (当帧即可参与匹配)
+    void addWorldPoint(float x, float y, float z, float w);
 
 private:
     struct Kf {

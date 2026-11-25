@@ -97,6 +97,21 @@ void KeyframeSubmapProvider::buildFromMapFallback() {
     buildPoseTree();
 }
 
+void KeyframeSubmapProvider::addWorldPoint(float x, float y, float z, float w) {
+    if (m_kfs.empty()) return;
+    size_t best = 0; double bd = 1e18;
+    for (size_t i = 0; i < m_kfs.size(); ++i) {
+        const double dx = m_kfs[i].pose.trans.x() - x;
+        const double dy = m_kfs[i].pose.trans.y() - y;
+        const double d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = i; }
+    }
+    PointType q;
+    q.x = x; q.y = y; q.z = z;
+    q.intensity = w;
+    m_kfs[best].world->push_back(q);
+}
+
 CloudType::Ptr KeyframeSubmapProvider::getLocalMap(const PoseStamped& pose) {
     CloudType::Ptr out(new CloudType());
     if (!m_pose_tree_ready && !m_have_injected) buildFromMapFallback();

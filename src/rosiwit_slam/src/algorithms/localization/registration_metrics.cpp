@@ -48,6 +48,9 @@ CoverageStats evaluateCoverage(const pcl::KdTreeFLANN<PointType>& kdtree,
     std::vector<float> sq(1);
     const Eigen::Matrix3d R = T.block<3,3>(0,0);
     const Eigen::Vector3d t = T.block<3,1>(0,3);
+    // P4: 目标点自带持久度 w (intensity), 用于加权锚定判据
+    const CloudType::ConstPtr tcloud = kdtree.getInputCloud();
+    double w_all = 0.0, w_in = 0.0;
     double sum = 0.0;
     int used = 0;
     for (int i = 0; i < n; i += step) {
@@ -58,13 +61,22 @@ CoverageStats evaluateCoverage(const pcl::KdTreeFLANN<PointType>& kdtree,
         qp.y = static_cast<float>(q.y());
         qp.z = static_cast<float>(q.z());
         if (kdtree.nearestKSearch(qp, 1, idx, sq) <= 0) continue;
+        double tw = 128.0;                       // 目标点无 w 时按已确认计
+        if (tcloud && idx[0] >= 0 && static_cast<size_t>(idx[0]) < tcloud->size())
+            tw = std::max(0.0f, std::min(255.0f, tcloud->points[idx[0]].intensity));
+        w_all += tw;
         ++used;
-        if (sq[0] <= thr2) { ++s.inliers; sum += std::sqrt(sq[0]); }
+        if (sq[0] <= thr2) {
+            ++s.inliers; sum += std::sqrt(sq[0]);
+            w_in += tw;
+            if (tw >= 128.0f) ++s.inl128;
+        }
     }
     s.total = used;
     if (used > 0) {
         s.coverage = static_cast<double>(s.inliers) / used;
         if (s.inliers > 0) s.mean_dist = sum / s.inliers;
+        if (w_all > 0.0) s.w_support = w_in / w_all;   // 位姿被已确认结构支撑的比例
     }
     return s;
 }

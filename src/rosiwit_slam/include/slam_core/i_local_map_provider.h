@@ -24,6 +24,8 @@ public:
 
     /// 返回位姿附近的局部地图
     virtual CloudType::Ptr getLocalMap(const PoseStamped& pose) = 0;
+    /// w-map: 提交的新结构直接进分块缓存 (当帧参与匹配; 默认无操作)
+    virtual void addWorldPoint(float /*x*/, float /*y*/, float /*z*/, float /*w*/) {}
 
     virtual void configure(const LocalMapConfig& /*cfg*/) {}
 };

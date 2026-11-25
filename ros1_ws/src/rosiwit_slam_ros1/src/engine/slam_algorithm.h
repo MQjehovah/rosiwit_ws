@@ -258,6 +258,10 @@ private:
         float scan_period_ms = 100.0f;
         int lidar_filter_num = 3;
         double lidar_min_range = 0.5, lidar_max_range = 100.0;
+        // 陀螺尖峰过滤: 任一轴 |gyro| 超过此值(rad/s)的 IMU 样本整包丢弃。
+        // 万集 722 内置 IMU 实测间歇性吐 ±8~10 rad/s 尖峰 (静止机器物理不可能),
+        // 会积分进航向造成幻影旋转/去畸变涂抹。<=0 关闭。
+        double gyro_spike_max = 5.0;
         // 机身自过滤: 在 base_link 下按包围盒删除机体自身回波.
         // ---- 以下原本在 legacy JSON, 现在只从 YAML 读 ----
         double rt_grid_map_publish_hz = 1.0;    // mapping.rt_grid_map_publish_hz
@@ -288,6 +292,7 @@ private:
     void onOutput(const rosiwit_slam::SlamOutput& out);
     /// 真正的帧处理 (只在 FrontEnd 线程上跑)
     void processImu(const sensor_msgs::Imu::ConstPtr& msg);
+    unsigned long gyro_spike_dropped_ = 0;   // 陀螺尖峰丢弃计数
     void processLidar(const sensor_msgs::PointCloud2::ConstPtr& msg);
     /// FrontEnd: 唯一消费帧的线程 (运动先验 + 匹配 + 建图前端)
     void frontendLoop(rosiwit_common::CancelToken token);

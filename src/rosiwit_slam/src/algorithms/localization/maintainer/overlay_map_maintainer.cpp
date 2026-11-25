@@ -133,6 +133,15 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
     m_pending_store->push_back(q);   // 供 store 增量插入
     ++m_overlay_count;
     ++m_revision;                    // 目标缓存失效信号
+    // ★w-map (2026-11-26): 提交即升格进工作图云 (intensity=当前 w) —— 目标从
+    // 工作图分块生成, 新结构当帧即可参与匹配; 不再有"增量层"与"全量图"的时差。
+    if (m_base_raw) {
+        PointType bp;
+        bp.x = q.x; bp.y = q.y; bp.z = q.z;
+        bp.intensity = static_cast<float>(m_persistency[vk].w);
+        m_base_raw->push_back(bp);
+    }
+    if (m_commit_sink) m_commit_sink(p, static_cast<float>(m_persistency[vk].w));
 }
 
 void OverlayMapMaintainer::rayCarve(const PoseStamped& pose, const CloudType::Ptr& scan_body) {

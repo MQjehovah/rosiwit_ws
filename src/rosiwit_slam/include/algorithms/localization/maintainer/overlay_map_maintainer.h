@@ -1,6 +1,7 @@
 // include/algorithms/localization/maintainer/overlay_map_maintainer.h
 #pragma once
 #include <unordered_map>
+#include <functional>
 #include <unordered_set>
 #include <cstdint>
 #include <pcl/kdtree/kdtree_flann.h>
@@ -54,6 +55,10 @@ public:
     /// 回收已删除体素的点 (w 降到 0 / 硬删的那些): 由落盘时刻调用 (1h 一次)。
     /// 逐条删除要扫整格点云, 太贵; 攒到落盘时全量扫一遍, 成本可忽略。
     void reclaim() override { compactCells(); }
+    /// 提交钩子: 新结构升格时回调 (w-map 模式下管道用它把点插进工作图分块缓存)
+    void setCommitHook(std::function<void(const Eigen::Vector3d&, float)> hook) {
+        m_commit_sink = std::move(hook);
+    }
     uint64_t revision() const override { return m_revision; }
 
 private:
@@ -108,6 +113,8 @@ private:
     /// 底图体素 w 衰减到 0 的集合: 匹配目标里要剔除这些体素里的底图点
     /// (墙挪了/拆了 = 射线穿过 -> w 递减为 0)。落盘时也剔除, 跨会话持久。
     std::unordered_set<int64_t> m_dead_base;
+    std::atomic<bool> m_carve_enabled{true};   // 静止不雕刻
+    std::function<void(const Eigen::Vector3d&, float)> m_commit_sink;
     uint32_t m_session_id = 1;     // 计票单位 = session
     uint32_t m_day_index = 0;      // 计票单位 = day (pose.time/86400)
     double   m_session_start_s = -1.0;

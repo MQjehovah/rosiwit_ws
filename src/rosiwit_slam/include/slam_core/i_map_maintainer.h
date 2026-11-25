@@ -6,6 +6,8 @@
 #include <cstddef>
 #include "slam_core/localization_stage_types.h"
 
+#include <functional>
+
 namespace rosiwit_slam {
 
 /// 地图维护阶段 (第6阶段): 长期运行时吸收环境变化.
@@ -62,6 +64,8 @@ public:
     virtual CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const { return cloud; }
     /// 回收已删除体素的点 (落盘时刻调用一次, 批量压缩)。
     virtual void reclaim() {}
+    /// w-map: 新结构升格回调 (管道用它同步分块缓存; 默认无操作)
+    virtual void setCommitHook(std::function<void(const Eigen::Vector3d&, float)>) {}
 
     /// A 阶段(影子): 最近一次"位姿可信"帧的扫描点里, 落在 overlay 体素上的点中
     /// w >= maintainer.persistency_anchor 的占比 (0~1)。只统计, 不参与决策。

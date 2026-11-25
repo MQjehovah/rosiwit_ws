@@ -36,6 +36,9 @@ struct AnchorQuality {
     int    correspondences = 0;    // 有效对应数
     bool   has_hessian = false;    // 是否提供 JtJ 特征分解
     double smallest_eig_ratio = 0.0;
+    // P4 (2026-11-26): 位姿被"已确认结构(w>=128)"支撑的内点占比 [0,1]。
+    // 退化/未确认区域里匹配可以自洽, 但支撑的是不可信几何 —— 加权锚定用它区分。
+    double static_support = -1.0;  // <0 = 配准器未填
 };
 
 /// 锚质量判据 (Zhang ICRA 2016 的可观测性 + 场景相对的内点率):
@@ -49,11 +52,15 @@ struct AnchorCriteria {
     int    min_inliers = 50;    // 绝对下限(防 3 个点也当锚)
     double min_ratio = 0.5;     // inliers / 可见点数(滤除前)
     double min_eig_ratio = 1e-3;
+    double min_static_support = 0.0;  // 内点落在 w>=128 体素的加权占比下限 (0=关)
 };
 
 inline bool anchorQualityOk(const AnchorQuality& q, const AnchorCriteria& c) {
     if (!q.converged || !q.accepted) return false;
     if (q.has_hessian && q.smallest_eig_ratio < c.min_eig_ratio) return false;
+    // P4: 静态支撑不足 = 位姿主要靠未确认几何对上的 -> 不当锚 (配准使用 w 权重)
+    if (c.min_static_support > 0.0 && q.static_support >= 0.0 &&
+        q.static_support < c.min_static_support) return false;
     if (q.inliers < c.min_inliers) return false;
     const int vis = q.visible > 0 ? q.visible : q.correspondences;
     if (vis > 0 && static_cast<double>(q.inliers) < c.min_ratio * static_cast<double>(vis)) {

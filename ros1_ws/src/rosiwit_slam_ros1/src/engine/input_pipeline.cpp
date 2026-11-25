@@ -89,6 +89,23 @@ void SlamAlgorithm::processImu(const sensor_msgs::Imu::ConstPtr& msg) {
     s.acc = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
     s.gyro = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
     s.time = getSec(msg->header.stamp) + imu_time_offset_.load();
+    // 陀螺尖峰过滤 (2026-11-26): 万集 722 内置 IMU 间歇性输出 ±8~10 rad/s 的
+    // 尖峰样本 (静止机器物理不可能; 实测 200 样本 std=6.4)。一帧 200Hz 尖峰
+    // 积分 5ms 就是 ~2°/帧的幻影旋转, 会同时污染 ESKF 航向、零偏估计和去畸变。
+    // 超限样本整包丢弃 (200Hz 丢几个无影响), 计数限频告警。gyro_spike_max<=0 关闭。
+    {
+        const double gm = std::max(std::abs(s.gyro.x()),
+                          std::max(std::abs(s.gyro.y()), std::abs(s.gyro.z())));
+        if (!std::isfinite(gm) || (cfg_.gyro_spike_max > 0.0 && gm > cfg_.gyro_spike_max)) {
+            ++gyro_spike_dropped_;
+            if (gyro_spike_dropped_ == 1 || gyro_spike_dropped_ % 200 == 0) {
+                std::cout << "[ImuGuard] 丢弃陀螺尖峰样本 #" << gyro_spike_dropped_
+                          << " |g|=" << gm << " rad/s (limit "
+                          << cfg_.gyro_spike_max << ")" << std::endl;
+            }
+            return;
+        }
+    }
     if (input_seen_hook_) input_seen_hook_(false);
     if (algo_) algo_->onImu(s);
 }
