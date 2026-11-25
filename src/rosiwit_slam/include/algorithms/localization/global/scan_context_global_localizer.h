@@ -16,17 +16,22 @@ public:
 };
 
 /// ScanContext 全局重定位: 描述子库召回 + GICP 精配准.
-/// 复用建图侧落盘的 map.pcd + ".scdb".
+/// 复用建图侧落盘的 map.pcd + ".scdb"; 若没有 .scdb 但有地图关键帧, 则**在本地现场
+/// 用关键帧现建描述子库**(1600 关键帧约 2~5 s, 后台线程做, 建完写盘缓存).
 class ScanContextGlobalLocalizer : public IGlobalLocalizer {
 public:
     std::string name() const override { return "scan_context"; }
     void configure(const GlobalLocalizeConfig& cfg) override;
     bool setMap(const std::string& map_path, const CloudType::Ptr& global_map) override;
+    bool setMapWithKeyframes(const std::string& map_path, const CloudType::Ptr& global_map,
+                             const std::vector<LocalKeyframe>& keyframes) override;
     bool localize(const CloudType::Ptr& scan, GlobalCandidate& out) override;
     int localizeTopK(const CloudType::Ptr& scan, int max_k,
                      std::vector<GlobalCandidate>& out) override;
 
 private:
+    /// 建完 m_db 之后: 全局图降采样 + KD 树 + 粗层
+    bool buildMapSide(const CloudType::Ptr& global_map);
     GlobalLocalizeConfig m_cfg;
     std::shared_ptr<ScanContext> m_sc;
     std::vector<ScanContextDatabaseEntry> m_db;
@@ -37,6 +42,8 @@ private:
     pcl::KdTreeFLANN<PointType> m_kdt_coarse;  // m_map_coarse
     pcl::GeneralizedIterativeClosestPoint<PointType, PointType> m_gicp;
     pcl::GeneralizedIterativeClosestPoint<PointType, PointType> m_gicp_coarse;
+    /// 车体系 -> 水平系 的旋转 (描述子只能建立在水平系上; 本机雷达/IMU 俯装)
+    Eigen::Matrix3d m_level_r = Eigen::Matrix3d::Identity();
     bool m_ready = false;
 };
 

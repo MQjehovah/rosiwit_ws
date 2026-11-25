@@ -26,6 +26,14 @@ public:
     /// @param global_map 全局点云
     virtual bool setMap(const std::string& map_path, const CloudType::Ptr& global_map) = 0;
 
+    /// 带关键帧的建库入口: ScanContext 这类"地点描述子"库需要关键帧(位姿 + 本体系点云)
+    /// 才能在本地现场建库; 默认忽略关键帧, 退化为 setMap.
+    virtual bool setMapWithKeyframes(const std::string& map_path,
+                                     const CloudType::Ptr& global_map,
+                                     const std::vector<LocalKeyframe>& /*keyframes*/) {
+        return setMap(map_path, global_map);
+    }
+
     /// 尝试定位单帧; 命中返回 true 并填充 out
     virtual bool localize(const CloudType::Ptr& scan, GlobalCandidate& out) = 0;
 

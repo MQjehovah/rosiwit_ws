@@ -255,16 +255,23 @@ localization:
   #   matcher     : gicp | pp_icp | p2p_icp | vgicp
   #   monitor     : threshold | windowed
   pipeline:
-    # **按需全局重定位**: /global_localization 服务会触发它; 切图带 initpose 直接跟踪不触发。
+    # **按需全局重定位**: /global_localization 服务或判丢后自动触发; 切图带 initpose 直接跟踪不触发。
     #
     # 为什么不用 bbs: 本机雷达**俯装 41.67°**, 而 BBS 的模型是"点云投影到 xy + 只搜 yaw",
-    # 俯仰分量的存在使 2D 假设不成立 —— 实机候选稳定卡在 0.62, 候选附近 ±2m/±12° 穷举
-    # 也上不去, 而手动给完整 3D 位姿能到 0.9+。fpfh_ransac 是 **3D 特征匹配**, 无此假设。
-    # (若之后把 BBS 改成"先转到车体系再投影", 可以再切回来以换取速度)
-    # bbs 已支持"车体系投影"(见下面 bbs_mount_*): 先转到车体系再 2D 搜索, 结果换回雷达系。
-    # 若发现异常, 切回 fpfh_ransac (3D, 已验证 0.99+) 即可。
-    # 默认关闭全局重定位; 需要冷启动/丢失后全局重锁时改为 fpfh_ransac
-    # (建库已优化为 1m/3m/2 线程, 6M 点图实测约 11s)
+    # 俯仰分量的存在使 2D 假设不成立 —— 实机候选稳定卡在 0.62。
+    #
+    # 2026-11-26 结论 (本仓库录包实测, 详见 docs/GLOBAL_RELOC_2026-11-26.md):
+    #   1) relocalizer: none 时全局重定位是**死代码**, 判丢后只剩 27 起点 × 3s 的局部穷举
+    #      (FitSweep), 帧率 10Hz -> 1.4Hz 且回不来;
+    #   2) 本轮补齐了与算法无关的基础设施: 描述子库改为切图后**后台用地图关键帧自动建**
+    #      (1607 关键帧 ~260ms, 缓存 <map>.reloc.scdb), 查询云统一转到车体系, 召回失败
+    #      退回"按 ringkey 取前 K 再由覆盖率+精配+歧义裁决", 精配够好就提前停;
+    #   3) scan_context 在这张图上**召回还不够**: 同地点描述子距离 0.75~0.81 (阈值 0.4),
+    #      召回候选精配只有 0.29~0.35 -> 暂不建议开(现场用 [SCProbe] 复核).
+    #
+    # 可选: fpfh_ransac = 3D 特征匹配, 不受俯装影响(历史实测 0.99+), 但慢(建库 ~11s,
+    #       单次 topk ~6s + 3s/候选). 判丢后按 retry_interval 重试: 能回来, 但要几十秒.
+    #       scan_context 要真正可用, 下一步是把描述子库改成"按关键帧位姿从全局图切视野"来建.
     relocalizer: none
     motion_prior: imu_ekf   # odom+IMU 误差状态EKF (2026-10-17); 退回旧版改 imu
     local_map: keyframe_submap
@@ -441,6 +448,14 @@ localization:
     sc_max_radius: 80.0
     sc_dist_thresh: 0.4
     sc_candidate_ratio: 0.3
+    sc_z_cap: 4.0              # 描述子高度截断(m): 俯装雷达远处点高度差异大, 0=不截断
+    # ---- 描述子库 (2026-11-26) ----
+    # 库要按"关键帧位姿从全局图切视野"来建并与查询同口径(降采样/水平系/高度截断),
+    # 否则同地点描述子距离 0.75+(阈值 0.4), 召回不到. 现场用 [SCProbe] 复核 best_d.
+    sc_db_from_map: true       # true=从全局图切视野(实测比关键帧原始点云好); false=用关键帧点云
+    sc_db_radius: 30.0         # 每个地点的模拟视野半径(m)
+    sc_db_spacing: 5.0         # 位姿抽稀(m): 太密反而互相混淆(实测 365 地点比 1345 召回好)
+    sc_db_max_places: 800      # 库条目上限
     # bbs 专用
     # **安装变换只有一个来源: TF(base_link <- lidar), 由 ROS 层注入 `bbs_mount_r`(3x3 矩阵)**。
     # 这里不再提供欧拉角配置: 那样会出现第二份来源, 且 rpy 顺序易错

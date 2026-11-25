@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <Eigen/Eigen>
@@ -260,6 +261,26 @@ struct GlobalLocalizeConfig {
     double sc_min_radius = 2.0;
     double sc_dist_thresh = 0.4;
     double sc_candidate_ratio = 0.3;
+    // ScanContext 描述子的高度截断(m): 取每格最大高度前先截到该值.
+    // 本机雷达俯装, 远处点在不同帧/不同距离下高度差异极大, 不截断会导致
+    // "同地点"描述子距离 >1 (阈值 0.4), 全局重定位永远召回失败.
+    double sc_z_cap = 4.0;
+    int    sc_min_overlap_cells = 60;  // 掩码距离至少要比较这么多格子(重叠不足则不可信)
+    // ---- 描述子库建库参数 (2026-11-26) ----
+    // 库必须和查询"同口径": 查询是单帧扫描(雷达系->车体系->水平系), 所以库也按
+    // 关键帧位姿**从全局图切一个视野**再算描述子, 而不是直接拿建图关键帧的原始点云
+    // (那批点云是累积图、被 voxel/高度带裁过, 与单帧扫描系统性不同 -> 实测同地点
+    //  描述子距离 0.75~0.81, 阈值 0.4, 召回不到).
+    double sc_db_radius = 30.0;      // 每个地点的模拟视野半径(m)
+    double sc_db_spacing = 5.0;      // 位姿抽稀: 互相至少隔这么远(m)
+    int    sc_db_max_places = 800;   // 库条目上限
+    // true = 用"从全局图切视野"建库(点位密集但无遮挡); false = 用建图关键帧原始点云
+    // (真实扫描, 有遮挡). 两者都要和查询端**同样的降采样/高度带**才可比.
+    bool   sc_db_from_map = false;
+    // 车体->水平系的旋转 (row-major 3x3): 描述子只对"绕 z 的旋转"不变, 而本机内部
+    // 坐标系是俯装的(雷达/IMU 倾斜 ~39°), 直接算描述子会同时混进俯仰 -> 同地点
+    // 距离也过不了阈值, 列偏移也不再等于世界 yaw. 两边都先转到水平系再算.
+    std::array<double, 9> sc_level_r{{1, 0, 0, 0, 1, 0, 0, 0, 1}};
     // BBS (branch-and-bound) 分支定界 2D 全局搜索
     // 安装角 (base<-lidar 的 rpy, 度)。BBS 的 2D 搜索要求"水平安装":
     // 先把扫描与地图都转到 base(车体)系再投影, 最后把结果换回雷达系。0 = 不转换。
