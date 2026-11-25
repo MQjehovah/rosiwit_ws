@@ -53,7 +53,7 @@ bool ScanContextGlobalLocalizer::setMapWithKeyframes(
     m_db.clear();
     if (!m_sc) configure(m_cfg);
 
-    const std::string db_path = map_path + ".reloc.scdb";   // 与建图侧的 .scdb 区分(高度截断口径不同)
+    const std::string db_path = map_path + ".reloc2.scdb";   // gen2: 切视野建库(与 gen1 关键帧点云口径不同)
     if (loadScanContextDatabase(db_path, m_db) && !m_db.empty()) {
         std::cout << "[SCGlobal] loaded db: " << m_db.size() << " kfs" << std::endl;
         return buildMapSide(global_map);
@@ -64,26 +64,66 @@ bool ScanContextGlobalLocalizer::setMapWithKeyframes(
         return false;
     }
 
-    // ---- 现场建库: 每个关键帧一个描述子 (2~5 s, 跑在后台建库线程) ----
-    // 关键帧点云是本体系, 位姿是 map<-body, 正好是 ScanContext 需要的
-    // (查询时 guess = kf.pose * Rz(列偏移)). 与建图侧 scan_context_lc 的算法一致.
+    // ---- 现场建库: 按关键帧位姿**从全局图切视野**, 与查询同口径 ----
+    // 为什么不再直接用 kf.cloud: 那是建图侧的累积点云(voxel + 高度带裁过), 而查询是
+    // 单帧扫描; 实测同地点描述子距离 0.75~0.81 (阈值 0.4), 召回不到。切图视野后两边
+    // 都是"某点位的 360° 视野", 只剩遮挡差异。
+    // 代价: 每地点一次半径搜索+变换+描述子 (~10~30ms), 条目按 sc_db_spacing 抽稀.
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<ScanContextDatabaseEntry> db;
-    db.reserve(keyframes.size());
     int skipped = 0;
-    for (const auto& kf : keyframes) {
-        if (!kf.cloud || kf.cloud->size() < 50) { ++skipped; continue; }
-        ScanContextDatabaseEntry e;
-        e.id = "kf" + std::to_string(db.size());
-        e.rot = kf.pose.rot;
-        e.trans = kf.pose.trans;
-        // 描述子建在**水平系**上 (与查询端同一变换), 否则俯装雷达的俯仰会混进描述子
-        Eigen::Matrix4d T_lvl = Eigen::Matrix4d::Identity();
-        T_lvl.block<3, 3>(0, 0) = m_level_r;
-        CloudType::Ptr lvl(new CloudType());
-        pcl::transformPointCloud(*kf.cloud, *lvl, T_lvl);
-        e.desc = m_sc->makeDescriptor(lvl);
-        db.push_back(std::move(e));
+    CloudType::Ptr base = m_cfg.sc_db_from_map && global_map
+        ? downsampleCloud(filterFinite(global_map), std::max(0.4, m_cfg.voxel_resolution))
+        : CloudType::Ptr();
+    if (base && base->size() >= 1000) {
+        pcl::KdTreeFLANN<PointType> kdt;
+        kdt.setInputCloud(base);
+        // 位姿抽稀: 贪心保证两两间距 >= sc_db_spacing (关键帧本身 1~2m 一个)
+        const double min_d = std::max(1.0, m_cfg.sc_db_spacing);
+        std::vector<V3D> picked;
+        picked.reserve(static_cast<size_t>(m_cfg.sc_db_max_places));
+        for (const auto& kf : keyframes) {
+            if (static_cast<int>(picked.size()) >= m_cfg.sc_db_max_places) break;
+            bool keep = true;
+            for (const auto& q : picked) {
+                if ((kf.pose.trans - q).norm() < min_d) { keep = false; break; }
+            }
+            if (!keep) continue;
+            CloudType::Ptr sub = cropRadius(kdt, base, kf.pose.trans,
+                                            m_cfg.sc_db_radius, 12000);
+            if (!sub || sub->size() < 100) { ++skipped; continue; }
+            // 世界 -> 车体系 -> 水平系 (与查询端 toBodyFrame + m_level_r 完全同一条链)
+            const Eigen::Matrix3d R_bw = kf.pose.rot.transpose();
+            Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+            T.block<3, 3>(0, 0) = m_level_r * R_bw;
+            T.block<3, 1>(0, 3) = -m_level_r * R_bw * kf.pose.trans;
+            CloudType::Ptr lvl(new CloudType());
+            pcl::transformPointCloud(*sub, *lvl, T);
+            ScanContextDatabaseEntry e;
+            e.id = "place" + std::to_string(db.size());
+            e.rot = kf.pose.rot;
+            e.trans = kf.pose.trans;
+            e.desc = m_sc->makeDescriptor(lvl);
+            db.push_back(std::move(e));
+            picked.push_back(kf.pose.trans);
+        }
+    }
+    if (db.empty() && !keyframes.empty()) {
+        // 全局图不可用 (工作图模式等): 退回"关键帧原始点云"建库, 至少能跑
+        std::cerr << "[SCGlobal] map crops unavailable, fallback to keyframe clouds" << std::endl;
+        for (const auto& kf : keyframes) {
+            if (!kf.cloud || kf.cloud->size() < 50) { ++skipped; continue; }
+            ScanContextDatabaseEntry e;
+            e.id = "kf" + std::to_string(db.size());
+            e.rot = kf.pose.rot;
+            e.trans = kf.pose.trans;
+            Eigen::Matrix4d T_lvl = Eigen::Matrix4d::Identity();
+            T_lvl.block<3, 3>(0, 0) = m_level_r;
+            CloudType::Ptr lvl(new CloudType());
+            pcl::transformPointCloud(*kf.cloud, *lvl, T_lvl);
+            e.desc = m_sc->makeDescriptor(lvl);
+            db.push_back(std::move(e));
+        }
     }
     if (db.empty()) {
         std::cerr << "[SCGlobal] build db failed: all keyframes too small" << std::endl;
@@ -92,8 +132,9 @@ bool ScanContextGlobalLocalizer::setMapWithKeyframes(
     m_db.swap(db);
     const double ms = std::chrono::duration<double, std::milli>(
                           std::chrono::steady_clock::now() - t0).count();
-    std::cout << "[SCGlobal] built db from keyframes: " << m_db.size()
-              << " kfs (skipped " << skipped << ") in " << ms << " ms" << std::endl;
+    std::cout << "[SCGlobal] built db from map crops: " << m_db.size()
+              << " places (skipped " << skipped << ", spacing " << m_cfg.sc_db_spacing
+              << "m, radius " << m_cfg.sc_db_radius << "m) in " << ms << " ms" << std::endl;
     // 落盘缓存: 下次启动直接 load (设备上如果 map_path 在 /dev/shm 每次重建也无妨)
     if (saveScanContextDatabase(db_path, m_db))
         std::cout << "[SCGlobal] cached db -> " << db_path << std::endl;
@@ -120,12 +161,17 @@ int ScanContextGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max
     out.clear();
     if (!m_ready || !m_sc || !scan || scan->empty()) return 0;
 
+    // 查询云先按与建库相同的 voxel 降采样, 再转到水平系算描述子.
+    // 为什么必须降采样: 描述子取"每格最大高度/占用", 对点密度敏感 —— 原始扫描 11.7k 点
+    // vs 关键帧 0.3m 体素(≈3.7k 点), 占用模式系统性不同, 同地点距离也会被拉到 0.7+.
+    CloudType::Ptr scan_desc = downsampleCloud(scan, m_cfg.voxel_resolution);
+    if (!scan_desc || scan_desc->size() < 10) scan_desc = scan;
     const ScanContext::Descriptor cur = [&] {
         // 查询云同样转到水平系再算描述子 (与建库时的变换一致)
         Eigen::Matrix4d T_lvl = Eigen::Matrix4d::Identity();
         T_lvl.block<3, 3>(0, 0) = m_level_r;
         CloudType::Ptr lvl(new CloudType());
-        pcl::transformPointCloud(*scan, *lvl, T_lvl);
+        pcl::transformPointCloud(*scan_desc, *lvl, T_lvl);
         return m_sc->makeDescriptor(lvl);
     }();
 
@@ -201,7 +247,11 @@ int ScanContextGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max
     //   阶段1 粗层 (0.6 m) 淘汰绝大多数错误候选; 阶段2 只在粗层通过的候选上做全精度.
     //   以前每个候选都在 0.3 m 全图上跑完整 GICP, 15 个候选 = 10~40 s.
     const int try_limit = std::max(1, max_k * 3);
-    const double coarse_gate = std::max(0.30, 0.55 * m_cfg.min_score);
+    // 粗筛门限: 描述子只给"大致哪个地方", 候选位置可能差 1~3m (库是 1m 抽稀的地点位姿).
+    // 所以粗筛要松一点(1.2m 容差/0.25 覆盖): 它的作用只是淘汰"完全不对的地方",
+    // 真正的精度由后面的 GICP + 覆盖率 + 歧义门控负责.
+    const double coarse_gate = std::max(0.20, 0.50 * m_cfg.min_score);
+    const double coarse_inlier = 1.2;
     int refined = 0;      // 成功产出候选数
     int fine_tried = 0;   // 实际精配次数 (无论成功), 决定最坏耗时
     // 只精配最靠前的几个候选: 覆盖率打分已经排序, 排在 4 名之后的基本是重复结构.
@@ -226,7 +276,7 @@ int ScanContextGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max
         {
             const Eigen::Matrix4d T0 = guess.cast<double>();
             const CoverageStats cs0 = evaluateCoverage(m_kdt, *scan_down, T0,
-                                                      /*inlier_dist=*/0.8, /*max_points=*/2000);
+                                                      coarse_inlier, /*max_points=*/2000);
             if (cs0.coverage < coarse_gate) continue;
         }
 

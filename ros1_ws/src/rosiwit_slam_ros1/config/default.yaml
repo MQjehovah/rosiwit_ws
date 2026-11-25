@@ -441,6 +441,13 @@ localization:
     sc_dist_thresh: 0.4
     sc_candidate_ratio: 0.3
     sc_z_cap: 4.0              # 描述子高度截断(m): 俯装雷达远处点高度差异大, 0=不截断
+    # ---- 描述子库 (2026-11-26) ----
+    # 库要按"关键帧位姿从全局图切视野"来建并与查询同口径(降采样/水平系/高度截断),
+    # 否则同地点描述子距离 0.75+(阈值 0.4), 召回不到. 现场用 [SCProbe] 复核 best_d.
+    sc_db_from_map: true       # true=从全局图切视野(实测比关键帧原始点云好); false=用关键帧点云
+    sc_db_radius: 30.0         # 每个地点的模拟视野半径(m)
+    sc_db_spacing: 5.0         # 位姿抽稀(m): 太密反而互相混淆(实测 365 地点比 1345 召回好)
+    sc_db_max_places: 800      # 库条目上限
     # bbs 专用
     # **安装变换只有一个来源: TF(base_link <- lidar), 由 ROS 层注入 `bbs_mount_r`(3x3 矩阵)**。
     # 这里不再提供欧拉角配置: 那样会出现第二份来源, 且 rpy 顺序易错

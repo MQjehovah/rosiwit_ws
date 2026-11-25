@@ -393,6 +393,10 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_global_cfg.sc_dist_thresh     = getv<double>(gc, "sc_dist_thresh", m_global_cfg.sc_dist_thresh);
         m_global_cfg.sc_candidate_ratio = getv<double>(gc, "sc_candidate_ratio", m_global_cfg.sc_candidate_ratio);
         m_global_cfg.sc_z_cap           = getv<double>(gc, "sc_z_cap", m_global_cfg.sc_z_cap);
+        m_global_cfg.sc_db_radius       = getv<double>(gc, "sc_db_radius", m_global_cfg.sc_db_radius);
+        m_global_cfg.sc_db_spacing      = getv<double>(gc, "sc_db_spacing", m_global_cfg.sc_db_spacing);
+        m_global_cfg.sc_db_max_places   = getv<int>(gc, "sc_db_max_places", m_global_cfg.sc_db_max_places);
+        m_global_cfg.sc_db_from_map     = getv<bool>(gc, "sc_db_from_map", m_global_cfg.sc_db_from_map);
         m_global_cfg.bbs_z_min          = getv<double>(gc, "bbs_z_min", m_global_cfg.bbs_z_min);
                 // 安装矩阵由 ROS 层注入在 override YAML 的**顶层**(与 r_il/map_directory 同级);
     // 这里同时接受 localization.global 与顶层两种位置(顶层优先取不到时回退)。
