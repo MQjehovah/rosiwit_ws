@@ -178,6 +178,7 @@ void OverlayMapMaintainer::missVoxel(int64_t vk) {
     if (m_cfg.persistency_miss_action == 0) {
         m_persistency.erase(it);
         m_voxel_seen.erase(vk);
+        m_pending_remove.insert(vk);   // 记账: 点从 m_cells 批量回收 (#6)
     } else {
         const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
         v.w = (v.w > gain) ? static_cast<uint8_t>(v.w - gain) : 0;
@@ -185,8 +186,37 @@ void OverlayMapMaintainer::missVoxel(int64_t vk) {
         if (v.w == 0) {
             m_persistency.erase(it);
             m_voxel_seen.erase(vk);
+            m_pending_remove.insert(vk);   // w 降到 0 = 删除, 点一起回收 (#6)
         }
     }
+}
+
+void OverlayMapMaintainer::compactCells() {
+    // 批量回收: 把已删除体素的点从 m_cells 移除, 空分块删除。
+    // 只在 pending 达到阈值时调用 (摊还成本), 语义 = "@w 降到 0 就去除"。
+    if (m_pending_remove.empty()) return;
+    size_t removed = 0;
+    for (auto it = m_cells.begin(); it != m_cells.end();) {
+        auto& cell = it->second;
+        if (!cell) { it = m_cells.erase(it); continue; }
+        auto& pts = cell->points;
+        size_t keep = 0;
+        for (size_t i = 0; i < pts.size(); ++i) {
+            const auto& p = pts[i];
+            const int vx = static_cast<int>(std::floor(p.x / m_voxel));
+            const int vy = static_cast<int>(std::floor(p.y / m_voxel));
+            const int vz = static_cast<int>(std::floor(p.z / m_voxel));
+            if (m_pending_remove.count(voxelKey(vx, vy, vz))) { ++removed; continue; }
+            pts[keep++] = pts[i];
+        }
+        pts.resize(keep);
+        cell->width = static_cast<uint32_t>(keep);
+        it = (keep == 0) ? m_cells.erase(it) : std::next(it);
+    }
+    if (m_overlay_count >= removed) m_overlay_count -= removed;
+    else m_overlay_count = 0;
+    m_pending_remove.clear();
+    if (removed > 0) ++m_revision;
 }
 
 int OverlayMapMaintainer::persistencyAt(const Eigen::Vector3d& p) const {
@@ -229,6 +259,8 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
                                        const MatchResult& match, bool pose_confident) {
     if (!m_cfg.enabled || !scan_body || scan_body->empty()) return;
     ++m_frame;
+    // 内存回收 (#6) 交给落盘时刻 (1h 一次, 全量扫一遍): 逐条回收太贵 (见 reclaim())。
+    // 这里只留一个极大上限的安全阀, 防止长期不落盘时清单无限增长 (只有 key, 很小)。
     m_novel_votes = 0;
     m_novel_committed = 0;
     // 计票单位 = session/day 需要的记账

@@ -158,7 +158,7 @@ private:
     int    m_base_only_age = 0;           // 帧计数, 每 30 帧重建一次底图 crop
     double m_cov_base = -1.0;             // 最近一帧的底图覆盖率 (<0 = 未算)
     int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
-    bool   m_anchor_on_base = true;       // true=位姿锚在底图(目标只用底图); false=子图桥接
+    // 锚定状态只有 m_on_submap 一个 (m_anchor_on_base 已合并, 见下)
     int    m_anchor_close_patience = 10;  // 连续好锚帧 -> 关
     // ---- 子图桥接模式 ----
     bool m_on_submap = false;             // true = 目标=子图, 边建图边定位

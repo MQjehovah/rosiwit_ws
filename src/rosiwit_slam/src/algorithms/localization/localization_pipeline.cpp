@@ -2605,19 +2605,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 if (m_cov_base >= m_monitor_cfg.credible_fitness) ++m_cov_base_ok_streak;
                 else m_cov_base_ok_streak = 0;
 
-                // ---- 锚定开关 ----
-                //   底图匹配度高 -> 位姿锚在底图 (目标 = 底图, 不混子图/overlay)
-                //   底图匹配度低 -> 子图桥接 (目标 = 底图 + 子图/overlay), 子图自更新
-                // 切换时使目标缓存失效, 下一帧重建。
                 if (m_cov_base >= 0.0) {
+                    // cov_base 跨阈值 = 底图锚定质量发生阶跃: 使目标缓存与
+                    // 子图窗口锚失效一次 (边沿检测, 不再单独维护第二个状态变量)。
+                    static bool prev_on_base = true;
                     const bool on_base = (m_cov_base >= m_monitor_cfg.credible_fitness);
-                    if (on_base != m_anchor_on_base) {
-                        m_anchor_on_base = on_base;
+                    if (on_base != prev_on_base) {
+                        prev_on_base = on_base;
                         m_have_submap_anchor = false;   // 子图窗口锚一起失效
                         m_has_cached_target = false;
-                        std::cout << "[anchor] switch to "
-                                  << (on_base ? "BASE map (anchored)" : "submap (bridging)")
-                                  << " cov_base=" << m_cov_base << std::endl;
                     }
                 }
             } else {
@@ -2707,6 +2703,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         wm_last = now;            // 先占位, 防止重复触发
                         wm_last_rev = rev;
                         wm_saving.store(true);
+                        // 存图时刻回收已删除体素的点 (#6): 1h 一次, 全量扫描成本可忽略,
+                        // 之后 snapshotOverlay / 工作图落盘都是干净的。
+                        m_maintainer->reclaim();
                         CloudType::Ptr base_snap(new CloudType(*m_map));
                         CloudType::Ptr ov = m_maintainer ? m_maintainer->snapshotOverlay()
                                                          : nullptr;

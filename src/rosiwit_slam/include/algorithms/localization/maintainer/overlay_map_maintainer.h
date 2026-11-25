@@ -43,6 +43,9 @@ public:
     size_t lastNovelCommitted() const override { return m_novel_committed; }
 
     size_t overlaySize() const { return m_overlay_count; }
+    /// 回收已删除体素的点 (w 降到 0 / 硬删的那些): 由落盘时刻调用 (1h 一次)。
+    /// 逐条删除要扫整格点云, 太贵; 攒到落盘时全量扫一遍, 成本可忽略。
+    void reclaim() { compactCells(); }
     uint64_t revision() const override { return m_revision; }
 
 private:
@@ -94,6 +97,10 @@ private:
     double   m_session_start_s = -1.0;
     CloudType::Ptr m_last_world;   // 最近一次可信帧的扫描点(世界系, 按体素去重, 供 persistencyCoverage)
     std::unordered_map<int64_t, CloudType::Ptr> m_cells;  // 粗分块索引
+    /// 已删除体素(voxel key)的待回收清单: w 降到 0 的体素, 其点仍在 m_cells 里。
+    /// 立即回收要扫整格点云(千点级) x 每帧数千次删除 -> 太贵; 攒到阈值批量压缩。
+    std::unordered_set<int64_t> m_pending_remove;
+    void compactCells();
     Eigen::Vector3d m_last_add = Eigen::Vector3d::Zero();
     bool m_have_last = false;
     int m_low_count = 0;
