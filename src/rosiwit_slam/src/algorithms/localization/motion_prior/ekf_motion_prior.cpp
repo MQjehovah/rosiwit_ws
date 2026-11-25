@@ -87,6 +87,40 @@ void EkfMotionPrior::onImu(const IMUSample& s) {
     const double dt = s.time - m_last_imu_time;
     if (dt <= 0.0 || dt > m_cfg.max_dt) { m_last_imu_time = s.time; return; }
 
+    // ---- 静止陀螺零偏自吸收 (2026-11-25) ----
+    // 万集 722 内置 IMU 的 z 零偏会漂 (实测静止机器 gz 匀速 ~0.03rad/s, 还有 -8/-87 的
+    // 尖峰): 航向匀速漂 -> 匹配解与预测差 >创新量门 -> 全部拒收 -> onMatch 不来 ->
+    // 零偏估计(在 onMatch 里)永不更新 -> 死锁到人工重播种, 有界恢复也救不回
+    // (从转飞的猜测出发 GICP 到不了 min_coverage, 冻结逃逸的 fitness 前置条件也不满足)。
+    // 轮速是最硬的静止证据: 里程计速度≈0 且长时间无采纳匹配时, 真实 yaw 角速度必然≈0,
+    // 把 z 零偏向测量值拉使 (gz-bg)->0, 匹配即可重新过门, 零偏估计闭环恢复。
+    // 只拉 z 轴 (yaw); 运动中或刚有采纳匹配时完全不干预。
+    {
+        const bool wheels_still = m_have_odom && m_v.head<2>().norm() < 0.05;
+        const double match_age =
+            (m_last_match_time >= 0.0) ? (s.time - m_last_match_time) : 1e9;
+        if (wheels_still && match_age > 2.0 && m_calibrated) {
+            m_still_s += dt;
+        } else {
+            m_still_s = 0.0;
+        }
+        if (m_still_s > 1.0) {
+            const double k = std::min(1.0, 2.0 * dt);   // 时间常数 ~0.5s
+            const double resid = s.gyro.z() - m_gyro_bias.z();
+            if (std::fabs(resid) > 0.01) {
+                m_gyro_bias.z() += k * resid;
+                static double s_last_log = 0.0;
+                if (s.time - s_last_log > 2.0) {
+                    s_last_log = s.time;
+                    std::cout << "[StillBg] 静止零偏吸收: gz=" << s.gyro.z()
+                              << " bg_z=" << m_gyro_bias.z()
+                              << " (|v|=" << m_v.head<2>().norm()
+                              << " m/s, 无采纳匹配 " << match_age << "s)" << std::endl;
+                }
+            }
+        }
+    }
+
     // ---- 姿态: 陀螺积分(去零偏) ----
     const V3D w_s = s.gyro - m_gyro_bias;   // 传感器系角速度
     const V3D angle_inc = w_s * dt;
@@ -398,17 +432,26 @@ void EkfMotionPrior::onMatch(const PoseStamped& pose) {
             velocityUpdate(z, m_cfg.ekf_r_match * m_cfg.ekf_r_match);
 
             // 陀螺零偏在线微调 (航向新息; 与 ImuMotionPrior 同款, 该部分实机验证过)
-            const double dtb = std::min(dt, 0.5);
-            // 新息必须同时刻: 旧实现拿先验"现在"的姿态与 t_a 的匹配姿态比, 两者差
-            // ω·(now - t_a) (回放 ~10°), 会被错记成零偏把真实转速吃掉.
-            PoseStamped prior_at;
-            const M3D R_prior = histAt(pose.time, prior_at) ? prior_at.rot : m_pose.rot;
-            const M3D dR = R_prior.transpose() * pose.rot;
-            Eigen::Quaterniond qe(dR);
-            if (qe.w() < 0.0) qe.coeffs() *= -1.0;
-            m_gyro_bias -= dtb * m_cfg.gyro_bias_gain * (qe.w() * qe.vec());
-            m_gyro_bias = m_gyro_bias.cwiseMax(-m_cfg.gyro_bias_max)
-                              .cwiseMin(m_cfg.gyro_bias_max);
+            // ★2026-11-25 修订: 只在"连续匹配流"里学习。长 coast/重定位后的第一帧,
+            // dt 是整个丢失时长, dtb 被 clamp 到 0.5 -> 匹配相对先验的 yaw 修正量 δ
+            // (种子重锚的单次位姿跳变) 被当成零偏注入 bg_z = δ/4: δ=8° -> 2°/s 的
+            // 恒定幻影自旋 ("重定位明明对上了, 位姿原地旋转然后丢, 一段时间自愈"的
+            // 根因; 实测自旋窗口内 raw gz 全程 ~0.000x, 传感器根本没转)。
+            // 位姿单次跳变不是零偏 (零偏是持续的角速度误差) —— 跳过本次学习,
+            // 等连续匹配流 (dt<0.15s) 恢复后再吸收, 那时的小新息才是零偏的真观测。
+            if (dt < 0.15) {
+                const double dtb = std::min(dt, 0.15);
+                // 新息必须同时刻: 旧实现拿先验"现在"的姿态与 t_a 的匹配姿态比, 两者差
+                // ω·(now - t_a) (回放 ~10°), 会被错记成零偏把真实转速吃掉.
+                PoseStamped prior_at;
+                const M3D R_prior = histAt(pose.time, prior_at) ? prior_at.rot : m_pose.rot;
+                const M3D dR = R_prior.transpose() * pose.rot;
+                Eigen::Quaterniond qe(dR);
+                if (qe.w() < 0.0) qe.coeffs() *= -1.0;
+                m_gyro_bias -= dtb * m_cfg.gyro_bias_gain * (qe.w() * qe.vec());
+                m_gyro_bias = m_gyro_bias.cwiseMax(-m_cfg.gyro_bias_max)
+                                  .cwiseMin(m_cfg.gyro_bias_max);
+            }
         }
     }
     // 锚定绝对位姿 (先验只管帧间预测, 绝对位姿归匹配层).

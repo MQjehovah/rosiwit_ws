@@ -90,6 +90,7 @@ private:
     // odom 缓存
     PoseStamped m_odom;
     double m_odom_time = -1.0;
+    double m_still_s = 0.0;              // 静止零偏吸收的连续计时(s)
     bool m_have_odom = false;
     double m_odom_yaw_rate = 0.0;
     double m_gyro_yaw_rate = 0.0;
