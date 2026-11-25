@@ -42,6 +42,7 @@ ScanContext::Descriptor ScanContext::makeDescriptor(const CloudType::Ptr& cloud)
         if (sector >= ns) sector = ns - 1;
 
         // 取每个格子的最大高度 (也可改用最大强度)
+        if (m_cfg.z_cap > 0.0 && z > m_cfg.z_cap) z = m_cfg.z_cap;
         if (z > desc.data(ring, sector)) {
             desc.data(ring, sector) = z;
         }

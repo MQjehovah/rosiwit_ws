@@ -34,6 +34,12 @@ public:
         double min_radius = 2.0;      // 最小有效半径 (m), 去除近处噪声
         int ring_key_bins = 10;       // RingKey 直方图分箱数
         double ring_key_ratio = 0.3;  // RingKey 非空判定阈值 (>此比例=非空)
+        // 高度上限 (m): >0 时把每格高度截到该值再比较.
+        // 为什么需要: 描述子取"每格最大高度", 而远处点的高度会随俯仰/距离线性变化
+        // (本机雷达俯装 41.67°, 50m 外的地面点在雷达系 z≈31m), 不截断的话"同地点"
+        // 的查询和关键帧描述子能差到 20+ m, 召回永远过不了阈值 (实测 best_d=1.63).
+        // 0 = 不截断 (建图侧 loop closure 保持原行为).
+        double z_cap = 0.0;
     };
 
     struct Descriptor {

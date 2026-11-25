@@ -392,6 +392,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
                                               : getv<double>(gc, "sc_min_radius", m_global_cfg.sc_min_radius);
         m_global_cfg.sc_dist_thresh     = getv<double>(gc, "sc_dist_thresh", m_global_cfg.sc_dist_thresh);
         m_global_cfg.sc_candidate_ratio = getv<double>(gc, "sc_candidate_ratio", m_global_cfg.sc_candidate_ratio);
+        m_global_cfg.sc_z_cap           = getv<double>(gc, "sc_z_cap", m_global_cfg.sc_z_cap);
         m_global_cfg.bbs_z_min          = getv<double>(gc, "bbs_z_min", m_global_cfg.bbs_z_min);
                 // 安装矩阵由 ROS 层注入在 override YAML 的**顶层**(与 r_il/map_directory 同级);
     // 这里同时接受 localization.global 与顶层两种位置(顶层优先取不到时回退)。
@@ -759,6 +760,12 @@ void LocalizationPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar
     m_matcher_cfg.crop_r_valid = true;
     if (m_matcher) m_matcher->configure(m_matcher_cfg);
     if (m_global_matcher) m_global_matcher->configure(m_matcher_cfg);
+    // 全局重定位描述子也要用同一个"水平系": 本机内部系是俯装的, ScanContext 只对
+    // 绕 z 的旋转不变, 不转平的话同地点描述子也对不上(实测 best_d 0.77 > 阈值 0.4).
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            m_global_cfg.sc_level_r[r * 3 + c] = r_base_lidar(r, c);
+    if (m_relocalizer) m_relocalizer->configure(m_global_cfg);
     m_base_r = r_base_lidar;
     m_base_r_valid = true;
     diag::log('I', "LocPipeline", "mount injected: up_body=(" + std::to_string(up.x()) + ", " +
@@ -889,6 +896,9 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
         m_reloc_ready = false;
         m_reloc_map_snap = m_map;
         m_reloc_path_snap = m_map_path;
+        // 关键帧还没转换完 (mark("kfs") 之前): 先清空旧图的关键帧, 避免拿旧位姿建库.
+        // 末尾还会再 kick 一次, 那时带上真正的关键帧.
+        m_reloc_kfs_snap.clear();
     }
     if (m_executor) {
         kickRelocBuild();
@@ -1016,6 +1026,7 @@ void LocalizationPipeline::setMapData(const MapData& data) {
         m_reloc_ready = false;
         m_reloc_map_snap = m_map;
         m_reloc_path_snap = m_map_path;
+        m_reloc_kfs_snap = lkfs;   // 只拷 shared_ptr, 点云不复制
     }
     if (!m_reloc_thread.joinable())
         m_reloc_thread = std::thread([this] { relocBuildWorker(); });
@@ -1076,13 +1087,14 @@ bool LocalizationPipeline::runRelocBuildOnce() {
     if (m_reloc_stop || !m_reloc_request) return false;
     const CloudType::Ptr map = m_reloc_map_snap;
     const std::string path = m_reloc_path_snap;
+    const std::vector<LocalKeyframe> kfs = m_reloc_kfs_snap;   // shared_ptr 拷贝
     m_reloc_request = false;
     lk.unlock();
     m_reloc_building.store(true);
     const auto t0 = std::chrono::steady_clock::now();
     bool ok = false;
     if (m_relocalizer && m_relocalizer_name != "none" && map && !map->empty())
-        ok = m_relocalizer->setMap(path, map);
+        ok = m_relocalizer->setMapWithKeyframes(path, map, kfs);
     const double ms = std::chrono::duration<double, std::milli>(
                           std::chrono::steady_clock::now() - t0).count();
     lk.lock();
@@ -1208,16 +1220,19 @@ void LocalizationPipeline::resetRelativeAnchor() {
     if (m_fusion) m_fusion->resetRelative();
 }
 
+CloudType::Ptr LocalizationPipeline::toBodyFrame(const CloudType::Ptr& cloud) const {
+    if (!m_lidar_to_imu_valid || !cloud || cloud->empty()) return cloud;
+    CloudType::Ptr body(new CloudType);
+    pcl::transformPointCloud(*cloud, *body, m_lidar_to_imu);
+    body->header = cloud->header;
+    return body;
+}
+
 CloudType::Ptr LocalizationPipeline::prepareScan(const LidarFrame& f,
                                                 const PoseStamped& end_pose) {
     CloudType::Ptr scan = deskewScan(f, end_pose);
     // 雷达系 -> IMU 系 (定位路径不经过建图前端, 需要自己做)
-    if (m_lidar_to_imu_valid && scan && !scan->empty()) {
-        CloudType::Ptr body(new CloudType);
-        pcl::transformPointCloud(*scan, *body, m_lidar_to_imu);
-        body->header = scan->header;
-        scan = body;
-    }
+    scan = toBodyFrame(scan);
     // 高度带裁剪: 与 matcher 用同一 z 带和同一套安装外参 (地面/贴地点不参与,
     // 也不写进 overlay/子图 —— 否则地面会被当成"新结构")。
     if (m_matcher_cfg.match_z_filter &&
@@ -1733,6 +1748,10 @@ bool LocalizationPipeline::runGlobalRelocOnce() {
         if (nk <= 0) {
             std::lock_guard<std::mutex> lk(m_global_mu);
             m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
+            // 以前这里静默返回: 现场只看得到"一直 LOST", 分不清是描述子召回失败
+            // 还是候选被覆盖率/精配淘汰. 打一条便于定位 (每帧最多一条, 已节流).
+            diag::log('W', "LocPipeline", "global reloc: no candidate from " +
+                      m_relocalizer_name + " -> retry");
             return true;
         }
         std::sort(cands.begin(), cands.end(),
@@ -1754,6 +1773,7 @@ bool LocalizationPipeline::runGlobalRelocOnce() {
             pcl::KdTreeFLANN<PointType> gt_kdtree;
             const bool crop_target = m_global_cfg.reloc_submap_radius > 0.0;
             if (crop_target) gt_kdtree.setInputCloud(global_map);
+            int refined = 0;
             for (const auto& cand : cands) {
                 CloudType::Ptr target = global_map;
                 if (crop_target) {
@@ -1765,12 +1785,20 @@ bool LocalizationPipeline::runGlobalRelocOnce() {
                 MatchResult r;
                 if (!m_global_matcher->match(scan, cand.pose, r) || !r.converged)
                     continue;
+                ++refined;
                 if (r.fitness > best_fit) {
                     second_fit = best_fit;
                     best_fit = r.fitness;
                     best_pose = r.pose;
                 } else if (r.fitness > second_fit) {
                     second_fit = r.fitness;
+                }
+                // 提前收敛: 已经拿到"够好且和次优分得开"的两个候选时不再继续精配.
+                // (候选是按粗分降序的, 后面的只会更差; 这能把最坏耗时从 N 次精配压到 2~3 次)
+                if (refined >= 2 && best_fit >= m_global_cfg.reloc_accept_score &&
+                    (second_fit < m_global_cfg.reloc_accept_score ||
+                     best_fit - second_fit >= m_ambiguity_margin)) {
+                    break;
                 }
             }
         }
@@ -1928,7 +1956,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             if (m_global_cooldown > 0) {
                 --m_global_cooldown;
             } else if (!m_initialized.load() || m_status.load() == LOST || m_global_request) {
-                m_global_scan = f.cloud;
+                // 查询点云必须与地图关键帧同系(车体系): 局部跟踪用的是 prepareScan 之后的
+                // 点云, 这里不能再用原始雷达系点云 (俯装雷达差 41.67°, 描述子对不上).
+                m_global_scan = toBodyFrame(f.cloud);
                 m_global_scan_generation = m_global_generation;
                 m_global_scan_valid = true;
                 m_global_request = true;

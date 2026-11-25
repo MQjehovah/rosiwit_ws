@@ -102,6 +102,10 @@ private:
     /// 匹配用 guess 版本; 写地图必须用"匹配解 res.pose"再算一遍, 否则点云会被
     /// 转差 corr_deg 那几度, 同一面墙写两次就是两层(实车叠图根因之一)。
     CloudType::Ptr prepareScan(const LidarFrame& f, const PoseStamped& end_pose);
+    /// 只做 雷达系 -> IMU/车体系 的外参变换 (不依赖位姿, 冷启动也能用).
+    /// 全局重定位的查询点云必须和地图关键帧同系: 本机雷达俯装 41.67°, 直接用
+    /// 雷达系点云算 ScanContext 描述子会和关键帧(车体系)对不上 -> 永远召回失败.
+    CloudType::Ptr toBodyFrame(const CloudType::Ptr& cloud) const;
 
     /// 子图 vs 先验图 的一致性观测 (只测不改): 把子图刚性地对齐到先验图,
     /// 输出残余刚体变换 (Δt, Δyaw)。Δt≈0 => 两者一致; 明显非零 => 子图已经偏了。
@@ -304,6 +308,9 @@ private:
     bool m_reloc_ready = false;         // 构建完成且对应当前地图
     CloudType::Ptr m_reloc_map_snap;    // 构建目标的地图快照(指针比对判断是否过期)
     std::string m_reloc_path_snap;
+    // 建库用的关键帧快照 (ScanContext 这类地点描述子库要 位姿 + 本体系点云).
+    // 只存 shared_ptr: 点云与局部地图共用, 不额外拷贝点.
+    std::vector<LocalKeyframe> m_reloc_kfs_snap;
     // 冷启动消歧: top1-top2 精配分差小于该值 => 保留多假设跟踪(重复结构双解)
     double m_ambiguity_margin = 0.02;
     // 跟踪期重播种可达性门控: 候选离当前位姿超该值不进假设池(31m 瞬移教训)

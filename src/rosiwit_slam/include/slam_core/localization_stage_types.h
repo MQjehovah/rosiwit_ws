@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <Eigen/Eigen>
@@ -258,6 +259,14 @@ struct GlobalLocalizeConfig {
     double sc_min_radius = 2.0;
     double sc_dist_thresh = 0.4;
     double sc_candidate_ratio = 0.3;
+    // ScanContext 描述子的高度截断(m): 取每格最大高度前先截到该值.
+    // 本机雷达俯装, 远处点在不同帧/不同距离下高度差异极大, 不截断会导致
+    // "同地点"描述子距离 >1 (阈值 0.4), 全局重定位永远召回失败.
+    double sc_z_cap = 4.0;
+    // 车体->水平系的旋转 (row-major 3x3): 描述子只对"绕 z 的旋转"不变, 而本机内部
+    // 坐标系是俯装的(雷达/IMU 倾斜 ~39°), 直接算描述子会同时混进俯仰 -> 同地点
+    // 距离也过不了阈值, 列偏移也不再等于世界 yaw. 两边都先转到水平系再算.
+    std::array<double, 9> sc_level_r{{1, 0, 0, 0, 1, 0, 0, 0, 1}};
     // BBS (branch-and-bound) 分支定界 2D 全局搜索
     // 安装角 (base<-lidar 的 rpy, 度)。BBS 的 2D 搜索要求"水平安装":
     // 先把扫描与地图都转到 base(车体)系再投影, 最后把结果换回雷达系。0 = 不转换。
