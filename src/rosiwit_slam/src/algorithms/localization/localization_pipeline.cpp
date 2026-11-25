@@ -1191,20 +1191,24 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     }
     if (m_maintainer) {
         CloudType::Ptr ov = m_maintainer->getOverlay(pose);
-        if (ov && !ov->empty()) {
-            // 锚定在底图上时目标只用底图 (overlay/子图是"底图锚不住"时的桥接):
-            // 混进去会自引用, 位姿漂了分数还满分 (实机 fitness/fitness_all=1.000)。
-            if (!m_anchor_on_base) {
-                if (m_maintainer_cfg.override_base)
-                    suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
-                *target += *ov;
-            }
+        if (ov && !ov->empty() && !m_anchor_on_base) {
+            // 桥接目标 = "雕刻图", 不是底图∪overlay 的并集:
+            // 并集是双层冗余, 稍一错位扫描点在两层里都能找到对应 -> 评分虚高
+            // (实机: 位姿错 27m 时仍 96 分)。在 overlay 有点的区域,
+            // 用它**替代**底图的旧结构 (suppressBaseByOverlay)。
+            if (m_maintainer_cfg.override_base)
+                suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
+            *target += *ov;
         }
     }
     // 子图 (会话地图): 只在"底图锚不住"时参与匹配; 常驻自更新, 不关闭。
+    // 同样按体素压制底图同区域旧点, 再并入 (保持"雕刻图"语义)。
     if (!m_anchor_on_base && m_session_map.active()) {
         CloudType::Ptr sub = m_session_map.pointsWorld();
-        if (sub && !sub->empty()) *target += *sub;
+        if (sub && !sub->empty()) {
+            suppressBaseByOverlay(target, sub, m_session_map.config().voxel);
+            *target += *sub;
+        }
     }
     return target;
 }
