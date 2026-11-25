@@ -268,7 +268,7 @@ localization:
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
-    map_maintainer: none          # 2026-11-24: 现场先关 overlay(自更新层仍在调试, 改录包离线验证)
+    map_maintainer: overlay       # 2026-11-25: 开 overlay 自更新 (工作图 map.overlay.pcd, 1h 落盘)
     pose_fusion: eskf         # eskf(限幅 + 多源加权, 默认) | direct(直通, 可回退)
 
   # ---- 位姿融合参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效 ----
@@ -456,7 +456,7 @@ localization:
   # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
   # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
   session_map:
-    enabled: false   # 2026-11-24: 现场先关会话子图(会自证漂移, 改录包离线验证)
+    enabled: false   # 2026-11-25: 关会话子图, 先验 overlay (两者轮换测试)
     use_for_tracking: false
     # 2026-11-24: 25 -> 35. 实测雷达点水平距离 p50=27.6 / p90=33.0 / p95=35.6,
     # 25m 只用上 36% 的点 (25~35m 的长墙对抑制 yaw 漂移最有用); 35m 覆盖 94.5%.
@@ -603,14 +603,14 @@ localization:
     radius: 60.0
     voxel: 0.3
     cell: 10.0
-    persist_hits: 3           # 新结构确认票数(按 persistency_unit 计): view => 3 次重新进入视野
+    persist_hits: 2           # 新结构确认票数(按 persistency_unit 计): 2026-11-25 起一律 view+2
     # 工作图落盘: 只有一张全量工作图 (map.overlay.pcd), 1 小时一次, 没变化不写。
     refresh_frames: 300       # ★联动: 周期性用叠加层刷新全局重定位库(环境变化防失效)
     decay_frames: 0            # ★A 阶段: 交给体素可信度 w 软删除, 不再按帧龄硬删 (0=不衰减)
     override_base: true       # 结构被移除/替换时压制原图旧点
     # ---- A 阶段: 体素可信度 w (影子模式, 只统计不决策) ----
     persistency_anchor: 128             # w>=此值视为"高可信静态几何" (0~255; 观测 +8 / 雕刻 -8 / 0 删除)
-    shadow: false            # 打开写入, 用录包验证自更新效果
+    shadow: false            # 2026-11-25: 实写模式 —— overlay 参与匹配(w>=match_w_min)并落盘
     # 参与匹配的最低可信度 w: 低于它只当"虚影"(只留在调试云), 不进匹配目标;
     # 高 w 的结构通过密度占比自然"多算"。128 = persistency_anchor(≈16 次确认)。
     match_w_min: 128           # 低于它的 overlay 点只当虚影, 不参与匹配(128 = persistency_anchor)

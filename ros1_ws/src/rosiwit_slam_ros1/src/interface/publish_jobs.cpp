@@ -165,7 +165,11 @@ void Ros1SlamInterface::buildGlobalMapMessage() {
     vg.setInputCloud(cloud.makeShared());
     vg.filter(*ds);
     ensureCloudDims(*ds);
-    point_map_puber_.publish(toPointCloud2(*ds, kMapFrame, ros::Time::now()));
+    const auto msg = toPointCloud2(*ds, kMapFrame, ros::Time::now());
+    point_map_puber_.publish(msg);
+    // 统一工作图 (w-map) 之后只有一张图: /slam/debug/overlay_map 与 global_map 发同一份
+    // (0.3 体素 + intensity=w)。旧语义"只发新增层"已废弃 —— 底图也进了同一套 w 账本。
+    if (overlay_map_puber_.getNumSubscribers() > 0) overlay_map_puber_.publish(msg);
     debug_map_published_.store(true);   // 只有真正发出去才算完成, 失败留给 startPub 重试
 }
 

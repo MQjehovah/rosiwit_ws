@@ -442,7 +442,7 @@ struct MaintainerConfig {
     double radius = 60.0;            // 叠加层按位姿取用半径(m)
     double voxel = 0.3;              // 叠加层体素(去重)
     double cell = 10.0;              // 叠加层空间分块边长(m)
-    int    persist_hits = 1;         // 体素需被观测到的最少次数才并入(>1 过滤瞬态, 长期用)
+    int    persist_hits = 2;         // 体素需被观测到的最少次数才并入(2026-11-25: 一律 view+2)
     int    refresh_frames = 0;       // 每 N 帧用叠加层刷新全局重定位器 (0=关闭)
     int    decay_frames = 0;         // 叠加层体素超过该帧数未再观测则移除 (0=不衰减)
     // ---- A 阶段: 体素可信度 w (方案 v3 §3) ----
@@ -452,8 +452,8 @@ struct MaintainerConfig {
     int    persistency_anchor = 128;
     // ---- w 的计票单位 (同一个体素在每个单位内最多 +1) ----
     // 0=frame(每帧) 1=view(每次重新进入视野) 2=session(每个任务会话) 3=day(每个自然日)
-    // frame 与扫描频率耦合, 只用于 A/B; 默认 session: w ≈ "多少个任务确认过".
-    int    persistency_unit = 2;
+    // frame 与扫描频率耦合, 只用于 A/B; 2026-11-25 起一律 view: w ≈ "重新进入视野几次确认过".
+    int    persistency_unit = 1;
     int    persistency_hit_gain = 1;        // 每个单位加多少
     int    persistency_miss_confirm = 3;    // 连续 free 证据帧数 -> 判定消失(去抖)
     int    persistency_miss_action = 0;     // 0=删除  1=按 persistency_hit_gain 递减

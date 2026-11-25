@@ -1335,23 +1335,60 @@ void LocalizationPipeline::checkSubmapPriorConsistency() {
     CloudType::Ptr B = downsampleCloud(prior, 0.4);
     if (!A || !B || A->size() < 1500 || B->size() < 1500) return;
 
+    // 第一步: 恒等位姿下的平均最近邻距离 (0.3m 封顶)。
+    // 两云一致时 ~0.05~0.15 (体素错位量级); 明显偏移时 >0.2。先量这个, 大多数帧
+    // 不需要 GICP —— 2026-11-25 实测教训: 对应距离放到 1.0m 的 GICP 会沿走廊状
+    // 结构"滑"出 0.5~2.0m 的假残余 (读数在 0.05 和 1.1m 之间每 3s 来回跳, 物理上
+    // 不可能, 纯属局部最优), 恒等评分才是稳定可信的基准。
+    pcl::KdTreeFLANN<PointType> kdt;
+    kdt.setInputCloud(B);
+    double sum = 0.0;
+    int cnt = 0;
+    std::vector<int> nn_idx(1);
+    std::vector<float> nn_d2(1);
+    for (const auto& p : A->points) {
+        if (kdt.nearestKSearch(p, 1, nn_idx, nn_d2) > 0) {
+            const double d = std::sqrt(static_cast<double>(nn_d2[0]));
+            if (d <= 0.3) { sum += d; ++cnt; }
+        }
+    }
+    if (cnt < static_cast<int>(A->size() / 4)) {
+        // 3/4 的点在 0.3m 内找不到对应 -> 结构性不同 (场景真变了), 不是偏移
+        std::cout << "[submap-prior] n=" << A->size() << "/" << B->size()
+                  << " fit_id=n/a -> UNDECIDABLE(true-change?)" << std::endl;
+        return;
+    }
+    const double fit_id = sum / cnt;
+    if (fit_id < 0.12) {
+        std::cout << "[submap-prior] n=" << A->size() << "/" << B->size()
+                  << " fit_id=" << fit_id << " -> CONSISTENT" << std::endl;
+        return;
+    }
+    // 第二步: 恒等分数差 -> 用**小对应距离**(0.35m) 的 GICP 找局部残余。
+    // 对应距离小, GICP 最多滑 0.35m, 量出的 Delta 才是真实局部偏移。
     pcl::GeneralizedIterativeClosestPoint<PointType, PointType> gicp;
     gicp.setInputSource(A);
     gicp.setInputTarget(B);
     gicp.setMaximumIterations(30);
-    gicp.setMaxCorrespondenceDistance(1.0);
+    gicp.setMaxCorrespondenceDistance(0.35);
     gicp.setTransformationEpsilon(1e-6);
     CloudType aligned;
     gicp.align(aligned);
-    if (!gicp.hasConverged()) return;
+    if (!gicp.hasConverged()) {
+        std::cout << "[submap-prior] n=" << A->size() << "/" << B->size()
+                  << " fit_id=" << fit_id << " -> UNDECIDABLE(no-converge)" << std::endl;
+        return;
+    }
     const Eigen::Matrix4f T = gicp.getFinalTransformation();
     const double dx = T(0, 3), dy = T(1, 3);
     const double dt = std::sqrt(dx * dx + dy * dy);
     const double dyaw = std::atan2(T(1, 0), T(0, 0)) * 57.2957795;
-    const double fit = gicp.getFitnessScore(0.3);
+    const double fit_al = gicp.getFitnessScore(0.3);
+    const bool real_offset = (fit_al < 0.7 * fit_id && dt > 0.10);
     std::cout << "[submap-prior] n=" << A->size() << "/" << B->size()
-              << " fit=" << fit << " residual=" << dt << "m/" << dyaw << "deg -> "
-              << ((dt > 0.20 || std::fabs(dyaw) > 1.5) ? "OFFSET" : "CONSISTENT")
+              << " fit_id=" << fit_id << " fit_al=" << fit_al
+              << " d=" << dt << "m/" << dyaw << "deg -> "
+              << (real_offset ? "OFFSET" : "UNDECIDABLE(struct-diff)")
               << std::endl;
 }
 
@@ -2529,7 +2566,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     have_prev_insert = true;
     // 大修正(>0.3m / >5°)后, 之前写进会话子图的点在世界系里就"错位"了: 不清掉的话,
     // 目标和调试云里都会出现新旧两层墙(实车"叠图"). 子图是临时补丁, 重建代价很低。
-    if (m_session_map.active() && (corr_m > 0.15 || corr_deg > 1.5)) {
+    // 大修正后子图的处理 (2026-11-25 修订: 只在桥接态搬移):
+    //   桥接态: 位姿由子图自证, 修正后必须把子图一起搬 (T_GS' = Delta o T_GS),
+    //           否则位姿和补丁脱钩, 下帧目标就错 (搬移在这里是必须的)。
+    //   锚定态: 位姿由**底图**校正, 世界没动, 子图点本来就写在世界系里 ——
+    //           把局部修正抹到整个 35m 补丁上, 是把噪声固化进补丁 (实测: 每次搬移后
+    //           [submap-prior] 残差台阶式变大, 累计 ~0.75m 后 fitness 掉到 0.57 判丢)。
+    //           修正只影响"之后写入的点", 老点不动。
+    if (m_on_submap && m_session_map.active() &&
+        (corr_m > 0.15 || corr_deg > 1.5)) {
         // 不管当前是锚定还是桥接, 一律"刚性搬移": 清空子图在任何状态下都可能把
         // 唯一的跟踪源丢掉; 而点不动、只改 anchor 变换(T_GS' = Δ∘T_GS)是等价且无损的。
         // Δ = res ∘ guess⁻¹ (作用在世界系)。
@@ -2839,8 +2884,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             // overlay 是跨会话确认过的结构, 属于地图; 只有会话子图是本会话自证的部分。
             //   cov_prior 高 -> 先验图锚得住 -> 关闭子图
             //   cov_prior 低 -> 先验图锚不住 -> 子图自更新
-            if (m_session_map_enabled && m_ever_localized && scan && !scan->empty() &&
-                m_local_map) {
+            // 2026-11-25: 不再挂 session_map.enabled —— overlay 的 T4 写图门槛
+            // (base_anchored) 也用 cov_base, 关子图开 overlay 时它必须照常计算,
+            // 否则永远是 -1, 写图门槛退化成 anchorOk(自引用风险)。
+            if (m_ever_localized && scan && !scan->empty() && m_local_map) {
                 // 成本: 全点降采样 + 全图 KD 查询 ~几 ms。诊断用途, 每 5 帧算一次即可
                 // (锚定切换用的是 m_on_submap 的弱锚 streak, 不依赖这个值的实时性)。
                 static int cov_n = 0;
@@ -2891,10 +2938,17 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             }
             }
 
-            if (m_maintainer) {
-                int anchor_age = 0;
-                size_t persistency_pts = 0;
-                const double ss = m_maintainer->persistencyCoverage(m_pose, &anchor_age, &persistency_pts);
+            // ---- 锚质量 / 会话子图 / 诊断输出 ----
+            // ★与 overlay maintainer 解耦 (2026-11-25): 会话子图是独立机制, 由
+            // session_map.enabled 单独控制, 不依赖是否配置了 map_maintainer ——
+            // 现场曾因 map_maintainer:none 时 maintainer 为空, 整段子图逻辑不执行,
+            // 表现为"开了子图却没有 [session_map] open / 话题无数据"。
+            int anchor_age = 0;
+            size_t persistency_pts = 0;
+            // persistency_cov 是 overlay 的诊断量: 没开 overlay 时输出 n/a
+            const double ss = m_maintainer
+                ? m_maintainer->persistencyCoverage(m_pose, &anchor_age, &persistency_pts)
+                : -1.0;
 
                 // ---- B 阶段(影子): 突变场景"会话地图"(session map) ----
                 // 锚质量 = 行业标准三件套: 本帧被接受 + inliers + JtJ 最小特征值比
@@ -2910,7 +2964,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     // overlay 顶不住 -> 切换目标到子图。
                     // **只切换, 不重建**: 子图从定位成功起就一直在建, 内容可信;
                     // 此刻 reset 会让子图变薄, 临时建图必然出错。
-                    if (!m_on_submap && m_ever_localized &&
+                    // ★必须确认子图机制已启用: session_map.enabled=false 时没有子图,
+                    //   切桥接 = 目标变成空云, 匹配直接失效 (overlay-only 模式的灾难)。
+                    if (m_session_map_enabled && !m_on_submap && m_ever_localized &&
                         m_anchor_weak_streak >= m_anchor_patience &&
                         m_status.load() != LOST) {
                         m_on_submap = true;
@@ -2936,13 +2992,17 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         // 只要定位成功且覆盖率高, 就立刻开子图并**一直在建**:
                         // 底图某天完全变化锚不住时, 已建好的子图立即顶上 (边建图边定位),
                         // 而不是临时去建 (临时建的子图自身就是错的, 顶不住)。
-                        // 桥接态放宽到 lost_fitness: 降级带里也要能开/建, 否则子图冻结越走越对不上。
-                        // 桥接态写入用**子图专用低门槛**(默认 0.35): 变化区里对先验的
-                        // fitness 天然只有 0.4~0.5, 若还要求 0.6/0.85, 就会死锁
+                        // ★开图/写图门槛用 lost_fitness(=accept.min_coverage, 0.6):
+                        //   overlay 关掉后目标只剩底图, fitness 天然 0.78~0.85
+                        //   (0.93 那种是带子图自证的分数), 拿 credible(0.85) 当门槛
+                        //   子图永远开不了(2026-11-25 实机: 无 [session_map] open)。
+                        //   补丁不进匹配目标(只有桥接才进), 写差了可被 zip-up/一致性观测兜住。
+                        // 桥接态放宽到 m_sm_write_fitness(0.35): 变化区里对先验的
+                        // fitness 天然只有 0.4~0.5, 若沿用 overlay 门槛, 就会死锁
                         // —— 需要子图才能提分, 又因为分不够不让写子图(2026-11-24 实机:
                         // submap_size 一直是 0, 桥接态等于没图可配, 30 帧后必丢)。
                         const double write_bar = !m_on_submap
-                                                     ? m_monitor_cfg.credible_fitness
+                                                     ? m_monitor_cfg.lost_fitness
                                                      : m_sm_write_fitness;
                         if (!m_session_map.active() && m_status.load() == LOCALIZED &&
                             accepted && res.fitness >= write_bar) {
@@ -2973,7 +3033,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // 每点 intensity = w (w==0 的点不写)。没有增量日志。
                 // map.pcd 只做原图备份, 永不修改。
                 // 变化判据 = maintainer revision() (几何/权重有增删才 +1)。
-                if (m_ever_localized && m_map &&
+                if (m_maintainer && m_ever_localized && m_map &&
                     !m_map->empty() && m_initialized && accepted) {
                     static std::atomic<bool> wm_saving(false);
                     static std::chrono::steady_clock::time_point wm_last =
@@ -3010,11 +3070,6 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                             wm_saving.store(false);
                         }).detach();
                     }
-                // ★必须在 m_session_map_mu 作用域之外调用(函数内部会自己加锁,
-                // 非递归 mutex 在同一线程二次加锁 = 死锁; 2026-11-24 实机踩过)。
-                if (m_session_map_enabled && (++m_consistency_tick % 30 == 0)) {
-                    checkSubmapPriorConsistency();
-                }
                 std::ostringstream qs;
                 qs.setf(std::ios::fixed);
                 qs.precision(3);
@@ -3023,8 +3078,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 qs << " anchor_age=" << anchor_age
                    << " persistency_pts=" << persistency_pts
                    << " cov_base=" << (m_cov_base >= 0.0 ? m_cov_base : -1.0)
-                   << " novel_votes=" << m_maintainer->lastNovelVotes()
-                   << " novel_commits=" << m_maintainer->lastNovelCommitted()
+                   << " novel_votes=" << (m_maintainer ? m_maintainer->lastNovelVotes() : 0)
+                   << " novel_commits=" << (m_maintainer ? m_maintainer->lastNovelCommitted() : 0)
                    << " state="
                    << (m_status.load() == LOST ? "LOST"
                        : (m_status.load() == LOCALIZED ? "LOCALIZED" : "INIT"))
@@ -3040,7 +3095,6 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " session_map_size=" << session_map_size
                    << " session_map_age=" << session_map_age;
                 std::cout << qs.str() << std::endl;
-            }
         }
     }
 }

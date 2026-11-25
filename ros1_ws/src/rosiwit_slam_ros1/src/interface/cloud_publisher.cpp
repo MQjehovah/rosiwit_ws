@@ -59,68 +59,21 @@ void Ros1SlamInterface::startPub() {
         (mode == SlamMode::MAPPING && have_imu_.load() && have_laser_.load());
     if (scan_wanted) scheduleScanJob();
 
-    // 1Hz 调试出口: 地图自更新 overlay / 会话地图 (latched, 有订阅者才构建)
+    // 1Hz 调试出口: 会话地图 (latched, 有订阅者才构建)。
+    // overlay_map 已并入 global_map 的整图发布 (统一工作图后只有一张图, 见 publish_jobs.cpp),
+    // 这里不再发"新增层", 避免把 latched 整图覆盖成小增量云。
     if (debug_publish_ && mode == SlamMode::LOCALIZATION &&
-        (overlay_map_puber_.getNumSubscribers() > 0 ||
-         session_map_puber_.getNumSubscribers() > 0)) {
+        session_map_puber_.getNumSubscribers() > 0) {
         const ros::Time now = ros::Time::now();
         if (last_aux_map_pub_.isZero() || (now - last_aux_map_pub_).toSec() >= 1.0) {
             last_aux_map_pub_ = now;
-            if (overlay_map_puber_.getNumSubscribers() > 0) {
-                rosiwit_slam::PointVec pts;
-                if (engine_.getOverlayCloud(pts) && !pts.empty()) {
-                    // 只发 x/y/z/intensity, intensity = A 阶段持久度 w(0~255);
-                    // 着色交给客户端 (RViz Intensity / CloudCompare 标量场), 这里不烤颜色.
-                    pcl::PointCloud<pcl::PointXYZI> cloud;
-                    cloud.reserve(pts.size());
-                    for (const auto& p : pts) {
-                        pcl::PointXYZI q;
-                        q.x = p.x;
-                        q.y = p.y;
-                        q.z = p.z;
-                        q.intensity = p.intensity;
-                        cloud.push_back(q);
-                    }
-                    cloud.width = static_cast<uint32_t>(cloud.size());
-                    cloud.height = 1;
-                    cloud.is_dense = false;
-                    sensor_msgs::PointCloud2 msg;
-                    pcl::toROSMsg(cloud, msg);
-                    msg.header.frame_id = kMapFrame;
-                    msg.header.stamp = now;
-                    overlay_map_puber_.publish(msg);
-                    static int wlog = 0;
-                    if (++wlog % 10 == 1) {   // 约 10s 一次, 打 w 的分布
-                        float wmin = 1e9f, wmax = -1e9f;
-                        std::vector<float> ws;
-                        ws.reserve(pts.size());
-                        for (const auto& p : pts) {
-                            const float w = p.intensity;
-                            wmin = std::min(wmin, w);
-                            wmax = std::max(wmax, w);
-                            ws.push_back(w);
-                        }
-                        std::nth_element(ws.begin(), ws.begin() + ws.size() / 2, ws.end());
-                        const float wmed = ws[ws.size() / 2];
-                        size_t confirmed = 0;
-                        for (size_t i = 0; i < ws.size(); ++i) {
-                            if (ws[i] >= overlay_anchor_) ++confirmed;
-                        }
-                        std::cout << "[overlay] pts=" << pts.size()
-                                  << " w[min/med/max]=" << wmin << "/" << wmed << "/" << wmax
-                                  << " w>=" << overlay_anchor_ << ":" << confirmed << std::endl;
-                    }
-                }
-            }
-            if (session_map_puber_.getNumSubscribers() > 0) {
-                rosiwit_slam::PointVec pts;
-                if (engine_.getSessionMapCloud(pts) && !pts.empty()) {
-                    CloudType cloud;
-                    cloud.reserve(pts.size());
-                    for (const auto& p : pts) cloud.push_back(p);
-                    ensureCloudDims(cloud);
-                    session_map_puber_.publish(toPointCloud2(cloud, kMapFrame, now));
-                }
+            rosiwit_slam::PointVec pts;
+            if (engine_.getSessionMapCloud(pts) && !pts.empty()) {
+                CloudType cloud;
+                cloud.reserve(pts.size());
+                for (const auto& p : pts) cloud.push_back(p);
+                ensureCloudDims(cloud);
+                session_map_puber_.publish(toPointCloud2(cloud, kMapFrame, now));
             }
         }
     }
