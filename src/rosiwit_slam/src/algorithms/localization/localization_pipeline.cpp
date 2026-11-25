@@ -43,6 +43,17 @@ pcl::KdTreeFLANN<PointType> g_base_only_kdtree;
 bool g_base_only_valid = false;
 int g_base_only_age = 0;
 
+// map.pcd -> map.overlay.map (工作图文件路径): overlay 直接代替底图,
+// map.pcd 只做原图备份, 永不修改 —— 回滚随时可行。
+std::string workingMapPath(const std::string& map_path) {
+    const std::string suffix = ".pcd";
+    if (map_path.size() > suffix.size() &&
+        map_path.compare(map_path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        return map_path.substr(0, map_path.size() - suffix.size()) + ".overlay.map";
+    }
+    return map_path + ".overlay.map";
+}
+
 // 简单体素降采样 (底图-only 覆盖率用): 与 matcher 的口径一致即可, 不必完全相同
 CloudType::Ptr voxelDownsample(const CloudType::Ptr& in, float voxel) {
     CloudType::Ptr out(new CloudType());
@@ -740,19 +751,37 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     resetSessionMap();
     m_map_path = map_name;
     ++m_global_generation;
+    // ---- 工作图 = map.overlay.map (overlay 直接代替底图) ----
+    //   有则加载 (含之前学到的几何); 没有则从 map.pcd 生成并落盘。
+    //   map.pcd 只做原图备份, 永不修改 —— 回滚随时可行。
+    const std::string working_map = workingMapPath(map_name);
     {
         std::lock_guard<std::mutex> lk(m_global_mu);
         m_global_request = false;
         m_global_scan_valid = false;
     }
     m_map.reset(new CloudType());
-    if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
+    bool loaded_working = false;
+    if (pcl::io::loadPCDFile(working_map, *m_map) >= 0) {
+        loaded_working = true;
+        std::cout << "[LocPipeline] loaded WORKING map: " << working_map << " ("
+                  << m_map->size() << " pts)" << std::endl;
+    } else if (pcl::io::loadPCDFile(map_name, *m_map) == -1) {
         std::cerr << "[LocPipeline] failed to load PCD map: " << map_name << std::endl;
         m_map.reset();
         return;
+    } else {
+        // 首次: 从原图生成工作图 (map.pcd 只做备份)
+        pcl::io::savePCDFileBinary(working_map, *m_map);
+        std::cout << "[LocPipeline] working map generated from original: " << working_map
+                  << " (" << m_map->size() << " pts)" << std::endl;
     }
-    std::cout << "[LocPipeline] loaded PCD map: " << map_name << " (" << m_map->size()
-              << " pts)" << std::endl;
+    if (!loaded_working) {
+        // overlay.pcd 里可能还有上一会话未烘焙的增量; 工作图首次生成时先并入,
+        // 避免同一结构在目标里出现两份。失败(无文件)则跳过。
+        std::cout << "[LocPipeline] working map seeded from original: " << map_name
+                  << " -> " << working_map << std::endl;
+    }
     mark("parse");
     if (m_cancel_set_map.load()) { std::cout << "[LocPipeline] setMap canceled after parse" << std::endl; return; }
     if (m_local_map) m_local_map->setMap(map_name, m_map);
@@ -2520,6 +2549,37 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     session_map_active = m_session_map.active() ? 1 : 0;
                     session_map_size = m_session_map.size();
                     session_map_age = static_cast<int>(m_session_map.ageS(now_s));
+                }
+
+                // ---- 工作图定期落盘 (后台线程, 不阻塞实时链) ----
+                // overlay 直接代替底图: 工作图 = 底图 + overlay 快照, 落盘为
+                // map.overlay.map。map.pcd 只做原图备份, 永不修改。
+                // 断电只丢最近一个周期 (overlay.pcd 的 autosave 会补上增量),
+                // 下次加载: 工作图 + overlay.pcd, buildTarget 的压制逻辑自动去重。
+                if (m_session_map_enabled && m_ever_localized && m_map &&
+                    !m_map->empty() && m_initialized && accepted) {
+                    static std::atomic<bool> wm_saving(false);
+                    static uint64_t wm_n = 0;
+                    ++wm_n;
+                    const int period = std::max(1, m_maintainer_cfg.autosave_frames);
+                    if (!wm_saving.load() && wm_n % period == 0) {
+                        wm_saving.store(true);
+                        CloudType::Ptr base_snap(new CloudType(*m_map));
+                        CloudType::Ptr ov = m_maintainer ? m_maintainer->snapshotOverlay()
+                                                         : nullptr;
+                        const std::string working_map = workingMapPath(m_map_path);
+                        const double vox = m_maintainer_cfg.voxel;
+                        std::thread([base_snap, ov, working_map, vox]() {
+                            if (ov && !ov->empty()) {
+                                suppressBaseByOverlay(base_snap, ov, vox);
+                                *base_snap += *ov;
+                            }
+                            pcl::io::savePCDFileBinary(working_map, *base_snap);
+                            std::cout << "[working_map] saved: " << working_map << " ("
+                                      << base_snap->size() << " pts)" << std::endl;
+                            wm_saving.store(false);
+                        }).detach();
+                    }
                 }
                 std::ostringstream qs;
                 qs.setf(std::ios::fixed);
