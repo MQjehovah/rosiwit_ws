@@ -1445,11 +1445,25 @@ void LocalizationPipeline::checkSubmapPriorConsistency() {
 }
 
 CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
-    // ---- 子图桥接模式: 目标 = 子图 (临时图, 边建图边定位) ----
-    // overlay 锚不住时用子图维持; 周期性对 overlay 探测重锚 (见 onLidar)。
+    // ---- 子图桥接模式: 目标 = 工作图 crop + 子图【联合】 (ROLL 式联合匹配) ----
+    // ★2026-11-26: 旧实现桥接时目标切成纯子图 —— 子图只含"走过的地方"(写入还
+    // 停在 fitness 门后, 滞后于机器人), 行驶进入薄弱区时纯子图撑不住, fitness
+    // 0.86 -> 0.33 -> LOST (实机 00:02 完整复现)。ROLL 的做法是全局图与临时图
+    // 【联合】匹配: 变化区域由子图覆盖, 其余由工作图锚定, 不存在"失去约束"的
+    // 空窗。桥接/锚定的差别只剩 overlay 权重, 模式切换的复杂度大幅下降。
     if (m_on_submap) {
-        std::lock_guard<std::mutex> lk(m_session_map_mu);   // 与 reset/update 互斥
-        return m_session_map.pointsWorld();
+        CloudType::Ptr out(new CloudType());
+        if (m_local_map) {
+            CloudType::Ptr base_crop = m_local_map->getLocalMap(pose);
+            if (base_crop && !base_crop->empty()) *out += *base_crop;
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_session_map_mu);   // 与 reset/update 互斥
+            CloudType::Ptr sub = m_session_map.pointsWorld();
+            if (sub && !sub->empty()) *out += *sub;
+        }
+        if (!out->empty()) out = downsampleCloud(out, 0.3);   // 并集去重
+        return out;
     }
     // ---- overlay 锚定模式: 目标 = 底图 crop + overlay (压制同区域旧点) ----
     return buildAnchoredTarget(pose);
@@ -3043,6 +3057,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     //   切桥接 = 目标变成空云, 匹配直接失效 (overlay-only 模式的灾难)。
                     if (m_session_map_enabled && !m_on_submap && m_ever_localized &&
                         m_anchor_weak_streak >= m_anchor_patience &&
+                        m_session_map.size() > 3000 &&   // 空子图不接管 (目标会被空云顶替)
                         m_status.load() != LOST) {
                         m_on_submap = true;
                         m_probe_countdown = m_probe_period;
@@ -3093,8 +3108,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         // 变化区里残差本来就大, 套上就永远写不进去。
                         const bool pose_stable_sm =
                             (corr_m <= m_sm_write_corr_m && corr_deg <= m_sm_write_corr_deg);
-                        if (accepted && res.converged && pose_stable_sm &&
-                            res.fitness >= write_bar && scan_map && !scan_map->empty()) {
+                        // ★桥接 = 异常学习模式 (ROLL 式): 低 fitness 本身就是"场景
+                        // 与图不一致"的信号, 此刻若仍要求 accepted+fitness 门, 变化
+                        // 结构永远学不进子图 (实测死锁)。桥接时只要 GICP 收敛且
+                        // 位姿没跳 (pose_stable), 就用当前解注册扫描 —— 子图是临时
+                        // 的, 有 zip-up 修正和 LOST 清空兜底。锚定态维持原门槛。
+                        const bool write_ok = m_on_submap
+                            ? (res.converged && pose_stable_sm)
+                            : (accepted && res.converged && pose_stable_sm &&
+                               res.fitness >= write_bar);
+                        if (write_ok && scan_map && !scan_map->empty()) {
                             m_session_map.update(*scan_map, res.pose);
                         }
                     }
