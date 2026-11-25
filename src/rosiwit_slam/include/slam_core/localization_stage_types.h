@@ -461,7 +461,7 @@ struct MaintainerConfig {
     bool   shadow = true;            // true: w 只用于 persistency_cov 观测, 不影响定位/插入
     // 写图要求匹配残差小 (rmse = 平均最近邻距离, m): 位姿不确定时不落图。
     // 0 = 关闭该条。
-    double max_rmse = 0.06;
+    double max_rmse = 0.20;          // 2026-11-25 实测校准: 0.3 体素 rmse 地板 ~0.14, 0.06 全拒
     // 参与匹配的最低可信度: w < 此值的 overlay 点只当"虚影", 不进匹配目标。
     // 默认 = persistency_anchor(128): 只有被反复确认(≈16 个 view)的结构才参与定位。
     int    match_w_min = 128;
