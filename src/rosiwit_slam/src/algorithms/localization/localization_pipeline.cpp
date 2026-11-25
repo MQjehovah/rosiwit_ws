@@ -1424,16 +1424,24 @@ void LocalizationPipeline::checkSubmapPriorConsistency() {
         return;
     }
     const Eigen::Matrix4f T = gicp.getFinalTransformation();
-    const double dx = T(0, 3), dy = T(1, 3);
-    const double dt = std::sqrt(dx * dx + dy * dy);
+    const double dx = T(0, 3), dy = T(1, 3), dz = T(2, 3);
+    const double dxy = std::sqrt(dx * dx + dy * dy);
     const double dyaw = std::atan2(T(1, 0), T(0, 0)) * 57.2957795;
     const double fit_al = gicp.getFitnessScore(0.3);
-    const bool real_offset = (fit_al < 0.7 * fit_id && dt > 0.10);
+    // 分类 (2026-11-25 v2): 残差含 z —— 子图与先验的差异可能主要在垂直轴
+    // (z 基准/安装高差), 只看 xy 会把「对齐良好」误标成 struct-diff。
+    //   CONSISTENT : 对齐后残差已经很小 (fit_al<0.12 且 xy/z/yaw 都小)
+    //   OFFSET     : 对齐显著改善 (fit_al < 0.7*fit_id) 且 xy 或 z 或 yaw 超阈
+    //   UNDECIDABLE: 对齐也无改善 (两朵云结构确实不同, 真变化)
+    const bool improved = (fit_al < 0.7 * fit_id);
+    const bool small = (dxy < 0.10 && std::fabs(dz) < 0.10 && std::fabs(dyaw) < 1.5);
+    const bool offset = improved && !small;
+    const char* cls = small ? "CONSISTENT"
+                    : (offset ? "OFFSET" : "UNDECIDABLE(struct-diff)");
     std::cout << "[submap-prior] n=" << A->size() << "/" << B->size()
               << " fit_id=" << fit_id << " fit_al=" << fit_al
-              << " d=" << dt << "m/" << dyaw << "deg -> "
-              << (real_offset ? "OFFSET" : "UNDECIDABLE(struct-diff)")
-              << std::endl;
+              << " dxy=" << dxy << "m dz=" << dz << "m/" << dyaw << "deg -> "
+              << cls << std::endl;
 }
 
 CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
