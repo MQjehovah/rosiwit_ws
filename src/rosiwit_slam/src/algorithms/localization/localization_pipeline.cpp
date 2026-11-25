@@ -2689,7 +2689,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // overlay 直接代替底图: 工作图 = 底图 + overlay 快照 → map.overlay.map。
                 // map.pcd 只做原图备份, 永不修改。
                 // 变化判据 = maintainer revision() (overlay 有增删才 +1)。
-                if (m_session_map_enabled && m_ever_localized && m_map &&
+                if (m_ever_localized && m_map &&
                     !m_map->empty() && m_initialized && accepted) {
                     static std::atomic<bool> wm_saving(false);
                     static std::chrono::steady_clock::time_point wm_last =
