@@ -40,9 +40,26 @@ export const ros = new DebugRosClient(
 export const bridge = ros.bridge
 export const tfTree = new TfTree()
 
-export type LayerKey = 'tf' | 'status' | 'logs' | 'trail'
+export type LayerKey = 'tf' | 'logs' | 'trail'
 
 export type RendererKind = 'points' | 'grid' | 'laser' | 'path' | 'polygon' | 'json' | 'status' | 'image'
+
+/** 插件 = 绑定一个话题的可视化卡片；系统本身不自动订阅它。 */
+export type PluginKind = 'status' | 'device'
+export type PluginDock = 'left' | 'canvas'
+
+export interface PluginItem {
+  id: string
+  kind: PluginKind
+  title: string
+  topic: string
+  enabled: boolean
+  dock: PluginDock
+  /** 投到画布后的位置（相对视口左上角，px） */
+  x: number
+  y: number
+  w: number
+}
 
 export interface DisplayStats {
   hz: number
@@ -140,6 +157,8 @@ export const state = reactive({
   shadowTime: 0,
 
   displays: [] as DisplayItem[],
+  /** 插件实例：默认存在但未订阅，需要手动开启 */
+  plugins: [] as PluginItem[],
   topics: [] as Array<{ name: string; type: string }>,
   topicQuery: '',
   displayError: '',
@@ -166,10 +185,9 @@ export const state = reactive({
   },
 
   layers: {
-    // 只有 TF 默认订阅；日志面板始终可见，所以日志也默认订阅
+    // 系统只自动订阅 TF，用于坐标转换；日志也要手动开
     tf: true,
-    status: true,
-    logs: true,
+    logs: false,
     trail: true,
   } as Record<LayerKey, boolean>,
 
@@ -291,7 +309,6 @@ const LAYER_SUBS: Record<LayerKey, Array<[string, SubscribeOptions]>> = {
     ['/tf', { throttle: 100, queue: 100 }],
     ['/tf_static', { queue: 1 }],
   ],
-  status: [['/slam/info', { throttle: 150, queue: 1 }]],
   logs: [['/rosout_agg', { throttle: 500, queue: 5 }]],
   trail: [],
 }
@@ -539,6 +556,123 @@ export function toggleDisplay(id: string): void {
   saveDisplays()
 }
 
+// -------------------------------------------------------------- plugins
+
+const PLUGINS_KEY = 'hmi.plugins.v1'
+const PLUGIN_DEFS: PluginItem[] = [
+  {
+    id: 'plugin-status',
+    kind: 'status',
+    title: '定位状态',
+    topic: '/slam/info',
+    enabled: false,
+    dock: 'left',
+    x: 16,
+    y: 16,
+    w: 300,
+  },
+  {
+    id: 'plugin-device',
+    kind: 'device',
+    title: '设备信息',
+    topic: '/device/robot_shadow',
+    enabled: false,
+    dock: 'left',
+    x: 24,
+    y: 24,
+    w: 320,
+  },
+]
+
+function loadPlugins(): PluginItem[] {
+  const out = PLUGIN_DEFS.map((p) => ({ ...p }))
+  try {
+    const raw = localStorage.getItem(PLUGINS_KEY)
+    if (!raw) return out
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return out
+    for (const item of out) {
+      const saved = parsed.find((x: any) => x && x.id === item.id)
+      if (!saved) continue
+      if (typeof saved.enabled === 'boolean') item.enabled = saved.enabled
+      if (saved.dock === 'canvas' || saved.dock === 'left') item.dock = saved.dock
+      if (Number.isFinite(saved.x)) item.x = saved.x
+      if (Number.isFinite(saved.y)) item.y = saved.y
+      if (Number.isFinite(saved.w)) item.w = Math.max(220, Math.min(480, saved.w))
+    }
+  } catch {
+    /* ignore */
+  }
+  return out
+}
+
+function savePlugins(): void {
+  try {
+    localStorage.setItem(PLUGINS_KEY, JSON.stringify(state.plugins))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 插件本身就是一个话题订阅；启停都走这里 */
+function applyPluginSubscription(p: PluginItem): void {
+  if (p.kind === 'status') {
+    // /slam/info 用桥的内置 status 流（有结构化解码，且不会和通用话题订阅抢同一个
+    // RosSource self.subs 键）；同样是手动订阅/停订。
+    if (p.enabled) ros.subscribe('/slam/info', { throttle: 500, queue: 1 })
+    else ros.unsubscribe('/slam/info')
+    return
+  }
+  if (p.enabled) {
+    bridge.setSubscription(p.topic, { rate: 1, voxel: 0, max: 0 })
+  } else {
+    bridge.setSubscription(p.topic, null)
+  }
+}
+
+export function syncPluginSubscriptions(): void {
+  for (const p of state.plugins) applyPluginSubscription(p)
+}
+
+export function setPluginEnabled(id: string, enabled: boolean): void {
+  const p = state.plugins.find((x) => x.id === id)
+  if (!p) return
+  p.enabled = enabled
+  applyPluginSubscription(p)
+  savePlugins()
+}
+
+export function dockPluginToCanvas(id: string, x?: number, y?: number): void {
+  const p = state.plugins.find((x) => x.id === id)
+  if (!p) return
+  p.dock = 'canvas'
+  if (Number.isFinite(x)) p.x = Math.max(8, Math.round(x as number))
+  if (Number.isFinite(y)) p.y = Math.max(8, Math.round(y as number))
+  if (!p.enabled) {
+    p.enabled = true
+    applyPluginSubscription(p)
+  }
+  savePlugins()
+}
+
+export function undockPlugin(id: string): void {
+  const p = state.plugins.find((x) => x.id === id)
+  if (!p) return
+  p.dock = 'left'
+  savePlugins()
+}
+
+export function movePlugin(id: string, x: number, y: number): void {
+  const p = state.plugins.find((x) => x.id === id)
+  if (!p) return
+  p.x = Math.max(4, Math.round(x))
+  p.y = Math.max(4, Math.round(y))
+}
+
+export function commitPlugins(): void {
+  savePlugins()
+}
+
 /** 单帧抓取：点云/栅格/激光/path/polygon 都能用。 */
 export async function grabTopic(id: string): Promise<void> {
   const d = state.displays.find((x) => x.id === id)
@@ -608,10 +742,6 @@ export async function refreshTopics(): Promise<void> {
     state.topics = topics
       .map((t) => ({ name: t.name, type: t.type || map[t.name] || '' }))
       .sort((a, b) => a.name.localeCompare(b.name))
-    if (!state.displays.length) {
-      const seed = '/curr_scan_point'
-      if (state.topics.some((t) => t.name === seed)) addDisplay(seed, map[seed])
-    }
     pushLog('info', `话题列表已更新：${topics.length} 个`)
   } catch (e) {
     pushLog('warn', `读取话题列表失败：${(e as Error).message}`)
@@ -1050,12 +1180,11 @@ export function initHmi(): void {
   state.topicTypes = { ...TOPIC_CATALOG }
   state.mutedSources = loadMutedSources()
   Object.assign(state.layers, loadLayers())
-  // 日志面板常驻在底部，默认保持订阅
-  state.layers.logs = true
   loadDisplays()
+  state.plugins = loadPlugins()
   void restorePcdDisplays()
-  // 设备信息插件：常驻低频订阅，不依赖显示项
-  bridge.setSubscription('/device/robot_shadow', { rate: 1, voxel: 0, max: 0 })
+  // 插件默认未订阅；这里只按用户保存的开关恢复
+  syncPluginSubscriptions()
 
   ros.onStatus((status, detail) => {
     state.status = status

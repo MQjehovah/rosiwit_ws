@@ -19,7 +19,7 @@
       在地面点击放置位姿，移动鼠标调整朝向，然后在左侧确认发布
     </div>
     <div v-if="noSources" class="empty-hint">
-      像 RViz 一样在左侧「显示项」里添加话题：点云、栅格、激光、路径都可以单独设置
+      在左侧「话题」里添加要订阅的话题
     </div>
     <div v-if="state.measure.active || state.measure.a" class="hud hud-measure">
       <span v-if="!state.measure.a" class="chip">测距：点第一个点</span>

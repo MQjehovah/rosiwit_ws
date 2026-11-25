@@ -1,462 +1,333 @@
 <template>
   <div class="control-panel">
-    <!-- 定位状态 -->
-    <details class="sec" open>
-      <summary>
-        <span class="sec-title">定位状态</span>
-        <span class="sec-meta">{{ slamAgeText }}</span>
-      </summary>
-      <div class="sec-body">
-        <div v-if="!state.layers.status" class="prompt">
-          未订阅 <code>/slam/info</code>
-          <button class="mini" @click="setLayer('status', true)">订阅</button>
-        </div>
-        <template v-else>
-          <div class="badges">
-            <span class="badge" :class="locClass">{{ state.statusText || locText }}</span>
-            <span class="badge ghost">匹配 {{ percent(state.slam.matching_degree) }}</span>
-          </div>
+    <div class="side-tabs">
+      <button :class="{ active: tab === 'topics' }" @click="tab = 'topics'">话题</button>
+      <button :class="{ active: tab === 'plugins' }" @click="tab = 'plugins'">插件</button>
+      <button :class="{ active: tab === 'tools' }" @click="tab = 'tools'">工具</button>
+    </div>
 
-          <div v-if="state.matchHistory.length > 1" class="spark-wrap">
-            <svg class="spark" viewBox="0 0 120 24" preserveAspectRatio="none">
-              <line class="spark-threshold" x1="0" y1="4.8" x2="120" y2="4.8" />
-              <polyline :points="sparkPoints" />
-            </svg>
-            <span class="spark-label">{{ sparkSeconds }}s</span>
-          </div>
-          <div v-else class="spark-empty">等待匹配度曲线…</div>
-
-          <div
-            v-if="state.slam.location_status === 2 || (state.slam.location_status === 1 && state.slam.map_area > 0)"
-            class="lost-box"
-          >
-            <span class="badge" :class="state.slam.location_status === 2 ? 'bad' : 'warn'">
-              {{ state.slam.location_status === 2 ? '定位丢失' : '初始化/恢复中' }}
-            </span>
-            <span class="mono">
-              x {{ state.slam.robot_pose.x.toFixed(2) }} · y
-              {{ state.slam.robot_pose.y.toFixed(2) }} · yaw
-              {{ ((state.slam.robot_pose.theta * 180) / Math.PI).toFixed(0) }}°
-            </span>
-            <span title="核心当前帧的匹配度，非丢失前缓存的数值">
-              当前匹配度 {{ percent(state.slam.matching_degree) }}
-            </span>
-          </div>
-
-          <dl class="kv2">
-            <dt>地图</dt>
-            <dd>{{ state.slam.map_name || '—' }}</dd>
-            <dt>面积</dt>
-            <dd>{{ state.slam.map_area ? (state.slam.map_area / 10000).toFixed(2) + ' 万 m²' : '—' }}</dd>
-            <dt>TF</dt>
-            <dd>{{ state.frames.length }} 帧</dd>
-            <dt>来源</dt>
-            <dd>{{ shortSource }}</dd>
-          </dl>
-
-          <details class="sub">
-            <summary>定位状态插件</summary>
-            <p class="note">
-              直接消费 <code>/slam/info</code>：同时兼容数字枚举与字符串，前端翻译成可读状态。
-              当前：{{ state.statusText || '等待数据' }}
-            </p>
-            <pre class="diag-pre">{{ slamRaw }}</pre>
-          </details>
-        </template>
+    <!-- 话题：只有订阅 + 渲染 -->
+    <div v-show="tab === 'topics'" class="tab-body">
+      <div class="row add-topic">
+        <select v-model="newTopic" class="select">
+          <option value="">选择话题…</option>
+          <option v-for="t in state.topics" :key="t.name" :value="t.name">
+            {{ t.name }} · {{ shortType(t.type) }}
+          </option>
+        </select>
+        <button class="btn small" :disabled="!newTopic" @click="doAddDisplay">添加</button>
+        <button class="btn tiny" :disabled="state.status !== 'open' || state.topicScanning" @click="doRefreshTopics">
+          {{ state.topicScanning ? '…' : '刷新' }}
+        </button>
       </div>
-    </details>
+      <p v-if="state.displayError" class="error-text">{{ state.displayError }}</p>
 
-    <!-- 设备信息 -->
-    <details class="sec" open>
-      <summary>
-        <span class="sec-title">设备信息</span>
-        <span class="sec-meta">{{ shadowAgeText }}</span>
-      </summary>
-      <div class="sec-body">
-        <div v-if="!state.robotShadow" class="prompt">
-          等待 <code>/device/robot_shadow</code>…
-        </div>
-        <template v-else>
-          <div class="badges">
-            <span class="badge" :class="shadowOnline ? 'ok' : 'bad'">
-              {{ shadowOnline ? '在线' : '离线' }}
-            </span>
-            <span class="badge ghost">{{ shadowDevice }}</span>
-            <span class="badge ghost">{{ shadowStateText }}</span>
-          </div>
+      <div v-if="!state.displays.length" class="empty">暂无显示项</div>
 
-          <div class="tank-grid">
-            <div class="tank">
-              <div class="tank-head"><span>电池</span><b>{{ pctText(shadowProp.bms_soc) }}</b></div>
-              <div class="tank-bar">
-                <i :class="levelClass(shadowProp.bms_soc)" :style="{ width: pctWidth(shadowProp.bms_soc) }" />
-              </div>
-            </div>
-            <div class="tank">
-              <div class="tank-head"><span>清水量</span><b>{{ pctText(shadowProp.clean_height) }}</b></div>
-              <div class="tank-bar">
-                <i class="water" :style="{ width: pctWidth(shadowProp.clean_height) }" />
-              </div>
-            </div>
-            <div class="tank">
-              <div class="tank-head"><span>污水量</span><b>{{ pctText(shadowProp.dirty_height) }}</b></div>
-              <div class="tank-bar">
-                <i class="dirty" :style="{ width: pctWidth(shadowProp.dirty_height) }" />
-              </div>
-            </div>
-          </div>
-
-          <dl class="kv2">
-            <dt>设备</dt>
-            <dd>{{ shadow.device_id || '—' }} · {{ shadow.product_id || '—' }}</dd>
-            <dt>地图</dt>
-            <dd>{{ shadow.map_name || '—' }}</dd>
-            <dt>控制</dt>
-            <dd>{{ shadow.control_mode || '—' }}</dd>
-            <dt>清洁</dt>
-            <dd>{{ shadow.clean_mode || '—' }}</dd>
-            <dt>网络</dt>
-            <dd>4G {{ shadow.state_4G || '—' }} · WiFi {{ shadow.wifi_state || '—' }}</dd>
-            <dt>充电</dt>
-            <dd>{{ shadowProp.is_charge ? '充电中' : '未充电' }} · {{ shadowProp.dock ? '已回桩' : '未回桩' }}</dd>
-            <dt>环境</dt>
-            <dd>
-              {{ num(shadowProp.Temp) }}°C · {{ num(shadowProp.Humi) }}%RH · PM2.5
-              {{ num(shadowProp.PM2_5) }}
-            </dd>
-          </dl>
-
-          <div v-if="shadowFaults.length" class="fault-box">
-            <div class="fault-head">故障 {{ shadowFaults.length }} 条</div>
-            <div v-for="(f, i) in shadowFaults.slice(0, 4)" :key="`${f.code || i}-${i}`" class="fault-item">
-              <span class="fault-level">{{ f.level || 'FAULT' }}</span>
-              <span class="fault-text" :title="f.fault_desc">{{ f.name || f.fault_desc || f.code }}</span>
-            </div>
-          </div>
-
-          <details class="sub">
-            <summary>原始 robot_shadow</summary>
-            <pre class="diag-pre">{{ shadowPretty }}</pre>
-          </details>
-        </template>
-      </div>
-    </details>
-
-    <!-- 显示项（RViz 风格：任意话题动态添加） -->
-    <details class="sec" open>
-      <summary>
-        <span class="sec-title">显示项</span>
-        <span class="sec-meta">{{ activeDisplays }} / {{ state.displays.length }}</span>
-      </summary>
-      <div class="sec-body">
-        <p class="source-hint">
-          像 RViz 一样按需订阅任意话题。点云卡片的数据源可以切换成「本地 PCD」，
-          直接选择本机文件；后端只负责订阅 / 压缩 / 传输。
-        </p>
-
-        <div class="row add-topic">
-          <select v-model="newTopic" class="select">
-            <option value="">选择话题…</option>
-            <option v-for="t in state.topics" :key="t.name" :value="t.name">
-              {{ t.name }} · {{ shortType(t.type) }}
-            </option>
-          </select>
-          <button class="btn small" :disabled="!newTopic" @click="doAddDisplay">添加</button>
-          <button class="btn tiny" :disabled="state.status !== 'open' || state.topicScanning" @click="doRefreshTopics">
-            {{ state.topicScanning ? '…' : '刷新' }}
-          </button>
-        </div>
-        <p v-if="state.displayError" class="error-text">{{ state.displayError }}</p>
-
-        <div v-if="!state.displays.length" class="prompt">
-          还没有显示项。先刷新话题列表，再选择要看的点云 / 栅格 / 激光…
+      <div v-for="d in state.displays" :key="d.id" class="display-item">
+        <div class="display-head">
+          <label class="layer" :title="d.type">
+            <input type="checkbox" :checked="d.enabled" @change="toggleDisplay(d.id)" />
+            <span class="swatch" :style="{ background: d.color }" />
+            <span class="layer-name">{{ d.topic }}</span>
+          </label>
+          <span class="type-tag">{{ shortType(d.type) }}</span>
+          <button class="mini danger" title="移除" @click="removeDisplay(d.id)">×</button>
         </div>
 
-        <div v-for="d in state.displays" :key="d.id" class="display-item">
-          <div class="display-head">
-            <label class="layer" :title="d.type">
-              <input
-                type="checkbox"
-                :checked="d.enabled"
-                @change="toggleDisplay(d.id)"
-              />
-              <span class="swatch" :style="{ background: d.color }" />
-              <span class="layer-name">{{ d.topic }}</span>
-            </label>
-            <span class="type-tag">{{ shortType(d.type) }}</span>
-            <button class="mini danger" title="移除" @click="removeDisplay(d.id)">×</button>
-          </div>
-
-          <div class="display-controls">
-            <label v-if="d.type.includes('PointCloud')">
-              数据源
-              <select
-                class="select mini-select"
-                :value="d.source"
-                @change="changeDisplaySource(d.id, ($event.target as HTMLSelectElement).value as any)"
-              >
-                <option value="topic">话题</option>
-                <option value="pcd">本地 PCD</option>
-              </select>
-            </label>
-            <label>
-              渲染
-              <select
-                class="select mini-select"
-                :value="d.renderer"
-                @change="updateDisplay(d.id, { renderer: ($event.target as HTMLSelectElement).value as any })"
-              >
-                <option v-for="r in rendererOptions(d)" :key="r" :value="r">{{ rendererLabel(r) }}</option>
-              </select>
-            </label>
-            <label v-if="d.renderer === 'points' || d.renderer === 'laser'" class="point-size-row">
-              点大小
-              <input
-                type="range"
-                min="0.01"
-                max="0.5"
-                step="0.01"
-                :value="d.pointSize"
-                @input="setDisplayPointSize(d.id, ($event.target as HTMLInputElement).valueAsNumber)"
-              />
-              <span class="mono">{{ d.pointSize.toFixed(2) }}m</span>
-            </label>
-            <label v-if="d.renderer !== 'json'">
-              颜色
-              <input
-                class="color-input"
-                type="color"
-                :value="d.color"
-                @input="updateDisplay(d.id, { color: ($event.target as HTMLInputElement).value })"
-              />
-            </label>
-            <label v-if="d.renderer === 'points'">
-              着色
-              <select
-                class="select mini-select"
-                :value="d.colorMode"
-                @change="updateDisplay(d.id, { colorMode: ($event.target as HTMLSelectElement).value as any })"
-              >
-                <option value="height">高度</option>
-                <option value="intensity">强度/持久度</option>
-                <option value="flat">固定</option>
-              </select>
-            </label>
-            <label v-if="d.renderer === 'points'">
-              体素
-              <input
-                class="input tiny-input"
-                type="number"
-                min="0"
-                max="1"
-                step="0.01"
-                :value="d.voxel"
-                @change="updateDisplay(d.id, { voxel: Number(($event.target as HTMLInputElement).value) || 0 })"
-              />
-            </label>
-            <label v-if="d.renderer === 'points'">
-              上限
-              <input
-                class="input tiny-input"
-                type="number"
-                min="0"
-                step="10000"
-                :value="d.max"
-                @change="updateDisplay(d.id, { max: Number(($event.target as HTMLInputElement).value) || 0 })"
-              />
-            </label>
-            <label v-if="d.source === 'topic'">
-              频率
-              <select
-                class="select mini-select"
-                :value="d.rate"
-                @change="updateDisplay(d.id, { rate: Number(($event.target as HTMLSelectElement).value) })"
-              >
-                <option :value="0">手动</option>
-                <option :value="1">1Hz</option>
-                <option :value="2">2Hz</option>
-                <option :value="5">5Hz</option>
-                <option :value="10">10Hz</option>
-                <option :value="20">20Hz</option>
-              </select>
-            </label>
-            <button
-              v-if="d.source === 'topic'"
-              class="mini"
-              :disabled="state.status !== 'open'"
-              @click="grabTopic(d.id)"
+        <div class="display-controls">
+          <label v-if="d.type.includes('PointCloud')">
+            数据源
+            <select
+              class="select mini-select"
+              :value="d.source"
+              @change="changeDisplaySource(d.id, ($event.target as HTMLSelectElement).value as any)"
             >
-              抓取
-            </button>
-            <label v-if="d.source === 'pcd'" class="btn tiny file-btn pcd-file">
-              {{ d.pcdName || '选择 PCD 文件' }}
-              <input type="file" accept=".pcd" @change="onDisplayPcd(d.id, $event)" />
-            </label>
-          </div>
-
-          <div v-if="d.source === 'pcd'" class="display-stats">
-            <span>本地 PCD</span>
-            <span v-if="state.pcdCounts[d.id]">{{ state.pcdCounts[d.id].toLocaleString() }} 点</span>
-            <span v-else>未选择文件</span>
-          </div>
-          <div v-else class="display-stats">
-            <span v-if="d.rate === 0" class="manual-tag">手动</span>
-            <span v-else>{{ d.stats.hz.toFixed(1) }} Hz</span>
-            <span>{{ formatBytes(d.stats.bytes) }}/帧</span>
-            <span>累计 {{ formatBytes(d.stats.total) }}</span>
-            <span v-if="d.stats.age >= 0">{{ (d.stats.age / 1000).toFixed(1) }}s 前</span>
-            <span v-if="d.renderer !== 'image' && state.pointCounts[d.topic]">
-              {{ state.pointCounts[d.topic].toLocaleString() }} 点/格
-            </span>
-          </div>
-          <img
-            v-if="d.renderer === 'image' && state.images[d.topic]"
-            class="topic-thumb"
-            :src="state.images[d.topic].url"
-            :alt="d.topic"
-            @click="openImage(d.topic)"
-          />
+              <option value="topic">话题</option>
+              <option value="pcd">本地 PCD</option>
+            </select>
+          </label>
+          <label>
+            渲染
+            <select
+              class="select mini-select"
+              :value="d.renderer"
+              @change="updateDisplay(d.id, { renderer: ($event.target as HTMLSelectElement).value as any })"
+            >
+              <option v-for="r in rendererOptions(d)" :key="r" :value="r">{{ rendererLabel(r) }}</option>
+            </select>
+          </label>
+          <label v-if="d.renderer === 'points' || d.renderer === 'laser'" class="point-size-row">
+            点大小
+            <input
+              type="range"
+              min="0.01"
+              max="0.5"
+              step="0.01"
+              :value="d.pointSize"
+              @input="setDisplayPointSize(d.id, ($event.target as HTMLInputElement).valueAsNumber)"
+            />
+            <span class="mono">{{ d.pointSize.toFixed(2) }}m</span>
+          </label>
+          <label v-if="d.renderer !== 'json'">
+            颜色
+            <input
+              class="color-input"
+              type="color"
+              :value="d.color"
+              @input="updateDisplay(d.id, { color: ($event.target as HTMLInputElement).value })"
+            />
+          </label>
+          <label v-if="d.renderer === 'points'">
+            着色
+            <select
+              class="select mini-select"
+              :value="d.colorMode"
+              @change="updateDisplay(d.id, { colorMode: ($event.target as HTMLSelectElement).value as any })"
+            >
+              <option value="height">高度</option>
+              <option value="intensity">强度/持久度</option>
+              <option value="flat">固定</option>
+            </select>
+          </label>
+          <label v-if="d.renderer === 'points'">
+            体素
+            <input
+              class="input tiny-input"
+              type="number"
+              min="0"
+              max="1"
+              step="0.01"
+              :value="d.voxel"
+              @change="updateDisplay(d.id, { voxel: Number(($event.target as HTMLInputElement).value) || 0 })"
+            />
+          </label>
+          <label v-if="d.renderer === 'points'">
+            上限
+            <input
+              class="input tiny-input"
+              type="number"
+              min="0"
+              step="10000"
+              :value="d.max"
+              @change="updateDisplay(d.id, { max: Number(($event.target as HTMLInputElement).value) || 0 })"
+            />
+          </label>
+          <label v-if="d.source === 'topic'">
+            频率
+            <select
+              class="select mini-select"
+              :value="d.rate"
+              @change="updateDisplay(d.id, { rate: Number(($event.target as HTMLSelectElement).value) })"
+            >
+              <option :value="0">手动</option>
+              <option :value="1">1Hz</option>
+              <option :value="2">2Hz</option>
+              <option :value="5">5Hz</option>
+              <option :value="10">10Hz</option>
+              <option :value="20">20Hz</option>
+            </select>
+          </label>
+          <button
+            v-if="d.source === 'topic'"
+            class="mini"
+            :disabled="state.status !== 'open'"
+            @click="grabTopic(d.id)"
+          >
+            抓取
+          </button>
+          <label v-if="d.source === 'pcd'" class="btn tiny file-btn pcd-file">
+            {{ d.pcdName || '选择 PCD 文件' }}
+            <input type="file" accept=".pcd" @change="onDisplayPcd(d.id, $event)" />
+          </label>
         </div>
 
-        <div v-if="gridInfo" class="foot">
-          <span class="dim" :title="state.gridFromCache ? '来自本地缓存' : '本会话抓取'">
-            {{ gridInfo }}
+        <div v-if="d.source === 'pcd'" class="display-stats">
+          <span>本地 PCD</span>
+          <span v-if="state.pcdCounts[d.id]">{{ state.pcdCounts[d.id].toLocaleString() }} 点</span>
+          <span v-else>未选择文件</span>
+        </div>
+        <div v-else class="display-stats">
+          <span v-if="d.rate === 0" class="manual-tag">手动</span>
+          <span v-else>{{ d.stats.hz.toFixed(1) }} Hz</span>
+          <span>{{ formatBytes(d.stats.bytes) }}/帧</span>
+          <span>累计 {{ formatBytes(d.stats.total) }}</span>
+          <span v-if="d.stats.age >= 0">{{ (d.stats.age / 1000).toFixed(1) }}s 前</span>
+          <span v-if="d.renderer !== 'image' && state.pointCounts[d.topic]">
+            {{ state.pointCounts[d.topic].toLocaleString() }} 点/格
           </span>
         </div>
+        <img
+          v-if="d.renderer === 'image' && state.images[d.topic]"
+          class="topic-thumb"
+          :src="state.images[d.topic].url"
+          :alt="d.topic"
+          @click="openImage(d.topic)"
+        />
       </div>
-    </details>
 
-    <!-- 设备控制 -->
-    <details class="sec" open>
-      <summary>
-        <span class="sec-title">设备控制</span>
-        <span class="sec-meta">{{ motionText }}</span>
-      </summary>
-      <div class="sec-body">
-        <div class="dpad">
-          <button
-            class="dpad-btn up"
-            :class="{ active: activeDir === 'forward' }"
-            :disabled="state.status !== 'open'"
-            @pointerdown.prevent="startMotion('forward')"
-            @pointerup="stopMotion"
-            @pointerleave="stopMotion"
-            @pointercancel="stopMotion"
-            @contextmenu.prevent
-          >
-            ↑
-          </button>
-          <button
-            class="dpad-btn left"
-            :class="{ active: activeDir === 'left' }"
-            :disabled="state.status !== 'open'"
-            @pointerdown.prevent="startMotion('left')"
-            @pointerup="stopMotion"
-            @pointerleave="stopMotion"
-            @pointercancel="stopMotion"
-            @contextmenu.prevent
-          >
-            ←
-          </button>
-          <button class="dpad-btn stop" :disabled="state.status !== 'open'" @click="stopMotion">停</button>
-          <button
-            class="dpad-btn right"
-            :class="{ active: activeDir === 'right' }"
-            :disabled="state.status !== 'open'"
-            @pointerdown.prevent="startMotion('right')"
-            @pointerup="stopMotion"
-            @pointerleave="stopMotion"
-            @pointercancel="stopMotion"
-            @contextmenu.prevent
-          >
-            →
-          </button>
-          <button
-            class="dpad-btn down"
-            :class="{ active: activeDir === 'back' }"
-            :disabled="state.status !== 'open'"
-            @pointerdown.prevent="startMotion('back')"
-            @pointerup="stopMotion"
-            @pointerleave="stopMotion"
-            @pointercancel="stopMotion"
-            @contextmenu.prevent
-          >
-            ↓
-          </button>
-        </div>
-
-        <div class="speed-row">
-          <label>
-            线速度
-            <input v-model.number="linearSpeed" type="range" min="0.05" max="0.5" step="0.05" />
-            <span class="mono">{{ linearSpeed.toFixed(2) }} m/s</span>
-          </label>
-          <label>
-            角速度
-            <input v-model.number="angularSpeed" type="range" min="0.1" max="1.5" step="0.1" />
-            <span class="mono">{{ angularSpeed.toFixed(1) }} rad/s</span>
-          </label>
-        </div>
-
-        <p class="note">
-          按住方向键持续运动，松开立即停；断线、切换页面或 0.5s 没收到新指令时服务端也会自动发零速。
-          直接发布 <code>/cmd_vel</code>，使用前请先停止导航任务并确认周围安全。
-        </p>
+      <div v-if="gridInfo" class="foot">
+        <span class="dim" :title="state.gridFromCache ? '来自本地缓存' : '本会话抓取'">
+          {{ gridInfo }}
+        </span>
       </div>
-    </details>
+    </div>
 
-    <!-- 初始位姿 -->
-    <details class="sec">
-      <summary>
-        <span class="sec-title">初始位姿</span>
-        <span class="sec-meta">{{ poseSummary }}</span>
-      </summary>
-      <div class="sec-body">
-        <div class="row">
-          <button
-            class="btn"
-            :class="{ primary: state.estimating }"
-            :disabled="state.status !== 'open'"
-            @click="toggleEstimate"
-          >
-            {{ state.estimating ? '取消点选' : '地图上点选' }}
-          </button>
-          <button class="btn" :disabled="!draftValid" @click="publishPose">发布 /initialpose</button>
-        </div>
-        <div class="grid3">
-          <label>x<input v-model.number="draft.x" class="input" type="number" step="0.1" /></label>
-          <label>y<input v-model.number="draft.y" class="input" type="number" step="0.1" /></label>
-          <label>yaw°<input v-model.number="draftTheta" class="input" type="number" step="1" /></label>
-        </div>
-        <div class="row">
-          <button class="btn small" :disabled="!draftValid" @click="applyDraft">应用到标记</button>
-          <button class="btn small" :disabled="!draftValid || state.servicePending" @click="doRelocate">
-            调用 /relocation
-          </button>
-        </div>
-        <p class="note">点选后拖鼠标调朝向；<code>/initialpose</code> 走话题，<code>/relocation</code> 需要地图名。</p>
-      </div>
-    </details>
+    <!-- 插件：绑定话题的可视化卡片 -->
+    <div v-show="tab === 'plugins'" class="tab-body">
+      <p class="plugin-hint">插件也是话题订阅；点「订阅」开始，拖 ⠿ 到中间画布。</p>
 
-    <!-- 控制 -->
-    <details class="sec">
-      <summary>
-        <span class="sec-title">控制</span>
-        <span class="sec-meta">{{ busy ? '执行中…' : state.statusText }}</span>
-      </summary>
-      <div class="sec-body">
-        <div class="grid2">
-          <button class="btn" :disabled="busy" @click="doMode(1)">切到定位</button>
-          <button class="btn" :disabled="busy" @click="doMode(0)">切到建图</button>
-          <button class="btn warn" :disabled="busy" @click="doStopMap">结束建图</button>
-          <button class="btn" :disabled="busy" @click="doDump">dump recorder</button>
-        </div>
-        <p class="note">建图模式会重建地图；结束建图会保存当前地图。都会二次确认。</p>
-        <div v-if="state.lastService" class="service-result" :title="state.lastService">
-          {{ state.lastService }}
+      <PluginCard
+        v-for="p in leftPlugins"
+        :key="p.id"
+        :plugin="p"
+        mode="sidebar"
+        class="plugin-block"
+        @toggle="setPluginEnabled(p.id, $event)"
+        @dock="dockPluginToCanvas(p.id, 24, 24)"
+        @dragstart="onPluginDragStart($event, p)"
+      />
+
+      <div v-if="canvasPlugins.length" class="canvas-list">
+        <span class="canvas-title">画布上</span>
+        <div v-for="p in canvasPlugins" :key="p.id" class="canvas-row">
+          <span>{{ p.title }}</span>
+          <button class="mini" @click="undockPlugin(p.id)">收回</button>
         </div>
       </div>
-    </details>
+    </div>
+
+    <!-- 工具：控制类功能 -->
+    <div v-show="tab === 'tools'" class="tab-body">
+      <details class="sec" open>
+        <summary>
+          <span class="sec-title">设备控制</span>
+          <span class="sec-meta">{{ motionText }}</span>
+        </summary>
+        <div class="sec-body">
+          <div class="dpad">
+            <button
+              class="dpad-btn up"
+              :class="{ active: activeDir === 'forward' }"
+              :disabled="state.status !== 'open'"
+              @pointerdown.prevent="startMotion('forward')"
+              @pointerup="stopMotion"
+              @pointerleave="stopMotion"
+              @pointercancel="stopMotion"
+              @contextmenu.prevent
+            >
+              ↑
+            </button>
+            <button
+              class="dpad-btn left"
+              :class="{ active: activeDir === 'left' }"
+              :disabled="state.status !== 'open'"
+              @pointerdown.prevent="startMotion('left')"
+              @pointerup="stopMotion"
+              @pointerleave="stopMotion"
+              @pointercancel="stopMotion"
+              @contextmenu.prevent
+            >
+              ←
+            </button>
+            <button class="dpad-btn stop" :disabled="state.status !== 'open'" @click="stopMotion">停</button>
+            <button
+              class="dpad-btn right"
+              :class="{ active: activeDir === 'right' }"
+              :disabled="state.status !== 'open'"
+              @pointerdown.prevent="startMotion('right')"
+              @pointerup="stopMotion"
+              @pointerleave="stopMotion"
+              @pointercancel="stopMotion"
+              @contextmenu.prevent
+            >
+              →
+            </button>
+            <button
+              class="dpad-btn down"
+              :class="{ active: activeDir === 'back' }"
+              :disabled="state.status !== 'open'"
+              @pointerdown.prevent="startMotion('back')"
+              @pointerup="stopMotion"
+              @pointerleave="stopMotion"
+              @pointercancel="stopMotion"
+              @contextmenu.prevent
+            >
+              ↓
+            </button>
+          </div>
+
+          <div class="speed-row">
+            <label>
+              线速度
+              <input v-model.number="linearSpeed" type="range" min="0.05" max="0.5" step="0.05" />
+              <span class="mono">{{ linearSpeed.toFixed(2) }} m/s</span>
+            </label>
+            <label>
+              角速度
+              <input v-model.number="angularSpeed" type="range" min="0.1" max="1.5" step="0.1" />
+              <span class="mono">{{ angularSpeed.toFixed(1) }} rad/s</span>
+            </label>
+          </div>
+
+          <p class="note">
+            按住方向键持续运动，松开立即停；断线、切换页面或 0.5s 没收到新指令时服务端也会自动发零速。
+            直接发布 <code>/cmd_vel</code>，使用前请先停止导航任务并确认周围安全。
+          </p>
+        </div>
+      </details>
+
+      <details class="sec">
+        <summary>
+          <span class="sec-title">初始位姿</span>
+          <span class="sec-meta">{{ poseSummary }}</span>
+        </summary>
+        <div class="sec-body">
+          <div class="row">
+            <button
+              class="btn"
+              :class="{ primary: state.estimating }"
+              :disabled="state.status !== 'open'"
+              @click="toggleEstimate"
+            >
+              {{ state.estimating ? '取消点选' : '地图上点选' }}
+            </button>
+            <button class="btn" :disabled="!draftValid" @click="publishPose">发布 /initialpose</button>
+          </div>
+          <div class="grid3">
+            <label>x<input v-model.number="draft.x" class="input" type="number" step="0.1" /></label>
+            <label>y<input v-model.number="draft.y" class="input" type="number" step="0.1" /></label>
+            <label>yaw°<input v-model.number="draftTheta" class="input" type="number" step="1" /></label>
+          </div>
+          <div class="row">
+            <button class="btn small" :disabled="!draftValid" @click="applyDraft">应用到标记</button>
+            <button class="btn small" :disabled="!draftValid || state.servicePending" @click="doRelocate">
+              调用 /relocation
+            </button>
+          </div>
+          <p class="note">点选后拖鼠标调朝向；<code>/initialpose</code> 走话题，<code>/relocation</code> 需要地图名。</p>
+        </div>
+      </details>
+
+      <details class="sec">
+        <summary>
+          <span class="sec-title">控制</span>
+          <span class="sec-meta">{{ busy ? '执行中…' : state.status === 'open' ? '就绪' : state.status }}</span>
+        </summary>
+        <div class="sec-body">
+          <div class="grid2">
+            <button class="btn" :disabled="busy" @click="doMode(1)">切到定位</button>
+            <button class="btn" :disabled="busy" @click="doMode(0)">切到建图</button>
+            <button class="btn warn" :disabled="busy" @click="doStopMap">结束建图</button>
+            <button class="btn" :disabled="busy" @click="doDump">dump recorder</button>
+          </div>
+          <p class="note">建图模式会重建地图；结束建图会保存当前地图。都会二次确认。</p>
+          <div v-if="state.lastService" class="service-result" :title="state.lastService">
+            {{ state.lastService }}
+          </div>
+        </div>
+      </details>
+    </div>
   </div>
 </template>
 
@@ -466,6 +337,7 @@ import {
   addDisplay,
   bridge,
   changeDisplaySource,
+  dockPluginToCanvas,
   dumpRecorder,
   grabTopic,
   loadPcdIntoDisplay,
@@ -475,19 +347,31 @@ import {
   refreshTopics,
   relocate,
   removeDisplay,
-  setLayer,
   setDisplayPointSize,
   setPendingPose,
+  setPluginEnabled,
   state,
   stopMapOperation,
   switchSlamMode,
   toggleDisplay,
+  undockPlugin,
   updateDisplay,
   type DisplayItem,
+  type PluginItem,
   type RendererKind,
 } from '../ros/app'
+import PluginCard from './plugins/PluginCard.vue'
 
+const tab = ref<'topics' | 'plugins' | 'tools'>('topics')
 const newTopic = ref('')
+
+const leftPlugins = computed(() => state.plugins.filter((p) => p.dock === 'left'))
+const canvasPlugins = computed(() => state.plugins.filter((p) => p.dock === 'canvas'))
+
+function onPluginDragStart(e: DragEvent, p: PluginItem): void {
+  e.dataTransfer?.setData('text/plain', p.id)
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
 
 function doAddDisplay(): void {
   if (!newTopic.value) return
@@ -607,113 +491,7 @@ function formatBytes(n: number): string {
   return `${n} B`
 }
 
-const slamRaw = computed(() =>
-  JSON.stringify(
-    {
-      slam_state: state.slam.slam_state,
-      location_status: state.slam.location_status,
-      matching_degree: state.slam.matching_degree,
-      update_request: state.slam.update_request,
-      map_name: state.slam.map_name,
-      map_area: state.slam.map_area,
-      robot_pose: state.slam.robot_pose,
-    },
-    null,
-    2,
-  ),
-)
-
-const locText = computed(
-  () => ['定位正常', '恢复中', '定位失败'][state.slam.location_status] ?? '无数据',
-)
-const locClass = computed(() => ({
-  ok: state.slam.location_status === 0,
-  warn: state.slam.location_status === 1,
-  bad: state.slam.location_status === 2,
-}))
-
 const busy = computed(() => state.servicePending || state.status !== 'open')
-const activeDisplays = computed(() => state.displays.filter((d) => d.enabled).length)
-const shortSource = computed(() => state.robot.source.replace('TF map→', 'TF '))
-
-// -------------------------------------------------------------- robot shadow
-
-const shadow = computed<Record<string, any>>(() => state.robotShadow || {})
-const shadowProp = computed<Record<string, any>>(() => (shadow.value.property as any) || {})
-const shadowFaults = computed<any[]>(() => (Array.isArray(shadow.value.fault) ? shadow.value.fault : []))
-const shadowOnline = computed(() => !!shadow.value.online)
-const shadowDevice = computed(
-  () =>
-    [shadow.value.product_id, shadow.value.product_sub_model].filter(Boolean).join(' ') || '—',
-)
-const shadowStateText = computed(() => {
-  const s = String(shadow.value.robot_state || '')
-  const map: Record<string, string> = {
-    ROBOT_MODE_IDLE: '空闲',
-    ROBOT_MODE_CLEAN: '清洁中',
-    ROBOT_MODE_CLEANING: '清洁中',
-    ROBOT_MODE_MAPPING: '建图中',
-    ROBOT_MODE_CHARGING: '充电中',
-    ROBOT_MODE_PAUSE: '暂停',
-    ROBOT_MODE_ERROR: '故障',
-    ROBOT_MODE_MANUAL: '手动',
-    ROBOT_MODE_RETURN: '回桩中',
-  }
-  return map[s] || s || '—'
-})
-const shadowAgeText = computed(() => {
-  if (!state.shadowTime) return '等待数据…'
-  return `${((nowTick.value - state.shadowTime) / 1000).toFixed(1)}s 前`
-})
-const shadowPretty = computed(() => JSON.stringify(shadow.value, null, 2))
-
-function pctWidth(value: unknown): string {
-  const n = Number(value)
-  return `${Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0))}%`
-}
-
-function pctText(value: unknown): string {
-  return pctWidth(value)
-}
-
-function levelClass(value: unknown): string {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return ''
-  if (n <= 20) return 'bad'
-  if (n <= 50) return 'warn'
-  return 'ok'
-}
-
-function num(value: unknown): number {
-  const n = Number(value)
-  return Number.isFinite(n) ? n : 0
-}
-
-const nowTick = ref(Date.now())
-let tickTimer: number | null = null
-onMounted(() => {
-  tickTimer = window.setInterval(() => {
-    nowTick.value = Date.now()
-  }, 500)
-  window.addEventListener('pointerup', onGlobalStop)
-  window.addEventListener('pointercancel', onGlobalStop)
-  window.addEventListener('blur', onGlobalStop)
-  document.addEventListener('visibilitychange', onVisibilityChange)
-})
-onBeforeUnmount(() => {
-  if (tickTimer !== null) clearInterval(tickTimer)
-  stopMotion()
-  window.removeEventListener('pointerup', onGlobalStop)
-  window.removeEventListener('pointercancel', onGlobalStop)
-  window.removeEventListener('blur', onGlobalStop)
-  document.removeEventListener('visibilitychange', onVisibilityChange)
-})
-
-const slamAgeText = computed(() => {
-  if (!state.layers.status) return '未订阅'
-  if (!state.slamTime) return '等待数据…'
-  return `${((nowTick.value - state.slamTime) / 1000).toFixed(1)}s 前`
-})
 
 const gridInfo = computed(() => {
   if (!state.gridTime) return ''
@@ -743,24 +521,6 @@ watch(
   },
   { deep: true },
 )
-
-function percent(value: number): string {
-  return `${(Math.max(0, Math.min(1, value || 0)) * 100).toFixed(0)}%`
-}
-
-const sparkPoints = computed(() => {
-  const h = state.matchHistory
-  if (h.length < 2) return ''
-  const n = h.length
-  return h
-    .map((v, i) => {
-      const y = 24 - Math.min(1, Math.max(0, v)) * 24
-      return `${((i / (n - 1)) * 120).toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
-})
-
-const sparkSeconds = computed(() => Math.round(state.matchHistory.length * 0.4))
 
 function ageText(age: number): string {
   if (age < 0) return '—'
@@ -831,7 +591,22 @@ async function doDump(): Promise<void> {
     /* 已写入日志 */
   }
 }
+
+onMounted(() => {
+  window.addEventListener('pointerup', onGlobalStop)
+  window.addEventListener('pointercancel', onGlobalStop)
+  window.addEventListener('blur', onGlobalStop)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+onBeforeUnmount(() => {
+  stopMotion()
+  window.removeEventListener('pointerup', onGlobalStop)
+  window.removeEventListener('pointercancel', onGlobalStop)
+  window.removeEventListener('blur', onGlobalStop)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+})
 </script>
+
 
 <style scoped>
 .control-panel {
@@ -1635,5 +1410,79 @@ async function doDump(): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+</style>
+
+<style scoped>
+.side-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #0c131b;
+  border-bottom: 1px solid var(--line);
+}
+.side-tabs button {
+  flex: 1;
+  padding: 6px 4px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+  background: transparent;
+  color: #6f8396;
+  font-size: 11px;
+  cursor: pointer;
+}
+.side-tabs button:hover {
+  color: #b9d2e6;
+  background: rgba(56, 189, 248, 0.04);
+}
+.side-tabs button.active {
+  color: #7dd3fc;
+  background: #0b141d;
+  border-color: var(--line);
+}
+.tab-body {
+  padding: 10px 12px 12px;
+}
+.empty {
+  padding: 12px 0;
+  color: #54687a;
+  font-size: 10.5px;
+  text-align: center;
+}
+.plugin-hint {
+  margin: 0 0 8px;
+  color: #5f7488;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.plugin-block {
+  display: block;
+  margin-bottom: 8px;
+}
+.canvas-list {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.canvas-title {
+  color: #5f7488;
+  font-size: 10px;
+}
+.canvas-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a9bccd;
+  font-size: 10.5px;
+}
+.canvas-row .mini {
+  margin-left: auto;
 }
 </style>
