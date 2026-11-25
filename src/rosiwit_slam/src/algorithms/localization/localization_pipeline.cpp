@@ -997,7 +997,14 @@ void LocalizationPipeline::setMapData(const MapData& data) {
         m_maintainer->setBaseEmbeddedWeights(using_working_map);
         m_maintainer->setBaseMap(m_map_path, m_map);
     }
-    if (m_local_map && !lkfs.empty()) {
+    if (using_working_map) {
+        // ★w-map (2026-11-25): 工作图就是图, 匹配目标直接从它分块生成
+        // (provider 的无关键帧兜底: 全局图按 10m 分块成虚拟关键帧)。
+        // 不再注入 xzmap 旧关键帧 —— 否则目标里永远没有已提交的变化结构,
+        // 变化区域 (该角落 ~15%) 的点永远配不上, fitness 停在 0.85 拉不回 0.93。
+        std::cout << "[LocPipeline] w-map: local_map from WORKING map ("
+                  << m_map->size() << " pts), xzmap keyframes skipped" << std::endl;
+    } else if (m_local_map && !lkfs.empty()) {
         m_local_map->setKeyframes(lkfs);
         std::cout << "[LocPipeline] setMapData keyframes=" << lkfs.size() << std::endl;
     }

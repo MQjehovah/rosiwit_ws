@@ -464,7 +464,7 @@ localization:
   # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
   # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
   session_map:
-    enabled: false   # 2026-11-25: 关会话子图, 先验 overlay (两者轮换测试)
+    enabled: true    # 2026-11-25: 子图+overlay 同时开启 (均已解耦, 可并存)
     use_for_tracking: false
     # 2026-11-24: 25 -> 35. 实测雷达点水平距离 p50=27.6 / p90=33.0 / p95=35.6,
     # 25m 只用上 36% 的点 (25~35m 的长墙对抑制 yaw 漂移最有用); 35m 覆盖 94.5%.
