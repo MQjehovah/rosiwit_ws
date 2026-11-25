@@ -98,6 +98,8 @@ private:
         uint8_t  miss = 0;       // 连续 free 证据帧数 (去抖)
         uint32_t last_key = 0;   // 上次计票的单位键 (session/day)
         uint32_t last_frame = 0; // 上次 hit 的帧号 (view 单位用)
+        uint32_t last_miss_frame = 0; // 上次 free 证据的帧号 (miss 与 hit 对称: 每帧一票)
+        uint32_t last_miss_key = 0;   // 上次 free 证据的计票单位键 (session/day)
         bool     from_base = false;  // 该体素来自底图 (点不在 m_cells, 死亡时进 m_dead_base)
     };
     std::unordered_map<int64_t, PersistencyVoxel> m_persistency;

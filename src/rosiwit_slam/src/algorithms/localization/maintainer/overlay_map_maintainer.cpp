@@ -210,23 +210,34 @@ void OverlayMapMaintainer::missVoxel(int64_t vk) {
     }
     PersistencyVoxel& v = it->second;
     const bool from_base = v.from_base;
-    const int need = m_cfg.persistency_miss_confirm > 0 ? m_cfg.persistency_miss_confirm : 1;
-    if (++v.miss < need) return;
-    if (m_cfg.persistency_miss_action == 0) {
+    // ★2026-11-25: miss 与 hit 完全对称 —— 每帧最多一票 + 按计票单位 (view) 计数。
+    // 旧实现: 每帧 ++miss (同一帧的多条掠射射线重复计数) 且 miss_confirm=3 帧
+    // 就硬删 -> 静止机器的掠射射线 (贴着墙/天花板平面走) 3 帧删掉一片真实几何
+    // (实测静止 ~10min, 匹配目标 126k -> 119k, fitness 0.89 -> 0.83, 落盘固化)。
+    // 现在的语义 = 文档本意: 「w=128 = 16 次'射线穿过'证据才判死」—— 每个 view
+    // 一票, 每票 w -= hit_gain, 减到 0 才删。命中票与自由票在同一结构上自然对冲:
+    // 真墙 (每 pass 命中+8, 掠射 free-8) net 0 稳定; 被搬走的货物 (只有 free 票)
+    // 快速衰减删除。
+    if (v.last_miss_frame == static_cast<uint32_t>(m_frame)) return;   // 每帧最多一票
+    const uint32_t prev_miss = v.last_miss_frame;
+    v.last_miss_frame = static_cast<uint32_t>(m_frame);
+    bool count = false;
+    switch (m_cfg.persistency_unit) {
+        case 0:  count = true; break;                              // frame: 每帧
+        case 1:  // view: 首次也算一票; 之后需要中间隔过帧 (离开过视野)
+                 count = (prev_miss == 0) || (m_frame > prev_miss + 1); break;
+        case 2:  count = (v.last_miss_key != m_session_id); break; // session
+        default: count = (v.last_miss_key != m_day_index); break;  // day
+    }
+    if (!count) return;
+    if (m_cfg.persistency_unit >= 2) v.last_miss_key = currentUnitKey();
+    const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
+    v.w = (v.w > gain) ? static_cast<uint8_t>(v.w - gain) : 0;
+    if (v.w == 0) {
         m_persistency.erase(it);
         m_voxel_seen.erase(vk);
-        if (from_base) m_dead_base.insert(vk);      // 底图体素: 记入死亡集, 目标里剔除
+        if (from_base) m_dead_base.insert(vk);      // 底图体素: 目标里剔除
         else m_pending_remove.insert(vk);           // overlay 体素: 点从 m_cells 回收
-    } else {
-        const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
-        v.w = (v.w > gain) ? static_cast<uint8_t>(v.w - gain) : 0;
-        v.miss = 0;
-        if (v.w == 0) {
-            m_persistency.erase(it);
-            m_voxel_seen.erase(vk);
-            if (from_base) m_dead_base.insert(vk);
-            else m_pending_remove.insert(vk);
-        }
     }
 }
 

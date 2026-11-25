@@ -596,8 +596,11 @@ localization:
     #              | session(每个任务会话) | day(每个自然日)
     persistency_unit: view      # 2026-11-24: session -> view (要写进去, 不能等 3 个会话)
     persistency_hit_gain: 8          # 每个计票单位 +8 -> anchor 128 = 16 个会话(或 16 帧)
-    persistency_miss_confirm: 3      # 连续 free 证据帧数 -> 删除(去抖)
-    persistency_miss_action: 0       # 0=删除  1=按 persistency_hit_gain 递减
+    persistency_miss_confirm: 3      # (2026-11-25 起废弃: miss 已与 hit 对称, 按票衰减)
+    persistency_miss_action: 1       # 每个计票单位的 free 证据票 w -= hit_gain, 减到 0 删除。
+                                     # 2026-11-25: 0 -> 1。旧的"3 帧 free 硬删"在静止场景下
+                                     # 会把掠射射线扫到的真实墙/天花板删掉 (实测静止 10min
+                                     # 匹配目标 126k->119k); 对称化后真墙有命中票对冲, net 0 稳定
     persistency_session_hours: 12    # 会话超时自动换新
     target_w_min: 16           # 匹配目标里 overlay 点的最低 w: 固定物体参与, 动态/未确认忽略
     # ---- 统一工作图: 底图点也进同一套 w 账本 (工作图文件里 intensity = w) ----

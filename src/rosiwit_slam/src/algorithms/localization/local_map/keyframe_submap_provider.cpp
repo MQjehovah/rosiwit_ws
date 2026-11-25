@@ -68,7 +68,12 @@ void KeyframeSubmapProvider::buildFromMapFallback() {
                                       static_cast<unsigned int>(cy));
     };
 
+    // w-map (2026-11-25): 工作图 intensity = 持久度 w。目标只收 w>=64 的点 ——
+    // 2026-11-25 现场口径: w<64 都是未确认点 (提交 w=8, 每 view +8, 8 个 view 确认),
+    // 瞬态 (人/临时物) 不进匹配目标。原图 map.pcd 的 intensity 是反射率 (也可能落在
+    // 圈内), 由调用方保证: 只有工作图模式下才走本兜底 (见 pipeline setMapData)。
     for (const auto& p : m_map->points) {
+        if (p.intensity < 64.0f) continue;
         const long long cx = static_cast<long long>(std::floor(p.x / cell));
         const long long cy = static_cast<long long>(std::floor(p.y / cell));
         Acc& a = cells[key(cx, cy)];
