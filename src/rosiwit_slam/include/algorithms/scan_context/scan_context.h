@@ -60,6 +60,20 @@ public:
     static double distance(const Descriptor& a, const Descriptor& b,
                            int* out_col_shift = nullptr);
 
+    /// 掩码距离结果: 只统计"两边都非空"的格子, 并记录参与比较的格子数.
+    struct MaskedMatch {
+        double dist = 1e9;   // 平均高度差(m), 只算共同非空格
+        int    shift = 0;    // 列偏移(旋转)
+        int    compared = 0; // 参与比较的格子数(重叠量)
+    };
+
+    /// 掩码距离 (推荐用于重定位): 空 vs 有不罚分, 只比"两边都看到的格子".
+    /// 为什么: 全格 L1 会把"这格有东西/没东西"算成 z_cap 那么大的差, 同地点距离
+    /// 被顶到 0.4~0.5 (阈值边缘, 时灵时不灵). 只比共同非空格后, 距离反映真实几何差.
+    /// compared 太小(< min_compared) 视为"重叠不足", 该偏移不参与竞争.
+    static MaskedMatch distanceMasked(const Descriptor& a, const Descriptor& b,
+                                      int min_compared = 60, double eps = 0.05);
+
     /// RingKey 距离 (用于快速筛选候选)
     static double ringKeyDistance(const Eigen::VectorXi& a, const Eigen::VectorXi& b);
 

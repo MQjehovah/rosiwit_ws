@@ -115,6 +115,38 @@ double ScanContext::distance(const Descriptor& a, const Descriptor& b,
     return best_dist;
 }
 
+ScanContext::MaskedMatch ScanContext::distanceMasked(const Descriptor& a, const Descriptor& b,
+                                                     int min_compared, double eps) {
+    MaskedMatch best;
+    const int nr = std::min(a.rows(), b.rows());
+    const int ns = std::min(a.cols(), b.cols());
+    if (nr <= 0 || ns <= 0) return best;
+
+    int best_cnt = -1;
+    for (int shift = 0; shift < ns; ++shift) {
+        double sum = 0.0;
+        int cnt = 0;
+        for (int r = 0; r < nr; ++r) {
+            for (int s = 0; s < ns; ++s) {
+                const double av = a.data(r, s);
+                const double bv = b.data(r, (s + shift) % ns);
+                if (av > eps && bv > eps) { sum += std::fabs(av - bv); ++cnt; }
+            }
+        }
+        if (cnt < min_compared) continue;           // 重叠不足: 不可信
+        const double d = sum / std::max(1, cnt);
+        // 距离优先; 距离接近时选重叠更多的(更稳)
+        if (best_cnt < 0 || d < best.dist - 1e-9 ||
+            (std::fabs(d - best.dist) <= 5e-3 && cnt > best.compared)) {
+            best.dist = d;
+            best.shift = shift;
+            best.compared = cnt;
+            best_cnt = cnt;
+        }
+    }
+    return best;
+}
+
 double ScanContext::ringKeyDistance(const Eigen::VectorXi& a, const Eigen::VectorXi& b) {
     int n = std::min(a.size(), b.size());
     if (n == 0) return std::numeric_limits<double>::max();

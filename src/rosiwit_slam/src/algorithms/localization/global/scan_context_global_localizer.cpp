@@ -175,25 +175,39 @@ int ScanContextGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max
         return m_sc->makeDescriptor(lvl);
     }();
 
-    struct Candidate { size_t idx; double rk; double d; int shift; };
+    struct Candidate { size_t idx; double rk; double d; double rank; int shift; };
     std::vector<Candidate> cands;
     cands.reserve(m_db.size());
     for (size_t i = 0; i < m_db.size(); ++i)
-        cands.push_back({i, ScanContext::ringKeyDistance(m_db[i].desc.ring_key, cur.ring_key), 0.0, 0});
+        cands.push_back({i, ScanContext::ringKeyDistance(m_db[i].desc.ring_key, cur.ring_key),
+                         0.0, 0.0, 0});
     std::sort(cands.begin(), cands.end(),
               [](const Candidate& a, const Candidate& b) { return a.rk < b.rk; });
     const size_t num = std::max<size_t>(1, static_cast<size_t>(cands.size() * m_cfg.sc_candidate_ratio));
 
+    // 查询侧"有东西"的格子数: 用来算重叠率, 防止"只比了几格 → 距离虚低"的假候选拿头名
+    int cur_occ = 0;
+    for (int r = 0; r < cur.rows(); ++r)
+        for (int s = 0; s < cur.cols(); ++s)
+            if (cur.data(r, s) > 0.05) ++cur_occ;
+    const double occ_ref = std::max(1, cur_occ);
+
     std::vector<Candidate> hits;
     for (size_t ci = 0; ci < num; ++ci) {
-        int shift = 0;
-        const double d = ScanContext::distance(m_db[cands[ci].idx].desc, cur, &shift);
-        if (d < m_cfg.sc_dist_thresh) {
-            Candidate c = cands[ci]; c.d = d; c.shift = shift;
+        // 掩码距离: 只比"两边都非空"的格子 (空 vs 有 不罚分), 见 ScanContext::distanceMasked
+        const auto mm = ScanContext::distanceMasked(m_db[cands[ci].idx].desc, cur, m_cfg.sc_min_overlap_cells);
+        if (mm.compared <= 0) continue;
+        if (mm.dist < m_cfg.sc_dist_thresh) {
+            Candidate c = cands[ci];
+            c.d = mm.dist;
+            c.shift = mm.shift;
+            // 排序键: 距离 + 低重叠惩罚 (重叠率 0.35 以下按比例加罚), 避免"重叠少→距离虚低"
+            const double overlap = static_cast<double>(mm.compared) / occ_ref;
+            c.rank = mm.dist + 0.30 * std::max(0.0, 1.0 - overlap / 0.35);
             hits.push_back(c);
         }
     }
-    std::sort(hits.begin(), hits.end(), [](const Candidate& a, const Candidate& b) { return a.d < b.d; });
+    std::sort(hits.begin(), hits.end(), [](const Candidate& a, const Candidate& b) { return a.rank < b.rank; });
 
     // 召回兜底: sc_dist_thresh 只是"省时间"的预筛, 不能当"这里有没有地方"的判决.
     // 现场同一地点的描述子距离会被"关键帧降采样 vs 原始扫描""货架变动"整体抬高,
@@ -204,15 +218,17 @@ int ScanContextGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max
         fallback = true;
         const int kfall = std::max(3, std::min<int>(8, static_cast<int>(cands.size())));
         for (int ci = 0; ci < kfall; ++ci) {
-            int shift = 0;
-            const double d = ScanContext::distance(m_db[cands[ci].idx].desc, cur, &shift);
+            const auto mm = ScanContext::distanceMasked(m_db[cands[ci].idx].desc, cur,
+                                                        m_cfg.sc_min_overlap_cells);
             Candidate c = cands[ci];
-            c.d = d;
-            c.shift = shift;
+            c.d = (mm.compared > 0) ? mm.dist : 1e9;
+            c.shift = mm.shift;
+            const double overlap = static_cast<double>(mm.compared) / occ_ref;
+            c.rank = c.d + 0.30 * std::max(0.0, 1.0 - overlap / 0.35);
             hits.push_back(c);
         }
         std::sort(hits.begin(), hits.end(),
-                  [](const Candidate& a, const Candidate& b) { return a.d < b.d; });
+                  [](const Candidate& a, const Candidate& b) { return a.rank < b.rank; });
     }
 
     // [SCProbe] 召回诊断 (每次查询一条): 没有命中时现场看不出是"描述子差"还是"候选被
@@ -226,9 +242,11 @@ int ScanContextGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max
             double kmax = m_db.empty() ? 0.0 : m_db.front().desc.data.maxCoeff();
             std::cout << "[SCProbe] db=" << m_db.size()
                       << " scan_pts=" << scan->size()
+                      << " occ=" << cur_occ
                       << " rk_best=" << (cands.empty() ? -1.0 : cands.front().rk)
                       << " hits=" << hits.size()
                       << " best_d=" << (hits.empty() ? -1.0 : hits.front().d)
+                      << " best_rank=" << (hits.empty() ? -1.0 : hits.front().rank)
                       << " thr=" << m_cfg.sc_dist_thresh
                       << " fallback=" << (fallback ? 1 : 0)
                       << " qmax=" << qmax << " kmax=" << kmax << std::endl;
