@@ -32,6 +32,7 @@ import argparse
 import collections
 import json
 import math
+import os
 import signal
 import struct
 import sys
@@ -46,7 +47,11 @@ try:
 except NameError:
     TEXT_TYPE = str
 
-VERSION = "6"
+VERSION = "7"
+# 单帧点云进入缓存前最多保留多少点（/global_map 有 600 万点，全量 Python tuple
+# 会吃掉 1.5GB+ 内存和大量 CPU）。HMI 显示上限通常 30 万，100 万足够；
+# 需要全量时用 DEBUG_BRIDGE_MAX_CLOUD_POINTS=0 关闭上限。
+MAX_CLOUD_POINTS = int(os.environ.get("DEBUG_BRIDGE_MAX_CLOUD_POINTS", "1000000"))
 
 ENV_HELLO = 1
 ENV_GRID = 2
@@ -948,9 +953,9 @@ def normalize_topic(topic, typ, msg):
     kind = TYPE_KIND.get(typ)
     if kind == KIND_CLOUD:
         if typ == "sensor_msgs/PointCloud2":
-            pts, has_i = pc2_points(msg)
+            pts, has_i = pc2_points(msg, MAX_CLOUD_POINTS)
         else:
-            pts = pc_points(msg)
+            pts = pc_points(msg, MAX_CLOUD_POINTS)
             has_i = False
         frame = msg.header.frame_id or "map"
         pts, frame = cloud_to_map(pts, frame)
@@ -1056,6 +1061,28 @@ class RosSource(object):
                     self._resubscribe(topic)
             except Exception as e:
                 log("watchdog: %s" % e)
+
+    def release_topic(self, topic):
+        """没有客户端再需要这个普通话题时，取消 ROS 订阅并丢掉缓存。
+        否则点过一次 /global_map 就会永久占着 600 万点缓存 + 持续归一化。"""
+        if topic in BUILTIN_STREAMS or topic in ("/tf", "/tf_static", "/slam/info", "/rosout_agg"):
+            return
+        with CLIENTS_LOCK:
+            clients = list(CLIENTS)
+        for c in clients:
+            if topic in c.subs or topic in c.raw_subs:
+                return
+        with self.lock:
+            sub = self.subs.pop(topic, None)
+            self.sub_specs.pop(topic, None)
+        if sub is not None:
+            try:
+                sub.unregister()
+            except Exception:
+                pass
+        with STORE_LOCK:
+            TOPIC_DATA.pop(topic, None)
+        log("released %s (no clients)" % topic)
 
     def ensure_stream(self, stream):
         from sensor_msgs.msg import PointCloud2, LaserScan
@@ -1671,6 +1698,10 @@ class BridgeWS(websocket.WebSocketHandler):
             elif action == ACTION_UNSUBSCRIBE:
                 self.client.subs.pop(stream, None)
                 self.client.send(encode_status(stream, True, "unsubscribed"))
+                try:
+                    SOURCE.release_topic(stream)
+                except Exception as e:
+                    log("release %s: %s" % (stream, e))
             elif action == ACTION_REQUEST:
                 self._request(self.client, stream, voxel, max_points, refresh)
             elif action == ACTION_SET_INITIAL_POSE:
@@ -1807,10 +1838,16 @@ class BridgeWS(websocket.WebSocketHandler):
                 SOURCE.set_twist(0.0, 0.0)
             except Exception:
                 pass
+        streams = list(self.client.subs.keys())
         self.client.close_raw()
         with CLIENTS_LOCK:
             if self.client in CLIENTS:
                 CLIENTS.remove(self.client)
+        for topic in streams:
+            try:
+                SOURCE.release_topic(topic)
+            except Exception as e:
+                log("release %s: %s" % (topic, e))
 
 
 def publisher_loop():

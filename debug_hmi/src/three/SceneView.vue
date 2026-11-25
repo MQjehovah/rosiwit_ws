@@ -112,6 +112,8 @@ const dynamicLayers = new Map<string, DynamicLayer>()
 const lastGrid = new Map<string, GridData>()
 /** 最近一帧话题点云：切着色模式 / 手动抓取后没有新帧时也能立即重上色 */
 const lastTopicCloud = new Map<string, CloudData>()
+/** 已经上传到 GPU 的 (positions, colorMode)，避免拖点大小/改颜色时重复上传几十万点 */
+const appliedClouds = new Map<string, { positions: Float32Array; mode: string; color: string }>()
 const warnedIntensity = new Set<string>()
 
 const pendingGroup = new THREE.Group()
@@ -282,12 +284,14 @@ function disposeDynamic(topic: string): void {
   else entry.layer.clear()
   dynamicLayers.delete(topic)
   lastTopicCloud.delete(topic)
+  appliedClouds.delete(topic)
 }
 
 function ensureDynamic(topic: string, renderer: string): DynamicLayer | null {
   const existing = dynamicLayers.get(topic)
   if (existing && existing.renderer === renderer) return existing
   if (existing) disposeDynamic(topic)
+  appliedClouds.delete(topic)
   const d = state.displays.find((x) => x.topic === topic)
   let layer: PointCloudLayer | GridMapLayer | PathLayer
   if (renderer === 'grid') layer = new GridMapLayer()
@@ -343,7 +347,15 @@ function syncDisplayLayers(): void {
         if (d.colorMode === 'intensity' && !cloud.colors) warnMissingIntensity(d)
         else if (cloud.colors) warnedIntensity.delete(`${d.source}:${d.id}`)
         const colors = cloudColors(d, cloud)
-        entry.layer.setPoints(cloud.positions, colors)
+        const prev = appliedClouds.get(d.topic)
+        if (!prev || prev.positions !== cloud.positions || prev.mode !== d.colorMode) {
+          entry.layer.setPoints(cloud.positions, colors)
+          appliedClouds.set(d.topic, {
+            positions: cloud.positions,
+            mode: d.colorMode,
+            color: d.color,
+          })
+        }
         if (!colors) entry.layer.setColor(hexColor(d.color))
         entry.layer.setVisible(d.enabled)
         placeInMap(entry.layer.object, cloud.frame || 'map')
@@ -376,6 +388,7 @@ function applyTopicCloud(topic: string, cloud: CloudData): void {
   // 固定色标不随 min/max 拉伸; height: 本地按 z 上色; flat: 用条目颜色.
   const colors = cloudColors(d, cloud)
   entry.layer.setPoints(cloud.positions, colors)
+  appliedClouds.set(topic, { positions: cloud.positions, mode: d.colorMode, color: d.color })
   if (!colors) entry.layer.setColor(hexColor(d.color))
   entry.layer.setSize(d.pointSize)
   entry.layer.setVisible(true)
