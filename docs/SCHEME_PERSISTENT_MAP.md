@@ -112,13 +112,16 @@ map.overlay.pcd    工作图 = 底图(降采样 0.3) + overlay，**每个点 int
 - overlay 计票/雕刻机制（rayCarve/observeHits/collectNovel/decay）
 - T4 写图门控：必须锚在底图（非桥接 + `cov_base` 达标），去掉对"含子图目标"自证
 - T1 反光板工程部分：节点进 deb（`catkin_install_python`）+ `launch/reflector.launch` + `config/reflector.yaml`；`rosiwit_slam.launch` 加 `start_reflector`（默认 false）
+  - 点云按 `lidar_in_base` 外参 + `curr_localization_pose` 转到 map 系（雷达俯装 39.37°，不能直接取 x,y）
+  - 修正方向：检测点带当前位姿误差 E，配准得 C=E⁻¹，绝对位姿 = C ∘ 当前位姿
+  - **自动标定**：`mode=calibrate`（`launch/reflector_calib.launch`），稳定簇（观测数/标准差门限）自动写成 `reflectors`
 
 ### 待办（**以本文档为准**，多路并行以此收敛；2026-11-25 决议）
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
 | T0 | 0.2.18 装机验证四步链路 | 已构建 | 贴地/锚定/桥接/zip-up（§2 状态机）+ 首次生成/二次加载工作图 |
-| T1 | **反光板绝对约束** | 工程完成，待现场标定 | 节点/launch/config 已进包；缺：反光板坐标标定（`config/reflector.yaml` 的 `reflectors`）与现场阈值调参 |
+| T1 | **反光板绝对约束** | 工程完成，待现场标定 | 节点/launch/config 已进包；**自带自动标定模式**（`reflector_calib.launch`：定位正常时走一圈，按 `curr_localization_pose` + lidar 外参把反光板转到 map 系聚类，输出 `~/.ros/reflector_calib.yaml`），无需人工量 xy；只剩现场跑一次标定 + 调 `intensity_min` |
 | T2 | **overlay w 加权匹配**（固定物体权重更大，忽略动态） | 已实现，待验证 | 匹配目标按 `target_w_min` 过滤；ELite 式 4 的离散化 |
 | T3 | **子图桥接 + 周期重锚 + zip-up** | 已实现，待验证 | 弱锚切子图（不重建）；每 50 帧对 overlay 探测；恢复后 zip-up 修正子图漂移（§4） |
 | T4 | `anchorOk` → `static_support`/`cov_base` 口径统一 | 已实现，待验证 | 写图门控改为"非桥接 + cov_base 达标"；桥接期不写 overlay |

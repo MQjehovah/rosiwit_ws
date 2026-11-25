@@ -1,0 +1,14 @@
+<launch>
+  <!-- 反光板自动标定 (T1): 定位正常时开车走一圈, 自动输出反光板 map 系坐标。
+       Ctrl-C 后结果写到 ~/.ros/reflector_calib.yaml, 复制 reflectors 到
+       config/reflector.yaml 即可用于定位。 -->
+  <arg name="config" default="$(find rosiwit_slam_ros1)/config/reflector.yaml"/>
+  <arg name="output_yaml" default="$(env HOME)/.ros/reflector_calib.yaml"/>
+
+  <node pkg="rosiwit_slam_ros1" type="reflector_absolute_node.py"
+        name="reflector_absolute" output="screen">
+    <rosparam file="$(arg config)" command="load"/>
+    <param name="mode" value="calibrate"/>
+    <param name="output_yaml" value="$(arg output_yaml)"/>
+  </node>
+</launch>
