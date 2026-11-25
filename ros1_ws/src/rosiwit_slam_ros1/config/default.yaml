@@ -349,10 +349,10 @@ localization:
     max_keyframes: 15   # keyframe_submap: 最近关键帧数上限
     cache_move: 0.5     # 位姿移动小于该值复用上一帧局部地图(m, 提速)
     # ---- 子图窗口锚 (2026-11-25, 默认关闭) ----
-    # 想法: 只让"已验证帧"挪窗口中心, 防弱匹配把子图窗口带偏. 实测(同包对照, 见
-    # docs/LOCALIZATION_ANCHOR_2026-11-25.md): 打开后反而更容易丢
-    #   (lag=8m: SUCCESS 99.8%->85.6%; lag=1m: 开局就 LOST 且不恢复),
-    # 因为窗口滞后会把匹配"往后拽", 自己制造自洽漂移. 现场不要开, 仅留作实验开关.
+    # 想法: 只让"已验证帧"挪窗口中心, 防弱匹配把子图窗口带偏.
+    # 同包对照(见 docs/LOCALIZATION_ANCHOR_2026-11-25.md):
+    #   关闭 98.5~99.8%; 打开 lag=1m 99.4%; 打开 lag=8m+可信门限 85.6%(单次).
+    # 没有证据显示更好, 而窗口滞后本身有"把匹配往后拽"的风险 -> 默认关, 仅留实验.
     anchor_hold: false
     anchor_max_lag: 1.0          # 窗口中心允许滞后(m); 超了强制拉回预测位姿
     anchor_min_fitness: 0.0      # 可信帧最低 fitness (0=不看; 本环境正常帧只有 0.6~0.88)
@@ -505,6 +505,20 @@ localization:
     # 实测未开时: 转弯单帧修正 2.5~5.8m 仍被判 accepted, fitness 0.75~0.87。
     degeneracy_partial_update: true
     degeneracy_ratio_soft: 0.05   # 特征值比低于此值逐步忽略该方向
+    # ★冻结逃逸 (2026-11-25): 位姿偏出创新量门限后, 匹配每帧都稳定指向真值却被永久
+    # 拒收 -> 速度先验衰减 + odom 判 slip -> 冻在原地, 只能靠重定位(relocalizer=none 时
+    # 永不恢复). 连续 escape_frames 帧匹配彼此一致(相邻 <=0.20m/5deg, 累计离散 <=0.45m)
+    # 且 fitness 已过 min_coverage 时, 放行一次并把先验/融合重置到该位姿.
+    # 不新增 fitness 门限, 不看点数; 错误匹配帧间乱跳, 过不了"彼此一致".
+    # 验证: 真实失败日志回放 -> 在出事那一帧触发 1 次; 4 次正常跑(8000+帧) -> 0 次。
+    escape_enabled: true
+    escape_frames: 6              # 需要连续一致的被拒帧数 (~0.6s @10Hz)
+    escape_min_coast: 8           # 先连续拒绝这么多帧才允许逃逸(不和正常门控抢)
+    escape_consist_trans: 0.20    # 相邻两帧匹配位姿允许差(m)
+    escape_consist_rot_deg: 5.0   # 相邻两帧匹配姿态允许差(deg)
+    escape_max_spread: 0.45       # 候选相对首个候选的最大离散(m)
+    escape_max_jump: 8.0         # 单次逃逸最大位移(m), 防跨图乱跳
+    escape_cooldown_s: 3.0        # 两次逃逸最小间隔(s)
 
   # ---- 地面/平面约束 (适配平地+坡道): none | lock_zrp | ground_plane ----
   planar:

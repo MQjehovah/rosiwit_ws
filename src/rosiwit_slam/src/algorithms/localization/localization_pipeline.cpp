@@ -432,6 +432,14 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_accept_cfg.max_trans_innov         = getv<double>(ac, "max_trans_innov", m_accept_cfg.max_trans_innov);
         m_accept_cfg.degeneracy_partial_update = getv<bool>(ac, "degeneracy_partial_update", m_accept_cfg.degeneracy_partial_update);
         m_accept_cfg.degeneracy_ratio_soft = getv<double>(ac, "degeneracy_ratio_soft", m_accept_cfg.degeneracy_ratio_soft);
+        m_accept_cfg.escape_enabled        = getv<bool>(ac, "escape_enabled", m_accept_cfg.escape_enabled);
+        m_accept_cfg.escape_frames         = getv<int>(ac, "escape_frames", m_accept_cfg.escape_frames);
+        m_accept_cfg.escape_min_coast      = getv<int>(ac, "escape_min_coast", m_accept_cfg.escape_min_coast);
+        m_accept_cfg.escape_consist_trans  = getv<double>(ac, "escape_consist_trans", m_accept_cfg.escape_consist_trans);
+        m_accept_cfg.escape_consist_rot_deg = getv<double>(ac, "escape_consist_rot_deg", m_accept_cfg.escape_consist_rot_deg);
+        m_accept_cfg.escape_max_spread     = getv<double>(ac, "escape_max_spread", m_accept_cfg.escape_max_spread);
+        m_accept_cfg.escape_max_jump       = getv<double>(ac, "escape_max_jump", m_accept_cfg.escape_max_jump);
+        m_accept_cfg.escape_cooldown_s     = getv<double>(ac, "escape_cooldown_s", m_accept_cfg.escape_cooldown_s);
     }
     auto mtc = loc["maintainer"];
     if (mtc) {
@@ -1631,6 +1639,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_last_accepted = pending_pose;
             m_have_last_accepted = false;
             m_coast_count = 0;
+            m_escape_cnt = 0;               // 逃逸候选作废
+            m_escape_prev_valid = false;
             m_have_submap_anchor = false;   // 子图窗口锚一起失效
             m_has_cached_target = false;   // 旧缓存目标建在旧位姿附近
             // 注入位姿后的门限放行 (见 acceptMatch): 让被 reset 掉的先验偏置重新学回来.
@@ -1894,6 +1904,70 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         reject_reason = ok ? "accepted" : "matcher_failed";
         accepted = ok && acceptMatch(res, scan, guess, &reject_reason);
         out_pose = accepted ? res.pose : guess;
+
+        // ---- 冻结逃逸 (2026-11-25) ----
+        // 只在"连续 N 帧匹配结果彼此一致、且匹配质量本来就够 min_coverage"时放行一次.
+        // 典型场景: 位姿偏出 max_trans_innov 后被永久拒收, 匹配却每帧稳定指向真值.
+        // 错误匹配(相似结构)通常帧间乱跳, 过不了这里的"彼此一致"检查.
+        if (m_accept_cfg.escape_enabled) {
+            const bool candidate = !accepted && ok && res.converged && !m_seed_pending &&
+                res.fitness >= m_accept_cfg.min_coverage &&
+                (res.pose.trans - guess.trans).norm() <= m_accept_cfg.escape_max_jump;
+            bool consistent = false;
+            if (candidate) {
+                if (!m_escape_prev_valid) {
+                    m_escape_first = res.pose;
+                    m_escape_cnt = 1;
+                    consistent = true;
+                } else {
+                    const double dt = (res.pose.trans - m_escape_prev.trans).norm();
+                    const M3D dR = res.pose.rot * m_escape_prev.rot.transpose();
+                    const double dang = std::fabs(Eigen::AngleAxisd(dR).angle());   // rad
+                    const double spread = (res.pose.trans - m_escape_first.trans).norm();
+                    consistent = dt <= m_accept_cfg.escape_consist_trans &&
+                                 dang <= m_accept_cfg.escape_consist_rot_deg / 57.2957795 &&
+                                 spread <= m_accept_cfg.escape_max_spread;
+                    m_escape_cnt = consistent ? m_escape_cnt + 1 : 1;
+                    if (!consistent) m_escape_first = res.pose;
+                }
+                m_escape_prev = res.pose;
+                m_escape_prev_valid = true;
+            } else {
+                m_escape_cnt = 0;
+                m_escape_prev_valid = false;
+            }
+            if (m_escape_cnt >= m_accept_cfg.escape_frames &&
+                m_coast_count >= m_accept_cfg.escape_min_coast &&
+                f.end_time - m_escape_last_fire_t >= m_accept_cfg.escape_cooldown_s) {
+                // 放行: 位姿直接放到匹配结果上, 并把先验/融合一起重置到该位姿
+                // (与外部注入位姿同一条路径), 之后靠 bypass 让偏置重新学回来.
+                const double jump = (res.pose.trans - guess.trans).norm();
+                accepted = true;
+                out_pose = res.pose;
+                reject_reason = "escape";
+                m_escape_last_fire_t = f.end_time;
+                m_escape_cnt = 0;
+                m_escape_prev_valid = false;
+                m_coast_count = 0;
+                m_maha_bypass_frames = std::max(m_maha_bypass_frames, 5);
+                m_last_accepted = res.pose;
+                m_have_last_accepted = true;
+                m_consistent_cnt = 0;
+                m_corr_prev_valid = false;
+                {
+                    std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+                    if (m_prior) m_prior->reset(res.pose);
+                }
+                {
+                    std::lock_guard<std::mutex> fk(m_fusion_mu);
+                    if (m_fusion) m_fusion->reset(res.pose);
+                }
+                std::cout << "[Escape] jump=" << jump
+                          << " fit=" << res.fitness
+                          << " inl=" << res.inliers
+                          << " t=" << f.end_time << std::endl;
+            }
+        }
 
         // 退化方向部分更新 (B): 在 JtJ 特征基下按可观测度缩放修正量.
         // 旋转时对应点集中在单面长墙, 沿墙平移方向几乎不可观测, ICP 仍会给出

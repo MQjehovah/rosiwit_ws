@@ -171,12 +171,9 @@ struct LocalMapConfig {
     double cache_move = 0.5;         // 位姿移动小于该值时复用上一帧局部地图(m)
     // ---- 子图窗口锚 (2026-11-25 实验后默认关闭) ----
     // 想法: 只有"已验证帧"才把窗口中心吸附到匹配位姿, 弱帧保持旧锚点, 防止弱匹配
-    // 把子图窗口带偏. 实测(同包 A/E 对照, 见 docs/LOCALIZATION_ANCHOR_2026-11-25.md):
-    //   开 lag=8m + credible_fitness(0.85): 74/81 帧 hold, 窗口滞后 6.7m -> SUCCESS 85.6%;
-    //   开 lag=1m + min_fitness 0:            开局 4.7s 就 LOST, 191s 未恢复;
-    //   关闭:                                 98.5~99.8%, 无 LOST, 与基线逐帧一致.
-    // 原因: 窗口滞后会把匹配"往后拽", anchor 再跟着被拉偏的位姿走 -> 自洽漂移.
-    // 保留开关仅供后续实验; 现场不要开.
+    // 把子图窗口带偏. 同包对照(见 docs/LOCALIZATION_ANCHOR_2026-11-25.md):
+    //   关闭 98.5~99.8%; 打开 lag=1m 99.4%; 打开 lag=8m+可信门限 85.6%(单次).
+    // 没有证据显示更好, 而窗口滞后本身有"把匹配往后拽"的风险 -> 默认关, 仅留实验.
     bool   anchor_hold = false;          // 总开关; false = 按当前估计建图(旧行为)
     double anchor_max_lag = 1.0;         // 窗口中心允许的最大滞后(m)
     double anchor_min_eig_ratio = 1e-3;  // 视为"可观测"的最小 λmin/λmax
@@ -386,6 +383,20 @@ struct AcceptConfig {
     // "沿长墙滑动"这类退化解整体生效 (旋转时对应点集中在单面墙的典型失效).
     bool   degeneracy_partial_update = false;
     double degeneracy_ratio_soft = 0.05;    // 软门限: 特征值比低于该值逐步忽略
+    // ---- 冻结逃逸 (2026-11-25) ----
+    // 现场/回放复现: 位姿偏出 max_trans_innov 之后, 匹配每帧都能稳定找到同一个正确
+    // 位姿, 但单帧修正超标被永久拒收 -> 速度先验衰减 + odom 被判 slip -> 位姿冻在
+    // 原地, 只剩重定位试探(帧率从 10Hz 掉到 1.4Hz), relocalizer=none 时永不恢复.
+    // 这里只在"连续 N 帧匹配结果彼此一致"时放行一次, 把位姿放回去.
+    // 不新增 fitness 门限(沿用 min_coverage), 更不看点数.
+    bool   escape_enabled = true;
+    int    escape_frames = 6;         // 需要连续一致的被拒帧数
+    int    escape_min_coast = 8;      // 先连续拒绝这么多帧才允许逃逸(不和正常门控抢)
+    double escape_consist_trans = 0.20;     // 相邻两帧匹配位姿允许差(m)
+    double escape_consist_rot_deg = 5.0;    // 相邻两帧匹配姿态允许差(deg)
+    double escape_max_spread = 0.45;        // 候选相对首个候选的最大离散(m)
+    double escape_max_jump = 8.0;           // 单次逃逸的最大位移(m), 防跨图乱跳
+    double escape_cooldown_s = 3.0;         // 两次逃逸最小间隔(s), 防两个解之间来回跳
 };
 
 // ==================== 地面/平面约束 ====================

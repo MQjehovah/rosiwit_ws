@@ -176,6 +176,8 @@ private:
         m_have_submap_anchor = false;   // 换图/重置后子图窗口锚必须重来
         m_on_submap = false;
         m_probe_countdown = 0;
+        m_escape_cnt = 0;               // 换图后逃逸候选作废
+        m_escape_prev_valid = false;
     }
     PlanarConstraintConfig m_planar_cfg;
     std::string m_relocalizer_name = "none";
@@ -239,6 +241,13 @@ private:
     // 弱帧(贴墙/稀疏/退化)保持旧锚点, 防止弱匹配把子图窗口带偏 -> 自洽锁歪.
     PoseStamped m_submap_anchor;
     bool m_have_submap_anchor = false;
+    // 冻结逃逸 (2026-11-25): 连续拒绝期间, 记录"匹配自己是否稳定"。
+    // 匹配每帧都指向同一个位姿 = 真值在那边, 门控却不让过 -> 放行一次.
+    int  m_escape_cnt = 0;              // 连续一致帧数
+    bool m_escape_prev_valid = false;
+    PoseStamped m_escape_prev;          // 上一帧候选
+    PoseStamped m_escape_first;         // 本轮首个候选(限制累计离散)
+    double m_escape_last_fire_t = -1e9;  // 上次逃逸时间(冷却)
 
     // 全局重定位库后台构建 (2026-10-17 推行丢失事故: 懒建把 44.6s 的 FPFH 全图特征
     // 构建塞进 onLidar 回调, 单线程 spinner 冻结, 雷达停处理/界面冻住。行业惯例:
