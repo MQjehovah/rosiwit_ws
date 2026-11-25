@@ -170,6 +170,13 @@ private:
     int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
     // 锚定状态只有 m_on_submap 一个 (m_anchor_on_base 已合并, 见下)
     int    m_consistency_tick = 0;        // 子图↔先验一致性观测的节拍 (机器人侧新增)
+    // ---- 输出位姿限速 (安全): 位姿跳变不再直通导航 (实机: 匹配在两个对齐间
+    // 振荡 ±15m, 导航看到瞬移会急停/窜车) —— 合法跳变 (种子/有界恢复/换图) 走旁路。
+    bool   m_out_lim_bypass = false;
+    bool   m_out_lim_valid = false;
+    PoseStamped m_out_lim_prev;
+    double m_out_v_max = 2.0;             // 输出位姿平移速度上限 (m/s)
+    double m_out_wz_max = 1.6;            // 输出位姿偏航角速度上限 (rad/s ≈91°/s)
     // 软着陆: 种子/重定位刚生效后的前 N 帧限制单帧修正量(1°/5cm),
     // 防止首帧跳变把点云写岔成两层(机器人侧新增, 锚定切换路径由 zip-up 即时搬移, 不再使用)
     int    m_soft_land_frames = 0;

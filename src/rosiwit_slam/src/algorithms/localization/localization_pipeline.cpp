@@ -150,6 +150,9 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_maintainer_name  = getv<std::string>(pipe, "map_maintainer", m_maintainer_name);
     // 工作图落盘周期 (分钟, <=0 = 关闭周期落盘); 现场临时 10 分钟验证
     m_working_map_save_min = getv<double>(pipe, "working_map_save_min", m_working_map_save_min);
+    // 输出位姿限速 (安全防护): 超物理上限的位姿跳变按上限滑移, 不直通导航
+    m_out_v_max  = getv<double>(pipe, "output_v_max", m_out_v_max);
+    m_out_wz_max = getv<double>(pipe, "output_wz_max", m_out_wz_max);
     m_fusion_name      = getv<std::string>(pipe, "pose_fusion", m_fusion_name);
     if (!pipe || !pipe["pose_fusion"]) {
         // 兼容旧配置: pose_fusion 直接写在 localization 下 (设备 compat_legacy.yaml 就是这种)
@@ -903,6 +906,7 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
 
 void LocalizationPipeline::setMapData(const MapData& data) {
     std::lock_guard<std::mutex> state_lk(m_state_mu);
+    m_out_lim_bypass = true;   // 换图: 输出限速旁路 (新图坐标系)
     m_cancel_set_map.store(false);
     m_status = INIT;
     m_seed_pending = false;
@@ -1563,6 +1567,7 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
                   std::to_string(best_fit) + ") -> global relocalization");
         return false;
     }
+    m_out_lim_bypass = true;
     m_pose = best;
     m_pose.time = best.time;
     {
@@ -1890,6 +1895,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_status = INIT;
         }
         if (pending_init) {
+            m_out_lim_bypass = true;
             m_pose = pending_pose;
             // 关键: 外部注入新位姿 (重定位 / 2D 约束) 后, 旧的"最近被接受位姿"
             // 锚点已经无效. 不清掉它会导致位姿被硬拉回去:
@@ -2081,6 +2087,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                             m_last_accepted.trans - m_last_accepted.rot * m_motion_cfg.lever_arm;
                         m_pose.trans = base_la + m_pose.rot * m_motion_cfg.lever_arm;
                     } else {
+                        m_out_lim_bypass = true;
                         m_pose = m_last_accepted;
                     }
                     {
@@ -2520,6 +2527,43 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         m_last_accepted = out_pose;      // 逸出保护用的回退锚点
         m_have_last_accepted = true;
     }
+    // ---- 输出位姿限速 (安全防护, 2026-11-26) ----
+    // 匹配在两个对齐之间振荡时, 单帧位姿跳变可达 ±15m —— 直通导航会让导航
+    // 看到"瞬移"而急停/窜车 (实机: 机器人被吓跑)。这里把超物理上限的位姿变化
+    // 按上限速度滑移输出; 合法跳变 (种子/有界恢复/换图) 走 m_out_lim_bypass 旁路。
+    if (m_out_lim_bypass) {
+        m_out_lim_bypass = false;
+        m_out_lim_valid = false;
+    }
+    if (m_out_lim_valid) {
+        const double dtl = out_pose.time - m_out_lim_prev.time;
+        if (dtl > 1e-3 && dtl < 0.5) {
+            V3D dp = out_pose.trans - m_out_lim_prev.trans;
+            const double v = dp.norm() / dtl;
+            if (v > m_out_v_max) {
+                const double kk = (m_out_v_max * dtl) / dp.norm();
+                out_pose.trans = m_out_lim_prev.trans + dp * kk;
+                static double s_lv = 0.0;
+                if (out_pose.time - s_lv > 2.0) {
+                    s_lv = out_pose.time;
+                    std::cout << "[OutLim] 位姿跳变限速: " << v << " m/s -> "
+                              << m_out_v_max << " m/s" << std::endl;
+                }
+            }
+            const M3D Rrel = m_out_lim_prev.rot.transpose() * out_pose.rot;
+            const double dyaw = std::atan2(Rrel(1, 0), Rrel(0, 0));
+            const double wz = dyaw / dtl;
+            if (std::fabs(wz) > m_out_wz_max) {
+                const double dyc = std::copysign(m_out_wz_max * dtl, dyaw);
+                Eigen::Quaterniond qo(out_pose.rot);
+                qo = qo * Eigen::Quaterniond(Eigen::AngleAxisd(dyc - dyaw, V3D::UnitZ()));
+                qo.normalize();
+                out_pose.rot = qo.toRotationMatrix();
+            }
+        }
+    }
+    m_out_lim_prev = out_pose;
+    m_out_lim_valid = true;
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
@@ -3108,16 +3152,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         // 变化区里残差本来就大, 套上就永远写不进去。
                         const bool pose_stable_sm =
                             (corr_m <= m_sm_write_corr_m && corr_deg <= m_sm_write_corr_deg);
-                        // ★桥接 = 异常学习模式 (ROLL 式): 低 fitness 本身就是"场景
-                        // 与图不一致"的信号, 此刻若仍要求 accepted+fitness 门, 变化
-                        // 结构永远学不进子图 (实测死锁)。桥接时只要 GICP 收敛且
-                        // 位姿没跳 (pose_stable), 就用当前解注册扫描 —— 子图是临时
-                        // 的, 有 zip-up 修正和 LOST 清空兜底。锚定态维持原门槛。
-                        const bool write_ok = m_on_submap
-                            ? (res.converged && pose_stable_sm)
-                            : (accepted && res.converged && pose_stable_sm &&
-                               res.fitness >= write_bar);
-                        if (write_ok && scan_map && !scan_map->empty()) {
+                        // 2026-11-26: 回退异常学习模式 —— 桥接时无条件注册会让
+                        // 错位姿的扫描污染子图, 联合目标随即自证错位姿 (高 fitness
+                        // 锁死在错误位置)。恢复 accepted+fitness 门; 重新引入需
+                        // 改用 LIO 位姿注册 + 可靠性判据 (ROLL 原设计)。
+                        if (accepted && res.converged && pose_stable_sm &&
+                            res.fitness >= write_bar && scan_map && !scan_map->empty()) {
                             m_session_map.update(*scan_map, res.pose);
                         }
                     }

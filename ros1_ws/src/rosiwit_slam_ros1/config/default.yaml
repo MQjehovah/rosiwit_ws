@@ -271,6 +271,9 @@ localization:
     map_maintainer: overlay       # 2026-11-25: 开 overlay 自更新 (统一工作图 map.overlay.pcd)
     # 工作图落盘周期 (分钟, revision 有变化才写盘)。2026-11-25 临时 10 分钟验证, 验证完回 60。
     working_map_save_min: 10
+    # ---- 输出位姿限速 (安全): 匹配振荡导致的位姿跳变按上限滑移, 不直通导航 ----
+    output_v_max: 2.0           # m/s
+    output_wz_max: 1.6          # rad/s (≈91°/s)
 
     pose_fusion: eskf         # eskf(限幅 + 多源加权, 默认) | direct(直通, 可回退)
 
@@ -464,7 +467,7 @@ localization:
   # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
   # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
   session_map:
-    enabled: true    # 2026-11-25: 子图+overlay 同时开启 (均已解耦, 可并存)
+    enabled: false   # 2026-11-26: 暂关 —— 异常学习模式会让错位姿扫描污染子图, 回退 #97fe9fd 的修复2
     use_for_tracking: false
     # 2026-11-24: 25 -> 35. 实测雷达点水平距离 p50=27.6 / p90=33.0 / p95=35.6,
     # 25m 只用上 36% 的点 (25~35m 的长墙对抑制 yaw 漂移最有用); 35m 覆盖 94.5%.
