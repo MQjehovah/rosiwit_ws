@@ -2,7 +2,15 @@
   <!-- rosiwit_slam ROS1 接口层启动 -->
   <arg name="config_file" default="$(find rosiwit_slam_ros1)/config/default.yaml"/>
 
+  <!-- T1 反光板绝对约束: 需要先在 config/reflector.yaml 标定反光板坐标再开 -->
+  <arg name="start_reflector" default="false"/>
+  <arg name="reflector_config" default="$(find rosiwit_slam_ros1)/config/reflector.yaml"/>
+
   <node pkg="rosiwit_slam_ros1" type="rosiwit_slam_ros1_node" name="rosiwit_slam" output="screen">
     <param name="config_file"    value="$(arg config_file)"/>
   </node>
+
+  <include if="$(arg start_reflector)" file="$(find rosiwit_slam_ros1)/launch/reflector.launch">
+    <arg name="config" value="$(arg reflector_config)"/>
+  </include>
 </launch>

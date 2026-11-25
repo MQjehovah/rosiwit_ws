@@ -9,7 +9,6 @@
 # 配置: 反光板地图坐标 (map 系) 必须现场标定后写入 YAML。
 import math
 import itertools
-import yaml
 import rospy
 import numpy as np
 from sensor_msgs.msg import PointCloud2, PointField

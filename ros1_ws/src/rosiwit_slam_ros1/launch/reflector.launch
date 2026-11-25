@@ -1,0 +1,10 @@
+<launch>
+  <!-- 反光板绝对定位 (T1): 强度聚类 -> 反光板质心 -> 2D 刚体配准 -> /absolute_pose
+       依赖: 反光板地图坐标必须在现场标定后写入 config/reflector.yaml 的 reflectors。
+       未标定 (reflectors 为空) 时节点只检测、不发布, 不影响定位。 -->
+  <arg name="config" default="$(find rosiwit_slam_ros1)/config/reflector.yaml"/>
+  <node pkg="rosiwit_slam_ros1" type="reflector_absolute_node.py"
+        name="reflector_absolute" output="screen">
+    <rosparam file="$(arg config)" command="load"/>
+  </node>
+</launch>

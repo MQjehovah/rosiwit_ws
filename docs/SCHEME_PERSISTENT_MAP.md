@@ -105,21 +105,23 @@ map.overlay.pcd    工作图 = 底图(降采样 0.3) + overlay，**每个点 int
 
 ## 6. 落地状态与路线
 
-### 已落地（0.2.16，设备在跑）
+### 已落地（代码侧，待装机）
 - 车底贴地：初值/输出按 `T(base_footprint←lidar)` 互逆换算（z=0=车底）
-- 工作图 `map.overlay.pcd`（0.3 底图+overlay，点+intensity=w，单文件）：加载/1h 全量落盘/无变化不写；旧版残留启动时自动清理
+- 工作图 `map.overlay.pcd`（0.3 底图+overlay，点+intensity=w，单文件）：首次载入生成/1h 全量落盘/无变化不写；旧版残留启动时自动清理
 - `dynamic_filter: false`：评分诚实
 - overlay 计票/雕刻机制（rayCarve/observeHits/collectNovel/decay）
+- T4 写图门控：必须锚在底图（非桥接 + `cov_base` 达标），去掉对"含子图目标"自证
+- T1 反光板工程部分：节点进 deb（`catkin_install_python`）+ `launch/reflector.launch` + `config/reflector.yaml`；`rosiwit_slam.launch` 加 `start_reflector`（默认 false）
 
 ### 待办（**以本文档为准**，多路并行以此收敛；2026-11-25 决议）
 
 | # | 事项 | 状态 | 说明 |
 |---|---|---|---|
-| T0 | 0.2.18 装机验证四步链路 | 已构建 | 贴地/锚定/桥接/zip-up（§2 状态机） |
-| T1 | **反光板绝对约束** | 待开发 | 优先级最高（用户 2026-11-25 指定）。`onAbsolute` 入口已就绪；缺：强度阈值聚类检测节点 + 反光板地图配置 + 现场部署。完全变化场景的工业标准解 |
-| T2 | **overlay w 加权匹配**（固定物体权重更大，忽略动态） | 待开发 | overlay 计票已能区分固定/动态（固定结构 w 累积、动态衰减）；匹配目标按 w 过滤/加权即可——低 w 瞬态不参与，高 w 固定结构主导匹配。ELite 式 4 的离散化 |
-| T3 | **子图桥接 + 周期重锚 + zip-up** | 0.2.18 已实现，待验证 | 弱锚切子图（不重建）；每 50 帧对 overlay 探测；恢复后 zip-up 修正子图漂移（§4） |
-| T4 | `anchorOk` → `static_support`/`cov_base` 口径统一 | 待开发 | 去自引用残余（对含子图目标算的锚质量不可信） |
+| T0 | 0.2.18 装机验证四步链路 | 已构建 | 贴地/锚定/桥接/zip-up（§2 状态机）+ 首次生成/二次加载工作图 |
+| T1 | **反光板绝对约束** | 工程完成，待现场标定 | 节点/launch/config 已进包；缺：反光板坐标标定（`config/reflector.yaml` 的 `reflectors`）与现场阈值调参 |
+| T2 | **overlay w 加权匹配**（固定物体权重更大，忽略动态） | 已实现，待验证 | 匹配目标按 `target_w_min` 过滤；ELite 式 4 的离散化 |
+| T3 | **子图桥接 + 周期重锚 + zip-up** | 已实现，待验证 | 弱锚切子图（不重建）；每 50 帧对 overlay 探测；恢复后 zip-up 修正子图漂移（§4） |
+| T4 | `anchorOk` → `static_support`/`cov_base` 口径统一 | 已实现，待验证 | 写图门控改为"非桥接 + cov_base 达标"；桥接期不写 overlay |
 | T5 | 长走廊实测 + `max_keyframes` A/B（24 vs 40） | 现场半天 | cov_base 虚高风险；实测后再定 |
 | T6 | ELite P1/P3（距离加权贝叶斯 hit/miss、overlap 分支） | 二期 | 底图小错可修（墙挪 0.5 m） |
 

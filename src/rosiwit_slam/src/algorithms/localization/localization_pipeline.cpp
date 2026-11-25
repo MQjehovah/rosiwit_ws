@@ -2381,7 +2381,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // 写图用**匹配位姿 res.pose**, 不用融合后的 out_pose: 匹配位姿才是"让这片
         // 去畸变点云对上先验地图"的那个位姿, 与地图几何天然一致; 融合位姿带滤波/限幅
         // 滞后 (转弯时实测差 28°), 直接写进去就是墙歪/叠图, 而且会被当成地图的一部分.
-        if (allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg) &&
+        //
+        // T4 (2026-11-25): 写图必须锚在**底图**上, 不能拿"含 overlay/子图的目标"判胜
+        // (自引用): 桥接期目标就是子图, 位姿由子图自身算出, 再写回 overlay = 自证;
+        // cov_base 有效时要求达到可信阈值 (底图真的配上了); cov_base 还没算出来 (-1,
+        // 底图 KD 未就绪) 时退回 anchorOk, 否则起步阶段完全学不到东西。
+        // 注: cov_base 在本帧稍后才更新, 这里用的是上一帧的值 (1 帧滞后, 可接受)。
+        const bool base_anchored = !m_on_submap &&
+            (m_cov_base < 0.0 || m_cov_base >= m_monitor_cfg.credible_fitness);
+        if (base_anchored &&
+            allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg) &&
             anchorOk(res, accepted)) {
             m_maintainer->onLocalized(res.pose, scan, m_last_match, true);
         }
