@@ -111,6 +111,8 @@ public:
     std::string name() const override { return m_pipeline_name; }
     bool getGlobalMap(PointVec& out) override;
     bool getOverlayCloud(PointVec& out) override;
+    bool getWorkingMapCloud(PointVec& out) override;
+    uint64_t workingMapRevision() const override;
     bool getSessionMapCloud(PointVec& out) override;
     SlamState state() const override;
 

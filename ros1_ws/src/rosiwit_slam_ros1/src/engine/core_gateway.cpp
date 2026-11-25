@@ -229,6 +229,16 @@ bool SlamAlgorithm::getSessionMapCloud(rosiwit_slam::PointVec& out) {
     return false;
 }
 
+bool SlamAlgorithm::getWorkingMapCloud(rosiwit_slam::PointVec& out) {
+    if (algo_raw_) return algo_raw_->getWorkingMapCloud(out);
+    return false;
+}
+
+uint64_t SlamAlgorithm::workingMapRevision() const {
+    if (algo_raw_) return algo_raw_->workingMapRevision();
+    return 0;
+}
+
 std::string SlamAlgorithm::dumpFlightRecorder(const std::string& reason) {
     return diag::FlightRecorder::instance().dump(reason);
 }

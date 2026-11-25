@@ -40,6 +40,8 @@ public:
     bool getMapCloud(PointVec& out) override;
     bool getOverlayCloud(PointVec& out) override;
     bool getSessionMapCloud(PointVec& out) override;
+    bool getWorkingMapCloud(PointVec& out) override;
+    uint64_t workingMapRevision() const override;
     /// 运行时注入安装外参 (来自 URDF/TF/启动参数); 统一驱动扫描变换与偏航轴 up_body.
     void setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar,
                            const Eigen::Matrix3d& r_il,
@@ -187,6 +189,9 @@ private:
     // 子图是"瞬时补丁", 写入门槛必须比 overlay 低: 变化区里 fitness(对先验) 天然低,
     // 若还要求和先验匹配得上, 就永远写不进去 -> 桥接时没有跟踪源 -> 必丢(2026-11-24 实机)。
     double m_sm_write_fitness = 0.35;   // 桥接态写子图的最低 fitness
+    // 统一工作图 (map.overlay.pcd) 落盘周期 (分钟): revision 有变化才写。
+    // 2026-11-25: 临时 10 分钟 (现场验证 overlay 自更新), 验证完回 60。
+    double m_working_map_save_min = 60.0;
     double m_sm_write_corr_m = 0.25;    // 允许的单帧修正
     double m_sm_write_corr_deg = 3.0;
 

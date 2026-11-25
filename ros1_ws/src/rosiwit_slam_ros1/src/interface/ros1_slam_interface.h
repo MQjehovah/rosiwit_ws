@@ -164,11 +164,13 @@ private:
     void scheduleScanJob();
     void scheduleGridJob();
     void scheduleGlobalMapJob();
+    void scheduleOverlayMapJob();
     void schedulePlanarJob();
     // 池任务体: 构造并就地 publish
     void buildScanMessages();
     void buildGridMessage();
     void buildGlobalMapMessage();
+    void buildOverlayMapMessage();   // 统一工作图 (当前 w) -> /slam/debug/overlay_map
     /// 析构前等在途池任务收尾 (任务体捕获 this)
     void waitForAuxJobs();
     void publishCurrPose();          // 位姿发布总入口 (只做模式分派/顺序)
@@ -403,6 +405,11 @@ private:
     std::atomic<bool> scan_job_busy_{false};
     std::atomic<bool> grid_job_busy_{false};
     std::atomic<bool> global_map_job_busy_{false};
+    // ---- overlay_map (统一工作图) revision 限频重发 (2026-11-25) ----
+    std::atomic<bool> overlay_map_job_busy_{false};
+    std::atomic<uint64_t> overlay_map_last_rev_{0};    // 上次发布时的工作图 revision
+    std::atomic<bool> overlay_map_have_rev_{false};    // 是否已经发过至少一次
+    std::atomic<double> overlay_map_last_pub_wall_{0.0};  // 上次发布墙钟秒 (限频 60s)
     std::atomic<bool> planar_job_busy_{false};
     std::atomic<double> last_path_build_s_{0.0};   // 轨迹的 1Hz 构造节流
     AuxJobGuard aux_jobs_;                          // 析构时等在途任务

@@ -148,6 +148,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
     m_matcher_name     = getv<std::string>(pipe, "matcher", m_matcher_name);
     m_monitor_name     = getv<std::string>(pipe, "monitor", m_monitor_name);
     m_maintainer_name  = getv<std::string>(pipe, "map_maintainer", m_maintainer_name);
+    // 工作图落盘周期 (分钟, <=0 = 关闭周期落盘); 现场临时 10 分钟验证
+    m_working_map_save_min = getv<double>(pipe, "working_map_save_min", m_working_map_save_min);
     m_fusion_name      = getv<std::string>(pipe, "pose_fusion", m_fusion_name);
     if (!pipe || !pipe["pose_fusion"]) {
         // 兼容旧配置: pose_fusion 直接写在 localization 下 (设备 compat_legacy.yaml 就是这种)
@@ -1005,6 +1007,18 @@ bool LocalizationPipeline::getOverlayCloud(PointVec& out) {
     if (!c || c->empty()) return false;
     out.assign(c->begin(), c->end());
     return true;
+}
+
+bool LocalizationPipeline::getWorkingMapCloud(PointVec& out) {
+    if (!m_map || m_map->empty()) return false;
+    CloudType c = *m_map;                       // 拷贝后注 w, 不动加载原图
+    if (m_maintainer) m_maintainer->annotateBaseWeights(c);   // 刷新成**当前** w
+    out.assign(c.begin(), c.end());
+    return true;
+}
+
+uint64_t LocalizationPipeline::workingMapRevision() const {
+    return m_maintainer ? m_maintainer->revision() : 0;
 }
 
 bool LocalizationPipeline::getSessionMapCloud(PointVec& out) {
@@ -3028,7 +3042,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     session_map_age = static_cast<int>(m_session_map.ageS(now_s));
                 }
 
-                // ---- 工作图定期落盘 (后台线程): 1 小时一次, 没变化不写盘 ----
+                // ---- 工作图定期落盘 (后台线程): working_map_save_min 周期, 没变化不写盘 ----
                 // 只有一张全量工作图: 底图(0.3) + overlay → map.overlay.pcd,
                 // 每点 intensity = w (w==0 的点不写)。没有增量日志。
                 // map.pcd 只做原图备份, 永不修改。
@@ -3041,7 +3055,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     static uint64_t wm_last_rev = 0;
                     const uint64_t rev = m_maintainer ? m_maintainer->revision() : 0;
                     const auto now = std::chrono::steady_clock::now();
-                    const bool due = (now - wm_last) >= std::chrono::hours(1);
+                    const bool due = (m_working_map_save_min > 0.0) &&
+                        (now - wm_last) >= std::chrono::duration_cast<std::chrono::seconds>(
+                                              std::chrono::duration<double, std::ratio<60>>(
+                                                  m_working_map_save_min));
                     const bool changed = (rev != wm_last_rev);
                     if (!wm_saving.load() && due && changed) {
                         wm_last = now;            // 先占位, 防止重复触发

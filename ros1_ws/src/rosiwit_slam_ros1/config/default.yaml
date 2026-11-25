@@ -268,7 +268,9 @@ localization:
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
-    map_maintainer: overlay       # 2026-11-25: 开 overlay 自更新 (工作图 map.overlay.pcd, 1h 落盘)
+    map_maintainer: overlay       # 2026-11-25: 开 overlay 自更新 (统一工作图 map.overlay.pcd)
+    # 工作图落盘周期 (分钟, revision 有变化才写盘)。2026-11-25 临时 10 分钟验证, 验证完回 60。
+    working_map_save_min: 10
     pose_fusion: eskf         # eskf(限幅 + 多源加权, 默认) | direct(直通, 可回退)
 
   # ---- 位姿融合参数 (localization.fusion.*), 只在 pose_fusion=eskf 时生效 ----

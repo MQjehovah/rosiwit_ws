@@ -50,6 +50,13 @@ void Ros1SlamInterface::scheduleGlobalMapJob() {
         [this] { global_map_job_busy_.store(false); });
 }
 
+void Ros1SlamInterface::scheduleOverlayMapJob() {
+    if (overlay_map_job_busy_.exchange(true)) return;
+    aux_jobs_.submit(engine_, "pool", "overlay_map_pub",
+        [this] { buildOverlayMapMessage(); },
+        [this] { overlay_map_job_busy_.store(false); });
+}
+
 void Ros1SlamInterface::schedulePlanarJob() {
     if (!planar_constraint_enabled_) return;
     if (planar_job_busy_.exchange(true)) return;
@@ -165,12 +172,30 @@ void Ros1SlamInterface::buildGlobalMapMessage() {
     vg.setInputCloud(cloud.makeShared());
     vg.filter(*ds);
     ensureCloudDims(*ds);
-    const auto msg = toPointCloud2(*ds, kMapFrame, ros::Time::now());
-    point_map_puber_.publish(msg);
-    // 统一工作图 (w-map) 之后只有一张图: /slam/debug/overlay_map 与 global_map 发同一份
-    // (0.3 体素 + intensity=w)。旧语义"只发新增层"已废弃 —— 底图也进了同一套 w 账本。
-    if (overlay_map_puber_.getNumSubscribers() > 0) overlay_map_puber_.publish(msg);
+    point_map_puber_.publish(toPointCloud2(*ds, kMapFrame, ros::Time::now()));
     debug_map_published_.store(true);   // 只有真正发出去才算完成, 失败留给 startPub 重试
+}
+
+// /slam/debug/overlay_map: 统一工作图 (底图 0.3 体素 + overlay, intensity=**当前** w,
+// 含本会话新提交的持久度)。触发 = 首次进定位模式 + revision 变化, 限频 1min (见 startPub)。
+void Ros1SlamInterface::buildOverlayMapMessage() {
+    PointVec pts;
+    if (!engine_.getWorkingMapCloud(pts) || pts.empty()) return;
+    CloudType cloud;
+    cloud.reserve(pts.size());
+    for (auto& p : pts) cloud.push_back(p);
+    cloud.width = static_cast<uint32_t>(cloud.size());
+    cloud.height = 1;
+    CloudType::Ptr ds(new CloudType());
+    pcl::VoxelGrid<PointType> vg;
+    vg.setLeafSize(0.3f, 0.3f, 0.3f);
+    vg.setInputCloud(cloud.makeShared());
+    vg.filter(*ds);
+    ensureCloudDims(*ds);
+    overlay_map_puber_.publish(toPointCloud2(*ds, kMapFrame, ros::Time::now()));
+    overlay_map_last_rev_.store(engine_.workingMapRevision());
+    overlay_map_have_rev_.store(true);
+    overlay_map_last_pub_wall_.store(ros::WallTime::now().toSec());
 }
 
 void Ros1SlamInterface::waitForAuxJobs() { aux_jobs_.shutdown("Ros1SlamInterface"); }

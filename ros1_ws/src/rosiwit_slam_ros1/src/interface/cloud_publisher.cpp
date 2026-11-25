@@ -78,6 +78,20 @@ void Ros1SlamInterface::startPub() {
         }
     }
 
+    // overlay_map (统一工作图): 首次进定位模式立即发; 之后 revision 变化时限频重发
+    // (最多 1min 一次)。只有 debug 打开且有订阅者才构造 (整图 ~2.5M 点, 构造在池线程)。
+    if (debug_publish_ && mode == SlamMode::LOCALIZATION &&
+        overlay_map_puber_.getNumSubscribers() > 0) {
+        const bool first = !overlay_map_have_rev_.load();
+        const bool changed = overlay_map_have_rev_.load() &&
+                             engine_.workingMapRevision() != overlay_map_last_rev_.load();
+        const double now_wall = ros::WallTime::now().toSec();
+        if ((first || changed) &&
+            now_wall - overlay_map_last_pub_wall_.load() >= 60.0) {
+            scheduleOverlayMapJob();
+        }
+    }
+
     // 整图只在 debug 打开时发, 每个模式一次 (legacy.cpp:936)
     if (debug_publish_ && !debug_map_published_.load() &&
         (mode == SlamMode::LOCALIZATION ||

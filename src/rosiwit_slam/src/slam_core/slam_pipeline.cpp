@@ -1001,6 +1001,15 @@ bool SlamPipeline::getOverlayCloud(PointVec& out) {
     return m_localization->getOverlayCloud(out);
 }
 
+bool SlamPipeline::getWorkingMapCloud(PointVec& out) {
+    if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) return false;
+    return m_localization->getWorkingMapCloud(out);
+}
+
+uint64_t SlamPipeline::workingMapRevision() const {
+    return m_localization ? m_localization->workingMapRevision() : 0;
+}
+
 bool SlamPipeline::getSessionMapCloud(PointVec& out) {
     if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) return false;
     return m_localization->getSessionMapCloud(out);

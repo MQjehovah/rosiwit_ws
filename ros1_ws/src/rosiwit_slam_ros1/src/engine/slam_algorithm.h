@@ -139,6 +139,9 @@ public:
     /// 地图自更新 overlay / 会话地图快照 (调试话题)
     bool getOverlayCloud(rosiwit_slam::PointVec& out);
     bool getSessionMapCloud(rosiwit_slam::PointVec& out);
+    /// 统一工作图 (底图 0.3 + overlay, intensity=当前 w) 与 revision (调试话题限频重发)
+    bool getWorkingMapCloud(rosiwit_slam::PointVec& out);
+    uint64_t workingMapRevision() const;
 
     // ==================== 核心结构操作 (线程安全入口) ====================
     // 为什么需要这一层: 接口层以前直接拿 algo() 裸指针调"会替换核心内部对象"的操作

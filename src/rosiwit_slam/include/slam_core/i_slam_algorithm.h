@@ -97,6 +97,10 @@ public:
 
     /// 地图自更新 overlay / 会话地图快照 (调试出口; 默认不支持)
     virtual bool getOverlayCloud(PointVec& /*out*/) { return false; }
+    /// 统一工作图 (底图 0.3 体素 + overlay), intensity = **当前** w (含本会话提交)
+    virtual bool getWorkingMapCloud(PointVec& /*out*/) { return false; }
+    /// 工作图 revision: overlay 几何/权重有增删才 +1 (供调试话题限频重发)
+    virtual uint64_t workingMapRevision() const { return 0; }
     virtual bool getSessionMapCloud(PointVec& /*out*/) { return false; }
     /// 位姿 + 协方差 (order [rot(3),trans(3)]; 默认不支持)
     virtual bool getPoseCov(PoseStamped& /*out*/, Eigen::Matrix<double, 6, 6>& /*cov*/) { return false; }
