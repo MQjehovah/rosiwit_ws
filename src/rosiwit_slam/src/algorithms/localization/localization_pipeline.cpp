@@ -2458,13 +2458,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             MatchResult pr;
             if (m_matcher->match(scan, out_pose, pr) && pr.converged &&
                 pr.fitness >= m_global_cfg.reloc_accept_score) {
-                // zip-up: C = p_overlay_match ∘ p_submap_est^-1, 作用于子图全部内容
-                Eigen::Matrix4d C = Eigen::Matrix4d::Identity();
-                C.block<3, 3>(0, 0) = pr.pose.rot * out_pose.rot.transpose();
-                C.block<3, 1>(0, 3) = pr.pose.trans - C.block<3, 3>(0, 0) * out_pose.trans;
+                // ★段级出口修正 (SessionMap v2, ROLL Fig.3 简化闭式解): 用可靠
+                // 匹配位姿作末端约束, 把整段关键帧的漂移按序号线性摊平 ——
+                // 替代 v1 的单点 zip-up 刚性搬移 (漂移大时会撕裂子图内部)。
                 {
-                    std::lock_guard<std::mutex> lk(m_session_map_mu);   // 与 reset/update 互斥
-                    m_session_map.applyCorrection(C);
+                    std::lock_guard<std::mutex> lk(m_session_map_mu);
+                    m_session_map.applyExitCorrection(pr.pose);
                 }
                 out_pose = pr.pose;
                 res = pr;
@@ -2472,8 +2471,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_on_submap = false;
                 m_maha_bypass_frames = 5;
                 diag::log('I', "LocPipeline",
-                          "re-anchored to overlay (zip-up applied, drift=" +
-                              std::to_string(C.block<3, 1>(0, 3).norm()) + "m)");
+                          "re-anchored to overlay (segment exit-correction applied)");
             }
             m_has_cached_target = false;   // 下一帧按 m_on_submap 重建常规目标
         }
