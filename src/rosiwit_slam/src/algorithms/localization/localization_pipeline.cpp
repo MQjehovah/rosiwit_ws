@@ -1208,6 +1208,14 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
 }
 
 CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
+    // ---- 子图桥接模式: 目标 = 子图 (临时图, 边建图边定位) ----
+    // overlay 锚不住时用子图维持; 周期性对 overlay 探测重锚 (见 onLidar)。
+    if (m_on_submap) return m_session_map.pointsWorld();
+    // ---- overlay 锚定模式: 目标 = 底图 crop + overlay (压制同区域旧点) ----
+    return buildAnchoredTarget(pose);
+}
+
+CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose) {
     CloudType::Ptr target = m_local_map->getLocalMap(pose);
     // [LocProbe] 诊断: 局部地图到底取到多少点 (NO Effective Points 排查)
     {
@@ -1220,23 +1228,13 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     }
     if (m_maintainer) {
         CloudType::Ptr ov = m_maintainer->getOverlay(pose);
-        if (ov && !ov->empty() && !m_anchor_on_base) {
-            // 桥接目标 = "雕刻图", 不是底图∪overlay 的并集:
-            // 并集是双层冗余, 稍一错位扫描点在两层里都能找到对应 -> 评分虚高
-            // (实机: 位姿错 27m 时仍 96 分)。在 overlay 有点的区域,
-            // 用它**替代**底图的旧结构 (suppressBaseByOverlay)。
+        if (ov && !ov->empty()) {
+            // 底图与 overlay 的并集是双层冗余 (稍一错位两层都能配上, 评分虚高)。
+            // 在 overlay 有点的区域, 用它**替代**底图的旧结构 (suppressBaseByOverlay),
+            // 目标收敛为"当前几何"。
             if (m_maintainer_cfg.override_base)
                 suppressBaseByOverlay(target, ov, m_maintainer_cfg.voxel);
             *target += *ov;
-        }
-    }
-    // 子图 (会话地图): 只在"底图锚不住"时参与匹配; 常驻自更新, 不关闭。
-    // 同样按体素压制底图同区域旧点, 再并入 (保持"雕刻图"语义)。
-    if (!m_anchor_on_base && m_session_map.active()) {
-        CloudType::Ptr sub = m_session_map.pointsWorld();
-        if (sub && !sub->empty()) {
-            suppressBaseByOverlay(target, sub, m_session_map.config().voxel);
-            *target += *sub;
         }
     }
     return target;
@@ -2012,6 +2010,34 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         PoseStamped sp;
         if (m_smoother.getPose(sp)) out_pose = sp;
     }
+    // ---- 子图模式: 周期性对 overlay 做探测匹配 (重锚尝试, ELite zip-up) ----
+    // overlay 恢复的判据: 用当前位姿对 overlay(底图+w) 目标做一次完整匹配,
+    // fitness 达 reloc_accept_score 即重锚; 子图漂移用 Δ 修正 (zip-up)。
+    if (m_on_submap && --m_probe_countdown <= 0) {
+        m_probe_countdown = m_probe_period;
+        CloudType::Ptr probe_target = buildAnchoredTarget(guess);
+        if (probe_target && probe_target->size() >= 100) {
+            m_matcher->setTarget(probe_target);
+            MatchResult pr;
+            if (m_matcher->match(scan, out_pose, pr) && pr.converged &&
+                pr.fitness >= m_global_cfg.reloc_accept_score) {
+                // zip-up: C = p_overlay_match ∘ p_submap_est^-1, 作用于子图全部内容
+                Eigen::Matrix4d C = Eigen::Matrix4d::Identity();
+                C.block<3, 3>(0, 0) = pr.pose.rot * out_pose.rot.transpose();
+                C.block<3, 1>(0, 3) = pr.pose.trans - C.block<3, 3>(0, 0) * out_pose.trans;
+                m_session_map.applyCorrection(C);
+                out_pose = pr.pose;
+                res = pr;
+                accepted = true;
+                m_on_submap = false;
+                m_maha_bypass_frames = 5;
+                diag::log('I', "LocPipeline",
+                          "re-anchored to overlay (zip-up applied, drift=" +
+                              std::to_string(C.block<3, 1>(0, 3).norm()) + "m)");
+            }
+            m_has_cached_target = false;   // 下一帧按 m_on_submap 重建常规目标
+        }
+    }
     // 地面/平面约束 (锁 z/roll/pitch; 坡道跟随地形)
     {
         // [pose_cmp] 追踪 33deg 倾角在哪一步出现/消失 (每 20 帧一条, 纯打印)
@@ -2515,6 +2541,18 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 } else {
                     ++m_anchor_weak_streak;
                     m_anchor_ok_streak = 0;
+                    // overlay 顶不住 -> 切换目标到子图。
+                    // **只切换, 不重建**: 子图从定位成功起就一直在建, 内容可信;
+                    // 此刻 reset 会让子图变薄, 临时建图必然出错。
+                    if (!m_on_submap && m_ever_localized &&
+                        m_anchor_weak_streak >= m_anchor_patience &&
+                        m_status.load() != LOST) {
+                        m_on_submap = true;
+                        m_probe_countdown = m_probe_period;
+                        m_has_cached_target = false;   // 下一帧目标切到子图
+                        std::cout << "[anchor] switch to submap (bridging, pts="
+                                  << m_session_map.size() << ")" << std::endl;
+                    }
                 }
 
                 int  session_map_active = 0;

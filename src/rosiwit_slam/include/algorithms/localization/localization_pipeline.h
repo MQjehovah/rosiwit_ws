@@ -158,16 +158,22 @@ private:
     int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
     bool   m_anchor_on_base = true;       // true=位姿锚在底图(目标只用底图); false=子图桥接
     int    m_anchor_close_patience = 10;  // 连续好锚帧 -> 关
+    // ---- 子图桥接模式 ----
+    bool m_on_submap = false;             // true = 目标=子图, 边建图边定位
+    int  m_probe_countdown = 0;           // 距下一次 overlay 探测重锚的帧数
+    int  m_probe_period = 50;             // 探测周期 (帧, 5s @10Hz)
     int    m_anchor_weak_streak = 0;
     int    m_anchor_ok_streak = 0;
     double m_session_map_radius = 25.0;
     double m_session_map_voxel = 0.15;
     size_t m_session_map_max_points = 300000;
-    /// 服务/换图线程调用: 加锁清空子图
+    /// 服务/换图线程调用: 加锁清空子图, 并退出子图桥接模式
     void resetSessionMap() {
         std::lock_guard<std::mutex> lk(m_session_map_mu);
         m_session_map.deactivate();
         m_have_submap_anchor = false;   // 换图/重置后子图窗口锚必须重来
+        m_on_submap = false;
+        m_probe_countdown = 0;
     }
     PlanarConstraintConfig m_planar_cfg;
     std::string m_relocalizer_name = "none";
