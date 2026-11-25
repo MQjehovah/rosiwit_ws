@@ -2551,18 +2551,23 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     session_map_age = static_cast<int>(m_session_map.ageS(now_s));
                 }
 
-                // ---- 工作图定期落盘 (后台线程, 不阻塞实时链) ----
-                // overlay 直接代替底图: 工作图 = 底图 + overlay 快照, 落盘为
-                // map.overlay.map。map.pcd 只做原图备份, 永不修改。
-                // 断电只丢最近一个周期 (overlay.pcd 的 autosave 会补上增量),
-                // 下次加载: 工作图 + overlay.pcd, buildTarget 的压制逻辑自动去重。
+                // ---- 工作图定期落盘 (后台线程): 1 小时一次, 没变化不写盘 ----
+                // overlay 直接代替底图: 工作图 = 底图 + overlay 快照 → map.overlay.map。
+                // map.pcd 只做原图备份, 永不修改。
+                // 变化判据 = maintainer revision() (overlay 有增删才 +1)。
                 if (m_session_map_enabled && m_ever_localized && m_map &&
                     !m_map->empty() && m_initialized && accepted) {
                     static std::atomic<bool> wm_saving(false);
-                    static uint64_t wm_n = 0;
-                    ++wm_n;
-                    const int period = std::max(1, m_maintainer_cfg.autosave_frames);
-                    if (!wm_saving.load() && wm_n % period == 0) {
+                    static std::chrono::steady_clock::time_point wm_last =
+                        std::chrono::steady_clock::now();
+                    static uint64_t wm_last_rev = 0;
+                    const uint64_t rev = m_maintainer ? m_maintainer->revision() : 0;
+                    const auto now = std::chrono::steady_clock::now();
+                    const bool due = (now - wm_last) >= std::chrono::hours(1);
+                    const bool changed = (rev != wm_last_rev);
+                    if (!wm_saving.load() && due && changed) {
+                        wm_last = now;            // 先占位, 防止重复触发
+                        wm_last_rev = rev;
                         wm_saving.store(true);
                         CloudType::Ptr base_snap(new CloudType(*m_map));
                         CloudType::Ptr ov = m_maintainer ? m_maintainer->snapshotOverlay()
