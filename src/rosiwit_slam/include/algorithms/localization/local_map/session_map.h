@@ -1,21 +1,29 @@
 // ============================================================================
-// session_map.h — 突变场景用的滚动子图（方案 v3 §3 B 阶段）
+// session_map.h — 突变场景用的滚动子图 v2 (ROLL 式段级临时建图)
 //
-// 解决的场景：机器人进入一个"全是货堆、看不到高可信几何"的区域，
-// 全局图的锚（map->odom）不可用。此时用一个**局部子图**维持跟踪：
+// 参考论文: ROLL (IROS 2022, arXiv:2203.03923) —— Long-Term Robust LiDAR-based
+// Localization With Temporary Mapping in Changing Environments.
 //
-//   * 子图有自己的坐标系 F0（= 创建瞬间的全局位姿），并记下该位姿 T_GS
-//   * 只累积 anchor 系下的点；机器人走远后按半径丢弃 -> 内存恒定
-//   * T_GS **冻结**：子图更新不会让全局位姿跳动
-//   * 全局位姿 = T_GS * pose_s，因此局部连续、全局不崩
+// v1 的问题: 点存进单一哈希表 (anchor 系), 丢失了"这段点是什么时候/以什么位姿
+// 注册"的来源信息 —— 导致 (1) 桥接期的漂移只能整图刚性搬移 (zip-up), 段内
+// 漂移无法摊平; (2) 掠射 free 证据按帧计数, 静止时误删真实几何。
 //
-// 与现有 keyframe_submap 的区别：后者是"从全局图裁一块"（内容可能是旧的），
-// 本类是"用进入后的当前观测新建"（内容永远是当下的样子）。
+// v2 (ROLL 式):
+//   * 桥接期的扫描按【关键帧】注册 (每 kf_min_dist 米 / kf_min_frames 帧一个),
+//     每个关键帧带着自己注册时的估计位姿 —— 保留来源信息
+//   * 段结束时 (重锚成功), 用可靠匹配位姿作为末端约束, 把整段的漂移按关键帧
+//     序号线性摊平 (ROLL Fig.3 两全局因子位姿图的简化闭式解) —— 段级修正
+//   * free 证据与 hit 证据对称: 每帧每体素最多一票, 累计 >=free_votes_to_clear
+//     才从视图剔除 (不再按帧硬删)
+//   * 视图 = 全体关键帧点 变换→合并→体素去重 (缓存), 死亡/自由体素跳过
 // ============================================================================
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include <Eigen/Eigen>
 
@@ -26,75 +34,90 @@ namespace rosiwit_slam {
 class SessionMap {
 public:
   struct Config {
-    double radius = 25.0;      // 机器人周围保留半径 (m)
-    double voxel = 0.15;       // 去重体素 (m)
-    size_t max_points = 300000;  // 容量上限 (超过后停止插入并告警)
-    int clear_stride = 20;       // 自由空间清除: 扫描点抽样步长 (每 N 个点走一条射线)
+    double radius = 25.0;        // 机器人周围保留半径 (m); 超出的关键帧整体裁剪
+    double voxel = 0.15;         // 视图合并时的体素去重 (m)
+    size_t max_points = 400000;  // 视图点数上限 (超过后停止插入并告警)
+    int clear_stride = 20;       // 自由空间清除: 扫描点抽样步长
+    double kf_min_dist = 1.0;    // 关键帧最小间距 (m)
+    int kf_min_frames = 15;      // 关键帧最小帧数
+    int free_votes_to_clear = 3; // free 票数达到即从视图剔除 (对称于 hit 计票)
   };
 
   void configure(const Config& c) { cfg_ = c; }
   const Config& config() const { return cfg_; }
 
-  /// 以当前全局位姿为锚创建子图（清空）。**必须在位姿可信时调用**，
-  /// 否则锚一开始就是错的。
-  void reset(const PoseStamped& anchor, double now_s);
-
+  /// 开图 (位姿可信时调用)
+  void reset(const PoseStamped& robot, double now_s);
   bool active() const { return active_; }
   const PoseStamped& anchor() const { return anchor_; }
   double ageS(double now_s) const { return active_ ? (now_s - created_s_) : 0.0; }
-  size_t size() const { return pts_.size(); }
+  size_t size() const { return view_ ? view_->size() : 0; }
+  size_t keyframes() const { return m_kfs.size(); }
 
-  /// 用一帧机体系点云更新：world = pose*body -> anchor = T_GS^-1*world，
-  /// 体素去重；距机器人超过 radius 的点丢弃。
+  /// 桥接注册: 一帧机体系点云 + 当时的估计位姿。
+  /// 内部: 变换到世界系 → 追加到当前关键帧 (按距离/帧数滚动切新关键帧) →
+  ///       掠射 free 投票 (每帧每体素一票) → 老关键帧裁剪。
   void update(const CloudType& scan_body, const PoseStamped& pose_world);
 
-  /// 世界系刚性修正: 把整张子图按 (dR, dT) 搬到新位姿解上 (T_GS' = Δ ∘ T_GS)。
-  /// 用于"桥接态发生大修正但绝不能清空子图"的场合: 点不动, 只改锚变换, 一次缓存重建。
-  void applyWorldCorrection(const Eigen::Matrix3d& dR, const Eigen::Vector3d& dT) {
-    if (!active_) return;
-    anchor_.rot = dR * anchor_.rot;
-    anchor_.trans = dR * anchor_.trans + dT;
-    cache_dirty_ = true;
-  }
+  /// 段级出口修正 (ROLL Fig.3 简化闭式解): 用重锚得到的可靠位姿作为末端约束,
+  /// 把整段关键帧的漂移按序号线性摊平。返回参与修正的关键帧数。
+  size_t applyExitCorrection(const PoseStamped& reliable);
 
-  /// 世界系子图点云（T_GS * pts），供匹配目标使用。带缓存: update/reset 后重建一次。
-  CloudType::Ptr pointsWorld() const;
-
-  /// 只取 center 周围 radius 内的世界系点（radius<=0 = 全部）。走同一份缓存, 只做距离筛选,
-  /// 用于"存图半径大、参与匹配的半径小"——存 40m 备着, 匹配只喂 25m, 不让目标云膨胀。
-  CloudType::Ptr pointsWorld(const Eigen::Vector3d& center, double radius) const;
-
-
-  /// 关闭并清空（重新看到高可信几何时调用）
-  void deactivate() {
-    active_ = false;
-    pts_.clear();
-    have_robot_ = false;
-    cache_.reset();
-    cache_dirty_ = true;
-  }
-
-  /// zip-up 修正: C 为 world 系修正变换 (子图锚系旧值 -> 重锚后的新值),
-  /// 作用于子图全部点与锚。桥接结束重锚回 overlay 时调用 (ELite 式)。
+  /// zip-up 兼容入口: C 为 world 系修正变换, 作用于全部关键帧位姿。
   void applyCorrection(const Eigen::Matrix4d& C);
 
+  /// 旧接口兼容: (dR, dT) 形式的 zip-up
+  void applyWorldCorrection(const Eigen::Matrix3d& dR, const Eigen::Vector3d& dT) {
+    if (!active_) return;
+    Eigen::Matrix4d C = Eigen::Matrix4d::Identity();
+    C.block<3, 3>(0, 0) = dR;
+    C.block<3, 1>(0, 3) = dT;
+    applyCorrection(C);
+  }
+
+  /// 世界系合并视图 (体素去重 + free/dead 剔除 + 半径裁剪, 带缓存)。
+  /// intensity = 0 (v2 子图是纯几何; w 账本在 maintainer 侧)。
+  CloudType::Ptr pointsWorld() const;
+  /// 只取 center 周围 radius 内的点 (走同一份缓存, 距离筛选)
+  CloudType::Ptr pointsWorld(const Eigen::Vector3d& center, double radius) const;
+
+  /// 关闭并清空 (重新看到高可信几何时调用)
+  void deactivate();
+
+  /// 自由空间投票接口: 供外部 (w 账本) 在雕刻判定时投 free 票 (可选, 默认内部计数)
+  void markFreeVote(double x, double y, double z);
+
 private:
-  int64_t key(double x, double y, double z) const;
-  void sweepFar();
+  struct EpKf {
+    PoseStamped pose;          // 注册时的估计位姿 (world)
+    CloudType::Ptr world;      // 世界系点云 (观测时变换, 含 intensity=0)
+    Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+  };
+
+  void rebuildView() const;
+  void pruneKfs();
 
   Config cfg_;
   bool active_ = false;
-  PoseStamped anchor_;
+  PoseStamped anchor_;               // 兼容字段 (= 开图位姿)
   double created_s_ = 0.0;
-
-  std::unordered_map<int64_t, Eigen::Vector3d> pts_;  // anchor 系
-  mutable CloudType::Ptr cache_;      // 世界系缓存 (pointsWorld 复用, 避免每帧重建 30 万点)
-  mutable bool cache_dirty_ = true;
-  const CloudType::Ptr& cachedWorld() const;
-  Eigen::Vector3d robot_anchor_ = Eigen::Vector3d::Zero();  // 机器人在 anchor 系
-  Eigen::Vector3d sweep_origin_ = Eigen::Vector3d::Zero();  // 上次清扫时的机器人位置
+  Eigen::Vector3d robot_trans_ = Eigen::Vector3d::Zero();  // 最近机器人位置 (world)
+  Eigen::Matrix3d robot_rot_ = Eigen::Matrix3d::Identity(); // 最近机器人姿态 (world)
   bool have_robot_ = false;
-  bool capacity_warned_ = false;
+
+  std::vector<EpKf> m_kfs;           // 段内关键帧
+  int m_frames_since_kf_ = 0;
+  Eigen::Vector3d m_last_kf_pos_ = Eigen::Vector3d::Zero();
+
+  // 自由投票: 体素 key (0.3 世界网格) → 票数/帧号。达到 free_votes_to_clear 的
+  // 体素在视图构建时跳过 (真正的"搬运/消失"清得掉, 掠射单帧误伤清不掉)。
+  std::unordered_map<int64_t, int> m_free_votes_;
+  std::unordered_map<int64_t, uint32_t> m_free_frame_;
+  uint32_t m_frame = 0;
+
+  mutable CloudType::Ptr view_;
+  mutable bool view_dirty_ = true;
+  mutable bool capacity_warned_ = false;
 };
 
 }  // namespace rosiwit_slam

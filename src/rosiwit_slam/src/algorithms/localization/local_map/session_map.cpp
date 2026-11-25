@@ -1,3 +1,6 @@
+// ============================================================================
+// session_map.cpp — v2 (ROLL 式段级临时建图), 见 session_map.h 顶部说明
+// ============================================================================
 #include "algorithms/localization/local_map/session_map.h"
 
 #include <cmath>
@@ -5,155 +8,212 @@
 
 namespace rosiwit_slam {
 
-int64_t SessionMap::key(double x, double y, double z) const {
-  const double v = (cfg_.voxel > 1e-6) ? cfg_.voxel : 0.15;
-  const int64_t ix = static_cast<int64_t>(std::floor(x / v));
-  const int64_t iy = static_cast<int64_t>(std::floor(y / v));
-  const int64_t iz = static_cast<int64_t>(std::floor(z / v));
-  // 每轴 21 位（约 ±1e5 m @0.15m），够仓库尺度
-  return ((ix & 0x1FFFFF) << 42) | ((iy & 0x1FFFFF) << 21) | (iz & 0x1FFFFF);
+static int64_t vkey(double x, double y, double z, double v) {
+    const int64_t ix = static_cast<int64_t>(std::floor(x / v));
+    const int64_t iy = static_cast<int64_t>(std::floor(y / v));
+    const int64_t iz = static_cast<int64_t>(std::floor(z / v));
+    return ((ix & 0x1FFFFF) << 42) | ((iy & 0x1FFFFF) << 21) | (iz & 0x1FFFFF);
 }
 
-void SessionMap::reset(const PoseStamped& anchor, double now_s) {
-  anchor_ = anchor;
-  created_s_ = now_s;
-  pts_.clear();
-  active_ = true;
-  have_robot_ = false;
-  capacity_warned_ = false;
-  cache_.reset();
-  cache_dirty_ = true;
-  std::cout << "[submap] opened: anchor=(" << anchor.trans.x() << ", "
-            << anchor.trans.y() << ") radius=" << cfg_.radius << std::endl;
+void SessionMap::reset(const PoseStamped& robot, double now_s) {
+    anchor_ = robot;               // 兼容字段: 开图位姿
+    robot_trans_ = robot.trans;    // 兼容旧成员语义
+    created_s_ = now_s;
+    active_ = true;
+    have_robot_ = true;
+    capacity_warned_ = false;
+    m_kfs.clear();
+    m_frames_since_kf_ = 0;
+    m_free_votes_.clear();
+    m_free_frame_.clear();
+    m_frame = 0;
+    view_.reset();
+    view_dirty_ = true;
+    // 开图即建第一个关键帧 (锚定在当前估计位姿)
+    EpKf k;
+    k.pose = robot;
+    k.world.reset(new CloudType());
+    m_kfs.push_back(std::move(k));
+    std::cout << "[submap] v2 opened: anchor=(" << robot.trans.x() << ", "
+              << robot.trans.y() << ") radius=" << cfg_.radius << std::endl;
 }
 
-void SessionMap::sweepFar() {
-  if (!have_robot_) return;
-  const double r = cfg_.radius;
-  if (r <= 0.0) return;
-  const double r2 = r * r;
-  for (auto it = pts_.begin(); it != pts_.end();) {
-    if ((it->second - robot_anchor_).squaredNorm() > r2) {
-      it = pts_.erase(it);
-    } else {
-      ++it;
+void SessionMap::deactivate() {
+    active_ = false;
+    m_kfs.clear();
+    m_free_votes_.clear();
+    m_free_frame_.clear();
+    m_frame = 0;
+    view_.reset();
+    view_dirty_ = true;
+}
+
+void SessionMap::pruneKfs() {
+    // 关键帧级裁剪: 质心超出 radius×1.2 的关键帧整体丢弃 (内存恒定)
+    const double r = cfg_.radius * 1.2;
+    const double r2 = r * r;
+    Eigen::Vector3d ref = m_kfs.back().centroid;   // 以最新关键帧为参考
+    if (have_robot_) ref = robot_trans_;
+    size_t pts = 0;
+    for (const auto& k : m_kfs) if (k.world) pts += k.world->size();
+    size_t kept = 0;
+    std::vector<EpKf> nk;
+    nk.reserve(m_kfs.size());
+    for (auto& k : m_kfs) {
+        const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
+        if ((c - ref).squaredNorm() > r2) continue;
+        nk.push_back(std::move(k));
+        if (k.world) kept += k.world->size();
     }
-  }
-  sweep_origin_ = robot_anchor_;
+    if (nk.size() != m_kfs.size()) {
+        m_kfs.swap(nk);
+        view_dirty_ = true;
+    }
+    (void)pts; (void)kept;
 }
 
 void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_world) {
-  if (!active_ || scan_body.empty()) return;
+    if (!active_ || scan_body.empty()) return;
+    robot_trans_ = pose_world.trans;
+    robot_rot_ = pose_world.rot;
+    have_robot_ = true;
+    ++m_frame;
+    const uint32_t frame = static_cast<uint32_t>(m_frame);
 
-  // world = pose * body
-  const M3D& R_wb = pose_world.rot;
-  const V3D& t_wb = pose_world.trans;
-
-  // anchor 系 = T_GS^-1 * world
-  const M3D R_gs_inv = anchor_.rot.transpose();
-  const V3D t_gs = anchor_.trans;
-
-  robot_anchor_ = R_gs_inv * (t_wb - t_gs);
-  have_robot_ = true;
-
-  const double r = cfg_.radius;
-  const double r2 = (r > 0.0) ? r * r : 0.0;
-  const bool cap = (cfg_.max_points > 0 && pts_.size() >= cfg_.max_points);
-
-  if (cap) {
-    if (!capacity_warned_) {
-      std::cout << "[submap] capacity reached (" << cfg_.max_points
-                << "), stop inserting" << std::endl;
-      capacity_warned_ = true;
+    // 当前关键帧: 不存在/移动超距/帧数超限 → 新建
+    bool new_kf = m_kfs.empty();
+    if (!new_kf) {
+        const Eigen::Vector3d dp = pose_world.trans - m_kfs.back().pose.trans;
+        new_kf = (dp.norm() >= cfg_.kf_min_dist) ||
+                 (m_frames_since_kf_ >= cfg_.kf_min_frames);
     }
-  } else {
+    if (new_kf) {
+        EpKf k;
+        k.pose = pose_world;
+        k.world.reset(new CloudType());
+        m_kfs.push_back(std::move(k));
+        m_frames_since_kf_ = 0;
+        view_dirty_ = true;
+    }
+    EpKf& kf = m_kfs.back();
+    const Eigen::Matrix3d R_ki = kf.pose.rot.transpose();
+    const Eigen::Vector3d t_ki = -R_ki * kf.pose.trans;
+    Eigen::Vector3d acc = Eigen::Vector3d::Zero();
+    size_t npts = 0;
     for (const auto& p : scan_body.points) {
-      if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-      const V3D w = R_wb * V3D(p.x, p.y, p.z) + t_wb;
-      const V3D a = R_gs_inv * (w - t_gs);
-      if (r2 > 0.0 && (a - robot_anchor_).squaredNorm() > r2) continue;  // 半径外直接丢
-      pts_.emplace(key(a.x(), a.y(), a.z()), a);                          // 体素去重
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        const Eigen::Vector3d w = pose_world.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose_world.trans;
+        const Eigen::Vector3d kl = R_ki * w + t_ki;      // 关键帧局部系
+        PointType q;
+        q.x = static_cast<float>(w.x());
+        q.y = static_cast<float>(w.y());
+        q.z = static_cast<float>(w.z());
+        kf.world->push_back(q);
+        acc += w;
+        ++npts;
+        // 掠射 free 票: 每帧每体素最多一票 (对称于 hit 的 view 计票)
+        const int64_t fk = vkey(w.x(), w.y(), w.z(), cfg_.voxel);
+        if (m_free_frame_[fk] != frame) {
+            m_free_frame_[fk] = frame;
+            ++m_free_votes_[fk];
+        }
     }
+    if (npts) kf.centroid = acc / static_cast<double>(npts);
+    view_dirty_ = true;
 
-    // 自由空间清除 (方案 v2 §3): 沿"传感器原点 -> 端点"射线前进, 途经的体素判为自由
-    // 并删除。否则搬走的货/走过的动态物会一直留在子图里 (子图是覆盖式, 不清就叫
-    // 积分式, 搬走的东西永远在)。与 overlay 的 rayCarve 同一原理, 采样步长=体素。
-    const V3D origin_a = R_gs_inv * (t_wb - t_gs);
-    const int stride = std::max(1, cfg_.clear_stride);
-    const int n = static_cast<int>(scan_body.points.size());
-    const double step = std::max(0.05, cfg_.voxel);
-    for (int i = 0; i < n; i += stride) {
-      const auto& p = scan_body.points[i];
-      if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-      const V3D end = R_gs_inv * (R_wb * V3D(p.x, p.y, p.z) + t_wb - t_gs);
-      const V3D dir = end - origin_a;
-      const double len = dir.norm();
-      if (len < step * 3) continue;                     // 太近: 全是端点, 不清
-      const V3D u = dir / len;
-      // 从 1 个体素开始, 到端点前 1 个体素结束 (端点本身是占据, 不能清)
-      for (double d = step; d < len - step; d += step) {
-        const V3D q = origin_a + u * d;
-        pts_.erase(key(q.x(), q.y(), q.z()));
-      }
+    // 关键帧级裁剪: 质心超出 radius×1.2 的关键帧整体丢弃
+    pruneKfs();
+}
+
+size_t SessionMap::applyExitCorrection(const PoseStamped& reliable) {
+    if (m_kfs.empty()) return 0;
+    // ROLL Fig.3 简化闭式解: 里程计因子把关键帧串联, 两端各一个全局匹配因子。
+    // 当只有末端一个可靠位姿时, 最优解 = 把末端残差按序号线性分摊到全部关键帧
+    // (漂移平滑假设下的线性摊平 ≈ GTSAM 解, 免依赖)。
+    const size_t n = m_kfs.size();
+    const Eigen::Vector3d d_last = reliable.trans - m_kfs.back().pose.trans;
+    const Eigen::Matrix3d dR_last = reliable.rot * m_kfs.back().pose.rot.transpose();
+    Eigen::Quaterniond qd(dR_last);
+    qd.normalize();
+    for (size_t i = 0; i < n; ++i) {
+        const double a = (n > 1) ? static_cast<double>(i) / static_cast<double>(n - 1) : 1.0;
+        m_kfs[i].pose.trans += a * d_last;
+        Eigen::Quaterniond q0(m_kfs[i].pose.rot);
+        q0 = q0.slerp(a, qd).normalized();   // Eigen 3.3: a.slerp(t, b)
+        m_kfs[i].pose.rot = q0.toRotationMatrix();
     }
-  }
-
-  cache_dirty_ = true;   // 有点写入 -> 世界系缓存失效
-  // 机器人走出一段距离后清扫一次（避免每帧 O(n) 全扫）
-  if (have_robot_ && (robot_anchor_ - sweep_origin_).norm() > std::max(1.0, 0.4 * r)) {
-    sweepFar();
-  }
-}
-
-const CloudType::Ptr& SessionMap::cachedWorld() const {
-  if (!cache_) cache_.reset(new CloudType());
-  if (!cache_dirty_) return cache_;
-  cache_->clear();
-  cache_dirty_ = false;
-  if (!active_ || pts_.empty()) return cache_;
-  cache_->reserve(pts_.size());
-  for (const auto& kv : pts_) {
-    const V3D w = anchor_.rot * kv.second + anchor_.trans;
-    PointType p;
-    p.x = static_cast<float>(w.x());
-    p.y = static_cast<float>(w.y());
-    p.z = static_cast<float>(w.z());
-    p.intensity = 0.0f;
-    cache_->push_back(p);
-  }
-  return cache_;
-}
-
-CloudType::Ptr SessionMap::pointsWorld() const {
-  if (!active_ || pts_.empty()) return CloudType::Ptr(new CloudType());
-  return cachedWorld();   // 直接共享只读缓存 (位姿不动时不重复 30 万次旋转/拷贝)
-}
-
-CloudType::Ptr SessionMap::pointsWorld(const Eigen::Vector3d& center, double radius) const {
-  if (!(radius > 0.0)) return pointsWorld();
-  CloudType::Ptr out(new CloudType());
-  if (!active_ || pts_.empty()) return out;
-  const CloudType::Ptr& all = cachedWorld();
-  const double r2 = radius * radius;
-  out->reserve(all->size());
-  for (const auto& p : all->points) {
-    const double dx = p.x - center.x();
-    const double dy = p.y - center.y();
-    if (dx * dx + dy * dy <= r2) out->push_back(p);
-  }
-  out->width = static_cast<uint32_t>(out->size());
-  out->height = 1;
-  out->is_dense = false;
-  return out;
+    view_dirty_ = true;
+    return n;
 }
 
 void SessionMap::applyCorrection(const Eigen::Matrix4d& C) {
-  if (!active_ || pts_.empty()) return;
-  const Eigen::Matrix3d dR = C.block<3, 3>(0, 0);
-  const Eigen::Vector3d dt = C.block<3, 1>(0, 3);
-  for (auto& kv : pts_) kv.second = dR * kv.second + dt;
-  anchor_.rot = dR * anchor_.rot;
-  anchor_.trans = dR * anchor_.trans + dt;
+    if (!active_) return;
+    for (auto& k : m_kfs) {
+        k.pose.rot = C.block<3, 3>(0, 0) * k.pose.rot;
+        k.pose.trans = C.block<3, 3>(0, 0) * k.pose.trans + C.block<3, 1>(0, 3);
+    }
+    view_dirty_ = true;
 }
+
+
+
+CloudType::Ptr SessionMap::pointsWorld() const {
+    CloudType::Ptr out(new CloudType());
+    if (!active_ || m_kfs.empty()) return out;
+    if (view_ && !view_dirty_) return view_;
+    // 合并视图: 全体关键帧点 → 0.3 体素去重 → free>=free_votes_to_clear 跳过
+    const double vv = std::max(0.05, cfg_.voxel);
+    std::unordered_set<int64_t> emitted;
+    emitted.reserve(m_kfs.size() * 4);
+    out->reserve(m_kfs.size() * 8);
+    for (const auto& k : m_kfs) {
+        if (!k.world) continue;
+        for (const auto& p : k.world->points) {
+            const int64_t vk = vkey(p.x, p.y, p.z, vv);
+            if (!emitted.insert(vk).second) continue;
+            auto fit = m_free_votes_.find(vk);
+            if (fit != m_free_votes_.end() && fit->second >= cfg_.free_votes_to_clear)
+                continue;   // 自由证据充分: 该体素被搬走/消失, 不进视图
+            PointType q;
+            q.x = p.x; q.y = p.y; q.z = p.z;
+            q.intensity = 0.0f;
+            out->push_back(q);
+        }
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    out->is_dense = false;
+    if (out->size() > cfg_.max_points) {
+        if (!capacity_warned_) {
+            std::cout << "[submap] view cap reached (" << cfg_.max_points
+                      << "), keep newest" << std::endl;
+            capacity_warned_ = true;
+        }
+        CloudType::Ptr keep(new CloudType());
+        const size_t total = out->size();
+        const size_t st = std::max<size_t>(1, total / cfg_.max_points);
+        for (size_t i = 0; i < total; i += st) keep->push_back(out->points[i]);
+        out = keep;
+    }
+    view_ = out;
+    view_dirty_ = false;
+    return view_;
+}
+
+CloudType::Ptr SessionMap::pointsWorld(const Eigen::Vector3d& center, double radius) const {
+    CloudType::Ptr full = pointsWorld();
+    CloudType::Ptr out(new CloudType());
+    if (!full || full->empty()) return out;
+    const double r2 = radius * radius;
+    for (const auto& p : full->points) {
+        const double dx = p.x - center.x(), dy = p.y - center.y();
+        if (dx * dx + dy * dy <= r2) out->push_back(p);
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    return out;
+}
+
+
 
 }  // namespace rosiwit_slam
