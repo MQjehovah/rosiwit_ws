@@ -2657,6 +2657,23 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         const bool rmse_ok = (res.rmse < 0.0 || m_maintainer_cfg.max_rmse <= 0.0 ||
                               res.rmse <= m_maintainer_cfg.max_rmse);
         const bool pose_stable = (corr_m <= 0.10 && corr_deg <= 1.0 && rmse_ok);
+        // [InsProbe] 写图门逐条件观测 (每 100 帧): 哪个条件在挡, 一眼可见
+        static int ins_n = 0;
+        const bool ins_show = (++ins_n % 100 == 0);
+        const bool ins_anchor_ok = ins_show ? anchorOk(res, accepted) : false;
+        if (ins_show) {
+            std::cout << "[InsProbe] fit=" << res.fitness
+                      << " anchored=" << base_anchored
+                      << " shadow=" << m_maintainer_cfg.shadow
+                      << " coast=" << m_coast_count
+                      << " corr=" << corr_m << "m/" << corr_deg << "deg"
+                      << " rmse=" << res.rmse
+                      << " stable=" << pose_stable
+                      << " tracking=" << tracking
+                      << " acc=" << accepted
+                      << " div=" << divergence
+                      << " anchorOk=" << ins_anchor_ok << std::endl;
+        }
         if (base_anchored && !m_maintainer_cfg.shadow &&
             m_coast_count == 0 && pose_stable &&
             allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg) &&

@@ -605,7 +605,8 @@ localization:
     radius: 60.0
     voxel: 0.3
     cell: 10.0
-    persist_hits: 2           # 新结构确认票数(按 persistency_unit 计): 2026-11-25 起一律 view+2
+    persist_hits: 1           # 新结构确认票数(按 persistency_unit 计): 2026-11-25 起一律 view;
+                              # 1 = 首次看到即提交 (质量由 rmse/corr/fitness 门兜底)
     # 工作图落盘: 只有一张全量工作图 (map.overlay.pcd), 1 小时一次, 没变化不写。
     refresh_frames: 300       # ★联动: 周期性用叠加层刷新全局重定位库(环境变化防失效)
     decay_frames: 0            # ★A 阶段: 交给体素可信度 w 软删除, 不再按帧龄硬删 (0=不衰减)
