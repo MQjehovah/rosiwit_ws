@@ -275,7 +275,9 @@ localization:
     relocalizer: fpfh_ransac   # 2026-11-26 现场: none 时判丢后无法全局恢复 (死代码); 本机俯装 41.67°, BBS 不适用
     motion_prior: imu_ekf   # odom+IMU 误差状态EKF (2026-10-17); 退回旧版改 imu
     local_map: keyframe_submap
-    matcher: gicp       # 2026-11-26 20:5x: fast_gicp -> 回退 gicp (静止自转回归期间先回到上午已知良好配置)
+    matcher: fast_gicp   # 2026-11-27 03:1x: gicp -> fast_gicp. 20:5x 回退是怀疑匹配器导致静止自转;
+                        #   根因已确认在零偏学习/融合层坐标系 (23c790f), 与匹配器无关. 离线基准: 结果一致
+                        #   (0.9cm/0.0°), 单帧 117ms -> 66ms; 实机行驶帧耗时 p50 194ms (PCL gicp).
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
@@ -501,7 +503,8 @@ localization:
   # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
   # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
   session_map:
-    enabled: false   # 2026-11-26 17:5x: 现场要求暂关 —— 桥接自证问题验证中, 先只跑工作图+网格恢复
+    enabled: true    # 2026-11-27 03:1x: 重新打开 (现场要求). 17:5x 暂关时在查桥接自证, 其根因
+                        #   (LOST/置信度/退出改由 cov_base 裁决) 已在 c39a36b 修复, 之后桥接路径一直没再验证.
     use_for_tracking: false
     # 2026-11-24: 25 -> 35. 实测雷达点水平距离 p50=27.6 / p90=33.0 / p95=35.6,
     # 25m 只用上 36% 的点 (25~35m 的长墙对抑制 yaw 漂移最有用); 35m 覆盖 94.5%.
