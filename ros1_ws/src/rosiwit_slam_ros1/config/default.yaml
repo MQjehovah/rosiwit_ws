@@ -275,7 +275,7 @@ localization:
     relocalizer: fpfh_ransac   # 2026-11-26 现场: none 时判丢后无法全局恢复 (死代码); 本机俯装 41.67°, BBS 不适用
     motion_prior: imu_ekf   # odom+IMU 误差状态EKF (2026-10-17); 退回旧版改 imu
     local_map: keyframe_submap
-    matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有
+    matcher: fast_gicp   # 2026-11-26: gicp -> fast_gicp (同算法 OpenMP 并行; 离线基准 30 帧: 与 PCL gicp
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
@@ -315,14 +315,15 @@ localization:
     # 导致位姿输出只有 ~1.4Hz(雷达 10Hz), 界面"频率很低"。
     # 降迭代 + 放大体素, 目标单帧 < 150ms; 精度用下面的 inlier_dist/max_corr 兜住。
     voxel_resolution: 0.3
-    max_iterations: 12
+    max_iterations: 8             # 2026-11-26: 12 -> 8 (先验准, 8 轮足够; 配合 epsilon 提前收敛)
     # 退化输入守卫: 降采样+动态滤除后点数低于该值直接判配准失败, 不进 GICP。
     # 依据: 2026-10-17 20:06 节点死亡 —— 错误位姿下 dynamic_filter 把扫描滤到 16 点,
     #        PCL 1.8 GICP computeCovariances(点数<k_correspondences=20) 段错误(单测复现 exit 139)。
     # 调小 -> 更容易进 GICP(有崩溃风险); 调大 -> 更保守(稀疏但有效帧可能被拒)。
     min_match_points: 50
     max_correspondence_dist: 2.5   # 2026-11-26: 1.2->2.5 残差吸附范围翻倍 (15m处 ~4.6°->9.5°, 距离 2.5m)
-    transformation_epsilon: 0.000001
+    transformation_epsilon: 0.001  # 2026-11-26: 1e-6 -> 1e-3 (1mm / 0.057°): 原值实际永不提前
+                                    # 收敛, 每帧跑满迭代; 1mm 远低于位姿噪声底
     inlier_dist: 0.3               # 算"配上"的距离(m), 比上面更严。
                                    # 注: coverage 对"沿墙滑动"天然钝感 (转几度点仍在墙上),
                                    # 2026-11-25 试过 0.18 提区分度, 但所有阈值 (accept/lost/

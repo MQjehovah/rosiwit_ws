@@ -2520,6 +2520,51 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }
             }
         }
+        // [DumpSeq] (ROSIWIT_DUMP_SEQ=N 时) 每 30 帧转储一帧到 /tmp/slamdump_seq/f_%03d/,
+        // 最多 N 帧: scan.pcd (prepareScan 后, 与匹配器输入完全一致) + poses.txt
+        // (guess/result 位姿, target 文件)。目标只在换目标时存一份 target_<k>.pcd。
+        // 用途: 离线基准 —— 各 matcher (gicp/pp_icp/vgicp/fast_gicp/lio) 在同一输入上
+        // 比耗时/位姿 (tools/bench_matcher)。
+        static const int kDumpSeqMax = [] {
+            const char* e = std::getenv("ROSIWIT_DUMP_SEQ");
+            return e ? std::atoi(e) : 0;
+        }();
+        if (kDumpSeqMax > 0 && ok && res.converged && scan && !scan->empty()) {
+            static int seq_n = 0, seq_frame = 0, seq_tgt = 0;
+            static CloudType::Ptr seq_last_target;
+            if (++seq_frame % 30 == 0 && seq_n < kDumpSeqMax) {
+                const std::string dir = "/tmp/slamdump_seq/f_" + std::to_string(seq_n);
+                (void)system(("mkdir -p /tmp/slamdump_seq " + dir).c_str());
+                try {
+                    pcl::io::savePCDFileBinary(dir + "/scan.pcd", *scan);
+                    std::string tgt_name = "none";
+                    if (m_cached_target) {
+                        if (m_cached_target != seq_last_target) {
+                            tgt_name = "/tmp/slamdump_seq/target_" + std::to_string(seq_tgt++) +
+                                       ".pcd";
+                            pcl::io::savePCDFileBinary(tgt_name, *m_cached_target);
+                            seq_last_target = m_cached_target;
+                        } else {
+                            tgt_name = "/tmp/slamdump_seq/target_" + std::to_string(seq_tgt - 1) +
+                                       ".pcd";
+                        }
+                    }
+                    std::ofstream df(dir + "/poses.txt");
+                    df << std::fixed << std::setprecision(9);
+                    df << "fitness " << res.fitness << "\n";
+                    df << "target " << tgt_name << "\n";
+                    df << "matcher " << (m_matcher ? m_matcher->name() : "?") << "\n";
+                    df << "guess_trans " << guess.trans.transpose() << "\n";
+                    df << "guess_rot " << Eigen::Quaterniond(guess.rot).coeffs().transpose() << "\n";
+                    df << "res_trans " << res.pose.trans.transpose() << "\n";
+                    df << "res_rot " << Eigen::Quaterniond(res.pose.rot).coeffs().transpose() << "\n";
+                } catch (const std::exception&) {}
+                if (seq_n == 0 || (seq_n + 1) % 10 == 0)
+                    std::cout << "[DumpSeq] " << (seq_n + 1) << "/" << kDumpSeqMax
+                              << " fitness=" << res.fitness << std::endl;
+                ++seq_n;
+            }
+        }
         // 匹配结果同样锁成 x/y/yaw + 固定安装姿态 (z/roll/pitch 弱观测, 不允许漂)
         if (ok && res.converged) planarizePose(res.pose);
         // [LocProbe] 逐帧诊断: 帧时间 + 可见点/参与点/内点 + fitness + guess/res 完整位姿;

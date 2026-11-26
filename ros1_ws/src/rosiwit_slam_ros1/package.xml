@@ -27,6 +27,8 @@
   <exec_depend>libpcl-all</exec_depend>
   <depend>eigen</depend>
   <depend>yaml-cpp</depend>
+  <build_depend>fast_gicp</build_depend>
+  <exec_depend>fast_gicp</exec_depend>
 
   <test_depend>gtest</test_depend>
 

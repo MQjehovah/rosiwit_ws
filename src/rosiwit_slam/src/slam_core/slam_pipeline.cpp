@@ -1,3 +1,9 @@
+#include <pthread.h>
+#include <sched.h>
+#include <dirent.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <cstdlib>
 #include "slam_core/slam_pipeline.h"
 #include "slam_core/slam_factory.h"
 #include "algorithms/map_store/voxel_map_store.h"
@@ -656,7 +662,39 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
     SlamBase::onLidar(f);
 }
 
+namespace {
+// 跟踪线程设 SCHED_FIFO 后, 它创建的 OpenMP 工作线程会继承实时优先级; OpenMP 空闲
+// 时默认自旋等待 -> 几个实时线程空转即可饿死整机 (相机/导航都是普通调度)。
+// 首帧后一次性把除跟踪线程外的所有线程降回普通调度 (需要 CAP_SYS_NICE, 失败忽略)。
+void demoteOtherRealtimeThreads() {
+    const long self = static_cast<long>(syscall(SYS_gettid));
+    DIR* d = opendir("/proc/self/task");
+    if (!d) return;
+    while (dirent* e = readdir(d)) {
+        const long tid = std::atol(e->d_name);
+        if (tid <= 0 || tid == self) continue;
+        sched_param sp{};
+        sp.sched_priority = 0;
+        sched_setscheduler(static_cast<pid_t>(tid), SCHED_OTHER, &sp);
+    }
+    closedir(d);
+}
+} // namespace
+
 void SlamPipeline::localizationWorker(rosiwit_common::CancelToken token) {
+    // ★跟踪线程实时优先级 (2026-11-26): 整机 8xA55 过载 (load 10+, 相机/AI/录包),
+    //   跟踪线程就绪后常被抢占 -> 单帧 200ms~1s、队列积压。它绝大多数时间在等雷达
+    //   (条件变量阻塞), FIFO 只影响"它就绪时优先被调度", 不会空转饿死其他线程。
+    //   非 root / 无 CAP_SYS_NICE 时失败, 静默忽略。
+    {
+        sched_param sp{};
+        sp.sched_priority = 40;
+        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) != 0) {
+            sp.sched_priority = 0;
+            pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp);
+            nice(-5);
+        }
+    }
     while (!token.cancelled()) {
         // 有帧立即被唤醒; 超时只用来及时看到"模式变了/要停了"
         auto f = m_loc_buf.pop_for(std::chrono::milliseconds(50));
@@ -668,6 +706,9 @@ void SlamPipeline::localizationWorker(rosiwit_common::CancelToken token) {
         if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) continue;
         // 重定位/GICP 在 worker 线程执行，ROS spinner 仍能处理服务、TF、slam/info。
         handleLocalization(*f);
+        // 首帧后: OpenMP 工作线程已创建, 把继承来的实时优先级收回 (只留跟踪线程)
+        static bool demoted = false;
+        if (!demoted) { demoted = true; demoteOtherRealtimeThreads(); }
         // LIO 相对观测: 在输出之后跑, 避免把前端耗时压在本帧 S2M 输出路径上。
         updateLioRelative(*f);
     }

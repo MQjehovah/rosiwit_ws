@@ -44,6 +44,7 @@ find_package(GTSAM QUIET)
 find_package(octomap QUIET)
 find_package(yaml-cpp QUIET)
 find_package(OpenMP QUIET)
+find_package(fast_gicp QUIET)   # 可选: matcher=fast_gicp (OpenMP 并行 GICP)
 
 # ---- 通用并发基础层 (Channel / Thread / ThreadPool / Snapshot), ROS 无关 ----
 #   与 ROS 包内联复用时由外层先 add_subdirectory, 这里用 TARGET 守卫避免重复定义。
@@ -72,6 +73,18 @@ target_include_directories(rosiwit_slam PUBLIC
 target_compile_definitions(rosiwit_slam PUBLIC EIGEN_MPL2_ONLY)
 target_compile_options(rosiwit_slam PRIVATE -pipe -pthread)
 target_link_libraries(rosiwit_slam PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBS} rosiwit_common)
+if(fast_gicp_FOUND)
+    target_compile_definitions(rosiwit_slam PRIVATE ROSIWIT_USE_FAST_GICP)
+    target_include_directories(rosiwit_slam PRIVATE ${fast_gicp_INCLUDE_DIRS})
+    # catkin 导出的 fast_gicp_LIBRARIES 只是裸名 "fast_gicp"; 用绝对路径链接,
+    # 否则可执行文件链接期找不到符号 (共享库允许未定义符号, 错误推迟到 exe 才暴露)。
+    find_library(FAST_GICP_LIB NAMES fast_gicp HINTS ${fast_gicp_LIBRARY_DIRS}
+                 ${CATKIN_DEVEL_PREFIX}/lib NO_DEFAULT_PATH)
+    target_link_libraries(rosiwit_slam PUBLIC ${FAST_GICP_LIB})
+    message(STATUS "fast_gicp: found -> matcher 'fast_gicp' available")
+else()
+    message(STATUS "fast_gicp: not found -> matcher 'fast_gicp' unavailable")
+endif()
 
 if(Sophus_FOUND)
     target_compile_definitions(rosiwit_slam PRIVATE SOPHUS_USE_BASIC_LOGGING)

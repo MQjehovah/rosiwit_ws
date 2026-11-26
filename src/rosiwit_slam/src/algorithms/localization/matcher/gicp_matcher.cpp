@@ -12,10 +12,13 @@ static const bool kLocProbe = std::getenv("ROSIWIT_LOC_PROBE") != nullptr;
 
 void GicpMatcher::configure(const ScanMatcherConfig& cfg) {
     m_cfg = cfg;
-    m_gicp.setMaximumIterations(m_cfg.max_iterations);
-    m_gicp.setMaxCorrespondenceDistance(m_cfg.max_correspondence_dist);
-    m_gicp.setTransformationEpsilon(m_cfg.transformation_epsilon);
-    m_gicp.setEuclideanFitnessEpsilon(1e-6);
+    if (!m_gicp) return;   // 子类自带求解器 (如 LioMatcher), 不配置引擎
+    m_gicp->setMaximumIterations(m_cfg.max_iterations);
+    m_gicp->setMaxCorrespondenceDistance(m_cfg.max_correspondence_dist);
+    m_gicp->setTransformationEpsilon(m_cfg.transformation_epsilon);
+    // 2026-11-26: 关闭 fitness epsilon —— PCL 的收敛判据在它 >0 时每轮迭代都再扫
+    //   一遍近邻算 MSE (迭代成本翻倍), 而位姿收敛由 transformation_epsilon 判定即可。
+    m_gicp->setEuclideanFitnessEpsilon(0.0);
 }
 
 void GicpMatcher::setTarget(const CloudType::Ptr& target) {
@@ -25,6 +28,25 @@ void GicpMatcher::setTarget(const CloudType::Ptr& target) {
     if (m_target->size() < static_cast<size_t>(std::max(1, m_cfg.min_match_points)))
         m_target->clear();
     if (!m_target->empty()) m_kdtree.setInputCloud(m_target);
+}
+
+bool GicpMatcher::align(const CloudType::Ptr& src, const Eigen::Matrix4d& guess_T,
+                        Eigen::Matrix4d& T_out, int& iterations) {
+    Eigen::Matrix4f g = guess_T.cast<float>();
+    m_gicp->setInputSource(src);
+    // 目标指针没变就别重设: PCL 1.8 setInputTarget 无条件置脏 target_cloud_updated_
+    // (每帧重建 ~6k 点目标 KD 树) 且 GICP 子类再 reset target_covariances_
+    // (每帧重算 20NN 协方差) —— 实测占每帧 37ms 的绝大部分。目标缓存命中时
+    // 指针跨帧不变, PCL 内部缓存(树+协方差)自动复用, 结果逐位一致。
+    if (m_gicp->getInputTarget() != m_target) m_gicp->setInputTarget(m_target);
+    CloudType aligned;
+    m_gicp->align(aligned, g);
+    iterations = m_gicp->getMaximumIterations();
+    // fast_gicp 的 LsqRegistration 从不设置 converged_ (基类初值恒 false) —— 不能用它
+    // 判失败; 只校验解的有限性, 收敛与否交给评分 (覆盖率/残差) 判。
+    if (m_name != "fast_gicp" && !m_gicp->hasConverged()) return false;
+    T_out = m_gicp->getFinalTransformation().cast<double>();
+    return T_out.allFinite();
 }
 
 bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
@@ -86,21 +108,13 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     if (src->size() < static_cast<size_t>(std::max(1, m_cfg.min_match_points))) return false;
 
     const auto t1 = std::chrono::steady_clock::now();
-    Eigen::Matrix4f g = guess_T.cast<float>();
-    m_gicp.setInputSource(src);
-    // 目标指针没变就别重设: PCL 1.8 setInputTarget 无条件置脏 target_cloud_updated_
-    // (每帧重建 ~6k 点目标 KD 树) 且 GICP 子类再 reset target_covariances_
-    // (每帧重算 20NN 协方差) —— 实测占每帧 37ms 的绝大部分。目标缓存命中时
-    // 指针跨帧不变, PCL 内部缓存(树+协方差)自动复用, 结果逐位一致。
-    if (m_gicp.getInputTarget() != m_target) m_gicp.setInputTarget(m_target);
-    CloudType aligned;
-    m_gicp.align(aligned, g);
+    Eigen::Matrix4d T;
+    // 求解核心可替换 (GICP 引擎 / LioMatcher 的 iEKF 点到面); 评分在下面共用
+    if (!align(src, guess_T, T, out.iterations)) {
+        out.converged = false;
+        return false;
+    }
     if (probe) ms_gicp = ms_since(t1);
-
-    out.iterations = m_gicp.getMaximumIterations();
-    if (!m_gicp.hasConverged()) { out.converged = false; return false; }
-
-    const Eigen::Matrix4d T = m_gicp.getFinalTransformation().cast<double>();
     out.pose = matrixToPose(T, guess.time);
     const auto t2 = std::chrono::steady_clock::now();
     const CoverageStats cs = evaluateCoverage(m_kdtree, *src, T, m_cfg.inlier_dist);

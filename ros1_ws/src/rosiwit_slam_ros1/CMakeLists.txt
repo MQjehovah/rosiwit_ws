@@ -117,6 +117,9 @@ target_link_libraries(repair_map_grid rosiwit_slam_ros1_lib)
 add_dependencies(repair_map_grid ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 install(TARGETS repair_map_grid RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
+add_executable(bench_matcher src/tools/bench_matcher.cpp)
+target_link_libraries(bench_matcher rosiwit_slam_ros1_lib)
+
 add_executable(map_cleanup src/tools/map_cleanup.cpp)
 target_link_libraries(map_cleanup rosiwit_slam_ros1_lib)
 add_dependencies(map_cleanup ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

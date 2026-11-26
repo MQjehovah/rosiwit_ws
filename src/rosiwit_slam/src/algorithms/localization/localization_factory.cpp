@@ -5,6 +5,11 @@
 #include "algorithms/localization/matcher/p2p_icp_matcher.h"
 #include "algorithms/localization/matcher/vgicp_matcher.h"
 #include "algorithms/localization/matcher/ndt2d_matcher.h"
+#include "algorithms/localization/matcher/lio_matcher.h"
+#include <pcl/registration/gicp.h>
+#ifdef ROSIWIT_USE_FAST_GICP
+#include <fast_gicp/gicp/fast_gicp.hpp>
+#endif
 #include "algorithms/localization/local_map/global_map_provider.h"
 #include "algorithms/localization/local_map/radius_submap_provider.h"
 #include "algorithms/localization/local_map/keyframe_submap_provider.h"
@@ -23,11 +28,23 @@
 namespace rosiwit_slam {
 
 std::unique_ptr<IScanMatcher> LocalizationFactory::createMatcher(const std::string& name) {
-    if (name == "gicp")    return std::make_unique<GicpMatcher>();
+    if (name == "gicp")
+        return std::make_unique<GicpMatcher>(
+            std::make_unique<pcl::GeneralizedIterativeClosestPoint<PointType, PointType>>(),
+            "gicp");
+#ifdef ROSIWIT_USE_FAST_GICP
+    if (name == "fast_gicp") {
+        // fast_gicp: OpenMP 并行的协方差估计与逐轮线性化; 8xA55 整机过载, 限 4 线程
+        auto eng = std::make_unique<fast_gicp::FastGICP<PointType, PointType>>();
+        eng->setNumThreads(4);
+        return std::make_unique<GicpMatcher>(std::move(eng), "fast_gicp");
+    }
+#endif
     if (name == "pp_icp")  return std::make_unique<PpIcpMatcher>();
     if (name == "p2p_icp") return std::make_unique<P2pIcpMatcher>();
     if (name == "vgicp")   return std::make_unique<VgicpMatcher>();
     if (name == "ndt2d")   return std::make_unique<Ndt2dMatcher>();
+    if (name == "lio")     return std::make_unique<LioMatcher>();
     return nullptr;
 }
 
@@ -70,7 +87,7 @@ std::unique_ptr<IPoseFusion> LocalizationFactory::createPoseFusion(const std::st
     return nullptr;
 }
 
-std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "pp_icp", "p2p_icp", "vgicp", "ndt2d"}; }
+std::vector<std::string> LocalizationFactory::listMatchers()          { return {"gicp", "fast_gicp", "lio", "pp_icp", "p2p_icp", "vgicp", "ndt2d"}; }
 std::vector<std::string> LocalizationFactory::listLocalMapProviders() { return {"global", "radius_submap", "keyframe_submap"}; }
 std::vector<std::string> LocalizationFactory::listMotionPriors()      { return {"constant_velocity", "imu", "imu_ekf"}; }
 std::vector<std::string> LocalizationFactory::listGlobalLocalizers()  { return {"none", "scan_context", "bbs", "fpfh_ransac"}; }
