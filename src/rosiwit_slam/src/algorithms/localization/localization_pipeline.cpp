@@ -466,6 +466,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_accept_cfg.mahalanobis_ref_points = getv<int>(ac, "mahalanobis_ref_points", m_accept_cfg.mahalanobis_ref_points);
         m_accept_cfg.mahalanobis_coast_widen = getv<double>(ac, "mahalanobis_coast_widen", m_accept_cfg.mahalanobis_coast_widen);
         m_accept_cfg.max_trans_innov         = getv<double>(ac, "max_trans_innov", m_accept_cfg.max_trans_innov);
+        m_accept_cfg.max_rot_innov_deg       = getv<double>(ac, "max_rot_innov_deg", m_accept_cfg.max_rot_innov_deg);
         m_accept_cfg.degeneracy_partial_update = getv<bool>(ac, "degeneracy_partial_update", m_accept_cfg.degeneracy_partial_update);
         m_accept_cfg.degeneracy_ratio_soft = getv<double>(ac, "degeneracy_ratio_soft", m_accept_cfg.degeneracy_ratio_soft);
         m_accept_cfg.escape_enabled        = getv<bool>(ac, "escape_enabled", m_accept_cfg.escape_enabled);
@@ -1693,6 +1694,26 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
             e.tail<3>().norm() > m_accept_cfg.max_trans_innov * std::sqrt(widen)) {
             return reject("innov_trans");
         }
+
+    }
+    // ★大修正的证据检验 (2026-11-26 实车丢定位根因, 不是门控):
+    //   匹配相对预测的大跳变必须由"证据显著更优"支撑。在**预测位姿**处重新评估
+    //   同一片扫描的残差: 若匹配残差没有明显低于预测残差, 说明该处环境中两个解
+    //   不可区分 (底图弱覆盖区的混叠), 这帧匹配不构成跳变证据 —— 拒绝,
+    //   位姿继续由运动先验推进, 等真正有区分度的视角再修正。
+    //   实机: 72°/1.66m 的错解在错误位置拿到 0.80 覆盖率并被接受, 位姿被打飞。
+    {
+        const Eigen::Matrix3d dR_ev = res.pose.rot * guess.rot.transpose();
+        const double corr_rot =
+            std::acos(std::max(-1.0, std::min(1.0, (dR_ev.trace() - 1.0) * 0.5))) *
+            57.2957795;
+        const double corr_t = (res.pose.trans - guess.trans).norm();
+        if ((corr_rot > 8.0 || corr_t > 0.4) && m_matcher) {
+            const double r_guess = m_matcher->evaluateResidual(scan, guess);
+            if (r_guess > 1e-9 && res.residual > r_guess * 0.8) {
+                return reject("ambiguous_no_evidence");
+            }
+        }
     }
     if (m_accept_cfg.mode == 0) {
         if (res.fitness >= m_accept_cfg.min_coverage) {
@@ -2188,6 +2209,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }
                 out_pose.time = f.end_time;
                 return;      // 本次判定为未定位, 让上层报"丢失"而不是静默
+            }
+            // ★目标点数封顶 (2026-11-26 实机根因): 局部目标 28 万点 -> GICP 1.8s,
+            //   预测过期 + 大新息。超过阈值时体素降采样到 ~8 万点 (0.4m)。
+            if (target->size() > 120000) {
+                CloudType::Ptr ds = voxelDownsample(target, 0.4f);
+                if (ds && ds->size() >= 20000) target = ds;
             }
             m_cached_target = target;
             m_cached_target_pose = target_center;

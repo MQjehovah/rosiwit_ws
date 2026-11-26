@@ -281,7 +281,7 @@ localization:
     monitor: windowed
     map_maintainer: overlay       # A/B: 恢复自更新, 雕刻关闭
     # 工作图落盘周期 (分钟, revision 有变化才写盘)。2026-11-25 临时 10 分钟验证, 验证完回 60。
-    working_map_save_min: 10
+    working_map_save_min: 60   # 2026-11-26: 10 分钟验证期结束 —— 失败期账本会被落盘固化, 回 60
     # ---- 输出位姿限速 (安全): 匹配振荡导致的位姿跳变按上限滑移, 不直通导航 ----
     output_v_max: 2.0           # m/s
     output_wz_max: 1.6          # rad/s (≈91°/s)
