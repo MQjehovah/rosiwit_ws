@@ -320,7 +320,7 @@ void OverlayMapMaintainer::observeHits(const PoseStamped& pose, const CloudType:
     }
 }
 
-void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType::Ptr& scan_body,
+void OverlayMapMaintainer::onLocalizedLocked(const PoseStamped& pose, const CloudType::Ptr& scan_body,
                                        const MatchResult& match, bool pose_confident) {
     if (!m_cfg.enabled || !scan_body || scan_body->empty()) return;
     ++m_frame;
@@ -571,7 +571,7 @@ void OverlayMapMaintainer::optimizePoses() {
 #endif
 }
 
-CloudType::Ptr OverlayMapMaintainer::getOverlay(const PoseStamped& pose) {
+CloudType::Ptr OverlayMapMaintainer::getOverlayLocked(const PoseStamped& pose) {
     CloudType::Ptr out(new CloudType());
     if (m_cells.empty()) return out;
     const double radius = m_cfg.radius > 0 ? m_cfg.radius : 60.0;
@@ -648,7 +648,7 @@ double OverlayMapMaintainer::persistencyCoverage(const PoseStamped& pose,
     return static_cast<double>(trusted) / static_cast<double>(total);
 }
 
-void OverlayMapMaintainer::popOverlayDelta(CloudType::Ptr& out) {
+void OverlayMapMaintainer::popOverlayDeltaLocked(CloudType::Ptr& out) {
     out = m_pending_store;
     m_pending_store.reset();
 }
@@ -665,7 +665,7 @@ void OverlayMapMaintainer::popOverlayDelta(CloudType::Ptr& out) {
 //   自由票  -> 射线穿过但段内无命中的底图体素 w -= gain (挪走/消失的衰减)
 //   新结构  -> 离底图 > delta_min 的点按 persist_hits 提交 (融进工作图)
 // 每种证据均与命中/雕刻同源, 只是打包一次性处理。
-void OverlayMapMaintainer::mergeChunk(const PoseStamped& pose, const CloudType::Ptr& world) {
+void OverlayMapMaintainer::mergeChunkLocked(const PoseStamped& pose, const CloudType::Ptr& world) {
     if (!world || world->empty()) return;
     // world -> body (用该块自己的注册位姿逆变换), 之后走与普通帧完全相同的账目
     Eigen::Matrix4d Ti = Eigen::Matrix4d::Identity();
@@ -678,7 +678,7 @@ void OverlayMapMaintainer::mergeChunk(const PoseStamped& pose, const CloudType::
     collectNovel(pose, body);     // 新结构提交 (persist_hits 门控)
 }
 
-CloudType::Ptr OverlayMapMaintainer::snapshotOverlay() {
+CloudType::Ptr OverlayMapMaintainer::snapshotOverlayLocked() {
     CloudType::Ptr out(new CloudType());
     for (const auto& kv : m_cells) {
         if (!kv.second) continue;
@@ -700,7 +700,7 @@ CloudType::Ptr OverlayMapMaintainer::snapshotOverlay() {
     return out;
 }
 
-bool OverlayMapMaintainer::save(const std::string& path) {
+bool OverlayMapMaintainer::saveLocked(const std::string& path) {
     CloudType::Ptr all = snapshotOverlay();
     if (!all || all->empty()) return false;
     // 只存 x/y/z/intensity(=A 阶段持久度 w), 与调试话题字段一致:
@@ -721,7 +721,7 @@ bool OverlayMapMaintainer::save(const std::string& path) {
     return pcl::io::savePCDFileBinary(path, out) == 0;
 }
 
-bool OverlayMapMaintainer::load(const std::string& path) {
+bool OverlayMapMaintainer::loadLocked(const std::string& path) {
     // 兼容旧文件: 旧的 8 字段 PCD (含 normal_*/curvature) 也能按 xyzi 读出来.
     pcl::PointCloud<pcl::PointXYZI> in;
     if (pcl::io::loadPCDFile(path, in) != 0) return false;
@@ -776,7 +776,7 @@ void OverlayMapMaintainer::annotateBaseWeights(CloudType& cloud) const {
 
 // 匹配目标用: 剔除 w 已降到 0 的底图点 (墙挪了/拆了 -> 射线证据判死)。
 // 无死亡体素时原样返回, 不复制。
-CloudType::Ptr OverlayMapMaintainer::filterDeadBase(const CloudType::Ptr& cloud) const {
+CloudType::Ptr OverlayMapMaintainer::filterDeadBaseLocked(const CloudType::Ptr& cloud) const {
     if (!cloud || m_dead_base.empty() || m_voxel <= 0.0) return cloud;
     CloudType::Ptr out(new CloudType());
     out->reserve(cloud->size());

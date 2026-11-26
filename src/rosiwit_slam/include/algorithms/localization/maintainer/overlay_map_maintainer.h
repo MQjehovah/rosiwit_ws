@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <pcl/kdtree/kdtree_flann.h>
 #include "slam_core/i_map_maintainer.h"
+#include <mutex>
 
 namespace rosiwit_slam {
 
@@ -20,12 +21,37 @@ public:
     void configure(const MaintainerConfig& cfg) override { m_cfg = cfg; }
     void setBaseMap(const std::string& map_path, const CloudType::Ptr& base) override;
     void onLocalized(const PoseStamped& pose, const CloudType::Ptr& scan_body,
-                     const MatchResult& match, bool pose_confident) override;
-    CloudType::Ptr getOverlay(const PoseStamped& pose) override;
-    CloudType::Ptr snapshotOverlay() override;
-    void popOverlayDelta(CloudType::Ptr& out) override;
-    bool save(const std::string& path) override;
-    bool load(const std::string& path) override;
+                     const MatchResult& match, bool pose_confident) override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        onLocalizedLocked(pose, scan_body, match, pose_confident);
+    }
+    void onLocalizedLocked(const PoseStamped& pose, const CloudType::Ptr& scan_body,
+                     const MatchResult& match, bool pose_confident);
+    CloudType::Ptr getOverlay(const PoseStamped& pose) override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        return getOverlayLocked(pose);
+    }
+    // ★线程安全 (2026-11-26 实机段错误根因): 本对象被三个线程访问 ——
+    //   定位线程 onLocalized/mergeChunk (改 m_cells/m_persistency/m_dead_base)、
+    //   IO 发布线程 snapshotOverlay/getOverlay、存盘线程 reclaim。
+    //   之前零锁, 并发读写 unordered_map -> 进入定位瞬间 (overlay_map 首发布)
+    //   与账本更新相撞 -> SIGSEGV (exit -11)。所有公开入口统一加递归锁。
+    CloudType::Ptr snapshotOverlay() override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        return snapshotOverlayLocked();
+    }
+    void popOverlayDelta(CloudType::Ptr& out) override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        popOverlayDeltaLocked(out);
+    }
+    bool save(const std::string& path) override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        return saveLocked(path);
+    }
+    bool load(const std::string& path) override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        return loadLocked(path);
+    }
 
     /// A 阶段(影子): 最近一次可信帧的扫描点里, 落在 overlay 体素上的点中
     /// w >= cfg.persistency_anchor 的占比; 只统计, 不参与决策. 无变化结构可见时返回 -1.
@@ -49,20 +75,43 @@ public:
     double voxelSize() const { return m_voxel; }
     static int64_t voxelKeyOf(int cx, int cy, int cz) { return voxelKey(cx, cy, cz); }
     // 统一工作图: 工作图文件里 intensity = w
-    void setBaseEmbeddedWeights(bool on) override { m_base_embedded = on; }
+    void setBaseEmbeddedWeights(bool on) override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        m_base_embedded = on;
+    }
     void annotateBaseWeights(CloudType& cloud) const override;
-    CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const override;
+    CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        return filterDeadBaseLocked(cloud);
+    }
     /// 回收已删除体素的点 (w 降到 0 / 硬删的那些): 由落盘时刻调用 (1h 一次)。
     /// 逐条删除要扫整格点云, 太贵; 攒到落盘时全量扫一遍, 成本可忽略。
-    void reclaim() override { compactCells(); }
+    void reclaim() override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        compactCells();
+    }
     /// w-map 段级融合: 把一块 (位姿+世界系点云) 走完整账目 ——
     /// 命中票 / 自由票(雕刻) / 新结构提交, 一次完成。用于子图关键帧走出覆盖时。
-    void mergeChunk(const PoseStamped& pose, const CloudType::Ptr& world);
+    void mergeChunk(const PoseStamped& pose, const CloudType::Ptr& world) {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        mergeChunkLocked(pose, world);
+    }
     /// 提交钩子: 新结构升格时回调 (w-map 模式下管道用它把点插进工作图分块缓存)
     void setCommitHook(std::function<void(const Eigen::Vector3d&, float)> hook) {
         m_commit_sink = std::move(hook);
     }
-    uint64_t revision() const override { return m_revision; }
+    uint64_t revision() const override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);
+        return m_revision;
+    }
+    // ---- 加锁实现 (原函数体改名, 由上面的公开入口统一加锁) ----
+    CloudType::Ptr snapshotOverlayLocked();
+    void popOverlayDeltaLocked(CloudType::Ptr& out);
+    bool saveLocked(const std::string& path);
+    bool loadLocked(const std::string& path);
+    CloudType::Ptr filterDeadBaseLocked(const CloudType::Ptr& cloud) const;
+    void mergeChunkLocked(const PoseStamped& pose, const CloudType::Ptr& world);
+    CloudType::Ptr getOverlayLocked(const PoseStamped& pose);
 
 private:
     static int64_t voxelKey(int cx, int cy, int cz);
@@ -123,6 +172,7 @@ private:
     // 阈值才产生新视角。静止机器人只有一个视角, hit/miss 都只计一票:
     // 否则 miss 侧的"每帧"语义会把静止时未被当前扫描返回的真实几何逐帧减死
     // (射线抽样间歇 = 假的新视角), 工作图被自更新侵蚀 -> 位姿缓漂。
+    mutable std::recursive_mutex m_mu;   // 全对象递归锁 (见公开入口说明)
     uint32_t m_view_id = 1;
     PoseStamped m_view_pose;
     bool m_view_valid = false;
