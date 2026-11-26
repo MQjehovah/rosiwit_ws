@@ -1284,15 +1284,16 @@ void LocalizationPipeline::onImu(const IMUSample& s) {
     {
         std::lock_guard<std::mutex> fk(m_fusion_mu);
         if (m_fusion) {
-            // ★融合器 yaw 积分必须减掉陀螺零偏: 它的 m_gyro_bias_z 原来从未被
-            //   赋值 (恒 0), 原始零偏直接积分 -> 静止时 yaw 以 ~1.5°/s 自转,
-            //   重定位后子图被抹成扇形 (2026-11-26 根因)。零偏由运动先验学习。
-            double bz = 0.0;
+            // ★融合器与运动先验必须用同一个去零偏口径。融合器做的是 (gyro-b)·up,
+            //   所以这里同步 **传感器系 3D 零偏** (不再是 z 分量): 俯装 IMU 下
+            //   gyro·up - b_z 是坐标系错配, 差值 = 静止时的 yaw 幻影
+            //   (2026-11-26 根因: 融合层 5.9°/s, 发布航向与匹配解恒差 11.3°)。
+            V3D bias = V3D::Zero();
             {
                 std::lock_guard<std::mutex> pk(m_prior_mu);
-                if (m_prior) bz = m_prior->gyroBiasZ();
+                if (m_prior) bias = m_prior->gyroBias();
             }
-            m_fusion->setGyroBiasZ(bz);
+            m_fusion->setGyroBias(bias);
             m_fusion->onImu(s);
         }
     }
@@ -2919,7 +2920,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 return std::atan2(p.rot(1, 0), p.rot(0, 0)) * 57.2957795;
             };
             double pb = 0.0;
-            { std::lock_guard<std::mutex> pk(m_prior_mu); if (m_prior) pb = m_prior->gyroBiasZ(); }
+            V3D pb3 = V3D::Zero();   // 传感器系 3D 零偏: 静止时三个分量都应≈实测陀螺均值
+            {
+                std::lock_guard<std::mutex> pk(m_prior_mu);
+                if (m_prior) {
+                    pb = m_prior->gyroBiasZ();
+                    pb3 = m_prior->gyroBias();
+                }
+            }
             auto rpyOfPose = [](const PoseStamped& p) {
                 const Eigen::Matrix3d R = p.rot;
                 const double pitch = std::asin(std::max(-1.0, std::min(1.0, -R(2, 0)))) * 57.2957795;
@@ -2942,6 +2950,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                       << " roll_o=" << rp_o.first << " pitch_o=" << rp_o.second
                       << " roll_g=" << rp_g.first << " pitch_g=" << rp_g.second
                       << " bias_z=" << pb
+                      << " bias3=(" << pb3.x() << "," << pb3.y() << "," << pb3.z() << ")"
                       << " abs=" << (m_has_abs ? 1 : 0) << std::endl;
             }
         }

@@ -472,7 +472,18 @@ void EkfMotionPrior::onMatch(const PoseStamped& pose) {
                 const M3D dR = R_prior.transpose() * pose.rot;
                 Eigen::Quaterniond qe(dR);
                 if (qe.w() < 0.0) qe.coeffs() *= -1.0;
-                m_gyro_bias -= dtb * m_cfg.gyro_bias_gain * (qe.w() * qe.vec());
+                // ★只学习重力轴分量 (2026-11-26 根因: 静止自转 / 发布航向恒差 11°).
+                // 平面锁定设计里 (planarizePose), 匹配与输出的 roll/pitch 是常数
+                // (标称安装角), 不携带任何陀螺信息; 而先验内部姿态是重力对平的。
+                // 两者只要差一个恒定倾角 δ (地面坡度 / 标称安装角误差, 实机 ~1°),
+                // 旧实现就把 δ 当零偏沿水平轴积分: 零偏误差一直长到重力校正顶住
+                // 才停 (|ê|≈10δ)。实机 bz 0 -> 0.103 rad/s 的一阶响应时间常数
+                // 31.6s, 与本回路推算的 1/(0.5·(1-e⁻¹)/10) 逐点吻合。该误差的 z
+                // 分量再经融合层泄漏成 yaw 幻影。倾角不是零偏的观测 —— 只取新息
+                // 在重力轴上的投影 (yaw 分量的学习率与旧实现完全一致)。
+                const V3D up_sensor = (R_prior.transpose() * V3D::UnitZ()).normalized();
+                const double yaw_err = qe.w() * qe.vec().dot(up_sensor);
+                m_gyro_bias -= dtb * m_cfg.gyro_bias_gain * (yaw_err * up_sensor);
                 m_gyro_bias = m_gyro_bias.cwiseMax(-m_cfg.gyro_bias_max)
                                   .cwiseMin(m_cfg.gyro_bias_max);
             }

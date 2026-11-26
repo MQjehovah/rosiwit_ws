@@ -181,3 +181,87 @@ int main(int argc, char ** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// ---------------------------------------------------------------------------
+// 2026-11-26 根因回归 (发布航向与匹配解恒差 11°): 融合层的零偏口径。
+//
+// yaw 角速度必须按 slam_types.h 的约定 = (gyro - bias)·up_body。旧实现先投影再减
+// 传感器系 z 分量 (gyro·up - b_z): IMU 俯装 ~39° 时二者不等, 静止机器人以差值自转
+// (实机 b_z 误差 0.103 rad/s -> 5.9°/s), 被 yaw_gain(0.05) 平衡成
+// 19 × 0.1s × 0.103 的恒定航向偏差。杆臂轨道项的 ω_s 同理必须去零偏 (与运动先验同口径)。
+TEST(PoseFusion, GyroBiasUsesSameProjectionAsAngularVelocity) {
+    EkfPoseFusion f;
+    PoseFusionConfig cfg;
+    cfg.gravity = 9.81;
+    const double tilt = 39.37 * M_PI / 180.0;                       // 实车: IMU 俯装
+    const Eigen::Matrix3d r_base_lidar =
+        Eigen::AngleAxisd(tilt, Eigen::Vector3d::UnitX()).toRotationMatrix();
+    cfg.r_base_lidar = r_base_lidar;
+    cfg.up_body = r_base_lidar.transpose() * Eigen::Vector3d::UnitZ();   // (0, 0.634, 0.773)
+    cfg.up_body_valid = true;
+    cfg.lever_arm = Eigen::Vector3d(0.0, 0.304, 1.024);             // 实车杆臂 (传感器系)
+    cfg.lever_valid = true;
+    f.configure(cfg);
+
+    // 与实机同量级的零偏 (y/z 分量大): 静止时陀螺读数就等于它
+    const Eigen::Vector3d bias(0.004, -0.12, 0.10);
+    f.setGyroBias(bias);
+
+    f.reset(MakePose(0.0));
+
+    double t = 0.0;
+    for (int i = 0; i < 2000; ++i) {              // 10 s @200Hz
+        t += 0.005;
+        IMUSample s;
+        s.time = t;
+        s.gyro = bias;                            // 静止: 陀螺 = 零偏
+        s.acc = cfg.up_body * 9.81;
+        f.onImu(s);
+    }
+    const PoseStamped out = f.predict(t);
+    // 旧实现: yaw_rate = bias·up - b_z = -0.0988 rad/s -> 10s 转 -56.6°
+    EXPECT_NEAR(std::atan2(out.rot(1, 0), out.rot(0, 0)), 0.0, 1e-6);
+    // 旧实现杆臂项用原始陀螺: |bias × ρ| ≈ 0.15 m/s -> 10s 漂 ~1.5m
+    EXPECT_LT(out.trans.norm(), 1e-6);
+}
+
+// 对照: 去零偏不能吃掉真实转动。绕重力轴 0.3 rad/s 转 2s -> 航向 0.6 rad (模 2π)。
+TEST(PoseFusion, GyroBiasDoesNotEatRealRotation) {
+    EkfPoseFusion f;
+    PoseFusionConfig cfg;
+    cfg.gravity = 9.81;
+    const double tilt = 39.37 * M_PI / 180.0;
+    const Eigen::Matrix3d r_base_lidar =
+        Eigen::AngleAxisd(tilt, Eigen::Vector3d::UnitX()).toRotationMatrix();
+    cfg.up_body = r_base_lidar.transpose() * Eigen::Vector3d::UnitZ();
+    cfg.up_body_valid = true;
+    f.configure(cfg);
+
+    const Eigen::Vector3d bias(0.004, -0.12, 0.10);
+    f.setGyroBias(bias);
+    f.reset(MakePose(0.0));
+
+    const double rate = 0.3;                      // rad/s, 绕重力轴
+    double t = 0.0;
+    {   // 融合层按设计丢弃 reset 后的第一个样本 (dt 未知): 先喂一拍把它消耗掉
+        t += 0.005;
+        IMUSample s;
+        s.time = t;
+        s.gyro = bias + cfg.up_body * rate;
+        s.acc = cfg.up_body * 9.81;
+        f.onImu(s);
+    }
+    for (int i = 0; i < 400; ++i) {               // 2 s @200Hz
+        t += 0.005;
+        IMUSample s;
+        s.time = t;
+        s.gyro = bias + cfg.up_body * rate;       // 零偏 + 真实角速度
+        s.acc = cfg.up_body * 9.81;
+        f.onImu(s);
+    }
+    const PoseStamped out = f.predict(t);
+    double yaw = std::atan2(out.rot(1, 0), out.rot(0, 0));
+    while (yaw > M_PI) yaw -= 2.0 * M_PI;
+    while (yaw < -M_PI) yaw += 2.0 * M_PI;
+    EXPECT_NEAR(yaw, 0.6, 1e-6);
+}

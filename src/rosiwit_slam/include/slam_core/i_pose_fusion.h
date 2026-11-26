@@ -51,8 +51,13 @@ public:
     /// 高频 IMU: 用于姿态推进与协方差扩散
     virtual void onImu(const IMUSample& /*s*/) {}
 
-    /// 陀螺 z 零偏 (rad/s): yaw 积分前必须扣掉; 由管道从运动先验同步。
-    virtual void setGyroBiasZ(double /*b*/) {}
+    /// 陀螺零偏 (rad/s, **传感器系 3D**): 由管道从运动先验同步。yaw 积分必须用与
+    /// 角速度同一个投影 (gyro - bias)·up_body —— slam_types.h 的轴向约定。
+    /// 只传 z 分量、再从投影值里减, 是坐标系错配: IMU 俯装 ~39° 时
+    /// (gyro·up - b_z) ≠ (gyro - b)·up, 差值直接变成 yaw 幻影漂移
+    /// (2026-11-26 实机: b_z 误差 0.103 rad/s -> 融合层 5.9°/s, 被 yaw_gain
+    /// 平衡后发布航向与匹配解恒差 11.3° = 19 × 0.1s × 0.103)。
+    virtual void setGyroBias(const V3D& /*b*/) {}
 
     /// 轮式里程计位姿 (frame=odom, 车体姿态): 速度观测, 实现自行门控
     virtual void onOdom(const PoseStamped& /*odom*/) {}

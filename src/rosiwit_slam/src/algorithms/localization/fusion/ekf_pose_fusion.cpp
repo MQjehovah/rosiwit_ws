@@ -109,7 +109,10 @@ void EkfPoseFusion::onImu(const IMUSample& s) {
                          "暂时按 IMU z 轴积分" << std::endl;
         }
     }
-    const double yaw_rate = imuYawRate(s.gyro, m_up_body);
+    // 偏航角速度 = (gyro - bias)·up_body: 去零偏与投影是同一步 (slam_types.h 轴向约定)。
+    // 旧实现是 gyro·up_body - b_z —— 把传感器系 z 分量当成了重力轴分量, IMU 俯装时
+    // 二者差 (b·up - b_z), 静止即以该差值自转 (2026-11-26 实机 5.9°/s)。
+    const double yaw_rate = imuYawRate(s.gyro - m_gyro_bias, m_up_body);
 
     if (!m_have_imu) {
         m_last_imu_time = s.time;
@@ -124,7 +127,7 @@ void EkfPoseFusion::onImu(const IMUSample& s) {
         return;
     }
     // 姿态: 只积分 yaw; roll/pitch 由匹配与重力约束保持 (v1 简化, 见设计文档)
-    m_theta.z() = normAngle(m_theta.z() + (yaw_rate - m_gyro_bias_z) * dt);
+    m_theta.z() = normAngle(m_theta.z() + yaw_rate * dt);
     m_diag_yaw_int += yaw_rate * dt;
     {
         static int dn = 0;
@@ -139,7 +142,8 @@ void EkfPoseFusion::onImu(const IMUSample& s) {
     m_R = rpyToRot(m_theta);
     // 位置: ṗ_lidar = R·(R_blᵀ·v_base + ω_s×ρ) —— 与 EkfMotionPrior 同款杆臂轨道项
     // (slam_types.h: leverArmSensorFrame). 缺它时原地转 180° 位置误差 ≈0.83m.
-    m_w_s = s.gyro;
+    // ω_s 必须去零偏 (与运动先验同口径): 原始陀螺的零偏 × 杆臂是常值的幻影速度。
+    m_w_s = s.gyro - m_gyro_bias;
     {
         const Eigen::Vector3d v_sensor = m_cfg.lever_valid
             ? m_cfg.r_base_lidar.transpose() * Eigen::Vector3d(m_v.x(), m_v.y(), 0.0)

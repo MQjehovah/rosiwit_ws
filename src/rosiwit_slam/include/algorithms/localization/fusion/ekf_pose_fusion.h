@@ -26,7 +26,7 @@ public:
     void resetRelative() override;
 
     void onImu(const IMUSample& s) override;
-    void setGyroBiasZ(double b) override { m_gyro_bias_z = b; }
+    void setGyroBias(const V3D& b) override { m_gyro_bias = b; }
     // 重定位语义: 注入位姿只是假设, 注入后的第一次高匹配才是地图一致的解 ——
     // 该帧 yaw 全量采纳 (不是门控, 是"锚定第一观测"), 之后恢复互补增益防棘轮。
     // 否则 5% 增益需要 1~2s 收敛, 期间的写图会把几度烙进子图 (实机 1.25° 偏移).
@@ -73,7 +73,9 @@ private:
     double m_last_imu_time = -1.0;
     bool   m_have_imu = false;
     double m_gyro_z = 0.0;
-    double m_gyro_bias_z = 0.0;
+    // 传感器系 3D 陀螺零偏 (运动先验同步)。与角速度一起先去零偏、再按 up_body 投影;
+    // 杆臂轨道项用的 m_w_s 同样去零偏 (与 EkfMotionPrior 同一口径)。
+    Eigen::Vector3d m_gyro_bias = Eigen::Vector3d::Zero();
     bool m_anchor_yaw_next = true;   // 下一帧 yaw 全量采纳 (注入/初始化后)
     Eigen::Vector3d m_w_s = Eigen::Vector3d::Zero();  // 传感器系角速度 (杆臂轨道项用)
     // 机体 up 方向 (IMU 系). 本车 IMU 随雷达俯装 ~38°, gyro.z **不是**偏航角速度,

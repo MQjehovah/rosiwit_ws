@@ -173,3 +173,112 @@ int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// ---------------------------------------------------------------------------
+// 2026-11-26 根因回归 (静止自转 / 发布航向恒差 11°): 倾角新息不是陀螺零偏。
+//
+// 平面锁定设计里 (planarizePose), 匹配与输出的 roll/pitch 恒等于标称安装角, 不携带
+// 任何陀螺信息; 先验内部姿态则由重力对平。地面坡度 / 标称角误差让两者差一个恒定
+// 倾角 δ。旧实现把整只新息旋转向量喂进零偏积分器 (增益 1.0): 零偏在水平轴上一路
+// 跑到重力校正顶住为止 (|ê|≈10δ, 时间常数 1/(0.5·(1-e⁻¹)/10)=31.6s —— 与实机
+// bz 0 -> 0.103 rad/s 的一阶响应逐点吻合), 其 z 分量再经融合层泄漏成 yaw 幻影。
+TEST(EkfPrior, TiltInnovationIsNotLearnedAsGyroBias) {
+    MotionPriorConfig cfg = ekfCfg();
+    cfg.use_gravity = true;          // 本用例必须开: "重力对平 vs 标称安装角"的差就是被测对象
+    cfg.gravity_gain = 0.05;         // 实车值
+    cfg.gravity = 9.81;
+    cfg.imu_calib_samples = 50;
+    cfg.gyro_bias_gain = 1.0;        // 实车值
+    // 实车安装: IMU 随雷达俯装 39°
+    const double tilt = 39.37 * M_PI / 180.0;
+    const M3D R_mount = Eigen::AngleAxisd(tilt, V3D::UnitX()).toRotationMatrix();  // map <- sensor
+    cfg.up_body = (R_mount.transpose() * V3D::UnitZ()).normalized();
+    cfg.up_body_valid = true;
+
+    EkfMotionPrior prior;
+    prior.configure(cfg);
+    PoseStamped p0;
+    p0.time = 0.0;
+    p0.rot = R_mount;                // 重力对平的真实姿态 (base yaw = 0)
+    prior.reset(p0);
+
+    // 平面锁定的输出姿态: roll/pitch = 标称安装角, 与真实姿态差 δ (绕世界 x 轴 = 1° 坡度)
+    const double delta = 1.0 * M_PI / 180.0;
+    const M3D R_nominal = Eigen::AngleAxisd(delta, V3D::UnitX()).toRotationMatrix() * R_mount;
+
+    // 真实零偏 (静止时陀螺读数): 标定窗口直接给出, 之后不应再变
+    const V3D bias_true(0.004, -0.007, 0.012);
+    const double dt_imu = 0.005;
+    double t = 0.0;
+    for (int k = 0; k < 2000; ++k) {              // 200 s @10Hz
+        for (int i = 0; i < 20; ++i) {            // 200Hz
+            t += dt_imu;
+            IMUSample s;
+            s.time = t;
+            s.gyro = bias_true;                   // 静止: 陀螺 = 零偏
+            s.acc = cfg.up_body * 9.81;           // 静止: 比力 = g·up (传感器系)
+            prior.onImu(s);
+        }
+        // 跟踪线程每帧 (与 localization_pipeline 同序): 先验预测 -> 输出姿态被平面
+        // 锁定成 Rz(base yaw)·标称安装角 -> 先验锚定到这个输出。
+        PoseStamped fused = prior.predict(t);
+        const M3D R_base = fused.rot * R_nominal.transpose();
+        const double yaw = std::atan2(R_base(1, 0), R_base(0, 0));
+        fused.rot = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix() * R_nominal;
+        prior.onMatch(fused);
+    }
+    // 判据是零偏本身, 不是航向: 跑飞的分量在水平轴上 (被重力校正顶住), 在这个几何下
+    // 几乎不表现为航向漂移 —— A/B 实测旧实现 190s 航向只差 6e-7 rad, 零偏却错了 0.18。
+    // (输出姿态 roll/pitch 被锁成标称安装角后, z 分量经融合层才变成 yaw 幻影, 见
+    //  test_pose_fusion。)
+    const V3D err = prior.gyroBias() - bias_true;
+    EXPECT_LT(err.norm(), 1e-6)
+        << "倾角差被当成零偏学习: b=(" << prior.gyroBias().transpose() << ")";
+}
+
+// 对照: 航向新息仍然要学 (只去掉倾角分量, 不去掉 yaw 分量的学习)。
+// 真实零偏在标定后发生漂移 -> 先验以恒定角速度偏转 -> 每帧出现恒定的 yaw 新息
+// -> 零偏估计应把它收敛掉。
+TEST(EkfPrior, YawInnovationStillDrivesBiasLearning) {
+    MotionPriorConfig cfg = ekfCfg();
+    cfg.use_gravity = false;
+    cfg.imu_calib_samples = 50;
+    cfg.gyro_bias_gain = 1.0;
+    const double tilt = 39.37 * M_PI / 180.0;
+    const M3D R_mount = Eigen::AngleAxisd(tilt, V3D::UnitX()).toRotationMatrix();
+    cfg.up_body = (R_mount.transpose() * V3D::UnitZ()).normalized();
+    cfg.up_body_valid = true;
+
+    EkfMotionPrior prior;
+    prior.configure(cfg);
+    PoseStamped p0;
+    p0.time = 0.0;
+    p0.rot = R_mount;
+    prior.reset(p0);
+
+    // 标定: 零偏 = 0 (实机开机时 bz=0.000); 标定完成后真实零偏漂到 bias_drift
+    const V3D bias_drift(0.0, 0.0, 0.02);
+    const double dt_imu = 0.005;
+    double t = 0.0;
+    double yaw_true = 0.0;            // 机器人真实静止: 航向不变
+    // 100 s: yaw 分量学习的时间常数 ~20s, 5τ 后残差 <1% 初值 (断言阈值 1e-3 的 1/7)
+    for (int k = 0; k < 1000; ++k) {
+        for (int i = 0; i < 20; ++i) {
+            t += dt_imu;
+            IMUSample s;
+            s.time = t;
+            s.gyro = (k >= 2) ? bias_drift : V3D::Zero();   // 第 2 帧起漂移
+            s.acc = cfg.up_body * 9.81;
+            prior.onImu(s);
+        }
+        PoseStamped fused = prior.predict(t);
+        // 输出航向 = 真值 (匹配解不动), 其余姿态照抄先验
+        fused.rot = Eigen::AngleAxisd(yaw_true, V3D::UnitZ()).toRotationMatrix() * R_mount;
+        prior.onMatch(fused);
+    }
+    // 零偏估计应跟上真实零偏在重力轴上的分量 (未被观测的水平轴分量不在断言内)
+    const V3D b = prior.gyroBias();
+    const double up_true = bias_drift.dot(cfg.up_body);
+    EXPECT_NEAR(b.dot(cfg.up_body), up_true, 1e-3)
+        << "yaw 新息未被学习: b·up=" << b.dot(cfg.up_body) << " 期望≈" << up_true;
+}
