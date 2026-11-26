@@ -24,8 +24,6 @@ void SessionMap::reset(const PoseStamped& robot, double now_s) {
     capacity_warned_ = false;
     m_kfs.clear();
     m_frames_since_kf_ = 0;
-    m_free_votes_.clear();
-    m_free_frame_.clear();
     m_frame = 0;
     view_.reset();
     view_dirty_ = true;
@@ -41,8 +39,6 @@ void SessionMap::reset(const PoseStamped& robot, double now_s) {
 void SessionMap::deactivate() {
     active_ = false;
     m_kfs.clear();
-    m_free_votes_.clear();
-    m_free_frame_.clear();
     m_frame = 0;
     view_.reset();
     view_dirty_ = true;
@@ -111,12 +107,6 @@ void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_worl
         kf.world->push_back(q);
         acc += w;
         ++npts;
-        // 掠射 free 票: 每帧每体素最多一票 (对称于 hit 的 view 计票)
-        const int64_t fk = vkey(w.x(), w.y(), w.z(), cfg_.voxel);
-        if (m_free_frame_[fk] != frame) {
-            m_free_frame_[fk] = frame;
-            ++m_free_votes_[fk];
-        }
     }
     if (npts) kf.centroid = acc / static_cast<double>(npts);
     view_dirty_ = true;
@@ -171,9 +161,6 @@ CloudType::Ptr SessionMap::pointsWorld() const {
         for (const auto& p : k.world->points) {
             const int64_t vk = vkey(p.x, p.y, p.z, vv);
             if (!emitted.insert(vk).second) continue;
-            auto fit = m_free_votes_.find(vk);
-            if (fit != m_free_votes_.end() && fit->second >= cfg_.free_votes_to_clear)
-                continue;   // 自由证据充分: 该体素被搬走/消失, 不进视图
             PointType q;
             q.x = p.x; q.y = p.y; q.z = p.z;
             q.intensity = 0.0f;

@@ -487,7 +487,7 @@ localization:
   # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
   # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
   session_map:
-    enabled: false   # 2026-11-26: 暂关 —— 异常学习模式会让错位姿扫描污染子图, 回退 #97fe9fd 的修复2
+    enabled: true    # 2026-11-26: 重新打开 (v2 分支: 段级临时建图 + 出口修正)
     use_for_tracking: false
     # 2026-11-24: 25 -> 35. 实测雷达点水平距离 p50=27.6 / p90=33.0 / p95=35.6,
     # 25m 只用上 36% 的点 (25~35m 的长墙对抑制 yaw 漂移最有用); 35m 覆盖 94.5%.

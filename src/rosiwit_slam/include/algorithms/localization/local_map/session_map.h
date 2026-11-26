@@ -40,7 +40,6 @@ public:
     int clear_stride = 20;       // 自由空间清除: 扫描点抽样步长
     double kf_min_dist = 1.0;    // 关键帧最小间距 (m)
     int kf_min_frames = 15;      // 关键帧最小帧数
-    int free_votes_to_clear = 3; // free 票数达到即从视图剔除 (对称于 hit 计票)
   };
 
   void configure(const Config& c) { cfg_ = c; }
@@ -75,7 +74,7 @@ public:
     applyCorrection(C);
   }
 
-  /// 世界系合并视图 (体素去重 + free/dead 剔除 + 半径裁剪, 带缓存)。
+  /// 世界系合并视图 (体素去重 + 半径裁剪, 带缓存)。
   /// intensity = 0 (v2 子图是纯几何; w 账本在 maintainer 侧)。
   CloudType::Ptr pointsWorld() const;
   /// 只取 center 周围 radius 内的点 (走同一份缓存, 距离筛选)
@@ -84,8 +83,6 @@ public:
   /// 关闭并清空 (重新看到高可信几何时调用)
   void deactivate();
 
-  /// 自由空间投票接口: 供外部 (w 账本) 在雕刻判定时投 free 票 (可选, 默认内部计数)
-  void markFreeVote(double x, double y, double z);
 
 private:
   struct EpKf {
@@ -109,10 +106,6 @@ private:
   int m_frames_since_kf_ = 0;
   Eigen::Vector3d m_last_kf_pos_ = Eigen::Vector3d::Zero();
 
-  // 自由投票: 体素 key (0.3 世界网格) → 票数/帧号。达到 free_votes_to_clear 的
-  // 体素在视图构建时跳过 (真正的"搬运/消失"清得掉, 掠射单帧误伤清不掉)。
-  std::unordered_map<int64_t, int> m_free_votes_;
-  std::unordered_map<int64_t, uint32_t> m_free_frame_;
   uint32_t m_frame = 0;
 
   mutable CloudType::Ptr view_;
