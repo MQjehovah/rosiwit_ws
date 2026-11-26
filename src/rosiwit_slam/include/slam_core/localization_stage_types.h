@@ -497,7 +497,16 @@ struct MaintainerConfig {
     // 0=frame(每帧) 1=view(每次重新进入视野) 2=session(每个任务会话) 3=day(每个自然日)
     // frame 与扫描频率耦合, 只用于 A/B; 2026-11-25 起一律 view: w ≈ "重新进入视野几次确认过".
     int    persistency_unit = 1;
-    int    persistency_hit_gain = 1;        // 每个单位加多少
+    int    persistency_hit_gain = 1;        // 每个单位加多少 (= 满强度一票: 观测正好落在地图点上)
+    // ---- w 证据模型 (2026-11-27, 移植 ELite 式 5/6; docs/SCHEME_PERSISTENT_MAP.md §3) ----
+    // 一票的强度随"观测到地图点的距离 x"指数衰减, x → 1.2σ 时归零 (中性)。不再有
+    // "落在体素里就记满票"的硬边界 —— 那个体素边界正是底图被侵蚀的根源 (实机 3 分钟
+    // 判死 1.06 万点): free 票对掠过墙面 30cm 内的射线全记满, 命中票却只认与地图点同体素。
+    double persistency_sigma_hit = 0.0;     // 占据证据 (扫描端点) 的距离尺度 σ_o (m)。
+                                             // <=0: 自动 = voxel·5/6 -> 证据在 1.2σ = voxel = inlier_dist 处归零,
+                                             // 即"账本的命中"与"匹配器的内点"是同一个距离判据
+    double persistency_sigma_free = 0.0;    // 自由证据 (射线采样点) 的距离尺度 σ_f (m)。
+                                             // <=0: 自动 = voxel/6 (0.3 体素 -> 5cm: 只有贴着地图点经过的射线才算)
     int    persistency_miss_confirm = 3;    // 连续 free 证据帧数 -> 判定消失(去抖)
     int    persistency_miss_action = 0;     // 0=删除  1=按 persistency_hit_gain 递减
     int    persistency_session_hours = 12;  // 会话超时自动换新(防长期不重启)

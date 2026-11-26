@@ -19,6 +19,22 @@
 namespace rosiwit_slam {
 
 namespace {
+// ---- ELite (Gil et al., ICRA 2025, "Ephemerality meets LiDAR-based Lifelong Mapping") 式 5/6 ----
+constexpr double kEliteAlpha = 0.5;
+constexpr double kEliteBeta = 0.1;
+constexpr double kFullLogit = 2.1972245773362196;   // logit(0.9) = ln 9: x = 0 时的一票 (满强度)
+// 式 5: f(x) = min(α(1 − e^(−x²/σ²)) + β, α) —— 观测到地图点的距离为 x 时, 这个观测给出的
+//       "瞬态"概率。x = 0 -> 0.1 (强占据证据); x ≥ 1.27σ -> 0.5 (中性: 不提供任何信息)。
+// 式 6: ε' = fε / (fε + (1−f)(1−ε)) —— 贝叶斯更新, 在对数几率域里就是加 logit(1 − f)。
+// 映射到 w (0~255, 128 = 中性): 满强度一票 (x = 0) = persistency_hit_gain。
+inline int evidenceStep(double x, double sigma, int gain) {
+    if (!(sigma > 0.0) || !(x >= 0.0) || !(x < 1.2 * sigma)) return 0;
+    const double u2 = (x / sigma) * (x / sigma);
+    const double f = kEliteAlpha * (1.0 - std::exp(-u2)) + kEliteBeta;
+    if (f >= kEliteAlpha) return 0;
+    return static_cast<int>(std::lround(gain * std::log((1.0 - f) / f) / kFullLogit));
+}
+constexpr int kBlkShift = 3;                         // 占用位图: 每块 8^3 体素
 } // namespace
 
 int64_t OverlayMapMaintainer::voxelKey(int cx, int cy, int cz) {
@@ -39,9 +55,13 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     m_overlay_count = 0;
     ++m_revision;
 
+    m_occ.clear();                 // 账本的派生索引, 随账本一起清
+    m_occ_cache_key = -1;
+    m_occ_cache_words = nullptr;
     m_map_path = map_path;
     m_voxel = m_cfg.voxel > 0 ? m_cfg.voxel : 0.3;
     m_cell = m_cfg.cell > 0 ? m_cfg.cell : 10.0;
+    resolveSigmas();
     // 懒建: 这里只存原始指针, 降采样+KD树推迟到首次真正用到(L147 吸收判据)再建。
     // 全图降采样+建树实测 ~15s(aarch64, DDD), 每次切图都白付 —— 切图(带初始位姿)
     // 根本不碰它 (用户语义: 有 initpose 不需要额外准备, 直接跟踪)。
@@ -79,7 +99,9 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
             } else {
                 pv.w = static_cast<uint8_t>(w0);
             }
+            setRep(pv, Eigen::Vector3d(p.x, p.y, p.z), vx, vy, vz);   // 代表点 = 该体素的地图点
             m_persistency.emplace(vk, pv);
+            occSet(vx, vy, vz);
             ++seeded;
         }
         std::cout << "[overlay] base voxels in w ledger: " << seeded
@@ -99,6 +121,9 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
         m_cells.clear();
         m_voxel_seen.clear();
         m_persistency.clear();
+        m_occ.clear();
+        m_occ_cache_key = -1;
+        m_occ_cache_words = nullptr;
         m_last_world.reset();
         m_pending_store.reset();
         m_hits.clear();
@@ -113,12 +138,14 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
     const int vz = static_cast<int>(std::floor(p.z() / m_voxel));
     const int64_t vk = voxelKey(vx, vy, vz);
     if (m_voxel_seen.count(vk)) {   // 体素去重
-        hitVoxel(vk);               // 重复观测 -> 按计票单位累加
+        voteHit(vk, 0.0);           // 重复观测 -> 按计票单位累加
         return;
     }
     m_voxel_seen[vk] = m_frame;
-    m_persistency[vk] = PersistencyVoxel{};             // 新体素从 0 起, 本次观测即一次 hit
-    hitVoxel(vk);
+    PersistencyVoxel& pv = m_persistency[vk];           // 新体素从 0 起, 本次观测即一次 hit
+    setRep(pv, p, vx, vy, vz);                         // 代表点 = 提交时的扫描端点
+    occSet(vx, vy, vz);
+    voteHit(vk, 0.0);
 
     const int cx = static_cast<int>(std::floor(p.x() / m_cell));
     const int cy = static_cast<int>(std::floor(p.y() / m_cell));
@@ -146,29 +173,62 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
 }
 
 void OverlayMapMaintainer::rayCarve(const PoseStamped& pose, const CloudType::Ptr& scan_body) {
-    // 自由空间雕刻: 沿"传感器原点->扫描端点"射线前进, 途经的 overlay 体素判为自由并移除
-    // (货物被发走/过道重新开阔 -> 射线穿过 -> 清除鬼影)
-    if (scan_body->empty()) return;
-    const double step = std::max(0.05, m_voxel);
+    // 自由空间证据 (ELite 式 5 的自由项): 沿"传感器原点 -> 扫描端点"的射线前进, 途经的
+    // 账本体素若**离射线足够近** (≤ r_free = 1.2σ_free, 0.3 体素下 6cm) 才记一票自由证据。
+    // 旧实现是"采样点落在体素里就扣满 8": 0.3m 体素等于把 ELite 的 σ (2.5cm) 放大十倍,
+    // 任何从墙前 30cm 内掠过的射线都给真实墙面记一票 —— 底图被侵蚀的直接原因。
+    // 射线末端前一个体素内不采样 (d < len − m_voxel): 端点所在表面附近是"无证据区"
+    // (ELite 同样只在射线长度的 20%~90% 之间取自由采样点)。
+    if (!scan_body || scan_body->empty()) return;
+    // 采样间距 = voxel/3: 必须与 σ_free 同量级 —— 间距 0.3m 时"贴着地图点经过"这件事会被
+    // 采样量化吃掉 (鬼影删除慢一个数量级, 仿真验证); 位图预筛让密采样不再付哈希查找。
+    const double step = std::max(0.02, m_voxel / 3.0);
     const int stride = std::max(1, m_cfg.carve_stride);
+    const double inv = 1.0 / m_voxel;
+    const double r2 = m_r_free * m_r_free;
+    const uint32_t frame = static_cast<uint32_t>(m_frame);
+    m_free_touch.clear();
     const int n = static_cast<int>(scan_body->size());
-    for (int i = 0; i < n; i += stride) {
-        const auto& p = scan_body->points[i];
+    // 抽样相位逐帧轮转: 按点序每 stride 个取一条射线, 而扫描点序有周期结构 (环 x 方位)。
+    // 周期与 stride 不互素时, 固定相位会永远跳过某些方向 (合成扫描 24 排 / stride 3 ->
+    // 只有 z 序号 ≡ 0 的排被采样, 经过目标物的那一排从不采样 —— 鬼影一票证据都收不到)。
+    const int phase = stride > 1 ? static_cast<int>(m_frame % stride) : 0;
+    // 下标绕回 (i % n): 每帧采样的射线条数与相位无关。直接从 i = phase 起步会在点数少于
+    // phase 时 (单测里的单点扫描) 一条都不采。
+    for (int i = phase; i < n + phase; i += stride) {
+        const auto& p = scan_body->points[i % n];
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
         const Eigen::Vector3d end = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
         const Eigen::Vector3d dir = end - pose.trans;
         const double len = dir.norm();
         if (len < step * 2) continue;
-        const Eigen::Vector3d u = dir / len;
-        for (double d = step; d < len - m_voxel; d += step) {
-            const Eigen::Vector3d q = pose.trans + u * d;
-            const int vx = static_cast<int>(std::floor(q.x() / m_voxel));
-            const int vy = static_cast<int>(std::floor(q.y() / m_voxel));
-            const int vz = static_cast<int>(std::floor(q.z() / m_voxel));
-            const int64_t vk = voxelKey(vx, vy, vz);
-            missVoxel(vk);   // 连续 persistency_miss_confirm 帧 free 证据才删(去抖)
+        const Eigen::Vector3d du = dir * (step / len);
+        const double d_end = len - m_voxel;
+        Eigen::Vector3d q = pose.trans + du;
+        for (double d = step; d < d_end; d += step, q += du) {
+            const int vx = static_cast<int>(std::floor(q.x() * inv));
+            const int vy = static_cast<int>(std::floor(q.y() * inv));
+            const int vz = static_cast<int>(std::floor(q.z() * inv));
+            // 空体素一次位测试排除。不变量: m_voxel_seen 的键 ⊆ 账本的键 (两处同增同删),
+            // 所以账本里没有的体素也不在 m_voxel_seen 里, 旧的"硬删除"分支无事可做。
+            if (!occupied(vx, vy, vz)) continue;
+            auto it = m_persistency.find(voxelKey(vx, vy, vz));
+            if (it == m_persistency.end()) continue;   // 位图与账本不同步时以账本为准
+            PersistencyVoxel& v = it->second;
+            const Eigen::Vector3d pp = repPoint(v, vx, vy, vz);
+            const double x2 = (q - pp).squaredNorm();
+            if (!(x2 < r2)) continue;
+            const uint16_t xm = static_cast<uint16_t>(std::sqrt(x2) * 1000.0 + 0.5);
+            if (v.last_miss_frame != frame) {          // 本帧第一次: 挂到投票清单
+                v.last_miss_frame = frame;
+                v.free_x = xm;
+                m_free_touch.emplace_back(voxelKey(vx, vy, vz), &v);
+            } else if (xm < v.free_x) {                // 同一帧更近的观测: 只取最强的一次
+                v.free_x = xm;
+            }
         }
     }
+    applyFreeVotes();
 }
 
 void OverlayMapMaintainer::beginPersistencySession() {
@@ -187,73 +247,159 @@ uint32_t OverlayMapMaintainer::currentUnitKey() const {
     }
 }
 
-// 一个体素被"命中": 按计票单位决定这次算不算一票。
-void OverlayMapMaintainer::hitVoxel(int64_t vk) {
+// ============================================================================
+// w 证据模型 (2026-11-27, 移植 ELite 式 5/6; docs/SCHEME_PERSISTENT_MAP.md §3)
+//
+// 旧模型: 命中 = 扫描端点**落在体素里** +8; free = 射线采样点**落在体素里** -8。
+// 体素 0.3m 下这两条硬边界一个太松一个太紧: free 票对从墙前 30cm 内掠过的射线全记满,
+// 命中票却只认"端点与地图点同体素" —— 今天的扫描与地图差几厘米 (跨体素) 就拿不到命中。
+// 实机 (2026-11-27 02:39 起): 沿走廊跑 3 分钟判死 1.06 万个底图点, 23 分钟 1.6 万个,
+// fitness 持续下降; 而 cov_base (对未剔除的底图) 始终是平的 —— 不是地图变差, 是自更新
+// 的"删除"侧在过度删除。
+//
+// ELite (Gil et al., ICRA 2025) 的做法 (见文件头 evidenceStep): 证据强度随"观测到地图点
+// 的距离"指数衰减, 远了趋于中性; 关联用最近邻而不是体素包含。移植要点:
+//   占据证据 (扫描端点):  端点附近 r_hit = 1.2σ_hit 内的**每个**账本体素各记一次
+//                         (ELite 的 k 近邻)。σ_hit 的默认值让证据恰好在 inlier_dist 处
+//                         归零: 账本的"命中"与匹配器的"内点"是同一个距离判据。
+//   自由证据 (射线采样点): 采样点必须从地图点 r_free = 1.2σ_free (voxel/6 -> 6cm) 内经过。
+//                         σ 小, free 证据就够不着真实墙面 —— ELite 用 2.5cm 也是这个道理
+//                         (我们是在线、每视角一票, 直接照搬 2.5cm 则鬼影删不掉: 仿真验证)。
+//   累加: 对数几率域 (式 6); w=128 即 ELite 的 ε 初值 0.5。
+//   每个计票单位 (frame/view/session/day) 每个体素最多一票, 同一帧取最强的那次观测。
+// 二维仿真 (走廊, 行驶 40m, 200 个视角): 7 种 ±15cm 偏移下墙体判死 0 (旧模型每种偏移
+// 死 168~175 个); 墙前 0.5m 的鬼影在第 54~189 个视角被删。
+// ============================================================================
+
+void OverlayMapMaintainer::resolveSigmas() {
+    const double v = m_cfg.voxel > 0 ? m_cfg.voxel : 0.3;
+    // σ_hit: 1.2σ = voxel (= inlier_dist) -> 命中判据与匹配器内点判据一致
+    m_sigma_hit = m_cfg.persistency_sigma_hit > 0 ? m_cfg.persistency_sigma_hit : v * (5.0 / 6.0);
+    // σ_free: voxel/6 -> 只有贴着地图点经过的射线才算自由证据
+    m_sigma_free = m_cfg.persistency_sigma_free > 0 ? m_cfg.persistency_sigma_free : v / 6.0;
+    m_r_hit = 1.2 * m_sigma_hit;
+    m_r_free = 1.2 * m_sigma_free;
+}
+
+namespace {
+inline int floorDiv8(int v) { return (v - (v & 7)) >> 3; }   // 负坐标也按向下取整
+inline int signExtend21(int64_t v) { return static_cast<int>(v & 0x100000 ? v - 0x200000 : v); }
+} // namespace
+
+void OverlayMapMaintainer::occSet(int vx, int vy, int vz) {
+    std::array<uint64_t, 8>& w = m_occ[voxelKey(floorDiv8(vx), floorDiv8(vy), floorDiv8(vz))];
+    const int idx = ((vx & 7) * 8 + (vy & 7)) * 8 + (vz & 7);
+    w[idx >> 6] |= (uint64_t(1) << (idx & 63));
+    m_occ_cache_key = -1;          // m_occ 可能刚 rehash: 之前缓存的块指针作废
+    m_occ_cache_words = nullptr;
+}
+
+void OverlayMapMaintainer::occClear(int vx, int vy, int vz) {
+    const int64_t bk = voxelKey(floorDiv8(vx), floorDiv8(vy), floorDiv8(vz));
+    auto it = m_occ.find(bk);
+    if (it == m_occ.end()) return;
+    const int idx = ((vx & 7) * 8 + (vy & 7)) * 8 + (vz & 7);
+    it->second[idx >> 6] &= ~(uint64_t(1) << (idx & 63));
+    m_occ_cache_key = -1;
+    m_occ_cache_words = nullptr;
+}
+
+bool OverlayMapMaintainer::occupied(int vx, int vy, int vz) {
+    const int64_t bk = voxelKey(floorDiv8(vx), floorDiv8(vy), floorDiv8(vz));
+    if (bk != m_occ_cache_key) {
+        auto it = m_occ.find(bk);
+        m_occ_cache_key = bk;
+        m_occ_cache_words = (it == m_occ.end()) ? nullptr : it->second.data();
+    }
+    if (!m_occ_cache_words) return false;
+    const int idx = ((vx & 7) * 8 + (vy & 7)) * 8 + (vz & 7);
+    return (m_occ_cache_words[idx >> 6] >> (idx & 63)) & 1u;
+}
+
+void OverlayMapMaintainer::setRep(PersistencyVoxel& v, const Eigen::Vector3d& p,
+                                  int vx, int vy, int vz) const {
+    auto mm = [this](double d) {
+        return static_cast<uint16_t>(std::max(0L, std::min(65535L, std::lround(d * 1000.0))));
+    };
+    v.rx = mm(p.x() - vx * m_voxel);
+    v.ry = mm(p.y() - vy * m_voxel);
+    v.rz = mm(p.z() - vz * m_voxel);
+}
+
+Eigen::Vector3d OverlayMapMaintainer::repPoint(const PersistencyVoxel& v,
+                                               int vx, int vy, int vz) const {
+    return Eigen::Vector3d(vx * m_voxel + 0.001 * v.rx,
+                           vy * m_voxel + 0.001 * v.ry,
+                           vz * m_voxel + 0.001 * v.rz);
+}
+
+bool OverlayMapMaintainer::hitUnitAllows(const PersistencyVoxel& v) const {
+    switch (m_cfg.persistency_unit) {
+        case 0:  return true;                              // frame: 每帧
+        case 1:  return v.last_view != m_view_id;          // view: 位姿移动超过阈值才算新视角。
+                                                         // 静止时只有一个视角, 每体素只计一票。
+        case 2:  return v.last_key != m_session_id;        // session
+        default: return v.last_key != m_day_index;         // day
+    }
+}
+
+bool OverlayMapMaintainer::freeUnitAllows(const PersistencyVoxel& v) const {
+    switch (m_cfg.persistency_unit) {
+        case 0:  return true;
+        case 1:  return v.last_miss_view != m_view_id;     // 与 hit 完全对称
+        case 2:  return v.last_miss_key != m_session_id;
+        default: return v.last_miss_key != m_day_index;
+    }
+}
+
+void OverlayMapMaintainer::voteHit(int64_t vk, double x) {
     auto it = m_persistency.find(vk);
     if (it == m_persistency.end()) return;
     PersistencyVoxel& v = it->second;
-    const uint32_t frame = static_cast<uint32_t>(m_frame);
-    bool count = false;
-    switch (m_cfg.persistency_unit) {
-        case 0:  count = true; break;                              // frame: 每帧
-        case 1:  // view: 显式视角编号 —— 位姿移动超过阈值才算新视角。
-                 // 静止时只有一个视角, 每体素只计一票 (之前的"帧间隙"启发式
-                 // 在快照式重复观测下行为不直观, 且与 miss 侧不对称)。
-                 count = (v.last_view != m_view_id); break;
-        case 2:  count = (v.last_key != m_session_id); break;       // session
-        default: count = (v.last_key != m_day_index); break;        // day
-    }
-    v.last_frame = frame;
-    if (count) {
-        v.last_view = m_view_id;
-        const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
-        const int nw = static_cast<int>(v.w) + gain;
-        v.w = static_cast<uint8_t>(nw > 255 ? 255 : nw);
-        if (m_cfg.persistency_unit >= 2) v.last_key = currentUnitKey();
-    }
+    const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
+    const int d = evidenceStep(x, m_sigma_hit, gain);
+    v.last_frame = static_cast<uint32_t>(m_frame);
     v.miss = 0;   // 又看到了: 清空 free 累计
+    if (d <= 0 || !hitUnitAllows(v)) return;
+    v.last_view = m_view_id;
+    if (m_cfg.persistency_unit >= 2) v.last_key = currentUnitKey();
+    const int nw = static_cast<int>(v.w) + d;
+    v.w = static_cast<uint8_t>(nw > 255 ? 255 : nw);
 }
 
-// 一个体素被"自由空间雕刻": 连续 persistency_miss_confirm 帧才生效(去抖)。
-void OverlayMapMaintainer::missVoxel(int64_t vk) {
-    auto it = m_persistency.find(vk);
-    if (it == m_persistency.end()) {
-        m_voxel_seen.erase(vk);   // 无权重记录的体素: 保持原来的硬删除语义
-        return;
-    }
-    PersistencyVoxel& v = it->second;
-    const bool from_base = v.from_base;
-    // ★2026-11-25: miss 与 hit 完全对称 —— 每帧最多一票 + 按计票单位 (view) 计数。
-    // 旧实现: 每帧 ++miss (同一帧的多条掠射射线重复计数) 且 miss_confirm=3 帧
-    // 就硬删 -> 静止机器的掠射射线 (贴着墙/天花板平面走) 3 帧删掉一片真实几何
-    // (实测静止 ~10min, 匹配目标 126k -> 119k, fitness 0.89 -> 0.83, 落盘固化)。
-    // 现在的语义 = 文档本意: 「w=128 = 16 次'射线穿过'证据才判死」—— 每个 view
-    // 一票, 每票 w -= hit_gain, 减到 0 才删。命中票与自由票在同一结构上自然对冲:
-    // 真墙 (每 pass 命中+8, 掠射 free-8) net 0 稳定; 被搬走的货物 (只有 free 票)
-    // 快速衰减删除。
-    if (v.last_miss_frame == static_cast<uint32_t>(m_frame)) return;   // 每帧最多一票
-    v.last_miss_frame = static_cast<uint32_t>(m_frame);
-    bool count = false;
-    switch (m_cfg.persistency_unit) {
-        case 0:  count = true; break;                              // frame: 每帧
-        case 1:  // view: 与 hit 完全对称 —— 同一视角只计一票 (见上方视角推进)。
-                 // 静止机器人永远只有一个视角, 因此静止时不再有任何 free 计票,
-                 // 真实几何不会被"重复观察"侵蚀 (2026-11-26 根因)。
-                 count = (v.last_miss_view != m_view_id); break;
-        case 2:  count = (v.last_miss_key != m_session_id); break; // session
-        default: count = (v.last_miss_key != m_day_index); break;  // day
-    }
-    if (!count) return;
-    if (m_cfg.persistency_unit == 1) v.last_miss_view = m_view_id;
-    if (m_cfg.persistency_unit >= 2) v.last_miss_key = currentUnitKey();
+void OverlayMapMaintainer::applyFreeVotes() {
     const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
-    v.w = (v.w > gain) ? static_cast<uint8_t>(v.w - gain) : 0;
-    if (v.w == 0) {
-        m_persistency.erase(it);
-        m_voxel_seen.erase(vk);
-        if (from_base) m_dead_base.insert(vk);      // 底图体素: 目标里剔除
-        else m_pending_remove.insert(vk);           // overlay 体素: 点从 m_cells 回收
+    const uint32_t frame = static_cast<uint32_t>(m_frame);
+    for (auto& kv : m_free_touch) {
+        PersistencyVoxel& v = *kv.second;
+        const int d = evidenceStep(static_cast<double>(v.free_x) * 0.001, m_sigma_free, gain);
+        if (d <= 0 || !freeUnitAllows(v)) continue;
+        // ★占据证据优先 (ELite 跨会话关联的规则: 新会话在该点关联距离内有点 -> 共存, 不删)。
+        //   同一计票单位内已有扫描端点落在 r_hit (inlier_dist) 内的体素, 不叠加自由证据。
+        //   删除的充要条件于是变成"没有扫描落在它附近, 且射线从它旁边穿过":
+        //   - 今天的墙面与地图差 10cm (地图点在真实表面后面 10cm, 射线确实从它的位置穿过):
+        //     仍有端点落在它 inlier_dist 内 -> 不衰减。否则每趟经过都掉 ~90, 第二趟就死,
+        //     而新结构门控 (delta_min 0.5m) 又不允许在 10cm 外补点 -> 整面墙丢光。
+        //   - 挪走的货物 / 挪了 0.5m 的墙: 附近没有端点 -> 自由证据照常衰减 -> 删除。
+        //   (旧实现里同一帧的命中 +8 与 free -8 互相抵消, 等价于"命中优先"只在 hit/free 恰好
+        //    同帧时成立; 掠射的 free 票常常出现在没有端点落进**同体素**的帧里, 于是净扣。)
+        const bool hit_now = (m_cfg.persistency_unit == 0) ? (v.last_frame == frame)
+                                                           : !hitUnitAllows(v);
+        if (hit_now) continue;
+        v.last_miss_view = m_view_id;
+        if (m_cfg.persistency_unit >= 2) v.last_miss_key = currentUnitKey();
+        const bool from_base = v.from_base;
+        v.w = (v.w > d) ? static_cast<uint8_t>(v.w - d) : 0;
+        if (v.w == 0) {
+            m_persistency.erase(kv.first);
+            m_voxel_seen.erase(kv.first);
+            const int64_t k = kv.first;
+            occClear(signExtend21(k >> 42), signExtend21((k >> 21) & 0x1FFFFF), signExtend21(k & 0x1FFFFF));
+            if (from_base) m_dead_base.insert(kv.first);   // 底图体素: 目标里剔除
+            else m_pending_remove.insert(kv.first);        // overlay 体素: 点从 m_cells 回收
+        }
     }
+    m_free_touch.clear();
 }
 
 void OverlayMapMaintainer::compactCells() {
@@ -293,31 +439,90 @@ int OverlayMapMaintainer::persistencyAt(const Eigen::Vector3d& p) const {
 }
 
 void OverlayMapMaintainer::observeHits(const PoseStamped& pose, const CloudType::Ptr& scan_body) {
-    // A 阶段: 每帧每个体素只加一次 w (扫描点按体素去重), 只累加"已经是变化体素"的那些,
-    // 新体素仍走 collectNovel 的持久化门控 (按 persistency_unit 计票) —— w 只衡量持久结构被
-    // 重复看到的次数, 不会把瞬时点云抬成高可信.
+    // A 阶段 (ELite 式 5/6): 占据证据 = 扫描端点, 记给**端点附近**的每个账本体素 (r_hit 内),
+    // 强度随距离衰减 (见上方"w 证据模型"说明)。必须在雕刻之前: 同一帧里被命中的体素先拿到
+    // 占据证据。每个计票单位每体素最多一票, 同一帧取最强的那次观测。
+    //
+    // 代价: 端点附近 27 个邻格里的账本体素都是候选。逐端点查 27 次哈希 = 8000×27×150ns
+    // ≈ 32ms/帧 (实机 260 万条账本), 不可接受; 而 27 格里绝大多数是空的。所以
+    //   1) 先按扫描体素分组 (同一扫描体素里的端点共用一组候选), 每组只收集一次候选;
+    //   2) 候选收集用占用位图预筛, 只有确实在账本里的邻格才做哈希查找。
+    // 新结构仍走 collectNovel 的持久化门控 (按 persistency_unit 计票) —— w 只衡量持久结构
+    // 被重复看到的次数, 不会把瞬时点云抬成高可信。
     if (!m_last_world) m_last_world.reset(new CloudType());
     else m_last_world->clear();
+    m_groups.clear();
+    m_cand.clear();
     if (!scan_body || scan_body->empty()) return;
-    std::unordered_set<int64_t> seen;
-    seen.reserve(scan_body->size());
+    const double inv = 1.0 / m_voxel;
+    const double r2 = m_r_hit * m_r_hit;
     for (const auto& p : scan_body->points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-        const Eigen::Vector3d w = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
-        const int vx = static_cast<int>(std::floor(w.x() / m_voxel));
-        const int vy = static_cast<int>(std::floor(w.y() / m_voxel));
-        const int vz = static_cast<int>(std::floor(w.z() / m_voxel));
+        const Eigen::Vector3d e = pose.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose.trans;
+        const int vx = static_cast<int>(std::floor(e.x() * inv));
+        const int vy = static_cast<int>(std::floor(e.y() * inv));
+        const int vz = static_cast<int>(std::floor(e.z() * inv));
         const int64_t vk = voxelKey(vx, vy, vz);
-        if (!seen.insert(vk).second) continue;
-        if (m_persistency.find(vk) == m_persistency.end()) continue;
-        hitVoxel(vk);
-        m_voxel_seen[vk] = m_frame;   // 被再观测: 刷新存活时间
-        PointType q;
-        q.x = static_cast<float>(w.x());
-        q.y = static_cast<float>(w.y());
-        q.z = static_cast<float>(w.z());
-        m_last_world->push_back(q);
+        Group& g = m_groups[vk];
+        if (!g.scanned) {
+            g.scanned = true;
+            g.off = static_cast<uint32_t>(m_cand.size());
+            g.n = 0;
+            for (int a = -1; a <= 1; ++a)
+                for (int b = -1; b <= 1; ++b)
+                    for (int c = -1; c <= 1; ++c) {
+                        const int nx = vx + a, ny = vy + b, nz = vz + c;
+                        if (!occupied(nx, ny, nz)) continue;
+                        const int64_t nk = voxelKey(nx, ny, nz);
+                        auto it = m_persistency.find(nk);
+                        if (it == m_persistency.end()) continue;   // 位图与账本不同步时以账本为准
+                        Cand cd;
+                        cd.key = nk;
+                        cd.v = &it->second;
+                        cd.p = repPoint(it->second, nx, ny, nz);
+                        cd.best2 = r2;
+                        m_cand.push_back(cd);
+                        ++g.n;
+                        if (a == 0 && b == 0 && c == 0) g.own = true;
+                    }
+            if (g.own) {   // 这个扫描体素自己就是账本体素: 每帧记一个点, 供 persistencyCoverage 统计
+                m_voxel_seen[vk] = m_frame;   // 被再观测: 刷新存活时间
+                PointType q;
+                q.x = static_cast<float>(e.x());
+                q.y = static_cast<float>(e.y());
+                q.z = static_cast<float>(e.z());
+                m_last_world->push_back(q);
+            }
+        }
+        // 本帧最近的观测 (强度最高): 同一扫描体素里的端点共用这组候选, 只有距离计算
+        for (uint32_t i = g.off; i < g.off + g.n; ++i) {
+            Cand& cd = m_cand[i];
+            const double dx = e.x() - cd.p.x(), dy = e.y() - cd.p.y(), dz = e.z() - cd.p.z();
+            const double d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < cd.best2) {
+                cd.best2 = d2;
+                cd.has = true;
+            }
+        }
     }
+    // 帧末统一投票
+    const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
+    for (auto& cd : m_cand) {
+        if (!cd.has) continue;
+        PersistencyVoxel& v = *cd.v;
+        const int d = evidenceStep(std::sqrt(cd.best2), m_sigma_hit, gain);
+        v.last_frame = static_cast<uint32_t>(m_frame);
+        v.miss = 0;
+        if (d <= 0 || !hitUnitAllows(v)) continue;
+        v.last_view = m_view_id;
+        if (m_cfg.persistency_unit >= 2) v.last_key = currentUnitKey();
+        const int nw = static_cast<int>(v.w) + d;
+        v.w = static_cast<uint8_t>(nw > 255 ? 255 : nw);
+        m_voxel_seen[cd.key] = m_frame;   // 被再观测 (含邻近体素): 刷新存活时间
+    }
+    // Cand 里是指向账本条目的指针: 下一步 rayCarve 可能删掉条目 —— 用完立即清, 不留悬空指针。
+    m_groups.clear();
+    m_cand.clear();
 }
 
 void OverlayMapMaintainer::onLocalizedLocked(const PoseStamped& pose, const CloudType::Ptr& scan_body,

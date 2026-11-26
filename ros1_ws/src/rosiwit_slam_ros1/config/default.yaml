@@ -636,6 +636,19 @@ localization:
     #              | session(每个任务会话) | day(每个自然日)
     persistency_unit: view      # 2026-11-24: session -> view (要写进去, 不能等 3 个会话)
     persistency_hit_gain: 8          # 每个计票单位 +8 -> anchor 128 = 16 个会话(或 16 帧)
+    # ---- w 证据模型 (2026-11-27, 移植 ELite 式 5/6; docs/SCHEME_PERSISTENT_MAP.md §3.1) ----
+    # 一票的强度随"观测到地图点的距离 x"指数衰减, 到 1.2σ 归零; 同一计票单位内有端点落在地图点
+    # inlier_dist 内的体素不再叠加自由证据 (占据优先)。旧实现是"落在体素里就记满票": free 票对掠过
+    # 墙面 30cm 内的射线全记满, 命中票却只认与地图点同体素 —— 实机沿走廊跑 3 分钟判死 1.06 万个
+    # 底图点, 23 分钟 1.6 万个, fitness 越跑越低。
+    persistency_sigma_hit: 0.25     # 占据证据 (扫描端点): 1.2σ = 0.30 = matcher.inlier_dist。账本的"命中"
+                                     # 与匹配器的"内点"是同一个距离判据 —— 地图点不再支撑任何扫描点
+                                     # (= 不再是内点) 时才开始衰减。
+    persistency_sigma_free: 0.05    # 自由证据 (射线采样点): voxel/6。只有贴着地图点 6cm 内经过的射线才算。
+                                     # ELite 自己用 2.5cm, 但它离线处理全部射线; 我们在线、每视角一票,
+                                     # 仿真里 2.5cm 时鬼影删不掉。放宽到 0.075/0.10 鬼影删得更快 (经过后
+                                     # 2m / 0.5m), 但狭窄走廊里从远处接近墙面时, 还没开到的掠射段会被
+                                     # free 票拖低 20+ (测试 CorridorApproachDoesNotErodeFarWall)。
     persistency_miss_confirm: 3      # (2026-11-25 起废弃: miss 已与 hit 对称, 按票衰减)
     persistency_miss_action: 1       # 每个计票单位的 free 证据票 w -= hit_gain, 减到 0 删除。
                                      # 2026-11-25: 0 -> 1。旧的"3 帧 free 硬删"在静止场景下
@@ -679,7 +692,10 @@ localization:
                               # 高远处点受 39° 外参/测距误差影响, 最近邻常态 >0.3m,
                               # 0.3 会把天花板/高货架反复判成"新结构"(虚影)。
     novel_min_cluster: 3      # 新结构最小簇(26 邻域内本帧新颖体素数), 滤孤立噪点
-    carve_stride: 20          # 自由空间雕刻抽样步长 (看到空 -> 从叠加层移除鬼影)
+    carve_stride: 5                 # 自由证据射线的抽样步长 (按点序, 相位逐帧轮转): 20 -> 5。
+                                     # 自由证据变严 (贴着地图点才算) 后需要更多射线才能及时删掉鬼影:
+                                     # 墙前 0.5m 的鬼影, 1/20 删不掉, 1/5 在经过后 ~9m 删除。
+                                     # 代价: 射线采样点 x4; 位图预筛后每个采样点只是一次位测试。
     # L13 位姿图维护 (可选): 变化关键帧缓冲后用 GTSAM 平滑再写入
     # (min_keyframe_dist / min_confirm / fitness_trigger 只服务这条 pose_graph 路径;
     #  普通叠加层沉淀已改为"与 fitness 解耦、按计票单位确认")

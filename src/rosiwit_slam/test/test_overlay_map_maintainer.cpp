@@ -783,3 +783,290 @@ TEST(OverlayMaintainerWeights, AnnotateWithinBudgetAdvancesInBoundedSlices)
     EXPECT_EQ(base->size(), n);
     for (const PointType& p : base->points) EXPECT_FLOAT_EQ(p.intensity, 128.0f);
 }
+
+// ---------------------------------------------------------------------------
+// w 证据模型 (2026-11-27, 移植 ELite 式 5/6): 回归测试。
+//
+// 实机 (2026-11-27 02:39 起): 沿走廊跑 3 分钟判死 1.06 万个底图点, 23 分钟 1.6 万个,
+// fitness 越跑越低。旧模型"端点落在体素里 +8 / 采样点落在体素里 -8"对体素边界太敏感:
+// 今天的扫描与地图差几厘米 (跨体素) 就拿不到命中, 而掠过墙面 30cm 内的射线照记满 free 票。
+// 新模型: 证据强度随"观测到地图点的距离"指数衰减 (ELite 式 5), 对数几率域累加 (式 6)。
+// 这组测试只用新旧两个版本都有的接口 —— 为了能在旧实现上做 A/B (应当是红的)。
+// ---------------------------------------------------------------------------
+namespace {
+
+MaintainerConfig eliteCfg() {
+    MaintainerConfig c = testCfg();
+    c.persistency_unit = 1;          // view (生产配置)
+    c.persistency_hit_gain = 8;
+    c.carve_stride = 5;
+    c.delta_min = 0.3;               // 只需要"别把偏移后的墙面当成新结构"
+    c.novel_min_cluster = 3;
+    c.persist_hits = 3;
+    return c;
+}
+
+// 一面墙: x ≈ 0.15, 每 0.3m 体素一个点 (y 0~12m, z 0.3~2.4m)。每个点独占一个体素。
+CloudType::Ptr mkWall() {
+    CloudType::Ptr c(new CloudType());
+    for (int iy = 0; iy < 40; ++iy)
+        for (int iz = 0; iz < 8; ++iz)
+            c->push_back(mkPt(0.152f, 0.3f * iy + 0.137f, 0.3f * iz + 0.118f));
+    c->width = static_cast<uint32_t>(c->size());
+    c->height = 1;
+    return c;
+}
+
+// 一帧扫描 (机体 = 世界系, 传感器在 (sx, yt, 1.2)): 端点落在"今天的墙面"上 —— 与地图差 dx。
+// y 方向 ±15m (掠射角最小 ~5°), z 方向 24 排 (间距 0.1m)。
+// ★点序: z 排为外层循环。射线雕刻按点序每 carve_stride 个取一个; 排号在内层时点序的
+//   周期 (24) 会和步长混叠 (z_rows_inner=true 专门用来复现, 见 RaySubsampling 测试)。
+CloudType::Ptr mkWallScan(double sx, double yt, double z0, double dx, bool z_rows_inner = false) {
+    CloudType::Ptr c(new CloudType());
+    const double y0 = std::max(0.0, yt - 15.0), y1 = std::min(12.0, yt + 15.0);
+    const auto emit = [&](int iz, double y) {
+        c->push_back(mkPt(static_cast<float>(0.152 + dx - sx), static_cast<float>(y - yt),
+                          static_cast<float>(0.3 * (iz % 8) + 0.129 + 0.1 * (iz / 8) - z0)));
+    };
+    if (z_rows_inner) {
+        for (double y = y0; y <= y1; y += 0.02)
+            for (int iz = 0; iz < 24; ++iz) emit(iz, y);
+    } else {
+        for (int iz = 0; iz < 24; ++iz)
+            for (double y = y0; y <= y1; y += 0.02) emit(iz, y);
+    }
+    c->width = static_cast<uint32_t>(c->size());
+    c->height = 1;
+    return c;
+}
+
+// 沿墙行驶 nViews 个视角 (每 0.2m 一个), 返回 (判死的墙点数, 最低 w)。ghost: 墙前 0.5m 处的一个底图点。
+std::pair<int, int> driveAlongWall(double dx, int nViews, bool with_ghost, int* ghost_w = nullptr,
+                                   double* ms_per_frame = nullptr, bool z_rows_inner = false,
+                                   int stride = 5, int* ghost_dead_view = nullptr) {
+    OverlayMapMaintainer m;
+    MaintainerConfig cfg = eliteCfg();
+    cfg.carve_stride = stride;
+    m.configure(cfg);
+    m.setBaseEmbeddedWeights(false);
+    CloudType::Ptr base = mkWall();
+    const V3D ghost(0.652, 6.0, 1.21);
+    if (with_ghost) base->push_back(mkPt(0.652f, 6.0f, 1.21f));
+    m.setBaseMap("", base);
+    const MatchResult mr = lowFitnessMatch();
+    double acc_ms = 0.0;
+    for (int k = 0; k < nViews; ++k) {
+        const double yt = 0.2 * k;
+        const PoseStamped pose = mkPose(1.40 + 0.0, yt, 1.2);   // 传感器离墙 1.25m
+        CloudType::Ptr scan = mkWallScan(1.40, yt, 1.2, dx, z_rows_inner);
+        const auto t0 = std::chrono::steady_clock::now();
+        m.onLocalized(pose, scan, mr, true);
+        acc_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (with_ghost && ghost_dead_view && *ghost_dead_view < 0 &&
+            m.persistencyAt(V3D(0.652, 6.0, 1.21)) < 0)
+            *ghost_dead_view = k + 1;
+    }
+    if (ms_per_frame) *ms_per_frame = acc_ms / nViews;
+    // ★不能写 for (p : mkWall()->points): 临时 shared_ptr 在 range-for 的初始化表达式结束时就
+    //   析构, 循环读的是已释放的内存 (第一版就这么写, "判死 1 个"的坐标是垃圾值)。
+    const CloudType::Ptr wall = mkWall();
+    int dead = 0, wmin = 999;
+    for (const auto& p : wall->points) {
+        const int w = m.persistencyAt(V3D(p.x, p.y, p.z));
+        if (w < 0) {
+            ++dead;
+            std::cout << "[wall] 判死的点: (" << p.x << ", " << p.y << ", " << p.z << ")" << std::endl;
+        } else {
+            wmin = std::min(wmin, w);
+        }
+    }
+    if (ghost_w) *ghost_w = m.persistencyAt(ghost);
+    return {dead, wmin};
+}
+
+}  // namespace
+
+// ELite 式 5: 命中证据随"端点到地图点的距离 x"衰减, 到 1.2σ (= inlier_dist) 归零。
+TEST(OverlayWEvidence, HitStrengthDecaysWithDistance)
+{
+    const double sigma = 0.25;                      // = voxel * 5/6 (自动值), 1.2σ = 0.3 = inlier_dist
+    // (端点到地图点的距离, 期望的一票增量) —— 增量 = 8 · logit(1 − f(x/σ)) / logit(0.9)
+    const std::vector<std::pair<double, int>> cases = {
+        {0.000, 8}, {0.050, 7}, {0.125, 5}, {0.250, 1}, {0.290, 0}, {0.300, 0}};
+    for (const auto& c : cases) {
+        OverlayMapMaintainer m;
+        MaintainerConfig cfg = eliteCfg();
+        cfg.persistency_unit = 0;                   // frame: 单帧就能观察
+        EXPECT_LE(cfg.persistency_sigma_hit, 0.0);  // 用例不设 σ: 走自动值, 断言它与 inlier_dist 的关系
+        m.configure(cfg);
+        m.setBaseEmbeddedWeights(false);
+        CloudType::Ptr one(new CloudType());
+        one->push_back(mkPt(1.0f, 0.0f, 0.0f));     // 地图点 p
+        m.setBaseMap("", one);
+        CloudType::Ptr scan(new CloudType());
+        scan->push_back(mkPt(1.0f, static_cast<float>(c.first), 0.0f));   // 端点: 距 p 恰好 x (同体素)
+        m.onLocalized(mkPose(0, 0, 0), scan, lowFitnessMatch(), true);
+        EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 128 + c.second)
+            << "x=" << c.first << " m: 期望 +" << c.second;
+    }
+}
+
+// 侵蚀的直接机理: 今天的端点落在地图点的**相邻体素**里 (扫描与地图差几厘米, 跨过体素边界)。
+// 旧模型拿不到命中 (= +0); 新模型按距离记, 与同体素时完全一样。
+TEST(OverlayWEvidence, HitCrossesVoxelBoundary)
+{
+    const std::vector<std::pair<double, int>> cases = {{0.050, 7}, {0.250, 1}, {0.290, 0}};
+    for (const auto& c : cases) {
+        OverlayMapMaintainer m;
+        MaintainerConfig cfg = eliteCfg();
+        cfg.persistency_unit = 0;
+        m.configure(cfg);
+        m.setBaseEmbeddedWeights(false);
+        CloudType::Ptr one(new CloudType());
+        one->push_back(mkPt(1.0f, 0.0f, 0.0f));     // 地图点 p: 体素 y ∈ [0, 0.3)
+        m.setBaseMap("", one);
+        CloudType::Ptr scan(new CloudType());
+        scan->push_back(mkPt(1.0f, static_cast<float>(-c.first), 0.0f));   // 端点在体素 y ∈ [-0.3, 0)
+        m.onLocalized(mkPose(0, 0, 0), scan, lowFitnessMatch(), true);
+        EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 128 + c.second)
+            << "跨体素, x=" << c.first << " m: 期望 +" << c.second;
+    }
+}
+
+// ELite 式 5 (自由项): 射线必须**贴着地图点经过** (≤ 1.2σ_free = 6cm) 才算自由证据。
+// 旧模型: 采样点落在体素里就扣满 8 —— 墙前 30cm 内掠过的射线都给真实墙面记一票。
+TEST(OverlayWEvidence, FreeEvidenceNeedsToPassClose)
+{
+    // (射线到地图点的垂直距离, 期望的一票减量)
+    const std::vector<std::pair<double, int>> cases = {
+        {0.000, 8}, {0.040, 2}, {0.050, 1}, {0.060, 0}, {0.150, 0}};
+    for (const auto& c : cases) {
+        OverlayMapMaintainer m;
+        MaintainerConfig cfg = eliteCfg();
+        cfg.persistency_unit = 0;
+        m.configure(cfg);
+        m.setBaseEmbeddedWeights(false);
+        CloudType::Ptr one(new CloudType());
+        one->push_back(mkPt(1.0f, 0.0f, 0.0f));
+        m.setBaseMap("", one);
+        // 传感器在 (0, off, 0), 射线沿 +x: 采样点 (1.0, off, 0) 恰好在地图点旁 off 处
+        CloudType::Ptr scan(new CloudType());
+        scan->push_back(mkPt(3.0f, 0.0f, 0.0f));
+        m.onLocalized(mkPose(0, c.first, 0), scan, lowFitnessMatch(), true);
+        EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 128 - c.second)
+            << "射线距地图点 " << c.first << " m: 期望 -" << c.second;
+    }
+}
+
+// 核心回归: 今天的墙面与地图差 10cm (两个方向), 沿墙行驶 12m (60 个视角), 含掠射射线。
+// 一个底图点都不能被侵蚀掉。旧实现在这个场景里成片判死。
+TEST(OverlayWEvidence, OffsetWallIsNotEroded)
+{
+    for (const double dx : {0.10, -0.10, -0.15}) {
+        double ms = 0.0;
+        const auto r = driveAlongWall(dx, 60, false, nullptr, &ms);
+        std::cout << "[wall] 偏移 " << (dx > 0 ? "+" : "") << dx << " m: 判死 " << r.first
+                  << " / 320, 最低 w " << r.second << ", " << ms << " ms/帧" << std::endl;
+        EXPECT_EQ(r.first, 0) << "偏移 " << dx << " m: 底图被侵蚀";
+        // 占据优先: 附近一直有端点的体素不应低于中性值 (128)
+        EXPECT_GE(r.second, 128) << "偏移 " << dx << " m: 有端点支撑的体素仍被 free 票拖低";
+        EXPECT_LT(ms, 60.0) << "账本每帧耗时 (" << ms << " ms) 超出跟踪线程预算";
+    }
+}
+
+// 占据证据优先: 同一帧里既有端点落在地图点 inlier_dist 内、又有射线从它正上方穿过 ->
+// 不叠加自由证据。(挪走的货物附近没有端点, 不受这条保护; 见 GhostInFrontOfWallIsRemoved)
+TEST(OverlayWEvidence, OccupiedEvidenceDominatesFree)
+{
+    for (const bool with_endpoint : {true, false}) {
+        OverlayMapMaintainer m;
+        MaintainerConfig cfg = eliteCfg();
+        cfg.persistency_unit = 0;                   // frame
+        m.configure(cfg);
+        m.setBaseEmbeddedWeights(false);
+        CloudType::Ptr one(new CloudType());
+        one->push_back(mkPt(1.0f, 0.0f, 0.0f));     // 地图点 p
+        m.setBaseMap("", one);
+        CloudType::Ptr scan(new CloudType());
+        scan->push_back(mkPt(3.0f, 0.0f, 0.0f));    // 射线沿 +x: 采样点正好穿过 p -> 自由证据满强度 -8
+        if (with_endpoint) scan->push_back(mkPt(1.0f, 0.2f, 0.0f));   // 端点距 p 0.2m (< inlier_dist): +2
+        m.onLocalized(mkPose(0, 0, 0), scan, lowFitnessMatch(), true);
+        // 128 + 2 - 8 = 122 (没有优先规则)  |  128 + 2 = 130 (占据优先)  |  128 - 8 = 120 (没有端点)
+        EXPECT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), with_endpoint ? 130 : 120);
+    }
+}
+
+// 删除侧必须还工作: 墙前 0.5m 处的一个 (已不存在的) 底图点, 机器人经过后被删掉, 墙面不受影响。
+TEST(OverlayWEvidence, GhostInFrontOfWallIsRemoved)
+{
+    int ghost_w = 999, ghost_at = -1;
+    double ms = 0.0;
+    const auto r = driveAlongWall(0.0, 90, true, &ghost_w, &ms, false, 5, &ghost_at);
+    std::cout << "[ghost] 判死的墙点 " << r.first << ", 鬼影 w = " << ghost_w << " (第 30 个视角经过它, 判死于第 "
+              << ghost_at << " 个视角), " << ms << " ms/帧" << std::endl;
+    EXPECT_EQ(ghost_w, -1) << "墙前的鬼影没有被删掉";
+    EXPECT_EQ(r.first, 0) << "删鬼影的同时墙面被侵蚀了";
+}
+
+// 射线抽样按点序每 stride 个取一个。点序有周期结构 (真实扫描 = 环 x 方位; 这里 = z 排) 且周期与
+// stride 不互素时, 固定相位会永远跳过某些方向: 24 排 / stride 3 -> 只有 z 序号 ≡ 0 的排被采样,
+// 经过鬼影的那一排从不采样 -> 鬼影一票自由证据都收不到 (实测 w 恒为 128)。
+// 抽样相位逐帧轮转后, 任何点序 / 步长组合下都能覆盖到。
+TEST(OverlayWEvidence, RaySubsamplingDoesNotAliasOnScanOrder)
+{
+    int ghost_w = 999, ghost_at = -1;
+    const auto r = driveAlongWall(0.0, 40, true, &ghost_w, nullptr, /*z_rows_inner=*/true, /*stride=*/3, &ghost_at);
+    std::cout << "[alias] z 排在内层 + stride 3: 鬼影 w = " << ghost_w << ", 墙判死 " << r.first << std::endl;
+    EXPECT_LT(ghost_w, 100) << "抽样相位与点序混叠: 鬼影收不到自由证据";
+    EXPECT_EQ(r.first, 0);
+}
+
+// 对抗场景: 狭窄走廊里从 25m 外接近 60m 长墙。扫描按真实角分辨率 (0.3°) 生成 —— 远处沿墙点间距
+// 被入射角拉大到 ~1m, 很多墙面体素在该视角里附近没有端点 (不受占据优先保护), 而掠射射线正好
+// 从它们旁边经过。这是自由证据最容易误伤墙面的几何; σ_free 取 voxel/6 (5cm) 就是为了它。
+TEST(OverlayWEvidence, CorridorApproachDoesNotErodeFarWall)
+{
+    for (const double dx : {-0.10, 0.0}) {
+        OverlayMapMaintainer m;
+        MaintainerConfig cfg = eliteCfg();
+        cfg.radius = 80.0;
+        m.configure(cfg);
+        m.setBaseEmbeddedWeights(false);
+        const CloudType::Ptr wall(new CloudType());
+        for (int iy = 0; iy < 200; ++iy)
+            for (int iz = 0; iz < 8; ++iz)
+                wall->push_back(mkPt(0.152f, 0.3f * iy + 0.137f, 0.3f * iz + 0.118f));   // y ∈ [0, 60]
+        m.setBaseMap("", wall);
+        const MatchResult mr = lowFitnessMatch();
+        int dead = 0, wmin = 999;
+        for (int k = 0; k < 300 && dead == 0; ++k) {        // 机器人 y: -15 -> 45, 0.2m/视角
+            const double yt = -15.0 + 0.2 * k;
+            const double D = 1.25;                           // 传感器到墙的横向距离
+            CloudType::Ptr scan(new CloudType());
+            const double zrows[8] = {0.129, 0.429, 0.729, 1.029, 1.329, 1.629, 1.929, 2.229};
+            for (int ia = -200; ia <= 200; ++ia) {           // 方位角 0.3° 步长, 朝行进方向 ±60°
+                const double th = ia * 0.3 * M_PI / 180.0;
+                const double diry = std::cos(th), dirx = std::sin(th);      // x 分量: 朝墙 (-x)
+                if (dirx <= 1e-6) continue;
+                const double L = (D - dx) / dirx;                         // 到"今天的墙面"的距离
+                if (L > 40.0) continue;                                    // 量程 40m
+                const double ye = yt + L * diry;
+                if (ye < 0.0 || ye > 60.0) continue;
+                for (const double ze : zrows)
+                    scan->push_back(mkPt(static_cast<float>(-(D - dx)), static_cast<float>(ye - yt),
+                                         static_cast<float>(ze - 1.2)));
+            }
+            m.onLocalized(mkPose(0.152 + D, yt, 1.2), scan, mr, true);
+            dead = 0; wmin = 999;
+            for (const auto& p : wall->points) {
+                const int w = m.persistencyAt(V3D(p.x, p.y, p.z));
+                if (w < 0) ++dead;
+                else wmin = std::min(wmin, w);
+            }
+        }
+        std::cout << "[approach] 偏移 " << (dx > 0 ? "+" : "") << dx << " m: 判死 " << dead << " / 1600, 最低 w "
+                  << (dead ? -1 : wmin) << std::endl;
+        EXPECT_EQ(dead, 0) << "偏移 " << dx << " m: 远处掠射把还没开到的墙面侵蚀了";
+        EXPECT_GE(wmin, 120) << "偏移 " << dx << " m: 墙面 w 被远处掠射明显拖低";
+    }
+}

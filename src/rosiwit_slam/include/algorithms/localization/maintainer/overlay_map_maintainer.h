@@ -1,9 +1,11 @@
 // include/algorithms/localization/maintainer/overlay_map_maintainer.h
 #pragma once
 #include <unordered_map>
+#include <array>
 #include <functional>
 #include <unordered_set>
 #include <cstdint>
+#include <vector>
 #include <pcl/kdtree/kdtree_flann.h>
 #include "slam_core/i_map_maintainer.h"
 #include <mutex>
@@ -18,7 +20,7 @@ namespace rosiwit_slam {
 class OverlayMapMaintainer : public IMapMaintainer {
 public:
     std::string name() const override { return "overlay"; }
-    void configure(const MaintainerConfig& cfg) override { m_cfg = cfg; }
+    void configure(const MaintainerConfig& cfg) override { m_cfg = cfg; resolveSigmas(); }
     void setBaseMap(const std::string& map_path, const CloudType::Ptr& base) override;
     void onLocalized(const PoseStamped& pose, const CloudType::Ptr& scan_body,
                      const MatchResult& match, bool pose_confident) override {
@@ -118,8 +120,6 @@ private:
     void addPoint(const Eigen::Vector3d& p);
     void rayCarve(const PoseStamped& pose, const CloudType::Ptr& scan_body);
     void observeHits(const PoseStamped& pose, const CloudType::Ptr& scan_body);
-    void hitVoxel(int64_t vk);
-    void missVoxel(int64_t vk);
     uint32_t currentUnitKey() const;
     void rebuildCells();
     /// 懒建底图索引(降采样点云 + KD树 + 体素粗筛表)
@@ -151,17 +151,61 @@ private:
     // A 阶段(影子): 体素可信度 w. 计票单位见 cfg.persistency_unit (frame/view/session/day).
     // 只在可信帧写; shadow=true 时不参与决策.
     struct PersistencyVoxel {
-        uint8_t  w = 0;          // 可信度
+        static constexpr uint16_t kInfX = 0xFFFF;   // 本帧还没有这个类型的证据
+        uint8_t  w = 0;          // 可信度; 128 = 中性 (= ELite 的 ε 初值 0.5), 0 = 删除
         uint8_t  miss = 0;       // 连续 free 证据帧数 (去抖)
         uint32_t last_key = 0;   // 上次计票的单位键 (session/day)
         uint32_t last_frame = 0; // 上次 hit 的帧号 (frame 单位用)
         uint32_t last_view = 0;       // 上次 hit 的视角编号 (view 单位)
-        uint32_t last_miss_view = 0;  // 上次 free 证据的视角编号 (view 单位)
-        uint32_t last_miss_frame = 0; // 上次 free 证据的帧号 (miss 与 hit 对称: 每帧一票)
+        uint32_t last_miss_view = 0;  // 上次 free 证据的视角编号
+        uint32_t last_miss_frame = 0; // 本帧 free 证据的记账帧号 (同一帧只取最近的一次)
         uint32_t last_miss_key = 0;   // 上次 free 证据的计票单位键 (session/day)
         bool     from_base = false;  // 该体素来自底图 (点不在 m_cells, 死亡时进 m_dead_base)
+        // ★ELite 式 5: 证据强度随"观测到本地图点的距离"衰减 -> 每个体素记住自己的代表点
+        //   (体素内偏移, 毫米; 底图 = 该体素的地图点, overlay = 提交时的扫描端点)。
+        uint16_t rx = 0, ry = 0, rz = 0;
+        // 本帧 hit 证据的最近距离 (mm): 同一帧多个观测只投一票, 取最强的那次。
+        uint16_t hit_x = kInfX;
+        uint16_t free_x = kInfX;
     };
     std::unordered_map<int64_t, PersistencyVoxel> m_persistency;
+    // 账本的占用位图 (派生索引, 与 m_persistency 同步增删): 每 8^3 体素一块, 512 bit。
+    // 只回答"这个体素在账本里吗" —— 一次位测试 (~1ns) 代替一次哈希查找 (实机 260 万条
+    // 账本上 100~160ns)。端点附近 27 个邻格 / 射线沿途的采样点绝大多数是空体素。
+    std::unordered_map<int64_t, std::array<uint64_t, 8>> m_occ;
+    int64_t m_occ_cache_key = -1;                    // 最近一次查过的块 (连续查询几乎都在同一块里)
+    const uint64_t* m_occ_cache_words = nullptr;
+    void occSet(int vx, int vy, int vz);
+    void occClear(int vx, int vy, int vz);
+    bool occupied(int vx, int vy, int vz);
+
+    // ---- w 证据模型 (ELite 式 5/6, 见 .cpp 顶部说明) ----
+    void resolveSigmas();
+    /// 立即投一票占据证据 (观测正好落在地图点上: 新体素创建 / 重复观测的旧路径)
+    void voteHit(int64_t vk, double x);
+    bool hitUnitAllows(const PersistencyVoxel& v) const;     // 计票单位: 本单位还没投过 hit 票
+    bool freeUnitAllows(const PersistencyVoxel& v) const;
+    /// 代表点 (世界系) 的读写: 体素内偏移 (mm)
+    void setRep(PersistencyVoxel& v, const Eigen::Vector3d& p, int vx, int vy, int vz) const;
+    Eigen::Vector3d repPoint(const PersistencyVoxel& v, int vx, int vy, int vz) const;
+    /// observeHits 的逐帧分组: 同一扫描体素里的端点共用一组候选地图体素 (27 邻域里的账本体素)
+    struct Cand {
+        int64_t key = 0;
+        PersistencyVoxel* v = nullptr;
+        Eigen::Vector3d p = Eigen::Vector3d::Zero();
+        double best2 = 0.0;      // 本帧最近的观测距离²
+        bool has = false;
+    };
+    struct Group {
+        bool scanned = false;    // 候选已收集
+        bool own = false;        // 这个扫描体素自己就是账本体素
+        uint32_t off = 0, n = 0; // 候选在 m_cand 里的区间
+    };
+    std::unordered_map<int64_t, Group> m_groups;   // 仅 observeHits 内使用 (帧末清空)
+    std::vector<Cand> m_cand;
+    std::vector<std::pair<int64_t, PersistencyVoxel*>> m_free_touch;   // 本帧有 free 证据的体素
+    void applyFreeVotes();
+    double m_sigma_hit = 0.25, m_sigma_free = 0.05, m_r_hit = 0.3, m_r_free = 0.06;
     /// 底图云是否已是"工作图"(intensity = w, 已烘焙之前的 overlay)
     bool m_base_embedded = false;
     /// 底图体素 w 衰减到 0 的集合: 匹配目标里要剔除这些体素里的底图点

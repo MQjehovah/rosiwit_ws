@@ -522,6 +522,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         else if (wu == "session") m_maintainer_cfg.persistency_unit = 2;
         else if (wu == "day")     m_maintainer_cfg.persistency_unit = 3;
         m_maintainer_cfg.persistency_hit_gain      = getv<int>(mtc, "persistency_hit_gain", m_maintainer_cfg.persistency_hit_gain);
+        m_maintainer_cfg.persistency_sigma_hit  = getv<double>(mtc, "persistency_sigma_hit", m_maintainer_cfg.persistency_sigma_hit);
+        m_maintainer_cfg.persistency_sigma_free = getv<double>(mtc, "persistency_sigma_free", m_maintainer_cfg.persistency_sigma_free);
         m_maintainer_cfg.persistency_miss_confirm  = getv<int>(mtc, "persistency_miss_confirm", m_maintainer_cfg.persistency_miss_confirm);
         m_maintainer_cfg.persistency_miss_action   = getv<int>(mtc, "persistency_miss_action", m_maintainer_cfg.persistency_miss_action);
         m_maintainer_cfg.persistency_session_hours = getv<int>(mtc, "persistency_session_hours", m_maintainer_cfg.persistency_session_hours);
@@ -3838,6 +3840,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         std::lock_guard<std::mutex> lk(m_local_map_mu);
                         base_crop = m_local_map->getLocalMap(out_pose);
                     }
+                    // ★与匹配目标同口径 (2026-11-27): 匹配目标剔除了 w=0 的底图点 (filterDeadBase),
+                    //   这里原来不剔除 —— 账本把底图侵蚀掉 1.6 万点期间 cov_base 始终纹丝不动,
+                    //   显示的置信度比匹配器实际看到的支撑高出一截。cov_base 是 LOST/桥接退出的
+                    //   裁决依据, 必须是匹配器真正对着配的那份地图。
+                    if (m_maintainer) base_crop = m_maintainer->filterDeadBase(base_crop);
                     if (base_crop && base_crop->size() >= 100) {
                         g_base_only_kdtree.setInputCloud(base_crop);
                         g_base_only_valid = true;
