@@ -59,6 +59,20 @@ void Ros1SlamInterface::startPub() {
         (mode == SlamMode::MAPPING && have_imu_.load() && have_laser_.load());
     if (scan_wanted) scheduleScanJob();
 
+    // 1Hz 调试出口: 定位状态 JSON (独立于 session_map 订阅者; 有订阅就发)。
+    //   内容: 是否桥接(on_submap)、目标构成(target_source)、目标点数、cov_base、
+    //   anchor 连续计数、当前匹配 fitness/可见/内点、session_map 大小、位姿。
+    if (debug_publish_ && loc_stats_puber_.getNumSubscribers() > 0) {
+        static ros::Time last_loc_stats_pub;
+        const ros::Time now_ls = ros::Time::now();
+        if (last_loc_stats_pub.isZero() || (now_ls - last_loc_stats_pub).toSec() >= 1.0) {
+            last_loc_stats_pub = now_ls;
+            std_msgs::String st;
+            st.data = engine_.debugStatsJson();
+            if (!st.data.empty()) loc_stats_puber_.publish(st);
+        }
+    }
+
     // 1Hz 调试出口: 会话地图 (latched, 有订阅者才构建)。
     // overlay_map 已并入 global_map 的整图发布 (统一工作图后只有一张图, 见 publish_jobs.cpp),
     // 这里不再发"新增层", 避免把 latched 整图覆盖成小增量云。

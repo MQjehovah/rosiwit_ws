@@ -61,6 +61,9 @@ public:
     /// 地图自更新的 overlay 快照 / 会话地图快照 (调试出口, 默认不支持).
     virtual bool getOverlayCloud(PointVec& /*out*/) { return false; }
     virtual bool getSessionMapCloud(PointVec& /*out*/) { return false; }
+    /// 1Hz 调试状态 (JSON): 是否桥接/目标构成/点数/cov_base/拒绝原因等。
+    /// 供 /slam/debug/loc_stats 发布 —— 现场判断"当前拿什么图在匹配"用。
+    virtual std::string debugStatsJson() { return ""; }
     /// 统一工作图 (底图 0.3 体素 + overlay), intensity = **当前** w (含本会话提交)
     virtual bool getWorkingMapCloud(PointVec& /*out*/) { return false; }
     /// 工作图 revision: overlay 几何/权重有增删才 +1 (供调试话题限频重发)

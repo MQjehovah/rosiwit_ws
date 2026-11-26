@@ -114,6 +114,7 @@ public:
     bool getWorkingMapCloud(PointVec& out) override;
     uint64_t workingMapRevision() const override;
     bool getSessionMapCloud(PointVec& out) override;
+    std::string debugStatsJson() override;
     SlamState state() const override;
 
     bool saveMap(const std::string& path) override;

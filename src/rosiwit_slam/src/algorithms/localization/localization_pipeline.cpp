@@ -3463,6 +3463,38 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     m_deskew_prev_valid = true;
 }
 
+std::string LocalizationPipeline::debugStatsJson() {
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(3);
+    size_t sm_size = 0;
+    {
+        std::lock_guard<std::mutex> lk(m_session_map_mu);
+        sm_size = m_session_map.size();
+    }
+    size_t tgt_pts = 0;
+    if (m_cached_target) tgt_pts = m_cached_target->size();
+    os << "{\"status\":" << static_cast<int>(m_status.load())
+       << ",\"on_submap\":" << (m_on_submap ? 1 : 0)
+       << ",\"target_source\":\"" << (m_on_submap ? "joint" : "working_map") << "\""
+       << ",\"target_pts\":" << tgt_pts
+       << ",\"session_map_size\":" << sm_size
+       << ",\"cov_base\":" << m_cov_base
+       << ",\"cov_base_ok_streak\":" << m_cov_base_ok_streak
+       << ",\"anchor_weak_streak\":" << m_anchor_weak_streak
+       << ",\"anchor_ok_streak\":" << m_anchor_ok_streak
+       << ",\"fit\":" << m_last_match.fitness
+       << ",\"visible\":" << m_last_match.visible
+       << ",\"inliers\":" << m_last_match.inliers
+       << ",\"correspondences\":" << m_last_match.correspondences
+       << ",\"w_support\":" << m_last_match.w_support
+       << ",\"degenerate\":" << (m_last_match.degenerate ? 1 : 0)
+       << ",\"pose_x\":" << m_pose.trans.x()
+       << ",\"pose_y\":" << m_pose.trans.y()
+       << ",\"pose_yaw\":" << std::atan2(m_pose.rot(1, 0), m_pose.rot(0, 0)) * 57.2957795
+       << "}";
+    return os.str();
+}
+
 ILocalization::Status LocalizationPipeline::getStatus() {
     return m_status.load();
 }

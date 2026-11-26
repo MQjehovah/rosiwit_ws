@@ -94,24 +94,30 @@ void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_worl
         m_frames_since_kf_ = 0;
         view_dirty_ = true;
     }
-    EpKf& kf = m_kfs.back();
-    const Eigen::Matrix3d R_ki = kf.pose.rot.transpose();
-    const Eigen::Vector3d t_ki = -R_ki * kf.pose.trans;
-    Eigen::Vector3d acc = Eigen::Vector3d::Zero();
-    size_t npts = 0;
-    for (const auto& p : scan_body.points) {
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-        const Eigen::Vector3d w = pose_world.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose_world.trans;
-        const Eigen::Vector3d kl = R_ki * w + t_ki;      // 关键帧局部系
-        PointType q;
-        q.x = static_cast<float>(w.x());
-        q.y = static_cast<float>(w.y());
-        q.z = static_cast<float>(w.z());
-        kf.world->push_back(q);
-        acc += w;
-        ++npts;
+    // ★一个关键帧只存一次扫描 (2026-11-26 实机: 子图"全是糊的"):
+    //   旧实现把**每一帧**的扫描都按当时的世界位姿堆进同一个关键帧。位姿每帧
+    //   有零点几度的抖动/融合滞后, 几百帧叠加就在同一面墙上形成"毛边图层",
+    //   厚度随距离放大 —— 子图作为匹配目标完全不可用。
+    //   ROLL 式临时建图: 关键帧只在其创建时记录一帧扫描, 帧间不再堆积;
+    //   子图 = 少量关键帧扫描的并集, 每个关键帧内部自洽 (无跨帧位姿抖动)。
+    if (new_kf) {
+        EpKf& kf = m_kfs.back();
+        Eigen::Vector3d acc = Eigen::Vector3d::Zero();
+        size_t npts = 0;
+        for (const auto& p : scan_body.points) {
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+            const Eigen::Vector3d w =
+                pose_world.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose_world.trans;
+            PointType q;
+            q.x = static_cast<float>(w.x());
+            q.y = static_cast<float>(w.y());
+            q.z = static_cast<float>(w.z());
+            kf.world->push_back(q);
+            acc += w;
+            ++npts;
+        }
+        if (npts) kf.centroid = acc / static_cast<double>(npts);
     }
-    if (npts) kf.centroid = acc / static_cast<double>(npts);
     view_dirty_ = true;
 
     // 关键帧级裁剪: 质心超出 radius×1.2 的关键帧整体丢弃

@@ -102,6 +102,7 @@ public:
     /// 工作图 revision: overlay 几何/权重有增删才 +1 (供调试话题限频重发)
     virtual uint64_t workingMapRevision() const { return 0; }
     virtual bool getSessionMapCloud(PointVec& /*out*/) { return false; }
+    virtual std::string debugStatsJson() { return ""; }
     /// 位姿 + 协方差 (order [rot(3),trans(3)]; 默认不支持)
     virtual bool getPoseCov(PoseStamped& /*out*/, Eigen::Matrix<double, 6, 6>& /*cov*/) { return false; }
     /// 定位匹配度 [0,1] (定位模式下才有意义; 默认 0).

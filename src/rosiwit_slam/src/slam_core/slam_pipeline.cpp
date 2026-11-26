@@ -1010,6 +1010,11 @@ uint64_t SlamPipeline::workingMapRevision() const {
     return m_localization ? m_localization->workingMapRevision() : 0;
 }
 
+std::string SlamPipeline::debugStatsJson() {
+    if (!m_localization) return "";
+    return m_localization->debugStatsJson();
+}
+
 bool SlamPipeline::getSessionMapCloud(PointVec& out) {
     if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) return false;
     return m_localization->getSessionMapCloud(out);

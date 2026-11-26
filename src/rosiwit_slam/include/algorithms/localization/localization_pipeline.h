@@ -40,6 +40,8 @@ public:
     bool getMapCloud(PointVec& out) override;
     bool getOverlayCloud(PointVec& out) override;
     bool getSessionMapCloud(PointVec& out) override;
+    /// 1Hz 调试状态 JSON (是否桥接/目标构成/点数/cov_base/拒绝原因等)
+    std::string debugStatsJson() override;
     bool getWorkingMapCloud(PointVec& out) override;
     uint64_t workingMapRevision() const override;
     /// 运行时注入安装外参 (来自 URDF/TF/启动参数); 统一驱动扫描变换与偏航轴 up_body.

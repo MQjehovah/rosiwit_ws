@@ -224,6 +224,11 @@ bool SlamAlgorithm::getOverlayCloud(rosiwit_slam::PointVec& out) {
     return false;
 }
 
+std::string SlamAlgorithm::debugStatsJson() {
+    if (algo_raw_) return algo_raw_->debugStatsJson();
+    return "";
+}
+
 bool SlamAlgorithm::getSessionMapCloud(rosiwit_slam::PointVec& out) {
     if (algo_raw_) return algo_raw_->getSessionMapCloud(out);
     return false;
