@@ -229,13 +229,17 @@ void OverlayMapMaintainer::missVoxel(int64_t vk) {
     // 真墙 (每 pass 命中+8, 掠射 free-8) net 0 稳定; 被搬走的货物 (只有 free 票)
     // 快速衰减删除。
     if (v.last_miss_frame == static_cast<uint32_t>(m_frame)) return;   // 每帧最多一票
-    const uint32_t prev_miss = v.last_miss_frame;
     v.last_miss_frame = static_cast<uint32_t>(m_frame);
     bool count = false;
     switch (m_cfg.persistency_unit) {
         case 0:  count = true; break;                              // frame: 每帧
-        case 1:  // view: 首次也算一票; 之后需要中间隔过帧 (离开过视野)
-                 count = (prev_miss == 0) || (m_frame > prev_miss + 1); break;
+        case 1:  // view: 与 hit 同基准 —— "上一帧是否被观测(hit)到", 而不是
+                 // "上一帧是否被抽样射线穿过(miss)"。射线抽样天然稀疏/间歇,
+                 // 用 prev_miss 做门会让静止时的 miss 持续计票、而连续观测的
+                 // 真墙 hit 被 frame 间隙门抑制 -> w 单向衰减 -> 侵蚀真实几何
+                 // (2026-11-26 实测: 5min persistency_pts 2693->2137, 位姿被
+                 //  拖漂 ~0.5°/min; A/B: 关雕刻即完全稳定)。
+                 count = (v.last_frame == 0) || (m_frame > v.last_frame + 1); break;
         case 2:  count = (v.last_miss_key != m_session_id); break; // session
         default: count = (v.last_miss_key != m_day_index); break;  // day
     }
@@ -339,10 +343,11 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
     // 过桥/漂移期(位姿不可信): 不写、不雕刻, 避免污染地图
     if (!pose_confident) { m_low_count = 0; return; }
 
+    // A 阶段: 观测命中 -> w += 8。必须先于雕刻: 同一帧里被命中的体素
+    // 立即更新 last_frame, 雕刻的 view 门随即把它排除 (不被同帧自由票误伤)。
+    observeHits(pose, scan_body);
     // 清除: 看到"本该有货的地方是空的" -> 移除该处 overlay
     rayCarve(pose, scan_body);
-    // A 阶段: 观测命中 -> w += 8 (只统计, 不参与决策)
-    observeHits(pose, scan_body);
 
     if (m_cfg.pose_graph) {
         // L13: 变化关键帧缓冲, fitness 恢复或达阈值时 flush (GTSAM 位姿图平滑)

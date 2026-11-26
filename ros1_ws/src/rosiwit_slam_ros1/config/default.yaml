@@ -150,7 +150,7 @@ mapping:
     dynamic_residual_thresh: 1.0 # 动态点残差阈值
     free_space_carving: false # 是否启用自由空间雕刻
     carve_free_thresh: 3 # 雕刻空体素命中次数阈值
-    carve_stride: 10 # 雕刻射线抽样步长
+    carve_stride: 20          # 自由空间雕刻抽样步长 (看到空 -> 从叠加层移除鬼影)
     local_map_size: 300 # 局部地图立方体边长(m)
     detection_range: 60 # 雷达有效检测距离(m)
     map_move_threshold: 1.5 # 局部地图滑动窗口阈值比例
@@ -279,7 +279,7 @@ localization:
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
-    map_maintainer: overlay       # 2026-11-25: 开 overlay 自更新 (统一工作图 map.overlay.pcd)
+    map_maintainer: overlay       # A/B: 恢复自更新, 雕刻关闭
     # 工作图落盘周期 (分钟, revision 有变化才写盘)。2026-11-25 临时 10 分钟验证, 验证完回 60。
     working_map_save_min: 10
     # ---- 输出位姿限速 (安全): 匹配振荡导致的位姿跳变按上限滑移, 不直通导航 ----
