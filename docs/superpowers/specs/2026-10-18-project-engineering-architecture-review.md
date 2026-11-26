@@ -94,7 +94,7 @@ overlay revision + cache_move + 目标缓存三者交互决定失效——全对
 
 ### 6. 配置治理
 **实证**：default.yaml 600+ 行单文件；今晚事故链之一 = accept.min_coverage(0.35) /
-monitor.credible_fitness(0.75) / reloc_accept_score(0.85) 三个阈值互相打架。
+monitor.credible_fitness(0.75) / relocation_fitness(0.85) 三个阈值互相打架。
 **建议**：加载时一致性校验（断言 reloc_accept ≥ credible > min_coverage 等不变量）；
 阶段化 include；把"调这个参数会牵动谁"写进每个阈值的注释（部分已做，保持）。
 

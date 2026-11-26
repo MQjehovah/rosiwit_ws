@@ -368,8 +368,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_global_cfg.top_k              = getv<int>(gc, "top_k", m_global_cfg.top_k);
         m_global_cfg.reloc_submap_radius =
             getv<double>(gc, "reloc_submap_radius", m_global_cfg.reloc_submap_radius);
-        m_global_cfg.reloc_accept_score =
-            getv<double>(gc, "reloc_accept_score", m_global_cfg.reloc_accept_score);
+        m_global_cfg.relocation_fitness =
+            getv<double>(gc, "relocation_fitness", m_global_cfg.relocation_fitness);
         m_global_cfg.seed_max_drift =
             getv<double>(gc, "seed_max_drift", m_global_cfg.seed_max_drift);
         m_global_cfg.seed_max_yaw_deg =
@@ -385,6 +385,12 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_ambiguity_margin = getv<double>(gc, "ambiguity_margin", m_ambiguity_margin);
         m_reseed_radius    = getv<double>(gc, "reseed_radius", m_reseed_radius);
         m_global_cfg.retry_interval     = getv<int>(gc, "retry_interval", m_global_cfg.retry_interval);
+        m_global_cfg.grid_radius        = getv<double>(gc, "grid_recovery_radius", m_global_cfg.grid_radius);
+        m_global_cfg.grid_cell          = getv<double>(gc, "grid_recovery_cell", m_global_cfg.grid_cell);
+        m_global_cfg.grid_step_xy       = getv<double>(gc, "grid_recovery_step_xy", m_global_cfg.grid_step_xy);
+        m_global_cfg.grid_yaw_step_deg  = getv<double>(gc, "grid_recovery_yaw_step_deg", m_global_cfg.grid_yaw_step_deg);
+        m_global_cfg.grid_candidates    = getv<int>(gc, "grid_recovery_candidates", m_global_cfg.grid_candidates);
+        m_global_cfg.grid_min_score     = getv<double>(gc, "grid_recovery_min_score", m_global_cfg.grid_min_score);
         m_global_cfg.voxel_resolution   = getv<double>(gc, "voxel_resolution", m_global_cfg.voxel_resolution);
         m_global_cfg.icp_max_corr_dist  = getv<double>(gc, "icp_max_corr_dist", m_global_cfg.icp_max_corr_dist);
         m_global_cfg.icp_fitness_thresh = getv<double>(gc, "icp_fitness_thresh", m_global_cfg.icp_fitness_thresh);
@@ -631,8 +637,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         auto warn = [](const std::string& msg) {
             diag::log('W', "LocPipeline", "config invariant: " + msg);
         };
-        if (!(m_global_cfg.reloc_accept_score >= m_monitor_cfg.credible_fitness))
-            warn("reloc_accept_score(" + std::to_string(m_global_cfg.reloc_accept_score) +
+        if (!(m_global_cfg.relocation_fitness >= m_monitor_cfg.credible_fitness))
+            warn("relocation_fitness(" + std::to_string(m_global_cfg.relocation_fitness) +
                  ") < credible_fitness(" + std::to_string(m_monitor_cfg.credible_fitness) +
                  ") -> 弱重定位会被接受后立即进入僵尸带");
         if (!(m_monitor_cfg.credible_fitness > m_accept_cfg.min_coverage))
@@ -1562,48 +1568,161 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     if (!target || target->empty()) return false;
     m_matcher->setTarget(target);
 
-    // 27 次多起点 GICP 单帧可耗 3~13s; 之前没有预算/提前退出, 一旦位姿偏了
-    // 每帧都全量跑满, 单线程 spinner 被独占 -> /relocation 等服务排队"很慢"。
-    // 现在两条停止条件: 覆盖率已达标(0.97)即停 / 墙钟预算(3s)耗尽即停。
+    // ★网格搜索恢复 (2026-11-26): 以当前位姿为中心, 扫描对工作图 2D 栅格做
+    //   暴力平移×旋转搜索 (稠密栅格打分, 不用 GICP), 取前 K 个候选做 GICP 精配。
+    //   旧实现 27 起点 (±1.5m/±10°) 每点一次完整 GICP (170ms~1.8s), 3s 预算内
+    //   跑不完, 且搜不到 2~3m 级的位姿误差 —— 实机"判丢后永远恢复不了"的根因。
+    //   接受线 = global.relocation_fitness (与二阶段全局重定位同一条线)。
     const auto t0 = std::chrono::steady_clock::now();
-    const double offs[3] = {-1.5, 0.0, 1.5};
-    const double yaws[3] = {-10.0, 0.0, 10.0};
-    // 达标线用"健康线"(credible 0.75)而非最低接受线(min_coverage 0.35):
-    // 2026-10-17 推行复测死循环 —— 判丢后 bounded recovery 以 0.73"成功"(>0.35)
-    // -> 回到僵尸态 -> 10s 后再判丢 -> 再截胡, FPFH 冷启动永远轮不到, 位姿/点云
-    // 十几秒跳一次。恢复不出健康分数 = 失败, 放行给全局重定位。
-    double best_fit = std::max(m_accept_cfg.min_coverage,
-                               m_monitor_cfg.enabled ? m_monitor_cfg.credible_fitness
-                                                     : m_accept_cfg.min_coverage);
+    const double bar = m_global_cfg.relocation_fitness;
     PoseStamped best;
+    double best_fit = -1.0;
     bool found = false;
-    bool stop = false;
-    for (double dx : offs) {
-        if (stop) break;
-        for (double dy : offs) {
-            if (stop) break;
-            for (double yd : yaws) {
-                PoseStamped g = m_pose;
-                g.trans += V3D(dx, dy, 0.0);
-                g.rot = m_pose.rot * Eigen::AngleAxisd(yd * M_PI / 180.0, V3D::UnitZ()).toRotationMatrix();
-                planarizePose(g);
-                MatchResult r;
-                if (m_matcher->match(scan, g, r) && r.converged && r.fitness > best_fit) {
-                    planarizePose(r.pose);
-                    best_fit = r.fitness;
-                    best = r.pose;
-                    found = true;
-                }
-                const double ms = std::chrono::duration<double, std::milli>(
-                                      std::chrono::steady_clock::now() - t0).count();
-                if (best_fit >= 0.97 || ms > 3000.0) { stop = true; break; }
+
+    const double R = std::max(1.0, m_global_cfg.grid_radius);
+    const double cell = std::max(0.1, m_global_cfg.grid_cell);
+    const double step_xy = std::max(0.1, m_global_cfg.grid_step_xy);
+    const double yaw_step = std::max(1.0, m_global_cfg.grid_yaw_step_deg);
+    const int K = std::max(1, m_global_cfg.grid_candidates);
+    const double min_score = m_global_cfg.grid_min_score;
+
+    // 1) 工作图 2D 稠密栅格 (以位姿为中心; 只取扫描高度带, 去地面/天花板)
+    const double half = R + 60.0;
+    const int GW = static_cast<int>(2.0 * half / cell) + 1;
+    const double ox = m_pose.trans.x() - half, oy = m_pose.trans.y() - half;
+    std::vector<uint8_t> grid(static_cast<size_t>(GW) * static_cast<size_t>(GW), 0);
+    const double zlo = m_pose.trans.z() - 0.85, zhi = m_pose.trans.z() + 0.55;
+    size_t occupied = 0;
+    for (const auto& p : target->points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+        if (p.z < zlo || p.z > zhi) continue;
+        const int ix = static_cast<int>(std::floor((p.x - ox) / cell));
+        const int iy = static_cast<int>(std::floor((p.y - oy) / cell));
+        if (ix < 0 || iy < 0 || ix >= GW || iy >= GW) continue;
+        uint8_t& c =
+            grid[static_cast<size_t>(iy) * static_cast<size_t>(GW) + static_cast<size_t>(ix)];
+        if (!c) {
+            c = 1;
+            ++occupied;
+        }
+    }
+    if (occupied < 100) {
+        diag::log('W', "LocPipeline", "grid recovery: working map empty near pose -> skip");
+        return false;
+    }
+    // 2) 扫描 -> 水平系 (用预测姿态的倾斜), 取 xy (yaw 由搜索覆盖)
+    std::vector<float> px, py;
+    {
+        const size_t stride = std::max<size_t>(1, scan->size() / 2000);
+        px.reserve(2200);
+        py.reserve(2200);
+        for (size_t i = 0; i < scan->size(); i += stride) {
+            const auto& p = scan->points[i];
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+            const V3D q = m_pose.rot * V3D(p.x, p.y, p.z);
+            if (q.head<2>().squaredNorm() < 0.25) continue;   // 机身自身
+            px.push_back(static_cast<float>(q.x()));
+            py.push_back(static_cast<float>(q.y()));
+        }
+    }
+    if (px.size() < 100) return false;
+    const int npts = static_cast<int>(px.size());
+    const int cstride = std::max(1, npts / 400);
+    const double gx = m_pose.trans.x(), gy = m_pose.trans.y();
+    auto scoreAt = [&](double dx, double dy, double ca, double sa, int stride) {
+        int hit = 0, tot = 0;
+        for (int i = 0; i < npts; i += stride) {
+            const double rx = ca * px[i] - sa * py[i] + gx + dx;
+            const double ry = sa * px[i] + ca * py[i] + gy + dy;
+            const int ix = static_cast<int>(std::floor((rx - ox) / cell));
+            const int iy = static_cast<int>(std::floor((ry - oy) / cell));
+            ++tot;
+            if (ix >= 0 && iy >= 0 && ix < GW && iy < GW &&
+                grid[static_cast<size_t>(iy) * static_cast<size_t>(GW) +
+                     static_cast<size_t>(ix)])
+                ++hit;
+        }
+        return tot ? static_cast<double>(hit) / tot : 0.0;
+    };
+    // 3) 粗搜索: ±R 平移 × ±180° yaw (先用子集打分)
+    struct Cand {
+        double score;
+        double dx, dy, dyaw;
+    };
+    std::vector<Cand> cands;
+    const int nxy = static_cast<int>(std::ceil(R / step_xy));
+    for (double dyaw = -180.0; dyaw < 180.0; dyaw += yaw_step) {
+        const double a = dyaw * M_PI / 180.0;
+        const double ca = std::cos(a), sa = std::sin(a);
+        for (int ix = -nxy; ix <= nxy; ++ix) {
+            for (int iy = -nxy; iy <= nxy; ++iy) {
+                const double sc = scoreAt(ix * step_xy, iy * step_xy, ca, sa, cstride);
+                if (sc >= min_score) cands.push_back({sc, ix * step_xy, iy * step_xy, dyaw});
             }
         }
     }
-    if (!found) {
-        // 失败可见: 之前静默返回, 现场看不出"有界恢复试过但没到健康线"
-        diag::log('I', "LocPipeline", "bounded recovery failed (bar=" +
-                  std::to_string(best_fit) + ") -> global relocalization");
+    if (cands.empty()) {
+        diag::log('I', "LocPipeline", "grid recovery: no candidate -> global relocalization");
+        return false;
+    }
+    // 4) 前 300 个用全点重评, 非极大值抑制取前 K
+    std::sort(cands.begin(), cands.end(),
+              [](const Cand& a, const Cand& b) { return a.score > b.score; });
+    if (cands.size() > 300) cands.resize(300);
+    for (auto& c : cands) {
+        const double a = c.dyaw * M_PI / 180.0;
+        c.score = scoreAt(c.dx, c.dy, std::cos(a), std::sin(a), 1);
+    }
+    std::sort(cands.begin(), cands.end(),
+              [](const Cand& a, const Cand& b) { return a.score > b.score; });
+    std::vector<Cand> picked;
+    for (const auto& c : cands) {
+        bool dup = false;
+        for (const auto& k : picked) {
+            const double dxy = std::hypot(c.dx - k.dx, c.dy - k.dy);
+            const double dyw = std::fabs(c.dyaw - k.dyaw);
+            if (dxy < 0.8 && dyw < 20.0) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            picked.push_back(c);
+            if (static_cast<int>(picked.size()) >= K) break;
+        }
+    }
+    const double ms_grid =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    // 5) GICP 精配
+    for (const auto& c : picked) {
+        PoseStamped g = m_pose;
+        g.trans.x() += c.dx;
+        g.trans.y() += c.dy;
+        g.rot = Eigen::AngleAxisd(c.dyaw * M_PI / 180.0, V3D::UnitZ()).toRotationMatrix() *
+                m_pose.rot;
+        planarizePose(g);
+        MatchResult r;
+        if (m_matcher->match(scan, g, r) && r.converged && r.fitness > best_fit) {
+            planarizePose(r.pose);
+            best_fit = r.fitness;
+            best = r.pose;
+            found = true;
+        }
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (best_fit >= 0.97 || ms > 3000.0) break;
+    }
+    {
+        std::ostringstream os;
+        os << "grid recovery: grid_ms=" << ms_grid << " cands=" << cands.size()
+           << " picked=" << picked.size() << " best=" << best_fit << " bar=" << bar;
+        diag::log(found ? 'I' : 'W', "LocPipeline", os.str());
+    }
+    if (!found || best_fit < bar) {
+        // 失败可见: 恢复试过但没到接受线 -> 放行给二阶段全局重定位
+        diag::log('I', "LocPipeline", "bounded recovery failed (best=" +
+                  std::to_string(best_fit) + " bar=" + std::to_string(bar) +
+                  ") -> global relocalization");
         return false;
     }
     m_out_lim_bypass = true;
@@ -1708,7 +1827,10 @@ bool LocalizationPipeline::acceptMatch(const MatchResult& res, const CloudType::
             std::acos(std::max(-1.0, std::min(1.0, (dR_ev.trace() - 1.0) * 0.5))) *
             57.2957795;
         const double corr_t = (res.pose.trans - guess.trans).norm();
-        if ((corr_rot > 8.0 || corr_t > 0.4) && m_matcher) {
+        // 触发门槛 = 真正的"大跳变"量级 (15°/0.8m)。实测 0.4m/2° 属于正常修正,
+        // 用 0.4m 做门槛会把正常修正全部拒掉 -> 位姿无法校正 -> 先验漂移自转 ->
+        // 匹配更差 (2026-11-26 16:52 现场第二次丢定位就是这个原因)。
+        if ((corr_rot > 15.0 || corr_t > 0.8) && m_matcher) {
             const double r_guess = m_matcher->evaluateResidual(scan, guess);
             if (r_guess > 1e-9 && res.residual > r_guess * 0.8) {
                 return reject("ambiguous_no_evidence");
@@ -1858,14 +1980,14 @@ bool LocalizationPipeline::runGlobalRelocOnce() {
                 }
                 // 提前收敛: 已经拿到"够好且和次优分得开"的两个候选时不再继续精配.
                 // (候选是按粗分降序的, 后面的只会更差; 这能把最坏耗时从 N 次精配压到 2~3 次)
-                if (refined >= 2 && best_fit >= m_global_cfg.reloc_accept_score &&
-                    (second_fit < m_global_cfg.reloc_accept_score ||
+                if (refined >= 2 && best_fit >= m_global_cfg.relocation_fitness &&
+                    (second_fit < m_global_cfg.relocation_fitness ||
                      best_fit - second_fit >= m_ambiguity_margin)) {
                     break;
                 }
             }
         }
-        if (best_fit < m_global_cfg.reloc_accept_score) {
+        if (best_fit < m_global_cfg.relocation_fitness) {
             std::lock_guard<std::mutex> lk(m_global_mu);
             m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
             std::ostringstream os;
@@ -1875,7 +1997,7 @@ bool LocalizationPipeline::runGlobalRelocOnce() {
             return true;
         }
         const double gap = (second_fit >= 0.0) ? (best_fit - second_fit) : 1.0;
-        if (second_fit >= m_global_cfg.reloc_accept_score &&
+        if (second_fit >= m_global_cfg.relocation_fitness &&
             gap < m_ambiguity_margin) {
             std::lock_guard<std::mutex> lk(m_global_mu);
             m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
@@ -2094,12 +2216,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 帧首/帧末位姿先补偿到帧末坐标系.
     CloudType::Ptr scan = prepareScan(f, guess);
 
-    // relocalizer=none 时 globalRelocWorker 对重定位请求不做任何事(直接丢弃),
-    // LOST 后没有任何恢复路径。这里在 tracking 线程里接上已有的
-    // tryBoundedRecovery(±1.5m/±10° 多起点重锁, 与后续 tracking 同线程故
-    // matcher 使用安全), 失败按 retry_interval 冷却后重试。
-    if (m_relocalizer_name == "none" && m_initialized.load() &&
-        m_status.load() == LOST) {
+    // ★一阶段恢复 (2026-11-26): LOST 后先在 tracking 线程里跑网格搜索恢复
+    // (以当前位姿为中心 ±radius × ±180°, 粗栅格打分 + 前K个GICP精配; 与 tracking
+    // 同线程故 matcher 使用安全), 不再限定 relocalizer=none —— 之前开了 FPFH
+    // 这段就被跳过, 判丢后只剩召回≈0 的全局检索, 永远恢复不了。
+    // 失败后按 retry_interval 冷却, 放行给二阶段全局重定位 (globalRelocWorker)。
+    if (m_initialized.load() && m_status.load() == LOST) {
         bool try_now = false;
         {
             std::lock_guard<std::mutex> lk(m_global_mu);
@@ -2113,8 +2235,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_global_cooldown = std::max(1, m_global_cfg.retry_interval);
             }
             if (!recovered) {
-                // 有界恢复每 retry_interval 秒建一次 27 个多起点假设, glibc 会把释放的
-                // 临时点云留在 arena 里 (实机 LOST 时 RSS 涨到 2GB). 失败后主动 trim.
+                // 恢复失败后主动 trim: glibc 会把临时点云留在 arena 里
+                // (实机 LOST 时 RSS 涨到 2GB).
                 malloc_trim(0);
             }
             if (recovered) {
@@ -2432,12 +2554,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     } else if (m_seed_pending) {
         m_seed_pending = false;
         m_soft_land_frames = 20;   // 种子刚生效: 前 20 帧限幅, 别让首帧跳变写进地图
-        if (!res.converged || res.fitness < m_global_cfg.reloc_accept_score) {
+        if (!res.converged || res.fitness < m_global_cfg.relocation_fitness) {
             seed_failed = true;
             m_status = INIT;
             std::ostringstream os;
             os << "initial seed rejected: fitness=" << res.fitness
-               << " < " << m_global_cfg.reloc_accept_score << " -> INIT";
+               << " < " << m_global_cfg.relocation_fitness << " -> INIT";
             diag::log('W', "LocPipeline", os.str());
             FlightRecorder::instance().event("SEED_REJECT", os.str());
             m_last_match = res;
@@ -2574,7 +2696,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
     // ---- 子图模式: 周期性对 overlay 做探测匹配 (重锚尝试, ELite zip-up) ----
     // overlay 恢复的判据: 用当前位姿对 overlay(底图+w) 目标做一次完整匹配,
-    // fitness 达 reloc_accept_score 即重锚; 子图漂移用 Δ 修正 (zip-up)。
+    // fitness 达 relocation_fitness 即重锚; 子图漂移用 Δ 修正 (zip-up)。
     if (m_on_submap && --m_probe_countdown <= 0) {
         m_probe_countdown = m_probe_period;
         CloudType::Ptr probe_target = buildAnchoredTarget(guess);
@@ -2582,7 +2704,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_matcher->setTarget(probe_target);
             MatchResult pr;
             if (m_matcher->match(scan, out_pose, pr) && pr.converged &&
-                pr.fitness >= m_global_cfg.reloc_accept_score) {
+                pr.fitness >= m_global_cfg.relocation_fitness) {
                 // ★段级出口修正 (SessionMap v2, ROLL Fig.3 简化闭式解): 用可靠
                 // 匹配位姿作末端约束, 把整段关键帧的漂移按序号线性摊平 ——
                 // 替代 v1 的单点 zip-up 刚性搬移 (漂移大时会撕裂子图内部)。
@@ -3040,20 +3162,20 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     //   LOCALIZED -> LOST：连续 lost_patience 帧 fitness < lost_fitness
     // credible_fitness 是高置信/恢复线；lost_fitness 才是丢失线。
     // 位于 lost_fitness 与 credible_fitness 之间只是 degraded/coast，不能判丢。
-    // ---- 种子观察窗: 刚进入 LOCALIZED 后前 N 帧仍按 reloc_accept_score 复核 ----
+    // ---- 种子观察窗: 刚进入 LOCALIZED 后前 N 帧仍按 relocation_fitness 复核 ----
     // 弱种子 (0.80~0.84 的局部自洽) 能过 first-frame 校验, 但撑不过几百帧;
     // 这里在锁定初期就要求同样的高置信, 失败直接退回 INIT 等下一次真种子.
     if (m_status == LOCALIZED && m_scrutiny_frames > 0) {
         const bool scrutiny_ok =
             res.converged && accepted &&
-            res.fitness >= m_global_cfg.reloc_accept_score;
+            res.fitness >= m_global_cfg.relocation_fitness;
         if (!scrutiny_ok) {
             m_status = INIT;
             m_scrutiny_frames = 0;
             m_healthy_streak = 0;
             std::ostringstream os;
             os << "seed scrutiny failed: fitness=" << res.fitness
-               << " < " << m_global_cfg.reloc_accept_score
+               << " < " << m_global_cfg.relocation_fitness
                << " (converged=" << (res.converged ? 1 : 0)
                << " accepted=" << (accepted ? 1 : 0) << ") -> INIT";
             diag::log('W', "LocPipeline", os.str());
@@ -3130,10 +3252,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
     } else {
         // INIT / 重定位后：必须连续高置信帧才恢复 LOCALIZED。
-        // 恢复/重定位接受线保持独立参数 global.reloc_accept_score，不要用 credible_fitness 下盖。
+        // 恢复/重定位接受线保持独立参数 global.relocation_fitness，不要用 credible_fitness 下盖。
         const bool init_healthy =
             !seed_failed && res.converged && accepted &&
-            res.fitness >= m_global_cfg.reloc_accept_score;
+            res.fitness >= m_global_cfg.relocation_fitness;
         if (init_healthy) {
             ++m_healthy_streak;
             m_unhealthy_streak = 0;

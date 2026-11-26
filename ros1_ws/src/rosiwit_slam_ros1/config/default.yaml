@@ -13,7 +13,7 @@
 # ============================================================================
 #  [fitness 阈值链 —— 2026-10-17 僵尸带事故的教训]
 #   accept.min_coverage(0.60) = monitor.lost_fitness(0.60)
-#     < monitor.credible_fitness(0.85) ≤ global.reloc_accept_score(0.85)   必须保持此序!
+#     < monitor.credible_fitness(0.85) ≤ global.relocation_fitness(0.85)   必须保持此序!
 #   2026-11-19: 阈值链保持原值(0.35 / 0.75 / 0.85 / 0.85);
 #   本次只新增 GenZ 加权开关与地面约束开关的显式写法, 不动阈值。
 #   - min_coverage: 单帧匹配被接受的最低覆盖率。过高 -> 有效匹配被拒, 位姿冻结;
@@ -21,7 +21,7 @@
 #   - credible_fitness: 健康线。低于它连续 lost_patience 帧 -> 判丢重定位
 #     (统一替代原 mediocre_patience / lost_patience_low / coast_patience 三条路径);
 #     有界恢复必须达到此线才算成功, 否则放行全局重定位。
-#   - reloc_accept_score: 冷启动接受线。低于它宁可保持 LOST(界面如实), 不接受弱锁。
+#   - relocation_fitness: 冷启动接受线。低于它宁可保持 LOST(界面如实), 不接受弱锁。
 #     ★ 想"只接受高置信"改这里, 不要改 min_coverage —— 对应厂家 th_fitness_relocalization。
 #   观察 min_coverage 是否卡得太死: grep 'LocProbe' <log> | grep -i reject
 #  [匹配捕获-滤波螺旋]
@@ -421,11 +421,21 @@ localization:
 
   # ---- 全局重定位 (relocalizer: scan_context | bbs | fpfh_ransac) ----
   global:
+
+    # ---- 一阶段: 网格搜索恢复 (判丢后先于全局重定位; 替代原 27 起点有界恢复) ----
+    # 以当前位姿为中心 ±radius, 扫描对工作图 2D 栅格暴力打分 (±180° yaw 全覆盖),
+    # 前 K 个候选做 GICP 精配; 接受线 = relocation_fitness。粗筛 ~0.1s, 精配 ~1s。
+    grid_recovery_radius: 6.0         # 平移搜索半径 (m): 给的位姿偏差在此范围内可修回
+    grid_recovery_cell: 0.3           # 工作图 2D 栅格 (m)
+    grid_recovery_step_xy: 0.4        # 平移搜索步长 (m)
+    grid_recovery_yaw_step_deg: 8.0   # yaw 搜索步长 (deg)
+    grid_recovery_candidates: 6       # 精配候选数
+    grid_recovery_min_score: 0.35     # 粗筛最低命中率
     min_score: 0.5
     # 2026-11-26 临时 0.85 -> 0.70: 工作图经一晚行驶有侵蚀, 该区域 fitness 上限
     # ~0.74, 0.85 会让种子永远被拒 (INIT 无法恢复)。位姿放准后 0.70 可锁;
     # 工作图重新生成/重 mapping 后改回 0.85。
-    reloc_accept_score: 0.70    # 2026-11-26 临时 0.85 -> 0.70: 工作图一晚行驶有侵蚀,
+    relocation_fitness: 0.70    # 2026-11-26 临时 0.85 -> 0.70: 工作图一晚行驶有侵蚀,
                                 # 该区域 fitness 上限 ~0.74, 位姿放准后 0.70 可锁;
                                 # 工作图重生成/重 mapping 后改回 0.85
     top_k: 5                    # 全局重定位多候选数 (按分数降序精配, 命中 0.95+ 即停)
@@ -519,7 +529,7 @@ localization:
                               # 接受线都拿不到才判丢". 原来 0.75 会把 0.65~0.74 这种
                               # 位姿正常、只是场景变了的过渡段直接判丢。
     localized_patience: 3     # 连续健康帧数达到此值 -> LOCALIZED
-    scrutiny_frames: 0        # 进入 LOCALIZED 后前 N 帧仍要求 >= reloc_accept_score, 撑不住退回 INIT
+    scrutiny_frames: 0        # 进入 LOCALIZED 后前 N 帧仍要求 >= relocation_fitness, 撑不住退回 INIT
                               # (治"0.80~0.84 局部自洽假锁"); 0=关闭
                               # 2026-11-21 实机: 本站稳态 fitness 0.80~0.87, 用 0.85 复核会在
                               # 0.80~0.85 抖动时反复 LOCALIZED<->INIT, 反而把定位抖丢, 故默认关闭.
@@ -546,7 +556,7 @@ localization:
     #   （registration_metrics: evaluateCoverage, 最多采样 3000 点）
     #   低于它 -> 本帧配准结果**不采纳**，位姿靠 odom/预测顶（不报丢失，但也不更新）
     # 实测覆盖率典型 0.43（范围 0.43~0.99）。0.5 就会拒掉有效匹配 -> 保持 0.35。
-    # 想"只接受高置信重定位"改 localization.global.reloc_accept_score，
+    # 想"只接受高置信重定位"改 localization.global.relocation_fitness，
     # 对应厂家 xz_3d_slam 的 th_fitness_relocalization(=0.89)。
     min_coverage: 0.6    # ★2026-11-24: 0.7->0.6 (0.65~0.7 不再冻结位姿); 2026-11-23: 正确匹配实测 0.93~0.96, 转弯错帧 0.39~0.54
     residual_margin: 0.10

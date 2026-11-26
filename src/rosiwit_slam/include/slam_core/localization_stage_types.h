@@ -230,10 +230,21 @@ struct MotionPriorConfig {
 // ==================== 全局重定位配置 ====================
 struct GlobalLocalizeConfig {
     double min_score = 0.5;          // 命中最低分
-    double reloc_accept_score = 0.85; // 冷启动接受线: 低于此值宁可保持 LOST 也不给假位姿
+    double relocation_fitness = 0.85; // 冷启动接受线: 低于此值宁可保持 LOST 也不给假位姿
                                        // (2026-10-17: 曾用 min_score*0.9=0.45, 0.68 的弱
                                        //  重定位被反复接受 -> 僵尸循环: 接受->10s判丢->再接受)
     int    top_k = 5;                // 全局重定位多候选数
+    // ---- 一阶段: 网格搜索恢复 (替代原 27 起点有界恢复) ----
+    // 以当前位姿为中心, 扫描对工作图 2D 栅格做暴力平移×旋转搜索 (哈希/稠密栅格
+    // 打分, 不用 GICP), 取前 K 个候选做 GICP 精配; 接受线 = relocation_fitness。
+    // 旧实现: ±1.5m/±10° 共 27 起点, 每点一次完整 GICP (170ms~1.8s), 3s 预算内
+    // 跑不完, 且搜不到 2~3m 级的位姿误差 —— 实机"永远恢复不了"的根因之一。
+    double grid_radius = 6.0;         // 平移搜索半径 (m)
+    double grid_cell = 0.3;           // 工作图 2D 栅格边长 (m)
+    double grid_step_xy = 0.4;        // 平移搜索步长 (m)
+    double grid_yaw_step_deg = 8.0;   // yaw 搜索步长 (deg), 覆盖 ±180°
+    int    grid_candidates = 6;       // 粗筛后做 GICP 精配的候选数
+    double grid_min_score = 0.35;     // 粗筛最低命中率 (低于此不进精配)
     int    retry_interval = 30;      // 丢失后重定位尝试间隔(帧, 节流)
     double voxel_resolution = 0.3;   // 精配准降采样
     double icp_max_corr_dist = 2.0;
@@ -381,7 +392,7 @@ struct MonitorConfig {
     //   INIT/LOCALIZED -> LOST 需要连续 lost_patience 帧不健康。
     // 原 mediocre_patience / lost_patience_low / coast_patience 已合并到 lost_patience。
     int    localized_patience = 3;   // 连续健康帧数 -> LOCALIZED
-    // 种子观察窗: 刚进入 LOCALIZED 的前 N 帧, 仍要求 fitness >= reloc_accept_score
+    // 种子观察窗: 刚进入 LOCALIZED 的前 N 帧, 仍要求 fitness >= relocation_fitness
     // (而不是只要求 >= lost_fitness)。撑不住就退回 INIT —— 专治
     // "0.80~0.84 的局部自洽假锁": 假锁撑不过观察窗, 真锁不会掉。0=关闭。
     int    scrutiny_frames = 0;      // 默认关闭: 本站稳态 fitness 0.80~0.87, 用 0.85 复核会抖动

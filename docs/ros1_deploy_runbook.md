@@ -129,7 +129,7 @@ initial seed rejected: fitness=0.775956 < 0.8 -> INIT        # App 种子被拒,
 [DropProbe] fitness=0.79~0.84 correction_m=0.03 target_points=12195 accepted=1
 ```
 
-**机制**：种子接受线 `global.reloc_accept_score=0.80`，而种子判定只看**局部** GICP fitness
+**机制**：种子接受线 `global.relocation_fitness=0.80`，而种子判定只看**局部** GICP fitness
 （局部子图仅 1.2 万点）。在错误位姿附近只要有可配的墙面，fitness 就能到 0.80~0.84 →
 被判"定位成功"；之后局部子图围绕错误位姿裁剪，永远"自洽"，不会自己掉出来。
 
@@ -138,7 +138,7 @@ initial seed rejected: fitness=0.775956 < 0.8 -> INIT        # App 种子被拒,
 ```bash
 C=/opt/ros/melodic/share/rosiwit_slam_ros1/config/default.yaml
 sudo cp -a $C $C.bak_080
-sudo sed -i 's/reloc_accept_score: 0.80/reloc_accept_score: 0.85/' $C   # 与厂商 th_fitness_relocalization 对齐
+sudo sed -i 's/relocation_fitness: 0.80/relocation_fitness: 0.85/' $C   # 与厂商 th_fitness_relocalization 对齐
 sudo systemctl restart xzrobot
 ```
 
@@ -146,7 +146,7 @@ sudo systemctl restart xzrobot
 阈值链保持合法：`min_coverage 0.35 < lost 0.75 < credible 0.80 ≤ reloc_accept 0.85`。
 
 **代价**：如果真实位姿也只能到 0.82 左右，会一直 LOST（宁可失败也不给错位姿）。
-此时要么 App 里人工给一次初始位姿，要么把 `reloc_accept_score` 降到 0.82 再观察。
+此时要么 App 里人工给一次初始位姿，要么把 `relocation_fitness` 降到 0.82 再观察。
 
 **根治方向（尚未做）**：种子接受加"连续 N 帧 healthy 才报 LOCALIZED"或引入全局一致性
 （scan-context 多候选 / 更大范围校验），而不是单帧局部 fitness。

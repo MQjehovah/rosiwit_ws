@@ -73,7 +73,7 @@ localization_lost 0 次（>0.75 就不算丢）→ 位姿在漂但界面不报�
 | `mapping.frontend.enable_genz_weight` | true（+planarity 0.1/kernel 0.5/near_dist_sq 1.0） | GenZ 自适应加权（从 genz 那次移植） |
 | `accept.degeneracy_partial_update` | **true** | 退化方向按可观测度缩放。启用后**某一时段** correction 降到 0.03~0.07 m，但后续一轮又回到 2.5~5.8 m，**未稳定复现** |
 | `matcher.max_correspondence_dist` | 2.5 → **1.2** | 不许配到几米外"长得一样"的位置 |
-| `monitor.credible_fitness` / `global.reloc_accept_score` | 0.85 → **0.80** | 贴合实测稳态 0.81~0.87 |
+| `monitor.credible_fitness` / `global.relocation_fitness` | 0.85 → **0.80** | 贴合实测稳态 0.81~0.87 |
 | `global.input.gyro_scale` | 1.0 → **1.036** | 万集 IMU 偏航角速度低估 3.5%（配置注释即指出"掉头/绕圈航向误差放大的关键"）；**尚未验证** |
 
 待办：

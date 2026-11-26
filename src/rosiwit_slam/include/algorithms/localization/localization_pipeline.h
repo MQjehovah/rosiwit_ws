@@ -283,11 +283,11 @@ private:
     CloudType::Ptr m_cached_target;
     PoseStamped m_cached_target_pose;
     bool m_has_cached_target = false;
-    /// setInitPose 后首帧必须通过 global.reloc_accept_score；失败仍留在 INIT，
+    /// setInitPose 后首帧必须通过 global.relocation_fitness；失败仍留在 INIT，
     /// 由 lost_patience 连续帧计数决定何时 LOST。
     bool m_seed_pending = false;
     /// 种子观察窗剩余帧数: 进入 LOCALIZED 时置为 monitor.scrutiny_frames,
-    /// 期间每帧都要求 fitness >= reloc_accept_score, 否则退回 INIT。
+    /// 期间每帧都要求 fitness >= relocation_fitness, 否则退回 INIT。
     int m_scrutiny_frames = 0;
     uint64_t m_cached_target_rev = 0;   // 建缓存时的维护层版本号(overlay 变更 -> 失效)
     // 子图窗口锚 (2026-11-25): 只有"已验证帧"才把窗口中心吸附到匹配位姿,

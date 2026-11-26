@@ -134,7 +134,7 @@ for (const auto& p : base->points) {
 accept.min_coverage      0.60   (单帧采纳)
 monitor.lost_fitness     0.60   (连续 30 帧 < 此值 -> LOST)
 monitor.credible_fitness 0.85   (健康 / 写图 / 有界恢复)
-global.reloc_accept_score 0.85  (种子/重定位)
+global.relocation_fitness 0.85  (种子/重定位)
 submap.anchor_fitness_base 0.55 (低于 -> 桥接)
 submap.anchor_enter_frames 5    (fitness 连续 5 帧 <0.85 才切桥接)
 submap.anchor_return_frames 10  (连续 10 帧好才回锚定)
