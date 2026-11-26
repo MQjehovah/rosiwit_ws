@@ -56,6 +56,7 @@ void EkfPoseFusion::reset(const PoseStamped& pose) {
     m_P.setConstant(0.05);
     m_time = pose.time;
     m_valid = true;
+    m_anchor_yaw_next = true;   // 注入/重初始化后: 第一帧高匹配可直接锚定 yaw
     m_have_imu = false;
     m_last_imu_time = -1.0;
     m_gyro_z = 0.0;
@@ -311,10 +312,14 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
         gain(3 + i) = std::min(m_cfg.gain_trans, m_P(3 + i) / (m_P(3 + i) + Rdiag(3 + i)));
     }
     Eigen::Vector3d d_rot = gain.head<3>().asDiagonal() * e_rot;
-    // yaw: 互补滤波小增益 (见 PoseFusionConfig::yaw_gain 注释)。匹配的 yaw 是
-    // "谷底自由"量 (长墙/对称区), 单位增益反馈 = 把 GICP 恒定侧偏积分成棘轮。
-    // x/y(roll/pitch) 保持原增益 —— 它们由重力观测约束, 不受此病理影响。
-    d_rot.z() = m_cfg.yaw_gain * e_rot.z();
+    // yaw: 注入后的第一帧高匹配全量采纳 (地图一致解), 之后互补滤波小增益。
+    // 同一位置: 第一帧是在"无地图一致估计"下的观测 (重定位语义), 且不构成
+    // 反馈回路; 之后的帧才受"谷底自由 + 恒定侧偏"棘轮病理影响。
+    if (m_anchor_yaw_next) {
+        m_anchor_yaw_next = false;   // 只此一次
+    } else {
+        d_rot.z() = m_cfg.yaw_gain * e_rot.z();
+    }
 
     Eigen::Vector3d d_trans = gain.tail<3>().asDiagonal() * e_trans;
     // ---- 单帧修正限幅 (核心: 一次错配不可能瞬移) ----

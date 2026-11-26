@@ -39,6 +39,7 @@ using diag::FlightRecorder;
 //   ROSIWIT_DUMP_FRAME=1 : 首个好帧/坏帧转储 PCD 到 /tmp/slamdump{,_good} (离线对账)
 // 回放/实车排查时给节点置位即可, 不用重编 (逐帧对账: /tmp/frame_lag.py).
 static const bool kLocProbe = std::getenv("ROSIWIT_LOC_PROBE") != nullptr;
+static const bool kYawInjectDiag = true;   // 临时: 注入位姿一致性诊断
 static const bool kDumpFrame = std::getenv("ROSIWIT_DUMP_FRAME") != nullptr;
 
 namespace {
@@ -1942,6 +1943,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
         if (pending_init) {
             m_out_lim_bypass = true;
+            // ★时间戳修复 (2026-11-26 根因): App/服务的 initial_pose 不带 stamp
+            //   (t=0)。以 t=0 重锚先验/融合后, 它们的预测/历史插值从 0 基准外推,
+            //   在"注入 -> 第一帧"之间凭空产生 0.5~4.5° 的 yaw 偏差 (随停留时间变化),
+            //   随后系统靠收敛慢慢修正 —— 收敛期间写进子图的几度就是实机看到的
+            //   "激光 vs 子图小角度 + 远处偏差 + fitness 缓慢衰减"。
+            if (!(pending_pose.time > 0.0) || pending_pose.time > f.end_time + 0.5)
+                pending_pose.time = f.end_time;
             m_pose = pending_pose;
             // 关键: 外部注入新位姿 (重定位 / 2D 约束) 后, 旧的"最近被接受位姿"
             // 锚点已经无效. 不清掉它会导致位姿被硬拉回去:
@@ -1957,6 +1965,17 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_has_cached_target = false;   // 旧缓存目标建在旧位姿附近
             m_deskew_prev_valid = false;   // 旧解的位姿不能当新解的去畸变起点
             m_yaw_trace_n = 0;             // 诊断: 逐帧 yaw 轨迹 250 帧
+            if (kYawInjectDiag) {
+                auto yw = [](const PoseStamped& q) {
+                    return std::atan2(q.rot(1, 0), q.rot(0, 0)) * 57.2957795;
+                };
+                std::cout << std::fixed << std::setprecision(3)
+                          << "[InjectDiag] pending_pose yaw=" << yw(pending_pose)
+                          << " x=" << pending_pose.trans.x() << " y=" << pending_pose.trans.y()
+                          << " t=" << pending_pose.time
+                          << " | m_pose yaw=" << yw(m_pose) << " t=" << m_pose.time
+                          << std::endl;
+            }
             // ★重定位/位姿注入: 子图关键帧按旧解注册, 新解下不清理就是"叠图"——
             //   同一面墙在子图里两份 (相差 Δ), 联合目标两层互相打架, 且
             //   popLeavingKfs 会把两层都 mergeChunk 进 w 账本, ghost 墙永久固化。
@@ -2173,6 +2192,23 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_matcher->setTarget(target);
         }
         const bool ok = m_matcher->match(scan, guess, res);
+        // ★4DOF 投影 (2026-11-26 根因): 地图系滚转/俯仰基准与重力有 ~39° 偏置
+        //   (本图 roll 恒 39.37°, up=(-0.02,0.63,0.77)), 而 GICP 做 6DOF 解 ——
+        //   roll/pitch 的微小修正经姿态复合以 sin(39°)≈0.63 的耦合漏进 yaw,
+        //   每帧 +0.2~0.4° 恒定侧偏 -> 闭环积分成慢漂 (实测 5min 1.1°, 远处
+        //   偏差 + fitness 0.92->0.84)。地机跟踪本应在 4DOF (x,y,z,yaw) 内。
+        //   这里把"匹配相对预测的姿态增量"投影到 yaw 轴: 保留绝对姿态 (含图的
+        //   滚转基准), 丢弃 roll/pitch 伪增量, yaw 不再被污染。
+        if (ok && res.converged) {
+            const M3D dR = res.pose.rot * guess.rot.transpose();
+            Eigen::Quaterniond qd(dR);
+            if (qd.w() < 0.0) qd.coeffs() *= -1.0;
+            double s_ = std::sqrt(qd.x() * qd.x() + qd.y() * qd.y() + qd.z() * qd.z());
+            double yaw_delta = 0.0;
+            if (s_ > 1e-12) yaw_delta = 2.0 * std::atan2(qd.z(), qd.w());
+            const M3D Rz = Eigen::AngleAxisd(yaw_delta, V3D::UnitZ()).toRotationMatrix();
+            res.pose.rot = Rz * guess.rot;
+        }
         // 软着陆: 目标组成刚变(锚定<->桥接)时, 匹配解可能相对预测跳 3~5°.
         // 直接把跳变写进位姿, 会让"跳变前/跳变后"写进地图的点岔开几度(实车叠图).
         // 这里把单帧修正限到 1°/5cm, 用 10 帧爬到新解; 位姿连续 -> 地图不再分两层.
@@ -2644,6 +2680,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     std::cout << os.str() << std::endl;
                 }
             }
+        }
+        // ★写图一致性: 融合位姿与本次匹配的差。收敛窗口内 (重定位后融合按
+        //   yaw_gain 逼近地图值时) 这个差是 1~2°; 以未收敛位姿写图会把收敛
+        //   过程的几度烙进子图 (实机测: 激光 vs 子图恒差 1.25°, 2026-11-26)。
+        {
+            const M3D Rg = out_pose.rot * res.pose.rot.transpose();
+            m_sm_match_gap_deg =
+                std::acos(std::max(-1.0, std::min(1.0, (Rg.trace() - 1.0) * 0.5))) *
+                57.2957795;
+            m_sm_match_gap_m = (out_pose.trans - res.pose.trans).norm();
         }
         // 先验锚定融合输出 (yaw 已被互补增益过滤, 原始匹配不再驱动闭环)
         {

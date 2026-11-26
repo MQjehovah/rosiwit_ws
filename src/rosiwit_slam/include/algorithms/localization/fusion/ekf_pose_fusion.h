@@ -27,6 +27,10 @@ public:
 
     void onImu(const IMUSample& s) override;
     void setGyroBiasZ(double b) override { m_gyro_bias_z = b; }
+    // 重定位语义: 注入位姿只是假设, 注入后的第一次高匹配才是地图一致的解 ——
+    // 该帧 yaw 全量采纳 (不是门控, 是"锚定第一观测"), 之后恢复互补增益防棘轮。
+    // 否则 5% 增益需要 1~2s 收敛, 期间的写图会把几度烙进子图 (实机 1.25° 偏移).
+    void anchorYawOnNextMatch() { m_anchor_yaw_next = true; }
     void onOdom(const PoseStamped& odom) override;
     void onRelative(const PoseStamped& pose,
                     const Eigen::Matrix<double, 6, 6>& cov) override;
@@ -70,6 +74,7 @@ private:
     bool   m_have_imu = false;
     double m_gyro_z = 0.0;
     double m_gyro_bias_z = 0.0;
+    bool m_anchor_yaw_next = true;   // 下一帧 yaw 全量采纳 (注入/初始化后)
     Eigen::Vector3d m_w_s = Eigen::Vector3d::Zero();  // 传感器系角速度 (杆臂轨道项用)
     // 机体 up 方向 (IMU 系). 本车 IMU 随雷达俯装 ~38°, gyro.z **不是**偏航角速度,
     // 必须投影: yaw_rate = ω·up_body. 直接用 gyro.z 会让转弯转速少算 ~22%

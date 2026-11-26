@@ -184,6 +184,8 @@ private:
     double m_anchor_w_support_min = 0.30;
     int    m_seg_merge_tick = 0;          // 走出覆盖的段级融合节拍
     int    m_yaw_trace_n = -1;           // 重定位后逐帧 yaw 轨迹 (诊断, <0=关)
+    double m_sm_match_gap_deg = 1e9;     // 融合位姿 vs 匹配的角差 (写图一致性判据)
+    double m_sm_match_gap_m = 1e9;       // 同上, 平移差
     double m_out_wz_max = 1.6;            // 输出位姿偏航角速度上限 (rad/s ≈91°/s)
     // 软着陆: 种子/重定位刚生效后的前 N 帧限制单帧修正量(1°/5cm),
     // 防止首帧跳变把点云写岔成两层(机器人侧新增, 锚定切换路径由 zip-up 即时搬移, 不再使用)
