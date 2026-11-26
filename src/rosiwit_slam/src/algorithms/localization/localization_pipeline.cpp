@@ -5,6 +5,7 @@
 #include "algorithms/localization/localization_factory.h"
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/maintainer/insert_gate.h"
+#include "algorithms/localization/maintainer/annotate_slice.h"
 #include "algorithms/localization/registration_metrics.h"
 #include "algorithms/map_store/map_store_factory.h"
 #include <unordered_map>
@@ -20,6 +21,9 @@
 #include <cstdlib>
 #include <cstdio>
 #include <sys/stat.h>
+#include <unistd.h>       // nice(): 工作图落盘线程降优先级 (只需放宽, 无需特权)
+#include <cerrno>
+#include <cstring>
 #include <pcl/io/pcd_io.h>
 #include <pcl/registration/gicp.h>
 #include <pcl/common/transforms.h>
@@ -679,6 +683,11 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         }
         m_maintainer->configure(m_maintainer_cfg);
     }
+    // 工作图落盘线程 (见头文件 m_save_thread 注释)。可 join 的成员线程, 析构时先停再收。
+    if (!m_save_thread.joinable()) {
+        m_save_stop = false;
+        m_save_thread = std::thread(&LocalizationPipeline::mapSaveWorker, this);
+    }
 
     {
         std::lock_guard<std::mutex> lk(m_global_mu);
@@ -714,10 +723,219 @@ LocalizationPipeline::~LocalizationPipeline() {
     }
     m_target_cv.notify_all();
     if (m_target_thread.joinable()) m_target_thread.join();
+    // 工作图落盘线程: 在维护器/地图 (下面成员析构) 之前退出。在途落盘在下一个
+    // 阶段边界放弃 (m_save_abort), 不带着半截状态写盘。
+    {
+        std::lock_guard<std::mutex> lk(m_save_mu);
+        m_save_stop = true;
+        m_save_abort = true;
+        m_save_req = false;
+    }
+    m_save_cv.notify_all();
+    if (m_save_thread.joinable()) m_save_thread.join();
     // 工作图 (map.overlay.pcd) 由 1 小时定时器全量落盘, 析构时不再单独写 overlay
     // (只剩一个工作文件, 没有增量日志)。
 }
 
+namespace {
+// 工作图落盘分片: 跟踪线程每帧花在 w 标注上的时间预算, 以及看表的粒度。
+// 260 万点实测 ~33ns/点: 8192 点 ≈ 0.3ms; 每帧 ≤2.3ms -> 约 40 帧 (4s) 标完。
+constexpr double kSaveSliceBudgetMs = 2.0;
+constexpr size_t kSaveSubChunk = 8192;
+}  // namespace
+
+// ★工作图落盘 (2026-11-26 根因: 每小时整点丢失)。见头文件 m_save_thread 注释 —— 两线程分工:
+//
+//   落盘线程 (本函数)              跟踪线程 (帧尾, advanceSaveAnnotation)
+//   ----------------------------   ----------------------------------------------
+//   (1) 底图降采样 (只读不变量)
+//   ---- 交接 snap ----------->    (2) 每帧 <=2ms 分片查账本写 w (持维护器锁, 段级)
+//                                  (3) 做完: reclaim + overlay 快照 (overlay 分块小)
+//   <------------- 交接 snap ----
+//   (4) 压缩 / 叠加 / 写盘 (tmp + rename)
+//
+//   本线程**从不访问维护器** (账本 / overlay), 与跟踪线程之间没有账本锁的竞争; 两个线程
+//   只通过 m_save_mu 保护的状态交接 cloud 指针, 同一时刻只有一个线程访问它。
+//   锁序: 处理阶段不持 m_save_mu 去拿任何别的锁; 跟踪线程投递/交接时只持 m_save_mu。
+void LocalizationPipeline::mapSaveWorker() {
+    // 降优先级 (nice +10, 放宽无需特权): 多秒的 CPU 活不与跟踪线程抢核。
+    nice(10);
+    std::unique_lock<std::mutex> lk(m_save_mu);
+    for (;;) {
+        m_save_cv.wait(lk, [this] { return m_save_stop || m_save_req; });
+        if (m_save_stop) break;
+        m_save_req = false;
+        m_save_busy = true;
+        m_save_stage = SaveStage::Downsample;
+        const CloudType::Ptr map = m_save_req_map;
+        m_save_req_map.reset();
+        const std::string working_map = m_save_req_path;
+        const double vox = m_save_req_vox;
+        lk.unlock();
+
+        using clk = std::chrono::steady_clock;
+        auto ms_between = [](clk::time_point a, clk::time_point b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        const auto t_start = clk::now();
+        double ms_vox = 0.0, ms_ann = 0.0, ms_merge = 0.0, ms_io = 0.0;
+        int ann_frames = 0;
+        size_t n_total = 0, n_ov = 0;
+        bool ok = false;
+        std::string err;
+        const char* stage = "voxel";
+        // ★线程里绝不能让异常逃逸 (= std::terminate = 整个进程 abort; 2026-11-25 实机:
+        //   工作图属主 root, open 失败 -> pcl::IOException -> 节点自杀)。失败只记日志。
+        try {
+            if (!map || map->empty()) throw std::runtime_error("map missing");
+            // (1) 底图降采样到 voxel: 与 overlay 同网格、与匹配口径一致 (只读, 无锁)
+            CloudType::Ptr base_snap = voxelDownsample(map, static_cast<float>(vox));
+            ms_vox = ms_between(t_start, clk::now());
+            // 交接给跟踪线程: 它在自己的帧预算内分片查账本 (见 advanceSaveAnnotation)
+            {
+                std::lock_guard<std::mutex> g(m_save_mu);
+                if (m_save_abort) throw std::runtime_error("aborted");
+                m_save_snap = base_snap;
+                m_save_next = 0;
+                m_save_slice_frames = 0;
+                m_save_slice_ms = 0.0;
+                m_save_stage = SaveStage::Annotate;
+                m_save_annotating.store(true);
+            }
+            stage = "annotate";
+            lk.lock();
+            m_save_cv.wait(lk, [this] {
+                return m_save_stop || m_save_abort || m_save_stage != SaveStage::Annotate;
+            });
+            const bool handover = (m_save_stage == SaveStage::Write);
+            ann_frames = m_save_slice_frames;
+            ms_ann = m_save_slice_ms;
+            CloudType::Ptr ov;
+            base_snap.reset();
+            if (handover) {
+                // 跟踪线程标注完成: 快照归本线程
+                m_save_stage = SaveStage::Write;
+                base_snap = m_save_snap;
+                m_save_snap.reset();
+                ov = m_save_overlay;
+                m_save_overlay.reset();
+            }
+            lk.unlock();
+            if (!handover) throw std::runtime_error("aborted");
+            const auto t_merge = clk::now();
+            // (4) 压缩 (去掉 w<=0 的点): 不需要账本
+            IMapMaintainer::compactAnnotated(*base_snap);
+            if (ov && !ov->empty()) {
+                suppressBaseByOverlay(base_snap, ov, vox);   // 叠加处由 overlay 点取代底图点
+                *base_snap += *ov;
+            }
+            n_total = base_snap->size();
+            n_ov = ov ? ov->size() : 0;
+            const auto t_io = clk::now();
+            ms_merge = ms_between(t_merge, t_io);
+            stage = "write";
+            // 临时文件 + rename: 工作图文件要么是旧的完整版, 要么是新的完整版
+            const std::string tmp = working_map + ".tmp";
+            try {
+                pcl::io::savePCDFileBinary(tmp, *base_snap);
+                if (std::rename(tmp.c_str(), working_map.c_str()) != 0)
+                    throw std::runtime_error(std::string("rename: ") + std::strerror(errno));
+            } catch (...) {
+                std::remove(tmp.c_str());
+                throw;
+            }
+            ms_io = ms_between(t_io, clk::now());
+            ok = true;
+        } catch (const std::exception& e) {
+            err = e.what();
+        } catch (...) {
+            err = "unknown exception";
+        }
+        if (ok) {
+            std::cout << "[working_map] saved: " << working_map << " (" << n_total
+                      << " pts; overlay=" << n_ov << " vox_ms=" << ms_vox
+                      << " ann_ms=" << ms_ann << " ann_frames=" << ann_frames
+                      << " merge_ms=" << ms_merge << " io_ms=" << ms_io << " bg=1)" << std::endl;
+        } else if (err == "aborted") {
+            std::cout << "[working_map] save aborted at " << stage
+                      << " (map switched / shutting down)" << std::endl;
+        } else {
+            std::cerr << "[working_map] save FAILED at " << stage << ": " << err
+                      << " (检查目录属主/磁盘空间)" << std::endl;
+        }
+        {
+            std::lock_guard<std::mutex> g(m_save_mu);
+            m_save_snap.reset();
+            m_save_overlay.reset();
+            m_save_next = 0;
+            m_save_stage = SaveStage::Idle;
+            m_save_annotating.store(false);
+            m_save_busy = false;
+        }
+        m_save_cv.notify_all();   // abortMapSaveAndWait / 析构在等这一刻
+    }
+}
+
+// 跟踪线程帧尾调用 (持 m_state_mu, 与换图互斥): 有在途的落盘任务时, 在时间预算内推进
+// 一片 w 标注。只有本线程写账本, 所以读账本的这一步放在这里 —— 落盘线程不碰它。
+void LocalizationPipeline::advanceSaveAnnotation() {
+    using clk = std::chrono::steady_clock;
+    CloudType::Ptr snap;
+    size_t next = 0;
+    {
+        std::lock_guard<std::mutex> lk(m_save_mu);
+        if (m_save_stage != SaveStage::Annotate || m_save_abort) {
+            m_save_annotating.store(false);   // 已被换图 / 析构作废
+            return;
+        }
+        snap = m_save_snap;
+        next = m_save_next;
+    }
+    if (!snap || !m_maintainer) return;
+    const size_t n = snap->size();
+    // 预算内推进: 每子段 <= kSaveSubChunk 点 (~0.5ms), 段间看表, 超预算即停 ——
+    // 每帧新增耗时确定有界 (annotate_slice.h)
+    const auto t0 = clk::now();
+    next = annotateWithinBudget(*m_maintainer, *snap, next, kSaveSliceBudgetMs, kSaveSubChunk);
+    const auto t1 = clk::now();
+    const double used_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    const bool finished = (next >= n);
+    CloudType::Ptr ov;
+    double extra_ms = 0.0;
+    if (finished) {
+        // 账本相关的收尾同样只在本线程做: 回收已删除体素的点 + overlay 快照 (overlay 分块小)
+        m_maintainer->reclaim();
+        ov = m_maintainer->snapshotOverlay();
+        extra_ms = std::chrono::duration<double, std::milli>(clk::now() - t1).count();
+    }
+    std::lock_guard<std::mutex> lk(m_save_mu);
+    m_save_next = next;
+    ++m_save_slice_frames;
+    m_save_slice_ms += used_ms + extra_ms;
+    if (finished && m_save_stage == SaveStage::Annotate) {   // 没被换图 / 析构作废
+        m_save_overlay = ov;
+        m_save_stage = SaveStage::Write;                     // 交接: 快照归落盘线程
+        m_save_annotating.store(false);
+        m_save_cv.notify_all();
+        std::cout << "[working_map] annotation done: " << n << " pts in " << m_save_slice_frames
+                  << " frames, " << m_save_slice_ms << " ms on tracking thread" << std::endl;
+    }
+    m_save_annotating.store(m_save_stage == SaveStage::Annotate);   // 没做完才继续; 被作废则停
+}
+
+void LocalizationPipeline::abortMapSaveAndWait() {
+    // 调用方: setMapImpl / setMapData (持 m_state_mu, 与 onLidar 互斥 —— 所以现在没有分片
+    // 在跑)。换图会重置维护器并换掉 m_map: 作废未开始的请求, 让落盘线程离开 (它只持有
+    // cloud 指针, 不碰维护器), 在途的分片任务随 m_save_stage 复位而作废。
+    std::unique_lock<std::mutex> lk(m_save_mu);
+    m_save_req = false;
+    m_save_req_map.reset();
+    m_save_abort = true;
+    m_save_annotating.store(false);
+    m_save_cv.notify_all();
+    m_save_cv.wait(lk, [this] { return !m_save_busy; });
+    m_save_abort = false;
+}
 // ★后台建目标: 裁剪工作图 (provider 只读; 账本有锁) + 建新匹配器实例。
 // 跟踪线程继续用旧目标 (裁剪半径 60m, 重建半径 15m, 余量充足), 建好后帧边界切换。
 void LocalizationPipeline::targetBuildWorker() {
@@ -873,6 +1091,7 @@ void LocalizationPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar
 void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     // 换图会替换 local_map/matcher/store/maintainer; 与 onLidar 互斥.
     std::lock_guard<std::mutex> state_lk(m_state_mu);
+    abortMapSaveAndWait();   // 让在途落盘离开、作废在途分片 (见 mapSaveWorker)
     m_cancel_set_map.store(false);
     // 分段计时: /switch_map 曾实测 48s, 必须知道钱花在哪 (每阶段一行, 只在切图时打)
     const auto t_total0 = std::chrono::steady_clock::now();
@@ -1007,6 +1226,7 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
 
 void LocalizationPipeline::setMapData(const MapData& data) {
     std::lock_guard<std::mutex> state_lk(m_state_mu);
+    abortMapSaveAndWait();   // 让在途落盘离开、作废在途分片 (见 mapSaveWorker)
     m_out_lim_bypass = true;   // 换图: 输出限速旁路 (新图坐标系)
     m_cancel_set_map.store(false);
     m_status = INIT;
@@ -3786,56 +4006,47 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // 每点 intensity = w (w==0 的点不写)。没有增量日志。
                 // map.pcd 只做原图备份, 永不修改。
                 // 变化判据 = maintainer revision() (几何/权重有增删才 +1)。
+                    // 工作图落盘的分片标注 (见头文件 m_save_thread 注释): 有在途任务时, 每帧
+                    // 在时间预算内推进一片; 无任务时只是一次原子读。
+                    if (m_save_annotating.load(std::memory_order_acquire)) advanceSaveAnnotation();
                 if (m_maintainer && m_ever_localized && m_map &&
                     !m_map->empty() && m_initialized && accepted) {
-                    static std::atomic<bool> wm_saving(false);
+                    // ★2026-11-26 根因 (每小时整点丢失): 快照构建 (回收 / 全量底图降采样 /
+                    //   w 标注 / overlay 快照) 原在**这里同步执行** —— 注释写着"后台线程",
+                    //   实际只有最后的写盘在后台。8xA55 满载时一帧 ~4s (实机 s2m_ms_ema=297,
+                    //   queue=1): 跟踪线程停摆期间 IMU 线程照常积分, 恢复后新息超门 -> LOST。
+                    //   现在跟踪线程只投递请求 + 每帧一片有界的 w 标注 (见 advanceSaveAnnotation),
+                    //   其余 (降采样 / 压缩 / 合并 / 写盘) 由 mapSaveWorker 执行。
                     static std::chrono::steady_clock::time_point wm_last =
                         std::chrono::steady_clock::now();
                     static uint64_t wm_last_rev = 0;
-                    const uint64_t rev = m_maintainer ? m_maintainer->revision() : 0;
+                    const uint64_t rev = m_maintainer->revision();
                     const auto now = std::chrono::steady_clock::now();
                     const bool due = (m_working_map_save_min > 0.0) &&
                         (now - wm_last) >= std::chrono::duration_cast<std::chrono::seconds>(
                                               std::chrono::duration<double, std::ratio<60>>(
                                                   m_working_map_save_min));
                     const bool changed = (rev != wm_last_rev);
-                    if (!wm_saving.load() && due && changed) {
-                        wm_last = now;            // 先占位, 防止重复触发
-                        wm_last_rev = rev;
-                        wm_saving.store(true);
-                        // 存图时刻回收已删除体素的点 (#6): 1h 一次, 全量扫描成本可忽略,
-                        // 之后 snapshotOverlay / 工作图落盘都是干净的。
-                        m_maintainer->reclaim();
-                        // 全量工作图只有一张: 底图先降采样到 voxel(0.3) —— 与 overlay 同网格、
-                        // 与匹配口径一致; 再写 intensity=w (w==0 的点不写 = 跨会话删除生效)。
-                        const double vox = m_maintainer_cfg.voxel > 0 ? m_maintainer_cfg.voxel : 0.3;
-                        CloudType::Ptr base_snap =
-                            voxelDownsample(m_map, static_cast<float>(vox));
-                        if (m_maintainer) m_maintainer->annotateBaseWeights(*base_snap);
-                        CloudType::Ptr ov = m_maintainer ? m_maintainer->snapshotOverlay()
-                                                         : nullptr;
-                        const std::string working_map = workingMapPath(m_map_path);
-                        std::thread([base_snap, ov, working_map, vox, wm_saving]() mutable {
-                            // ★detached 线程里绝不能让异常逃逸: 一旦抛出 = std::terminate
-                            // = 整个进程 abort (2026-11-25 实机: sudo 恢复的工作图属主 root,
-                            // open 失败 -> pcl::IOException -> 节点自杀, curr_scan_point/
-                            // slam/info 全部消失)。任何失败只记日志, 本帧放弃落盘。
-                            try {
-                                if (ov && !ov->empty()) {
-                                    suppressBaseByOverlay(base_snap, ov, vox);
-                                    *base_snap += *ov;
-                                }
-                                pcl::io::savePCDFileBinary(working_map, *base_snap);
-                                std::cout << "[working_map] saved: " << working_map << " ("
-                                          << base_snap->size() << " pts)" << std::endl;
-                            } catch (const std::exception& e) {
-                                std::cerr << "[working_map] save FAILED: " << e.what()
-                                          << " (检查文件属主/磁盘空间)" << std::endl;
-                            } catch (...) {
-                                std::cerr << "[working_map] save FAILED (unknown)" << std::endl;
-                            }
-                            wm_saving.store(false);
-                        }).detach();
+                    bool posted = false;
+                    if (due && changed) {
+                        std::lock_guard<std::mutex> sk(m_save_mu);
+                        if (m_save_thread.joinable() && !m_save_busy && !m_save_req) {
+                            wm_last = now;            // 先占位, 防止重复触发
+                            wm_last_rev = rev;
+                            // 请求时刻的快照: 定位期间底图内容不变 (换图会换新指针);
+                            // 路径同理 —— 执行时 m_map_path 可能已指向另一张图。
+                            m_save_req_map = m_map;
+                            m_save_req_path = workingMapPath(m_map_path);
+                            m_save_req_vox =
+                                m_maintainer_cfg.voxel > 0 ? m_maintainer_cfg.voxel : 0.3;
+                            m_save_req = true;
+                            posted = true;
+                        }
+                    }
+                    if (posted) {
+                        m_save_cv.notify_one();
+                        std::cout << "[working_map] save requested (rev=" << rev
+                                  << ") -> background thread" << std::endl;
                     }
                 std::ostringstream qs;
                 qs.setf(std::ios::fixed);

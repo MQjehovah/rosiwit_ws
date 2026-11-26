@@ -205,6 +205,11 @@ if(CATKIN_ENABLE_TESTING)
     if(TARGET test_overlay_map_maintainer)
         target_link_libraries(test_overlay_map_maintainer rosiwit_slam_ros1_lib)
     endif()
+    # 工作图落盘端到端 (2026-11-26): 落盘线程 + 跟踪线程分片标注的两线程交接
+    catkin_add_gtest(test_working_map_save test/test_working_map_save.cpp)
+    if(TARGET test_working_map_save)
+        target_link_libraries(test_working_map_save rosiwit_slam_ros1_lib)
+    endif()
 
     catkin_add_gtest(test_planar_constraint ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_planar_constraint.cpp)
     if(TARGET test_planar_constraint)

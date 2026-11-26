@@ -753,25 +753,31 @@ bool OverlayMapMaintainer::loadLocked(const std::string& path) {
 // ---- 统一工作图: 一个文件同时装几何和权重 (intensity = w) ----
 // 落盘前调用: 给底图点写上它所在体素的 w, 丢弃 w==0 的点 -> 跨会话"删除"生效,
 // 不需要额外的 sidecar 文件 (w 就在 PCD 里, 和 overlay 的表示完全一致)。
-void OverlayMapMaintainer::annotateBaseWeights(CloudType& cloud) const {
+void OverlayMapMaintainer::annotateBaseWeightsRange(CloudType& cloud, size_t begin,
+                                                    size_t end) const {
+    // 只写 intensity, 不改点数: 调用方可以把它切成有界的小片分多次调用 (工作图落盘:
+    // 账本只有跟踪线程在写, 需要账本的这一步就由跟踪线程在自己的帧预算内分片完成,
+    // 见 localization_pipeline.cpp mapSaveWorker 上方注释)。持锁范围 = 调用方给的这一片。
     if (m_voxel <= 0.0) return;
     const int w_default = m_cfg.base_voxel_w > 0 ? m_cfg.base_voxel_w : 128;
-    CloudType kept;
-    kept.reserve(cloud.size());
-    for (const auto& p : cloud.points) {
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+    std::lock_guard<std::recursive_mutex> lk(m_mu);
+    auto& pts = cloud.points;
+    end = std::min(end, pts.size());
+    for (size_t i = begin; i < end; ++i) {
+        PointType& p = pts[i];
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
+            p.intensity = kAnnotateDrop;
+            continue;
+        }
         const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
                                     static_cast<int>(std::floor(p.y / m_voxel)),
                                     static_cast<int>(std::floor(p.z / m_voxel)));
         int w = w_default;
         auto it = m_persistency.find(vk);
         if (it != m_persistency.end()) w = it->second.w;
-        if (w <= 0) continue;                       // 已删除: 不写进工作图
-        PointType q = p;
-        q.intensity = static_cast<float>(std::min(255, w));
-        kept.push_back(q);
+        p.intensity = (w <= 0) ? kAnnotateDrop                      // 已删除: 不写进工作图
+                               : static_cast<float>(std::min(255, w));
     }
-    cloud.swap(kept);
 }
 
 // 匹配目标用: 剔除 w 已降到 0 的底图点 (墙挪了/拆了 -> 射线证据判死)。

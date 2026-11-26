@@ -79,7 +79,7 @@ public:
         std::lock_guard<std::recursive_mutex> lk(m_mu);
         m_base_embedded = on;
     }
-    void annotateBaseWeights(CloudType& cloud) const override;
+    void annotateBaseWeightsRange(CloudType& cloud, size_t begin, size_t end) const override;
     CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const override {
         std::lock_guard<std::recursive_mutex> lk(m_mu);
         return filterDeadBaseLocked(cloud);

@@ -152,6 +152,43 @@ private:
     // 工作图 provider 访问锁: 后台建目标线程 (getLocalMap) 与跟踪线程的提交钩子
     // (addWorldPoint 往同一关键帧点云 push_back) 并发 -> 串行化。
     std::mutex m_local_map_mu;
+    // ★工作图落盘 (2026-11-26 根因: 整点丢失) —— 两线程分工, 需要账本的步骤只由
+    //   跟踪线程做。
+    //   原实现把整个快照构建 (回收 / 全量底图降采样 / w 标注 / overlay 快照) 放在跟踪
+    //   线程的帧尾同步执行, 8xA55 满载时一帧 ~4s -> 帧流中断 -> IMU 线程空转积分 ->
+    //   恢复后新息超门 -> LOST。
+    //   但也不能简单丢给后台线程: w 标注要读维护器账本 (260 万条), 账本每帧被跟踪线程
+    //   写。本机 (load 8~10) 上只要两个线程在这把锁上撞一次, 前台被唤醒就要 3~26ms
+    //   (futex 唤醒 -> 被调度的延迟); "分段持锁 + 睡眠让出"只是降低碰撞概率的时序启发式。
+    //   所以让后台线程**根本不碰账本**:
+    //     落盘线程: 底图降采样 (只读, 定位期间不变量) -> 等跟踪线程 -> 压缩 / 合并 / 写盘;
+    //     跟踪线程: 每帧尾在时间预算内 (~2ms) 推进一片 w 标注, 做完再拍 overlay 快照。
+    //   没有跨线程的账本读, 没有睡眠, 每帧新增耗时确定有界 (260 万点 ≈ 40 帧 ≈ 4s)。
+    //   快照 cloud 在两个线程间按阶段交接, 同一时刻只有一个线程访问。
+    //   换图 (setMapImpl/setMapData, 持 m_state_mu —— 与 onLidar 互斥) 先等落盘线程
+    //   离开 (它只持有 cloud 指针), 再清掉在途的分片任务。
+    //   可 join 的成员线程 (不是 detach): 析构时先停再收。
+    enum class SaveStage { Idle, Downsample, Annotate, Write };
+    std::thread m_save_thread;
+    std::mutex m_save_mu;             // 保护下面所有 m_save_* 状态 (阶段之间交接用, 处理期间不持)
+    std::condition_variable m_save_cv;
+    bool m_save_stop = false;         // 析构: 退出 worker
+    bool m_save_req = false;          // 待处理请求 (未开始)
+    bool m_save_busy = false;         // 落盘进行中 (任一阶段)
+    bool m_save_abort = false;        // 换图 / 析构: 放弃在途落盘 (不写盘)
+    SaveStage m_save_stage = SaveStage::Idle;
+    std::atomic<bool> m_save_annotating{false};   // 快路径: 帧尾是否要推进分片 (无任务时零开销)
+    CloudType::Ptr m_save_req_map;    // 请求时刻的底图指针 (定位期间内容不变)
+    std::string m_save_req_path;      // 请求时刻的工作图路径
+    double m_save_req_vox = 0.3;
+    CloudType::Ptr m_save_snap;       // 底图快照: Annotate 阶段归跟踪线程, Write 阶段归落盘线程
+    size_t m_save_next = 0;           // 下一个待标注点
+    CloudType::Ptr m_save_overlay;    // 跟踪线程在标注完成时拍的 overlay 快照
+    int m_save_slice_frames = 0;      // 诊断: 标注用了多少帧
+    double m_save_slice_ms = 0.0;     // 诊断: 分片累计耗时
+    void mapSaveWorker();             // 落盘线程
+    void advanceSaveAnnotation();     // 跟踪线程帧尾: 预算内推进一片
+    void abortMapSaveAndWait();
     // [DumpTurn] 转弯诊断: 原始 IMU 环形缓冲 (~2s), 转储时写盘供离线复现去畸变
     std::deque<IMUSample> m_imu_ring;
     std::mutex m_imu_ring_mu;

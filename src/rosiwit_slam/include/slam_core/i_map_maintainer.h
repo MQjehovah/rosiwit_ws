@@ -58,8 +58,34 @@ public:
     /// 载入的底图云是否是"工作图"(map.overlay.pcd): 是则 intensity 就是 w。
     /// 必须在 setBaseMap 之前调用 (setBaseMap 用它解释 intensity)。
     virtual void setBaseEmbeddedWeights(bool /*on*/) {}
-    /// 把 w 写进 intensity 并丢弃 w==0 的点 (工作图落盘前调用)。
-    virtual void annotateBaseWeights(CloudType& /*cloud*/) const {}
+    /// 分片标注时给"要丢弃的点"打的标记 (合法 w >= 1, 所以 <0 不会与合法值混淆)。
+    static constexpr float kAnnotateDrop = -1.0f;
+    /// 把 w 写进 intensity 并丢弃 w==0 的点 (整云一次完成: 分片标注 + 压缩)。
+    /// 需要账本 —— 只在账本的写者线程 (跟踪线程 / 换图线程) 上调用。
+    virtual void annotateBaseWeights(CloudType& cloud) const {
+        annotateBaseWeightsRange(cloud, 0, cloud.size());
+        compactAnnotated(cloud);
+    }
+    /// 分片标注: 对 points[begin, end) 逐点写 intensity = min(255, w); w<=0 或非有限点打
+    /// kAnnotateDrop 标记。**不压缩、不改点数** —— 调用方可以在自己的时间预算内分多次
+    /// 调用 (每片的持锁范围就是这一片), 最后再 compactAnnotated()。
+    /// 线程安全: 段内持锁。
+    virtual void annotateBaseWeightsRange(CloudType& /*cloud*/, size_t /*begin*/,
+                                          size_t /*end*/) const {}
+    /// 压缩: 去掉带 kAnnotateDrop 标记的点 (原地, 写指针恒不超过读指针)。
+    /// 不需要账本, 不持锁 —— 可以放在后台线程 / 任意时刻做。
+    static void compactAnnotated(CloudType& cloud) {
+        auto& pts = cloud.points;
+        size_t keep = 0;
+        for (size_t i = 0; i < pts.size(); ++i) {
+            if (pts[i].intensity < 0.0f) continue;
+            if (keep != i) pts[keep] = pts[i];
+            ++keep;
+        }
+        pts.resize(keep);
+        cloud.width = static_cast<uint32_t>(keep);
+        cloud.height = 1;
+    }
     /// 剔除 w 已降到 0 的底图点 (匹配目标用); 无死亡体素时原样返回。
     virtual CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const { return cloud; }
     /// 回收已删除体素的点 (落盘时刻调用一次, 批量压缩)。
