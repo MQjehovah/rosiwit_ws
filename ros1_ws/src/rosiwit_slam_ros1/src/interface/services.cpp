@@ -319,6 +319,10 @@ bool Ros1SlamInterface::handleSwitchMap(
                     return false;   // 需要真的重载
                 }
                 applyInitPose(cmd.initial_pose, true);
+                // ★同图快路径也必须同步 map_name: 否则 App 用正确名称重切同一张图时,
+                //   /slam/info 的 map_name 停留在上一次(可能错的)名称 (2026-11-26 实机:
+                //   手动切图错传 uuid 后, 再传正确名称 "1楼" 被快路径忽略)。
+                setMapName(cmd.map_name);
                 // 同一张图也补一次 nav 载图: nav 可能比 SLAM 晚重启, 不能只靠首次切图。
                 notifyNavSwitchMap(xzMapBase(cmd.map_dir), cmd);
                 return true;

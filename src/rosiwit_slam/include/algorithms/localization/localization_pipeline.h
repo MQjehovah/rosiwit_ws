@@ -261,6 +261,12 @@ private:
     /// 避免运动先验在无修正情况下一直积分, 越漂越远(实机曾漂到离图 96m, 从此再也匹配不上)。
     PoseStamped m_last_accepted;
     bool m_have_last_accepted = false;
+    // 去畸变起点: 上一帧**输出**位姿 (帧末更新)。
+    // m_pose 在本帧匹配后已被覆盖成本帧位姿 (time == f.end_time), 写图路径
+    // end=res.pose(time==f.end_time) 时 "end<=start" 会让 deskew 静默跳过 ——
+    // 写进子图的扫描从未去畸变, 旋转时整片糊 (2026-11-26 根因)。
+    PoseStamped m_deskew_prev_pose;
+    bool m_deskew_prev_valid = false;
     bool m_deskew_enabled = true;
     double m_deskew_max_gap = 0.30;       // 上一接受帧到当前帧起始的最大间隔(s)
     double m_deskew_min_angle_deg = 0.2;  // 小于此旋转量不做补偿

@@ -1275,10 +1275,20 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
     if (!m_deskew_enabled || !f.cloud || f.cloud->empty()) return f.cloud;
     if (!m_have_last_accepted && m_pose.time < 0.0) return f.cloud;
 
-    // 优先用上一帧输出位姿；它即使本帧未 accepted 也仍然跟着先验走。
-    // 只用 last_accepted 会在连续拒绝时很快超过 max_gap，去畸变随即失效。
-    const PoseStamped* start = &m_last_accepted;
-    if (m_pose.time > start->time) start = &m_pose;
+    // 起点: 必须是严格早于 end_pose 的位姿。m_pose 在本帧匹配后已是 f.end_time
+    // (写图路径 end=res.pose 时 time 相同), 旧逻辑取 m_pose 会让 end<=start
+    // 直接跳过 —— 写子图的扫描从未去畸变, 旋转时整片糊 (2026-11-26 根因)。
+    // 候选按"最新且严格早于 end"选: 上一帧输出位姿 > 最后接受位姿 > m_pose。
+    const PoseStamped* start = nullptr;
+    if (m_deskew_prev_valid && m_deskew_prev_pose.time < end_pose.time - 1e-6)
+        start = &m_deskew_prev_pose;
+    if (m_last_accepted.time >= 0.0 && m_last_accepted.time < end_pose.time - 1e-6 &&
+        (!start || m_last_accepted.time > start->time))
+        start = &m_last_accepted;
+    if (m_pose.time >= 0.0 && m_pose.time < end_pose.time - 1e-6 &&
+        (!start || m_pose.time > start->time))
+        start = &m_pose;
+    if (!start) return f.cloud;   // 无可用起点 (首帧/注入后): 不补偿, 保底
     const PoseStamped& start_pose = *start;
     const double span = f.end_time - f.start_time;
     const double gap = f.start_time - start_pose.time;
@@ -1933,6 +1943,18 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_escape_prev_valid = false;
             m_have_submap_anchor = false;   // 子图窗口锚一起失效
             m_has_cached_target = false;   // 旧缓存目标建在旧位姿附近
+            m_deskew_prev_valid = false;   // 旧解的位姿不能当新解的去畸变起点
+            // ★重定位/位姿注入: 子图关键帧按旧解注册, 新解下不清理就是"叠图"——
+            //   同一面墙在子图里两份 (相差 Δ), 联合目标两层互相打架, 且
+            //   popLeavingKfs 会把两层都 mergeChunk 进 w 账本, ghost 墙永久固化。
+            //   注入解也可能是错的 (混叠场景实测), 刚性搬移 (applyWorldCorrection)
+            //   会把整个补丁钉到错误解上 —— 直接废弃重建最稳:
+            //   注入通常发生在 LOST/INIT, 旧子图本来就不可信; 新解被接受后
+            //   几帧内重积累 (open 门: LOCALIZED + accepted + fitness>=write_bar)。
+            {
+                std::lock_guard<std::mutex> lk(m_session_map_mu);
+                if (m_session_map.active()) m_session_map.deactivate();
+            }
             // 注入位姿后的门限放行 (见 acceptMatch): 让被 reset 掉的先验偏置重新学回来.
             m_maha_bypass_frames = 5;
             {
@@ -3282,6 +3304,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 std::cout << qs.str() << std::endl;
         }
     }
+    // 去畸变起点: 帧末才更新 (写图路径的 prepareScan 还在上面用本帧的起点)。
+    m_deskew_prev_pose = out_pose;
+    m_deskew_prev_valid = true;
 }
 
 ILocalization::Status LocalizationPipeline::getStatus() {

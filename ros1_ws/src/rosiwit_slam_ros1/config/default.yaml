@@ -637,7 +637,9 @@ localization:
     radius: 60.0
     voxel: 0.3
     cell: 10.0
-    persist_hits: 1           # 新结构确认票数(按 persistency_unit 计): 2026-11-25 起一律 view;
+    persist_hits: 3           # 新结构确认票数(按 persistency_unit 计): 1->3 (2026-11-26)
+                            # 动态过滤最小实现: 瞬时物/行人单帧观测不再提交进 w 账本,
+                            # 静态结构 3 帧 (~0.2s) 确认无感; 站立者靠对称雕刻自愈;
                               # 1 = 首次看到即提交 (质量由 rmse/corr/fitness 门兜底)
     # 工作图落盘: 只有一张全量工作图 (map.overlay.pcd), 1 小时一次, 没变化不写。
     refresh_frames: 300       # ★联动: 周期性用叠加层刷新全局重定位库(环境变化防失效)

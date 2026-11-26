@@ -465,7 +465,7 @@ struct MaintainerConfig {
     double radius = 60.0;            // 叠加层按位姿取用半径(m)
     double voxel = 0.3;              // 叠加层体素(去重)
     double cell = 10.0;              // 叠加层空间分块边长(m)
-    int    persist_hits = 1;         // 体素需被观测到的最少次数才并入(2026-11-25: 一律 view+1)
+    int    persist_hits = 3;         // 体素需被观测到的最少次数才并入(2026-11-26: 1->3 动态过滤)
     int    refresh_frames = 0;       // 每 N 帧用叠加层刷新全局重定位器 (0=关闭)
     int    decay_frames = 0;         // 叠加层体素超过该帧数未再观测则移除 (0=不衰减)
     // ---- A 阶段: 体素可信度 w (方案 v3 §3) ----
