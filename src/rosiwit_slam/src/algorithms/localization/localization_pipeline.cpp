@@ -1862,7 +1862,16 @@ CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose
     }
     if (m_maintainer) {
         // 统一工作图: 剔除 w 已降到 0 的底图点 (墙挪了/拆了, 射线证据判死)。
+        const size_t pre = target ? target->size() : 0;
         target = m_maintainer->filterDeadBase(target);
+        // [TargetBuild] 每次建目标都打 (目标按 cache_move 重建半径滚动, 行驶中约 20s 一次):
+        //   这份裁剪里有多少点因账本判死而被剔除 —— "账本是否在侵蚀底图"在匹配目标上的直接度量
+        //   (tools/drive_report.py)。上面的 [LocProbe] 是每 50 次采样一条的裁剪点数, 不能和之后
+        //   某帧的 target_points 配对: 两个数常常来自不同位置的两份裁剪。
+        std::ostringstream tb;
+        tb << "[TargetBuild] pre=" << pre << " removed=" << (pre - (target ? target->size() : 0))
+           << " pose=(" << pose.trans.x() << ", " << pose.trans.y() << ")";
+        std::cout << tb.str() << std::endl;
     }
     // ★w-map (2026-11-26): 匹配目标 = 工作图本体 (含已提交并升格的结构),
     // 不再有独立的 overlay 增量层 —— 新结构提交时直接进工作图云 (见

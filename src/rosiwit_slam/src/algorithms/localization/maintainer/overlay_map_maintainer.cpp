@@ -687,7 +687,26 @@ void OverlayMapMaintainer::collectNovel(const PoseStamped& pose, const CloudType
         n.cz = cz;
         novel.emplace(vk, n);
     }
-    if (novel.empty()) return;
+    // [诊断] 每 100 帧打一次分支计数 (定位"新结构不沉淀")。是全局状态, 不依赖本帧有没有新结构候选
+    // (下面 novel.empty() 会提前返回), 所以先定义、两条路径都调。
+    auto log_status = [&]() {
+        if (m_frame % 100 != 0) return;
+        std::cout << "[maint] scan=" << m_dbg_scan
+                  << " seen=" << m_dbg_seen
+                  << " base=" << m_dbg_base
+                  << " kd=" << m_dbg_kd
+                  << " cand=" << novel.size()
+                  << " cluster_rej=" << m_dbg_cluster
+                  << " votes=" << m_novel_votes
+                  << " commits=" << m_novel_committed
+                  // 判死的底图体素总数 (全局, 精确): 账本是否在侵蚀底图的直接度量
+                  // (tools/drive_report.py)。行驶几分钟就从 0 涨到上万 = 在删真实的墙。
+                  << " dead_base=" << m_dead_base.size() << std::endl;
+    };
+    if (novel.empty()) {
+        log_status();
+        return;
+    }
 
     const uint32_t frame = static_cast<uint32_t>(m_frame);
     for (const auto& kv : novel) {
@@ -721,17 +740,7 @@ void OverlayMapMaintainer::collectNovel(const PoseStamped& pose, const CloudType
             ++m_novel_committed;
         }
     }
-    // [诊断] 每 100 帧打一次分支计数 (定位"新结构不沉淀")
-    if (m_frame % 100 == 0) {
-        std::cout << "[maint] scan=" << m_dbg_scan
-                  << " seen=" << m_dbg_seen
-                  << " base=" << m_dbg_base
-                  << " kd=" << m_dbg_kd
-                  << " cand=" << novel.size()
-                  << " cluster_rej=" << m_dbg_cluster
-                  << " votes=" << m_novel_votes
-                  << " commits=" << m_novel_committed << std::endl;
-    }
+    log_status();
 }
 
 void OverlayMapMaintainer::flushBuffer() {
