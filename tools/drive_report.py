@@ -293,6 +293,7 @@ def report_erosion(log):
         # 近似 (旧日志): [LocProbe] 是每 50 次调用采样一条的"裁剪点数", 目标按 15m 重建半径滚动 ——
         # 它和之后某帧的 target_points 常常不是同一份裁剪, 差值带有位置造成的误差 (几个百分点)。
         print('近似 (旧日志, 没有 [TargetBuild]): 采样的裁剪点数 -> 1~20s 后目标点数, 两个数可能来自不同位置的裁剪')
+        print('  (11-27 新账本那趟, 这个近似值给出 "判死 47~1109", 而落盘文件逐点对比的确切结果是 0 —— 以 tools/wmap_diff.py 为准)')
         rows = []
         for b in log.builds:
             d = next((d for d in log.drops if b['t'] + 1.0 <= d['t'] <= b['t'] + 20.0), None)
