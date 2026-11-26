@@ -66,6 +66,8 @@ public:
     virtual void reclaim() {}
     /// w-map: 新结构升格回调 (管道用它同步分块缓存; 默认无操作)
     virtual void setCommitHook(std::function<void(const Eigen::Vector3d&, float)>) {}
+    /// w-map 段级融合: 走出子图覆盖的关键帧一次性「命中+雕刻+新结构」记账
+    virtual void mergeChunk(const PoseStamped& /*pose*/, const CloudType::Ptr& /*world*/) {}
 
     /// A 阶段(影子): 最近一次"位姿可信"帧的扫描点里, 落在 overlay 体素上的点中
     /// w >= maintainer.persistency_anchor 的占比 (0~1)。只统计, 不参与决策。

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <pcl/io/pcd_io.h>
+#include <pcl/common/transforms.h>
 
 #ifdef USE_GTSAM
 #include <gtsam/geometry/Pose3.h>
@@ -628,6 +629,31 @@ double OverlayMapMaintainer::persistencyCoverage(const PoseStamped& pose,
 void OverlayMapMaintainer::popOverlayDelta(CloudType::Ptr& out) {
     out = m_pending_store;
     m_pending_store.reset();
+}
+
+// w-map 段级融合 (走出子图覆盖时的一次性记账):
+//   命中票  -> 该段观测到的地图体素 w += gain (确认/成熟)
+//   自由票  -> 射线穿过但段内无命中的底图体素 w -= gain (挪走/消失的衰减)
+//   新结构  -> 离底图 > delta_min 的点按 persist_hits 提交 (融进工作图)
+// 每种证据均与命中/雕刻同源, 只是打包一次性处理。
+
+
+// w-map 段级融合 (走出子图覆盖时的一次性记账):
+//   命中票  -> 该段观测到的地图体素 w += gain (确认/成熟)
+//   自由票  -> 射线穿过但段内无命中的底图体素 w -= gain (挪走/消失的衰减)
+//   新结构  -> 离底图 > delta_min 的点按 persist_hits 提交 (融进工作图)
+// 每种证据均与命中/雕刻同源, 只是打包一次性处理。
+void OverlayMapMaintainer::mergeChunk(const PoseStamped& pose, const CloudType::Ptr& world) {
+    if (!world || world->empty()) return;
+    // world -> body (用该块自己的注册位姿逆变换), 之后走与普通帧完全相同的账目
+    Eigen::Matrix4d Ti = Eigen::Matrix4d::Identity();
+    Ti.block<3, 3>(0, 0) = pose.rot.transpose();
+    Ti.block<3, 1>(0, 3) = -pose.rot.transpose() * pose.trans;
+    CloudType::Ptr body(new CloudType());
+    pcl::transformPointCloud(*world, *body, Ti);
+    observeHits(pose, body);      // 命中票 (w += gain, view 门控)
+    rayCarve(pose, body);         // 自由票 (w -= gain, 对称计票)
+    collectNovel(pose, body);     // 新结构提交 (persist_hits 门控)
 }
 
 CloudType::Ptr OverlayMapMaintainer::snapshotOverlay() {

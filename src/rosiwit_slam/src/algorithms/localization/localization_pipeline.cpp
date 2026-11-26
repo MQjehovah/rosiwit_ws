@@ -3185,6 +3185,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                             res.fitness >= write_bar && scan_map && !scan_map->empty()) {
                             m_session_map.update(*scan_map, res.pose);
                         }
+                        // ★走出子图覆盖的旧关键帧: 段级一次性「融合+雕刻」进 w 账本。
+                        // 子图覆盖内纯几何跟踪 (零账本交互); 只有整段退出时才与
+                        // w 账本结算一次 —— 用户口径: 走出子图 = 融合 + 雕刻一次。
+                        if (++m_seg_merge_tick % 25 == 0) {
+                            auto leaving = m_session_map.popLeavingKfs(out_pose.trans);
+                            for (auto& kf : leaving)
+                                if (m_maintainer) m_maintainer->mergeChunk(kf.pose, kf.world);
+                        }
                     }
                     session_map_active = m_session_map.active() ? 1 : 0;
                     session_map_size = m_session_map.size();

@@ -84,13 +84,18 @@ public:
   void deactivate();
 
 
-private:
+  /// 段内关键帧 (注册位姿 + 世界系点云)。走出覆盖时整体交给 w 账本融合。
   struct EpKf {
     PoseStamped pose;          // 注册时的估计位姿 (world)
-    CloudType::Ptr world;      // 世界系点云 (观测时变换, 含 intensity=0)
+    CloudType::Ptr world;      // 世界系点云 (观测时变换)
     Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
   };
 
+  /// 走出子图覆盖的关键帧整体退出 (由管道取走做一次性融合+雕刻)。
+  /// 只按 XY 距离判断 (z 由车辆高度决定, 不参与)。
+  std::vector<EpKf> popLeavingKfs(const Eigen::Vector3d& cur_xy);
+
+private:
   void rebuildView() const;
   void pruneKfs();
 

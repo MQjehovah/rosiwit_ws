@@ -55,6 +55,9 @@ public:
     /// 回收已删除体素的点 (w 降到 0 / 硬删的那些): 由落盘时刻调用 (1h 一次)。
     /// 逐条删除要扫整格点云, 太贵; 攒到落盘时全量扫一遍, 成本可忽略。
     void reclaim() override { compactCells(); }
+    /// w-map 段级融合: 把一块 (位姿+世界系点云) 走完整账目 ——
+    /// 命中票 / 自由票(雕刻) / 新结构提交, 一次完成。用于子图关键帧走出覆盖时。
+    void mergeChunk(const PoseStamped& pose, const CloudType::Ptr& world);
     /// 提交钩子: 新结构升格时回调 (w-map 模式下管道用它把点插进工作图分块缓存)
     void setCommitHook(std::function<void(const Eigen::Vector3d&, float)> hook) {
         m_commit_sink = std::move(hook);

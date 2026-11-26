@@ -147,6 +147,27 @@ void SessionMap::applyCorrection(const Eigen::Matrix4d& C) {
 
 
 
+std::vector<SessionMap::EpKf> SessionMap::popLeavingKfs(const Eigen::Vector3d& cur_xy) {
+    // 走出覆盖: 关键帧质心距当前机器人位置 > radius×1.2 → 整帧退出。
+    // 退出前管道会对每帧做一次「融合+雕刻」(w 账本记账), 然后这些帧不再属于子图。
+    std::vector<EpKf> out;
+    const double r2 = (cfg_.radius * 1.2) * (cfg_.radius * 1.2);
+    std::vector<EpKf> keep;
+    keep.reserve(m_kfs.size());
+    for (auto& k : m_kfs) {
+        const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
+        if ((c.head<2>() - cur_xy.head<2>()).squaredNorm() > r2) out.push_back(std::move(k));
+        else keep.push_back(std::move(k));
+    }
+    if (!out.empty()) {
+        m_kfs.swap(keep);
+        view_dirty_ = true;
+        std::cout << "[submap] leaving chunk: " << out.size() << " kfs merged out (remained "
+                  << m_kfs.size() << ")" << std::endl;
+    }
+    return out;
+}
+
 CloudType::Ptr SessionMap::pointsWorld() const {
     CloudType::Ptr out(new CloudType());
     if (!active_ || m_kfs.empty()) return out;
