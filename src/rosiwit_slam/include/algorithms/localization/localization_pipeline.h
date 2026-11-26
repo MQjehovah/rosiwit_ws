@@ -127,6 +127,30 @@ private:
     std::unique_ptr<ILocalMapProvider>    m_local_map;
     std::unique_ptr<IScanMatcher>         m_matcher;
     std::unique_ptr<IScanMatcher>         m_global_matcher;   // 全局候选精配专用，独立线程使用
+
+    // ★目标双缓冲 (2026-11-26 架构修复): 地图静态, 建目标 (裁剪+KD树+GICP协方差,
+    //   110ms~1.8s) 放后台线程; 跟踪线程只做对齐, 建好在帧边界原子切换。
+    //   旧实现每移动 0.5m 在跟踪线程同步重建 -> 周期性卡死 -> 被迫抽稀目标 ->
+    //   覆盖率评分失真 (0.93 -> 0.84)。
+    std::unique_ptr<IScanMatcher>         m_matcher_spare;   // 后台建好的新目标
+    std::unique_ptr<IScanMatcher>         m_matcher_aux;     // 恢复/假设种子专用, 不碰跟踪目标
+    std::thread m_target_thread;                              // 后台建目标线程
+    std::mutex m_target_mu;
+    std::condition_variable m_target_cv;
+    bool m_target_stop = false;
+    bool m_target_req = false;            // 有建目标请求
+    bool m_target_ready = false;          // spare 已就绪, 待跟踪线程切换
+    bool m_target_building = false;
+    PoseStamped m_target_req_center;
+    uint64_t m_target_req_rev = 0;
+    bool m_spare_valid = false;
+    CloudType::Ptr m_spare_target;
+    PoseStamped m_spare_center;
+    uint64_t m_spare_rev = 0;
+    void targetBuildWorker();
+    // 工作图 provider 访问锁: 后台建目标线程 (getLocalMap) 与跟踪线程的提交钩子
+    // (addWorldPoint 往同一关键帧点云 push_back) 并发 -> 串行化。
+    std::mutex m_local_map_mu;
     std::unique_ptr<ILocalizationMonitor> m_monitor;
     std::unique_ptr<IMapMaintainer>       m_maintainer;   // 第6阶段: 非破坏性叠加地图维护
     // 第7阶段: 位姿融合 (direct=直通 / eskf=IMU+odom 推进 + 匹配观测限幅修正)

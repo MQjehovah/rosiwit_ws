@@ -623,8 +623,22 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     if (!m_fusion) { std::cerr << "[LocPipeline] unknown pose_fusion: " << m_fusion_name << std::endl; return false; }
 
     m_matcher->configure(m_matcher_cfg);
+    // 目标双缓冲: aux 匹配器 (恢复/假设种子专用) + 后台建目标线程
+    m_matcher_aux = LocalizationFactory::createMatcher(m_matcher_name);
+    m_matcher_aux->configure(m_matcher_cfg);
+    if (!m_matcher->usesStore()) {
+        m_target_stop = false;
+        m_target_thread = std::thread(&LocalizationPipeline::targetBuildWorker, this);
+    }
     m_global_matcher = LocalizationFactory::createMatcher(m_matcher_name);
     if (m_global_matcher) m_global_matcher->configure(m_matcher_cfg);
+    if (m_matcher_aux) m_matcher_aux->configure(m_matcher_cfg);
+    {
+        std::lock_guard<std::mutex> lk(m_target_mu);
+        m_matcher_spare.reset();   // 配置变了, 在建的/建好的 spare 作废
+        m_spare_target.reset();
+        m_target_ready = false;
+    }
     m_prior->configure(m_motion_cfg);
     m_local_map->configure(m_local_map_cfg);
     m_monitor->configure(m_monitor_cfg);
@@ -694,8 +708,59 @@ LocalizationPipeline::~LocalizationPipeline() {
     }
     m_global_cv.notify_all();
     if (m_global_thread.joinable()) m_global_thread.join();
+    {
+        std::lock_guard<std::mutex> lk(m_target_mu);
+        m_target_stop = true;
+    }
+    m_target_cv.notify_all();
+    if (m_target_thread.joinable()) m_target_thread.join();
     // 工作图 (map.overlay.pcd) 由 1 小时定时器全量落盘, 析构时不再单独写 overlay
     // (只剩一个工作文件, 没有增量日志)。
+}
+
+// ★后台建目标: 裁剪工作图 (provider 只读; 账本有锁) + 建新匹配器实例。
+// 跟踪线程继续用旧目标 (裁剪半径 60m, 重建半径 15m, 余量充足), 建好后帧边界切换。
+void LocalizationPipeline::targetBuildWorker() {
+    std::unique_lock<std::mutex> lk(m_target_mu);
+    for (;;) {
+        m_target_cv.wait(lk, [this] { return m_target_stop || m_target_req; });
+        if (m_target_stop) break;
+        m_target_req = false;
+        const PoseStamped center = m_target_req_center;
+        const uint64_t rev = m_target_req_rev;
+        lk.unlock();
+
+        const auto t0 = std::chrono::steady_clock::now();
+        CloudType::Ptr target = buildAnchoredTarget(center);   // 工作图完整裁剪, 不抽稀
+        std::unique_ptr<IScanMatcher> fresh;
+        const bool valid = target && !target->empty();
+        if (valid) {
+            fresh = LocalizationFactory::createMatcher(m_matcher_name);
+            fresh->configure(m_matcher_cfg);
+            fresh->setTarget(target);   // KD 树 + GICP 目标协方差 (耗时部分, 在这里做)
+        }
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+
+        lk.lock();
+        m_matcher_spare = std::move(fresh);
+        m_spare_target = target;
+        m_spare_center = center;
+        // 记"建成时"的版本号 (而非请求时): 建的 70ms 里若有提交, 切换后不会立刻
+        // 判过期再建一次 (目标内容已含那次提交)。
+        (void)rev;
+        m_spare_rev = m_maintainer ? m_maintainer->revision() : 0;
+        m_spare_valid = valid;
+        m_target_ready = true;
+        m_target_building = false;
+        lk.unlock();
+        static int log_n = 0;
+        if (++log_n % 5 == 1) {
+            std::cout << "[target] background build: pts=" << (target ? target->size() : 0)
+                      << " ms=" << ms << " valid=" << (valid ? 1 : 0) << std::endl;
+        }
+        lk.lock();
+    }
 }
 
 std::string LocalizationPipeline::describe() const {
@@ -782,6 +847,13 @@ void LocalizationPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar
     m_matcher_cfg.crop_r_valid = true;
     if (m_matcher) m_matcher->configure(m_matcher_cfg);
     if (m_global_matcher) m_global_matcher->configure(m_matcher_cfg);
+    if (m_matcher_aux) m_matcher_aux->configure(m_matcher_cfg);
+    {
+        std::lock_guard<std::mutex> lk(m_target_mu);
+        m_matcher_spare.reset();   // 配置变了, 在建的/建好的 spare 作废
+        m_spare_target.reset();
+        m_target_ready = false;
+    }
     // 全局重定位描述子也要用同一个"水平系": 本机内部系是俯装的, ScanContext 只对
     // 绕 z 的旋转不变, 不转平的话同地点描述子也对不上(实测 best_d 0.77 > 阈值 0.4).
     for (int r = 0; r < 3; ++r)
@@ -1031,9 +1103,12 @@ void LocalizationPipeline::setMapData(const MapData& data) {
         m_maintainer->setBaseMap(m_map_path, m_map);
         // ★w-map: 新结构升格回调 —— 提交的点当场进工作图云 + 分块缓存 (当帧参与匹配)
         m_maintainer->setCommitHook([this](const Eigen::Vector3d& pt, float w) {
-            if (m_local_map) m_local_map->addWorldPoint(
-                static_cast<float>(pt.x()), static_cast<float>(pt.y()),
-                static_cast<float>(pt.z()), w);
+            if (m_local_map) {
+                std::lock_guard<std::mutex> lk(m_local_map_mu);
+                m_local_map->addWorldPoint(
+                    static_cast<float>(pt.x()), static_cast<float>(pt.y()),
+                    static_cast<float>(pt.z()), w);
+            }
         });
     }
     if (using_working_map) {
@@ -1523,7 +1598,11 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     if (m_on_submap && m_status.load() == LOCALIZED) {
         CloudType::Ptr out(new CloudType());
         if (m_local_map) {
-            CloudType::Ptr base_crop = m_local_map->getLocalMap(pose);
+            CloudType::Ptr base_crop;
+            {
+                std::lock_guard<std::mutex> lk(m_local_map_mu);
+                base_crop = m_local_map->getLocalMap(pose);
+            }
             if (base_crop && !base_crop->empty()) *out += *base_crop;
         }
         {
@@ -1539,11 +1618,15 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
 }
 
 CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose) {
-    CloudType::Ptr target = m_local_map->getLocalMap(pose);
+    CloudType::Ptr target;
+    {
+        std::lock_guard<std::mutex> lk(m_local_map_mu);
+        target = m_local_map->getLocalMap(pose);
+    }
     // [LocProbe] 诊断: 局部地图到底取到多少点 (NO Effective Points 排查)
     {
-        static int probe_n = 0;
-        if (++probe_n % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
+        static std::atomic<int> probe_n{0};   // 后台建目标线程也会调, 计数原子化
+        if ((probe_n.fetch_add(1) + 1) % 50 == 0) {   // 5s 一条: 100Hz 输出下 1Hz 仍然太吵
             std::cout << "[LocProbe] local_map_points=" << (target ? target->size() : 0)
                       << " pose=(" << pose.trans.x() << ", " << pose.trans.y() << ")"
                       << " local_map_name=" << m_local_map_name << std::endl;
@@ -1563,14 +1646,18 @@ CloudType::Ptr LocalizationPipeline::buildAnchoredTarget(const PoseStamped& pose
 bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     // 出口重锁: 在推算位姿附近做有界局部多起点配准(优于全局检索; 叠加层帮助在新货环境重锁)
     if (!m_local_map || !m_matcher) return false;
-    CloudType::Ptr target = m_local_map->getLocalMap(m_pose);
+    CloudType::Ptr target;
+    {
+        std::lock_guard<std::mutex> lk(m_local_map_mu);
+        target = m_local_map->getLocalMap(m_pose);
+    }
     if (m_maintainer) target = m_maintainer->filterDeadBase(target);
     if (m_maintainer) {
         CloudType::Ptr ov = m_maintainer->getOverlay(m_pose);
         if (ov && !ov->empty()) *target += *ov;
     }
     if (!target || target->empty()) return false;
-    m_matcher->setTarget(target);
+    m_matcher_aux->setTarget(target);   // aux: 不碰跟踪目标 (双缓冲)
 
     // ★网格搜索恢复 (2026-11-26): 以当前位姿为中心, 扫描对工作图 2D 栅格做
     //   暴力平移×旋转搜索 (稠密栅格打分, 不用 GICP), 取前 K 个候选做 GICP 精配。
@@ -1706,7 +1793,7 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
                 m_pose.rot;
         planarizePose(g);
         MatchResult r;
-        if (m_matcher->match(scan, g, r) && r.converged && r.fitness > best_fit) {
+        if (m_matcher_aux->match(scan, g, r) && r.converged && r.fitness > best_fit) {
             planarizePose(r.pose);
             best_fit = r.fitness;
             best = r.pose;
@@ -2264,9 +2351,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         const int nh = m_hyp.size();
         for (int i = 0; i < nh; ++i) {
             const PoseStamped g = m_hyp.all()[i].pose;
-            if (!m_matcher->usesStore()) m_matcher->setTarget(buildTarget(g));
+            if (!m_matcher_aux->usesStore()) m_matcher_aux->setTarget(buildTarget(g));
             MatchResult r;
-            if (m_matcher->match(scan, g, r)) m_hyp.update(i, r);
+            if (m_matcher_aux->match(scan, g, r)) m_hyp.update(i, r);   // aux: 不碰跟踪目标
         }
         const int bi = m_hyp.best();
         m_hyp.prune(m_hyp_margin, m_hyp_stale);
@@ -2286,22 +2373,51 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // 降采样+KD-tree。之前配了维护层(m_maintainer)就直接放弃缓存 —— 但 overlay
         // 只在真正写入新点时变(revision 自增), 静态环境基本不增长; 而每帧重建 10k 目标
         // 的降采样+建树是把位姿输出拖到 10Hz 的主因之一(雷达 15.8Hz, 2026-10-17 实测)。
-        bool rebuild_target = true;
-        // 窗口中心 = 子图锚(只在已验证帧上跟随), 不是当前估计。
-        // 这样弱帧(贴墙/稀疏/退化)的漂移不会立刻把 24 关键帧窗口带偏。
-        // anchor_hold=false 时退回旧行为(直接用预测位姿建图), 便于 A/B 与现场回滚.
+        // ★目标双缓冲 (2026-11-26 架构修复): 建目标 (裁剪+KD树+GICP 协方差估计,
+        //   110ms~1.8s) 放后台线程, 跟踪线程只做对齐; 后台建好在**帧边界原子切换**。
+        //   旧实现每移动 cache_move(0.5m) 同步重建 -> 跟踪线程周期性卡死 (预测过期/
+        //   大新息), 被迫抽稀目标压延迟, 又把覆盖率评分从 0.93 拉到 0.84。
+        //   重建触发 = 距当前目标中心 >= cache_move (现在是"重建半径", 15m) 或地图版本变。
+        //   目标 = 工作图完整裁剪 (不抽稀)。首次/失效时同步建一次 (逸出保护在此)。
+        bool rebuild_target = false;
         const PoseStamped& target_center =
             (m_local_map_cfg.anchor_hold && m_have_submap_anchor) ? m_submap_anchor : guess;
         const uint64_t maint_rev = m_maintainer ? m_maintainer->revision() : 0;
         if (m_on_submap) {
-            // 桥接: 目标 = 子图, 而子图每帧都在更新(SessionMap 没有 revision)。
-            // 不强制刷新会一直用旧目标 -> 刚建的内容配不上。每 5 帧重建一次。
+            // 桥接: 目标含子图, 子图每帧更新 -> 保持同步重建 (会话内数据, 不预建)
             static int sub_rebuild_n = 0;
             rebuild_target = (!m_has_cached_target) || (++sub_rebuild_n % 5 == 0);
-        } else if (m_has_cached_target && maint_rev == m_cached_target_rev &&
-            (m_local_map_name == "global" ||
-             (target_center.trans - m_cached_target_pose.trans).norm() < m_local_map_cfg.cache_move)) {
-            rebuild_target = false;
+        } else {
+            // 1) 后台建好 -> 帧边界切换 (零阻塞)
+            if (m_target_ready) {
+                std::lock_guard<std::mutex> lk(m_target_mu);
+                m_matcher.swap(m_matcher_spare);
+                m_cached_target = m_spare_target;
+                m_cached_target_pose = m_spare_center;
+                m_cached_target_rev = m_spare_rev;
+                m_has_cached_target = m_spare_valid;
+                m_target_ready = false;
+            }
+            // 2) 是否需要新目标
+            if (m_local_map_name == "global") {
+                rebuild_target = false;             // matcher 自带全图 (usesStore)
+            } else if (!m_has_cached_target && !m_target_building) {
+                rebuild_target = true;              // 首次 / 目标失效: 同步建一次
+            } else if (m_has_cached_target) {
+                const bool far = (target_center.trans - m_cached_target_pose.trans).norm() >=
+                                 m_local_map_cfg.cache_move;
+                const bool stale = (maint_rev != m_cached_target_rev);
+                if (far || stale) {
+                    std::lock_guard<std::mutex> lk(m_target_mu);
+                    if (!m_target_building && !m_target_ready) {
+                        m_target_req_center = target_center;
+                        m_target_req_rev = maint_rev;
+                        m_target_req = true;
+                        m_target_building = true;
+                        m_target_cv.notify_all();
+                    }
+                }
+            }
         }
         if (!m_matcher->usesStore() && rebuild_target) {
             CloudType::Ptr target = buildTarget(target_center);
@@ -2335,12 +2451,6 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }
                 out_pose.time = f.end_time;
                 return;      // 本次判定为未定位, 让上层报"丢失"而不是静默
-            }
-            // ★目标点数封顶 (2026-11-26 实机根因): 局部目标 28 万点 -> GICP 1.8s,
-            //   预测过期 + 大新息。超过阈值时体素降采样到 ~8 万点 (0.4m)。
-            if (target->size() > 120000) {
-                CloudType::Ptr ds = voxelDownsample(target, 0.4f);
-                if (ds && ds->size() >= 20000) target = ds;
             }
             m_cached_target = target;
             m_cached_target_pose = target_center;
@@ -2705,9 +2815,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         m_probe_countdown = m_probe_period;
         CloudType::Ptr probe_target = buildAnchoredTarget(guess);
         if (probe_target && probe_target->size() >= 100) {
-            m_matcher->setTarget(probe_target);
+            m_matcher_aux->setTarget(probe_target);   // aux: 不碰跟踪目标
             MatchResult pr;
-            if (m_matcher->match(scan, out_pose, pr) && pr.converged &&
+            if (m_matcher_aux->match(scan, out_pose, pr) && pr.converged &&
                 pr.fitness >= m_global_cfg.relocation_fitness) {
                 // ★段级出口修正 (SessionMap v2, ROLL Fig.3 简化闭式解): 用可靠
                 // 匹配位姿作末端约束, 把整段关键帧的漂移按序号线性摊平 ——
@@ -3350,7 +3460,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 const bool do_cov = (++cov_n % 5 == 0);
                 if (do_cov && (!g_base_only_valid || ++g_base_only_age >= 30)) {
                     m_base_only_age = 0;
-                    CloudType::Ptr base_crop = m_local_map->getLocalMap(out_pose);
+                    CloudType::Ptr base_crop;
+                    {
+                        std::lock_guard<std::mutex> lk(m_local_map_mu);
+                        base_crop = m_local_map->getLocalMap(out_pose);
+                    }
                     if (base_crop && base_crop->size() >= 100) {
                         g_base_only_kdtree.setInputCloud(base_crop);
                         g_base_only_valid = true;
