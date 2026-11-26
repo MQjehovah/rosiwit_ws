@@ -715,7 +715,11 @@ void LocalizationPipeline::updateSnapshotLocked() {
     m_snapshot_pose = m_pose;
     m_snapshot_match = m_last_match;
     m_snapshot_cov = m_last_match.cov;
-    m_snapshot_confidence = m_last_match.fitness;
+    // ★桥接态显示对工作图本体的覆盖率 (2026-11-26 实机: 桥接后联合目标 fitness 0.93
+    //   而 cov_base 只有 0.156 —— 位姿相对真实地图已错, 界面却显示"定位正常")。
+    //   子图只补目标, 不参与判据: 对外报的匹配度 = 对真实地图的匹配度。
+    m_snapshot_confidence =
+        (m_on_submap && m_cov_base >= 0.0) ? m_cov_base : m_last_match.fitness;
     m_snapshot_valid = m_initialized.load();
 }
 
@@ -3209,6 +3213,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     const bool hard_unhealthy =
         seed_failed || !res.converged ||
         res.fitness < m_monitor_cfg.lost_fitness;
+    // ★桥接态位姿可信度由工作图裁决 (2026-11-26): 子图只补目标, 不参与判据。
+    //   桥接中对工作图本体的覆盖率低于 lost_fitness 同样算不健康 ->
+    //   lost_patience 帧后 LOST -> 退出桥接 -> 网格恢复 (只对工作图)。
+    const bool base_unhealthy =
+        m_on_submap && m_cov_base >= 0.0 && m_cov_base < m_monitor_cfg.lost_fitness;
 
     if (m_status == LOCALIZED) {
         // 跟踪阶段只要不低于 lost_fitness 就继续运行；不要求达到 credible_fitness。
@@ -3221,7 +3230,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         const bool neutral = low_evidence && m_low_evidence_frames < m_low_evidence_limit;
         if (neutral) {
             // 不改变 m_unhealthy_streak
-        } else if (hard_unhealthy || consensus_unhealthy) {
+        } else if (hard_unhealthy || base_unhealthy || consensus_unhealthy) {
             ++m_unhealthy_streak;
         } else {
             m_unhealthy_streak = 0;
@@ -3362,6 +3371,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 }
                 if (m_cov_base >= m_monitor_cfg.credible_fitness) ++m_cov_base_ok_streak;
                 else m_cov_base_ok_streak = 0;
+                // ★桥接退出 (与进入对称): 工作图重新锚得住 -> 回到只锚工作图。
+                if (m_on_submap && m_cov_base_ok_streak >= std::max(1, m_anchor_patience)) {
+                    m_on_submap = false;
+                    m_has_cached_target = false;
+                    m_have_submap_anchor = false;
+                    std::cout << "[anchor] base re-confirmed -> leave bridging (cov_base="
+                              << m_cov_base << ")" << std::endl;
+                }
 
                 // ★LOST 退出桥接: 桥接的目标含本会话子图, 而全局重定位只能靠
                 //   工作图。丢定位后必须回到"只锚工作图", 否则自我证实永远回不来。
