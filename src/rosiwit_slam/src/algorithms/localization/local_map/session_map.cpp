@@ -50,22 +50,25 @@ void SessionMap::pruneKfs() {
     const double r2 = r * r;
     Eigen::Vector3d ref = m_kfs.back().centroid;   // 以最新关键帧为参考
     if (have_robot_) ref = robot_trans_;
-    size_t pts = 0;
-    for (const auto& k : m_kfs) if (k.world) pts += k.world->size();
-    size_t kept = 0;
+    // ★先判有没有要裁的帧, 没有就原样返回、绝不碰 m_kfs。
+    //   不能先 move 再按条件 swap: 没裁剪时 nk.size()==m_kfs.size() 不 swap,
+    //   m_kfs 里全是 move 后的空壳 (world==nullptr), 下一帧 update() 里
+    //   push_back 直接 SIGSEGV (2026-11-26 实机: 子图一开必崩, 根因即此)。
+    bool any_prune = false;
+    for (const auto& k : m_kfs) {
+        const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
+        if ((c - ref).squaredNorm() > r2) { any_prune = true; break; }
+    }
+    if (!any_prune) return;
     std::vector<EpKf> nk;
     nk.reserve(m_kfs.size());
     for (auto& k : m_kfs) {
         const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
         if ((c - ref).squaredNorm() > r2) continue;
         nk.push_back(std::move(k));
-        if (k.world) kept += k.world->size();
     }
-    if (nk.size() != m_kfs.size()) {
-        m_kfs.swap(nk);
-        view_dirty_ = true;
-    }
-    (void)pts; (void)kept;
+    m_kfs.swap(nk);
+    view_dirty_ = true;
 }
 
 void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_world) {
@@ -152,6 +155,15 @@ std::vector<SessionMap::EpKf> SessionMap::popLeavingKfs(const Eigen::Vector3d& c
     // 退出前管道会对每帧做一次「融合+雕刻」(w 账本记账), 然后这些帧不再属于子图。
     std::vector<EpKf> out;
     const double r2 = (cfg_.radius * 1.2) * (cfg_.radius * 1.2);
+    // ★先判有没有要退出的帧, 没有就原样返回、绝不碰 m_kfs。
+    //   不能先 move 再按条件 swap: 没有退出帧时 m_kfs 会剩下 move 后的空壳
+    //   (world==nullptr), 下一帧 update() 里 push_back 直接 SIGSEGV。
+    bool any_leaving = false;
+    for (const auto& k : m_kfs) {
+        const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
+        if ((c.head<2>() - cur_xy.head<2>()).squaredNorm() > r2) { any_leaving = true; break; }
+    }
+    if (!any_leaving) return out;
     std::vector<EpKf> keep;
     keep.reserve(m_kfs.size());
     for (auto& k : m_kfs) {
@@ -159,12 +171,10 @@ std::vector<SessionMap::EpKf> SessionMap::popLeavingKfs(const Eigen::Vector3d& c
         if ((c.head<2>() - cur_xy.head<2>()).squaredNorm() > r2) out.push_back(std::move(k));
         else keep.push_back(std::move(k));
     }
-    if (!out.empty()) {
-        m_kfs.swap(keep);
-        view_dirty_ = true;
-        std::cout << "[submap] leaving chunk: " << out.size() << " kfs merged out (remained "
-                  << m_kfs.size() << ")" << std::endl;
-    }
+    m_kfs.swap(keep);
+    view_dirty_ = true;
+    std::cout << "[submap] leaving chunk: " << out.size() << " kfs merged out (remained "
+              << m_kfs.size() << ")" << std::endl;
     return out;
 }
 
