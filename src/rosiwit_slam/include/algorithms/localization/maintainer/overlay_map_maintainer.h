@@ -105,7 +105,9 @@ private:
         uint8_t  w = 0;          // 可信度
         uint8_t  miss = 0;       // 连续 free 证据帧数 (去抖)
         uint32_t last_key = 0;   // 上次计票的单位键 (session/day)
-        uint32_t last_frame = 0; // 上次 hit 的帧号 (view 单位用)
+        uint32_t last_frame = 0; // 上次 hit 的帧号 (frame 单位用)
+        uint32_t last_view = 0;       // 上次 hit 的视角编号 (view 单位)
+        uint32_t last_miss_view = 0;  // 上次 free 证据的视角编号 (view 单位)
         uint32_t last_miss_frame = 0; // 上次 free 证据的帧号 (miss 与 hit 对称: 每帧一票)
         uint32_t last_miss_key = 0;   // 上次 free 证据的计票单位键 (session/day)
         bool     from_base = false;  // 该体素来自底图 (点不在 m_cells, 死亡时进 m_dead_base)
@@ -117,6 +119,13 @@ private:
     /// (墙挪了/拆了 = 射线穿过 -> w 递减为 0)。落盘时也剔除, 跨会话持久。
     std::unordered_set<int64_t> m_dead_base;
     std::atomic<bool> m_carve_enabled{true};   // 静止不雕刻
+    // ★视角编号 (2026-11-26 根因修复): view 计票单位必须显式化 —— 位姿移动超过
+    // 阈值才产生新视角。静止机器人只有一个视角, hit/miss 都只计一票:
+    // 否则 miss 侧的"每帧"语义会把静止时未被当前扫描返回的真实几何逐帧减死
+    // (射线抽样间歇 = 假的新视角), 工作图被自更新侵蚀 -> 位姿缓漂。
+    uint32_t m_view_id = 1;
+    PoseStamped m_view_pose;
+    bool m_view_valid = false;
     std::function<void(const Eigen::Vector3d&, float)> m_commit_sink;
     uint32_t m_session_id = 1;     // 计票单位 = session
     uint32_t m_day_index = 0;      // 计票单位 = day (pose.time/86400)

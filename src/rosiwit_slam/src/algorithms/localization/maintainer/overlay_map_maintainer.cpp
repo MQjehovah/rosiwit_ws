@@ -196,13 +196,16 @@ void OverlayMapMaintainer::hitVoxel(int64_t vk) {
     bool count = false;
     switch (m_cfg.persistency_unit) {
         case 0:  count = true; break;                              // frame: 每帧
-        case 1:  // view: 首次看到也算一票; 之后再看到需要中间隔过帧(离开过视野)
-                 count = (v.last_frame == 0) || (frame > v.last_frame + 1); break;
+        case 1:  // view: 显式视角编号 —— 位姿移动超过阈值才算新视角。
+                 // 静止时只有一个视角, 每体素只计一票 (之前的"帧间隙"启发式
+                 // 在快照式重复观测下行为不直观, 且与 miss 侧不对称)。
+                 count = (v.last_view != m_view_id); break;
         case 2:  count = (v.last_key != m_session_id); break;       // session
         default: count = (v.last_key != m_day_index); break;        // day
     }
     v.last_frame = frame;
     if (count) {
+        v.last_view = m_view_id;
         const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
         const int nw = static_cast<int>(v.w) + gain;
         v.w = static_cast<uint8_t>(nw > 255 ? 255 : nw);
@@ -233,17 +236,15 @@ void OverlayMapMaintainer::missVoxel(int64_t vk) {
     bool count = false;
     switch (m_cfg.persistency_unit) {
         case 0:  count = true; break;                              // frame: 每帧
-        case 1:  // view: 与 hit 同基准 —— "上一帧是否被观测(hit)到", 而不是
-                 // "上一帧是否被抽样射线穿过(miss)"。射线抽样天然稀疏/间歇,
-                 // 用 prev_miss 做门会让静止时的 miss 持续计票、而连续观测的
-                 // 真墙 hit 被 frame 间隙门抑制 -> w 单向衰减 -> 侵蚀真实几何
-                 // (2026-11-26 实测: 5min persistency_pts 2693->2137, 位姿被
-                 //  拖漂 ~0.5°/min; A/B: 关雕刻即完全稳定)。
-                 count = (v.last_frame == 0) || (m_frame > v.last_frame + 1); break;
+        case 1:  // view: 与 hit 完全对称 —— 同一视角只计一票 (见上方视角推进)。
+                 // 静止机器人永远只有一个视角, 因此静止时不再有任何 free 计票,
+                 // 真实几何不会被"重复观察"侵蚀 (2026-11-26 根因)。
+                 count = (v.last_miss_view != m_view_id); break;
         case 2:  count = (v.last_miss_key != m_session_id); break; // session
         default: count = (v.last_miss_key != m_day_index); break;  // day
     }
     if (!count) return;
+    if (m_cfg.persistency_unit == 1) v.last_miss_view = m_view_id;
     if (m_cfg.persistency_unit >= 2) v.last_miss_key = currentUnitKey();
     const int gain = m_cfg.persistency_hit_gain > 0 ? m_cfg.persistency_hit_gain : 1;
     v.w = (v.w > gain) ? static_cast<uint8_t>(v.w - gain) : 0;
@@ -343,8 +344,24 @@ void OverlayMapMaintainer::onLocalized(const PoseStamped& pose, const CloudType:
     // 过桥/漂移期(位姿不可信): 不写、不雕刻, 避免污染地图
     if (!pose_confident) { m_low_count = 0; return; }
 
+    // 视角推进 (view 计票单位): 位姿移动 > 0.2m 或 > 2° 才算新视角。
+    if (!m_view_valid) {
+        m_view_pose = pose;
+        m_view_valid = true;
+    } else {
+        const double dxy = (pose.trans - m_view_pose.trans).norm();
+        const Eigen::Matrix3d dR = pose.rot * m_view_pose.rot.transpose();
+        const double dang =
+            std::acos(std::max(-1.0, std::min(1.0, (dR.trace() - 1.0) * 0.5))) *
+            57.2957795;
+        if (dxy > 0.2 || dang > 2.0) {
+            ++m_view_id;
+            if (m_view_id == 0) m_view_id = 1;
+            m_view_pose = pose;
+        }
+    }
     // A 阶段: 观测命中 -> w += 8。必须先于雕刻: 同一帧里被命中的体素
-    // 立即更新 last_frame, 雕刻的 view 门随即把它排除 (不被同帧自由票误伤)。
+    // 立即更新上次视角, 雕刻的 view 门随即把它排除 (不被同帧自由票误伤)。
     observeHits(pose, scan_body);
     // 清除: 看到"本该有货的地方是空的" -> 移除该处 overlay
     rayCarve(pose, scan_body);
