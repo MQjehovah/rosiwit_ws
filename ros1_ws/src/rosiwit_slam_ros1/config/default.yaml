@@ -272,7 +272,7 @@ localization:
     # 可选: fpfh_ransac = 3D 特征匹配, 不受俯装影响(历史实测 0.99+), 但慢(建库 ~11s,
     #       单次 topk ~6s + 3s/候选). 判丢后按 retry_interval 重试: 能回来, 但要几十秒.
     #       scan_context 要真正可用, 下一步是把描述子库改成"按关键帧位姿从全局图切视野"来建.
-    relocalizer: none
+    relocalizer: fpfh_ransac   # 2026-11-26 现场: none 时判丢后无法全局恢复 (死代码); 本机俯装 41.67°, BBS 不适用
     motion_prior: imu_ekf   # odom+IMU 误差状态EKF (2026-10-17); 退回旧版改 imu
     local_map: keyframe_submap
     matcher: gicp   # 实机: pp_icp(点到面) 需要目标点云带法向量, 而关键帧子图没有

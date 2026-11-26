@@ -1505,7 +1505,11 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     // 0.86 -> 0.33 -> LOST (实机 00:02 完整复现)。ROLL 的做法是全局图与临时图
     // 【联合】匹配: 变化区域由子图覆盖, 其余由工作图锚定, 不存在"失去约束"的
     // 空窗。桥接/锚定的差别只剩 overlay 权重, 模式切换的复杂度大幅下降。
-    if (m_on_submap) {
+    // ★LOST/INIT 时一律只锚工作图 (2026-11-26 现场): 子图是"本会话自己写出来的
+    //   补丁", 坐标来自漂移中的位姿 —— 丢定位后还拿它当匹配目标 = 自我证实,
+    //   系统可以永远锁在错误位姿里 (实机: LOST 后子图 16.8 万点, 联合目标
+    //   fitness 0.19, 永远回不来)。重定位只能靠有绝对参照的工作图。
+    if (m_on_submap && m_status.load() == LOCALIZED) {
         CloudType::Ptr out(new CloudType());
         if (m_local_map) {
             CloudType::Ptr base_crop = m_local_map->getLocalMap(pose);
@@ -2192,23 +2196,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_matcher->setTarget(target);
         }
         const bool ok = m_matcher->match(scan, guess, res);
-        // ★4DOF 投影 (2026-11-26 根因): 地图系滚转/俯仰基准与重力有 ~39° 偏置
-        //   (本图 roll 恒 39.37°, up=(-0.02,0.63,0.77)), 而 GICP 做 6DOF 解 ——
-        //   roll/pitch 的微小修正经姿态复合以 sin(39°)≈0.63 的耦合漏进 yaw,
-        //   每帧 +0.2~0.4° 恒定侧偏 -> 闭环积分成慢漂 (实测 5min 1.1°, 远处
-        //   偏差 + fitness 0.92->0.84)。地机跟踪本应在 4DOF (x,y,z,yaw) 内。
-        //   这里把"匹配相对预测的姿态增量"投影到 yaw 轴: 保留绝对姿态 (含图的
-        //   滚转基准), 丢弃 roll/pitch 伪增量, yaw 不再被污染。
-        if (ok && res.converged) {
-            const M3D dR = res.pose.rot * guess.rot.transpose();
-            Eigen::Quaterniond qd(dR);
-            if (qd.w() < 0.0) qd.coeffs() *= -1.0;
-            double s_ = std::sqrt(qd.x() * qd.x() + qd.y() * qd.y() + qd.z() * qd.z());
-            double yaw_delta = 0.0;
-            if (s_ > 1e-12) yaw_delta = 2.0 * std::atan2(qd.z(), qd.w());
-            const M3D Rz = Eigen::AngleAxisd(yaw_delta, V3D::UnitZ()).toRotationMatrix();
-            res.pose.rot = Rz * guess.rot;
-        }
+        // 2026-11-26: 4DOF 全程投影已撤销 —— 现场"运行中激光歪了修不回来"证实
+        //   它会丢掉匹配的 roll/pitch 修正 (本图姿态基准 39°, 转弯后需要姿态修正)。
+        //   慢漂的真正根因是账本侵蚀 (已由 view 计票修复), 无需此投影。
         // 软着陆: 目标组成刚变(锚定<->桥接)时, 匹配解可能相对预测跳 3~5°.
         // 直接把跳变写进位姿, 会让"跳变前/跳变后"写进地图的点岔开几度(实车叠图).
         // 这里把单帧修正限到 1°/5cm, 用 10 帧爬到新解; 位姿连续 -> 地图不再分两层.
@@ -3224,6 +3214,15 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 if (m_cov_base >= m_monitor_cfg.credible_fitness) ++m_cov_base_ok_streak;
                 else m_cov_base_ok_streak = 0;
 
+                // ★LOST 退出桥接: 桥接的目标含本会话子图, 而全局重定位只能靠
+                //   工作图。丢定位后必须回到"只锚工作图", 否则自我证实永远回不来。
+                if (m_status.load() == LOST && m_on_submap) {
+                    m_on_submap = false;
+                    m_has_cached_target = false;
+                    m_have_submap_anchor = false;
+                    std::cout << "[anchor] LOST -> leave bridging (target = working map only)"
+                              << std::endl;
+                }
                 if (m_cov_base >= 0.0) {
                     // cov_base 跨阈值 = 底图锚定质量发生阶跃: 使目标缓存与
                     // 子图窗口锚失效一次 (边沿检测, 不再单独维护第二个状态变量)。
