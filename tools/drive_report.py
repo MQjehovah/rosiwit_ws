@@ -418,7 +418,7 @@ def report_timing(log, ps):
             rate[0], pct(rate, 0.5), rate[-1]))
     mp = [m for m in log.mprobe if moving_t[0] <= m['t'] <= moving_t[-1]]
     if mp:
-        print('匹配器分段 (每 512 帧取 1 帧; gicp = 求解, 评估 = 覆盖率的 KD 树半径搜索):')
+        print('匹配器分段 (每 512 帧取 1 帧; gicp = 求解, 评估 = 覆盖率统计, 每个扫描点一次最近邻查询):')
         print('  %-9s %8s %9s %9s %9s %9s' % ('时刻', '扫描点', '地图点', 'gicp ms', '评估 ms', '合计 ms'))
         for m in mp:
             print('  %-9s %8d %9d %9.1f %9.1f %9.1f' % (hms(m['t']), m['src'], m['tgt'], m['gicp'], m['ev'], m['tot']))
