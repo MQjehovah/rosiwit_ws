@@ -165,6 +165,8 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     // 判据在 gicp 下一直是空转(日志里 eig 恒为 1.000 = 默认值). 这里用内点的局部
     // 平面法向补算一个 6x6 信息矩阵并上报, 先用于诊断/标定; 不置 has_hessian
     // (原因见下面的注释). 有效平面点不足时保持原行为.
+    Eigen::Matrix<double, 6, 6> H_obs = Eigen::Matrix<double, 6, 6>::Zero();
+    int obs_used = 0;
     {
         Eigen::Matrix<double, 6, 1> lam;
         Eigen::Matrix<double, 6, 6> vecs;
@@ -172,7 +174,7 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
         int dirs = 0;
         if (evaluateObservability(m_kdtree, *src, T,
                                   m_cfg.max_correspondence_dist, m_cfg.inlier_dist,
-                                  lam, vecs, ratio, dirs)) {
+                                  lam, vecs, ratio, dirs, &H_obs, &obs_used)) {
             // **故意不置 out.has_hessian** (2026-11-25 回归实测):
             // 置位后 pipeline 的 degeneracy_partial_update 会立刻按
             // degeneracy_ratio_soft(0.05) 削最弱方向; 而本估计器在正常帧算出的
@@ -201,6 +203,35 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     const double s = out.residual > 0 ? out.residual * out.residual
                                       : (out.rmse > 0 ? out.rmse * out.rmse : 1.0);
     out.cov = Eigen::Matrix<double, 6, 6>::Identity() * s;
+    // ★方向协方差 (2026-11-26 根因修复): 匹配是"预测的函数", 不是绝对观测 ——
+    //   在弱观测方向 (对称走廊的 yaw) 它几乎不含信息, 各向同性协方差却把它当
+    //   全信息用 (增益~0.95), 闭环积分出恒定的匹配偏置 -> 重定位后 yaw 自转/子图糊。
+    //   旋转块用内点几何的真实信息 H_rot = Σ((q-t)×n)(...)ᵀ/N:
+    //     cov_rot = (residual²/N)·H_rot⁻¹   [rad²], 弱方向自动放大, 增益随之趋零;
+    //   信息下限取 λmax·1e-3 (防无限大), 与 rot_cov_floor 配合。
+    {
+        const Eigen::Matrix3d H_rot = H_obs.block<3, 3>(0, 0);
+        if (obs_used >= 30 && H_rot.allFinite()) {
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es_rot(H_rot);
+            if (es_rot.info() == Eigen::Success) {
+                const Eigen::Vector3d lv = es_rot.eigenvalues();   // 升序
+                const double lm = lv(2);
+                if (lm > 1e-12) {
+                    Eigen::Vector3d cv;
+                    for (int i = 0; i < 3; ++i) {
+                        const double li = std::max(lv(i), lm * 1e-3);
+                        cv(i) = (s / static_cast<double>(obs_used)) / li;
+                    }
+                    const Eigen::Matrix3d C =
+                        es_rot.eigenvectors() * cv.asDiagonal() *
+                        es_rot.eigenvectors().transpose();
+                    for (int i = 0; i < 3; ++i) {
+                        out.cov(i, i) = std::max(C(i, i), s);
+                    }
+                }
+            }
+        }
+    }
     out.converged = true;
     return true;
 }

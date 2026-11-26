@@ -311,6 +311,11 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
         gain(3 + i) = std::min(m_cfg.gain_trans, m_P(3 + i) / (m_P(3 + i) + Rdiag(3 + i)));
     }
     Eigen::Vector3d d_rot = gain.head<3>().asDiagonal() * e_rot;
+    // yaw: 互补滤波小增益 (见 PoseFusionConfig::yaw_gain 注释)。匹配的 yaw 是
+    // "谷底自由"量 (长墙/对称区), 单位增益反馈 = 把 GICP 恒定侧偏积分成棘轮。
+    // x/y(roll/pitch) 保持原增益 —— 它们由重力观测约束, 不受此病理影响。
+    d_rot.z() = m_cfg.yaw_gain * e_rot.z();
+
     Eigen::Vector3d d_trans = gain.tail<3>().asDiagonal() * e_trans;
     // ---- 单帧修正限幅 (核心: 一次错配不可能瞬移) ----
     const double max_rot = m_cfg.max_correction_rot_deg * M_PI / 180.0;

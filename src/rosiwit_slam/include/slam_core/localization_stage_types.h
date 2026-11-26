@@ -319,6 +319,12 @@ struct GlobalLocalizeConfig {
 struct PoseFusionConfig {
     double gain_trans = 0.6;              // 位置增益上限 (0~1)
     double gain_rot = 0.8;                // 旋转增益上限
+    // 互补滤波 yaw 增益 (2026-11-26 现场根因): 匹配在长墙/对称区几乎不含 yaw
+    // 信息 (ICP 对应沿墙滑动, 固定对应关系的信息矩阵谎报可观), GICP 会稳定地
+    // 返回 "输入+0.3°" 的侧偏。单位增益反馈会把这个偏置积分成无界棘轮
+    // (重定位后位姿自转, 子图被抹成扇形)。yaw 改用小增益互补滤波:
+    //   陀螺积分负责快速转向, 匹配以时间常数 ~1/g 帧缓慢校正绝对 yaw。
+    double yaw_gain = 0.05;
     double max_correction_trans = 0.15;   // 单帧最大平移修正 (m)
     double max_correction_rot_deg = 3.0;  // 单帧最大旋转修正 (deg)
     double gravity = 9.81;                // 重力加速度 (m/s^2), 用于 up_body 自动估计

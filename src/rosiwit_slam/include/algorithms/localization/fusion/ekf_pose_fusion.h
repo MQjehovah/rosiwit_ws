@@ -26,6 +26,7 @@ public:
     void resetRelative() override;
 
     void onImu(const IMUSample& s) override;
+    void setGyroBiasZ(double b) override { m_gyro_bias_z = b; }
     void onOdom(const PoseStamped& odom) override;
     void onRelative(const PoseStamped& pose,
                     const Eigen::Matrix<double, 6, 6>& cov) override;

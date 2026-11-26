@@ -18,6 +18,14 @@ public:
     /// 初始化/重定位后重置积分基准 (含速度清零)
     virtual void reset(const PoseStamped& pose) = 0;
 
+    /// 重定位/位姿注入专用: 重置运动学状态, 保留传感器零偏/标定 (默认退回 reset)。
+    /// 零偏是传感器属性 —— 清掉会让重定位后 yaw 以真实零偏速率自转 (实机 1.5°/s)。
+    virtual void resetPose(const PoseStamped& pose) { reset(pose); }
+
+    /// 当前陀螺 z 零偏估计 (rad/s). 供融合器等下游使用 —— 融合器的 yaw 积分
+    /// 必须减掉它, 否则会以原始零偏速率自转 (2026-11-26 实机 1.5°/s 自转根因)。
+    virtual double gyroBiasZ() const { return 0.0; }
+
     /// 喂入 IMU (仅 IMU 类先验使用)
     virtual void onImu(const IMUSample& /*s*/) {}
 

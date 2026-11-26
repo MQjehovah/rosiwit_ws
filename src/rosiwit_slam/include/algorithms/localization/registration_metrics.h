@@ -68,6 +68,8 @@ bool evaluateObservability(const pcl::KdTreeFLANN<PointType>& kdtree,
                            Eigen::Matrix<double, 6, 6>& eigvecs,
                            double& smallest_ratio,
                            int& degenerate_dirs,
+                           Eigen::Matrix<double, 6, 6>* H_out = nullptr,
+                           int* used_out = nullptr,
                            int max_points = 400,
                            double plane_valid_thr = 0.10);
 

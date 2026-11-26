@@ -27,6 +27,11 @@ public:
     std::string name() const override { return "imu_ekf"; }
     void configure(const MotionPriorConfig& cfg) override { m_cfg = cfg; }
     void reset(const PoseStamped& pose) override;
+    /// 重定位/位姿注入专用: 只重置运动学状态, **保留陀螺/加速度零偏与静止标定**。
+    /// 零偏是传感器属性, 与位姿解无关 —— reset() 清零偏会让重定位后 yaw 以
+    /// 真实零偏速率自转 (2026-11-26 实机: 1.5°/s, 子图被抹成扇形)。
+    void resetPose(const PoseStamped& pose) override;
+    double gyroBiasZ() const override { return m_gyro_bias.z(); }
     void onImu(const IMUSample& s) override;
     void onOdom(const PoseStamped& odom) override;
     PoseStamped predict(double t) override;

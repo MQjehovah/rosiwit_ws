@@ -212,6 +212,8 @@ bool evaluateObservability(const pcl::KdTreeFLANN<PointType>& kdtree,
                            Eigen::Matrix<double, 6, 6>& eigvecs,
                            double& smallest_ratio,
                            int& degenerate_dirs,
+                           Eigen::Matrix<double, 6, 6>* H_out,
+                           int* used_out,
                            int max_points,
                            double plane_valid_thr) {
     const int n = static_cast<int>(scan.size());
@@ -261,6 +263,8 @@ bool evaluateObservability(const pcl::KdTreeFLANN<PointType>& kdtree,
     eigvecs = es.eigenvectors();
     const double lmax = eigvals.maxCoeff();
     if (!(lmax > 1e-12)) return false;
+    if (H_out) *H_out = H;      // 旋转信息块供方向协方差使用 (gicp_matcher)
+    if (used_out) *used_out = used;
     smallest_ratio = eigvals.minCoeff() / lmax;
     degenerate_dirs = 0;
     for (int k = 0; k < 6; ++k) {

@@ -183,6 +183,7 @@ private:
     // P4 加权锚定: 静态支撑 (内点落在 w>=128 体素的占比) 下限
     double m_anchor_w_support_min = 0.30;
     int    m_seg_merge_tick = 0;          // 走出覆盖的段级融合节拍
+    int    m_yaw_trace_n = -1;           // 重定位后逐帧 yaw 轨迹 (诊断, <0=关)
     double m_out_wz_max = 1.6;            // 输出位姿偏航角速度上限 (rad/s ≈91°/s)
     // 软着陆: 种子/重定位刚生效后的前 N 帧限制单帧修正量(1°/5cm),
     // 防止首帧跳变把点云写岔成两层(机器人侧新增, 锚定切换路径由 zip-up 即时搬移, 不再使用)

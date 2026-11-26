@@ -169,6 +169,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
             m_fusion_cfg.gravity                 = getv<double>(fc, "gravity", m_fusion_cfg.gravity);
             m_fusion_cfg.gravity_tol             = getv<double>(fc, "gravity_tol", m_fusion_cfg.gravity_tol);
             m_fusion_cfg.gain_rot                = getv<double>(fc, "gain_rot", m_fusion_cfg.gain_rot);
+            m_fusion_cfg.yaw_gain                = getv<double>(fc, "yaw_gain", m_fusion_cfg.yaw_gain);
             m_fusion_cfg.max_correction_trans    = getv<double>(fc, "max_correction_trans", m_fusion_cfg.max_correction_trans);
             m_fusion_cfg.max_correction_rot_deg  = getv<double>(fc, "max_correction_rot_deg", m_fusion_cfg.max_correction_rot_deg);
             m_fusion_cfg.trans_cov_floor         = getv<double>(fc, "trans_cov_floor", m_fusion_cfg.trans_cov_floor);
@@ -1190,7 +1191,18 @@ void LocalizationPipeline::onImu(const IMUSample& s) {
     }
     {
         std::lock_guard<std::mutex> fk(m_fusion_mu);
-        if (m_fusion) m_fusion->onImu(s);
+        if (m_fusion) {
+            // ★融合器 yaw 积分必须减掉陀螺零偏: 它的 m_gyro_bias_z 原来从未被
+            //   赋值 (恒 0), 原始零偏直接积分 -> 静止时 yaw 以 ~1.5°/s 自转,
+            //   重定位后子图被抹成扇形 (2026-11-26 根因)。零偏由运动先验学习。
+            double bz = 0.0;
+            {
+                std::lock_guard<std::mutex> pk(m_prior_mu);
+                if (m_prior) bz = m_prior->gyroBiasZ();
+            }
+            m_fusion->setGyroBiasZ(bz);
+            m_fusion->onImu(s);
+        }
     }
 }
 
@@ -1593,7 +1605,7 @@ bool LocalizationPipeline::tryBoundedRecovery(const CloudType::Ptr& scan) {
     m_pose.time = best.time;
     {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
-        m_prior->reset(m_pose);
+        m_prior->resetPose(m_pose);   // 保留零偏: 重定位不应清零传感器标定
     }
     {
         std::lock_guard<std::mutex> fk(m_fusion_mu);
@@ -1944,6 +1956,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_have_submap_anchor = false;   // 子图窗口锚一起失效
             m_has_cached_target = false;   // 旧缓存目标建在旧位姿附近
             m_deskew_prev_valid = false;   // 旧解的位姿不能当新解的去畸变起点
+            m_yaw_trace_n = 0;             // 诊断: 逐帧 yaw 轨迹 250 帧
             // ★重定位/位姿注入: 子图关键帧按旧解注册, 新解下不清理就是"叠图"——
             //   同一面墙在子图里两份 (相差 Δ), 联合目标两层互相打架, 且
             //   popLeavingKfs 会把两层都 mergeChunk 进 w 账本, ghost 墙永久固化。
@@ -1959,7 +1972,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_maha_bypass_frames = 5;
             {
                 std::lock_guard<std::mutex> prior_lk(m_prior_mu);
-                if (m_prior) m_prior->reset(pending_pose);
+                if (m_prior) m_prior->resetPose(pending_pose);   // 保留零偏 (重定位自转根因)
             }
             {
                 std::lock_guard<std::mutex> fk(m_fusion_mu);
@@ -2463,6 +2476,43 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
         m_has_abs = false;   // 一次性消费
     }
+    // ★YawTransProbe (2026-11-26 现场): 静止时 yaw 自转的链路定位 —— 分辨
+    //   "匹配解在转" 还是 "后处理把输出拉走"。 1.5Hz, 仅 LocProbe。
+    {
+        static int ytp_n = 0;
+        static double ytp_last_yaw = 1e9;
+        if ((++ytp_n % 10) == 0) {
+            auto yawOfPose = [](const PoseStamped& p) {
+                return std::atan2(p.rot(1, 0), p.rot(0, 0)) * 57.2957795;
+            };
+            double pb = 0.0;
+            { std::lock_guard<std::mutex> pk(m_prior_mu); if (m_prior) pb = m_prior->gyroBiasZ(); }
+            auto rpyOfPose = [](const PoseStamped& p) {
+                const Eigen::Matrix3d R = p.rot;
+                const double pitch = std::asin(std::max(-1.0, std::min(1.0, -R(2, 0)))) * 57.2957795;
+                const double roll = std::atan2(R(2, 1), R(2, 2)) * 57.2957795;
+                return std::make_pair(roll, pitch);
+            };
+            const auto rp_o = rpyOfPose(out_pose);
+            const auto rp_g = rpyOfPose(guess);
+            const double ytp_yaw = yawOfPose(out_pose);
+            const bool ytp_show = (ytp_n <= 300) || (std::fabs(ytp_yaw - ytp_last_yaw) > 0.15);
+            if (ytp_show) {
+            ytp_last_yaw = ytp_yaw;
+            std::cout << "[YawTrans] acc=" << (accepted ? 1 : 0)
+                      << std::fixed << std::setprecision(3)
+                      << " fit=" << res.fitness
+                      << " yaw_guess=" << yawOfPose(guess)
+                      << " yaw_match=" << yawOfPose(res.pose)
+                      << " yaw_out=" << yawOfPose(out_pose)
+                      << " yaw_mpose=" << yawOfPose(m_pose)
+                      << " roll_o=" << rp_o.first << " pitch_o=" << rp_o.second
+                      << " roll_g=" << rp_g.first << " pitch_g=" << rp_g.second
+                      << " bias_z=" << pb
+                      << " abs=" << (m_has_abs ? 1 : 0) << std::endl;
+            }
+        }
+    }
     // L4 固定滞后平滑: 融合运动先验(between) + 扫描匹配(unary, 带协方差)
     if (m_smoother.enabled()) {
         m_smoother.addFrame(f.end_time, guess, accepted, out_pose, res.cov);
@@ -2537,17 +2587,42 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         }
     }
     if (accepted) {
-        {
-            std::lock_guard<std::mutex> prior_lk(m_prior_mu);
-            m_prior->onMatch(out_pose);
-        }
+        // ★顺序 (2026-11-26 根因): 先融合, 再让先验锚定**融合输出** (见下方)。
+        //   旧顺序先锚定原始匹配 —— 匹配在长墙/对称区是"谷底自由"量 (GICP 每帧
+        //   返回输入+0.3°), 锚定它等于把棘轮直接灌进 guess (yaw 4~6°/s 自转),
+        //   子图按 res.pose 写入被抹成扇形。融合输出已按互补增益 (yaw_gain) 过滤。
         // 位姿融合层: 把匹配结果作为"带协方差的观测"喂给估计器 (direct 模式下等价于直通)
         {
             std::lock_guard<std::mutex> fk(m_fusion_mu);
+            const double yaw_pf = std::atan2(out_pose.rot(1, 0), out_pose.rot(0, 0)) * 57.2957795;
+            double yaw_pf_2 = yaw_pf;
             if (m_fusion) m_fusion->onMatch(out_pose, res.cov, res);
             // eskf: 下游看到的位姿改用融合输出 (单帧修正有界)
             if (m_fusion && m_fusion->name() != "direct") {
                 out_pose = m_fusion->predict(out_pose.time);
+                yaw_pf_2 = std::atan2(out_pose.rot(1, 0), out_pose.rot(0, 0)) * 57.2957795;
+                if (m_yaw_trace_n >= 0 && m_yaw_trace_n < 250) {
+                    ++m_yaw_trace_n;
+                    std::cout << "[YawTrace] n=" << m_yaw_trace_n
+                              << std::fixed << std::setprecision(3)
+                              << " acc=" << (accepted ? 1 : 0)
+                              << " fit=" << res.fitness
+                              << " yaw_guess=" << std::atan2(guess.rot(1,0), guess.rot(0,0)) * 57.2957795
+                              << " yaw_res=" << std::atan2(res.pose.rot(1,0), res.pose.rot(0,0)) * 57.2957795
+                              << " yaw_pf=" << yaw_pf << " yaw_pf2=" << yaw_pf_2
+                              << " yaw_share=" << [&] {
+                                     double num = 0.0, den = 0.0;
+                                     for (int i = 0; i < 6; ++i) {
+                                         const double l = res.hess_eigvals(i);
+                                         den += l;
+                                         num += l * res.hess_eigvecs(2, i) *
+                                                res.hess_eigvecs(2, i);
+                                     }
+                                     return den > 1e-12 ? num / den : -1.0;
+                                 }()
+                              << " small_ratio=" << res.smallest_eig_ratio
+                              << std::endl;
+                }
                 // [FusProbe] (ROSIWIT_LOC_PROBE=1) 融合层内部状态: 平面锁之前的姿态
                 // (roll/pitch 是否被匹配修正带歪)、位置 vs 匹配、修正量与门控诊断
                 if (kLocProbe) {
@@ -2569,6 +2644,11 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     std::cout << os.str() << std::endl;
                 }
             }
+        }
+        // 先验锚定融合输出 (yaw 已被互补增益过滤, 原始匹配不再驱动闭环)
+        {
+            std::lock_guard<std::mutex> prior_lk(m_prior_mu);
+            m_prior->onMatch(out_pose);
         }
         m_last_accepted = out_pose;      // 逸出保护用的回退锚点
         m_have_last_accepted = true;
@@ -2762,7 +2842,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 同一面墙就分成了两层(建图模式不会, 因为它用同一套位姿做去畸变和写图)。
     CloudType::Ptr scan_write;
     if ((m_maintainer || m_session_map_enabled) && res.converged) {
-        scan_write = prepareScan(f, res.pose);
+        // ★写图用融合输出位姿 (与发布/闭环一致): res.pose 在弱观测区是谷底自由量,
+        //   按它写入会把棘轮/侧偏烙进子图与 w 账本 (2026-11-26 扇形根因)。
+        scan_write = prepareScan(f, out_pose);
     }
     const CloudType::Ptr& scan_map =
         (scan_write && !scan_write->empty()) ? scan_write : scan;
@@ -2821,7 +2903,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_coast_count == 0 && pose_stable &&
             allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg) &&
             anchorOk(res, accepted)) {
-            m_maintainer->onLocalized(res.pose, scan_map, m_last_match, true);
+            m_maintainer->onLocalized(out_pose, scan_map, m_last_match, true);
         }
     }
 
@@ -3205,7 +3287,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         // 改用 LIO 位姿注册 + 可靠性判据 (ROLL 原设计)。
                         if (accepted && res.converged && pose_stable_sm &&
                             res.fitness >= write_bar && scan_map && !scan_map->empty()) {
-                            m_session_map.update(*scan_map, res.pose);
+                            m_session_map.update(*scan_map, out_pose);
                         }
                         // ★走出子图覆盖的旧关键帧: 段级一次性「融合+雕刻」进 w 账本。
                         // 子图覆盖内纯几何跟踪 (零账本交互); 只有整段退出时才与

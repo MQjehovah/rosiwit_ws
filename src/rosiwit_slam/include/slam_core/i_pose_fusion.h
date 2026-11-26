@@ -51,6 +51,9 @@ public:
     /// 高频 IMU: 用于姿态推进与协方差扩散
     virtual void onImu(const IMUSample& /*s*/) {}
 
+    /// 陀螺 z 零偏 (rad/s): yaw 积分前必须扣掉; 由管道从运动先验同步。
+    virtual void setGyroBiasZ(double /*b*/) {}
+
     /// 轮式里程计位姿 (frame=odom, 车体姿态): 速度观测, 实现自行门控
     virtual void onOdom(const PoseStamped& /*odom*/) {}
 

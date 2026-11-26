@@ -51,6 +51,30 @@ void EkfMotionPrior::reset(const PoseStamped& pose) {
     m_cal_acc.clear();
 }
 
+void EkfMotionPrior::resetPose(const PoseStamped& pose) {
+    // 与 reset() 相同, 但保留 m_gyro_bias / m_acc_bias / m_calibrated:
+    // 零偏是传感器属性, 换解/重定位不改变它。清掉会让重定位后 yaw 以真实零偏
+    // 速率自转, 直到 200 帧标定重新完成 (实机 1.5°/s × 数秒, 子图抹成扇形)。
+    m_hist.clear();
+    m_hist.emplace_back(pose.time, pose);
+    m_q_free = Eigen::Quaterniond::Identity();
+    m_qhist.clear();
+    m_pose = pose;
+    m_v.setZero();
+    m_P = Eigen::Matrix2d::Identity() * 1.0;
+    m_odom_rejected = 0;
+    m_last_imu_time = -1.0;
+    m_first_imu = false;
+    m_have_odom = false;
+    m_odom_time = -1.0;
+    m_last_w = V3D::Zero();
+    m_last_match_rot = pose.rot;
+    m_last_match_time = pose.time;
+    m_last_match_trans = pose.trans;
+    m_up_body = V3D::UnitZ();
+    // m_gyro_bias / m_acc_bias / m_calibrated / m_cal_*: 保留
+}
+
 void EkfMotionPrior::onImu(const IMUSample& s) {
     // ---- L11 静止标定 (与 ImuMotionPrior 同款) ----
     if (!m_calibrated && m_cfg.imu_calib_samples > 0) {
