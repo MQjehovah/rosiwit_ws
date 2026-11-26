@@ -18,7 +18,7 @@ void GicpMatcher::configure(const ScanMatcherConfig& cfg) {
     m_gicp->setTransformationEpsilon(m_cfg.transformation_epsilon);
     // 2026-11-26: 关闭 fitness epsilon —— PCL 的收敛判据在它 >0 时每轮迭代都再扫
     //   一遍近邻算 MSE (迭代成本翻倍), 而位姿收敛由 transformation_epsilon 判定即可。
-    m_gicp->setEuclideanFitnessEpsilon(0.0);
+    m_gicp->setEuclideanFitnessEpsilon(1e-6);   // 2026-11-26 20:5x: 回到原值 (静止自转回归)
 }
 
 void GicpMatcher::setTarget(const CloudType::Ptr& target) {

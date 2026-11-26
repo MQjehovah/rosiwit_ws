@@ -42,7 +42,7 @@ public:
     Eigen::Vector2d velocity() const { return m_v; }
     Eigen::Matrix2d velocityCov() const { return m_P; }
     int odomRejected() const { return m_odom_rejected; }
-    V3D gyroBias() const { return m_gyro_bias; }
+    V3D gyroBias() const override { return m_gyro_bias; }
     /// 求得的 odom→world 旋转 yaw (deg)。本机 /odom 与 map 差 ~-90°，这个值应≈-90。
     double odomToWorldYawDeg() const { return m_odom_offset_yaw_deg; }
     /// 最近一次 odom 速度观测与滤波速度的夹角 (deg)。直行时应≈0；稳定在 ±90 说明坐标系没对齐。

@@ -318,9 +318,6 @@ void EkfPoseFusion::onMatch(const PoseStamped& pose,
     if (m_anchor_yaw_next) {
         m_anchor_yaw_next = false;   // 只此一次
     } else {
-        // 2026-11-26 回退增益调度: 它把单帧大新息按 60% 应用 —— 混叠错解 (72°)
-        //   因此被瞬间放大成位姿翻转。大修正是否可信由管道侧的"证据检验"
-        //   (残差对比) 决定, 融合层保持恒定低增益, 只做平稳跟踪。
         d_rot.z() = m_cfg.yaw_gain * e_rot.z();
     }
 

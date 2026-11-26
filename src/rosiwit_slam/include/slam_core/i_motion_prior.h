@@ -25,6 +25,8 @@ public:
     /// 当前陀螺 z 零偏估计 (rad/s). 供融合器等下游使用 —— 融合器的 yaw 积分
     /// 必须减掉它, 否则会以原始零偏速率自转 (2026-11-26 实机 1.5°/s 自转根因)。
     virtual double gyroBiasZ() const { return 0.0; }
+    /// 当前 3D 陀螺零偏估计 (去畸变/诊断用; 默认零)
+    virtual Eigen::Vector3d gyroBias() const { return Eigen::Vector3d::Zero(); }
 
     /// 喂入 IMU (仅 IMU 类先验使用)
     virtual void onImu(const IMUSample& /*s*/) {}

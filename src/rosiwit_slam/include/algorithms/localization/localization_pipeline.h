@@ -4,6 +4,7 @@
 #include <string>
 #include <thread>
 #include <mutex>
+#include <deque>
 #include <condition_variable>
 #include <atomic>
 #include "algorithms/localization/local_map/session_map.h"
@@ -151,6 +152,9 @@ private:
     // 工作图 provider 访问锁: 后台建目标线程 (getLocalMap) 与跟踪线程的提交钩子
     // (addWorldPoint 往同一关键帧点云 push_back) 并发 -> 串行化。
     std::mutex m_local_map_mu;
+    // [DumpTurn] 转弯诊断: 原始 IMU 环形缓冲 (~2s), 转储时写盘供离线复现去畸变
+    std::deque<IMUSample> m_imu_ring;
+    std::mutex m_imu_ring_mu;
     std::unique_ptr<ILocalizationMonitor> m_monitor;
     std::unique_ptr<IMapMaintainer>       m_maintainer;   // 第6阶段: 非破坏性叠加地图维护
     // 第7阶段: 位姿融合 (direct=直通 / eskf=IMU+odom 推进 + 匹配观测限幅修正)

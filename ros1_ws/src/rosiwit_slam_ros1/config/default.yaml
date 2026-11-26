@@ -275,7 +275,7 @@ localization:
     relocalizer: fpfh_ransac   # 2026-11-26 现场: none 时判丢后无法全局恢复 (死代码); 本机俯装 41.67°, BBS 不适用
     motion_prior: imu_ekf   # odom+IMU 误差状态EKF (2026-10-17); 退回旧版改 imu
     local_map: keyframe_submap
-    matcher: fast_gicp   # 2026-11-26: gicp -> fast_gicp (同算法 OpenMP 并行; 离线基准 30 帧: 与 PCL gicp
+    matcher: gicp       # 2026-11-26 20:5x: fast_gicp -> 回退 gicp (静止自转回归期间先回到上午已知良好配置)
                     # -> 车一移动后反复报 "NO Effective Points!", 位姿冻结。
                     # gicp 不需要法向量。若后续给子图补上法向量, 可再切回 pp_icp 对比。
     monitor: windowed
@@ -315,15 +315,14 @@ localization:
     # 导致位姿输出只有 ~1.4Hz(雷达 10Hz), 界面"频率很低"。
     # 降迭代 + 放大体素, 目标单帧 < 150ms; 精度用下面的 inlier_dist/max_corr 兜住。
     voxel_resolution: 0.3
-    max_iterations: 8             # 2026-11-26: 12 -> 8 (先验准, 8 轮足够; 配合 epsilon 提前收敛)
+    max_iterations: 12            # 2026-11-26 20:5x: 回到 12 (下午改 8 后静止自转回归)
     # 退化输入守卫: 降采样+动态滤除后点数低于该值直接判配准失败, 不进 GICP。
     # 依据: 2026-10-17 20:06 节点死亡 —— 错误位姿下 dynamic_filter 把扫描滤到 16 点,
     #        PCL 1.8 GICP computeCovariances(点数<k_correspondences=20) 段错误(单测复现 exit 139)。
     # 调小 -> 更容易进 GICP(有崩溃风险); 调大 -> 更保守(稀疏但有效帧可能被拒)。
     min_match_points: 50
-    max_correspondence_dist: 2.5   # 2026-11-26: 1.2->2.5 残差吸附范围翻倍 (15m处 ~4.6°->9.5°, 距离 2.5m)
-    transformation_epsilon: 0.001  # 2026-11-26: 1e-6 -> 1e-3 (1mm / 0.057°): 原值实际永不提前
-                                    # 收敛, 每帧跑满迭代; 1mm 远低于位姿噪声底
+    max_correspondence_dist: 1.2   # 2026-11-26 20:5x: 回到 1.2 (下午 2.5 后静止自转回归: 谷内远点误配)
+    transformation_epsilon: 0.000001
     inlier_dist: 0.3               # 算"配上"的距离(m), 比上面更严。
                                    # 注: coverage 对"沿墙滑动"天然钝感 (转几度点仍在墙上),
                                    # 2026-11-25 试过 0.18 提区分度, 但所有阈值 (accept/lost/
@@ -569,7 +568,7 @@ localization:
     mahalanobis_rot_floor: 0.05    # rad; GICP 残差协方差的旋转下限
     mahalanobis_coast_widen: 0.5   # 连续拒绝后马氏门限 ×(1+k·coast) 放宽 (防死锁: 预测偏出
                                    # 门限后匹配再准也进不来, 实车卡死到人工重锁). 0=关
-    max_trans_innov: 1.2           # 2026-11-26: 0.6->1.2 残差吸附范围放大; 同样随 coast 放宽 (协方差门限
+    max_trans_innov: 0.6           # 2026-11-26 20:5x: 回到 0.6 (单帧位置创新量绝对上限, 随 coast 放宽)
                                    # 在点云充分时允许 ~1.9m, 挡不住相似结构间 0.5~0.9m 的中间解). 0=关
     # ★退化方向部分更新 (2026-11-19 打开): 用 JtJ 特征分解按可观测度缩放修正量,
     # 弱观测方向(长廊的沿墙方向)增益趋 0 => 只信先验, 不再让"沿长墙滑动"整体生效。

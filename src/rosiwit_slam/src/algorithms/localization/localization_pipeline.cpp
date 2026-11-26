@@ -1273,6 +1273,11 @@ void LocalizationPipeline::setInitPose(const PoseStamped& pose) {
 
 void LocalizationPipeline::onImu(const IMUSample& s) {
     {
+        std::lock_guard<std::mutex> lk(m_imu_ring_mu);
+        m_imu_ring.push_back(s);
+        while (m_imu_ring.size() > 600) m_imu_ring.pop_front();
+    }
+    {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
         if (m_prior) m_prior->onImu(s);
     }
@@ -2307,6 +2312,86 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // 帧首/帧末位姿先补偿到帧末坐标系.
     CloudType::Ptr scan = prepareScan(f, guess);
 
+    // [DumpTurn] (ROSIWIT_DUMP_TURN=N 时) 转弯帧 (角速度 > 0.15rad/s, 每 3 帧) 转储到
+    // /tmp/slamdump_turn/f_%03d/: raw.pcd (原始扫描, curvature=逐点 ms) + scan_online.pcd
+    // (在线去畸变结果) + meta.txt (帧时间/位姿/外参/裁剪/零偏) + imu.txt (±0.5s 原始 IMU)
+    // + target_<k>.pcd。用途: 离线扫"点时间 vs 陀螺时间线"的偏移 τ (tools/deskew_probe),
+    // 定位转弯后 yaw 误差的来源。
+    static const int kDumpTurnMax = [] {
+        const char* e = std::getenv("ROSIWIT_DUMP_TURN");
+        return e ? std::atoi(e) : 0;
+    }();
+    if (kDumpTurnMax > 0 && f.cloud && !f.cloud->empty()) {
+        static int turn_n = 0, turn_frame = 0, turn_tgt = 0;
+        static CloudType::Ptr turn_last_target;
+        static const bool turn_dir_ok = [] {
+            (void)system("mkdir -p /tmp/slamdump_turn");
+            return true;
+        }();
+        (void)turn_dir_ok;
+        double rate = 0.0;
+        Eigen::Vector3d bias = Eigen::Vector3d::Zero();
+        {
+            std::lock_guard<std::mutex> pk(m_prior_mu);
+            if (m_prior) bias = m_prior->gyroBias();
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_imu_ring_mu);
+            if (!m_imu_ring.empty()) rate = (m_imu_ring.back().gyro - bias).norm();
+        }
+        if (rate > 0.15 && ++turn_frame % 3 == 0 && turn_n < kDumpTurnMax) {
+            const std::string dir = "/tmp/slamdump_turn/f_" + std::to_string(turn_n);
+            (void)system(("mkdir -p " + dir).c_str());
+            try {
+                pcl::io::savePCDFileBinary(dir + "/raw.pcd", *f.cloud);
+                pcl::io::savePCDFileBinary(dir + "/scan_online.pcd", *scan);
+                std::string tgt_name = "none";
+                if (m_cached_target) {
+                    if (m_cached_target != turn_last_target) {
+                        tgt_name = "/tmp/slamdump_turn/target_" + std::to_string(turn_tgt++) + ".pcd";
+                        pcl::io::savePCDFileBinary(tgt_name, *m_cached_target);
+                        turn_last_target = m_cached_target;
+                    } else {
+                        tgt_name = "/tmp/slamdump_turn/target_" + std::to_string(turn_tgt - 1) + ".pcd";
+                    }
+                }
+                std::ofstream mf(dir + "/meta.txt");
+                mf << std::fixed << std::setprecision(9);
+                mf << "start_time " << f.start_time << "\n";
+                mf << "end_time " << f.end_time << "\n";
+                mf << "guess_trans " << guess.trans.transpose() << "\n";
+                mf << "guess_quat " << Eigen::Quaterniond(guess.rot).coeffs().transpose() << "\n";
+                mf << "prev_time " << m_deskew_prev_pose.time << "\n";
+                mf << "prev_trans " << m_deskew_prev_pose.trans.transpose() << "\n";
+                mf << "prev_quat " << Eigen::Quaterniond(m_deskew_prev_pose.rot).coeffs().transpose() << "\n";
+                mf << "bias " << bias.transpose() << "\n";
+                mf << "rate " << rate << "\n";
+                mf << "matcher " << (m_matcher ? m_matcher->name() : "?") << "\n";
+                mf << "target " << tgt_name << "\n";
+                mf << "l2i_valid " << (m_lidar_to_imu_valid ? 1 : 0) << "\n";
+                if (m_lidar_to_imu_valid)
+                    for (int r = 0; r < 3; ++r)
+                        for (int c = 0; c < 4; ++c) mf << m_lidar_to_imu(r, c) << (c == 3 ? '\n' : ' ');
+                mf << "crop_valid " << ((m_matcher_cfg.crop_r_valid) ? 1 : 0) << "\n";
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 3; ++c) mf << m_matcher_cfg.crop_r(r, c) << (c == 2 ? '\n' : ' ');
+                mf << "crop_t " << m_matcher_cfg.crop_t.transpose() << "\n";
+                mf << "zfilter " << (m_matcher_cfg.match_z_filter ? 1 : 0) << " "
+                   << m_matcher_cfg.match_z_min << " " << m_matcher_cfg.match_z_max << "\n";
+                std::ofstream ih(dir + "/imu.txt");
+                ih << std::fixed << std::setprecision(9);
+                ih << "bias " << bias.transpose() << "\n";
+                std::lock_guard<std::mutex> lk(m_imu_ring_mu);
+                for (const auto& im : m_imu_ring)
+                    if (im.time >= f.start_time - 0.5 && im.time <= f.end_time + 0.5)
+                        ih << im.time << " " << im.gyro.transpose() << " " << im.acc.transpose() << "\n";
+            } catch (const std::exception&) {}
+            std::cout << "[DumpTurn] " << (turn_n + 1) << "/" << kDumpTurnMax
+                      << " rate=" << rate << " rad/s span=" << (f.end_time - f.start_time) << std::endl;
+            ++turn_n;
+        }
+    }
+
     // ★一阶段恢复 (2026-11-26): LOST 后先在 tracking 线程里跑网格搜索恢复
     // (以当前位姿为中心 ±radius × ±180°, 粗栅格打分 + 前K个GICP精配; 与 tracking
     // 同线程故 matcher 使用安全), 不再限定 relocalizer=none —— 之前开了 FPFH
@@ -2459,6 +2544,20 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_matcher->setTarget(target);
         }
         const bool ok = m_matcher->match(scan, guess, res);
+        if (kDumpTurnMax > 0) {
+            static int turn_res_n = 0;
+            if (turn_res_n < kDumpTurnMax) {
+                const std::string dir = "/tmp/slamdump_turn/f_" + std::to_string(turn_res_n);
+                std::ofstream mf(dir + "/meta.txt", std::ios::app);
+                mf << std::fixed << std::setprecision(9);
+                mf << "result_trans " << res.pose.trans.transpose() << "\n";
+                mf << "result_quat " << Eigen::Quaterniond(res.pose.rot).coeffs().transpose() << "\n";
+                mf << "fitness " << res.fitness << "\n";
+                mf << "residual " << res.residual << "\n";
+                mf << "ok " << (ok ? 1 : 0) << "\n";
+                ++turn_res_n;
+            }
+        }
         // 2026-11-26: 4DOF 全程投影已撤销 —— 现场"运行中激光歪了修不回来"证实
         //   它会丢掉匹配的 roll/pitch 修正 (本图姿态基准 39°, 转弯后需要姿态修正)。
         //   慢漂的真正根因是账本侵蚀 (已由 view 计票修复), 无需此投影。
