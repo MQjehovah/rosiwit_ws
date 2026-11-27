@@ -113,7 +113,13 @@ private:
 
     /// 子图 vs 先验图 的一致性观测 (只测不改): 把子图刚性地对齐到先验图,
     /// 输出残余刚体变换 (Δt, Δyaw)。Δt≈0 => 两者一致; 明显非零 => 子图已经偏了。
-    void checkSubmapPriorConsistency();
+    // ★只在后台线程跑 (2026-11-27): 它要整图裁剪 + 两次降采样 + 建 KD 树 + 几万次最近邻,
+    //   恒等分数 >= 0.12 时再跑 PCL GICP (30 轮) —— 原先每 30 帧在跟踪线程上同步执行,
+    //   真实数据回放里单帧卡 1.2~3.3s。只测不改的诊断没有任何理由占实时线程。
+    //   跟踪线程只投递位姿快照; 上一轮没跑完就丢弃这一轮 (诊断不排队)。
+    void kickConsistencyCheck(const PoseStamped& pose);
+    void consistencyWorker();                 // 兼容路径 (未注入执行器)
+    void checkSubmapPriorConsistency(const PoseStamped& pose);
     bool ensureRelocalizerMap();   // 全局重定位库就绪检查(后台构建中返回 false, 绝不阻塞)
     void relocBuildWorker();       // 兼容路径(未注入执行器): 常驻等待请求
     bool runRelocBuildOnce();      // 池任务: 构建一次重定位库
@@ -270,6 +276,8 @@ private:
     int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
     // 锚定状态只有 m_on_submap 一个 (m_anchor_on_base 已合并, 见下)
     int    m_consistency_tick = 0;        // 子图↔先验一致性观测的节拍 (机器人侧新增)
+    int    m_consistency_every = 300;     // session_map.consistency_every_frames: 每多少帧观测一次
+    std::atomic<bool> m_consistency_job{false};   // 有观测在途
     // ---- 输出位姿限速 (安全): 位姿跳变不再直通导航 (实机: 匹配在两个对齐间
     // 振荡 ±15m, 导航看到瞬移会急停/窜车) —— 合法跳变 (种子/有界恢复/换图) 走旁路。
     bool   m_out_lim_bypass = false;
@@ -408,6 +416,12 @@ private:
     // 全局重定位搜索线程：只做 FPFH 候选搜索，不持 m_state_mu；
     // 找到候选后通过 m_pending_init 交给本地 tracking worker。
     std::thread m_global_thread;
+        std::thread m_consistency_thread;                        // 兼容路径的一致性观测线程
+        std::mutex m_consistency_mu;
+        std::condition_variable m_consistency_cv;
+        bool m_consistency_stop = false;
+        bool m_consistency_pending = false;
+        PoseStamped m_consistency_pose;
     std::mutex m_global_mu;
     std::condition_variable m_global_cv;
     CloudType::Ptr m_global_scan;

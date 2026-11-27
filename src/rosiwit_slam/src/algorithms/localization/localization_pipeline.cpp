@@ -566,6 +566,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_sm_write_fitness = getv<double>(smc, "write_fitness_bridging", m_sm_write_fitness);
         m_sm_write_corr_m = getv<double>(smc, "write_max_corr_m", m_sm_write_corr_m);
         m_sm_write_corr_deg = getv<double>(smc, "write_max_corr_deg", m_sm_write_corr_deg);
+        m_consistency_every = std::max(1, getv<int>(smc, "consistency_every_frames", m_consistency_every));
     }
     m_session_map.configure(SessionMap::Config{
         m_session_map_radius, m_session_map_voxel, m_session_map_max_points});
@@ -709,6 +710,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
     }
     if (!m_executor && !m_global_thread.joinable())
         m_global_thread = std::thread([this] { globalRelocWorker(); });
+    if (!m_executor && !m_consistency_thread.joinable())
+        m_consistency_thread = std::thread([this] { consistencyWorker(); });
     std::cout << "[LocPipeline] " << describe() << std::endl;
     return true;
 }
@@ -729,6 +732,13 @@ LocalizationPipeline::~LocalizationPipeline() {
     }
     m_global_cv.notify_all();
     if (m_global_thread.joinable()) m_global_thread.join();
+    {
+        std::lock_guard<std::mutex> lk(m_consistency_mu);
+        m_consistency_stop = true;
+        m_consistency_pending = false;
+    }
+    m_consistency_cv.notify_all();
+    if (m_consistency_thread.joinable()) m_consistency_thread.join();
     {
         std::lock_guard<std::mutex> lk(m_target_mu);
         m_target_stop = true;
@@ -1839,16 +1849,63 @@ CloudType::Ptr LocalizationPipeline::deskewScan(const LidarFrame& f, const PoseS
 // "子图 vs 先验图 的一致性观测 (只测不改)": 把子图刚性地对齐到先验图,
 // 输出残余刚体变换 (Δt, Δyaw)。Δt≈0 => 两者一致; 明显非零 => 子图已经偏了。
 // 先验图 = 底图 + overlay(工作站架构里的 buildAnchoredTarget, 与匹配锚定目标同源)。
-void LocalizationPipeline::checkSubmapPriorConsistency() {
+void LocalizationPipeline::kickConsistencyCheck(const PoseStamped& pose) {
+    bool expected = false;
+    if (!m_consistency_job.compare_exchange_strong(expected, true)) return;   // 在途: 丢弃本轮
+    if (m_executor) {
+        rosiwit_common::JobOptions opt;
+        opt.name = "submap_prior_check";
+        const auto id = m_executor->submit(
+            "pool", opt,
+            [this, pose](rosiwit_common::CancelToken) {
+                const auto t0 = std::chrono::steady_clock::now();
+                checkSubmapPriorConsistency(pose);
+                std::cout << "[submap-prior] check " << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
+                          << " ms (background)" << std::endl;
+            },
+            [this](rosiwit_common::JobId, bool) { m_consistency_job.store(false); });
+        if (id == rosiwit_common::kInvalidJobId) m_consistency_job.store(false);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_consistency_mu);
+        m_consistency_pose = pose;
+        m_consistency_pending = true;
+    }
+    m_consistency_cv.notify_all();
+}
+
+void LocalizationPipeline::consistencyWorker() {
+#if defined(__linux__)
+    setpriority(PRIO_PROCESS, 0, 10);     // 诊断任务: 与跟踪线程抢 CPU 时让路
+#endif
+    std::unique_lock<std::mutex> lk(m_consistency_mu);
+    for (;;) {
+        m_consistency_cv.wait(lk, [this] { return m_consistency_stop || m_consistency_pending; });
+        if (m_consistency_stop) break;
+        m_consistency_pending = false;
+        const PoseStamped pose = m_consistency_pose;
+        lk.unlock();
+        const auto t0 = std::chrono::steady_clock::now();
+        checkSubmapPriorConsistency(pose);
+        std::cout << "[submap-prior] check " << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
+                  << " ms (background)" << std::endl;
+        lk.lock();
+        m_consistency_job.store(false);
+    }
+}
+
+// 只在后台线程执行 (kickConsistencyCheck); pose 是投递时的位姿快照。
+void LocalizationPipeline::checkSubmapPriorConsistency(const PoseStamped& pose) {
     if (!m_session_map_enabled) return;
     CloudType::Ptr sub;
     {
         std::lock_guard<std::mutex> lk(m_session_map_mu);
         if (!m_session_map.active()) return;
-        sub = m_session_map.pointsWorld(m_pose.trans, m_session_map_match_radius);
+        sub = m_session_map.pointsWorld(pose.trans, m_session_map_match_radius);
     }
     if (!sub || sub->size() < 3000) return;
-    CloudType::Ptr prior = buildAnchoredTarget(m_pose);
+    CloudType::Ptr prior = buildAnchoredTarget(pose);
     if (!prior || prior->size() < 3000) return;
     CloudType::Ptr A = downsampleCloud(sub, 0.4);
     CloudType::Ptr B = downsampleCloud(prior, 0.4);
@@ -4057,8 +4114,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             }
             // ★机器人侧新增: 子图↔先验一致性观测 (只测不改)。必须在 m_session_map_mu
             // 作用域之外调用(函数内部自己加锁, 非递归 mutex 二次加锁 = 死锁; 实机踩过)。
-            if (m_session_map_enabled && (++m_consistency_tick % 30 == 0)) {
-                checkSubmapPriorConsistency();
+            if (m_session_map_enabled && (++m_consistency_tick % m_consistency_every == 0)) {
+                kickConsistencyCheck(m_pose);     // 后台跑, 不占跟踪线程 (见头文件说明)
             }
             }
 
