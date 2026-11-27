@@ -106,6 +106,7 @@ struct ScanMatcherConfig {
     int    max_iterations = 32;             // 最大迭代
     double max_correspondence_dist = 2.0;   // 初始最近邻门限(m)
     double transformation_epsilon = 1e-6;   // 收敛阈值
+    int    num_threads = 4;                // fast_gicp 的 OpenMP 线程数 (含调用它的跟踪线程); <=0 取默认
     // 质量评估
     double inlier_dist = 0.3;               // 内点最近邻阈值(m)
 

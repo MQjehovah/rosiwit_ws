@@ -2,6 +2,7 @@
 #include "algorithms/localization/matcher/gicp_matcher.h"
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/registration_metrics.h"
+#include <fast_gicp/gicp/fast_gicp.hpp>
 #include <chrono>
 #include <cstdlib>
 
@@ -14,6 +15,9 @@ void GicpMatcher::configure(const ScanMatcherConfig& cfg) {
     m_cfg = cfg;
     if (!m_gicp) return;   // 子类自带求解器 (如 LioMatcher), 不配置引擎
     m_gicp_lsq = dynamic_cast<fast_gicp::LsqRegistration<PointType, PointType>*>(m_gicp.get());
+    // 线程数由配置给 (matcher.num_threads; 工厂里的 4 只是构造时的缺省值)
+    if (auto* fg = dynamic_cast<fast_gicp::FastGICP<PointType, PointType>*>(m_gicp.get()))
+        fg->setNumThreads(std::max(1, m_cfg.num_threads));
     m_gicp->setMaximumIterations(m_cfg.max_iterations);
     m_gicp->setMaxCorrespondenceDistance(m_cfg.max_correspondence_dist);
     m_gicp->setTransformationEpsilon(m_cfg.transformation_epsilon);
