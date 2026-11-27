@@ -6,9 +6,12 @@
 #include <unordered_set>
 #include <cstdint>
 #include <vector>
+#include <cmath>
 #include <pcl/kdtree/kdtree_flann.h>
 #include "slam_core/i_map_maintainer.h"
 #include <mutex>
+#include <atomic>
+#include <memory>
 
 namespace rosiwit_slam {
 
@@ -19,6 +22,7 @@ namespace rosiwit_slam {
 ///   - getOverlay() 返回位姿附近 overlay, 由管道叠加到局部地图作为配准目标.
 class OverlayMapMaintainer : public IMapMaintainer {
 public:
+    using DeadSet = std::unordered_set<int64_t>;   // 判死体素集 (底图里 w 降到 0 的体素)
     std::string name() const override { return "overlay"; }
     void configure(const MaintainerConfig& cfg) override { m_cfg = cfg; resolveSigmas(); }
     void setBaseMap(const std::string& map_path, const CloudType::Ptr& base) override;
@@ -26,6 +30,7 @@ public:
                      const MatchResult& match, bool pose_confident) override {
         std::lock_guard<std::recursive_mutex> lk(m_mu);
         onLocalizedLocked(pose, scan_body, match, pose_confident);
+        refreshDiagLocked(pose);      // 写完把诊断缓存/判死快照发布出去 (读方不加主锁)
     }
     void onLocalizedLocked(const PoseStamped& pose, const CloudType::Ptr& scan_body,
                      const MatchResult& match, bool pose_confident);
@@ -33,11 +38,13 @@ public:
         std::lock_guard<std::recursive_mutex> lk(m_mu);
         return getOverlayLocked(pose);
     }
-    // ★线程安全 (2026-11-26 实机段错误根因): 本对象被三个线程访问 ——
-    //   定位线程 onLocalized/mergeChunk (改 m_cells/m_persistency/m_dead_base)、
-    //   IO 发布线程 snapshotOverlay/getOverlay、存盘线程 reclaim。
-    //   之前零锁, 并发读写 unordered_map -> 进入定位瞬间 (overlay_map 首发布)
-    //   与账本更新相撞 -> SIGSEGV (exit -11)。所有公开入口统一加递归锁。
+    // ★线程安全 (2026-11-26 实机段错误根因): 之前零锁, 并发读写 unordered_map -> 进入定位瞬间
+    //   (overlay_map 首发布) 与账本更新相撞 -> SIGSEGV (exit -11)。所有公开入口统一加递归锁。
+    // ★线程模型 (2026-11-27): 写账本 (onLocalized / mergeChunk) 只在**地图更新线程** (MapUpdateWorker)
+    //   上; IO 发布线程 snapshotOverlay/getOverlay、换图线程 setBaseMap 仍拿主锁 (它们不是实时路径)。
+    //   **跟踪线程不再拿主锁**: 它只读下面这些不加锁的视图 —— revision / lastNovel* (原子量),
+    //   filterDeadBase (判死体素集的写时复制快照), cachedPersistencyCoverage (每次写入后算好的缓存)。
+    //   持主锁的一次写入实测 30~550ms, 跟踪线程每帧都要读账本, 等这把锁 = 账本开销原样回到帧预算里。
     CloudType::Ptr snapshotOverlay() override {
         std::lock_guard<std::recursive_mutex> lk(m_mu);
         return snapshotOverlayLocked();
@@ -58,8 +65,18 @@ public:
     /// A 阶段(影子): 最近一次可信帧的扫描点里, 落在 overlay 体素上的点中
     /// w >= cfg.persistency_anchor 的占比; 只统计, 不参与决策. 无变化结构可见时返回 -1.
     double persistencyCoverage(const PoseStamped& pose,
-                         int* anchor_age = nullptr,
-                         size_t* session_map_pts = nullptr) const override;
+                                 int* anchor_age = nullptr,
+                                 size_t* session_map_pts = nullptr) const override {
+        std::lock_guard<std::recursive_mutex> lk(m_mu);   // 现算: 拿主锁 (测试/外部调用用)
+        return persistencyCoverageLocked(pose, anchor_age, session_map_pts);
+    }
+    double cachedPersistencyCoverage(int* anchor_age = nullptr,
+                                     size_t* session_map_pts = nullptr) const override {
+        std::lock_guard<std::mutex> lk(m_diag_mu);        // 只保护三个数的拷贝, 从不在写账本时持有
+        if (anchor_age) *anchor_age = m_diag.age;
+        if (session_map_pts) *session_map_pts = m_diag.pts;
+        return m_diag.cov;
+    }
 
     /// 开始一个新会话(任务): w 按 session 计票时, 每个会话最多 +1。
     /// 由 /start_task (或换图/节点启动) 调用; 超过 persistency_session_hours 也会自动换。
@@ -68,12 +85,13 @@ public:
     int persistencyAt(const Eigen::Vector3d& p) const;
 
     /// 诊断: 最近一帧参与"新结构候选"计票的体素数 / 本帧实际沉淀的体素数
-    size_t lastNovelVotes() const override { return m_novel_votes; }
-    size_t lastNovelCommitted() const override { return m_novel_committed; }
+    size_t lastNovelVotes() const override { return m_novel_votes.load(); }        // 原子量: 读方不加锁
+    size_t lastNovelCommitted() const override { return m_novel_committed.load(); }
 
     size_t overlaySize() const { return m_overlay_count; }
-    /// 统一工作图 Phase A: 底图体素的 w 账本查询 (目标里剔除已衰减的底图点)
-    const std::unordered_set<int64_t>& deadBaseVoxels() const { return m_dead_base; }
+    /// 统一工作图 Phase A: 底图体素的 w 账本查询 (目标里剔除已衰减的底图点)。
+    /// 返回快照 (写时复制, 不加主锁) —— 内容不可变, 可以在任何线程上读。
+    std::shared_ptr<const DeadSet> deadBaseVoxels() const { return deadBaseSnapshot(); }
     double voxelSize() const { return m_voxel; }
     static int64_t voxelKeyOf(int cx, int cy, int cz) { return voxelKey(cx, cy, cz); }
     // 统一工作图: 工作图文件里 intensity = w
@@ -83,8 +101,24 @@ public:
     }
     void annotateBaseWeightsRange(CloudType& cloud, size_t begin, size_t end) const override;
     CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const override {
-        std::lock_guard<std::recursive_mutex> lk(m_mu);
-        return filterDeadBaseLocked(cloud);
+        // 判死体素集的快照 (写时复制): 读方 (目标裁剪 / 覆盖率重裁剪, 可能在定位线程上) 不拿主锁,
+        // 不会卡在地图更新线程的一次写入上 (实车实测每次 30~550ms)。
+        return filterDeadBaseWith(deadBaseSnapshot(), cloud, m_voxel);
+    }
+    // 快照过滤 (静态: 不碰 this 的任何可变状态)。snap 为空或 cloud 为空时原样返回。
+    static CloudType::Ptr filterDeadBaseWith(const std::shared_ptr<const DeadSet>& snap,
+                                             const CloudType::Ptr& cloud, double voxel) {
+        if (!cloud || !snap || snap->empty() || voxel <= 0.0) return cloud;
+        CloudType::Ptr out(new CloudType());
+        out->reserve(cloud->size());
+        for (const auto& p : cloud->points) {
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+            if (snap->count(voxelKey(static_cast<int>(std::floor(p.x / voxel)),
+                                     static_cast<int>(std::floor(p.y / voxel)),
+                                     static_cast<int>(std::floor(p.z / voxel))))) continue;
+            out->push_back(p);
+        }
+        return out;
     }
     /// 回收已删除体素的点 (w 降到 0 / 硬删的那些): 由落盘时刻调用 (1h 一次)。
     /// 逐条删除要扫整格点云, 太贵; 攒到落盘时全量扫一遍, 成本可忽略。
@@ -97,15 +131,13 @@ public:
     void mergeChunk(const PoseStamped& pose, const CloudType::Ptr& world) {
         std::lock_guard<std::recursive_mutex> lk(m_mu);
         mergeChunkLocked(pose, world);
+        refreshDiagLocked(pose);
     }
     /// 提交钩子: 新结构升格时回调 (w-map 模式下管道用它把点插进工作图分块缓存)
     void setCommitHook(std::function<void(const Eigen::Vector3d&, float)> hook) {
         m_commit_sink = std::move(hook);
     }
-    uint64_t revision() const override {
-        std::lock_guard<std::recursive_mutex> lk(m_mu);
-        return m_revision;
-    }
+    uint64_t revision() const override { return m_revision.load(); }   // 原子量: 目标缓存判失效在定位线程上
     // ---- 加锁实现 (原函数体改名, 由上面的公开入口统一加锁) ----
     CloudType::Ptr snapshotOverlayLocked();
     void popOverlayDeltaLocked(CloudType::Ptr& out);
@@ -216,6 +248,40 @@ private:
     // 阈值才产生新视角。静止机器人只有一个视角, hit/miss 都只计一票:
     // 否则 miss 侧的"每帧"语义会把静止时未被当前扫描返回的真实几何逐帧减死
     // (射线抽样间歇 = 假的新视角), 工作图被自更新侵蚀 -> 位姿缓漂。
+
+    /// 判死体素集的当前快照 (写时复制, 指向的内容不可变) —— 读方不加账本主锁
+    std::shared_ptr<const DeadSet> deadBaseSnapshot() const {
+        std::lock_guard<std::mutex> lk(m_dead_mu);
+        return m_dead_snap;
+    }
+
+    // 一次写入之后 (持 m_mu) 调用: 把诊断覆盖率算好缓存起来 (定位线程的 1Hz 状态日志只读缓存),
+    // 判死体素集有变化就发布一份新快照。写账本的线程 = 地图更新线程 (MapUpdateWorker)。
+    void refreshDiagLocked(const PoseStamped& pose) {
+        double cov = -1.0;
+        int age = 0;
+        size_t pts = 0;
+        if (m_last_world && !m_last_world->empty()) cov = persistencyCoverageLocked(pose, &age, &pts);
+        {
+            std::lock_guard<std::mutex> lk(m_diag_mu);
+            m_diag.cov = cov;
+            m_diag.age = age;
+            m_diag.pts = pts;
+        }
+        if (m_dead_dirty) {
+            m_dead_dirty = false;
+            std::shared_ptr<const DeadSet> fresh = std::make_shared<const DeadSet>(m_dead_base);   // 拷贝在锁外做
+            std::lock_guard<std::mutex> lk(m_dead_mu);
+            m_dead_snap.swap(fresh);
+        }
+    }
+    double persistencyCoverageLocked(const PoseStamped& pose, int* anchor_age, size_t* session_map_pts) const;
+    struct Diag { double cov = -1.0; int age = 0; size_t pts = 0; };
+    Diag m_diag;                                 // 缓存的覆盖率诊断 (m_diag_mu)
+    mutable std::mutex m_diag_mu;                // 从不在写账本时持有
+    mutable std::mutex m_dead_mu;                // 只保护 m_dead_snap 指针的读写; 从不在写账本时持有
+    std::shared_ptr<const DeadSet> m_dead_snap;   // 写时复制快照
+    bool m_dead_dirty = true;                    // m_dead_base 变过, 下次写入后要发布快照 (持 m_mu)
     mutable std::recursive_mutex m_mu;   // 全对象递归锁 (见公开入口说明)
     uint32_t m_view_id = 1;
     PoseStamped m_view_pose;
@@ -235,11 +301,11 @@ private:
     int m_low_count = 0;
     long m_frame = 0;
     size_t m_overlay_count = 0;
-    size_t m_novel_votes = 0;       // 本帧计票的候选体素数(诊断)
-    size_t m_novel_committed = 0;   // 本帧沉淀的体素数(诊断)
+    std::atomic<size_t> m_novel_votes{0};       // 本帧计票的候选体素数(诊断; 原子量, 读方不加锁)
+    std::atomic<size_t> m_novel_committed{0};   // 本帧沉淀的体素数(诊断; 原子量, 读方不加锁)
     // [诊断] collectNovel 各分支计数, 定位"新结构不进 overlay"
     size_t m_dbg_scan = 0, m_dbg_seen = 0, m_dbg_base = 0, m_dbg_kd = 0, m_dbg_cluster = 0;
-    uint64_t m_revision = 0;      // 内容版本号: addPoint/load 自增, 供目标缓存判失效
+    std::atomic<uint64_t> m_revision{0};   // 内容版本号: addPoint/load 自增, 供目标缓存判失效 (读方不加锁)
 
     // L13 位姿图: 变化关键帧缓冲 (pose + 机体系点云)
     struct KfBuf { PoseStamped pose; CloudType::Ptr body; };

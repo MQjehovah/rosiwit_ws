@@ -9,8 +9,8 @@ namespace rosiwit_slam {
 
 /// 在时间预算内推进分片标注 (工作图落盘, 2026-11-26)。
 ///
-/// 账本只有跟踪线程在写, 所以需要账本的 w 标注由跟踪线程自己做; 为了不挤占帧预算,
-/// 从 begin 起按 sub_chunk 点一段一段调用 IMapMaintainer::annotateBaseWeightsRange,
+/// 账本只有地图更新线程在写 (MapUpdateWorker), 所以需要账本的 w 标注由它在队列空的间隙做; 为了不把
+/// 排队的观测任务拖久, 从 begin 起按 sub_chunk 点一段一段调用 IMapMaintainer::annotateBaseWeightsRange,
 /// 每段之后看表, 累计耗时达到 budget_ms 即停 —— 下次调用从返回值处继续。
 ///
 /// 返回本次推进到的位置 (== cloud.size() 表示已标完)。

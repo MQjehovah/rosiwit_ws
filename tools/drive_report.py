@@ -102,6 +102,11 @@ class Log(object):
         rx_imu = re.compile(r'ImuDiag\].*?yaw_rate=' + NUM)
         rx_perf = re.compile(r'\[LocPerf\] frames=(\d+) s2m_ms_ema=' + NUM +
                              r' last_ms=' + NUM + r' queue=(\d+)')
+        # 2026-11-27 追加的字段 (旧日志没有): 帧龄 = 这帧在 m_loc_buf 里等了多久; 累计丢弃 / 最近 50 帧丢弃
+        rx_perf2 = re.compile(r'age_ms_ema=' + NUM + r' drop_total=(\d+) drop_50=(\d+)')
+        # 地图更新线程 (账本写入, 2026-11-27 起不在跟踪线程上): 任务耗时 / 丢弃的观测 / 排队
+        rx_mupd = re.compile(r'mapupd_ms=' + NUM + r' mapupd_ema=' + NUM + r' mapupd_max=' + NUM +
+                             r' mapupd_drop=(\d+) mapupd_fail=(\d+) mapupd_q=(\d+)')
         rx_qual = re.compile(r'\[quality\].*?cov_base=' + NUM + r'.*?novel_votes=(\d+) novel_commits=(\d+)'
                              r'.*?anchor=(\w+) inl=(\d+) vis=(\d+)')
         rx_build = re.compile(r'\[LocProbe\] local_map_points=(\d+) pose=\(' + NUM + r',\s*' + NUM + r'\)')
@@ -138,9 +143,12 @@ class Log(object):
                 if line.startswith('[quality]'):
                     m = rx_qual.search(line)
                     if m:
+                        mu = rx_mupd.search(line)
                         self.quals.append(dict(t=t, cov=float(m.group(1)), nc=int(m.group(3)),
                                                anchor=m.group(4), inl=int(m.group(5)), vis=int(m.group(6)),
-                                               w=self.wr))
+                                               w=self.wr,
+                                               mu=(float(mu.group(2)), float(mu.group(3)), int(mu.group(4)),
+                                                   int(mu.group(5)), int(mu.group(6))) if mu else None))
                 elif line.startswith('[DropProbe'):
                     m = rx_drop.search(line)
                     if m:
@@ -152,8 +160,12 @@ class Log(object):
                 elif line.startswith('[LocPerf'):
                     m = rx_perf.search(line)
                     if m:
+                        m2 = rx_perf2.search(line)
                         self.perfs.append(dict(t=t, n=int(m.group(1)), ema=float(m.group(2)), ms=float(m.group(3)),
-                                               q=int(m.group(4))))
+                                               q=int(m.group(4)),
+                                               age=float(m2.group(1)) if m2 else None,
+                                               dtot=int(m2.group(2)) if m2 else None,
+                                               d50=int(m2.group(3)) if m2 else None))
                 elif line.startswith('[MatchProbe]'):
                     m = rx_mprobe.search(line)
                     if m:
@@ -416,6 +428,21 @@ def report_timing(log, ps):
     if rate:
         print('实际处理帧率: 最低 %.1f  中位 %.1f  最高 %.1f Hz   (低于 10 = 丢帧 + 位姿延迟)' % (
             rate[0], pct(rate, 0.5), rate[-1]))
+    # 2026-11-27 起节点自己报 m_loc_buf 的丢弃与帧龄 (之前这里的丢弃在日志里看不见: [slam_algo] input 1s
+    # 报的是 ROS 层通道, 不是跟踪线程的队列)
+    aged = [p for p in perfs if p.get('age') is not None]
+    if aged:
+        drop = aged[-1]['dtot'] - aged[0]['dtot']
+        age = sorted(p['age'] for p in aged)
+        print('跟踪队列: 区间内丢弃 %d 帧 (输入 10Hz x %.0fs = %d 帧)   帧龄 (入队→开始处理) ema: p50 %.0f  最大 %.0f ms'
+              % (drop, aged[-1]['t'] - aged[0]['t'], int((aged[-1]['t'] - aged[0]['t']) * 10),
+                 pct(age, 0.5), age[-1]))
+    mu = [q['mu'] for q in log.quals if q.get('mu') and moving_t[0] <= q['t'] <= moving_t[-1]]
+    if mu:   # 每项: (任务耗时 ema, 单次最大, 累计丢弃观测, 累计失败, 当前排队)
+        print('地图更新线程 (账本写入, 不在跟踪线程上): 任务耗时 ema p50 %.0f  最大 %.0f ms, 单次最大 %.0f ms; '
+              '区间内丢弃观测 %d, 失败 %d, 排队最大 %d'
+              % (pct(sorted(m[0] for m in mu), 0.5), max(m[0] for m in mu), max(m[1] for m in mu),
+                 mu[-1][2] - mu[0][2], mu[-1][3] - mu[0][3], max(m[4] for m in mu)))
     mp = [m for m in log.mprobe if moving_t[0] <= m['t'] <= moving_t[-1]]
     if mp:
         print('匹配器分段 (每 512 帧取 1 帧; gicp = 求解, 评估 = 覆盖率统计, 每个扫描点一次最近邻查询):')

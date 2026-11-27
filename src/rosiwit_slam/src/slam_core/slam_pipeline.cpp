@@ -4,6 +4,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <cstring>
 #include "slam_core/slam_pipeline.h"
 #include "slam_core/slam_factory.h"
 #include "algorithms/map_store/voxel_map_store.h"
@@ -656,43 +657,54 @@ void SlamPipeline::onLidar(const LidarFrame& f) {
     if (mode == PipelineMode::LOCALIZATION) {
         // 只入队: GICP/重定位不能占用 sensor callback, 否则 IMU 会在 DDS/队列里
         // 积压, 匹配结束后再被积分一遍, 造成重复积分/过冲.
-        m_loc_buf.push(std::move(f));   // 满时丢最旧 (Channel 内计数)
+        m_loc_buf.push(LocFrame{std::move(f), std::chrono::steady_clock::now()});   // 满时丢最旧 (Channel 内计数)
         return;
     }
     SlamBase::onLidar(f);
 }
 
 namespace {
-// 跟踪线程设 SCHED_FIFO 后, 它创建的 OpenMP 工作线程会继承实时优先级; OpenMP 空闲
-// 时默认自旋等待 -> 几个实时线程空转即可饿死整机 (相机/导航都是普通调度)。
-// 首帧后一次性把除跟踪线程外的所有线程降回普通调度 (需要 CAP_SYS_NICE, 失败忽略)。
-void demoteOtherRealtimeThreads() {
-    const long self = static_cast<long>(syscall(SYS_gettid));
-    DIR* d = opendir("/proc/self/task");
-    if (!d) return;
-    while (dirent* e = readdir(d)) {
-        const long tid = std::atol(e->d_name);
-        if (tid <= 0 || tid == self) continue;
-        sched_param sp{};
-        sp.sched_priority = 0;
-        sched_setscheduler(static_cast<pid_t>(tid), SCHED_OTHER, &sp);
+// 跟踪线程的实时优先级。systemd 单元用 LimitRTPRIO=40 放行 (xzrobot.service.d/10-slam-rt.conf, 见
+// docs/ros1_deploy_runbook.md §4.1); 没放行时 pthread_setschedparam 返回 EPERM。
+constexpr int kTrackRTPriority = 40;
+
+const char* schedPolicyName(int policy) {
+    switch (policy) {
+        case SCHED_FIFO: return "SCHED_FIFO";
+        case SCHED_RR:   return "SCHED_RR";
+        case SCHED_OTHER: return "SCHED_OTHER";
+        case SCHED_BATCH: return "SCHED_BATCH";
+        case SCHED_IDLE: return "SCHED_IDLE";
+        default: return "unknown";
     }
-    closedir(d);
 }
 } // namespace
 
 void SlamPipeline::localizationWorker(rosiwit_common::CancelToken token) {
-    // ★跟踪线程实时优先级 (2026-11-26): 整机 8xA55 过载 (load 10+, 相机/AI/录包),
+    // ★跟踪线程实时优先级 (2026-11-26): 整机 8 核过载 (load 10+, 相机/AI/录包),
     //   跟踪线程就绪后常被抢占 -> 单帧 200ms~1s、队列积压。它绝大多数时间在等雷达
     //   (条件变量阻塞), FIFO 只影响"它就绪时优先被调度", 不会空转饿死其他线程。
-    //   非 root / 无 CAP_SYS_NICE 时失败, 静默忽略。
+    //   结果**必须打日志** (2026-11-27): 之前失败是静默的 —— 单元 LimitRTPRIO=0,
+    //   这段代码上线以来从来没生效过, 而日志里看不出来。以读回的调度策略为准。
     {
         sched_param sp{};
-        sp.sched_priority = 40;
-        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) != 0) {
+        sp.sched_priority = kTrackRTPriority;
+        const int rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+        int policy = -1;
+        sched_param cur{};
+        const bool have = (pthread_getschedparam(pthread_self(), &policy, &cur) == 0);
+        if (have && (policy == SCHED_FIFO || policy == SCHED_RR)) {
+            std::cout << "[SlamPipeline] tracking thread scheduling: " << schedPolicyName(policy)
+                      << " prio=" << cur.sched_priority
+                      << (rc == 0 ? "" : " (set call failed, thread was already realtime)") << std::endl;
+        } else {
             sp.sched_priority = 0;
             pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp);
             nice(-5);
+            std::cout << "[SlamPipeline] tracking thread scheduling: NOT realtime (pthread_setschedparam: "
+                      << (rc != 0 ? std::strerror(rc) : std::string("no realtime policy read back"))
+                      << "); need LimitRTPRIO>=" << kTrackRTPriority << " on the systemd unit"
+                      << std::endl;
         }
     }
     while (!token.cancelled()) {
@@ -706,11 +718,13 @@ void SlamPipeline::localizationWorker(rosiwit_common::CancelToken token) {
         if (m_mode.load() != PipelineMode::LOCALIZATION || !m_localization) continue;
         // 重定位/GICP 在 worker 线程执行，ROS spinner 仍能处理服务、TF、slam/info。
         handleLocalization(*f);
-        // 首帧后: OpenMP 工作线程已创建, 把继承来的实时优先级收回 (只留跟踪线程)
-        static bool demoted = false;
-        if (!demoted) { demoted = true; demoteOtherRealtimeThreads(); }
+        // 跟踪线程创建的 OpenMP 工作线程**保持**继承来的实时优先级 (2026-11-27 修订): 它们是求解器
+        // 并行队伍的成员, 降成普通调度后实时主线程就在栅栏处等一个非实时线程 —— 优先级白给
+        // (num_threads=2 时一半的求解是它做的)。空闲时它们不会霸占 CPU: libgomp 默认是有限自旋后
+        // futex 睡眠 (单元没有设 OMP_WAIT_POLICY=active / GOMP_SPINCOUNT=infinite)。
+        // 跟踪线程不创建其它线程 (管线各线程都在初始化线程上建), 所以不会有别的线程继承实时优先级。
         // LIO 相对观测: 在输出之后跑, 避免把前端耗时压在本帧 S2M 输出路径上。
-        updateLioRelative(*f);
+        updateLioRelative(f->frame);
     }
 }
 
@@ -772,20 +786,31 @@ void SlamPipeline::updateLioRelative(const LidarFrame& f) {
     }
 }
 
-void SlamPipeline::handleLocalization(const LidarFrame& f) {
+void SlamPipeline::handleLocalization(const LocFrame& lf) {
     if (!m_localization) return;
+    const LidarFrame& f = lf.frame;
     const auto t0 = std::chrono::steady_clock::now();
+    // 帧龄: 这帧在 m_loc_buf 里等了多久 (入队 -> 开始处理)。≈0 = 跟得上; 接近/超过帧周期 = 在积压。
+    const double age_ms = std::chrono::duration<double, std::milli>(t0 - lf.t_enqueue).count();
     m_localization->onLidar(f);
     // 单帧 S2M 端到端耗时 (含去畸变/局部图/配准/融合): 预算 100 ms
     {
         const double ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - t0).count();
         static double ema = -1.0;
+        static double age_ema = -1.0;
         static int n = 0;
+        static uint64_t drop_seen = 0;   // 上次打印时的累计丢弃数
         ema = (ema < 0.0) ? ms : (0.9 * ema + 0.1 * ms);
+        age_ema = (age_ema < 0.0) ? age_ms : (0.9 * age_ema + 0.1 * age_ms);
         if (++n % 50 == 0) {
+            const rosiwit_common::ChannelStats st = m_loc_buf.stats();
+            const uint64_t drop_total = st.dropped_oldest + st.dropped_newest;
             std::cout << "[LocPerf] frames=" << n << " s2m_ms_ema=" << ema
-                      << " last_ms=" << ms << " queue=" << m_loc_buf.size() << std::endl;
+                      << " last_ms=" << ms << " queue=" << m_loc_buf.size()
+                      << " age_ms_ema=" << age_ema
+                      << " drop_total=" << drop_total << " drop_50=" << (drop_total - drop_seen) << std::endl;
+            drop_seen = drop_total;
         }
     }
 

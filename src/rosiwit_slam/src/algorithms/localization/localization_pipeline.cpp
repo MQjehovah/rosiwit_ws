@@ -697,6 +697,13 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         }
         m_maintainer->configure(m_maintainer_cfg);
     }
+    // 地图更新线程 (见头文件 m_map_update): 在初始化线程上创建; 线程入口自己再显式降回普通调度,
+    // 不依赖创建者是什么调度策略。
+    if (m_maintainer && !m_map_update) {
+        m_map_update.reset(new MapUpdateWorker(
+            [this](MapUpdateWorker::Job& job) { onMapUpdateJob(job); },
+            [this] { advanceSaveAnnotation(); }));
+    }
     // 工作图落盘线程 (见头文件 m_save_thread 注释)。可 join 的成员线程, 析构时先停再收。
     if (!m_save_thread.joinable()) {
         m_save_stop = false;
@@ -718,6 +725,9 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
 }
 
 LocalizationPipeline::~LocalizationPipeline() {
+    // 地图更新线程最先停 (丢掉排队任务, 等手里的任务 / 分片标注做完): 它们会访问维护器、
+    // 工作图 provider、重定位器与落盘状态 —— 都是下面才停的线程 / 才析构的成员。
+    m_map_update.reset();
     // 后台构建线程: 先停再收 (worker 可能正持有 45s 的构建)
     {
         std::lock_guard<std::mutex> lk(m_reloc_mu);
@@ -761,25 +771,28 @@ LocalizationPipeline::~LocalizationPipeline() {
 }
 
 namespace {
-// 工作图落盘分片: 跟踪线程每帧花在 w 标注上的时间预算, 以及看表的粒度。
-// 260 万点实测 ~33ns/点: 8192 点 ≈ 0.3ms; 每帧 ≤2.3ms -> 约 40 帧 (4s) 标完。
-constexpr double kSaveSliceBudgetMs = 2.0;
+// 工作图落盘分片: 地图更新线程每片花在 w 标注上的时间预算, 以及看表的粒度。
+// 260 万点实测 ~33ns/点: 8192 点 ≈ 0.3ms; 每片 <=5.3ms -> 约 17 片; 空闲节拍 50ms 一片 -> 1s 内标完。
+// 预算的作用只是别让一片太久推迟排队的观测任务 (标注只在队列空时做)。
+constexpr double kSaveSliceBudgetMs = 5.0;
 constexpr size_t kSaveSubChunk = 8192;
 }  // namespace
 
-// ★工作图落盘 (2026-11-26 根因: 每小时整点丢失)。见头文件 m_save_thread 注释 —— 两线程分工:
+// ★工作图落盘 (2026-11-26 根因: 每小时整点丢失)。见头文件 m_save_thread 注释 —— 分工:
 //
-//   落盘线程 (本函数)              跟踪线程 (帧尾, advanceSaveAnnotation)
-//   ----------------------------   ----------------------------------------------
+//   落盘线程 (本函数)                   地图更新线程 (队列空时, advanceSaveAnnotation)
+//   ----------------------------        ----------------------------------------------
 //   (1) 底图降采样 (只读不变量)
-//   ---- 交接 snap ----------->    (2) 每帧 <=2ms 分片查账本写 w (持维护器锁, 段级)
-//                                  (3) 做完: reclaim + overlay 快照 (overlay 分块小)
+//   ---- 交接 snap ----------->         (2) 每片 <=5ms 分片查账本写 w (它本来就是唯一的账本写线程)
+//                                       (3) 做完: reclaim + overlay 快照 (overlay 分块小)
 //   <------------- 交接 snap ----
 //   (4) 压缩 / 叠加 / 写盘 (tmp + rename)
 //
-//   本线程**从不访问维护器** (账本 / overlay), 与跟踪线程之间没有账本锁的竞争; 两个线程
-//   只通过 m_save_mu 保护的状态交接 cloud 指针, 同一时刻只有一个线程访问它。
-//   锁序: 处理阶段不持 m_save_mu 去拿任何别的锁; 跟踪线程投递/交接时只持 m_save_mu。
+//   本线程**从不访问维护器** (账本 / overlay); 两个线程只通过 m_save_mu 保护的状态交接 cloud 指针,
+//   同一时刻只有一个线程访问它。
+//   锁序: 处理阶段不持 m_save_mu 去拿任何别的锁; 交接时只持 m_save_mu。
+//   (历史: 2026-11-26 first 版把 (2)(3) 放在跟踪线程帧尾 —— 那时账本只有跟踪线程写;
+//    2026-11-27 账本写入移到地图更新线程, 标注跟着走, 跟踪线程彻底不碰账本。)
 void LocalizationPipeline::mapSaveWorker() {
     // 降优先级 (nice +10, 放宽无需特权): 多秒的 CPU 活不与跟踪线程抢核。
     nice(10);
@@ -828,7 +841,7 @@ void LocalizationPipeline::mapSaveWorker() {
                 // (1) 底图降采样到 voxel: 与 overlay 同网格、与匹配口径一致 (只读, 无锁)
                 CloudType::Ptr base_snap = voxelDownsample(map, static_cast<float>(vox));
                 ms_vox = ms_between(t_start, clk::now());
-                // 交接给跟踪线程: 它在自己的帧预算内分片查账本 (见 advanceSaveAnnotation)
+                // 交接给地图更新线程: 它在队列空的间隙分片查账本 (见 advanceSaveAnnotation)
                 {
                     std::lock_guard<std::mutex> g(m_save_mu);
                     if (m_save_abort) throw std::runtime_error("aborted");
@@ -851,7 +864,7 @@ void LocalizationPipeline::mapSaveWorker() {
                     ann_frames = m_save_slice_frames;
                     ms_ann = m_save_slice_ms;
                     if (handover) {
-                        // 跟踪线程标注完成: 快照归本线程 (只做过降采样的那份随之释放)
+                        // 地图更新线程标注完成: 快照归本线程 (只做过降采样的那份随之释放)
                         m_save_stage = SaveStage::Write;
                         base_snap = m_save_snap;
                         m_save_snap.reset();
@@ -917,9 +930,15 @@ void LocalizationPipeline::mapSaveWorker() {
     }
 }
 
-// 跟踪线程帧尾调用 (持 m_state_mu, 与换图互斥): 有在途的落盘任务时, 在时间预算内推进
-// 一片 w 标注。只有本线程写账本, 所以读账本的这一步放在这里 —— 落盘线程不碰它。
+// 地图更新线程调用 (MapUpdateWorker 的空闲回调, 队列空时每 ~50ms 一次): 有在途的落盘任务时,
+// 在时间预算内推进一片 w 标注。本线程就是账本的写线程 (MapUpdateWorker), 所以读账本的这一步放在
+// 这里 —— 落盘线程不碰账本, 跟踪线程也不碰。
+//
+// 与换图 (abortMapSaveAndWait) 的并发: 标注不再持 m_state_mu, 所以**一片做到一半可能被作废**。
+// 因此收尾 (reclaim + overlay 快照) 之前在 m_save_mu 下重新确认"仍在标注阶段且没被作废";
+// 换图线程在 flush() 里等本回调返回之前不会去动维护器 (setBaseMap), 收尾用的一定还是旧图的账本。
 void LocalizationPipeline::advanceSaveAnnotation() {
+    if (!m_save_annotating.load(std::memory_order_acquire)) return;   // 无在途任务: 一次原子读
     using clk = std::chrono::steady_clock;
     CloudType::Ptr snap;
     size_t next = 0;
@@ -934,8 +953,7 @@ void LocalizationPipeline::advanceSaveAnnotation() {
     }
     if (!snap || !m_maintainer) return;
     const size_t n = snap->size();
-    // 预算内推进: 每子段 <= kSaveSubChunk 点 (~0.5ms), 段间看表, 超预算即停 ——
-    // 每帧新增耗时确定有界 (annotate_slice.h)
+    // 预算内推进: 每子段 <= kSaveSubChunk 点 (~0.3ms), 段间看表, 超预算即停 (annotate_slice.h)
     const auto t0 = clk::now();
     next = annotateWithinBudget(*m_maintainer, *snap, next, kSaveSliceBudgetMs, kSaveSubChunk);
     const auto t1 = clk::now();
@@ -944,6 +962,14 @@ void LocalizationPipeline::advanceSaveAnnotation() {
     CloudType::Ptr ov;
     double extra_ms = 0.0;
     if (finished) {
+        {
+            std::lock_guard<std::mutex> lk(m_save_mu);
+            if (m_save_stage != SaveStage::Annotate || m_save_abort) {
+                // 最后一片做完的这一刻恰好被作废: 不做收尾、不交接 (落盘线程已按作废收场)
+                m_save_annotating.store(false);
+                return;
+            }
+        }
         // 账本相关的收尾同样只在本线程做: 回收已删除体素的点 + overlay 快照 (overlay 分块小)
         m_maintainer->reclaim();
         ov = m_maintainer->snapshotOverlay();
@@ -953,29 +979,77 @@ void LocalizationPipeline::advanceSaveAnnotation() {
     m_save_next = next;
     ++m_save_slice_frames;
     m_save_slice_ms += used_ms + extra_ms;
-    if (finished && m_save_stage == SaveStage::Annotate) {   // 没被换图 / 析构作废
+    if (finished && m_save_stage == SaveStage::Annotate && !m_save_abort) {   // 没被换图 / 析构作废
         m_save_overlay = ov;
         m_save_stage = SaveStage::Write;                     // 交接: 快照归落盘线程
         m_save_annotating.store(false);
         m_save_cv.notify_all();
         std::cout << "[working_map] annotation done: " << n << " pts in " << m_save_slice_frames
-                  << " frames, " << m_save_slice_ms << " ms on tracking thread" << std::endl;
+                  << " slices, " << m_save_slice_ms << " ms on map-update thread" << std::endl;
     }
-    m_save_annotating.store(m_save_stage == SaveStage::Annotate);   // 没做完才继续; 被作废则停
+    m_save_annotating.store(m_save_stage == SaveStage::Annotate && !m_save_abort);   // 没做完才继续; 被作废则停
 }
 
 void LocalizationPipeline::abortMapSaveAndWait() {
-    // 调用方: setMapImpl / setMapData (持 m_state_mu, 与 onLidar 互斥 —— 所以现在没有分片
-    // 在跑)。换图会重置维护器并换掉 m_map: 作废未开始的请求, 让落盘线程离开 (它只持有
-    // cloud 指针, 不碰维护器), 在途的分片任务随 m_save_stage 复位而作废。
-    std::unique_lock<std::mutex> lk(m_save_mu);
-    m_save_req = false;
-    m_save_req_map.reset();
-    m_save_abort = true;
-    m_save_annotating.store(false);
+    // 调用方: setMapImpl / setMapData (持 m_state_mu, 与 onLidar 互斥 —— 所以不会再有新的落盘
+    // 请求 / 账本任务进来)。换图会重置维护器并换掉 m_map, 分三步:
+    //   1) 作废未开始的请求, 置 m_save_abort (分片标注入口看到它就不再进入);
+    //   2) flush 地图更新线程: 丢掉排队的账本任务 (都属于旧图), 等手里的任务 / 那一片做完;
+    //   3) 等落盘线程离开 (它只持有 cloud 指针, 不碰维护器)。
+    // 第 2 步必须在**不持 m_save_mu** 时等: 分片标注交接时要拿 m_save_mu, 持着它等就互相卡死。
+    {
+        std::lock_guard<std::mutex> lk(m_save_mu);
+        m_save_req = false;
+        m_save_req_map.reset();
+        m_save_abort = true;
+        m_save_annotating.store(false);
+    }
     m_save_cv.notify_all();
+    if (m_map_update) m_map_update->flush();
+    std::unique_lock<std::mutex> lk(m_save_mu);
     m_save_cv.wait(lk, [this] { return !m_save_busy; });
     m_save_abort = false;
+}
+
+// ---- 地图更新线程 (见头文件 m_map_update) ----
+void LocalizationPipeline::submitMapUpdate(MapUpdateWorker::Job job) {
+    // 跟踪线程调用: 只入队, 永不阻塞 (观测任务满了丢最旧, 结算任务不丢 —— 见 MapUpdateWorker)
+    if (m_map_update) m_map_update->submit(std::move(job));
+}
+
+// 只在地图更新线程上执行 (MapUpdateWorker::run): 账本 (维护器) 的全部读写在这里串行。
+void LocalizationPipeline::onMapUpdateJob(MapUpdateWorker::Job& job) {
+    if (!m_maintainer) return;
+    switch (job.kind) {
+        case MapUpdateWorker::Kind::Localized:
+            // 逐帧写入 (门槛已在跟踪线程判定过, 见 onLidar 帧尾; pose_confident 恒为 true 同旧实现)
+            m_maintainer->onLocalized(job.pose, job.cloud, job.match, true);
+            break;
+        case MapUpdateWorker::Kind::Merge:
+            // 段级结算: 走出子图覆盖的关键帧一次性「命中 + 雕刻 + 新结构」记账
+            m_maintainer->mergeChunk(job.pose, job.cloud);
+            break;
+        case MapUpdateWorker::Kind::Lifelong: {
+            // lifelong: 用叠加层 (环境变化) 刷新全局重定位器, 避免重定位失效。
+            // 重定位器实现如果覆盖了 updateEnvironment, 须自己保证与 localizeTopK (跟踪线程) 的
+            // 并发安全 (现用的 fpfh_ransac 没有实现它, 是空操作)。
+            const CloudType::Ptr ov = m_maintainer->snapshotOverlay();
+            if (ov && !ov->empty() && ov->size() != m_last_overlay_size) {
+                m_last_overlay_size = ov->size();
+                if (m_relocalizer) m_relocalizer->updateEnvironment(ov);
+                // 存储底座增量插入新增 overlay 点 (避免整体重建)。地图存储没有内部锁,
+                // 跟踪线程 (匹配器 / 平面约束) 在读它 -> 增量交给跟踪线程在帧尾插入。
+                CloudType::Ptr d;
+                m_maintainer->popOverlayDelta(d);
+                if (d && !d->empty()) {
+                    std::lock_guard<std::mutex> lk(m_store_delta_mu);
+                    if (m_store_delta && !m_store_delta->empty()) *m_store_delta += *d;
+                    else m_store_delta = std::move(d);
+                }
+            }
+            break;
+        }
+    }
 }
 // ★后台建目标: 裁剪工作图 (provider 只读; 账本有锁) + 建新匹配器实例。
 // 跟踪线程继续用旧目标 (裁剪半径 60m, 重建半径 15m, 余量充足), 建好后帧边界切换。
@@ -3786,14 +3860,17 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                       << " div=" << divergence
                       << " anchorOk=" << ins_anchor_ok << std::endl;
         }
+        // ★写入门槛全部在这里 (跟踪线程) 判定, 语义不变; 账本写入本身交给地图更新线程 (2026-11-27):
+        // 入队永不阻塞, 账本跟不上时丢最旧的观测 (账本证据是累积的), 定位不再为账本耗时。
         if (base_anchored && !m_maintainer_cfg.shadow &&
             m_coast_count == 0 && pose_stable &&
             allowMapInsert(tracking, accepted, divergence, m_maintainer_cfg) &&
             anchorOk(res, accepted)) {
-            m_maintainer->onLocalized(out_pose, scan_map, m_last_match, true);
+            submitMapUpdate(MapUpdateWorker::Job{MapUpdateWorker::Kind::Localized, out_pose, scan_map,
+                                                 m_last_match});
         }
     }
-    m_frame_perf->mark(5);     // post 子阶段: 账本 之后 (之后 = 假设重播 / 状态机 / 下一帧请求)
+    m_frame_perf->mark(5);     // post 子阶段: 写入门槛判定 + 投递 之后 (之后 = 假设重播 / 状态机 / 下一帧请求)
 
     // 过桥计数: 连续未采纳帧数
     m_coast_count = accepted ? 0 : (m_coast_count + 1);
@@ -3824,22 +3901,24 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     }
 
     // lifelong: 周期性用叠加层(环境变化)刷新全局重定位器, 避免重定位失效
-    if (m_maintainer && m_relocalizer && m_relocalizer_name != "none" &&
+    // (要拿账本快照 -> 在地图更新线程上做; 这里只计数和投递)
+    if (m_map_update && m_relocalizer && m_relocalizer_name != "none" &&
         m_maintainer_cfg.refresh_frames > 0) {
         if (++m_refresh_counter >= m_maintainer_cfg.refresh_frames) {
             m_refresh_counter = 0;
-            CloudType::Ptr ov = m_maintainer->snapshotOverlay();
-            if (ov && !ov->empty() && ov->size() != m_last_overlay_size) {
-                m_last_overlay_size = ov->size();
-                m_relocalizer->updateEnvironment(ov);
-                // 存储底座增量插入新增 overlay 点 (避免整体重建)
-                if (m_store) {
-                    CloudType::Ptr d;
-                    m_maintainer->popOverlayDelta(d);
-                    if (d && !d->empty()) m_store->insert(d);
-                }
-            }
+            submitMapUpdate(MapUpdateWorker::Job{MapUpdateWorker::Kind::Lifelong, {}, {}, {}});
         }
+    }
+    // 地图更新线程交来的存储底座增量 (见 onMapUpdateJob 的 Lifelong 分支): 地图存储没有内部锁,
+    // 只能由本线程 (唯一读它的人) 插入 —— 与旧实现同一个插入点。
+    if (m_store) {
+        CloudType::Ptr d;
+        {
+            std::lock_guard<std::mutex> lk(m_store_delta_mu);
+            d = std::move(m_store_delta);
+            m_store_delta.reset();
+        }
+        if (d && !d->empty()) m_store->insert(d);
     }
 
     MonitorInput mi;
@@ -4129,9 +4208,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_frame_perf->mark(7);     // post 子阶段: 先验图(底图+overlay)覆盖率 之后
             int anchor_age = 0;
             size_t persistency_pts = 0;
-            // persistency_cov 是 overlay 的诊断量: 没开 overlay 时输出 n/a
+            // persistency_cov 是 overlay 的诊断量: 没开 overlay 时输出 n/a。
+            // 读缓存 (账本在最近一次写入后算好的): 不拿账本的锁 —— 账本写在地图更新线程上, 持锁可达几百 ms。
             const double ss = m_maintainer
-                ? m_maintainer->persistencyCoverage(m_pose, &anchor_age, &persistency_pts)
+                ? m_maintainer->cachedPersistencyCoverage(&anchor_age, &persistency_pts)
                 : -1.0;
 
                 // ---- B 阶段(影子): 突变场景"会话地图"(session map) ----
@@ -4214,13 +4294,18 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         // ★走出子图覆盖的旧关键帧: 段级一次性「融合+雕刻」进 w 账本。
                         // 子图覆盖内纯几何跟踪 (零账本交互); 只有整段退出时才与
                         // w 账本结算一次 —— 用户口径: 走出子图 = 融合 + 雕刻一次。
+                        // 结算是整段证据的一次性记账, 不能丢: 地图更新线程对这类任务不设丢弃
+                        // (MapUpdateWorker, 2026-11-27); 这里只投递。
                         m_frame_perf->mark(8);     // post 子阶段: 会话地图写入 之后
                         if (++m_seg_merge_tick % 25 == 0) {
                             auto leaving = m_session_map.popLeavingKfs(out_pose.trans);
-                            for (auto& kf : leaving)
-                                if (m_maintainer) m_maintainer->mergeChunk(kf.pose, kf.world);
+                            for (auto& kf : leaving) {
+                                if (!m_map_update) break;
+                                submitMapUpdate(MapUpdateWorker::Job{MapUpdateWorker::Kind::Merge,
+                                                                     kf.pose, std::move(kf.world), {}});
+                            }
                         }
-                                m_frame_perf->mark(9);     // post 子阶段: 走出子图的关键帧段级结算 (popLeavingKfs + mergeChunk) 之后
+                                m_frame_perf->mark(9);     // post 子阶段: 走出子图的关键帧段级结算 (popLeavingKfs + 投递 mergeChunk) 之后
                     }
                     session_map_active = m_session_map.active() ? 1 : 0;
                     session_map_size = m_session_map.size();
@@ -4232,18 +4317,16 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // 每点 intensity = w (w==0 的点不写)。没有增量日志。
                 // map.pcd 只做原图备份, 永不修改。
                 // 变化判据 = maintainer revision() (几何/权重有增删才 +1)。
-                    // 工作图落盘的分片标注 (见头文件 m_save_thread 注释): 有在途任务时, 每帧
-                    // 在时间预算内推进一片; 无任务时只是一次原子读。
-                    m_frame_perf->mark(10);     // post 子阶段: 工作图落盘分片标注 / 落盘请求 之后
-                    if (m_save_annotating.load(std::memory_order_acquire)) advanceSaveAnnotation();
+                // (需要账本的分片标注在地图更新线程上做, 见 advanceSaveAnnotation; 跟踪线程只投递请求。)
+                    m_frame_perf->mark(10);     // post 子阶段: 段级结算 之后 (之后 = 落盘请求 / 状态日志)
                 if (m_maintainer && m_ever_localized && m_map &&
                     !m_map->empty() && m_initialized && accepted) {
                     // ★2026-11-26 根因 (每小时整点丢失): 快照构建 (回收 / 全量底图降采样 /
                     //   w 标注 / overlay 快照) 原在**这里同步执行** —— 注释写着"后台线程",
                     //   实际只有最后的写盘在后台。8xA55 满载时一帧 ~4s (实机 s2m_ms_ema=297,
                     //   queue=1): 跟踪线程停摆期间 IMU 线程照常积分, 恢复后新息超门 -> LOST。
-                    //   现在跟踪线程只投递请求 + 每帧一片有界的 w 标注 (见 advanceSaveAnnotation),
-                    //   其余 (降采样 / 压缩 / 合并 / 写盘) 由 mapSaveWorker 执行。
+                    //   现在跟踪线程只投递请求; w 标注由地图更新线程在队列空的间隙分片做
+                    //   (advanceSaveAnnotation), 其余 (降采样 / 压缩 / 合并 / 写盘) 由 mapSaveWorker 执行。
                     static std::chrono::steady_clock::time_point wm_last =
                         std::chrono::steady_clock::now();
                     static uint64_t wm_last_rev = 0;
@@ -4301,6 +4384,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " session_map_age=" << session_map_age
                    << " map_tilt=" << (m_tilt_vec.norm() * 57.2957795)
                    << " tilt_sig=" << (m_tilt_frame_sigma > 0.0 ? m_tilt_frame_sigma * 57.2957795 : -1.0);
+                // 地图更新线程 (账本写入不在跟踪线程上了): 它自己的耗时 / 丢弃 / 积压
+                if (m_map_update) {
+                    const MapUpdateWorker::Stats ms = m_map_update->stats();
+                    qs << " mapupd_ms=" << ms.last_ms << " mapupd_ema=" << ms.ema_ms
+                       << " mapupd_max=" << ms.max_ms << " mapupd_drop=" << ms.dropped
+                       << " mapupd_fail=" << ms.failed << " mapupd_q=" << ms.queued;
+                }
                 std::cout << qs.str() << std::endl;
         }
     }

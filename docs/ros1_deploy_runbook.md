@@ -86,6 +86,22 @@ sudo systemctl restart xzrobot
 
 节点名保持 `xz_3d_slam`：`xzrobot_all` / App / `xz_3d_monitor` 都按这个部署名找它。
 
+### 4.1 SLAM 跟踪线程实时优先级（systemd drop-in，2026-11-27）
+
+节点启动后自己把跟踪线程（线程名 `slam_loc`）设成 `SCHED_FIFO 40`。非特权进程要有
+`RLIMIT_RTPRIO >= 40` 才设得上，而 systemd 单元默认是 0 —— 所以**不装这个 drop-in，实时优先级就静默不生效**
+（节点日志会打 `tracking thread scheduling: NOT realtime ... need LimitRTPRIO>=40`）。换机器 / 重装服务后要重做：
+
+```bash
+D=/etc/systemd/system/xzrobot.service.d
+sudo mkdir -p $D
+sudo install -m 644 -o root -g root ros1_ws/src/rosiwit_slam_ros1/systemd/xzrobot.service.d/10-slam-rt.conf $D/
+sudo systemctl daemon-reload          # 不重启服务; 下次 restart xzrobot 时对节点生效
+systemctl show xzrobot -p LimitRTPRIO # 40
+```
+
+只放开到代码用到的 40：本机中断线程是 50、内核线程 50/99，都在跟踪线程之上。
+
 ## 5. 验证
 
 ```bash
@@ -95,6 +111,10 @@ rosparam list | grep /xz_3d_slam/config_file        # 有
 rosservice list | grep -cE '^/(slam/mode_switch|switch_map|relocation|stop_map_operation|global_localization|finish_task|start_task|slam/dump_recorder|update_map_operation)$'   # 9
 rostopic hz /slam/info                              # ~10 Hz
 rostopic echo -n1 /slam/info                        # map_name / location_status
+grep -a 'tracking thread scheduling' $(ls -t /tmp/[0-9a-f]*-*/xz_3d_slam-*-stdout.log | head -1) | tail -1
+                                                   # SCHED_FIFO prio=40 (NOT realtime = §4.1 的 drop-in 没装)
+grep -a '^\[LocPerf\]' $(ls -t /tmp/[0-9a-f]*-*/xz_3d_slam-*-stdout.log | head -1) | tail -1
+                                                   # 行驶中 drop_50 应为 0、age_ms_ema 远小于 100 (帧周期)
 ```
 
 切图（App 通常自己会调）：

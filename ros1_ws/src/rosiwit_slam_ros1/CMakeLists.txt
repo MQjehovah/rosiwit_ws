@@ -210,6 +210,11 @@ if(CATKIN_ENABLE_TESTING)
     if(TARGET test_working_map_save)
         target_link_libraries(test_working_map_save rosiwit_slam_ros1_lib)
     endif()
+    # 地图更新线程 (2026-11-27): 账本写入挪出跟踪线程 —— 队列契约 + 账本的加锁读视图
+    catkin_add_gtest(test_map_update_worker ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_map_update_worker.cpp)
+    if(TARGET test_map_update_worker)
+        target_link_libraries(test_map_update_worker rosiwit_slam_ros1_lib)
+    endif()
 
     catkin_add_gtest(test_planar_constraint ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/rosiwit_slam/test/test_planar_constraint.cpp)
     if(TARGET test_planar_constraint)

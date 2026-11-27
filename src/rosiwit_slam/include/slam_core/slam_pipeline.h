@@ -173,16 +173,24 @@ public:
 
 private:
     void pushBackendTask(BackendTask task, const KeyFrame& kf = KeyFrame{});
-    void handleLocalization(const LidarFrame& f);
-    void localizationWorker(rosiwit_common::CancelToken token);
-    /// 停止定位 worker (join) 并丢弃残留帧; 幂等
-    void stopLocalizationWorker();
 
     // 定位模式重处理队列: sensor callback 只入队, 独立 worker 消费.
     // 全局重定位/GICP 可能持续数秒，绝不能占用 ROS spinner 或 50Hz 泵。
     // 容量 2 + 丢最旧: GICP 跟不上时宁可处理最新帧 (旧帧对跟踪没用)。
-    rosiwit_common::Channel<LidarFrame> m_loc_buf{2, rosiwit_common::OverflowPolicy::kDropOldest};
+    // 每帧记下入队时刻 (单调时钟): [LocPerf] 里的 age_ms = 这帧在队列里等了多久。
+    // ★这里的丢弃以前在日志里是**看不见的** ([slam_algo] input 1s 报的是 ROS 层 input_ 通道的
+    //   统计, 不是本队列): 2026-11-27 实车 318s 行驶回放分析, 3184 帧进 2500 帧出 (21% 被丢)。
+    struct LocFrame {
+        LidarFrame frame;
+        std::chrono::steady_clock::time_point t_enqueue;
+    };
+    rosiwit_common::Channel<LocFrame> m_loc_buf{2, rosiwit_common::OverflowPolicy::kDropOldest};
     std::unique_ptr<rosiwit_common::Thread> m_loc_worker;
+
+    void handleLocalization(const LocFrame& lf);
+    void localizationWorker(rosiwit_common::CancelToken token);
+    /// 停止定位 worker (join) 并丢弃残留帧; 幂等
+    void stopLocalizationWorker();
 
     // 定位模式下的 LIO 相对观测 (可选): IMU 在 sensor callback 只入队,
     // 由定位 worker 在喂雷达前一次性消费 —— 前端不是线程安全的。

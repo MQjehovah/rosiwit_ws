@@ -45,6 +45,8 @@ int64_t OverlayMapMaintainer::voxelKey(int cx, int cy, int cz) {
 }
 
 void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudType::Ptr& base) {
+    // 换图期间地图更新线程可能正在一次写入里: 入口加锁串行化 (调用方会先 flush 掉排队的任务)。
+    std::lock_guard<std::recursive_mutex> lk(m_mu);
     // 换图必须清空上一张图的叠加层/体素去重/增量缓存。否则旧 overlay 会
     // 继续叠加到新图局部目标上，造成"新图里混着上一张图的点" (切图干扰)。
     m_cells.clear();
@@ -73,6 +75,7 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     m_base_voxels.clear();
     m_base_indexed = false;
     m_dead_base.clear();
+    m_dead_dirty = true;        // 换图: 函数末尾发布一份空快照
     // ---- 统一工作图 (Phase A): 底图体素进同一套 w 账本 ----
     // 底图点不复制进 m_cells (几何仍走底图云的 KD 树, 性能不变), 账本只记 w:
     //   射线穿过 -> w 递减, 到 0 -> 进 m_dead_base -> 匹配目标里剔除对应的底图点
@@ -113,6 +116,7 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     // 没有增量日志: 只有一个全量工作图文件 (map.overlay.pcd, 1h 落盘),
     // 加载时它整体就是底图 (intensity = w)。这里不再读旧的 overlay 增量文件。
     ensureBaseIndex();     // 见上面"底图索引"的说明: 不留给第一次写账本 (跟踪线程)
+    refreshDiagLocked(PoseStamped());   // 诊断缓存清零 + 发布 (空的) 判死体素快照
 }
 
 void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
@@ -398,7 +402,7 @@ void OverlayMapMaintainer::applyFreeVotes() {
             m_voxel_seen.erase(kv.first);
             const int64_t k = kv.first;
             occClear(signExtend21(k >> 42), signExtend21((k >> 21) & 0x1FFFFF), signExtend21(k & 0x1FFFFF));
-            if (from_base) m_dead_base.insert(kv.first);   // 底图体素: 目标里剔除
+            if (from_base) { m_dead_base.insert(kv.first); m_dead_dirty = true; }   // 底图体素: 目标里剔除
             else m_pending_remove.insert(kv.first);        // overlay 体素: 点从 m_cells 回收
         }
     }
@@ -824,7 +828,7 @@ CloudType::Ptr OverlayMapMaintainer::getOverlayLocked(const PoseStamped& pose) {
     return out;
 }
 
-double OverlayMapMaintainer::persistencyCoverage(const PoseStamped& pose,
+double OverlayMapMaintainer::persistencyCoverageLocked(const PoseStamped& pose,
                                           int* anchor_age, size_t* session_map_pts) const {
     // A 阶段(影子): 统计"当前扫描点中落在 overlay(变化结构)上的点"里, w>=persistency_anchor 的占比.
     // 分母只含变化结构上的点; 纯底图区域不参与 (那里本来就是静态的, 不构成判断依据).

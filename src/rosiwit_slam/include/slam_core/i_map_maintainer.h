@@ -103,6 +103,10 @@ public:
     virtual double persistencyCoverage(const PoseStamped& /*pose*/,
                                  int* /*anchor_age*/ = nullptr,
                                  size_t* /*session_map_pts*/ = nullptr) const { return -1.0; }
+    /// 同上, 但是**账本自己在最近一次写入后算好的缓存值**: 不拿账本的锁, 任何线程都可以调
+    /// (定位线程的 1Hz 状态日志用它 —— 账本写入在地图更新线程上, 持锁可达几百 ms)。没有记录时返回 -1。
+    virtual double cachedPersistencyCoverage(int* /*anchor_age*/ = nullptr,
+                                             size_t* /*session_map_pts*/ = nullptr) const { return -1.0; }
 };
 
 } // namespace rosiwit_slam

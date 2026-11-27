@@ -17,6 +17,7 @@
 #include "slam_core/i_global_localizer.h"
 #include "slam_core/i_localization_monitor.h"
 #include "slam_core/i_map_maintainer.h"
+#include "algorithms/localization/maintainer/map_update_worker.h"
 #include "algorithms/localization/constraints/planar_constraint.h"
 #include "algorithms/localization/frame_perf.h"   // 成员是不完整类型时 make_unique 里的 unique_ptr 移动赋值编不过
 #include "algorithms/localization/hypothesis/hypothesis_manager.h"
@@ -156,24 +157,18 @@ private:
     PoseStamped m_spare_center;
     uint64_t m_spare_rev = 0;
     void targetBuildWorker();
-    // 工作图 provider 访问锁: 后台建目标线程 (getLocalMap) 与跟踪线程的提交钩子
+    // 工作图 provider 访问锁: 后台建目标线程 (getLocalMap) 与地图更新线程的提交钩子
     // (addWorldPoint 往同一关键帧点云 push_back) 并发 -> 串行化。
     std::mutex m_local_map_mu;
-    // ★工作图落盘 (2026-11-26 根因: 整点丢失) —— 两线程分工, 需要账本的步骤只由
-    //   跟踪线程做。
-    //   原实现把整个快照构建 (回收 / 全量底图降采样 / w 标注 / overlay 快照) 放在跟踪
-    //   线程的帧尾同步执行, 8xA55 满载时一帧 ~4s -> 帧流中断 -> IMU 线程空转积分 ->
-    //   恢复后新息超门 -> LOST。
-    //   但也不能简单丢给后台线程: w 标注要读维护器账本 (260 万条), 账本每帧被跟踪线程
-    //   写。本机 (load 8~10) 上只要两个线程在这把锁上撞一次, 前台被唤醒就要 3~26ms
-    //   (futex 唤醒 -> 被调度的延迟); "分段持锁 + 睡眠让出"只是降低碰撞概率的时序启发式。
-    //   所以让后台线程**根本不碰账本**:
-    //     落盘线程: 底图降采样 (只读, 定位期间不变量) -> 等跟踪线程 -> 压缩 / 合并 / 写盘;
-    //     跟踪线程: 每帧尾在时间预算内 (~2ms) 推进一片 w 标注, 做完再拍 overlay 快照。
-    //   没有跨线程的账本读, 没有睡眠, 每帧新增耗时确定有界 (260 万点 ≈ 40 帧 ≈ 4s)。
-    //   快照 cloud 在两个线程间按阶段交接, 同一时刻只有一个线程访问。
-    //   换图 (setMapImpl/setMapData, 持 m_state_mu —— 与 onLidar 互斥) 先等落盘线程
-    //   离开 (它只持有 cloud 指针), 再清掉在途的分片任务。
+    // ★工作图落盘 (2026-11-26 根因: 整点丢失) —— 落盘线程做不需要账本的步骤 (降采样 / 压缩 /
+    //   合并 / 写盘); 需要账本的 w 标注由**地图更新线程**在队列空的间隙里分片推进
+    //   (advanceSaveAnnotation, 见 m_map_update)。快照 cloud 按阶段在两个线程间交接,
+    //   同一时刻只有一个线程访问。
+    //   历史: 原实现把整个快照构建同步放在跟踪线程帧尾 (一帧 ~4s -> 帧流中断 -> LOST);
+    //   之后改为跟踪线程每帧推进 ~2ms —— 那是因为账本只有跟踪线程写。2026-11-27 账本写入
+    //   移到地图更新线程后, 标注跟着走: 跟踪线程彻底不碰账本。
+    //   换图 (setMapImpl/setMapData, 持 m_state_mu —— 与 onLidar 互斥) 先置 m_save_abort,
+    //   再 flush 地图更新线程 (手里的一片做完, 之后不再进入标注), 最后等落盘线程离开。
     //   可 join 的成员线程 (不是 detach): 析构时先停再收。
     enum class SaveStage { Idle, Downsample, Annotate, Write };
     std::thread m_save_thread;
@@ -184,23 +179,32 @@ private:
     bool m_save_busy = false;         // 落盘进行中 (任一阶段)
     bool m_save_abort = false;        // 换图 / 析构: 放弃在途落盘 (不写盘)
     SaveStage m_save_stage = SaveStage::Idle;
-    std::atomic<bool> m_save_annotating{false};   // 快路径: 帧尾是否要推进分片 (无任务时零开销)
+    std::atomic<bool> m_save_annotating{false};   // 快路径: 地图更新线程是否要推进分片 (无任务时零开销)
     CloudType::Ptr m_save_req_map;    // 请求时刻的底图指针 (定位期间内容不变)
     std::string m_save_req_path;      // 请求时刻的工作图路径
     double m_save_req_vox = 0.3;
-    CloudType::Ptr m_save_snap;       // 底图快照: Annotate 阶段归跟踪线程, Write 阶段归落盘线程
+    CloudType::Ptr m_save_snap;       // 底图快照: Annotate 阶段归地图更新线程, Write 阶段归落盘线程
     size_t m_save_next = 0;           // 下一个待标注点
-    CloudType::Ptr m_save_overlay;    // 跟踪线程在标注完成时拍的 overlay 快照
-    int m_save_slice_frames = 0;      // 诊断: 标注用了多少帧
+    CloudType::Ptr m_save_overlay;    // 标注完成时拍的 overlay 快照 (地图更新线程拍, 交接给落盘线程)
+    int m_save_slice_frames = 0;      // 诊断: 标注用了多少片
     double m_save_slice_ms = 0.0;     // 诊断: 分片累计耗时
     void mapSaveWorker();             // 落盘线程
-    void advanceSaveAnnotation();     // 跟踪线程帧尾: 预算内推进一片
+    void advanceSaveAnnotation();     // 地图更新线程 (队列空时): 预算内推进一片
     void abortMapSaveAndWait();
     // [DumpTurn] 转弯诊断: 原始 IMU 环形缓冲 (~2s), 转储时写盘供离线复现去畸变
     std::deque<IMUSample> m_imu_ring;
     std::mutex m_imu_ring_mu;
     std::unique_ptr<ILocalizationMonitor> m_monitor;
     std::unique_ptr<IMapMaintainer>       m_maintainer;   // 第6阶段: 非破坏性叠加地图维护
+    // ★地图更新线程 (2026-11-27): 账本 (维护器) 的全部读写都在它上面串行执行 —— 逐帧写入
+    //   onLocalized、段级结算 mergeChunk、lifelong 刷新、工作图落盘的分片标注。跟踪线程只做
+    //   写入门槛判定并投递任务 (永不阻塞), 读账本只走不加锁的快照/缓存。
+    //   账本写入是地图更新的功能, 不属于定位: 之前它在跟踪线程上每帧 32ms (p90 40ms, 尖峰
+    //   400~550ms), 跟踪线程平均每帧 126ms > 预算 100ms -> 队列常满, 21% 的帧被丢。
+    //   声明在 m_maintainer 之后 (先于它析构); 析构函数体第一件事就是停它。
+    std::unique_ptr<MapUpdateWorker>      m_map_update;
+    void onMapUpdateJob(MapUpdateWorker::Job& job);   // 地图更新线程: 执行一个任务
+    void submitMapUpdate(MapUpdateWorker::Job job);   // 跟踪线程: 入队 (永不阻塞)
     std::unique_ptr<FramePerf>            m_frame_perf;   // 帧耗时分解 (首次 onLidar 时建; 只在跟踪线程上用)
     // 第7阶段: 位姿融合 (direct=直通 / eskf=IMU+odom 推进 + 匹配观测限幅修正)
     std::unique_ptr<IPoseFusion>          m_fusion;
@@ -459,9 +463,13 @@ private:
     double m_consensus_trans_m = 1.0;
     double m_consensus_yaw_deg = 20.0;
 
-    // lifelong: 用叠加层刷新全局重定位器
+    // lifelong: 用叠加层刷新全局重定位器。计数在跟踪线程 (每 refresh_frames 帧投递一个任务),
+    // 刷新本身在地图更新线程 (要拿账本快照) —— m_last_overlay_size 只在地图更新线程上读写。
     int m_refresh_counter = 0;
     size_t m_last_overlay_size = 0;
+    // 地图更新线程 -> 跟踪线程: 存储底座增量 (地图存储没有内部锁, 只能跟踪线程写)
+    CloudType::Ptr m_store_delta;
+    std::mutex m_store_delta_mu;
 
     // 过桥(coasting)计数
     int m_coast_count = 0;
