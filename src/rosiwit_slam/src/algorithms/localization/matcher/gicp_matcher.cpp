@@ -3,6 +3,7 @@
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/registration_metrics.h"
 #include <fast_gicp/gicp/fast_gicp.hpp>
+#include <Eigen/LU>
 #include <chrono>
 #include <cstdlib>
 
@@ -134,6 +135,20 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     ms_gicp = ms_since(t1);                    // 每帧都记: 帧耗时分解 (FramePerf) 要用
     out.ms_solver = ms_gicp;
     out.pose = matrixToPose(T, guess.time);
+    // roll/pitch 的边缘协方差 (rad², 雷达中心参数化)。fast_gicp 的 Hessian 用"绕地图原点的旋转 + 平移"的
+    // 左扰动 d=(ω, t_delta): 雷达自身位移 dp = t_delta + ω × p  (p = 雷达在 map 系的位置 = T 的平移),
+    // 即 d = J (ω, dp), J = [I 0; [p]× I]。H' = Jᵀ H J, 协方差 = H'⁻¹, 取 ω 的 x/y 分量块 (其余自由度
+    // 自然被边缘化)。这一块与地图原点在哪无关, 只取决于这帧点云自身的几何。
+    if (m_gicp_lsq) {
+        const Eigen::Matrix<double, 6, 6>& H = m_gicp_lsq->getFinalHessian();
+        const Eigen::Vector3d p = T.block<3, 1>(0, 3);
+        Eigen::Matrix<double, 6, 6> J = Eigen::Matrix<double, 6, 6>::Identity();
+        J.block<3, 3>(3, 0) << 0.0, -p.z(), p.y(), p.z(), 0.0, -p.x(), -p.y(), p.x(), 0.0;
+        const Eigen::Matrix<double, 6, 6> Hp = J.transpose() * H * J;
+        const Eigen::Matrix<double, 6, 6> cov = Hp.fullPivLu().inverse();
+        const Eigen::Matrix2d c2 = cov.block<2, 2>(0, 0);
+        if (c2.allFinite() && c2(0, 0) > 0.0 && c2(1, 1) > 0.0) out.tilt_cov = c2;
+    }
     const auto t2 = std::chrono::steady_clock::now();
     const CoverageStats cs = evaluateCoverage(m_kdtree, *src, T, m_cfg.inlier_dist);
     ms_eval = ms_since(t2);

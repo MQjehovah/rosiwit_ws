@@ -98,6 +98,11 @@ struct MatchResult {
     Eigen::Matrix<double, 6, 6> hess_eigvecs = Eigen::Matrix<double, 6, 6>::Identity();
     // 位姿协方差 (order: [rot(3), trans(3)]); 默认大不确定度
     Eigen::Matrix<double, 6, 6> cov = Eigen::Matrix<double, 6, 6>::Identity() * 1e3;
+    // 匹配姿态里绕地图水平轴两个分量的边缘协方差 (rad²): 雷达中心参数化, 偏航/位置都边缘化掉, 取自求解器
+    // 最后一次线性化的 Hessian。它是"这一帧的匹配对横滚/俯仰有多大约束力"的度量 —— 实测行驶帧 (3000+ 点,
+    // 40m+ 远点) σ≈0.07°, 被近处物体包围的静止帧 (280 点, 3.6m 内) σ≈1° 且解沿"倾斜+高度"斜沟偏离真值。
+    // 全 -1 = 求解器没有给出 (非 fast_gicp 引擎)。
+    Eigen::Matrix2d tilt_cov = Eigen::Matrix2d::Constant(-1.0);
 };
 
 // ==================== 配准器配置 ====================

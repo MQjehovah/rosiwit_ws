@@ -321,7 +321,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         }
         if (pl && pl["z"]) m_planar_z = pl["z"].as<double>(0.0);
         if (pl && pl["lock_roll_pitch"]) m_lock_roll_pitch = pl["lock_roll_pitch"].as<bool>(true);
-        if (pl && pl["tilt_tau_s"]) m_tilt_tau = pl["tilt_tau_s"].as<double>(20.0);
+        if (pl && pl["tilt_sigma_deg"]) m_tilt_sigma_deg = pl["tilt_sigma_deg"].as<double>(0.03);
         if (pl && pl["tilt_output"]) m_tilt_output = pl["tilt_output"].as<bool>(false);
     }
     // ---- 定位 odom: 单一开关 localization.odom_mode (none | fuse) ----
@@ -1048,7 +1048,7 @@ void LocalizationPipeline::planarizePose(PoseStamped& p) const {
     if (m_fixed_z > 0.0) p.trans.z() = m_fixed_z;
 }
 
-void LocalizationPipeline::updateMapTilt(const PoseStamped& match, double t) {
+void LocalizationPipeline::updateMapTilt(const PoseStamped& match, const Eigen::Matrix2d& tilt_cov) {
     if (m_lock_roll_pitch || !m_fix_planar || !m_base_r_valid) return;
     // 本帧匹配姿态相对"水平 + 安装角"姿态的旋转 (地图系旋转向量): 绕水平轴的两个分量是倾斜,
     // 绕 z 的分量是偏航修正 (走原有的偏航路径, 不进这里)。
@@ -1060,13 +1060,30 @@ void LocalizationPipeline::updateMapTilt(const PoseStamped& match, double t) {
     const double lim = 15.0 * M_PI / 180.0;               // 合理性上限: 倾斜 > 15° 只可能是匹配错了
     const double vx = std::max(-lim, std::min(lim, v.x()));
     const double vy = std::max(-lim, std::min(lim, v.y()));
-    const double dt = (m_tilt_t < 0.0) ? 1.0 : std::max(1e-3, std::min(1.0, t - m_tilt_t));
-    m_tilt_t = t;
-    // 低通: 稳态时间常数 tilt_tau; 起步阶段按 1/(n+1) (即 running mean) 收敛, 不用等满一个时间常数
-    const double a = (m_tilt_tau > 0.0) ? std::max(dt / (m_tilt_tau + dt), 1.0 / (m_tilt_n + 1)) : 1.0;
-    m_tilt_vec.x() = (1.0 - a) * m_tilt_vec.x() + a * vx;
-    m_tilt_vec.y() = (1.0 - a) * m_tilt_vec.y() + a * vy;
-    ++m_tilt_n;
+    // 每帧测量按它自己的信息量定权 (精度加权融合): K = I (I0 + I)⁻¹。
+    // I = tilt_cov⁻¹ (求解器 Hessian 给的, 这帧几何决定); I0 = 当前估计的等效精度 1/σ0²。
+    // 实测 (真实数据回放): 行驶帧 σ 0.07~0.13° -> K 0.06~0.3; 停靠帧 σ 1.9~2.1° -> K < 0.002。引擎没给协方差 -> 不学。
+    Eigen::Matrix2d K = Eigen::Matrix2d::Zero();
+    m_tilt_frame_sigma = -1.0;
+    if (tilt_cov(0, 0) > 0.0) {
+        // 2x2 对称正定阵求逆 (伴随矩阵 / 行列式), 不依赖分解头文件
+        const double det = tilt_cov(0, 0) * tilt_cov(1, 1) - tilt_cov(0, 1) * tilt_cov(1, 0);
+        if (det > 0.0) {
+            Eigen::Matrix2d I;
+            I << tilt_cov(1, 1), -tilt_cov(0, 1), -tilt_cov(1, 0), tilt_cov(0, 0);
+            I /= det;
+            const double s0 = std::max(1e-6, m_tilt_sigma_deg) * M_PI / 180.0;
+            const Eigen::Matrix2d I0 = Eigen::Matrix2d::Identity() / (s0 * s0);
+            K = I * (I0 + I).inverse();
+            m_tilt_frame_sigma = std::sqrt(tilt_cov(0, 0) + tilt_cov(1, 1));
+        }
+    }
+    if (!K.allFinite()) K.setZero();
+    const Eigen::Vector2d z(vx, vy);
+    const Eigen::Vector2d x0(m_tilt_vec.x(), m_tilt_vec.y());
+    const Eigen::Vector2d x1 = x0 + K * (z - x0);
+    m_tilt_vec.x() = x1.x();
+    m_tilt_vec.y() = x1.y();
     const double ang = std::hypot(m_tilt_vec.x(), m_tilt_vec.y());
     m_map_tilt = (ang > 1e-9)
         ? Eigen::AngleAxisd(ang, V3D(m_tilt_vec.x(), m_tilt_vec.y(), 0.0) / ang).toRotationMatrix()
@@ -2580,9 +2597,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
         guess = m_prior->predict(f.end_time);
         planarizePose(guess);   // 先验也只保留 yaw, 不回传 z/roll/pitch 漂移
-        // 给匹配器的猜测带上地图倾斜 (planar.lock_roll_pitch=false): 输出是否带倾斜由 tilt_output 决定,
-        // 猜测一律带 —— 求解器每帧少转这几度, 是轮数从 12 降到 5~6 的主要原因。
-        if (!m_lock_roll_pitch) guess.rot = m_map_tilt * guess.rot;
+        // ★管线的 guess 必须和输出位姿在同一姿态基准上: 下游处处拿 guess 与 out_pose/res.pose 相减
+        //   (写图稳定性门 corr_deg<=1°, 子图重锚 corr_deg>1.5°, 子图锚点, 滞后诊断, 扫描预处理/去畸变 ...)。
+        //   只有输出也带倾斜 (tilt_output) 时 guess 才带; 默认 (只进猜测) 的倾斜在交给匹配器时才加 (见 match 调用处)。
+        if (!m_lock_roll_pitch && m_tilt_output) guess.rot = m_map_tilt * guess.rot;
     }
     // coast 重锚: matcher 连续失败后先验(尤其 IMU-only)每帧漂 0.1~0.3m,
     // 漂出对应距离(2m)后 correspondences=0, 从此永久失配。连续失败超过
@@ -2840,7 +2858,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_matcher->setTarget(target);
         }
         m_frame_perf->matchBegin();
-        const bool ok = m_matcher->match(scan, guess, res);
+        // 交给匹配器的猜测带上倾斜量 (planar.lock_roll_pitch=false): 求解器每帧少转这几度, 是轮数从 12 降到
+        // 5~6 的主要原因。只在这里加 —— 上面的 guess 保持水平, 与输出同基准 (2026-11-27 实机回放: 把倾斜加在
+        // guess 本身上时, 写图稳定性门每帧看到 2~5° 的"姿态修正"而全程关闭, 账本在行驶时一次都没被调用)。
+        PoseStamped guess_m = guess;
+        if (!m_lock_roll_pitch && !m_tilt_output) guess_m.rot = m_map_tilt * guess_m.rot;
+        const bool ok = m_matcher->match(scan, guess_m, res);
         m_frame_perf->matchEnd(res);
         if (kDumpTurnMax > 0) {
             static int turn_res_n = 0;
@@ -2965,7 +2988,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // 匹配结果同样锁成 x/y/yaw + 固定安装姿态 (z/roll/pitch 弱观测, 不允许漂)。
         // lock_roll_pitch=false 时 roll/pitch 换成"慢估计的地图倾斜": 先用本帧匹配更新估计, 再重建姿态。
         if (ok && res.converged) {
-            if (res.fitness >= 0.6) updateMapTilt(res.pose, f.end_time);
+            if (res.fitness >= 0.6) updateMapTilt(res.pose, res.tilt_cov);
             planarizePose(res.pose);
         }
         // [LocProbe] 逐帧诊断: 帧时间 + 可见点/参与点/内点 + fitness + guess/res 完整位姿;
@@ -4158,7 +4181,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " session_map=" << session_map_active
                    << " session_map_size=" << session_map_size
                    << " session_map_age=" << session_map_age
-                   << " map_tilt=" << (m_tilt_vec.norm() * 57.2957795);
+                   << " map_tilt=" << (m_tilt_vec.norm() * 57.2957795)
+                   << " tilt_sig=" << (m_tilt_frame_sigma > 0.0 ? m_tilt_frame_sigma * 57.2957795 : -1.0);
                 std::cout << qs.str() << std::endl;
         }
     }

@@ -222,25 +222,32 @@ private:
     Eigen::Vector2d m_rot_center = Eigen::Vector2d::Zero();
     double m_planar_z = 0.0;                                   // planar.z: body(车底) 目标高度
     bool   m_fix_planar = true;                               // 地面约束开关
-    // roll/pitch 锁 (2026-11-27): true = 姿态恒为"水平 + 安装角"(原行为); false = 带上地图倾斜量 m_map_tilt。
-    // 实测 (真实扫描回放): 地图的水平面相对重力固定倾斜 ~2.5°, 锁住之后匹配器每帧都要把这 2.5° 从头
-    // 转回去 —— LM 每轮只转 0.1~0.4°, 每帧 12 轮跑满, 求解 100+ms。倾斜是常数不是漂移, 锁掉它只增成本。
+    // roll/pitch 锁 (2026-11-27): true = 猜测姿态恒为"水平 + 安装角"(原行为); false = 带上地图倾斜量 m_map_tilt。
+    // 实测 (真实扫描回放): 匹配器每帧相对"水平"猜测要转 1.6~5.1°, LM 每轮只转 0.1~0.4°, 每帧 12 轮跑满,
+    // 求解 100+ms。把匹配器解里稳定的这部分倾斜放进猜测, 迭代 12 -> 5~6。
     bool   m_lock_roll_pitch = true;
-    double m_tilt_tau = 20.0;                                 // 地图倾斜量的低通时间常数 (s); 0 = 逐帧跟随匹配
+    // 倾斜量的估计 = 逐帧"精度加权"融合, 不是时间低通。每帧测量 = 匹配器解的姿态; 它的不确定度来自求解器
+    // 自己的 Hessian (MatchResult::tilt_cov), 只取决于这帧点云的几何:
+    //   行驶帧 (3000+ 点, 40m+ 远点) σ≈0.07~0.13° (信息比停靠帧高 100~300 倍);
+    //   被近处物体包围的停靠帧 (280 点, 3.6m 内) σ≈1~2° —— 而且它的解沿"倾斜 + 高度"的斜沟
+    //   偏离真值 (IMU 重力核对: 真值 1.3°, 解 5.4°, 同时高度抬高 14cm)。按时间低通时它和行驶帧同权。
+    // 融合增益 K = I (I0 + I)⁻¹, I0 = 当前估计的等效精度 1/m_tilt_sigma_deg²:
+    //   行驶帧每帧采信 6~30% (中位 ~18%): 启动后 20s 内跟上 (时间低通要 50~60s), 出库后 ~2s;
+    //   停靠帧 <0.2%: 停 55s 估计只动了 0.3° (时间低通几秒内就被拽到 5.4°, 出库后 20~40s 才回得来)。
+    // 引擎给不出 tilt_cov 时不学 (猜测保持水平 = 原行为)。
+    double m_tilt_sigma_deg = 0.03;                           // planar.tilt_sigma_deg: 当前估计的等效不确定度
     // 地图倾斜量是否也带进**输出**姿态。false (默认): 只放进给匹配器的猜测位姿, 输出姿态仍是
     // "水平 + 安装角" —— 对外发布的四元数与原来完全相同; 求解器的收敛只取决于猜测, 提速一分不少。
     // true: 输出姿态与地图一致 (带倾斜), 对外可见 (ROS 层发布的是完整四元数)。
     bool   m_tilt_output = false;
     Eigen::Matrix3d m_map_tilt = Eigen::Matrix3d::Identity(); // 地图水平面 -> 重力水平面 (地图系, 绕水平轴)
     Eigen::Vector3d m_tilt_vec = Eigen::Vector3d::Zero();     // 上面的旋转向量 (只含 x/y 分量)
-    int    m_tilt_n = 0;                                      // 已纳入估计的帧数 (首帧起快速收敛)
-    double m_tilt_t = -1.0;                                   // 上次更新的时刻
-    void   updateMapTilt(const PoseStamped& match, double t);
+    double m_tilt_frame_sigma = -1.0;                         // 最近一帧测量的 σ (rad), 只用于诊断
+    void   updateMapTilt(const PoseStamped& match, const Eigen::Matrix2d& tilt_cov);
     void   resetMapTilt() {                                   // 倾斜是地图的属性: 换图后重新估计
         m_map_tilt = M3D::Identity();
         m_tilt_vec = V3D::Zero();
-        m_tilt_n = 0;
-        m_tilt_t = -1.0;
+        m_tilt_frame_sigma = -1.0;
     }
     Eigen::Matrix4f m_lidar_to_imu = Eigen::Matrix4f::Identity();
     MaintainerConfig    m_maintainer_cfg;
