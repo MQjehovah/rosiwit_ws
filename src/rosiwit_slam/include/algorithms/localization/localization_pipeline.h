@@ -18,6 +18,7 @@
 #include "slam_core/i_localization_monitor.h"
 #include "slam_core/i_map_maintainer.h"
 #include "algorithms/localization/constraints/planar_constraint.h"
+#include "algorithms/localization/frame_perf.h"   // 成员是不完整类型时 make_unique 里的 unique_ptr 移动赋值编不过
 #include "algorithms/localization/hypothesis/hypothesis_manager.h"
 #include "algorithms/localization/smoother/fixed_lag_smoother.h"
 #include "slam_core/i_map_store.h"
@@ -194,6 +195,7 @@ private:
     std::mutex m_imu_ring_mu;
     std::unique_ptr<ILocalizationMonitor> m_monitor;
     std::unique_ptr<IMapMaintainer>       m_maintainer;   // 第6阶段: 非破坏性叠加地图维护
+    std::unique_ptr<FramePerf>            m_frame_perf;   // 帧耗时分解 (首次 onLidar 时建; 只在跟踪线程上用)
     // 第7阶段: 位姿融合 (direct=直通 / eskf=IMU+odom 推进 + 匹配观测限幅修正)
     std::unique_ptr<IPoseFusion>          m_fusion;
     mutable std::mutex                    m_fusion_mu;

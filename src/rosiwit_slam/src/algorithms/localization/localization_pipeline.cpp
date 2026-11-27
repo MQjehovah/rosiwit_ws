@@ -6,6 +6,7 @@
 #include "algorithms/localization/localization_utils.h"
 #include "algorithms/localization/maintainer/insert_gate.h"
 #include "algorithms/localization/maintainer/annotate_slice.h"
+#include "algorithms/localization/frame_perf.h"
 #include "algorithms/localization/registration_metrics.h"
 #include "algorithms/map_store/map_store_factory.h"
 #include <unordered_map>
@@ -2405,9 +2406,17 @@ void LocalizationPipeline::kickGlobalReloc() {
 }
 
 void LocalizationPipeline::onLidar(const LidarFrame& f) {
+    // 帧耗时分解 (frame_perf.h): 入口 -> 拿到状态锁 -> 匹配前 / 后 -> 出口 (含所有提前 return)。
+    if (!m_frame_perf) m_frame_perf.reset(new FramePerf());
+    struct PerfGuard {
+        FramePerf* p;
+        ~PerfGuard() { if (p) p->end(); }
+    } perf_guard{m_frame_perf.get()};
+    m_frame_perf->begin();
     // 唯一的"大状态"写入者: 整个匹配/重定位期间持 m_state_mu.
     // 高频输出 predictAt 只走 m_prior_mu, 因此不会被这里的长耗时阻塞.
     std::lock_guard<std::mutex> state_lk(m_state_mu);
+    m_frame_perf->locked();
     // 快照守卫：任何 return（包括长时间全局重定位）都会把最后状态发布给 ROS 层，
     // 但 getStatus/getPose 不再等待 m_state_mu。
     struct SnapshotGuard {
@@ -2793,7 +2802,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_has_cached_target = true;
             m_matcher->setTarget(target);
         }
+        m_frame_perf->matchBegin();
         const bool ok = m_matcher->match(scan, guess, res);
+        m_frame_perf->matchEnd(res);
         if (kDumpTurnMax > 0) {
             static int turn_res_n = 0;
             if (turn_res_n < kDumpTurnMax) {

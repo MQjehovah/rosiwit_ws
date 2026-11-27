@@ -83,6 +83,9 @@ struct MatchResult {
     // fitness 0.92, 不删 168 点只有 0.47) —— 判丢/锚点应该看这个数。<0=未计算。
     double fitness_all = -1.0;
     int    iterations = 0;         // 实际迭代次数
+    // 诊断 (2026-11-27 帧耗时分解): 求解器 (对齐) 与 覆盖率评估 各自的墙钟耗时; 0 = 该配准器未填
+    double ms_solver = 0.0;
+    double ms_eval = 0.0;
     bool   degenerate = false;     // 是否检测到退化方向
     int    degenerate_dirs = 0;    // 被门控的退化方向数
     double smallest_eig_ratio = 1.0; // 最小/最大特征值比 (可观测性)

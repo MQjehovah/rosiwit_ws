@@ -13,6 +13,7 @@ static const bool kLocProbe = std::getenv("ROSIWIT_LOC_PROBE") != nullptr;
 void GicpMatcher::configure(const ScanMatcherConfig& cfg) {
     m_cfg = cfg;
     if (!m_gicp) return;   // 子类自带求解器 (如 LioMatcher), 不配置引擎
+    m_gicp_lsq = dynamic_cast<fast_gicp::LsqRegistration<PointType, PointType>*>(m_gicp.get());
     m_gicp->setMaximumIterations(m_cfg.max_iterations);
     m_gicp->setMaxCorrespondenceDistance(m_cfg.max_correspondence_dist);
     m_gicp->setTransformationEpsilon(m_cfg.transformation_epsilon);
@@ -33,6 +34,14 @@ void GicpMatcher::setTarget(const CloudType::Ptr& target) {
 bool GicpMatcher::align(const CloudType::Ptr& src, const Eigen::Matrix4d& guess_T,
                         Eigen::Matrix4d& T_out, int& iterations) {
     Eigen::Matrix4f g = guess_T.cast<float>();
+    // 调试: ROSIWIT_GICP_LM_TRACE=N -> 前 N 次对齐打印 fast_gicp 的逐轮 LM 表 (到 stderr)。
+    // 2026-11-27: 用它确认真实扫描下求解器第 ~4 轮就到了对应关系切换造成的步长噪声底 (1~5mm),
+    // 之后的迭代步长不再变小 —— 按 1e-6 的"收敛"判据永远跑满 max_iterations。
+    static int lm_trace_left = [] {
+        const char* e = std::getenv("ROSIWIT_GICP_LM_TRACE");
+        return e ? std::atoi(e) : 0;
+    }();
+    if (m_gicp_lsq) m_gicp_lsq->setDebugPrint(lm_trace_left-- > 0);
     m_gicp->setInputSource(src);
     // 目标指针没变就别重设: PCL 1.8 setInputTarget 无条件置脏 target_cloud_updated_
     // (每帧重建 ~6k 点目标 KD 树) 且 GICP 子类再 reset target_covariances_
@@ -42,6 +51,8 @@ bool GicpMatcher::align(const CloudType::Ptr& src, const Eigen::Matrix4d& guess_
     CloudType aligned;
     m_gicp->align(aligned, g);
     iterations = m_gicp->getMaximumIterations();
+    // fast_gicp: iterations = 实际执行的外层迭代次数 (收敛了还是跑满上限 —— 求解器成本的主项)
+    if (m_name == "fast_gicp" && m_gicp_lsq) iterations = m_gicp_lsq->performedIterations();
     // fast_gicp 的 LsqRegistration 从不设置 converged_ (基类初值恒 false) —— 不能用它
     // 判失败; 只校验解的有限性, 收敛与否交给评分 (覆盖率/残差) 判。
     if (m_name != "fast_gicp" && !m_gicp->hasConverged()) return false;
@@ -56,6 +67,8 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     const bool probe = (++probe_n % 512 == 0);
     const auto t0 = std::chrono::steady_clock::now();
     double ms_ds = 0, ms_df = 0, ms_gicp = 0, ms_eval = 0;
+    out.ms_solver = 0.0;
+    out.ms_eval = 0.0;
     auto ms_since = [](const std::chrono::steady_clock::time_point& t) {
         return std::chrono::duration<double, std::milli>(
                    std::chrono::steady_clock::now() - t).count();
@@ -114,10 +127,13 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
         out.converged = false;
         return false;
     }
-    if (probe) ms_gicp = ms_since(t1);
+    ms_gicp = ms_since(t1);                    // 每帧都记: 帧耗时分解 (FramePerf) 要用
+    out.ms_solver = ms_gicp;
     out.pose = matrixToPose(T, guess.time);
     const auto t2 = std::chrono::steady_clock::now();
     const CoverageStats cs = evaluateCoverage(m_kdtree, *src, T, m_cfg.inlier_dist);
+    ms_eval = ms_since(t2);
+    out.ms_eval = ms_eval;
     out.fitness = cs.coverage;
     // 退化扫描打折 (2026-11-23): 参与配准的点太少时 "覆盖率" 没有统计意义 ——
     // 被近处物体包围 (实车: 雷达四面 0.6~3.7m 全是遮挡, 降采样后仅 240 点) 时任何位姿
@@ -203,7 +219,6 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
         }
     }
     if (probe) {
-        ms_eval = ms_since(t2);
         std::cout << "[MatchProbe] match_index=" << probe_n
                   << " scan_points=" << scan->size()
                   << " source_points=" << src->size()

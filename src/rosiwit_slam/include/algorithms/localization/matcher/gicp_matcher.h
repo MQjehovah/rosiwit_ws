@@ -5,6 +5,10 @@
 #include <memory>
 #include "slam_core/i_scan_matcher.h"
 
+namespace fast_gicp {
+template <typename PointSource, typename PointTarget> class LsqRegistration;
+}
+
 namespace rosiwit_slam {
 
 /// GICP 类配准器: 求解引擎可替换 (PCL GICP / fast_gicp::FastGICP ...), 前后处理与
@@ -33,6 +37,9 @@ protected:
     CloudType::Ptr m_target;
     pcl::KdTreeFLANN<PointType> m_kdtree;
     std::unique_ptr<pcl::Registration<PointType, PointType>> m_gicp;
+    // 引擎是 fast_gicp 系 (FastGICP / FastVGICP, 都派生自 LsqRegistration) 时指向它, 否则为空:
+    // 用来取实际迭代次数 (performedIterations)。
+    fast_gicp::LsqRegistration<PointType, PointType>* m_gicp_lsq = nullptr;
 };
 
 } // namespace rosiwit_slam
