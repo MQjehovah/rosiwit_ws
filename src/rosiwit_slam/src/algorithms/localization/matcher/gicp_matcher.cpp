@@ -25,10 +25,35 @@ void GicpMatcher::configure(const ScanMatcherConfig& cfg) {
     // 2026-11-26: 关闭 fitness epsilon —— PCL 的收敛判据在它 >0 时每轮迭代都再扫
     //   一遍近邻算 MSE (迭代成本翻倍), 而位姿收敛由 transformation_epsilon 判定即可。
     m_gicp->setEuclideanFitnessEpsilon(1e-6);   // 2026-11-26 20:5x: 回到原值 (静止自转回归)
+    if (m_gicp_lsq) fast_gicp::setTargetCovarianceReuseEnabled<PointType>(m_cfg.target_cov_reuse);
+    // PCL 基类 (Registration::initCompute, 每次 align 开头调用) 在换了目标后的第一次 align 里给它自己的
+    // tree_ 建索引 —— FastGICP 从不用这棵树 (有自己的 search_target_), 这 ~20ms (9 万点) 却落在跟踪线程
+    // 换目标后的第一帧上 (2026-11-27 实测每个新目标第一次 align 比之后多 ~40ms)。按 PCL 的开关不再重算。
+    if (m_gicp_lsq) m_gicp->setSearchMethodTarget(m_gicp->getSearchMethodTarget(), true);
 }
 
-void GicpMatcher::setTarget(const CloudType::Ptr& target) {
-    m_target = downsampleCloud(target, m_cfg.voxel_resolution);
+void GicpMatcher::setTargetCovReuseEnabled(bool on) {
+    fast_gicp::setTargetCovarianceReuseEnabled<PointType>(on);
+}
+
+void GicpMatcher::clearTargetCovarianceCache() {
+    fast_gicp::clearTargetCovarianceCache<PointType>();
+}
+
+void GicpMatcher::targetCovReuseStats(size_t& hits, size_t& miss, size_t& redo, size_t& entries) {
+    fast_gicp::targetCovCacheStats<PointType>(hits, miss, entries, &redo);
+}
+
+void GicpMatcher::setTarget(const CloudType::Ptr& target) { setTargetImpl(target, false); }
+
+void GicpMatcher::setTargetVoxelized(const CloudType::Ptr& target) {
+    setTargetImpl(target, m_cfg.voxel_resolution > 0.0);
+}
+
+void GicpMatcher::setTargetImpl(const CloudType::Ptr& target, bool voxelized) {
+    // 调用方声明目标已按同一分辨率体素化 -> 不再跑一遍 VoxelGrid (每次建目标省 ~30ms);
+    // 已经是每体素一个点的云再降采样结果不变, 只省时间。
+    m_target = voxelized ? target : downsampleCloud(target, m_cfg.voxel_resolution);
     if (!m_target) m_target.reset(new CloudType());
     // 退化目标守卫: 点数过少时 GICP 协方差估计无意义且会段错误, 置空让 match() 走拒绝分支
     if (m_target->size() < static_cast<size_t>(std::max(1, m_cfg.min_match_points)))

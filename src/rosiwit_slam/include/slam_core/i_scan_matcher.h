@@ -23,6 +23,10 @@ public:
     /// (2026-11-27: 之前协方差推迟到第一次 align 才算, 后台建好的目标切换后第一帧要多付 ~200ms。)
     virtual void setTarget(const CloudType::Ptr& target) = 0;
 
+    /// 同 setTarget, 但调用方声明: 这份目标已经按配准器的体素分辨率 (matcher.voxel_resolution) 降采样过
+    /// (每个体素至多一个点), 配准器可以省掉自己的降采样。默认忽略声明 (= setTarget)。
+    virtual void setTargetVoxelized(const CloudType::Ptr& target) { setTarget(target); }
+
     /// 设置统一存储底座 (可选): 支持时匹配器直接从 store 取近邻/统计, 与存储解耦
     virtual void setStore(IMapStore* /*store*/) {}
     virtual bool usesStore() const { return false; }

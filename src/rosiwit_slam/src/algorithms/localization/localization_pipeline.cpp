@@ -7,6 +7,7 @@
 #include "algorithms/localization/maintainer/insert_gate.h"
 #include "algorithms/localization/maintainer/annotate_slice.h"
 #include "algorithms/localization/frame_perf.h"
+#include "algorithms/localization/matcher/gicp_matcher.h"
 #include "algorithms/localization/registration_metrics.h"
 #include "algorithms/map_store/map_store_factory.h"
 #include <unordered_map>
@@ -207,6 +208,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         m_matcher_cfg.max_correspondence_dist = getv<double>(mc, "max_correspondence_dist", m_matcher_cfg.max_correspondence_dist);
         m_matcher_cfg.transformation_epsilon  = getv<double>(mc, "transformation_epsilon", m_matcher_cfg.transformation_epsilon);
         m_matcher_cfg.num_threads             = getv<int>(mc, "num_threads", m_matcher_cfg.num_threads);
+        m_matcher_cfg.target_cov_reuse = getv<bool>(mc, "target_cov_reuse", m_matcher_cfg.target_cov_reuse);
         m_matcher_cfg.inlier_dist             = getv<double>(mc, "inlier_dist", m_matcher_cfg.inlier_dist);
         m_matcher_cfg.use_corr_decay          = getv<bool>(mc, "use_corr_decay", m_matcher_cfg.use_corr_decay);
         m_matcher_cfg.corr_dist_init          = getv<double>(mc, "corr_dist_init", m_matcher_cfg.corr_dist_init);
@@ -983,16 +985,30 @@ void LocalizationPipeline::targetBuildWorker() {
         lk.unlock();
 
         const auto t0 = std::chrono::steady_clock::now();
+        auto el = [&t0]() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); };
+        double t_crop = 0.0, t_new = 0.0, t_set = 0.0;
         CloudType::Ptr target = buildAnchoredTarget(center);   // 工作图完整裁剪, 不抽稀
+        t_crop = el();
         std::unique_ptr<IScanMatcher> fresh;
         const bool valid = target && !target->empty();
         if (valid) {
             fresh = LocalizationFactory::createMatcher(m_matcher_name);
             fresh->configure(m_matcher_cfg);
-            fresh->setTarget(target);   // KD 树 + GICP 目标协方差 (耗时部分, 在这里做)
+            t_new = el();
+            // buildAnchoredTarget 的返回值 = 局部地图提供者按 local_map.voxel_resolution 降采样过的裁剪, 再经
+            // 账本 filterDeadBase (只剔除)。只有 keyframe_submap 的 getLocalMap 保证降采样 (其它提供者不保证),
+            // 且分辨率与配准器一致时, 才告诉配准器别再降采样一遍。
+            const bool voxelized = (m_local_map_name == "keyframe_submap" &&
+                                    m_local_map_cfg.voxel_resolution > 0.0 &&
+                                    std::fabs(m_local_map_cfg.voxel_resolution - m_matcher_cfg.voxel_resolution) < 1e-9);
+            if (voxelized) fresh->setTargetVoxelized(target);
+            else           fresh->setTarget(target);   // KD 树 + GICP 目标协方差 (耗时部分, 在这里做)
+            t_set = el();
         }
-        const double ms = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - t0).count();
+        const double ms = el();
+        static double acc_crop = 0, acc_new = 0, acc_set = 0, acc_ms = 0;   // 日志节流: 对已打印的构建取平均
+        static int acc_n = 0;
+        acc_crop += t_crop; acc_new += t_new - t_crop; acc_set += t_set - t_new; acc_ms += ms; ++acc_n;
 
         lk.lock();
         m_matcher_spare = std::move(fresh);
@@ -1008,8 +1024,18 @@ void LocalizationPipeline::targetBuildWorker() {
         lk.unlock();
         static int log_n = 0;
         if (++log_n % 5 == 1) {
-            std::cout << "[target] background build: pts=" << (target ? target->size() : 0)
-                      << " ms=" << ms << " valid=" << (valid ? 1 : 0) << std::endl;
+            size_t cov_hits = 0, cov_miss = 0, cov_redo = 0, cov_entries = 0;
+            GicpMatcher::targetCovReuseStats(cov_hits, cov_miss, cov_redo, cov_entries);
+            std::ostringstream os;
+            os << "[target] background build: pts=" << (target ? target->size() : 0) << " ms=" << ms
+               << " valid=" << (valid ? 1 : 0)
+               << " cov_reuse=" << (cov_hits + cov_miss > 0 ? 100.0 * (cov_hits - cov_redo) / (cov_hits + cov_miss) : 0.0)
+               << "% (redo=" << cov_redo << " new=" << cov_miss << " cache=" << cov_entries << ")"
+               << " | 分步均值(裁剪/建实例/setTarget): " << acc_crop / acc_n << "/" << acc_new / acc_n << "/" << acc_set / acc_n
+               << " of " << acc_ms / acc_n << " ms over " << acc_n << " builds";   // 整行一次输出: 多线程下逐段 << 会和别的线程交错
+            std::cout << os.str() << std::endl;
+            acc_crop = acc_new = acc_set = acc_ms = 0.0;
+            acc_n = 0;
         }
         lk.lock();
     }
@@ -1262,6 +1288,7 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     if (m_maintainer) {
         m_maintainer->setBaseEmbeddedWeights(loaded_working);
         m_maintainer->setBaseMap(map_name, m_map);
+        GicpMatcher::clearTargetCovarianceCache();     // 换图: 目标协方差缓存按点位置索引, 位置相同不代表几何相同
         if (!loaded_working) {
             // 首次载入: 生成工作图 = 底图降采样到 0.3 + w 初值 (intensity=w)。
             // 之后所有会话只加载这个 0.3 文件, 不再碰稠密的 map.pcd。
@@ -1402,6 +1429,7 @@ void LocalizationPipeline::setMapData(const MapData& data) {
     if (m_maintainer) {
         m_maintainer->setBaseEmbeddedWeights(using_working_map);
         m_maintainer->setBaseMap(m_map_path, m_map);
+        GicpMatcher::clearTargetCovarianceCache();     // 换图: 同上
         // ★w-map: 新结构升格回调 —— 提交的点当场进工作图云 + 分块缓存 (当帧参与匹配)
         m_maintainer->setCommitHook([this](const Eigen::Vector3d& pt, float w) {
             if (m_local_map) {
@@ -2818,6 +2846,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 if (far || stale) {
                     std::lock_guard<std::mutex> lk(m_target_mu);
                     if (!m_target_building && !m_target_ready) {
+                        // 窗口中心 = 当前位置 (与 2026-11-27 之前一致)。试过"只是账本内容变了就不挪窗口"以多用
+                        // 协方差缓存: 命中率 99.9%, 但机器人离窗口中心最远可到 15m, 前方覆盖从 60m 缩到 45m,
+                        // 同一时刻成对比较 fitness 平均低 0.014 —— 为了缓存改覆盖范围不值得, 撤回。
                         m_target_req_center = target_center;
                         m_target_req_rev = maint_rev;
                         m_target_req = true;

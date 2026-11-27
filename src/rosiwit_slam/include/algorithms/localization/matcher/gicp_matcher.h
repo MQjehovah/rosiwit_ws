@@ -22,11 +22,18 @@ public:
     std::string name() const override { return m_name; }
     void configure(const ScanMatcherConfig& cfg) override;
     void setTarget(const CloudType::Ptr& target) override;
+    void setTargetVoxelized(const CloudType::Ptr& target) override;
+
+    // 目标协方差复用缓存 (进程内, 按点位置; 见 ScanMatcherConfig::target_cov_reuse)
+    static void setTargetCovReuseEnabled(bool on);
+    static void clearTargetCovarianceCache();      // 换图必须调: 位置相同不代表几何相同
+    static void targetCovReuseStats(size_t& hits, size_t& miss, size_t& redo, size_t& entries);
     bool match(const CloudType::Ptr& scan, const PoseStamped& guess,
                MatchResult& out) override;
     double evaluateResidual(const CloudType::Ptr& scan, const PoseStamped& pose) override;
 
 protected:
+    void setTargetImpl(const CloudType::Ptr& target, bool voxelized);
     /// 求解核心: 从 guess_T 出发把 src 对齐到 m_target。返回 false = 未收敛/失败。
     /// GicpMatcher 用 GICP 引擎; LioMatcher 覆写为 iEKF 点到面。评分在 match() 中共用。
     virtual bool align(const CloudType::Ptr& src, const Eigen::Matrix4d& guess_T,
