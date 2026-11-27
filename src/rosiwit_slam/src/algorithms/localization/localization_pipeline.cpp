@@ -322,6 +322,7 @@ bool LocalizationPipeline::init(const std::string& config_path) {
         if (pl && pl["z"]) m_planar_z = pl["z"].as<double>(0.0);
         if (pl && pl["lock_roll_pitch"]) m_lock_roll_pitch = pl["lock_roll_pitch"].as<bool>(true);
         if (pl && pl["tilt_tau_s"]) m_tilt_tau = pl["tilt_tau_s"].as<double>(20.0);
+        if (pl && pl["tilt_output"]) m_tilt_output = pl["tilt_output"].as<bool>(false);
     }
     // ---- 定位 odom: 单一开关 localization.odom_mode (none | fuse) ----
     // fuse 同时打开两处 odom 输入, 不再需要单独配 motion_prior.use_odom:
@@ -1040,8 +1041,10 @@ void LocalizationPipeline::planarizePose(PoseStamped& p) const {
     if (!m_fix_planar || !m_base_r_valid) return;
     const M3D R_base = p.rot * m_base_r.transpose();      // base_footprint -> map
     const double yaw = std::atan2(R_base(1, 0), R_base(0, 0));
-    // roll/pitch: 锁住 = 水平 + 安装角; 不锁 = (慢估计的) 地图倾斜 + 水平 + 安装角 (见 updateMapTilt)
-    p.rot = m_map_tilt * Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix() * m_base_r;
+    // roll/pitch: 水平 + 安装角; 只有"不锁 且 倾斜带进输出"时才加上 (慢估计的) 地图倾斜 (见 updateMapTilt)。
+    // 只改猜测的模式 (m_tilt_output=false) 下这里始终是水平 —— 输出与原来完全相同。
+    const M3D R_level = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix() * m_base_r;
+    p.rot = (m_lock_roll_pitch || !m_tilt_output) ? R_level : m_map_tilt * R_level;
     if (m_fixed_z > 0.0) p.trans.z() = m_fixed_z;
 }
 
@@ -2577,6 +2580,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         std::lock_guard<std::mutex> prior_lk(m_prior_mu);
         guess = m_prior->predict(f.end_time);
         planarizePose(guess);   // 先验也只保留 yaw, 不回传 z/roll/pitch 漂移
+        // 给匹配器的猜测带上地图倾斜 (planar.lock_roll_pitch=false): 输出是否带倾斜由 tilt_output 决定,
+        // 猜测一律带 —— 求解器每帧少转这几度, 是轮数从 12 降到 5~6 的主要原因。
+        if (!m_lock_roll_pitch) guess.rot = m_map_tilt * guess.rot;
     }
     // coast 重锚: matcher 连续失败后先验(尤其 IMU-only)每帧漂 0.1~0.3m,
     // 漂出对应距离(2m)后 correspondences=0, 从此永久失配。连续失败超过

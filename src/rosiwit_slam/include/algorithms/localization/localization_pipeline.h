@@ -227,6 +227,10 @@ private:
     // 转回去 —— LM 每轮只转 0.1~0.4°, 每帧 12 轮跑满, 求解 100+ms。倾斜是常数不是漂移, 锁掉它只增成本。
     bool   m_lock_roll_pitch = true;
     double m_tilt_tau = 20.0;                                 // 地图倾斜量的低通时间常数 (s); 0 = 逐帧跟随匹配
+    // 地图倾斜量是否也带进**输出**姿态。false (默认): 只放进给匹配器的猜测位姿, 输出姿态仍是
+    // "水平 + 安装角" —— 对外发布的四元数与原来完全相同; 求解器的收敛只取决于猜测, 提速一分不少。
+    // true: 输出姿态与地图一致 (带倾斜), 对外可见 (ROS 层发布的是完整四元数)。
+    bool   m_tilt_output = false;
     Eigen::Matrix3d m_map_tilt = Eigen::Matrix3d::Identity(); // 地图水平面 -> 重力水平面 (地图系, 绕水平轴)
     Eigen::Vector3d m_tilt_vec = Eigen::Vector3d::Zero();     // 上面的旋转向量 (只含 x/y 分量)
     int    m_tilt_n = 0;                                      // 已纳入估计的帧数 (首帧起快速收敛)
