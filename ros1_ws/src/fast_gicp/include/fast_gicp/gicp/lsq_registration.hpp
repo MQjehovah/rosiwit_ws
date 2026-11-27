@@ -54,6 +54,11 @@ public:
 
   const Eigen::Matrix<double, 6, 6>& getFinalHessian() const;
 
+  // rosiwit local patch: 上一次 align 实际执行的外层迭代次数。pcl 的 nr_iterations_ 是最后一轮的下标
+  // (0 基), 所以 +1。节点用它区分"收敛了"和"跑满上限" —— 每轮迭代 = 一遍全量最近邻关联 + 线性化,
+  // 是求解器成本的主项 (实测 5000 点每轮约 20ms 单线程)。
+  int performedIterations() const { return static_cast<int>(nr_iterations_) + 1; }
+
   double evaluateCost(const Eigen::Matrix4f& relative_pose, Eigen::Matrix<double, 6, 6>* H = nullptr, Eigen::Matrix<double, 6, 1>* b = nullptr);
 
   virtual void swapSourceAndTarget() {}
@@ -63,7 +68,8 @@ public:
 protected:
   virtual void computeTransformation(PointCloudSource& output, const Matrix4& guess) override;
 
-  bool is_converged(const Eigen::Isometry3d& delta) const;
+  // rosiwit local patch: 收敛判据在雷达自身位置上量 (见 impl 里的说明)。x0 = 本轮迭代的起点位姿。
+  bool is_converged(const Eigen::Isometry3d& delta, const Eigen::Isometry3d& x0) const;
 
   virtual double linearize(const Eigen::Isometry3d& trans, Eigen::Matrix<double, 6, 6>* H = nullptr, Eigen::Matrix<double, 6, 1>* b = nullptr) = 0;
   virtual double compute_error(const Eigen::Isometry3d& trans) = 0;

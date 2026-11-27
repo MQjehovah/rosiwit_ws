@@ -71,7 +71,7 @@ void LsqRegistration<PointTarget, PointSource>::computeTransformation(PointCloud
       break;
     }
 
-    converged_ = is_converged(delta);
+    converged_ = is_converged(delta, x0);
   }
 
   final_transformation_ = x0.cast<float>().matrix();
@@ -79,10 +79,13 @@ void LsqRegistration<PointTarget, PointSource>::computeTransformation(PointCloud
 }
 
 template <typename PointTarget, typename PointSource>
-bool LsqRegistration<PointTarget, PointSource>::is_converged(const Eigen::Isometry3d& delta) const {
-  double accum = 0.0;
+bool LsqRegistration<PointTarget, PointSource>::is_converged(const Eigen::Isometry3d& delta, const Eigen::Isometry3d& x0) const {
   Eigen::Matrix3d R = delta.linear() - Eigen::Matrix3d::Identity();
-  Eigen::Vector3d t = delta.translation();
+  // rosiwit local patch (2026-11-27): 平移量取**雷达自身位置**的位移, 不取左扰动的 t。
+  // delta 是左扰动 (x_new = delta * x_old): 旋转绕地图原点, t 里带着 (R_delta - I)·p 这一截 ——
+  // 雷达离原点越远它越大 (46m 外 0.00036 rad 的残余转动 = 17mm), 雷达自己早已不动了, 按 t 判却
+  // 永远"没收敛"。本机地图 366m x 289m, 实测解在第 6~9 轮收敛后每帧还要空转 3~6 轮。
+  const Eigen::Vector3d t = (R * x0.translation() + delta.translation());
 
   Eigen::Matrix3d r_delta = 1.0 / rotation_epsilon_ * R.array().abs();
   Eigen::Vector3d t_delta = 1.0 / transformation_epsilon_ * t.array().abs();
@@ -149,7 +152,7 @@ bool LsqRegistration<PointTarget, PointSource>::step_lm(Eigen::Isometry3d& x0, E
     }
 
     if (rho < 0) {
-      if (is_converged(delta)) {
+      if (is_converged(delta, x0)) {
         return true;
       }
 
