@@ -762,18 +762,30 @@ constexpr size_t kSaveSubChunk = 8192;
 void LocalizationPipeline::mapSaveWorker() {
     // 降优先级 (nice +10, 放宽无需特权): 多秒的 CPU 活不与跟踪线程抢核。
     nice(10);
-    std::unique_lock<std::mutex> lk(m_save_mu);
     for (;;) {
-        m_save_cv.wait(lk, [this] { return m_save_stop || m_save_req; });
-        if (m_save_stop) break;
-        m_save_req = false;
-        m_save_busy = true;
-        m_save_stage = SaveStage::Downsample;
-        const CloudType::Ptr map = m_save_req_map;
-        m_save_req_map.reset();
-        const std::string working_map = m_save_req_path;
-        const double vox = m_save_req_vox;
-        lk.unlock();
+        // ★锁的规矩 (2026-11-27 06:47 实机崩溃的教训): 每个等待点都用一个**新的**作用域锁, 出作用域
+        //   即释放; 绝不把一个 unique_lock 跨 unlock() / 重新 lock() 复用。
+        //   旧实现: 循环顶部 wait(lk) -> 中途 lk.unlock() 做降采样/写盘 -> 回到循环顶部又直接
+        //   wait(lk), 此时锁并不在手里 (POSIX 未定义, glibc 恰好容忍)。第一次落盘因此侥幸成功;
+        //   第二次请求把它唤醒, 走到 lk.unlock() 时 unique_lock 发现自己不持有锁 -> 抛
+        //   system_error(operation_not_permitted), 那一行在 try 外面 -> std::terminate -> 节点 abort。
+        //   (journal 06:47:52: "terminate called after throwing an instance of 'std::system_error'
+        //    what(): Operation not permitted"; 回归测试: test_working_map_save 连续三次落盘)
+        CloudType::Ptr map;
+        std::string working_map;
+        double vox = 0.3;
+        {
+            std::unique_lock<std::mutex> lk(m_save_mu);
+            m_save_cv.wait(lk, [this] { return m_save_stop || m_save_req; });
+            if (m_save_stop) break;
+            m_save_req = false;
+            m_save_busy = true;
+            m_save_stage = SaveStage::Downsample;
+            map = m_save_req_map;
+            m_save_req_map.reset();
+            working_map = m_save_req_path;
+            vox = m_save_req_vox;
+        }
 
         using clk = std::chrono::steady_clock;
         auto ms_between = [](clk::time_point a, clk::time_point b) {
@@ -787,83 +799,89 @@ void LocalizationPipeline::mapSaveWorker() {
         std::string err;
         const char* stage = "voxel";
         // ★线程里绝不能让异常逃逸 (= std::terminate = 整个进程 abort; 2026-11-25 实机:
-        //   工作图属主 root, open 失败 -> pcl::IOException -> 节点自杀)。失败只记日志。
+        //   工作图属主 root, open 失败 -> pcl::IOException -> 节点自杀; 2026-11-27 06:47 见上)。
+        //   两层: 内层把落盘各阶段的异常转成日志; 外层兜住内层之后 (日志/收尾) 的任何意外。
         try {
-            if (!map || map->empty()) throw std::runtime_error("map missing");
-            // (1) 底图降采样到 voxel: 与 overlay 同网格、与匹配口径一致 (只读, 无锁)
-            CloudType::Ptr base_snap = voxelDownsample(map, static_cast<float>(vox));
-            ms_vox = ms_between(t_start, clk::now());
-            // 交接给跟踪线程: 它在自己的帧预算内分片查账本 (见 advanceSaveAnnotation)
-            {
-                std::lock_guard<std::mutex> g(m_save_mu);
-                if (m_save_abort) throw std::runtime_error("aborted");
-                m_save_snap = base_snap;
-                m_save_next = 0;
-                m_save_slice_frames = 0;
-                m_save_slice_ms = 0.0;
-                m_save_stage = SaveStage::Annotate;
-                m_save_annotating.store(true);
-            }
-            stage = "annotate";
-            lk.lock();
-            m_save_cv.wait(lk, [this] {
-                return m_save_stop || m_save_abort || m_save_stage != SaveStage::Annotate;
-            });
-            const bool handover = (m_save_stage == SaveStage::Write);
-            ann_frames = m_save_slice_frames;
-            ms_ann = m_save_slice_ms;
-            CloudType::Ptr ov;
-            base_snap.reset();
-            if (handover) {
-                // 跟踪线程标注完成: 快照归本线程
-                m_save_stage = SaveStage::Write;
-                base_snap = m_save_snap;
-                m_save_snap.reset();
-                ov = m_save_overlay;
-                m_save_overlay.reset();
-            }
-            lk.unlock();
-            if (!handover) throw std::runtime_error("aborted");
-            const auto t_merge = clk::now();
-            // (4) 压缩 (去掉 w<=0 的点): 不需要账本
-            IMapMaintainer::compactAnnotated(*base_snap);
-            if (ov && !ov->empty()) {
-                suppressBaseByOverlay(base_snap, ov, vox);   // 叠加处由 overlay 点取代底图点
-                *base_snap += *ov;
-            }
-            n_total = base_snap->size();
-            n_ov = ov ? ov->size() : 0;
-            const auto t_io = clk::now();
-            ms_merge = ms_between(t_merge, t_io);
-            stage = "write";
-            // 临时文件 + rename: 工作图文件要么是旧的完整版, 要么是新的完整版
-            const std::string tmp = working_map + ".tmp";
             try {
-                pcl::io::savePCDFileBinary(tmp, *base_snap);
-                if (std::rename(tmp.c_str(), working_map.c_str()) != 0)
-                    throw std::runtime_error(std::string("rename: ") + std::strerror(errno));
+                if (!map || map->empty()) throw std::runtime_error("map missing");
+                // (1) 底图降采样到 voxel: 与 overlay 同网格、与匹配口径一致 (只读, 无锁)
+                CloudType::Ptr base_snap = voxelDownsample(map, static_cast<float>(vox));
+                ms_vox = ms_between(t_start, clk::now());
+                // 交接给跟踪线程: 它在自己的帧预算内分片查账本 (见 advanceSaveAnnotation)
+                {
+                    std::lock_guard<std::mutex> g(m_save_mu);
+                    if (m_save_abort) throw std::runtime_error("aborted");
+                    m_save_snap = base_snap;
+                    m_save_next = 0;
+                    m_save_slice_frames = 0;
+                    m_save_slice_ms = 0.0;
+                    m_save_stage = SaveStage::Annotate;
+                    m_save_annotating.store(true);
+                }
+                stage = "annotate";
+                CloudType::Ptr ov;
+                bool handover = false;
+                {
+                    std::unique_lock<std::mutex> lk(m_save_mu);
+                    m_save_cv.wait(lk, [this] {
+                        return m_save_stop || m_save_abort || m_save_stage != SaveStage::Annotate;
+                    });
+                    handover = (m_save_stage == SaveStage::Write);
+                    ann_frames = m_save_slice_frames;
+                    ms_ann = m_save_slice_ms;
+                    if (handover) {
+                        // 跟踪线程标注完成: 快照归本线程 (只做过降采样的那份随之释放)
+                        m_save_stage = SaveStage::Write;
+                        base_snap = m_save_snap;
+                        m_save_snap.reset();
+                        ov = m_save_overlay;
+                        m_save_overlay.reset();
+                    }
+                }
+                if (!handover) throw std::runtime_error("aborted");
+                const auto t_merge = clk::now();
+                // (4) 压缩 (去掉 w<=0 的点): 不需要账本
+                IMapMaintainer::compactAnnotated(*base_snap);
+                if (ov && !ov->empty()) {
+                    suppressBaseByOverlay(base_snap, ov, vox);   // 叠加处由 overlay 点取代底图点
+                    *base_snap += *ov;
+                }
+                n_total = base_snap->size();
+                n_ov = ov ? ov->size() : 0;
+                const auto t_io = clk::now();
+                ms_merge = ms_between(t_merge, t_io);
+                stage = "write";
+                // 临时文件 + rename: 工作图文件要么是旧的完整版, 要么是新的完整版
+                const std::string tmp = working_map + ".tmp";
+                try {
+                    pcl::io::savePCDFileBinary(tmp, *base_snap);
+                    if (std::rename(tmp.c_str(), working_map.c_str()) != 0)
+                        throw std::runtime_error(std::string("rename: ") + std::strerror(errno));
+                } catch (...) {
+                    std::remove(tmp.c_str());
+                    throw;
+                }
+                ms_io = ms_between(t_io, clk::now());
+                ok = true;
+            } catch (const std::exception& e) {
+                err = e.what();
             } catch (...) {
-                std::remove(tmp.c_str());
-                throw;
+                err = "unknown exception";
             }
-            ms_io = ms_between(t_io, clk::now());
-            ok = true;
-        } catch (const std::exception& e) {
-            err = e.what();
+            if (ok) {
+                std::cout << "[working_map] saved: " << working_map << " (" << n_total
+                          << " pts; overlay=" << n_ov << " vox_ms=" << ms_vox
+                          << " ann_ms=" << ms_ann << " ann_frames=" << ann_frames
+                          << " merge_ms=" << ms_merge << " io_ms=" << ms_io << " bg=1)" << std::endl;
+            } else if (err == "aborted") {
+                std::cout << "[working_map] save aborted at " << stage
+                          << " (map switched / shutting down)" << std::endl;
+            } else {
+                std::cerr << "[working_map] save FAILED at " << stage << ": " << err
+                          << " (检查目录属主/磁盘空间)" << std::endl;
+            }
         } catch (...) {
-            err = "unknown exception";
-        }
-        if (ok) {
-            std::cout << "[working_map] saved: " << working_map << " (" << n_total
-                      << " pts; overlay=" << n_ov << " vox_ms=" << ms_vox
-                      << " ann_ms=" << ms_ann << " ann_frames=" << ann_frames
-                      << " merge_ms=" << ms_merge << " io_ms=" << ms_io << " bg=1)" << std::endl;
-        } else if (err == "aborted") {
-            std::cout << "[working_map] save aborted at " << stage
-                      << " (map switched / shutting down)" << std::endl;
-        } else {
-            std::cerr << "[working_map] save FAILED at " << stage << ": " << err
-                      << " (检查目录属主/磁盘空间)" << std::endl;
+            std::cerr << "[working_map] save worker: unexpected exception after stage " << stage << std::endl;
         }
         {
             std::lock_guard<std::mutex> g(m_save_mu);

@@ -5,7 +5,11 @@
 // 查账本写 w + overlay 快照), 两个线程按阶段交接 cloud 指针。本测试走真实管线:
 //   1) 定期落盘到期 -> 请求 -> 落盘线程降采样 -> 交接 -> 跟踪线程分片标注 -> 回交 -> 写盘;
 //   2) 写出的工作图内容正确: 底图体素 (0.3m, 每体素一点) + intensity = w;
-//   3) 管线析构时落盘线程被正常收掉 (不崩不挂)。
+//   3) 管线析构时落盘线程被正常收掉 (不崩不挂);
+//   4) **连续**多次落盘 (2026-11-27 06:47 实机崩溃): 落盘线程第一次落盘后把 unique_lock 解开了却
+//      没重新锁, 第二次请求一唤醒就在 lk.unlock() 上抛 system_error -> std::terminate -> 节点 abort。
+//      旧测试在第一个文件出现时就退出, 从没触发过第二次。这里用两次"新结构提交"(账本版本号变化,
+//      定期落盘的触发条件之一) 逼出第二、第三次落盘; 旧实现下本测试进程直接 SIGABRT。
 // 首次 setMap 会同步生成工作图文件 —— 先删掉它, 再验证它经由定期落盘路径重新出现。
 #include <gtest/gtest.h>
 #include <pcl/io/pcd_io.h>
@@ -57,6 +61,15 @@ CloudType::Ptr makeRoom()
         }
     c->width = static_cast<uint32_t>(c->size());
     c->height = 1;
+    return c;
+}
+
+// 地图上没有的柱子 (0.3m 体素下一列约 6 个体素, 满足最小簇 3): 被足够多的视角看到后账本提交它。
+CloudType::Ptr makePillar(double x, double y)
+{
+    CloudType::Ptr c(new CloudType());
+    for (double z = 0.2; z <= 1.8; z += 0.05)
+        c->push_back(mkPt(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
     return c;
 }
 
@@ -145,11 +158,22 @@ TEST(WorkingMapSaveTest, PeriodicSaveRewritesWorkingMapViaSlicedAnnotation)
              "    lost_patience: 30\n"
              "  maintainer:\n"
              "    voxel: 0.3\n"
-             "    base_voxel_w: 128\n";
+             "    base_voxel_w: 128\n"
+             // 默认 shadow=true: 只观察不写, onLocalized 不会被调用 (也就没有新结构提交)。
+             // 关掉它才会走完整的账本写入路径 —— 第二、三次落盘要靠新结构提交来触发。
+             "    shadow: false\n"
+             // 按"帧"计票: view 单位下"连续被看到"不重复计票, 而柱子的有无会影响写图门的放行节奏,
+             // 候选可能每次调用都在 —— 票永远涨不到 3。这里只关心"提交 -> 版本号变 -> 再次落盘"。
+             "    persistency_unit: 0\n";
     }
 
     int localized_frames = 0;
-    bool written = false;
+    // 新结构: A 从第 10 帧起、B 从第 150 帧起出现在**隔帧**里 —— view 计票单位下连续帧不重复计票,
+    // 隔一帧出现一次才算被"再次看到", 3 票 (persist_hits) 后提交 -> revision 变 -> 定期落盘到期。
+    const CloudType::Ptr pillarA = makePillar(6.5, 6.5);
+    const CloudType::Ptr pillarB = makePillar(1.5, 6.5);
+    int saves = 0;
+    size_t last_pts = 0;
     double max_frame_ms = 0.0;
     {
         LocalizationPipeline lp;
@@ -162,10 +186,14 @@ TEST(WorkingMapSaveTest, PeriodicSaveRewritesWorkingMapViaSlicedAnnotation)
         ASSERT_EQ(std::remove(work.c_str()), 0);
 
         lp.setInitPose(mkPose(3.0, 3.0, 0.0));
-        for (int i = 0; i < 600 && !written; ++i) {
+        for (int i = 0; i < 700 && saves < 3; ++i) {
             const PoseStamped truth = mkPose(3.0 + 0.01 * i, 3.0, i * 0.1 + 0.1);
             LidarFrame f;
             f.cloud = scanFromMap(map, truth);
+            if (i % 2 == 0) {
+                if (i >= 10) *f.cloud += *scanFromMap(pillarA, truth);
+                if (i >= 150) *f.cloud += *scanFromMap(pillarB, truth);
+            }
             f.start_time = i * 0.1;
             f.end_time = i * 0.1 + 0.1;
             const auto t0 = std::chrono::steady_clock::now();
@@ -174,28 +202,36 @@ TEST(WorkingMapSaveTest, PeriodicSaveRewritesWorkingMapViaSlicedAnnotation)
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
             localized_frames += (lp.getStatus() == ILocalization::LOCALIZED) ? 1 : 0;
             std::ifstream probe(work, std::ios::binary);
-            written = probe.good();
+            if (probe.good()) {
+                // rename 是原子的: 文件存在即完整。读一遍内容, 再删掉, 等下一次落盘把它重新写出来。
+                probe.close();
+                CloudType::Ptr got(new CloudType());
+                ASSERT_EQ(pcl::io::loadPCDFile(work, *got), 0) << "第 " << saves + 1 << " 次落盘: 工作图读不回";
+                int bad = 0;
+                for (const PointType& p : got->points) {
+                    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+                        !(p.intensity >= 1.0f)) ++bad;
+                }
+                EXPECT_EQ(bad, 0) << "第 " << saves + 1 << " 次落盘: 工作图里有非有限点或 w<=0 的点";
+                // 内容 = 底图体素 (+ 若有 overlay 则更多)
+                EXPECT_GE(got->size(), n_vox) << "第 " << saves + 1 << " 次落盘: 点数少于底图体素数";
+                EXPECT_LT(got->size(), n_vox + map->size()) << "第 " << saves + 1 << " 次落盘: 写成了整幅原始底图";
+                std::cout << "[wm_save] 第 " << saves + 1 << " 次落盘 (帧 " << i << "): 底图 " << map->size()
+                          << " pts / " << n_vox << " 体素 -> 工作图 " << got->size() << " pts" << std::endl;
+                last_pts = got->size();
+                ++saves;
+                ASSERT_EQ(std::remove(work.c_str()), 0);
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         // lp 析构: 停止并 join 落盘线程 (在这里挂住 / 崩掉 = 失败)
     }
-    // 循环在文件出现时即退出, 这里只要求确实有过被接受的帧 (落盘的前提)
+    // 第一回合同样验证过的性质: 确实有过被接受的帧 (落盘的前提)
     EXPECT_GE(localized_frames, 1) << "合成序列没有进入 LOCALIZED, 落盘条件不成立";
-    ASSERT_TRUE(written) << "定期落盘没有写出工作图 " << work;
-
-    CloudType::Ptr got(new CloudType());
-    ASSERT_EQ(pcl::io::loadPCDFile(work, *got), 0) << "工作图读不回 (写了一半?)";
-    // rename 是原子的: 文件存在即完整。内容 = 底图体素 (+ 若有 overlay 则更多), intensity = w
-    EXPECT_GE(got->size(), n_vox) << "工作图点数少于底图体素数";
-    EXPECT_LT(got->size(), n_vox + map->size()) << "工作图不应是整幅原始底图";
-    int bad = 0;
-    for (const PointType& p : got->points) {
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || !(p.intensity >= 1.0f)) ++bad;
-    }
-    EXPECT_EQ(bad, 0) << "工作图里有非有限点或 w<=0 的点";
-    std::cout << "[wm_save] 底图 " << map->size() << " pts / " << n_vox << " 体素 -> 工作图 "
-              << got->size() << " pts; localized_frames=" << localized_frames
-              << " max_frame_ms=" << max_frame_ms << std::endl;
+    // ★第二次落盘就是实机崩溃的那一步 (旧实现下本进程在上面就 abort 了, 走不到这条断言)
+    EXPECT_GE(saves, 3) << "连续落盘只完成了 " << saves << " 次 (需要 3 次: 第 2 次走的是崩溃的那条路径)";
+    EXPECT_GT(last_pts, n_vox) << "提交的新结构没有进工作图";
+    std::cout << "[wm_save] localized_frames=" << localized_frames << " max_frame_ms=" << max_frame_ms << std::endl;
 
     std::remove(work.c_str());
     std::remove(pcd.c_str());
