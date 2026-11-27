@@ -4383,7 +4383,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " session_map_size=" << session_map_size
                    << " session_map_age=" << session_map_age
                    << " map_tilt=" << (m_tilt_vec.norm() * 57.2957795)
-                   << " tilt_sig=" << (m_tilt_frame_sigma > 0.0 ? m_tilt_frame_sigma * 57.2957795 : -1.0);
+                   << " tilt_sig=" << (m_tilt_frame_sigma > 0.0 ? m_tilt_frame_sigma * 57.2957795 : -1.0)
+                   // 求解器逐帧: 迭代轮数 (上限 = matcher.max_iterations 时是没收敛) 与求解 / 评估耗时。
+                   // 帧耗时的长尾来自"跑到上限"的帧 (2026-11-27 回放: 每个百帧窗口都有打满 12 轮的帧, 求解 80~170ms)。
+                   << " iter=" << res.iterations
+                   << " solver_ms=" << res.ms_solver
+                   << " eval_ms=" << res.ms_eval;
                 // 地图更新线程 (账本写入不在跟踪线程上了): 它自己的耗时 / 丢弃 / 积压
                 if (m_map_update) {
                     const MapUpdateWorker::Stats ms = m_map_update->stats();
