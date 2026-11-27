@@ -114,7 +114,7 @@ private:
     /// 子图 vs 先验图 的一致性观测 (只测不改): 把子图刚性地对齐到先验图,
     /// 输出残余刚体变换 (Δt, Δyaw)。Δt≈0 => 两者一致; 明显非零 => 子图已经偏了。
     // ★只在后台线程跑 (2026-11-27): 它要整图裁剪 + 两次降采样 + 建 KD 树 + 几万次最近邻,
-    //   恒等分数 >= 0.12 时再跑 PCL GICP (30 轮) —— 原先每 30 帧在跟踪线程上同步执行,
+    //   恒等分数 >= 0.12 时再跑 PCL GICP (30 轮) —— 原先每 30 秒在跟踪线程上同步执行,
     //   真实数据回放里单帧卡 1.2~3.3s。只测不改的诊断没有任何理由占实时线程。
     //   跟踪线程只投递位姿快照; 上一轮没跑完就丢弃这一轮 (诊断不排队)。
     void kickConsistencyCheck(const PoseStamped& pose);
@@ -276,7 +276,11 @@ private:
     int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
     // 锚定状态只有 m_on_submap 一个 (m_anchor_on_base 已合并, 见下)
     int    m_consistency_tick = 0;        // 子图↔先验一致性观测的节拍 (机器人侧新增)
-    int    m_consistency_every = 300;     // session_map.consistency_every_frames: 每多少帧观测一次
+    // 观测周期 (秒)。计数器 m_consistency_tick 在 onLidar 的 1Hz 状态块里累加 (按帧时间每秒一次),
+    // 所以单位是秒不是帧 —— 原代码写 `% 30`, 注释里当成"每 30 帧"是读错了: 实际就是每 30 秒。
+    // 默认 300s (原 30s): 走到 GICP 分支的一次观测在后台要 2.6~3.2s 吃满一个核, 实测它运行的窗口里
+    // 跟踪线程仍有单帧到 280ms (nice 之后也一样: 抢的是内存/三级缓存)。输出只是一行日志, 没人消费。
+    int    m_consistency_period = 300;    // session_map.consistency_period_s
     std::atomic<bool> m_consistency_job{false};   // 有观测在途
     // ---- 输出位姿限速 (安全): 位姿跳变不再直通导航 (实机: 匹配在两个对齐间
     // 振荡 ±15m, 导航看到瞬移会急停/窜车) —— 合法跳变 (种子/有界恢复/换图) 走旁路。

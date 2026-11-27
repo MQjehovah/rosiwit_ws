@@ -566,7 +566,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_sm_write_fitness = getv<double>(smc, "write_fitness_bridging", m_sm_write_fitness);
         m_sm_write_corr_m = getv<double>(smc, "write_max_corr_m", m_sm_write_corr_m);
         m_sm_write_corr_deg = getv<double>(smc, "write_max_corr_deg", m_sm_write_corr_deg);
-        m_consistency_every = std::max(1, getv<int>(smc, "consistency_every_frames", m_consistency_every));
+        m_consistency_period = std::max(1, getv<int>(smc, "consistency_period_s", m_consistency_period));
     }
     m_session_map.configure(SessionMap::Config{
         m_session_map_radius, m_session_map_voxel, m_session_map_max_points});
@@ -4114,7 +4114,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             }
             // ★机器人侧新增: 子图↔先验一致性观测 (只测不改)。必须在 m_session_map_mu
             // 作用域之外调用(函数内部自己加锁, 非递归 mutex 二次加锁 = 死锁; 实机踩过)。
-            if (m_session_map_enabled && (++m_consistency_tick % m_consistency_every == 0)) {
+            // 注意: 本块是 1Hz (按帧时间每秒进一次), 所以 m_consistency_tick 数的是秒。
+            if (m_session_map_enabled && (++m_consistency_tick % m_consistency_period == 0)) {
                 kickConsistencyCheck(m_pose);     // 后台跑, 不占跟踪线程 (见头文件说明)
             }
             }
