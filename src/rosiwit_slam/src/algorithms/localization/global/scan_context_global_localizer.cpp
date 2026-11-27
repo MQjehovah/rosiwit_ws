@@ -161,6 +161,102 @@ int ScanContextGlobalLocalizer::localizeTopK(const CloudType::Ptr& scan, int max
     out.clear();
     if (!m_ready || !m_sc || !scan || scan->empty()) return 0;
 
+    // ---- 模式 A: 覆盖率打分 (不依赖描述子) ----
+    // 描述子在"地图切片 vs 单帧扫描"之间没有可用区间(见 docs §6), 所以默认改用
+    // 物理判据: 把查询扫描放到每个候选地点上, 量"这张图能解释多少点".
+    // 代价: 地点数 x ~1~3ms (0.6m 粗图, 800 点) -> 365 地点 ≈ 1~1.5s (后台线程).
+    // 这里只做"地点 + 粗朝向"筛选, 精配与 0.85 门控交给管线的二级精配.
+    if (m_cfg.sc_use_coverage_score) {
+        CloudType::Ptr scan_cov = downsampleCloud(scan, 0.6);
+        if (!scan_cov || scan_cov->size() < 50) scan_cov = scan;
+        struct Place { size_t idx; double cov; };
+        std::vector<Place> places;
+        places.reserve(m_db.size());
+        for (size_t i = 0; i < m_db.size(); ++i) {
+            Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+            T.block<3, 3>(0, 0) = m_db[i].rot;
+            T.block<3, 1>(0, 3) = m_db[i].trans;
+            const CoverageStats cs = evaluateCoverage(m_kdt_coarse, *scan_cov, T, 1.5, 800);
+            places.push_back({i, cs.coverage});
+        }
+        std::sort(places.begin(), places.end(),
+                  [](const Place& a, const Place& b) { return a.cov > b.cov; });
+        const int kCoarse = std::min<int>(std::max(4, max_k * 2), places.size());
+        // top 地点做 ±30° 朝向假设 (地点朝向 = 建图时该处的车头方向, 与查询朝向可能不同)
+        struct Hit { size_t idx; double cov; double yaw_deg; double dx = 0.0; double dy = 0.0; };
+        std::vector<Hit> hits2;
+        const double yaws[] = {-30.0, -15.0, 0.0, 15.0, 30.0};
+        for (int i = 0; i < kCoarse; ++i) {
+            double best_cov = -1.0, best_yaw = 0.0;
+            for (double yd : yaws) {
+                const Eigen::Matrix3d Rz =
+                    Eigen::AngleAxisd(yd / 57.2957795, V3D::UnitZ()).toRotationMatrix();
+                Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+                T.block<3, 3>(0, 0) = Rz * m_db[places[i].idx].rot;
+                T.block<3, 1>(0, 3) = m_db[places[i].idx].trans;
+                const CoverageStats cs = evaluateCoverage(m_kdt_coarse, *scan_cov, T, 1.5, 800);
+                if (cs.coverage > best_cov) { best_cov = cs.coverage; best_yaw = yd; }
+            }
+            hits2.push_back({places[i].idx, best_cov, best_yaw});
+        }
+        std::sort(hits2.begin(), hits2.end(),
+                  [](const Hit& a, const Hit& b) { return a.cov > b.cov; });
+
+        // ---- 局部精化: 地点级(5m)/朝向级(±15°) 还不够 GICP 收敛 (±30° yaw + 2.5m 位置
+        //     会让 GICP 跳到别的局部极小, 实测精配分只有 0.18). 这里对前 3 个地点做
+        //     (dyaw ±4° 步长 2°) x (dx,dy ±1m 步长 1m) 的细搜, 把初始误差压到
+        //     ~0.5m / 2° 以内, 再交给管线的 GICP.
+        const int kRefine = std::min<int>(3, hits2.size());
+        for (int i = 0; i < kRefine; ++i) {
+            const auto& e = m_db[hits2[i].idx];
+            double b_cov = -1.0, b_yaw = hits2[i].yaw_deg, b_dx = 0.0, b_dy = 0.0;
+            for (int k = -2; k <= 2; ++k) {
+                const double yd = hits2[i].yaw_deg + 2.0 * k;
+                const Eigen::Matrix3d Rz =
+                    Eigen::AngleAxisd(yd / 57.2957795, V3D::UnitZ()).toRotationMatrix();
+                for (int ix = -1; ix <= 1; ++ix) {
+                    for (int iy = -1; iy <= 1; ++iy) {
+                        Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+                        T.block<3, 3>(0, 0) = Rz * e.rot;
+                        T.block<3, 1>(0, 3) = e.trans + V3D(1.0 * ix, 1.0 * iy, 0.0);
+                        const CoverageStats cs =
+                            evaluateCoverage(m_kdt_coarse, *scan_cov, T, 1.2, 800);
+                        if (cs.coverage > b_cov) {
+                            b_cov = cs.coverage; b_yaw = yd; b_dx = 1.0 * ix; b_dy = 1.0 * iy;
+                        }
+                    }
+                }
+            }
+            hits2[i].cov = b_cov;
+            hits2[i].yaw_deg = b_yaw;
+            hits2[i].dx = b_dx;
+            hits2[i].dy = b_dy;
+        }
+        std::sort(hits2.begin(), hits2.end(),
+                  [](const Hit& a, const Hit& b) { return a.cov > b.cov; });
+        const int nret = std::min<int>(max_k, hits2.size());
+        for (int i = 0; i < nret; ++i) {
+            const Eigen::Matrix3d Rz =
+                Eigen::AngleAxisd(hits2[i].yaw_deg / 57.2957795, V3D::UnitZ()).toRotationMatrix();
+            GlobalCandidate c;
+            c.pose.rot = Rz * m_db[hits2[i].idx].rot;
+            c.pose.trans = m_db[hits2[i].idx].trans + V3D(hits2[i].dx, hits2[i].dy, 0.0);
+            c.pose.time = 0.0;
+            c.score = hits2[i].cov;
+            c.id = static_cast<int>(hits2[i].idx);
+            out.push_back(std::move(c));
+        }
+        static int cprobe = 0;
+        if (++cprobe % 3 == 0) {
+            std::cout << "[SCProbe] mode=coverage places=" << m_db.size()
+                      << " best_cov=" << (hits2.empty() ? -1.0 : hits2.front().cov)
+                      << " yaw=" << (hits2.empty() ? 0.0 : hits2.front().yaw_deg)
+                      << " dxy=" << (hits2.empty() ? 0.0 : std::hypot(hits2.front().dx, hits2.front().dy))
+                      << std::endl;
+        }
+        return nret;
+    }
+
     // 查询云先按与建库相同的 voxel 降采样, 再转到水平系算描述子.
     // 为什么必须降采样: 描述子取"每格最大高度/占用", 对点密度敏感 —— 原始扫描 11.7k 点
     // vs 关键帧 0.3m 体素(≈3.7k 点), 占用模式系统性不同, 同地点距离也会被拉到 0.7+.
