@@ -222,6 +222,22 @@ private:
     Eigen::Vector2d m_rot_center = Eigen::Vector2d::Zero();
     double m_planar_z = 0.0;                                   // planar.z: body(车底) 目标高度
     bool   m_fix_planar = true;                               // 地面约束开关
+    // roll/pitch 锁 (2026-11-27): true = 姿态恒为"水平 + 安装角"(原行为); false = 带上地图倾斜量 m_map_tilt。
+    // 实测 (真实扫描回放): 地图的水平面相对重力固定倾斜 ~2.5°, 锁住之后匹配器每帧都要把这 2.5° 从头
+    // 转回去 —— LM 每轮只转 0.1~0.4°, 每帧 12 轮跑满, 求解 100+ms。倾斜是常数不是漂移, 锁掉它只增成本。
+    bool   m_lock_roll_pitch = true;
+    double m_tilt_tau = 20.0;                                 // 地图倾斜量的低通时间常数 (s); 0 = 逐帧跟随匹配
+    Eigen::Matrix3d m_map_tilt = Eigen::Matrix3d::Identity(); // 地图水平面 -> 重力水平面 (地图系, 绕水平轴)
+    Eigen::Vector3d m_tilt_vec = Eigen::Vector3d::Zero();     // 上面的旋转向量 (只含 x/y 分量)
+    int    m_tilt_n = 0;                                      // 已纳入估计的帧数 (首帧起快速收敛)
+    double m_tilt_t = -1.0;                                   // 上次更新的时刻
+    void   updateMapTilt(const PoseStamped& match, double t);
+    void   resetMapTilt() {                                   // 倾斜是地图的属性: 换图后重新估计
+        m_map_tilt = M3D::Identity();
+        m_tilt_vec = V3D::Zero();
+        m_tilt_n = 0;
+        m_tilt_t = -1.0;
+    }
     Eigen::Matrix4f m_lidar_to_imu = Eigen::Matrix4f::Identity();
     MaintainerConfig    m_maintainer_cfg;
 

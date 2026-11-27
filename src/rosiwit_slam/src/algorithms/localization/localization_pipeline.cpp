@@ -320,6 +320,8 @@ bool LocalizationPipeline::init(const std::string& config_path) {
             m_fix_planar = (pm == "lock_zrp" || pm == "mount_lock");
         }
         if (pl && pl["z"]) m_planar_z = pl["z"].as<double>(0.0);
+        if (pl && pl["lock_roll_pitch"]) m_lock_roll_pitch = pl["lock_roll_pitch"].as<bool>(true);
+        if (pl && pl["tilt_tau_s"]) m_tilt_tau = pl["tilt_tau_s"].as<double>(20.0);
     }
     // ---- 定位 odom: 单一开关 localization.odom_mode (none | fuse) ----
     // fuse 同时打开两处 odom 输入, 不再需要单独配 motion_prior.use_odom:
@@ -1038,8 +1040,34 @@ void LocalizationPipeline::planarizePose(PoseStamped& p) const {
     if (!m_fix_planar || !m_base_r_valid) return;
     const M3D R_base = p.rot * m_base_r.transpose();      // base_footprint -> map
     const double yaw = std::atan2(R_base(1, 0), R_base(0, 0));
-    p.rot = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix() * m_base_r;
+    // roll/pitch: 锁住 = 水平 + 安装角; 不锁 = (慢估计的) 地图倾斜 + 水平 + 安装角 (见 updateMapTilt)
+    p.rot = m_map_tilt * Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix() * m_base_r;
     if (m_fixed_z > 0.0) p.trans.z() = m_fixed_z;
+}
+
+void LocalizationPipeline::updateMapTilt(const PoseStamped& match, double t) {
+    if (m_lock_roll_pitch || !m_fix_planar || !m_base_r_valid) return;
+    // 本帧匹配姿态相对"水平 + 安装角"姿态的旋转 (地图系旋转向量): 绕水平轴的两个分量是倾斜,
+    // 绕 z 的分量是偏航修正 (走原有的偏航路径, 不进这里)。
+    const M3D R_base = match.rot * m_base_r.transpose();
+    const double yaw = std::atan2(R_base(1, 0), R_base(0, 0));
+    const M3D level = Eigen::AngleAxisd(yaw, V3D::UnitZ()).toRotationMatrix() * m_base_r;
+    const Eigen::AngleAxisd aa(match.rot * level.transpose());
+    const V3D v = aa.axis() * aa.angle();
+    const double lim = 15.0 * M_PI / 180.0;               // 合理性上限: 倾斜 > 15° 只可能是匹配错了
+    const double vx = std::max(-lim, std::min(lim, v.x()));
+    const double vy = std::max(-lim, std::min(lim, v.y()));
+    const double dt = (m_tilt_t < 0.0) ? 1.0 : std::max(1e-3, std::min(1.0, t - m_tilt_t));
+    m_tilt_t = t;
+    // 低通: 稳态时间常数 tilt_tau; 起步阶段按 1/(n+1) (即 running mean) 收敛, 不用等满一个时间常数
+    const double a = (m_tilt_tau > 0.0) ? std::max(dt / (m_tilt_tau + dt), 1.0 / (m_tilt_n + 1)) : 1.0;
+    m_tilt_vec.x() = (1.0 - a) * m_tilt_vec.x() + a * vx;
+    m_tilt_vec.y() = (1.0 - a) * m_tilt_vec.y() + a * vy;
+    ++m_tilt_n;
+    const double ang = std::hypot(m_tilt_vec.x(), m_tilt_vec.y());
+    m_map_tilt = (ang > 1e-9)
+        ? Eigen::AngleAxisd(ang, V3D(m_tilt_vec.x(), m_tilt_vec.y(), 0.0) / ang).toRotationMatrix()
+        : M3D::Identity();
 }
 
 void LocalizationPipeline::setMountExtrinsic(const Eigen::Matrix3d& r_base_lidar,
@@ -1114,6 +1142,7 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
     // 换图会替换 local_map/matcher/store/maintainer; 与 onLidar 互斥.
     std::lock_guard<std::mutex> state_lk(m_state_mu);
     abortMapSaveAndWait();   // 让在途落盘离开、作废在途分片 (见 mapSaveWorker)
+    resetMapTilt();          // 地图倾斜是地图的属性 (planar.lock_roll_pitch)
     m_cancel_set_map.store(false);
     // 分段计时: /switch_map 曾实测 48s, 必须知道钱花在哪 (每阶段一行, 只在切图时打)
     const auto t_total0 = std::chrono::steady_clock::now();
@@ -1249,6 +1278,7 @@ void LocalizationPipeline::setMapImpl(const std::string& map_name) {
 void LocalizationPipeline::setMapData(const MapData& data) {
     std::lock_guard<std::mutex> state_lk(m_state_mu);
     abortMapSaveAndWait();   // 让在途落盘离开、作废在途分片 (见 mapSaveWorker)
+    resetMapTilt();          // 地图倾斜是地图的属性 (planar.lock_roll_pitch)
     m_out_lim_bypass = true;   // 换图: 输出限速旁路 (新图坐标系)
     m_cancel_set_map.store(false);
     m_status = INIT;
@@ -2926,8 +2956,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 ++seq_n;
             }
         }
-        // 匹配结果同样锁成 x/y/yaw + 固定安装姿态 (z/roll/pitch 弱观测, 不允许漂)
-        if (ok && res.converged) planarizePose(res.pose);
+        // 匹配结果同样锁成 x/y/yaw + 固定安装姿态 (z/roll/pitch 弱观测, 不允许漂)。
+        // lock_roll_pitch=false 时 roll/pitch 换成"慢估计的地图倾斜": 先用本帧匹配更新估计, 再重建姿态。
+        if (ok && res.converged) {
+            if (res.fitness >= 0.6) updateMapTilt(res.pose, f.end_time);
+            planarizePose(res.pose);
+        }
         // [LocProbe] 逐帧诊断: 帧时间 + 可见点/参与点/内点 + fitness + guess/res 完整位姿;
         // 离线对 odom 真值算每帧滞后 (/tmp/frame_lag.py). ROSIWIT_LOC_PROBE=1 逐帧,
         // 否则 50 帧一条.
@@ -4117,7 +4151,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                    << " eig=" << res.smallest_eig_ratio
                    << " session_map=" << session_map_active
                    << " session_map_size=" << session_map_size
-                   << " session_map_age=" << session_map_age;
+                   << " session_map_age=" << session_map_age
+                   << " map_tilt=" << (m_tilt_vec.norm() * 57.2957795);
                 std::cout << qs.str() << std::endl;
         }
     }
