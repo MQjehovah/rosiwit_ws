@@ -2897,6 +2897,14 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_has_cached_target = true;
             m_matcher->setTarget(target);
         }
+        {
+            bool bg_build = false;
+            {
+                std::lock_guard<std::mutex> lk(m_target_mu);
+                bg_build = m_target_building;
+            }
+            m_frame_perf->setFlag(bg_build);     // 诊断: 这帧是否与后台建目标重叠
+        }
         m_frame_perf->matchBegin();
         // 交给匹配器的猜测带上倾斜量 (planar.lock_roll_pitch=false): 求解器每帧少转这几度, 是轮数从 12 降到
         // 5~6 的主要原因。只在这里加 —— 上面的 guess 保持水平, 与输出同基准 (2026-11-27 实机回放: 把倾斜加在
@@ -3325,6 +3333,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         PoseStamped sp;
         if (m_smoother.getPose(sp)) out_pose = sp;
     }
+    m_frame_perf->mark(0);     // post 子阶段: 接受判定 / 逸出 / 种子 / 固定滞后平滑 之后
     // ---- 子图模式: 周期性对 overlay 做探测匹配 (重锚尝试, ELite zip-up) ----
     // overlay 恢复的判据: 用当前位姿对 overlay(底图+w) 目标做一次完整匹配,
     // fitness 达 relocation_fitness 即重锚; 子图漂移用 Δ 修正 (zip-up)。
@@ -3469,6 +3478,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         m_last_accepted = out_pose;      // 逸出保护用的回退锚点
         m_have_last_accepted = true;
     }
+    m_frame_perf->mark(1);     // post 子阶段: 子图探测 / 位姿融合 / 先验更新 之后
     // ---- 输出位姿限速 (安全防护, 2026-11-26) ----
     // 匹配在两个对齐之间振荡时, 单帧位姿跳变可达 ±15m —— 直通导航会让导航
     // 看到"瞬移"而急停/窜车 (实机: 机器人被吓跑)。这里把超物理上限的位姿变化
@@ -3509,6 +3519,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     m_pose = out_pose;
     m_last_match = res;
     m_last_match.pose = out_pose;
+    m_frame_perf->mark(2);     // post 子阶段: 输出限速 之后
     // ---- 子图窗口锚 (2026-11-25) ----
     // 判据都不看点数(对接工位只有 ~200 点但位姿是对的):
     //   1) 本帧被接受且收敛;
@@ -3656,6 +3667,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     // deskew 是按预测位姿 guess 做的, 与匹配解差 corr_deg(常态 0.1~3°) 时, 整片点云
     // 会被转差那几度 —— 匹配用的是"转过的点云 vs 地图", 还能对上; 但写进世界系时
     // 同一面墙就分成了两层(建图模式不会, 因为它用同一套位姿做去畸变和写图)。
+    m_frame_perf->mark(3);     // post 子阶段: 子图窗口锚 / 飞行记录 / 状态打印 之后
     CloudType::Ptr scan_write;
     if ((m_maintainer || m_session_map_enabled) && res.converged) {
         // ★写图用融合输出位姿 (与发布/闭环一致): res.pose 在弱观测区是谷底自由量,
@@ -3665,6 +3677,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
     const CloudType::Ptr& scan_map =
         (scan_write && !scan_write->empty()) ? scan_write : scan;
 
+    m_frame_perf->mark(4);     // post 子阶段: 写图点云二次去畸变 之后
     if (m_maintainer) {
         const FusionDiag fd = fusionDiag();
         double divergence = 0.0;
@@ -3722,6 +3735,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_maintainer->onLocalized(out_pose, scan_map, m_last_match, true);
         }
     }
+    m_frame_perf->mark(5);     // post 子阶段: 账本 之后 (之后 = 假设重播 / 状态机 / 下一帧请求)
 
     // 过桥计数: 连续未采纳帧数
     m_coast_count = accepted ? 0 : (m_coast_count + 1);
@@ -3970,6 +3984,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             // 2026-11-25: 不再挂 session_map.enabled —— overlay 的 T4 写图门槛
             // (base_anchored) 也用 cov_base, 关子图开 overlay 时它必须照常计算,
             // 否则永远是 -1, 写图门槛退化成 anchorOk(自引用风险)。
+            m_frame_perf->mark(6);     // post 子阶段: 状态机 / 重播种 / lifelong 刷新 之后
             if (m_ever_localized && scan && !scan->empty() && m_local_map) {
                 // 成本: 全点降采样 + 全图 KD 查询 ~几 ms。诊断用途, 每 5 帧算一次即可
                 // (锚定切换用的是 m_on_submap 的弱锚 streak, 不依赖这个值的实时性)。
@@ -4052,6 +4067,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             // session_map.enabled 单独控制, 不依赖是否配置了 map_maintainer ——
             // 现场曾因 map_maintainer:none 时 maintainer 为空, 整段子图逻辑不执行,
             // 表现为"开了子图却没有 [session_map] open / 话题无数据"。
+            m_frame_perf->mark(7);     // post 子阶段: 先验图(底图+overlay)覆盖率 之后
             int anchor_age = 0;
             size_t persistency_pts = 0;
             // persistency_cov 是 overlay 的诊断量: 没开 overlay 时输出 n/a
@@ -4139,11 +4155,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         // ★走出子图覆盖的旧关键帧: 段级一次性「融合+雕刻」进 w 账本。
                         // 子图覆盖内纯几何跟踪 (零账本交互); 只有整段退出时才与
                         // w 账本结算一次 —— 用户口径: 走出子图 = 融合 + 雕刻一次。
+                        m_frame_perf->mark(8);     // post 子阶段: 会话地图写入 之后
                         if (++m_seg_merge_tick % 25 == 0) {
                             auto leaving = m_session_map.popLeavingKfs(out_pose.trans);
                             for (auto& kf : leaving)
                                 if (m_maintainer) m_maintainer->mergeChunk(kf.pose, kf.world);
                         }
+                                m_frame_perf->mark(9);     // post 子阶段: 走出子图的关键帧段级结算 (popLeavingKfs + mergeChunk) 之后
                     }
                     session_map_active = m_session_map.active() ? 1 : 0;
                     session_map_size = m_session_map.size();
@@ -4157,6 +4175,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 // 变化判据 = maintainer revision() (几何/权重有增删才 +1)。
                     // 工作图落盘的分片标注 (见头文件 m_save_thread 注释): 有在途任务时, 每帧
                     // 在时间预算内推进一片; 无任务时只是一次原子读。
+                    m_frame_perf->mark(10);     // post 子阶段: 工作图落盘分片标注 / 落盘请求 之后
                     if (m_save_annotating.load(std::memory_order_acquire)) advanceSaveAnnotation();
                 if (m_maintainer && m_ever_localized && m_map &&
                     !m_map->empty() && m_initialized && accepted) {
