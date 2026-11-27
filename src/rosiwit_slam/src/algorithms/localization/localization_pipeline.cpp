@@ -22,6 +22,9 @@
 #include <cstdlib>
 #include <cstdio>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sys/resource.h>
+#endif
 #include <unistd.h>       // nice(): 工作图落盘线程降优先级 (只需放宽, 无需特权)
 #include <cerrno>
 #include <cstring>
@@ -964,6 +967,12 @@ void LocalizationPipeline::abortMapSaveAndWait() {
 // ★后台建目标: 裁剪工作图 (provider 只读; 账本有锁) + 建新匹配器实例。
 // 跟踪线程继续用旧目标 (裁剪半径 60m, 重建半径 15m, 余量充足), 建好后帧边界切换。
 void LocalizationPipeline::targetBuildWorker() {
+#if defined(__linux__)
+    // 建目标是维护任务, 跟踪线程是实时路径。降优先级 (nice +10, CFS 权重约 1/10): 两者抢 CPU 时让路,
+    // 机器空闲时全速。它起的 OpenMP 工作线程继承这个 nice。实测实车行驶中 CPU 空闲只有 ~18%,
+    // 后台重建 (9 万点协方差, 4 线程约 0.8s CPU) 不该和求解器平分核。
+    setpriority(PRIO_PROCESS, 0, 10);
+#endif
     std::unique_lock<std::mutex> lk(m_target_mu);
     for (;;) {
         m_target_cv.wait(lk, [this] { return m_target_stop || m_target_req; });

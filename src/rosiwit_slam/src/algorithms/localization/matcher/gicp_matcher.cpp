@@ -34,6 +34,11 @@ void GicpMatcher::setTarget(const CloudType::Ptr& target) {
     if (m_target->size() < static_cast<size_t>(std::max(1, m_cfg.min_match_points)))
         m_target->clear();
     if (!m_target->empty()) m_kdtree.setInputCloud(m_target);
+    // 目标的全部预处理在 setTarget 里做完 (谁调 setTarget 谁付钱): 上面的 KD 树 + 这里交给 GICP
+    // (PCL 的目标树 + 目标协方差, 9 万点约 200ms)。之前 setInputTarget 推迟到第一次 align 才调,
+    // 后台线程建好的备用匹配器其实没建完, 切换后跟踪线程的第一帧要替它算协方差 (2026-11-27)。
+    // 目标指针不变时 align 里不会再设 (见 align), 所以这里只在新目标上花一次。
+    if (!m_target->empty() && m_gicp) m_gicp->setInputTarget(m_target);
 }
 
 bool GicpMatcher::align(const CloudType::Ptr& src, const Eigen::Matrix4d& guess_T,
@@ -48,11 +53,9 @@ bool GicpMatcher::align(const CloudType::Ptr& src, const Eigen::Matrix4d& guess_
     }();
     if (m_gicp_lsq) m_gicp_lsq->setDebugPrint(lm_trace_left-- > 0);
     m_gicp->setInputSource(src);
-    // 目标指针没变就别重设: PCL 1.8 setInputTarget 无条件置脏 target_cloud_updated_
-    // (每帧重建 ~6k 点目标 KD 树) 且 GICP 子类再 reset target_covariances_
-    // (每帧重算 20NN 协方差) —— 实测占每帧 37ms 的绝大部分。目标缓存命中时
-    // 指针跨帧不变, PCL 内部缓存(树+协方差)自动复用, 结果逐位一致。
-    if (m_gicp->getInputTarget() != m_target) m_gicp->setInputTarget(m_target);
+    // 目标已在 setTarget 里交给 GICP (树 + 协方差都在那边算)。这里的指针判断只是兜底:
+    // PCL 1.8 setInputTarget 无条件置脏并重建目标树, GICP 子类再重算 20NN 协方差, 目标没变时绝不能重设。
+    if (m_gicp->getInputTarget() != m_target && m_target && !m_target->empty()) m_gicp->setInputTarget(m_target);
     CloudType aligned;
     m_gicp->align(aligned, g);
     iterations = m_gicp->getMaximumIterations();

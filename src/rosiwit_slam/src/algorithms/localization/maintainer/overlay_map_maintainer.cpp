@@ -62,9 +62,11 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     m_voxel = m_cfg.voxel > 0 ? m_cfg.voxel : 0.3;
     m_cell = m_cfg.cell > 0 ? m_cfg.cell : 10.0;
     resolveSigmas();
-    // 懒建: 这里只存原始指针, 降采样+KD树推迟到首次真正用到(L147 吸收判据)再建。
-    // 全图降采样+建树实测 ~15s(aarch64, DDD), 每次切图都白付 —— 切图(带初始位姿)
-    // 根本不碰它 (用户语义: 有 initpose 不需要额外准备, 直接跟踪)。
+    // 底图索引 (降采样拷贝 + KD 树 + 体素集) 在本函数末尾建好 (2026-11-27; 原先懒建, 推迟到首次写账本)。
+    // 懒建的理由是"切图带初始位姿不碰它, 省下全图降采样+建树"; 自从底图体素进账本 (下面遍历全图播种) 后
+    // 就不成立了 —— 每次运行第一次 onLocalized 都要建, 实测在**跟踪线程**上卡 3.1s (真实数据回放, 首个
+    // 100 帧窗口 post 最大 3133ms)。行驶中重启/切图之后来这么一下足以把跟丢。放到装图/切图这条本来就
+    // 阻塞的非实时路径上, 代价相同, 时机对了。
     m_base_raw = base;
     m_base.reset();
     m_has_base = false;
@@ -110,6 +112,7 @@ void OverlayMapMaintainer::setBaseMap(const std::string& map_path, const CloudTy
     }
     // 没有增量日志: 只有一个全量工作图文件 (map.overlay.pcd, 1h 落盘),
     // 加载时它整体就是底图 (intensity = w)。这里不再读旧的 overlay 增量文件。
+    ensureBaseIndex();     // 见上面"底图索引"的说明: 不留给第一次写账本 (跟踪线程)
 }
 
 void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {

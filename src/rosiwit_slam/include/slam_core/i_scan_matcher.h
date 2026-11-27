@@ -18,7 +18,9 @@ public:
     /// 读取配置 (config["localization"]["matcher"]); 默认无操作
     virtual bool init(const std::string& /*config_path*/) { return true; }
 
-    /// 设置目标(局部)地图, 内部可建 KD-tree
+    /// 设置目标(局部)地图。目标的全部预处理 (降采样 / 建树 / 配准器要的目标协方差) 在**调用线程**里
+    /// 做完, 之后的 match() 不再为目标付费 —— 所以它可以 (也应该) 放到后台线程里调。
+    /// (2026-11-27: 之前协方差推迟到第一次 align 才算, 后台建好的目标切换后第一帧要多付 ~200ms。)
     virtual void setTarget(const CloudType::Ptr& target) = 0;
 
     /// 设置统一存储底座 (可选): 支持时匹配器直接从 store 取近邻/统计, 与存储解耦

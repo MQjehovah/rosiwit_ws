@@ -87,6 +87,14 @@ void FastGICP<PointSource, PointTarget, SearchMethodSource, SearchMethodTarget>:
   pcl::Registration<PointSource, PointTarget, Scalar>::setInputTarget(cloud);
   search_target_->setInputCloud(cloud);
   target_covs_.clear();
+  // rosiwit local patch (2026-11-27): 目标协方差在这里算完, 不留到第一次 align 里懒算。
+  // 9 万点的目标每个点查 20 近邻, 4 线程约 200ms。之前放在 computeTransformation 里, 调用方在后台线程
+  // 里建好的"备用"配准器其实只建了一半: 切换后跟踪线程的第一帧要替它算这 200ms —— 每换一次目标
+  // 就有一帧 200ms+ (真实数据回放: 目标重建成簇时 100 帧窗口 p50 392ms)。setInputTarget 在哪个线程调,
+  // 这笔钱就在哪个线程付; 目标没变 (指针相同) 时不算。
+  if (target_ && !target_->empty()) {
+    calculate_covariances(target_, *search_target_, target_covs_);
+  }
 }
 
 template <typename PointSource, typename PointTarget, typename SearchMethodSource, typename SearchMethodTarget>
