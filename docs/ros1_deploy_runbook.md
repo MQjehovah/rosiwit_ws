@@ -86,7 +86,12 @@ sudo systemctl restart xzrobot
 
 节点名保持 `xz_3d_slam`：`xzrobot_all` / App / `xz_3d_monitor` 都按这个部署名找它。
 
-### 4.1 SLAM 跟踪线程实时优先级（systemd drop-in，2026-11-27）
+### 4.1 SLAM 跟踪线程实时优先级（systemd drop-in，2026-11-27）—— **暂不安装**
+
+> **当前状态：已撤回（11-27 22:05），设备上没有这个 drop-in，`LimitRTPRIO=0`。**
+> 起因：当晚一次带 RT 的诊断回放期间整机硬重启；回放用的优先级 50 与内核中断线程同级，当天 USB 主机控制器报错
+> 只出现在带 RT 的回放里。部署值 40 是否安全没有验证过。恢复前先按 `HANDOVER_2026-11-27.md` §3 P1 验证。
+> 下面是验证通过后的安装步骤，保留备查。
 
 节点启动后自己把跟踪线程（线程名 `slam_loc`）设成 `SCHED_FIFO 40`。非特权进程要有
 `RLIMIT_RTPRIO >= 40` 才设得上，而 systemd 单元默认是 0 —— 所以**不装这个 drop-in，实时优先级就静默不生效**
@@ -112,7 +117,7 @@ rosservice list | grep -cE '^/(slam/mode_switch|switch_map|relocation|stop_map_o
 rostopic hz /slam/info                              # ~10 Hz
 rostopic echo -n1 /slam/info                        # map_name / location_status
 grep -a 'tracking thread scheduling' $(ls -t /tmp/[0-9a-f]*-*/xz_3d_slam-*-stdout.log | head -1) | tail -1
-                                                   # SCHED_FIFO prio=40 (NOT realtime = §4.1 的 drop-in 没装)
+                                                   # 实时优先级启用时是 SCHED_FIFO prio=40; 现在应为 NOT realtime (§4.1 已撤回)
 grep -a '^\[LocPerf\]' $(ls -t /tmp/[0-9a-f]*-*/xz_3d_slam-*-stdout.log | head -1) | tail -1
                                                    # 行驶中 drop_50 应为 0、age_ms_ema 远小于 100 (帧周期)
 ```
