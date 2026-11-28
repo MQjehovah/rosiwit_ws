@@ -148,15 +148,27 @@ private:
     std::condition_variable m_target_cv;
     bool m_target_stop = false;
     bool m_target_req = false;            // 有建目标请求
+    bool m_target_req_joint = false;      // 本次请求的目标是否含子图 (桥接联合)
     bool m_target_ready = false;          // spare 已就绪, 待跟踪线程切换
     bool m_target_building = false;
     PoseStamped m_target_req_center;
     uint64_t m_target_req_rev = 0;
     bool m_spare_valid = false;
+    bool m_spare_joint = false;           // spare 是桥接联合目标 (底图∪子图)
     CloudType::Ptr m_spare_target;
     PoseStamped m_spare_center;
     uint64_t m_spare_rev = 0;
+    // 当前跟踪目标是否含子图。桥接退出后到 base 目标切回来之前, 旧联合目标还在用:
+    // 它的 fitness 是自证的, 必须用它挡住写图门 (base_anchored)。
+    bool m_cached_target_joint = false;
+    // 桥接联合目标的后台重建周期 (秒)。子图是局部补丁, 滞后 1~2s 完全够用;
+    // 绝不能在跟踪线程上同步重建 (2026-11-29 实车: 每 5 帧一次 400~800ms 卡顿,
+    // 丢帧率冲到 ~15~50%)。
+    double m_submap_target_refresh_s = 2.0;
+    double m_last_joint_target_req = -1.0e9;   // 上一次联合目标请求的帧时间
     void targetBuildWorker();
+    void requestTargetBuild(const PoseStamped& center, bool joint);
+    CloudType::Ptr buildJointTarget(const PoseStamped& pose);   // 底图(剔判死点) ∪ 子图
     // 工作图 provider 访问锁: 后台建目标线程 (getLocalMap) 与地图更新线程的提交钩子
     // (addWorldPoint 往同一关键帧点云 push_back) 并发 -> 串行化。
     std::mutex m_local_map_mu;
@@ -280,17 +292,19 @@ private:
     bool   m_ever_localized = false;      // 至少成功定位过一次 (之后才允许开会话地图/锚定)
     bool   m_base_only_valid = false;
     // ---- fitness_base 后台探测 (2026-11-29) ----
-    // 每 1s 对底图目标做一次 GICP (专用 matcher, 后台执行器/兼容线程), 产出:
-    //   m_fitness_base      = 优化后位姿对底图的覆盖率 (诚实, 不含子图/不自证)
-    //   m_reanchor_* 提案   = 达到 relocation/credible 时的重锚位姿, 跟踪线程帧边界采纳
-    // 跟踪线程零开销; 原来 cov_base 每 5s 在 post 阶段算覆盖率, 已升级成探测重锚。
+    // 每 1s 一次 (专用 matcher, 后台执行器/兼容线程), 按模式分两条便宜的路径:
+    //   OPEN:     只算覆盖率 (底图 crop + KD + evaluateCoverage, ~100ms) -> 指标;
+    //   BRIDGING: 对底图做 GICP (目标缓存 ≤3s/3m) -> fitness_base + 重锚提案。
+    // 跟踪线程零开销; 重锚提案在帧边界采纳 (见 m_reanchor_*)。
     struct BaseProbeJob {
         CloudType::Ptr scan;
         PoseStamped pose;
         std::shared_ptr<const IMapMaintainer::DeadSet> dead;   // 判死体素快照 (后台过滤用)
         double voxel = 0.3;
         uint64_t generation = 0;
-        bool publish_reanchor = false;   // 投递时是否处于桥接 (只有桥接需要重锚提案)
+        // 投递时的模式: true = 桥接 -> 对底图做 GICP 探测 (可发重锚提案);
+        //                 false = OPEN -> 只算覆盖率 (fitness_base 指标), 不花 setTarget/GICP 的钱。
+        bool solve = false;
     };
     void submitBaseProbe(const CloudType::Ptr& scan, const PoseStamped& pose);
     void runBaseProbeJob(const BaseProbeJob& job);
@@ -305,6 +319,12 @@ private:
     std::mutex m_probe_done_mu;
     std::condition_variable m_probe_done_cv;
     std::unique_ptr<IScanMatcher> m_probe_matcher;   // 后台探测专用 (不与跟踪线程的 aux 共享)
+    // 桥接探测的目标缓存 (只在探测线程访问): 底图 KD + GICP 协方差重建一次 ~300~400ms,
+    // 每秒重建会把一个核实打满。按"代数/位移/时间"复用, 最多 3s。
+    bool m_probe_target_valid = false;
+    uint64_t m_probe_target_gen = 0;
+    Eigen::Vector3d m_probe_target_center = Eigen::Vector3d::Zero();
+    double m_probe_target_built_s = -1.0;
     std::atomic<double> m_fitness_base{-1.0};        // 后台写, 跟踪线程读 (<0 = 未算)
     std::mutex m_reanchor_mu;                        // 重锚提案 (后台写/帧边界采纳)
     MatchResult m_reanchor_result;                   // 探测的配准结果 (fitness/协方差)

@@ -547,6 +547,8 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_anchor_min_eig_ratio = getv<double>(subc, "anchor_min_eig_ratio", m_anchor_min_eig_ratio);
         m_anchor_patience = getv<int>(subc, "anchor_patience", m_anchor_patience);
         m_anchor_w_support_min = getv<double>(subc, "anchor_w_support_min", m_anchor_w_support_min);
+        m_submap_target_refresh_s =
+            getv<double>(subc, "target_refresh_s", m_submap_target_refresh_s);
         m_session_map_radius = getv<double>(subc, "radius_m", m_session_map_radius);
         m_session_map_match_radius =
             getv<double>(subc, "match_radius_m", m_session_map_match_radius);
@@ -866,7 +868,7 @@ void LocalizationPipeline::submitBaseProbe(const CloudType::Ptr& scan, const Pos
     job.pose = pose;
     job.generation = m_global_generation.load();
     job.voxel = m_maintainer_cfg.voxel > 0.0 ? m_maintainer_cfg.voxel : 0.3;
-    job.publish_reanchor = m_on_submap;   // 跟踪线程读自己的状态; 只有桥接需要重锚提案
+    job.solve = m_on_submap;   // 只有桥接需要 GICP 探测/重锚; OPEN 只算覆盖率
     if (m_maintainer) job.dead = m_maintainer->deadBaseSnapshot();
     if (m_executor) {
         rosiwit_common::JobOptions opt;
@@ -897,29 +899,80 @@ void LocalizationPipeline::submitBaseProbe(const CloudType::Ptr& scan, const Pos
 }
 
 void LocalizationPipeline::runBaseProbeJob(const BaseProbeJob& job) {
-    if (!job.scan || job.scan->empty() || !m_probe_matcher) return;
+    if (!job.scan || job.scan->empty()) return;
     if (job.generation != m_global_generation.load()) return;   // 换图: 结果作废
-    CloudType::Ptr base_crop;
-    {
-        std::lock_guard<std::mutex> lk(m_local_map_mu);
-        if (!m_local_map) return;
-        base_crop = m_local_map->getLocalMap(job.pose);
-    }
-    base_crop = filterBaseProbeDead(job.dead, base_crop, job.voxel);
-    if (!base_crop || base_crop->size() < 100) {
-        m_fitness_base.store(-1.0);
+
+    // ---- OPEN: 只算覆盖率 (与 fitness 同口径 0.3/0.3m/全量) ----
+    // 不调 setTarget/GICP: 那条路要建底图 KD + GICP 目标协方差, 一次 300~400ms;
+    // 每秒跑一次等于常驻一个核。OPEN 的决策本来就用 res.fitness, fitness_base 只是
+    // 诚实指标 + 健康检查, 覆盖率足够。成本 ~100ms/秒 (2026-11-28 cov_base 实测)。
+    if (!job.solve) {
+        CloudType::Ptr base_crop;
+        {
+            std::lock_guard<std::mutex> lk(m_local_map_mu);
+            if (!m_local_map) return;
+            base_crop = m_local_map->getLocalMap(job.pose);
+        }
+        base_crop = filterBaseProbeDead(job.dead, base_crop, job.voxel);
+        if (!base_crop || base_crop->size() < 100) {
+            m_fitness_base.store(-1.0);
+            return;
+        }
+        pcl::KdTreeFLANN<PointType> kdtree;
+        kdtree.setInputCloud(base_crop);
+        // 与 matcher 的 fitness 同口径: 源点降采样体素 / 内点距离都跟配置走。
+        const double src_voxel =
+            m_matcher_cfg.voxel_resolution > 0.0 ? m_matcher_cfg.voxel_resolution : 0.3;
+        CloudType::Ptr ds = voxelDownsample(job.scan, static_cast<float>(src_voxel));
+        if (!ds || ds->size() < 50) return;
+        Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+        T.block<3, 3>(0, 0) = job.pose.rot;
+        T.block<3, 1>(0, 3) = job.pose.trans;
+        const double inlier = m_matcher_cfg.inlier_dist > 0.0 ? m_matcher_cfg.inlier_dist : 0.3;
+        const CoverageStats cs = evaluateCoverage(kdtree, *ds, T, inlier, 1 << 30);
+        if (job.generation != m_global_generation.load()) return;
+        m_fitness_base.store(cs.total > 0 ? cs.coverage : -1.0);
         return;
     }
-    m_probe_matcher->setTarget(base_crop);
+
+    // ---- BRIDGING: 对底图做 GICP (可发重锚提案) ----
+    // 目标缓存: 底图 KD + GICP 协方差重建一次 300~400ms, 1Hz 重建会把一个核实打满。
+    // 底图变化慢 (判死点剔除/偶发提交), 按 代数/位移/时间 复用, 最多 3s。
+    if (!m_probe_matcher) return;
+    const double now_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const bool reuse = m_probe_target_valid &&
+                       m_probe_target_gen == job.generation &&
+                       (job.pose.trans - m_probe_target_center).norm() <= 3.0 &&
+                       m_probe_target_built_s > 0.0 &&
+                       (now_s - m_probe_target_built_s) <= 3.0;
+    if (!reuse) {
+        CloudType::Ptr base_crop;
+        {
+            std::lock_guard<std::mutex> lk(m_local_map_mu);
+            if (!m_local_map) return;
+            base_crop = m_local_map->getLocalMap(job.pose);
+        }
+        base_crop = filterBaseProbeDead(job.dead, base_crop, job.voxel);
+        if (!base_crop || base_crop->size() < 100) {
+            m_probe_target_valid = false;
+            m_fitness_base.store(-1.0);
+            return;
+        }
+        m_probe_matcher->setTarget(base_crop);
+        m_probe_target_valid = true;
+        m_probe_target_gen = job.generation;
+        m_probe_target_center = job.pose.trans;
+        m_probe_target_built_s = now_s;
+    }
     MatchResult pr;
     if (!m_probe_matcher->match(job.scan, job.pose, pr)) {
         m_fitness_base.store(-1.0);   // 没收敛: 本秒未知, 不用 0 误触发 LOST
         return;
     }
     if (job.generation != m_global_generation.load()) return;
-    // 诚实指标: 永远只对底图评分 (工作图, 不含子图 / 不自证)。OPEN 态它也应与 fitness 接近。
+    // 诚实指标: 永远只对底图评分 (工作图, 不含子图 / 不自证)。
     m_fitness_base.store(pr.fitness);
-    if (!job.publish_reanchor) return;
     // 底图能给出重定位级支撑才算"可采纳的重锚提案"; 达标线以下只更新指标, 不动位姿。
     if (pr.fitness < m_global_cfg.relocation_fitness) return;
     {
@@ -1227,12 +1280,15 @@ void LocalizationPipeline::targetBuildWorker() {
         m_target_req = false;
         const PoseStamped center = m_target_req_center;
         const uint64_t rev = m_target_req_rev;
+        const bool joint = m_target_req_joint;
         lk.unlock();
 
         const auto t0 = std::chrono::steady_clock::now();
         auto el = [&t0]() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); };
         double t_crop = 0.0, t_new = 0.0, t_set = 0.0;
-        CloudType::Ptr target = buildAnchoredTarget(center);   // 工作图完整裁剪, 不抽稀
+        // 桥接联合目标 (底图∪子图) 也在这里建, 跟踪线程只做帧边界切换 (2026-11-29)。
+        CloudType::Ptr target = joint ? buildJointTarget(center)
+                                      : buildAnchoredTarget(center);
         t_crop = el();
         std::unique_ptr<IScanMatcher> fresh;
         const bool valid = target && !target->empty();
@@ -1264,6 +1320,7 @@ void LocalizationPipeline::targetBuildWorker() {
         (void)rev;
         m_spare_rev = m_maintainer ? m_maintainer->revision() : 0;
         m_spare_valid = valid;
+        m_spare_joint = joint;
         m_target_ready = true;
         m_target_building = false;
         lk.unlock();
@@ -1273,6 +1330,7 @@ void LocalizationPipeline::targetBuildWorker() {
             GicpMatcher::targetCovReuseStats(cov_hits, cov_miss, cov_redo, cov_entries);
             std::ostringstream os;
             os << "[target] background build: pts=" << (target ? target->size() : 0) << " ms=" << ms
+               << " joint=" << (joint ? 1 : 0)
                << " valid=" << (valid ? 1 : 0)
                << " cov_reuse=" << (cov_hits + cov_miss > 0 ? 100.0 * (cov_hits - cov_redo) / (cov_hits + cov_miss) : 0.0)
                << "% (redo=" << cov_redo << " new=" << cov_miss << " cache=" << cov_entries << ")"
@@ -1284,6 +1342,19 @@ void LocalizationPipeline::targetBuildWorker() {
         }
         lk.lock();
     }
+}
+
+// 请求后台建一帧目标 (joint=true -> 底图∪子图, 否则底图)。已有请求/已建好在等切换时
+// 直接跳过; 绝不在调用线程上建 (跟踪线程只做帧边界 swap)。
+void LocalizationPipeline::requestTargetBuild(const PoseStamped& center, bool joint) {
+    std::lock_guard<std::mutex> lk(m_target_mu);
+    if (m_target_building || m_target_ready) return;
+    m_target_req_center = center;
+    m_target_req_rev = m_maintainer ? m_maintainer->revision() : 0;
+    m_target_req_joint = joint;
+    m_target_req = true;
+    m_target_building = true;
+    m_target_cv.notify_all();
 }
 
 std::string LocalizationPipeline::describe() const {
@@ -2216,7 +2287,7 @@ void LocalizationPipeline::checkSubmapPriorConsistency(const PoseStamped& pose) 
               << cls << std::endl;
 }
 
-CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
+CloudType::Ptr LocalizationPipeline::buildJointTarget(const PoseStamped& pose) {
     // ---- 子图桥接模式: 目标 = 工作图 crop + 子图【联合】 (ROLL 式联合匹配) ----
     // ★2026-11-26: 旧实现桥接时目标切成纯子图 —— 子图只含"走过的地方"(写入还
     // 停在 fitness 门后, 滞后于机器人), 行驶进入薄弱区时纯子图撑不住, fitness
@@ -2227,25 +2298,38 @@ CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
     //   补丁", 坐标来自漂移中的位姿 —— 丢定位后还拿它当匹配目标 = 自我证实,
     //   系统可以永远锁在错误位姿里 (实机: LOST 后子图 16.8 万点, 联合目标
     //   fitness 0.19, 永远回不来)。重定位只能靠有绝对参照的工作图。
-    if (m_on_submap && m_status.load() == LOCALIZED) {
-        CloudType::Ptr out(new CloudType());
-        if (m_local_map) {
-            CloudType::Ptr base_crop;
-            {
-                std::lock_guard<std::mutex> lk(m_local_map_mu);
-                base_crop = m_local_map->getLocalMap(pose);
-            }
-            if (base_crop && !base_crop->empty()) *out += *base_crop;
-        }
+    CloudType::Ptr out(new CloudType());
+    CloudType::Ptr base_crop;
+    if (m_local_map) {
         {
-            std::lock_guard<std::mutex> lk(m_session_map_mu);   // 与 reset/update 互斥
-            CloudType::Ptr sub = m_session_map.pointsWorld();
-            if (sub && !sub->empty()) *out += *sub;
+            std::lock_guard<std::mutex> lk(m_local_map_mu);
+            base_crop = m_local_map->getLocalMap(pose);
         }
-        if (!out->empty()) out = downsampleCloud(out, 0.3);   // 并集去重
-        return out;
+        // ★2026-11-29: 与 OPEN 同口径, 底图 crop 也实时剔除判死点。
+        //   (历史实现漏了这一步, 死点会一直留在桥接目标里。)
+        const size_t pre = base_crop ? base_crop->size() : 0;
+        if (m_maintainer) base_crop = m_maintainer->filterDeadBase(base_crop);
+        if (m_maintainer) {
+            std::ostringstream tb;
+            tb << "[TargetBuild] pre=" << pre
+               << " removed=" << (pre - (base_crop ? base_crop->size() : 0))
+               << " pose=(" << pose.trans.x() << ", " << pose.trans.y() << ") joint=1";
+            std::cout << tb.str() << std::endl;
+        }
+        if (base_crop && !base_crop->empty()) *out += *base_crop;
     }
-    // ---- overlay 锚定模式: 目标 = 底图 crop + overlay (压制同区域旧点) ----
+    {
+        std::lock_guard<std::mutex> lk(m_session_map_mu);   // 与 reset/update 互斥
+        CloudType::Ptr sub = m_session_map.pointsWorld();
+        if (sub && !sub->empty()) *out += *sub;
+    }
+    if (!out->empty()) out = downsampleCloud(out, 0.3);   // 并集去重
+    return out;
+}
+
+CloudType::Ptr LocalizationPipeline::buildTarget(const PoseStamped& pose) {
+    // 桥接且仍 LOCALIZED: 联合目标; 其它 (OPEN/LOST/INIT): 只锚工作图。
+    if (m_on_submap && m_status.load() == LOCALIZED) return buildJointTarget(pose);
     return buildAnchoredTarget(pose);
 }
 
@@ -3113,25 +3197,40 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         //   重建触发 = 距当前目标中心 >= cache_move (现在是"重建半径", 15m) 或地图版本变。
         //   目标 = 工作图完整裁剪 (不抽稀)。首次/失效时同步建一次 (逸出保护在此)。
         bool rebuild_target = false;
+        if (!m_has_cached_target) m_cached_target_joint = false;
         const PoseStamped& target_center =
             (m_local_map_cfg.anchor_hold && m_have_submap_anchor) ? m_submap_anchor : guess;
         const uint64_t maint_rev = m_maintainer ? m_maintainer->revision() : 0;
-        if (m_on_submap) {
-            // 桥接: 目标含子图, 子图每帧更新 -> 保持同步重建 (会话内数据, 不预建)
-            static int sub_rebuild_n = 0;
-            rebuild_target = (!m_has_cached_target) || (++sub_rebuild_n % 5 == 0);
-        } else {
-            // 1) 后台建好 -> 帧边界切换 (零阻塞)
-            if (m_target_ready) {
-                std::lock_guard<std::mutex> lk(m_target_mu);
+
+        // 1) 帧边界切换 (OPEN / BRIDGING 共用): 只接受与当前模式一致的目标。
+        //    模式已变 (进/出桥接) -> 丢弃 spare, 继续用旧目标, 本帧按新模式重新请求;
+        //    这样切换永远不阻塞跟踪线程。
+        if (m_target_ready) {
+            std::lock_guard<std::mutex> lk(m_target_mu);
+            if (m_spare_joint == m_on_submap) {
                 m_matcher.swap(m_matcher_spare);
                 m_cached_target = m_spare_target;
                 m_cached_target_pose = m_spare_center;
                 m_cached_target_rev = m_spare_rev;
                 m_has_cached_target = m_spare_valid;
-                m_target_ready = false;
+                m_cached_target_joint = m_spare_joint;
             }
-            // 2) 是否需要新目标
+            m_target_ready = false;
+        }
+
+        // 2) 请求新目标 (后台建, 帧边界切)
+        if (m_on_submap) {
+            // 桥接: 联合目标 = 底图∪子图。★绝不在这里同步建 (2026-11-29 实车:
+            //   每 5 帧同步重建 400~800ms -> 丢帧率 15~50%)。子图是局部补丁,
+            //   目标滞后 1~2s 完全够用, 后台按 m_submap_target_refresh_s 周期重建。
+            if (!m_has_cached_target) {
+                rebuild_target = true;   // 换图/目标全部失效: 同步建一次兜底 (逸出保护)
+            } else if (f.end_time - m_last_joint_target_req >= m_submap_target_refresh_s) {
+                m_last_joint_target_req = f.end_time;
+                requestTargetBuild(target_center, true);
+            }
+        } else {
+            // OPEN: 现有异步缓存逻辑 (按 cache_move / 账本版本重建)
             if (m_local_map_name == "global") {
                 rebuild_target = false;             // matcher 自带全图 (usesStore)
             } else if (!m_has_cached_target && !m_target_building) {
@@ -3140,19 +3239,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 const bool far = (target_center.trans - m_cached_target_pose.trans).norm() >=
                                  m_local_map_cfg.cache_move;
                 const bool stale = (maint_rev != m_cached_target_rev);
-                if (far || stale) {
-                    std::lock_guard<std::mutex> lk(m_target_mu);
-                    if (!m_target_building && !m_target_ready) {
-                        // 窗口中心 = 当前位置 (与 2026-11-27 之前一致)。试过"只是账本内容变了就不挪窗口"以多用
-                        // 协方差缓存: 命中率 99.9%, 但机器人离窗口中心最远可到 15m, 前方覆盖从 60m 缩到 45m,
-                        // 同一时刻成对比较 fitness 平均低 0.014 —— 为了缓存改覆盖范围不值得, 撤回。
-                        m_target_req_center = target_center;
-                        m_target_req_rev = maint_rev;
-                        m_target_req = true;
-                        m_target_building = true;
-                        m_target_cv.notify_all();
-                    }
-                }
+                // 还在用桥接联合目标 (刚退出桥接): 尽快换回纯底图目标, 否则 fitness
+                // 是自证的 (写图门由 m_cached_target_joint 互锁, 这里只负责换目标)。
+                const bool wrong_mode = m_cached_target_joint;
+                if (far || stale || wrong_mode) requestTargetBuild(target_center, false);
             }
         }
         if (!m_matcher->usesStore() && rebuild_target) {
@@ -3192,6 +3282,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
             m_cached_target_pose = target_center;
             m_cached_target_rev = m_maintainer ? m_maintainer->revision() : 0;
             m_has_cached_target = true;
+            m_cached_target_joint = (m_on_submap && m_status.load() == LOCALIZED);
             m_matcher->setTarget(target);
         }
         {
@@ -3682,17 +3773,21 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 m_session_map.applyExitCorrection(out_pose);
             }
             m_bridge_correction_done = true;
-            m_has_cached_target = false;
             m_maha_bypass_frames = 5;
             if (exit_now) {
                 m_on_submap = false;
                 m_have_submap_anchor = false;
                 m_bridge_correction_done = false;
+                // 目标切回纯底图: 后台建, 帧边界再换 (旧联合目标继续用, 但写图门由
+                // m_cached_target_joint 互锁 -> 这段窗口不会拿自证 fitness 写图)。
+                requestTargetBuild(out_pose, false);
                 std::cout << "[submap_state] BRIDGING->OPEN cause=probe_reanchor fitness_base="
                           << prop.fitness << std::endl;
                 diag::log('I', "LocPipeline",
                           "re-anchored to base (segment exit-correction applied)");
             } else {
+                // 位姿/子图被修正过: 强制下一帧重建联合目标, 避免继续用修正前的子图部分。
+                m_last_joint_target_req = -1.0e9;
                 std::cout << "[submap_state] BRIDGING hold cause=probe_correction fitness_base="
                           << prop.fitness << " (< credible)" << std::endl;
             }
@@ -4036,7 +4131,9 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
         // (novel_votes 恒 0, overlay 写不进)。
         // overlay 自证的风险由既有约束兜住: 进目标的 overlay 点需 w>=target_w_min/match_w_min,
         // 写入需 rmse<=max_rmse + corr<=10cm/1° + anchorOk。
-        const bool base_anchored = !m_on_submap &&
+        // ★2026-11-29: 还拿着桥接联合目标时 (刚退出桥接、新底图目标还没切回来),
+        // res.fitness 含子图自证, 不能当写图依据。等 m_cached_target_joint 变 false。
+        const bool base_anchored = !m_on_submap && !m_cached_target_joint &&
             res.fitness >= m_monitor_cfg.credible_fitness;
         // 机器人侧补充 (2026-11-24): 位姿稳定性门 —— 刚发生 >10cm/>1° 修正的帧、
         // coast 帧(预测顶着的)位姿不可信, rmse 超标说明残余大; 写进去会和原有结构
@@ -4335,9 +4432,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 //   工作图。丢定位后必须回到"只锚工作图", 否则自我证实永远回不来。
                 if (m_status.load() == LOST && m_on_submap) {
                     m_on_submap = false;
-                    m_has_cached_target = false;
                     m_have_submap_anchor = false;
                     m_bridge_correction_done = false;
+                    // 后台切回纯底图目标 (LOST 时 buildTarget 本来就只给底图)。
+                    requestTargetBuild(out_pose, false);
                     {
                         std::lock_guard<std::mutex> lk(m_reanchor_mu);
                         m_reanchor_valid = false;
@@ -4397,11 +4495,13 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         m_status.load() != LOST) {
                         m_on_submap = true;
                         m_bridge_correction_done = false;
+                        m_last_joint_target_req = -1.0e9;   // 下一帧立刻请求联合目标
                         {
                             std::lock_guard<std::mutex> lk(m_reanchor_mu);
                             m_reanchor_valid = false;   // 不用进入前的旧提案
                         }
-                        m_has_cached_target = false;   // 下一帧目标切到底图+子图
+                        // 不丢旧目标: 继续用底图目标, 后台建好联合目标后帧边界切换
+                        // (同步重建一次 400~800ms, 正是 2026-11-29 丢帧的根因)。
                         m_have_submap_anchor = false;  // 子图窗口锚按联合目标重来
                         std::cout << "[submap_state] OPEN->BRIDGING cause=low_base_support fit="
                                   << res.fitness << " streak=" << m_anchor_weak_streak

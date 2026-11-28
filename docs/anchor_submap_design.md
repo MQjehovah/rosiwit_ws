@@ -47,9 +47,13 @@ overlay (持久变化层) 独立机制, 自带策略: 每帧/view/会话在 onLo
 （不复用 `relocation_fitness` 作进入线：它是对全局重定位的接受线，语义不同。）
 
 - OPEN 态：匹配目标就是底图 crop，`fitness` 即底图支撑；
-- BRIDGING 态：后台每 1s 对**底图**做一次 GICP（专用 matcher、80ms 预算），
-  给出 `fitness_base`（优化后位姿对底图的支撑，诚实、不含子图/不自证）。
-  跟踪线程只在帧边界采纳重锚提案，零开销。
+- BRIDGING 态：后台每 1s 对**底图**做一次 GICP（专用 matcher、80ms 预算、目标缓存
+  ≤3s/3m），给出 `fitness_base`（优化后位姿对底图的支撑，诚实、不含子图/不自证）。
+  跟踪线程只在帧边界采纳重锚提案，零开销；OPEN 态只算覆盖率（不跑 GICP）。
+- 桥接联合目标（底图∪子图）**后台周期重建**（`submap.target_refresh_s=2.0`，nice+10），
+  帧边界切换；跟踪线程绝不同步建目标（2026-11-29 实车：同步 400~800ms/5帧 -> 丢帧 11%）。
+- 刚退出桥接、旧联合目标还没换回底图目标的窗口里，`m_cached_target_joint` 互锁写图门
+  （`base_anchored`），不使用含子图的自证 fitness 写图。
 
 ```
 CLOSED → OPEN → BRIDGING

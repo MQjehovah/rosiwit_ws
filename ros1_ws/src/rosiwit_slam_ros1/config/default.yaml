@@ -786,6 +786,9 @@ localization:
     anchor_patience: 5         # 支撑不足的连续 1Hz 计数 -> 进入桥接
                                # (进入阈值用 monitor.degraded_fitness;
                                #  退出用探测重锚 fitness_base >= monitor.credible_fitness)
+    target_refresh_s: 2.0      # 桥接联合目标(底图∪子图)的后台重建周期(秒)。
+                               # 子图是局部补丁，目标滞后 1~2s 够用；
+                               # 绝不能放回跟踪线程同步重建 (2026-11-29 实车 400~800ms/次)。
 
   # ---- 统一地图存储底座 (L8): none | pcd | voxel ----
   # 设为 pcd/voxel 时, 支持 store 的配准器(pp_icp/p2p_icp)直接从 store 取近邻, 与存储解耦
