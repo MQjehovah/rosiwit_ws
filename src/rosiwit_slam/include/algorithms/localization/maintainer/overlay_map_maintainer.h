@@ -254,7 +254,7 @@ private:
     // (射线抽样间歇 = 假的新视角), 工作图被自更新侵蚀 -> 位姿缓漂。
 
     /// 判死体素集的当前快照 (写时复制, 指向的内容不可变) —— 读方不加账本主锁
-    std::shared_ptr<const DeadSet> deadBaseSnapshot() const {
+    std::shared_ptr<const DeadSet> deadBaseSnapshot() const override {
         std::lock_guard<std::mutex> lk(m_dead_mu);
         return m_dead_snap;
     }

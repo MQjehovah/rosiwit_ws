@@ -4,6 +4,8 @@
 #include <vector>
 #include <cstdint>
 #include <cstddef>
+#include <memory>
+#include <unordered_set>
 #include "slam_core/localization_stage_types.h"
 
 #include <functional>
@@ -15,9 +17,14 @@ namespace rosiwit_slam {
 /// 配准目标 = 原局部地图 + overlay, 从而原图文件与索引永不被改写.
 class IMapMaintainer {
 public:
+    using DeadSet = std::unordered_set<int64_t>;   // 判死体素集 (w 降到 0)
     virtual ~IMapMaintainer() = default;
 
     virtual std::string name() const = 0;
+
+    /// 判死体素集的写时复制快照 (不变内容, 任何线程可读)。cov_base 后台计算用它
+    /// 过滤底图点, 避免在后台任务里访问维护器对象。
+    virtual std::shared_ptr<const DeadSet> deadBaseSnapshot() const { return nullptr; }
 
     virtual bool init(const std::string& /*config_path*/) { return true; }
     virtual void configure(const MaintainerConfig& /*cfg*/) {}

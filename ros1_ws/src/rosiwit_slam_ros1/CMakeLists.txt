@@ -186,6 +186,18 @@ if(CATKIN_ENABLE_TESTING)
         target_link_libraries(test_gicp_matcher_guard rosiwit_slam_ros1_lib)
     endif()
 
+    # 2026-11-28: 求解器时间预算契约 (不设/极小/极大/迭代上限)
+    catkin_add_gtest(test_gicp_time_limit test/test_gicp_time_limit.cpp)
+    if(TARGET test_gicp_time_limit)
+        target_link_libraries(test_gicp_time_limit rosiwit_slam_ros1_lib)
+    endif()
+
+    # 2026-11-28: cov_base 后台计算 (执行器 / 兼容线程 / 析构安全 / 未定位不投递)
+    catkin_add_gtest(test_cov_base_background test/test_cov_base_background.cpp)
+    if(TARGET test_cov_base_background)
+        target_link_libraries(test_cov_base_background rosiwit_slam_ros1_lib rosiwit_common)
+    endif()
+
     catkin_add_gtest(test_reloc_disambig test/test_reloc_disambig.cpp)
     if(TARGET test_reloc_disambig)
         target_link_libraries(test_reloc_disambig rosiwit_slam_ros1_lib)

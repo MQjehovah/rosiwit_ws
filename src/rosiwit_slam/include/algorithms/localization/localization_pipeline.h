@@ -275,9 +275,35 @@ private:
     bool   m_ever_localized = false;      // 至少成功定位过一次 (之后才允许开会话地图/锚定)
     // 先验图-only 匹配度(fitness_base)的状态; KD 树/目标云放在 .cpp 匿名命名空间(避免头文件引 pcl)
     bool   m_base_only_valid = false;
-    int    m_base_only_age = 0;           // 帧计数, 每 30 帧重建一次底图 crop
-    double m_cov_base = -1.0;             // 最近一帧的底图覆盖率 (<0 = 未算)
+    // ---- cov_base 后台计算 (2026-11-28) ----
+    // 扫描对工作图的覆盖率一次 ~100ms (底图 crop + KD 树 + 评估), 原来每 5 秒在跟踪线程
+    // post 阶段算一次, 是单帧 100ms 尖峰的来源。现在把 crop/树/评估整体投到执行器
+    // ("pool" lane) 或兼容后台线程; 跟踪线程只读上一次的结果 (本来就允许滞后)。
+    struct CovBaseJob {
+        CloudType::Ptr scan;
+        PoseStamped pose;
+        std::shared_ptr<const IMapMaintainer::DeadSet> dead;   // 判死体素快照 (后台过滤用)
+        double voxel = 0.3;
+        double inlier_dist = 0.3;
+        uint64_t generation = 0;
+    };
+    void submitCovBase(const CloudType::Ptr& scan, const PoseStamped& pose);
+    void runCovBaseJob(const CovBaseJob& job);
+    void covBaseWorker();
+    std::thread m_cov_thread;
+    std::mutex m_cov_mu;
+    std::condition_variable m_cov_cv;
+    bool m_cov_stop = false;
+    bool m_cov_req = false;
+    CovBaseJob m_cov_job;
+    std::atomic<bool> m_cov_busy{false};
+    std::mutex m_cov_done_mu;
+    std::condition_variable m_cov_done_cv;
+    std::atomic<double> m_cov_base{-1.0};   // 后台写, 跟踪线程读 (<0 = 未算)
     int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
+    int    m_cov_tick = 0;                // 1Hz 块计数 (每 5 秒投递一次 cov_base)
+    bool   m_prev_on_base = true;         // cov_base 跨阈值边沿检测
+    double m_last_status_log = -1.0;      // 1Hz 状态/log 块的上一次帧时间 (按实例, 不跨实例)
     // 锚定状态只有 m_on_submap 一个 (m_anchor_on_base 已合并, 见下)
     int    m_consistency_tick = 0;        // 子图↔先验一致性观测的节拍 (机器人侧新增)
     // 观测周期 (秒)。计数器 m_consistency_tick 在 onLidar 的 1Hz 状态块里累加 (按帧时间每秒一次),

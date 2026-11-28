@@ -82,6 +82,8 @@ bool GicpMatcher::align(const CloudType::Ptr& src, const Eigen::Matrix4d& guess_
     // PCL 1.8 setInputTarget 无条件置脏并重建目标树, GICP 子类再重算 20NN 协方差, 目标没变时绝不能重设。
     if (m_gicp->getInputTarget() != m_target && m_target && !m_target->empty()) m_gicp->setInputTarget(m_target);
     CloudType aligned;
+    // 单帧求解时间预算 (0=off): 到点停止外层迭代, 第一轮总会执行。
+    if (m_gicp_lsq) m_gicp_lsq->setTimeLimitMs(m_cfg.time_limit_ms);
     m_gicp->align(aligned, g);
     iterations = m_gicp->getMaximumIterations();
     // fast_gicp: iterations = 实际执行的外层迭代次数 (收敛了还是跑满上限 —— 求解器成本的主项)
@@ -162,6 +164,7 @@ bool GicpMatcher::match(const CloudType::Ptr& scan, const PoseStamped& guess,
     }
     ms_gicp = ms_since(t1);                    // 每帧都记: 帧耗时分解 (FramePerf) 要用
     out.ms_solver = ms_gicp;
+    out.time_limited = (m_gicp_lsq && m_gicp_lsq->wasTimeLimited());
     out.pose = matrixToPose(T, guess.time);
     // roll/pitch 的边缘协方差 (rad², 雷达中心参数化)。fast_gicp 的 Hessian 用"绕地图原点的旋转 + 平移"的
     // 左扰动 d=(ω, t_delta): 雷达自身位移 dp = t_delta + ω × p  (p = 雷达在 map 系的位置 = T 的平移),

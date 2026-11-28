@@ -86,6 +86,9 @@ struct MatchResult {
     // 诊断 (2026-11-27 帧耗时分解): 求解器 (对齐) 与 覆盖率评估 各自的墙钟耗时; 0 = 该配准器未填
     double ms_solver = 0.0;
     double ms_eval = 0.0;
+    // 求解时间预算 (2026-11-28): 到点停止外层迭代 (第一轮总会执行)。0=不设预算。
+    // 只截断"没收敛的长尾", 不改代价函数/源点; time_limited 标记这次是否因此停下。
+    bool   time_limited = false;
     bool   degenerate = false;     // 是否检测到退化方向
     int    degenerate_dirs = 0;    // 被门控的退化方向数
     double smallest_eig_ratio = 1.0; // 最小/最大特征值比 (可观测性)
@@ -111,6 +114,10 @@ struct ScanMatcherConfig {
     int    max_iterations = 32;             // 最大迭代
     double max_correspondence_dist = 2.0;   // 初始最近邻门限(m)
     double transformation_epsilon = 1e-6;   // 收敛阈值
+    // 单帧求解时间预算(ms): 到点停止外层迭代 (第一轮总会执行), 0=关闭。
+    // 目的: 把"没收敛也硬跑满 max_iterations"的 100~400ms 长尾压到预算内;
+    // 不影响代价函数/源点, 触发时 MatchResult.time_limited=true。
+    double time_limit_ms = 0.0;
     // 目标协方差按点位置复用 (2026-11-27): 重建目标时位置和近邻都没变的点沿用上次算的协方差, 只算新来的点
     // 和近邻变了的点。结果与全量计算一致 (只有裁剪窗口边缘一圈例外, 见 fast_gicp 的 detail::TargetCovCache)。
     // 账本每提交一次目标就重建一次, 全量重算 9 万点 (0.8s CPU) 是提交密集区跟踪线程被拖慢的主因。

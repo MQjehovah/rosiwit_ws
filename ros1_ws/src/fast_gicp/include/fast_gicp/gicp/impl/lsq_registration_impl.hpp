@@ -1,5 +1,7 @@
 #include <fast_gicp/gicp/lsq_registration.hpp>
 
+#include <chrono>
+
 #include <boost/format.hpp>
 #include <fast_gicp/so3/so3.hpp>
 
@@ -62,7 +64,18 @@ void LsqRegistration<PointTarget, PointSource>::computeTransformation(PointCloud
     std::cout << "********************************************" << std::endl;
   }
 
+  // 时间预算: 第一轮总是执行 (保证至少做一次步); 之后每轮开始前看表。
+  time_limited_ = false;
+  const auto t_start = std::chrono::steady_clock::now();
   for (int i = 0; i < max_iterations_ && !converged_; i++) {
+    if (i > 0 && time_limit_ms_ > 0.0) {
+      const double elapsed_ms = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - t_start).count();
+      if (elapsed_ms >= time_limit_ms_) {
+        time_limited_ = true;
+        break;
+      }
+    }
     nr_iterations_ = i;
 
     Eigen::Isometry3d delta;

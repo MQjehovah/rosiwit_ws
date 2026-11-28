@@ -59,6 +59,11 @@ public:
   // 是求解器成本的主项 (实测 5000 点每轮约 20ms 单线程)。
   int performedIterations() const { return static_cast<int>(nr_iterations_) + 1; }
 
+  // rosiwit local patch (2026-11-28): 单帧求解时间预算。第一轮总是执行, 之后每轮
+  // 开始前看表; 超预算就停并把 time_limited 置位。0 = 关闭 (原行为)。
+  void setTimeLimitMs(double ms) { time_limit_ms_ = ms; }
+  bool wasTimeLimited() const { return time_limited_; }
+
   double evaluateCost(const Eigen::Matrix4f& relative_pose, Eigen::Matrix<double, 6, 6>* H = nullptr, Eigen::Matrix<double, 6, 1>* b = nullptr);
 
   virtual void swapSourceAndTarget() {}
@@ -86,6 +91,8 @@ protected:
   double lm_init_lambda_factor_;
   double lm_lambda_;
   bool lm_debug_print_;
+  double time_limit_ms_ = 0.0;   // 单帧求解预算 (ms), 0=off
+  bool   time_limited_ = false;  // 上一次 align 是否因预算停止
 
   Eigen::Matrix<double, 6, 6> final_hessian_;
 };
