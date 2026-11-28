@@ -39,34 +39,35 @@ overlay (持久变化层) 独立机制, 自带策略: 每帧/view/会话在 onLo
                      底图锚不住时参与匹配(桥接), 边建图边定位。
 ```
 
-### 2.1 锚定状态机（判据 = `cov_base`）
+### 2.1 锚定状态机（2026-11-29 统一版）
+
+判据 = **对底图的支撑**，只用一个口径（0.3m 体素、0.3m 内点、全量不抽样）：
+
+- OPEN 态：匹配目标就是底图 crop，`fitness` 即底图支撑；
+- BRIDGING 态：后台 `cov_base` 只对底图算（同 0.3 口径），是诚实的退出/健康判据；
+  `fitness` 此时对联合目标，是自证分，只做显示。
 
 ```
-cov_base := 对底图(不含子图/overlay)的覆盖率
-            同一降采样口径(0.4m 体素), 同一 inlier_dist(0.3m), 用底图-only crop 建 KD 树
+CLOSED → OPEN → BRIDGING
 
-锚定在底图 (m_anchor_on_base=true):
-    匹配目标 = 底图 crop (不含子图/overlay)
-    cov_base >= credible_fitness 期间保持
-
-底图锚不住 (cov_base < credible_fitness):
-    匹配目标 = 底图 crop + overlay + 子图   (桥接, 边建图边定位)
-    子图照常自更新 (accepted 且 fitness>=credible 的帧就写入)
-
-切回底图:  cov_base >= credible_fitness 持续 m_anchor_close_patience 帧
-切换瞬间:  只做两件事 —— 状态翻转 + 目标缓存失效 (没有任何特殊 merge)
+CLOSED→OPEN:   首次 status==LOCALIZED && fitness >= credible_fitness(0.85)
+                (不再要求本帧 accepted —— 开图只是开始累积)
+OPEN→BRIDGING: fitness < enter_support(0.70) 连续 anchor_patience(5) 个 1Hz tick
+                && 子图 >=3000 点 && status != LOST
+                目标 = 底图 crop(实时剔判死点) ∪ 子图; 写入门槛 0.35 + 位姿稳
+BRIDGING→OPEN: ① 周期探测重锚: 对底图目标 fitness >= relocation_fitness(0.70)
+               ② cov_base >= credible(0.85) 连续 patience 个 1Hz tick
+               ③ LOST: 回底图网格恢复(子图冻结, 不参与)
 ```
 
 要点：
 
-- **锚定判据必须用不含自建内容的目标**。混入子图/overlay 后 fitness 会自我确认
-  （错位姿也能满分），"锚是否恢复"就再也判不出来。
-- **子图提前开建**：`LOCALIZED` 且 `fitness>=credible` 就开（building ahead），
-  而不是等底图失效才临时建 —— 临时建的子图自己就是错的，顶不住。
-- **刚启动（从未定位成功）不允许开子图**（`m_ever_localized` 门控）：
-  那时位姿必错，写了就是自我污染。
-- overlay 的计票/雕刻是**独立机制**，与子图无关：桥接期间逐帧 `onLocalized`
-  本来就会用子图定位的位姿雕刻 overlay，不需要任何"子图 merge"特殊操作。
+- `anchorOk`（accepted/inliers/eig/w_support）**只用于写图门槛**，不再决定桥接；
+  桥接决策只用“底图支撑”一个指标 + 迟滞。
+- 桥接目标**保留底图**：判死点已实时剔除，剩下的是仍有效的绝对参照；不硬切纯子图
+  （纯子图 = 局部相对配对，两次探测重锚之间漂移不受约束）。
+- 子图首次开图后**常驻**，不因退出桥接而关闭。
+- 已删除死配置：`submap.anchor_close_patience`、`session_map.use_for_tracking`。
 
 ### 2.2 三个层次各自的"账本"
 
