@@ -490,8 +490,12 @@ private:
     /// 本函数只刷新 scan_ground_z_ (由 SlamAlgorithm::computeBaseFrames 提供).
     void computeLidarToBase();
     /// 地面在地图系里的 z。地图系原点=起始 IMU -> 地面 ≈ -IMU 安装高度。
-    /// 发布 scan_f_map / curr_scan_point 时用它做 z 参考, 保证与栅格 0.1~2.0m(相对地面)同带。
+    /// 只在 footprint TF 不可用时作为 scan_f_map 的**回退** z 参考。
     double scan_ground_z_ = -0.898;
+    /// /scan_f_map 的高度带 (base_footprint 系, m), yaml: scan_f_map.z_min / z_max。
+    /// 过滤用当前位姿的 T_map_base_footprint, 坡道/俯仰时跟着车体走 (2026-11-28)。
+    double scan_f_z_min_ = 0.15;
+    double scan_f_z_max_ = 2.5;
 };
 
 } // namespace rosiwit_slam_ros1

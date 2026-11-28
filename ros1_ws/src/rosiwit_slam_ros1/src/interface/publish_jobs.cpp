@@ -21,6 +21,7 @@
 #include "outputs.h"
 
 #include "convert.h"
+#include "frame_utils.h"
 #include "internal.h"
 
 using namespace rosiwit_slam;
@@ -75,6 +76,23 @@ void Ros1SlamInterface::buildScanMessages() {
     const ros::Time stamp = out.pose.time > 0 ? ros::Time(out.pose.time) : ros::Time::now();
     const SlamMode mode = slam_mode_.load();
 
+    // /scan_f_map 的高度带: 按机器人**当前 footprint 系**过滤, 而不是地图系里
+    // 一个固定的地面 z。T_map_base_footprint = T_map_lidar * T_lidar_base_footprint,
+    // 核心位姿 out.pose 是雷达位姿 (r_il = 单位阵)。TF 没准备好时回退到地图系
+    // 常量地面 (旧语义), 只影响显示, 不影响匹配。
+    Eigen::Matrix3d scan_z_rot = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d scan_z_trans = Eigen::Vector3d::Zero();
+    bool have_scan_z = false;
+    if (engine_.computeBaseFrames(/*blocking=*/false) && engine_.baseFootprintLidar().valid) {
+        // composeRightInv(T_map_lidar, T_base_footprint_lidar) = T_map_base_footprint
+        // (与 outputs.cpp preparePose 同一用法; baseFootprintLidar() 给的是 T_bf_lidar).
+        const rosiwit_slam::PoseStamped foot =
+            composeRightInv(out.pose, engine_.baseFootprintLidar());
+        scan_z_rot = foot.rot;
+        scan_z_trans = foot.trans;
+        have_scan_z = true;
+    }
+
     const bool want_f = ros1_pointcloud_puber_.getNumSubscribers() > 0;              // /scan_f_map
     const bool want_dbg = debug_publish_ && pointcloud_puber_.getNumSubscribers() > 0; // /curr_scan_point
 
@@ -90,7 +108,11 @@ void Ros1SlamInterface::buildScanMessages() {
                 toPointCloud2(world, kMapFrame, stamp));
         }
         if (want_f) {
-            CloudType::Ptr shaped = scanShape(world, kLocZMax, 1, scan_ground_z_, kScanZMin);
+            CloudType::Ptr shaped =
+                have_scan_z
+                    ? scanShape(world, scan_f_z_max_, 1, 0.0, scan_f_z_min_,
+                                &scan_z_rot, &scan_z_trans)
+                    : scanShape(world, scan_f_z_max_, 1, scan_ground_z_, scan_f_z_min_);
             if (shaped && !shaped->empty()) {
                 scan_f = std::make_shared<sensor_msgs::PointCloud>(
                     toOldPointCloud(*shaped, kMapFrame, stamp));
@@ -103,7 +125,11 @@ void Ros1SlamInterface::buildScanMessages() {
                 toPointCloud2(world, kMapFrame, stamp));
         }
         if (want_f) {
-            CloudType::Ptr shaped = scanShape(world, kMapZMax, 1, scan_ground_z_, kScanZMin);
+            CloudType::Ptr shaped =
+                have_scan_z
+                    ? scanShape(world, scan_f_z_max_, 1, 0.0, scan_f_z_min_,
+                                &scan_z_rot, &scan_z_trans)
+                    : scanShape(world, scan_f_z_max_, 1, scan_ground_z_, scan_f_z_min_);
             if (shaped && !shaped->empty()) {
                 scan_f = std::make_shared<sensor_msgs::PointCloud>(
                     toOldPointCloud(*shaped, kMapFrame, stamp));

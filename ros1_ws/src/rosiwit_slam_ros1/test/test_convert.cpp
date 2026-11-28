@@ -194,6 +194,26 @@ TEST(LegacyConvert, ScanShapeFiltersByZ) {
     ASSERT_EQ(out_map->size(), 1u);
 }
 
+// 7b (2026-11-28) —— /scan_f_map 的高度带必须按 footprint 系过滤 (不是地图系常量地面)
+TEST(LegacyConvert, ScanShapeFiltersInFootprintFrame) {
+    CloudType in;
+    in.push_back(mkPoint(0.0, 1.0, 0.0));   // footprint z = 1.0 -> 留
+    in.push_back(mkPoint(0.0, 0.0, 1.0));   // footprint z = 0.0 -> 丢
+
+    // map <- footprint: 绕 X 转 90° (车体俯仰)
+    const Eigen::Matrix3d R =
+        Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitX()).toRotationMatrix();
+    const Eigen::Vector3d t(0.0, 0.0, 0.0);
+    auto out = scanShape(in, 2.0, 1, 0.0, 0.5, &R, &t);
+    ASSERT_EQ(out->size(), 1u);
+    EXPECT_NEAR(out->points[0].y, 1.0, 1e-6);
+
+    // 旧的 map 系路径选中的是另一个点 -> 证明足迹系确实生效
+    auto out_map = scanShape(in, 2.0, 1, 0.0, 0.5);
+    ASSERT_EQ(out_map->size(), 1u);
+    EXPECT_NEAR(out_map->points[0].z, 1.0, 1e-6);
+}
+
 TEST(LegacyConvert, ScanShapeZMaxNonPositiveMeansNoFilter) {
     CloudType in;
     for (double z = -1.0; z <= 3.0; z += 0.5) in.push_back(mkPoint(0, 0, z));

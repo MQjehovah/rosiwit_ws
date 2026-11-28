@@ -96,8 +96,17 @@ Ros1SlamInterface::Ros1SlamInterface(ros::NodeHandle& nh, ros::NodeHandle& pnh,
         if (mt && mt["persistency_anchor"]) {
             overlay_anchor_ = mt["persistency_anchor"].as<double>();
         }
+        // /scan_f_map 高度带: 按 base_footprint 系过滤 (不是地图系常量地面), 可配置。
+        // 2026-11-28 现场要求: 0.15 ~ 2.5 m, 坡道/俯仰时跟着车体走。
+        if (yc["scan_f_map"]) {
+            const YAML::Node sf = yc["scan_f_map"];
+            if (sf["z_min"]) scan_f_z_min_ = sf["z_min"].as<double>();
+            if (sf["z_max"]) scan_f_z_max_ = sf["z_max"].as<double>();
+        }
         std::cout << "[ros1_slam] grid: save_res=" << grid_resolution_
                   << " realtime_res=" << realtime_grid_resolution_ << std::endl;
+        std::cout << "[ros1_slam] scan_f_map: footprint z band = "
+                  << scan_f_z_min_ << " ~ " << scan_f_z_max_ << " m" << std::endl;
         // C2b: 2D 平面约束开关 (localization.planar_constraint.enabled).
         if (yc["localization"] && yc["localization"]["planar_constraint"]) {
             const YAML::Node pc = yc["localization"]["planar_constraint"];

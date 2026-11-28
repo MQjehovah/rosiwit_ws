@@ -159,7 +159,9 @@ rosiwit_slam::CloudType::Ptr scanShape(const rosiwit_slam::CloudType& in,
                                              double z_max,
                                              int downsample_multiplier,
                                              double z_ref,
-                                             double z_min) {
+                                             double z_min,
+                                             const Eigen::Matrix3d* world_foot_rot,
+                                             const Eigen::Vector3d* world_foot_trans) {
     rosiwit_slam::CloudType::Ptr out(new rosiwit_slam::CloudType());
     const size_t n = in.size();
 
@@ -175,15 +177,18 @@ rosiwit_slam::CloudType::Ptr scanShape(const rosiwit_slam::CloudType& in,
     out->reserve(n / static_cast<size_t>(down_sample) + 1);
     int scan_count = 1;
     const bool use_z = (z_max > 0.0);
-    // ⚠ z_ref = **地面在地图系里的 z**。旧实现假设地面就是 z=0 才写死 `p.z > 0`,
-    // 而我们的地图系原点是起始时刻的雷达 -> 地面在 -0.898m。用绝对 z 过滤会把
-    // 0~0.9m 的墙面全部砍掉(只剩天花板/上部), 与栅格的 0.1~2.0m 高度带对不上,
-    // 表现就是"看不清点云和墙体的贴合情况"。这里改成相对地面过滤, 与栅格同带。
+    // 高度定义:
+    //   默认 = 地图系 z 相对常量地面 z_ref (旧语义; 车体姿态变化时这个常量会失准);
+    //   传入 T_map_base_footprint 时 = 点在**机器人 footprint 系**里的高度, 与车体
+    //   当前的 roll/pitch 一起走 —— /scan_f_map 用这一路 (yaml: scan_f_map.z_min/z_max)。
+    const bool use_foot = (world_foot_rot != nullptr && world_foot_trans != nullptr);
+    Eigen::RowVector3d rz = Eigen::RowVector3d::Zero();
+    if (use_foot) rz = world_foot_rot->row(2);
+    const double tz = use_foot ? world_foot_trans->z() : 0.0;
     for (const auto& p : in) {
-        const double z = p.z - z_ref;
-        // 下界默认 0(旧语义); scan_f_map 传 0.15 —— z_ref 实测可偏差 ~7cm(标定 -0.898
-        // vs 实测地面 -0.83), 下界含 0 会把贴地点放进界面(用户报告"非墙体点云")。
-        // 0.15 是 2026-11-22 现场确定的显示带下界 (上界 1.5m)。
+        const double z = use_foot
+                             ? rz(0) * p.x + rz(1) * p.y + rz(2) * p.z + tz
+                             : p.z - z_ref;
         if (!use_z || (z > z_min && z < z_max)) {
             if (scan_count % down_sample == 0) out->push_back(p);
         }

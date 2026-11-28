@@ -10,14 +10,8 @@ namespace rosiwit_slam_ros1 {
 namespace interface_internal {
 
 constexpr const char* kMapFrame = "map";
-// scan_f_map 的 z 过滤上界 (相对地面): 定位/建图统一 1.5m。
-// 2026-11-22 现场要求: 显示带统一为 0.15~1.5m (原 定位 2.0 / 建图 1.0)。
-constexpr double kLocZMax = 1.5;
-constexpr double kMapZMax = 1.5;
-// scan_f_map 高度带下界(相对地面)。
-// 0 会放行贴地点(z_ref 标定偏差 ~7cm 时地面直接漏进界面, 2026-10-17 用户报告),
-// 所以保留下界; 与上界一起构成 0.15~1.5m 的显示带。
-constexpr double kScanZMin = 0.15;
+// /scan_f_map 的高度带已改为 footprint 系 + yaml 可配 (scan_f_map.z_min/z_max,
+// 2026-11-28); 旧的 map 系常量 kLocZMax/kMapZMax/kScanZMin 已删除。
 
 inline const char* modeName(SlamMode m) {
     switch (m) {
