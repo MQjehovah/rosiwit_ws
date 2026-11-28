@@ -13,9 +13,9 @@
 # ============================================================================
 #  [fitness 阈值链 —— 2026-10-17 僵尸带事故的教训]
 #   accept.min_coverage(0.60) = monitor.lost_fitness(0.60)
-#     < monitor.degraded_fitness(0.85)       ← 定位降级线: 连续 patience 个 1Hz tick 后桥接
-#     < monitor.credible_fitness(0.90)       ← 健康线/桥接退出线
-#   ★2026-11-29 验证用临时值 (基线 0.70/0.85，验证完改回)。
+#     < monitor.degraded_fitness(0.70)       ← 定位降级线: 连续 patience 个 1Hz tick 后桥接
+#     < monitor.credible_fitness(0.85)       ← 健康线/桥接退出线
+#   注: 2026-11-29 用 0.85/0.90 做过一轮桥接验证 (15 进/14 出全部正确)，已恢复基线。
 #   注: global.relocation_fitness 目前是 0.70 (2026-11-26 因工作图侵蚀临时下调)，
 #   因此 "relocation >= credible" 这条不变量当前本来就不满足 (启动会告警)，本次不动它。
 #   2026-11-19: 阈值链保持原值(0.35 / 0.75 / 0.85 / 0.85);
@@ -567,17 +567,15 @@ localization:
 
   monitor:
     enabled: true
-    credible_fitness: 0.90   # 健康线: ≥ 此为健康帧; 开图/桥接退出也用它。
-                             # ★2026-11-29 验证用临时值 (基线 0.85，验证完改回):
-                             # 本场景对底图支撑正常 ≥0.9，抬高后桥接/退出可以真正被触发。
-                             # 代价: 0.85~0.90 的正常行驶段会被判"未达健康线"，子图会进桥接。
+    credible_fitness: 0.85   # 健康线: ≥ 此为健康帧; 开图/桥接退出也用它。
+                             # 2026-11-23: 0.80 -> 0.85。2026-11-29 验证完从 0.90 恢复。
     # 证据不足帧(靠站/贴墙时只剩一两百点): 本帧中性, 不累计"不健康";
     # 连续超过 low_evidence_limit 才按不健康处理(不能无限 coast)。
     min_evidence_points: 150
     low_evidence_limit: 300
-    degraded_fitness: 0.85    # 定位降级线: 对底图支撑 < 此值连续 submap.anchor_patience 个
-                              # 1Hz tick -> 进入桥接(子图锚定); 桥接退出用 credible_fitness(0.90)。
-                              # ★2026-11-29 验证用临时值 (基线 0.70，验证完改回)。
+    degraded_fitness: 0.70    # 定位降级线: 对底图支撑 < 此值连续 submap.anchor_patience 个
+                              # 1Hz tick -> 进入桥接(子图锚定); 桥接退出用 credible_fitness。
+                              # 2026-11-29 验证完从 0.85 恢复基线。
     lost_fitness: 0.60        # 2026-11-24: 0.75 -> 0.60, 与 accept.min_coverage 对齐。
                               # 语义: "匹配还能被采用就继续定位, 连续 lost_patience 帧连
                               # 接受线都拿不到才判丢". 原来 0.75 会把 0.65~0.74 这种
