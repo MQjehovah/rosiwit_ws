@@ -666,6 +666,28 @@ TEST(OverlayMaintainerWeights, DeadCommittedPointIsDroppedByAnnotate)
         EXPECT_GT(std::fabs(p.x - 2.0f), 0.1f) << "判死提交点的拷贝不应留存";
 }
 
+// 2026-11-28 实车 SIGSEGV 的回归: addPoint 会把新结构直接追加到工作图云
+// (与管道 m_map 同一指针)。落盘线程必须拿 snapshotBaseCloud() 的深拷贝,
+// 否则 voxelDownsample 与 push_back 并发。这里钉住"快照不随后续追加变化"。
+TEST(OverlayMaintainerWeights, BaseSnapshotStableAgainstCommits)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig cfg = testCfg();
+    cfg.persist_hits = 1;
+    m.configure(cfg);
+
+    CloudType::Ptr working = mkCloud({V3D(-1.0, 0.0, 0.0)});
+    m.setBaseMap("test", working);
+    CloudType::Ptr snap = m.snapshotBaseCloud();
+    ASSERT_TRUE(snap);
+    const size_t n0 = snap->size();
+
+    // 新结构提交 -> addPoint 向工作图云尾部追加
+    m.onLocalized(mkPose(0.0), mkCloud({V3D(2.0, 0.0, 0.0)}), lowFitnessMatch(), true);
+    ASSERT_EQ(working->size(), n0 + 1u) << "提交应升格进工作图云";
+    EXPECT_EQ(snap->size(), n0) << "快照必须不受之后的追加影响 (落盘线程读它)";
+}
+
 // 并发冒烟: 标注 (整云一次调用, 段内持锁) 的同时另一线程持续写账本 —— 不死锁 / 不崩溃 /
 // 结果自洽。修复前 annotateBaseWeights 完全不持锁, 与 onLocalized 是数据竞争 (过去它
 // 恰好只在跟踪线程调用才没出事)。生产路径上账本只由跟踪线程读 (见分片测试), 这里只

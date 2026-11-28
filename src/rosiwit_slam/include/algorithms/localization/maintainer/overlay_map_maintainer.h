@@ -100,6 +100,9 @@ public:
         m_base_embedded = on;
     }
     void annotateBaseWeightsRange(CloudType& cloud, size_t begin, size_t end) const override;
+    /// 工作图云快照: m_base_raw 会被 addPoint 追加 (与管道 m_map 同指针), 落盘/导出
+    /// 必须拿这份稳定拷贝, 否则并发 push_back 会 segfault (2026-11-28)。
+    CloudType::Ptr snapshotBaseCloud() const override;
     CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const override {
         // 判死体素集的快照 (写时复制): 读方 (目标裁剪 / 覆盖率重裁剪, 可能在定位线程上) 不拿主锁,
         // 不会卡在地图更新线程的一次写入上 (实车实测每次 30~550ms)。

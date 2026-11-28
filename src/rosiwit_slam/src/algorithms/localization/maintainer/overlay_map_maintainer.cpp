@@ -980,6 +980,16 @@ bool OverlayMapMaintainer::loadLocked(const std::string& path) {
     return m_overlay_count > 0;
 }
 
+CloudType::Ptr OverlayMapMaintainer::snapshotBaseCloud() const {
+    // ★必须在账本锁内拷贝: addPoint() 会把新提交的结构直接 push_back 到
+    //   m_base_raw (与管道 m_map 是同一 CloudType), 落在证据/提交计数里。
+    //   落盘线程若直接对 m_map 做 voxelDownsample, 会与地图更新线程的 vector
+    //   重新分配并发 -> 迭代器失效 -> SIGSEGV (2026-11-28 实车, 行驶中第二次落盘)。
+    std::lock_guard<std::recursive_mutex> lk(m_mu);
+    if (!m_base_raw) return CloudType::Ptr();
+    return CloudType::Ptr(new CloudType(*m_base_raw));
+}
+
 // ---- 统一工作图: 一个文件同时装几何和权重 (intensity = w) ----
 // 落盘前调用: 给底图点写上它所在体素的 w, 丢弃 w==0 的点 -> 跨会话"删除"生效,
 // 不需要额外的 sidecar 文件 (w 就在 PCD 里, 和 overlay 的表示完全一致)。

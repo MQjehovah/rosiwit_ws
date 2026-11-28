@@ -1578,7 +1578,11 @@ bool LocalizationPipeline::getOverlayCloud(PointVec& out) {
 
 bool LocalizationPipeline::getWorkingMapCloud(PointVec& out) {
     if (!m_map || m_map->empty()) return false;
-    CloudType c = *m_map;                       // 拷贝后注 w, 不动加载原图
+    // 走稳定快照: 工作图云在 addPoint 里会被追加 (与 m_map 同指针), 直接拷贝
+    // *m_map 会与地图更新线程的 push_back 并发 (调试整图导出也踩过同一竞态)。
+    CloudType::Ptr base = m_maintainer ? m_maintainer->snapshotBaseCloud() : CloudType::Ptr();
+    if (!base) base.reset(new CloudType(*m_map));
+    CloudType c = std::move(*base);             // 注 w 用, 不动加载原图
     if (m_maintainer) m_maintainer->annotateBaseWeights(c);   // 刷新成**当前** w
     out.assign(c.begin(), c.end());
     return true;
@@ -4351,9 +4355,12 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         if (m_save_thread.joinable() && !m_save_busy && !m_save_req) {
                             wm_last = now;            // 先占位, 防止重复触发
                             wm_last_rev = rev;
-                            // 请求时刻的快照: 定位期间底图内容不变 (换图会换新指针);
-                            // 路径同理 —— 执行时 m_map_path 可能已指向另一张图。
-                            m_save_req_map = m_map;
+                            // ★深拷贝给落盘线程 (账本锁内): 工作图云会被 addPoint 追加
+                            //   (与 m_map 同一指针), 落盘线程直接做 voxelDownsample 会与
+                            //   地图更新线程的 push_back 并发 -> SIGSEGV (2026-11-28 实车,
+                            //   行驶中第二次落盘)。路径同理 —— 执行时 m_map_path 可能已换图。
+                            CloudType::Ptr stable = m_maintainer->snapshotBaseCloud();
+                            m_save_req_map = stable ? stable : m_map;
                             m_save_req_path = workingMapPath(m_map_path);
                             m_save_req_vox =
                                 m_maintainer_cfg.voxel > 0 ? m_maintainer_cfg.voxel : 0.3;

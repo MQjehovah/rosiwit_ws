@@ -88,6 +88,11 @@ public:
     }
     /// 剔除 w 已降到 0 的底图点 (匹配目标用); 无死亡体素时原样返回。
     virtual CloudType::Ptr filterDeadBase(const CloudType::Ptr& cloud) const { return cloud; }
+    /// 稳定的工作图底图快照 (深拷贝, 账本锁内完成)。addPoint 会把新提交的结构
+    /// 追加到工作图云尾部 (与管道 m_map 同一指针), 落盘/调试导出直接读它会与
+    /// 地图更新线程的 push_back 并发 (2026-11-28 实车 SIGSEGV: 行驶中 map save 的
+    /// voxelDownsample 撞上 append)。需要在后台线程使用底图的地方都走这个快照。
+    virtual CloudType::Ptr snapshotBaseCloud() const { return CloudType::Ptr(); }
     /// 回收已删除体素的点 (落盘时刻调用一次, 批量压缩)。
     virtual void reclaim() {}
     /// w-map: 新结构升格回调 (管道用它同步分块缓存; 默认无操作)
