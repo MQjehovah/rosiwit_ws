@@ -195,9 +195,9 @@ localization:
     anchor_min_inliers: 50     # 绝对下限(防 3 个点也当锚)
     anchor_min_ratio: 0.5      # inliers / 匹配前可见点数(dynamic_filter 之前)
     anchor_min_eig_ratio: 0.001
-    anchor_patience: 5         # 支撑不足/恢复的连续 1Hz 计数 -> 切/退桥接
-    enter_support: 0.70        # 对底图支撑低于此值 -> 连续 patience 帧后桥接
-                               # 退出用 monitor.credible_fitness(0.85) 连续 patience 个 tick
+    anchor_patience: 5         # 支撑不足的连续 1Hz 计数 -> 进入桥接
+                               # 进入阈值用 monitor.degraded_fitness(0.70);
+                               # 退出用后台探测重锚 fitness_base >= monitor.credible_fitness(0.85)
   maintainer:
     persistency_unit: session  # frame|view|session|day
     persistency_hit_gain: 8    # 每个单位 +8 -> anchor 128 = 16 个会话
