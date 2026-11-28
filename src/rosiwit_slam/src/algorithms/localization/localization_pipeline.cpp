@@ -567,10 +567,16 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_sm_write_fitness = getv<double>(smc, "write_fitness_bridging", m_sm_write_fitness);
         m_sm_write_corr_m = getv<double>(smc, "write_max_corr_m", m_sm_write_corr_m);
         m_sm_write_corr_deg = getv<double>(smc, "write_max_corr_deg", m_sm_write_corr_deg);
+        m_session_map_min_kf_hits =
+            getv<int>(smc, "min_kf_hits", m_session_map_min_kf_hits);
         m_consistency_period = std::max(1, getv<int>(smc, "consistency_period_s", m_consistency_period));
     }
-    m_session_map.configure(SessionMap::Config{
-        m_session_map_radius, m_session_map_voxel, m_session_map_max_points});
+    SessionMap::Config smc_cfg;
+    smc_cfg.radius = m_session_map_radius;
+    smc_cfg.voxel = m_session_map_voxel;
+    smc_cfg.max_points = m_session_map_max_points;
+    smc_cfg.min_kf_hits = m_session_map_min_kf_hits;
+    m_session_map.configure(smc_cfg);
     auto plc = loc["planar"];
     if (plc) {
         m_planar_cfg.mode          = getv<std::string>(plc, "mode", m_planar_cfg.mode);

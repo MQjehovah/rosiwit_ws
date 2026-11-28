@@ -15,6 +15,12 @@ static int64_t vkey(double x, double y, double z, double v) {
     return ((ix & 0x1FFFFF) << 42) | ((iy & 0x1FFFFF) << 21) | (iz & 0x1FFFFF);
 }
 
+// vkey 把坐标截成 21 位有符号; 反解时补回符号位 (只用于按距离裁剪命中表)。
+static int64_t signExtend21(int64_t v) {
+    v &= 0x1FFFFF;
+    return (v & 0x100000) ? (v | ~int64_t(0x1FFFFF)) : v;
+}
+
 void SessionMap::reset(const PoseStamped& robot, double now_s) {
     anchor_ = robot;               // 兼容字段: 开图位姿
     robot_trans_ = robot.trans;    // 兼容旧成员语义
@@ -25,6 +31,7 @@ void SessionMap::reset(const PoseStamped& robot, double now_s) {
     m_kfs.clear();
     m_frames_since_kf_ = 0;
     m_frame = 0;
+    kf_hits_.clear();
     view_.reset();
     view_dirty_ = true;
     // 开图即建第一个关键帧 (锚定在当前估计位姿)
@@ -40,6 +47,7 @@ void SessionMap::deactivate() {
     active_ = false;
     m_kfs.clear();
     m_frame = 0;
+    kf_hits_.clear();
     view_.reset();
     view_dirty_ = true;
 }
@@ -56,14 +64,17 @@ void SessionMap::pruneKfs() {
     //   push_back 直接 SIGSEGV (2026-11-26 实机: 子图一开必崩, 根因即此)。
     bool any_prune = false;
     for (const auto& k : m_kfs) {
-        const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
+        // centroid 在 update() 里由世界系点累加得到 (acc += w), 不要再乘 kf.pose:
+        // 旧写法把世界系质心又当成本体系变换了一次, 机器人离地图原点 >radius 时
+        // (c ≈ 2*位置) 会把全部关键帧裁掉 -> 子图在远处永远是空的 (2026-11-28 发现)。
+        const Eigen::Vector3d c = k.centroid;
         if ((c - ref).squaredNorm() > r2) { any_prune = true; break; }
     }
     if (!any_prune) return;
     std::vector<EpKf> nk;
     nk.reserve(m_kfs.size());
     for (auto& k : m_kfs) {
-        const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
+        const Eigen::Vector3d c = k.centroid;
         if ((c - ref).squaredNorm() > r2) continue;
         nk.push_back(std::move(k));
     }
@@ -77,7 +88,6 @@ void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_worl
     robot_rot_ = pose_world.rot;
     have_robot_ = true;
     ++m_frame;
-    const uint32_t frame = static_cast<uint32_t>(m_frame);
 
     // 当前关键帧: 不存在/移动超距/帧数超限 → 新建
     bool new_kf = m_kfs.empty();
@@ -104,10 +114,22 @@ void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_worl
         EpKf& kf = m_kfs.back();
         Eigen::Vector3d acc = Eigen::Vector3d::Zero();
         size_t npts = 0;
+        // 动态点剔除: 统计每个体素在多少个**关键帧**里出现过 (同一关键帧内先按体素去重,
+        // 否则一帧里同一个行人几十个点就把票数堆满了)。缺失/少于阈值 => 瞬态, 不进视图。
+        const bool count_hits = (cfg_.min_kf_hits > 1);
+        std::unordered_set<int64_t> seen;
+        if (count_hits) seen.reserve(scan_body.size() * 2 + 1);
         for (const auto& p : scan_body.points) {
             if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
             const Eigen::Vector3d w =
                 pose_world.rot * Eigen::Vector3d(p.x, p.y, p.z) + pose_world.trans;
+            if (count_hits) {
+                const int64_t vk = vkey(w.x(), w.y(), w.z(), cfg_.voxel);
+                if (seen.insert(vk).second) {
+                    uint8_t& h = kf_hits_[vk];
+                    if (h < 255) ++h;
+                }
+            }
             PointType q;
             q.x = static_cast<float>(w.x());
             q.y = static_cast<float>(w.y());
@@ -122,6 +144,7 @@ void SessionMap::update(const CloudType& scan_body, const PoseStamped& pose_worl
 
     // 关键帧级裁剪: 质心超出 radius×1.2 的关键帧整体丢弃
     pruneKfs();
+    maybePruneHits();
 }
 
 size_t SessionMap::applyExitCorrection(const PoseStamped& reliable) {
@@ -166,19 +189,38 @@ std::vector<SessionMap::EpKf> SessionMap::popLeavingKfs(const Eigen::Vector3d& c
     //   (world==nullptr), 下一帧 update() 里 push_back 直接 SIGSEGV。
     bool any_leaving = false;
     for (const auto& k : m_kfs) {
-        const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
+        const Eigen::Vector3d c = k.centroid;   // 世界系质心, 见 pruneKfs 注释
         if ((c.head<2>() - cur_xy.head<2>()).squaredNorm() > r2) { any_leaving = true; break; }
     }
     if (!any_leaving) return out;
     std::vector<EpKf> keep;
     keep.reserve(m_kfs.size());
     for (auto& k : m_kfs) {
-        const Eigen::Vector3d c = k.pose.rot * k.centroid + k.pose.trans;
+        const Eigen::Vector3d c = k.centroid;
         if ((c.head<2>() - cur_xy.head<2>()).squaredNorm() > r2) out.push_back(std::move(k));
         else keep.push_back(std::move(k));
     }
     m_kfs.swap(keep);
     view_dirty_ = true;
+    // 动态点剔除: 送出融合前剔掉"只被 1 个关键帧看到"的瞬态点, 否则行人/门会被
+    // mergeChunk 当成新结构写进 w 账本 (先污染再靠雕刻慢慢删)。
+    if (cfg_.min_kf_hits > 1) {
+        size_t dropped = 0;
+        for (auto& k : out) {
+            if (!k.world || k.world->empty()) continue;
+            CloudType::Ptr kept(new CloudType());
+            kept->reserve(k.world->size());
+            for (const auto& p : k.world->points) {
+                if (voxelTransient(vkey(p.x, p.y, p.z, cfg_.voxel))) { ++dropped; continue; }
+                kept->push_back(p);
+            }
+            kept->width = static_cast<uint32_t>(kept->size());
+            kept->height = 1;
+            k.world.swap(kept);
+        }
+        if (dropped)
+            std::cout << "[submap] drop " << dropped << " transient pts before merge" << std::endl;
+    }
     std::cout << "[submap] leaving chunk: " << out.size() << " kfs merged out (remained "
               << m_kfs.size() << ")" << std::endl;
     return out;
@@ -188,16 +230,22 @@ CloudType::Ptr SessionMap::pointsWorld() const {
     CloudType::Ptr out(new CloudType());
     if (!active_ || m_kfs.empty()) return out;
     if (view_ && !view_dirty_) return view_;
-    // 合并视图: 全体关键帧点 → 0.3 体素去重 → free>=free_votes_to_clear 跳过
+    // 合并视图: 全体关键帧点 → 体素去重 → 动态瞬态体素跳过 (最新关键帧例外)
     const double vv = std::max(0.05, cfg_.voxel);
+    const bool filter_transient = (cfg_.min_kf_hits > 1);
+    const size_t newest = m_kfs.size() - 1;   // 最新关键帧不过滤: 子图刚开/刚移动时视图不为空
     std::unordered_set<int64_t> emitted;
     emitted.reserve(m_kfs.size() * 4);
     out->reserve(m_kfs.size() * 8);
-    for (const auto& k : m_kfs) {
+    for (size_t ki = 0; ki < m_kfs.size(); ++ki) {
+        const auto& k = m_kfs[ki];
         if (!k.world) continue;
+        const bool is_newest = (ki == newest);
         for (const auto& p : k.world->points) {
             const int64_t vk = vkey(p.x, p.y, p.z, vv);
             if (!emitted.insert(vk).second) continue;
+            if (filter_transient && !is_newest &&
+                voxelTransient(vkey(p.x, p.y, p.z, cfg_.voxel))) continue;
             PointType q;
             q.x = p.x; q.y = p.y; q.z = p.z;
             q.intensity = 0.0f;
@@ -238,6 +286,43 @@ CloudType::Ptr SessionMap::pointsWorld(const Eigen::Vector3d& center, double rad
     return out;
 }
 
+bool SessionMap::voxelTransient(int64_t vk) const {
+    if (cfg_.min_kf_hits <= 1) return false;
+    auto it = kf_hits_.find(vk);
+    // 缺记录 = 已按距离裁掉/从未统计 -> 按"支持"处理, 宁可保留也不误删。
+    return it != kf_hits_.end() && it->second < cfg_.min_kf_hits;
+}
 
+void SessionMap::maybePruneHits() {
+    if (cfg_.min_kf_hits <= 1) {
+        if (!kf_hits_.empty()) kf_hits_.clear();
+        return;
+    }
+    // 条目数 = 走过区域的体素数 (关键帧裁剪不会回收它们)。超过上限时按距离裁:
+    // 只删机器人 radius×1.5 以外的条目; 被裁掉 = missing -> 按支持处理, 不会误删
+    // 仍在保留关键帧里的点。
+    const size_t cap = std::max<size_t>(200000, cfg_.max_points * 2);
+    if (kf_hits_.size() <= cap) return;
+    const double r = cfg_.radius * 1.5;
+    const double r2 = r * r;
+    const double v = cfg_.voxel;
+    const double rx = have_robot_ ? robot_trans_.x() : 0.0;
+    const double ry = have_robot_ ? robot_trans_.y() : 0.0;
+    size_t erased = 0;
+    for (auto it = kf_hits_.begin(); it != kf_hits_.end();) {
+        const int64_t k = it->first;
+        const double x = (static_cast<double>(signExtend21(k >> 42)) + 0.5) * v;
+        const double y = (static_cast<double>(signExtend21((k >> 21) & 0x1FFFFF)) + 0.5) * v;
+        const double dx = x - rx, dy = y - ry;
+        if (dx * dx + dy * dy > r2) {
+            it = kf_hits_.erase(it);
+            ++erased;
+        } else {
+            ++it;
+        }
+    }
+    std::cout << "[submap] prune hit table: -" << erased << " -> " << kf_hits_.size()
+              << " (transient filter)" << std::endl;
+}
 
 }  // namespace rosiwit_slam

@@ -326,6 +326,7 @@ private:
 
     double m_session_map_voxel = 0.15;
     size_t m_session_map_max_points = 300000;
+    int    m_session_map_min_kf_hits = 2;   // 子图动态点剔除: 体素至少被 N 个关键帧看到
     /// 服务/换图线程调用: 加锁清空子图, 并退出子图桥接模式
     void resetSessionMap() {
         std::lock_guard<std::mutex> lk(m_session_map_mu);
