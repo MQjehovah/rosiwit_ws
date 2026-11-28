@@ -271,7 +271,11 @@ private:
     int    m_anchor_min_inliers = 50;     // 绝对下限(防 3 个点也当锚)
     double m_anchor_min_ratio = 0.5;      // 内点 / 匹配前可见点数
     double m_anchor_min_eig_ratio = 1e-3;
-    int    m_anchor_patience = 5;         // 连续弱锚帧 -> 开会话地图
+    // 桥接状态机的迟滞参数 (2026-11-29 统一口径):
+    //   进入 = 对底图支撑 (fitness) < m_submap_enter_support 连续 m_anchor_patience 帧
+    //   退出 = 对底图支撑 (cov_base) >= credible_fitness 连续 m_anchor_patience 个 1Hz tick
+    //         或周期探测重锚成功 (对底图目标 fitness >= relocation_fitness)
+    int    m_anchor_patience = 5;
     bool   m_ever_localized = false;      // 至少成功定位过一次 (之后才允许开会话地图/锚定)
     // 先验图-only 匹配度(fitness_base)的状态; KD 树/目标云放在 .cpp 匿名命名空间(避免头文件引 pcl)
     bool   m_base_only_valid = false;
@@ -332,11 +336,13 @@ private:
     int    m_low_evidence_frames = 0;
     int    m_min_evidence_points = 150;    // 可见点数低于此 -> 本帧中性(不累计不健康)
     int    m_low_evidence_limit = 300;     // 中性最多持续这么多帧(约30s), 超过仍判不健康
-    int    m_anchor_close_patience = 10;  // 连续好锚帧 -> 关
+    double m_submap_enter_support = 0.70; // 对底图支撑低于此值 -> 连续 patience 帧后桥接
     // ---- 子图桥接模式 ----
     bool m_on_submap = false;             // true = 目标=子图, 边建图边定位
     int  m_probe_countdown = 0;           // 距下一次 overlay 探测重锚的帧数
     int  m_probe_period = 50;             // 探测周期 (帧, 5s @10Hz)
+    // 桥接支持的连续计数: weak = 底图支撑 < enter_support 的连续帧;
+    // ok = 支撑恢复的连续帧。名字沿用旧字段 (debugStatsJson 兼容), 语义已改为"底图支撑"。
     int    m_anchor_weak_streak = 0;
     int    m_anchor_ok_streak = 0;
     double m_session_map_radius = 25.0;

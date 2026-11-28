@@ -546,8 +546,7 @@ m_global_cfg.bbs_mount_roll_deg = getv<double>(gc, "bbs_mount_roll_deg", m_globa
         m_anchor_min_eig_ratio = getv<double>(subc, "anchor_min_eig_ratio", m_anchor_min_eig_ratio);
         m_anchor_patience = getv<int>(subc, "anchor_patience", m_anchor_patience);
         m_anchor_w_support_min = getv<double>(subc, "anchor_w_support_min", m_anchor_w_support_min);
-        m_anchor_close_patience =
-            getv<int>(subc, "anchor_close_patience", m_anchor_close_patience);
+        m_submap_enter_support = getv<double>(subc, "enter_support", m_submap_enter_support);
         m_session_map_radius = getv<double>(subc, "radius_m", m_session_map_radius);
         m_session_map_match_radius =
             getv<double>(subc, "match_radius_m", m_session_map_match_radius);
@@ -821,7 +820,8 @@ constexpr size_t kSaveSubChunk = 8192;
 
 // ============================================================================
 // cov_base 后台计算 (2026-11-28)
-//   扫描对工作图的覆盖率 = 底图 crop + KD 树 + 评估, 实测 85~100ms; 原来每 5 秒在
+//   base_support (原 cov_base) = 扫描对**底图**的覆盖率, 与 fitness 同口径 (0.3/0.3m),
+//   只是参考地图永远只取底图。底图 crop + KD 树 + 评估, 实测 85~100ms; 原来每 5 秒在
 //   跟踪线程的 post 阶段同步算一次。现在整块投给执行器 ("pool" lane) 或兼容后台线程,
 //   跟踪线程只读上一次的 m_cov_base (1 帧/几秒滞后, 锚定判据本来就按 streak 用)。
 //   与匹配目标同口径: 底图 crop 仍剔除判死体素 (用跟踪线程捕获的写时复制快照)。
@@ -901,12 +901,14 @@ void LocalizationPipeline::runCovBaseJob(const CovBaseJob& job) {
     }
     pcl::KdTreeFLANN<PointType> kdtree;
     kdtree.setInputCloud(base_crop);
-    CloudType::Ptr ds = voxelDownsample(job.scan, 0.4f);
+    // 与 fitness 同口径 (2026-11-29): 0.3 体素、0.3m 内点、全量不抽样。
+    // 原来 0.4 + <=3000 抽样只是历史成本控制; 后台每 5s 跑一次, 这点查询无所谓。
+    CloudType::Ptr ds = voxelDownsample(job.scan, 0.3f);
     if (!ds || ds->size() < 50) return;
     Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
     T.block<3, 3>(0, 0) = job.pose.rot;
     T.block<3, 1>(0, 3) = job.pose.trans;
-    const CoverageStats cs = evaluateCoverage(kdtree, *ds, T, job.inlier_dist);
+    const CoverageStats cs = evaluateCoverage(kdtree, *ds, T, job.inlier_dist, 1 << 30);
     if (job.generation != m_global_generation.load()) return;
     m_cov_base.store(cs.total > 0 ? cs.coverage : -1.0);
 }
@@ -3633,6 +3635,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 accepted = true;
                 m_on_submap = false;
                 m_maha_bypass_frames = 5;
+                std::cout << "[submap_state] BRIDGING->OPEN cause=probe_reanchor fit="
+                          << pr.fitness << std::endl;
                 diag::log('I', "LocPipeline",
                           "re-anchored to overlay (segment exit-correction applied)");
             }
@@ -4280,6 +4284,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     m_on_submap = false;
                     m_has_cached_target = false;
                     m_have_submap_anchor = false;
+                    std::cout << "[submap_state] BRIDGING->OPEN cause=base_recovered cov_base="
+                              << cov_base << " streak=" << m_cov_base_ok_streak << std::endl;
                     std::cout << "[anchor] base re-confirmed -> leave bridging (cov_base="
                               << cov_base << ")" << std::endl;
                 }
@@ -4290,6 +4296,7 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     m_on_submap = false;
                     m_has_cached_target = false;
                     m_have_submap_anchor = false;
+                    std::cout << "[submap_state] BRIDGING->OPEN cause=lost" << std::endl;
                     std::cout << "[anchor] LOST -> leave bridging (target = working map only)"
                               << std::endl;
                 }
@@ -4329,18 +4336,20 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                 ? m_maintainer->cachedPersistencyCoverage(&anchor_age, &persistency_pts)
                 : -1.0;
 
-                // ---- B 阶段(影子): 突变场景"会话地图"(session map) ----
-                // 锚质量 = 行业标准三件套: 本帧被接受 + inliers + JtJ 最小特征值比
-                // (Zhang, ICRA 2016). 弱锚持续 N 帧才开, 恢复 M 帧才关。
-                // persistency_cov 只作诊断, 不再参与判定。
-                const bool anchor_ok = anchorOk(res, accepted);
-                if (anchor_ok) {
+                // ---- B 阶段: 突变场景"会话地图"(session map) ----
+                // 进入/退出桥接统一成"对底图的支撑" (2026-11-29):
+                //   OPEN 态目标就是底图 crop, 所以 res.fitness 就是底图支撑;
+                //   退出用后台 cov_base(也只对底图) + 周期探测重锚(对底图目标)。
+                //   anchorOk(accepted/inliers/eig/w_support) 只留给写图门槛, 不再参与
+                //   桥接决策 —— 那套混合了接受门/EKF 内部判定, 是之前逻辑不清的原因。
+                const bool support_ok = (res.fitness >= m_submap_enter_support);
+                if (support_ok) {
                     ++m_anchor_ok_streak;
                     m_anchor_weak_streak = 0;
                 } else {
                     ++m_anchor_weak_streak;
                     m_anchor_ok_streak = 0;
-                    // overlay 顶不住 -> 切换目标到子图。
+                    // 底图支撑不足 -> 切换目标到底图+子图联合。
                     // **只切换, 不重建**: 子图从定位成功起就一直在建, 内容可信;
                     // 此刻 reset 会让子图变薄, 临时建图必然出错。
                     // ★必须确认子图机制已启用: session_map.enabled=false 时没有子图,
@@ -4351,7 +4360,10 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                         m_status.load() != LOST) {
                         m_on_submap = true;
                         m_probe_countdown = m_probe_period;
-                        m_has_cached_target = false;   // 下一帧目标切到子图
+                        m_has_cached_target = false;   // 下一帧目标切到底图+子图
+                        std::cout << "[submap_state] OPEN->BRIDGING cause=low_base_support fit="
+                                  << res.fitness << " streak=" << m_anchor_weak_streak
+                                  << " pts=" << m_session_map.size() << std::endl;
                         std::cout << "[anchor] switch to submap (bridging, pts="
                                   << m_session_map.size() << ")" << std::endl;
                     }
@@ -4367,29 +4379,32 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                     // "锚定在哪"由 fitness_base 决定(见上), 只影响 buildTarget 的目标组成:
                     //   底图匹配度高 -> 位姿锚在底图上;  底图匹配度低 -> 子图桥接并自更新。
                     if (!m_ever_localized) {
-                        if (m_session_map.active()) m_session_map.deactivate();
+                        if (m_session_map.active()) {
+                            m_session_map.deactivate();
+                            std::cout << "[submap_state] ->CLOSED cause=never_localized"
+                                      << std::endl;
+                        }
                     } else {
                         // 只要定位成功且覆盖率高, 就立刻开子图并**一直在建**:
                         // 底图某天完全变化锚不住时, 已建好的子图立即顶上 (边建图边定位),
                         // 而不是临时去建 (临时建的子图自身就是错的, 顶不住)。
-                        // ★开图/写图门槛用 lost_fitness(=accept.min_coverage, 0.6):
-                        //   overlay 关掉后目标只剩底图, fitness 天然 0.78~0.85
-                        //   (0.93 那种是带子图自证的分数), 拿 credible(0.85) 当门槛
-                        //   子图永远开不了(2026-11-25 实机: 无 [session_map] open)。
-                        //   补丁不进匹配目标(只有桥接才进), 写差了可被 zip-up/一致性观测兜住。
-                        // 桥接态放宽到 m_sm_write_fitness(0.35): 变化区里对先验的
-                        // fitness 天然只有 0.4~0.5, 若沿用 overlay 门槛, 就会死锁
-                        // —— 需要子图才能提分, 又因为分不够不让写子图(2026-11-24 实机:
-                        // submap_size 一直是 0, 桥接态等于没图可配, 30 帧后必丢)。
+                        // ★开图 (2026-11-29 统一): 只在"可信定位"时开 ——
+                        //   status==LOCALIZED && fitness >= credible_fitness(0.85)。
+                        //   不再要求本帧 accepted (那是接受/EKF 内部判定, 与"能不能开始
+                        //   累积子图"无关); 开图后常驻自更新。第一帧关键帧由下面的写入门槛
+                        //   (accepted+位姿稳+fitness>=write_bar) 决定, 不会写入脏帧。
+                        //   牺牲的场景: 开机就在剧变区 (fitness<0.85) 时不开图 -> 没有子图可
+                        //   桥接, 只能靠底图/重定位。这是 2026-11-29 讨论后的取舍。
                         const double write_bar = !m_on_submap
                                                      ? m_monitor_cfg.lost_fitness
                                                      : m_sm_write_fitness;
                         if (!m_session_map.active() && m_status.load() == LOCALIZED &&
-                            accepted && res.fitness >= write_bar) {
+                            res.fitness >= m_monitor_cfg.credible_fitness) {
                             m_session_map.reset(m_pose, now_s);
-                            std::cout << "[session_map] open ("
-                                      << (!m_on_submap ? "base anchored" : "bridging")
-                                      << ", building ahead) fitness=" << res.fitness << std::endl;
+                            std::cout << "[submap_state] CLOSED->OPEN fitness=" << res.fitness
+                                      << " (credible, building ahead)" << std::endl;
+                            std::cout << "[session_map] open (base anchored, building ahead) fitness="
+                                      << res.fitness << std::endl;
                         }
                         // 自更新: 匹配被接受且置信度达标就写 (锚定态也写, 供"底图低"时桥接)
                         // 与 overlay 同理: 用匹配位姿 res.pose 落点, 保证会话地图与先验
@@ -4492,7 +4507,8 @@ void LocalizationPipeline::onLidar(const LidarFrame& f) {
                   
                    << " persistency_anchor=" << m_maintainer_cfg.persistency_anchor
                    << " fitness=" << res.fitness
-                   << " anchor=" << (anchor_ok ? "OK" : "WEAK")
+                   // anchorOk 只用于展示/写图判据; 桥接决策用的是底图支撑 (fitness/cov_base)
+                   << " anchor=" << (anchorOk(res, accepted) ? "OK" : "WEAK")
                    << " inl=" << res.inliers
                    << " vis=" << res.visible
                     << " fitness_all=" << (res.fitness_all >= 0.0 ? res.fitness_all : -1.0)

@@ -521,14 +521,16 @@ localization:
 
   # ---- 健康监测 (monitor: threshold | windowed) —— ★联动(阈值链)见文件头 ----
     min_radius: 2.0 # 重定位候选最小半径(m)
-  # ---- B 阶段: 突变场景滚动子图 (影子) ----
-  # 高可信几何看不到(persistency_cov < open)时, 以当前位姿为锚开一个局部子图,
-  # 只在 odom/局部系里维持跟踪, 冻住 map->odom; 恢复后关闭。
-  # 当前 use_for_tracking=false: 只累积与打日志, 不改匹配行为。
+  # ---- B 阶段: 突变场景滚动子图 ----
+  # 状态机 (2026-11-29 统一):
+  #   OPEN:   首次 status==LOCALIZED && fitness >= credible_fitness(0.85) 才开图, 之后常驻自更新。
+  #   BRIDGING: 对底图支撑 (fitness) < submap.enter_support(0.70) 连续 anchor_patience 帧才切;
+  #            目标 = 底图 crop ∪ 子图 (只剔判死点, 不硬切纯子图)。
+  #   退出:   对底图覆盖率 cov_base >= credible(0.85) 连续 patience 个 1Hz tick,
+  #            或周期探测重锚 (对底图目标 fitness >= relocation_fitness), 或 LOST。
+  #   anchorOk(accepted/inliers/eig/w_support) 只用在写图门槛, 不再决定桥接。
   session_map:
-    enabled: true    # 2026-11-27 03:1x: 重新打开 (现场要求). 17:5x 暂关时在查桥接自证, 其根因
-                        #   (LOST/置信度/退出改由 cov_base 裁决) 已在 c39a36b 修复, 之后桥接路径一直没再验证.
-    use_for_tracking: false
+    enabled: true
     # 2026-11-24: 25 -> 35. 实测雷达点水平距离 p50=27.6 / p90=33.0 / p95=35.6,
     # 25m 只用上 36% 的点 (25~35m 的长墙对抑制 yaw 漂移最有用); 35m 覆盖 94.5%.
     radius_m: 35.0            # 存储半径: 子图保留机器人周围这么大的点
@@ -770,8 +772,9 @@ localization:
     anchor_min_inliers: 50     # 绝对下限(防 3 个点也当锚)
     anchor_min_ratio: 0.5      # 内点 / 匹配前可见点数(dynamic_filter 之前)
     anchor_min_eig_ratio: 0.001
-    anchor_patience: 5         # 连续弱锚帧 -> 开会话地图
-    anchor_close_patience: 10  # 连续好锚帧 -> 关
+    anchor_patience: 5         # 支撑不足/恢复的连续 1Hz 计数 -> 切/退桥接
+    enter_support: 0.70        # 对底图支撑 < 此值 -> 连续 anchor_patience 帧后桥接
+                               # (退出阈值用 monitor.credible_fitness=0.85, 见上)
 
   # ---- 统一地图存储底座 (L8): none | pcd | voxel ----
   # 设为 pcd/voxel 时, 支持 store 的配准器(pp_icp/p2p_icp)直接从 store 取近邻, 与存储解耦
