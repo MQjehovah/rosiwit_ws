@@ -7,7 +7,7 @@
     python3 tools/drive_report.py <日志> 02:39:40 --speed 0.6 0.95 --by-speed
 
 各节看什么 (背景见 docs/SCHEME_PERSISTENT_MAP.md §3.1):
-  侵蚀     被 w 账本判死的底图点。两个精确来源: 账本的 [maint] dead_base (全局判死体素总数, 每 100 帧
+  侵蚀     被 w 账本判死的工作图点 (底图 + 已升格提交点)。两个精确来源: 账本的 [maint] dead_base (全局判死体素总数, 每 100 帧
            一条) 和 [TargetBuild] (每次建目标时这份裁剪里剔除了多少点)。健康: ~0 且不随时间涨;
            涨到上千还在线性增长 = 账本在删真实的墙。旧日志没有这两行时回退到近似配对 (见 report_erosion)。
   fitness  按主航向往返切趟、只取行驶中的直行帧, 在同一速度段内逐趟对比。fitness 是扫描侧统计的 (有
@@ -278,17 +278,18 @@ def lap_shape(poses, n_laps):
 
 
 def report_erosion(log):
-    section('侵蚀 (被 w 账本判死的底图点)')
-    # 1) 全局: 账本自己记的判死底图体素总数 (精确; 每 100 帧一条, 统计区间之前的也收, 因为是累计量)
+    section('侵蚀 (被 w 账本判死的工作图点)')
+    # 1) 全局: 账本自己记的判死体素总数 (底图 + 已升格进工作图的提交点; 精确;
+    #    每 100 帧一条, 统计区间之前的也收, 因为是累计量)
     if log.dead:
         dead = log.dead
-        print('判死的底图体素总数 (账本 [maint], 每 100 帧一条): %d (%s) -> %d (%s)%s' % (
+        print('判死的工作图体素总数 (账本 [maint], 每 100 帧一条): %d (%s) -> %d (%s)%s' % (
             dead[0][1], hms(dead[0][0]), dead[-1][1], hms(dead[-1][0]),
             ', 占底图 %.2f%%' % (100.0 * dead[-1][1] / log.base_voxels) if log.base_voxels else ''))
         print('  ' + '  '.join('%s:%d' % (hms(t), d) for t, d in sampled(dead, 12)))
         moving = [d for t, d in dead if log.nearest_pose(t) is not None and log.nearest_pose(t)['v'] > 0.1]
         if len(moving) >= 4 and moving[-1] - moving[0] > 500:
-            print('  [警告] 行驶期间判死数持续增长 (+%d): 账本在删底图。真有东西被挪走时应该很快饱和, '
+            print('  [警告] 行驶期间判死数持续增长 (+%d): 账本在删工作图。真有东西被挪走时应该很快饱和, '
                   '线性增长 = 在删真实的墙' % (moving[-1] - moving[0]))
     # 2) 每次建目标: 这份裁剪里剔除了多少 (精确)
     if log.tbuilds:
@@ -305,7 +306,8 @@ def report_erosion(log):
         # 近似 (旧日志): [LocProbe] 是每 50 次调用采样一条的"裁剪点数", 目标按 15m 重建半径滚动 ——
         # 它和之后某帧的 target_points 常常不是同一份裁剪, 差值带有位置造成的误差 (几个百分点)。
         print('近似 (旧日志, 没有 [TargetBuild]): 采样的裁剪点数 -> 1~20s 后目标点数, 两个数可能来自不同位置的裁剪')
-        print('  (11-27 新账本那趟, 这个近似值给出 "判死 47~1109", 而落盘文件逐点对比的确切结果是 0 —— 以 tools/wmap_diff.py 为准)')
+        print('  (11-27 那趟的近似值给出 "判死 47~1109", 但文件逐点对比是 0: 当时判死点落盘时被写成 128'
+              ' (11-28 修复, 见 docs/HANDOVER_2026-11-27.md §1.6); 现在以 tools/wmap_diff.py 为准)')
         rows = []
         for b in log.builds:
             d = next((d for d in log.drops if b['t'] + 1.0 <= d['t'] <= b['t'] + 20.0), None)

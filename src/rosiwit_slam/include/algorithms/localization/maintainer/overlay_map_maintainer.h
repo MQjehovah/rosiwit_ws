@@ -240,8 +240,9 @@ private:
     double m_sigma_hit = 0.25, m_sigma_free = 0.05, m_r_hit = 0.3, m_r_free = 0.06;
     /// 底图云是否已是"工作图"(intensity = w, 已烘焙之前的 overlay)
     bool m_base_embedded = false;
-    /// 底图体素 w 衰减到 0 的集合: 匹配目标里要剔除这些体素里的底图点
-    /// (墙挪了/拆了 = 射线穿过 -> w 递减为 0)。落盘时也剔除, 跨会话持久。
+    /// 工作图里 w 衰减到 0 的体素集合 (底图点 + 后来升格进工作图的提交点):
+    /// 匹配目标里剔除这些体素里的点 (墙挪了/拆了 = 射线穿过 -> w 递减为 0),
+    /// 落盘时同样按它丢弃 -> 跨会话持久。
     std::unordered_set<int64_t> m_dead_base;
     std::atomic<bool> m_carve_enabled{true};   // 静止不雕刻
     // ★视角编号 (2026-11-26 根因修复): view 计票单位必须显式化 —— 位姿移动超过

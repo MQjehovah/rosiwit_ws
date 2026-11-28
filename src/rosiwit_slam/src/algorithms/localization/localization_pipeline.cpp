@@ -828,7 +828,7 @@ void LocalizationPipeline::mapSaveWorker() {
         const auto t_start = clk::now();
         double ms_vox = 0.0, ms_ann = 0.0, ms_merge = 0.0, ms_io = 0.0;
         int ann_frames = 0;
-        size_t n_total = 0, n_ov = 0;
+        size_t n_total = 0, n_ov = 0, n_drop = 0;
         bool ok = false;
         std::string err;
         const char* stage = "voxel";
@@ -874,8 +874,10 @@ void LocalizationPipeline::mapSaveWorker() {
                 }
                 if (!handover) throw std::runtime_error("aborted");
                 const auto t_merge = clk::now();
-                // (4) 压缩 (去掉 w<=0 的点): 不需要账本
+                // (4) 压缩 (去掉 w<=0 / 判死的点): 不需要账本
+                const size_t n_base_before_compact = base_snap->size();
                 IMapMaintainer::compactAnnotated(*base_snap);
+                n_drop = n_base_before_compact - base_snap->size();
                 if (ov && !ov->empty()) {
                     suppressBaseByOverlay(base_snap, ov, vox);   // 叠加处由 overlay 点取代底图点
                     *base_snap += *ov;
@@ -904,7 +906,7 @@ void LocalizationPipeline::mapSaveWorker() {
             }
             if (ok) {
                 std::cout << "[working_map] saved: " << working_map << " (" << n_total
-                          << " pts; overlay=" << n_ov << " vox_ms=" << ms_vox
+                          << " pts; overlay=" << n_ov << " drop=" << n_drop << " vox_ms=" << ms_vox
                           << " ann_ms=" << ms_ann << " ann_frames=" << ann_frames
                           << " merge_ms=" << ms_merge << " io_ms=" << ms_io << " bg=1)" << std::endl;
             } else if (err == "aborted") {

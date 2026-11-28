@@ -148,6 +148,9 @@ void OverlayMapMaintainer::addPoint(const Eigen::Vector3d& p) {
         voteHit(vk, 0.0);           // 重复观测 -> 按计票单位累加
         return;
     }
+    // 这个体素之前被判死 (点已从匹配目标里剔除), 现在又真的长出结构: 撤销判死,
+    // 否则落盘时会按 m_dead_base 把刚提交的点也一起丢掉。
+    if (m_dead_base.erase(vk) != 0) m_dead_dirty = true;
     m_voxel_seen[vk] = m_frame;
     PersistencyVoxel& pv = m_persistency[vk];           // 新体素从 0 起, 本次观测即一次 hit
     setRep(pv, p, vx, vy, vz);                         // 代表点 = 提交时的扫描端点
@@ -402,8 +405,13 @@ void OverlayMapMaintainer::applyFreeVotes() {
             m_voxel_seen.erase(kv.first);
             const int64_t k = kv.first;
             occClear(signExtend21(k >> 42), signExtend21((k >> 21) & 0x1FFFFF), signExtend21(k & 0x1FFFFF));
-            if (from_base) { m_dead_base.insert(kv.first); m_dead_dirty = true; }   // 底图体素: 目标里剔除
-            else m_pending_remove.insert(kv.first);        // overlay 体素: 点从 m_cells 回收
+            // 判死 = 工作图里这个体素上的点不再参与匹配、落盘时丢弃。底图点和
+            // "提交时升格进工作图"的点都要记: 后者除了在 m_cells 里回收, 还有一份
+            // 拷贝已经追加进工作图云 (addPoint -> m_base_raw), 不记就会在落盘时
+            // 按 base_voxel_w 复活 (见 annotateBaseWeightsRange)。
+            m_dead_base.insert(kv.first);
+            m_dead_dirty = true;
+            if (!from_base) m_pending_remove.insert(kv.first);   // overlay: 还要从 m_cells 回收
         }
     }
     m_free_touch.clear();
@@ -706,8 +714,9 @@ void OverlayMapMaintainer::collectNovel(const PoseStamped& pose, const CloudType
                   << " cluster_rej=" << m_dbg_cluster
                   << " votes=" << m_novel_votes
                   << " commits=" << m_novel_committed
-                  // 判死的底图体素总数 (全局, 精确): 账本是否在侵蚀底图的直接度量
-                  // (tools/drive_report.py)。行驶几分钟就从 0 涨到上万 = 在删真实的墙。
+                  // 判死的工作图体素总数 (底图 + 已升格进工作图的提交点; 全局, 精确):
+                  // 账本是否在侵蚀工作图的直接度量 (tools/drive_report.py)。
+                  // 行驶几分钟就从 0 涨到上万 = 在删真实的墙。
                   << " dead_base=" << m_dead_base.size() << std::endl;
     };
     if (novel.empty()) {
@@ -974,6 +983,7 @@ bool OverlayMapMaintainer::loadLocked(const std::string& path) {
 // ---- 统一工作图: 一个文件同时装几何和权重 (intensity = w) ----
 // 落盘前调用: 给底图点写上它所在体素的 w, 丢弃 w==0 的点 -> 跨会话"删除"生效,
 // 不需要额外的 sidecar 文件 (w 就在 PCD 里, 和 overlay 的表示完全一致)。
+// 判死体素已经不在账本里 (key 在 m_dead_base), 这里按判死集合打删除标记, 见下面注释。
 void OverlayMapMaintainer::annotateBaseWeightsRange(CloudType& cloud, size_t begin,
                                                     size_t end) const {
     // 只写 intensity, 不改点数: 调用方可以把它切成有界的小片分多次调用 (工作图落盘:
@@ -993,6 +1003,15 @@ void OverlayMapMaintainer::annotateBaseWeightsRange(CloudType& cloud, size_t beg
         const int64_t vk = voxelKey(static_cast<int>(std::floor(p.x / m_voxel)),
                                     static_cast<int>(std::floor(p.y / m_voxel)),
                                     static_cast<int>(std::floor(p.z / m_voxel)));
+        // ★判死的体素在 applyFreeVotes 里已经从 m_persistency 里 erase (只留 key 在
+        //   m_dead_base), 所以这里必须先查判死集合。否则查不到 w -> 回落到
+        //   base_voxel_w(128), 把已经删除的底图点当成"没观测过"又写回工作图。
+        //   (2026-11-28 实机: 账本判死 25,592 个体素, 整点落盘 0 点被丢弃、文件里
+        //    一个 w<=0 都没有, 重启后这些点全部以 128 复活。)
+        if (m_dead_base.count(vk) != 0) {
+            p.intensity = kAnnotateDrop;
+            continue;
+        }
         int w = w_default;
         auto it = m_persistency.find(vk);
         if (it != m_persistency.end()) w = it->second.w;

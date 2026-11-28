@@ -598,6 +598,74 @@ TEST(OverlayMaintainerWeights, AnnotateBaseWeightsInPlaceKeepsSemantics)
     EXPECT_EQ(n_default, kMany);
 }
 
+// 2026-11-28 (判死不落盘修复的配套): 判死体素在死亡时已经从 m_persistency 里 erase,
+// 只剩 key 在 m_dead_base。annotateBaseWeightsRange 必须查判死集合, 否则查不到 w
+// 就回落到 base_voxel_w=128, 把已经删除的底图点当"没观测过"又写回工作图。
+// 实机症状: 账本判死 25,592 个体素, 整点落盘 0 点被丢弃, 重启后全部复活。
+TEST(OverlayMaintainerWeights, DeadBasePointIsDroppedByAnnotate)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig cfg = testCfg();
+    cfg.persistency_unit = 0;          // 每帧计票 (每帧 -8)
+    cfg.persistency_hit_gain = 8;
+    m.configure(cfg);
+
+    // 底图两点: (1,0,0) 会被 +x 射线的自由证据判死; (-1,0,0) 在射线反方向, 保持存活
+    m.setBaseMap("test", mkCloud({V3D(1.0, 0.0, 0.0), V3D(-1.0, 0.0, 0.0)}));
+    ASSERT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), 128);
+
+    const PoseStamped pose = mkPose(0.0);
+    const MatchResult mr = lowFitnessMatch();
+    auto far = mkCloud({V3D(5.0, 0.0, 0.0)});
+    for (int i = 0; i < 16 && m.persistencyAt(V3D(1.0, 0.0, 0.0)) >= 0; ++i) {
+        m.onLocalized(pose, far, mr, true);
+    }
+    ASSERT_EQ(m.persistencyAt(V3D(1.0, 0.0, 0.0)), -1) << "16 帧自由证据后底图点应判死";
+
+    CloudType::Ptr work = mkCloud({V3D(1.0, 0.0, 0.0), V3D(-1.0, 0.0, 0.0)});
+    m.annotateBaseWeights(*work);
+
+    ASSERT_EQ(work->size(), 1u) << "判死的底图点必须从工作图里丢弃";
+    EXPECT_NEAR(work->points[0].x, -1.0f, 1e-6);
+    EXPECT_FLOAT_EQ(work->points[0].intensity, 128.0f);
+}
+
+// 同一处遗漏的另一半: 提交时 addPoint 会把点同时写进 overlay 分块 (m_cells) 和
+// 工作图云 (m_base_raw, 与管道 m_map 同一指针)。判死时如果只记 overlay 的
+// m_pending_remove, 工作图云里的那份拷贝就会在落盘时按 128 复活 —— 新结构只增不减。
+TEST(OverlayMaintainerWeights, DeadCommittedPointIsDroppedByAnnotate)
+{
+    OverlayMapMaintainer m;
+    MaintainerConfig cfg = testCfg();
+    cfg.persistency_unit = 0;          // 每帧计票
+    cfg.persistency_hit_gain = 8;
+    cfg.persist_hits = 1;              // 单帧提交
+    m.configure(cfg);
+
+    // 工作图 = 两个底图点; 提交点会经 addPoint 追加进同一张云。
+    // (5,0,0) 上放一个底图点, 让后续射线端点落在底图上 -> 不再触发新提交。
+    CloudType::Ptr working = mkCloud({V3D(-1.0, 0.0, 0.0), V3D(5.0, 0.0, 0.0)});
+    m.setBaseMap("test", working);
+
+    const PoseStamped pose = mkPose(0.0);
+    const MatchResult mr = lowFitnessMatch();
+
+    // 1) (2,0,0) 新结构提交 -> 升格进工作图, 账本 w=8
+    m.onLocalized(pose, mkCloud({V3D(2.0, 0.0, 0.0)}), mr, true);
+    ASSERT_EQ(working->size(), 3u) << "提交点应升格进工作图云";
+    ASSERT_EQ(m.persistencyAt(V3D(2.0, 0.0, 0.0)), 8);
+
+    // 2) 射线穿过 (2,0,0), 端点落在 (5,0,0) 的底图上 -> w 8 -> 0, 判死
+    m.onLocalized(pose, mkCloud({V3D(5.0, 0.0, 0.0)}), mr, true);
+    ASSERT_EQ(m.persistencyAt(V3D(2.0, 0.0, 0.0)), -1) << "提交点应被判死";
+
+    // 3) 落盘标注: 工作图云里那份已判死的提交点拷贝必须被丢弃, 两个底图点保留
+    m.annotateBaseWeights(*working);
+    ASSERT_EQ(working->size(), 2u) << "判死的提交点也必须从工作图里丢弃";
+    for (const PointType& p : working->points)
+        EXPECT_GT(std::fabs(p.x - 2.0f), 0.1f) << "判死提交点的拷贝不应留存";
+}
+
 // 并发冒烟: 标注 (整云一次调用, 段内持锁) 的同时另一线程持续写账本 —— 不死锁 / 不崩溃 /
 // 结果自洽。修复前 annotateBaseWeights 完全不持锁, 与 onLocalized 是数据竞争 (过去它
 // 恰好只在跟踪线程调用才没出事)。生产路径上账本只由跟踪线程读 (见分片测试), 这里只
