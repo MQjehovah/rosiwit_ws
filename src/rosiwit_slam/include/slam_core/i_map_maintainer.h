@@ -22,7 +22,7 @@ public:
 
     virtual std::string name() const = 0;
 
-    /// 判死体素集的写时复制快照 (不变内容, 任何线程可读)。cov_base 后台计算用它
+    /// 判死体素集的写时复制快照 (不变内容, 任何线程可读)。fitness_base 后台探测用它
     /// 过滤底图点, 避免在后台任务里访问维护器对象。
     virtual std::shared_ptr<const DeadSet> deadBaseSnapshot() const { return nullptr; }
 

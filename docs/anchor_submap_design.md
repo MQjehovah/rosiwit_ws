@@ -8,7 +8,7 @@
 ## 0. 一句话
 
 **overlay 是独立的计票/雕刻机制（每帧/view/会话），子图只负责"底图锚不住时"维持瞬时定位；
-锚定判据是对底图（不含子图/overlay）的覆盖率 `cov_base`，两端（初值/输出）用同一条 TF 互逆换算。**
+锚定判据是对底图（不含子图/overlay）的支撑 `fitness_base`，两端（初值/输出）用同一条 TF 互逆换算。**
 
 ---
 
@@ -39,35 +39,47 @@ overlay (持久变化层) 独立机制, 自带策略: 每帧/view/会话在 onLo
                      底图锚不住时参与匹配(桥接), 边建图边定位。
 ```
 
-### 2.1 锚定状态机（2026-11-29 统一版）
+### 2.1 锚定状态机（2026-11-29 最终版）
 
-判据 = **对底图的支撑**，只用一个口径（0.3m 体素、0.3m 内点、全量不抽样）：
+判据 = **对底图的支撑**，只用一个口径（0.3m 体素、0.3m 内点、全量不抽样）。
+进入用 `monitor.degraded_fitness(0.70)`，退出用 `monitor.credible_fitness(0.85)` ——
+阈值链 `lost(0.60) < degraded(0.70) < credible(0.85) ≤ relocation(0.85)` 启动时校验。
+（不复用 `relocation_fitness` 作进入线：它是对全局重定位的接受线，语义不同。）
 
 - OPEN 态：匹配目标就是底图 crop，`fitness` 即底图支撑；
-- BRIDGING 态：后台 `cov_base` 只对底图算（同 0.3 口径），是诚实的退出/健康判据；
-  `fitness` 此时对联合目标，是自证分，只做显示。
+- BRIDGING 态：后台每 1s 对**底图**做一次 GICP（专用 matcher、80ms 预算），
+  给出 `fitness_base`（优化后位姿对底图的支撑，诚实、不含子图/不自证）。
+  跟踪线程只在帧边界采纳重锚提案，零开销。
 
 ```
 CLOSED → OPEN → BRIDGING
 
 CLOSED→OPEN:   首次 status==LOCALIZED && fitness >= credible_fitness(0.85)
                 (不再要求本帧 accepted —— 开图只是开始累积)
-OPEN→BRIDGING: fitness < enter_support(0.70) 连续 anchor_patience(5) 个 1Hz tick
+OPEN→BRIDGING: fitness < degraded_fitness(0.70) 连续 anchor_patience(5) 个 1Hz tick
                 && 子图 >=3000 点 && status != LOST
                 目标 = 底图 crop(实时剔判死点) ∪ 子图; 写入门槛 0.35 + 位姿稳
-BRIDGING→OPEN: ① 周期探测重锚: 对底图目标 fitness >= relocation_fitness(0.70)
-               ② cov_base >= credible(0.85) 连续 patience 个 1Hz tick
-               ③ LOST: 回底图网格恢复(子图冻结, 不参与)
+BRIDGING:      后台探测重锚提案 (每 1s):
+                  fitness_base >= credible(0.85) -> 段级修正 + 退桥接 -> OPEN
+                  [0.70, 0.85)                  -> 只做一次段级修正 (位姿+子图一起),
+                                                   保持桥接; 后续中间提案不再搬位姿
+                  fitness_base < lost(0.60) 持续 -> 桥接不健康 -> LOST 路径
+BRIDGING→OPEN: LOST: 回底图网格恢复(子图冻结/退出, 不参与)
 ```
 
 要点：
 
-- `anchorOk`（accepted/inliers/eig/w_support）**只用于写图门槛**，不再决定桥接；
-  桥接决策只用“底图支撑”一个指标 + 迟滞。
+- 只有一条退出路径（后台探测重锚）。被动覆盖率在"位姿已漂"的场景永远低
+  （扫描整体错位 > 0.3m 内点阈值），探测允许先把位姿拉回来再评分，是它的超集。
+- 提案里带探测时的输入位姿；采纳时取世界系修正量 `C = T_out · T_in⁻¹` 作用到当前位姿，
+  抵消后台 1s 周期内的机器人运动（不能直接覆盖 1s 前的绝对位姿）。
+- `anchorOk`（accepted/inliers/eig/w_support）**只用于写图门槛**，不再决定桥接。
 - 桥接目标**保留底图**：判死点已实时剔除，剩下的是仍有效的绝对参照；不硬切纯子图
   （纯子图 = 局部相对配对，两次探测重锚之间漂移不受约束）。
 - 子图首次开图后**常驻**，不因退出桥接而关闭。
-- 已删除死配置：`submap.anchor_close_patience`、`session_map.use_for_tracking`。
+- `fitness_base` 同时用于桥接健康检查（< lost 持续 -> LOST）与 UI 诚实置信度。
+- 已删除死配置：`submap.enter_support`、`submap.anchor_close_patience`、
+  `session_map.use_for_tracking`。
 
 ### 2.2 三个层次各自的"账本"
 
@@ -143,7 +155,7 @@ m_pose = out_pose → snapshot          ← 发布侧 composeRightInv(fp←lidar
 ## 5. 遗留（都有记录，未修）
 
 1. **overlay 计票依赖 `anchorOk(res)`**（inliers+特征值比），在桥接态是"对着含子图的
-   目标"算的 —— 自引用风险仍在。若要彻底，`anchorOk` 也应改用 cov_base 口径。
+   目标"算的 —— 自引用风险仍在。若要彻底，`anchorOk` 也应改用 fitness_base 口径。
 2. **`[planar]` 逐帧 z 约束未生效**：核心位姿带安装 pitch（nm_z≈0.85），`scan_plane`
    每帧 `jump`。当前 z 靠初值+底图锚定撑住；若底图长期失效需要桥接长时间工作，
    需把约束也换到与位姿一致的系。
@@ -159,10 +171,11 @@ m_pose = out_pose → snapshot          ← 发布侧 composeRightInv(fp←lidar
 |---|---|---|
 | `session_map.enabled` | true | 子图开关（总闸） |
 | `session_map.radius_m / voxel / max_points` | 25 / 0.15 / 30 万 | 子图范围/去重/容量 |
-| `localization.monitor.credible_fitness` | 0.75 | cov_base/fitness 的"高"线 |
-| `matcher.dynamic_dist` | 0.4 | 底图离群点删除门限（只影响优化，不影响 cov_base 分母） |
-| `matcher.inlier_dist` | 0.3 | "配上"的距离判据（cov_base 用它） |
-| `anchor.close_patience` | - | cov_base 达标持续 N 帧才切回底图 |
+| `localization.monitor.degraded_fitness` | 0.70 | 对底图支撑的降级线 -> 进入桥接 |
+| `localization.monitor.credible_fitness` | 0.75 | fitness_base/fitness 的"高"线 (退出桥接) |
+| `matcher.dynamic_dist` | 0.4 | 底图离群点删除门限（只影响优化，不影响 fitness_base 分母） |
+| `matcher.inlier_dist` | 0.3 | "配上"的距离判据（fitness_base 用它） |
+| `submap.anchor_patience` | 5 | 支撑不足持续 N 个 1Hz tick 才进入桥接 |
 | `init_pose_frame` | lidar | 初值换算目标系（私有参数） |
 
 ## 7. 日志速查
@@ -170,8 +183,8 @@ m_pose = out_pose → snapshot          ← 发布侧 composeRightInv(fp←lidar
 | 日志 | 含义 |
 |---|---|
 | `[slam_algo] init pose footprint->lidar: z 0.000->0.984 (+0.984) yaw ...` | 初值 TF 换算结果 |
-| `[quality] ... cov_base=1.000 ... session_map=1 size=...` | 底图覆盖率/锚定状态/子图规模 |
-| `[anchor] switch to BASE/submap cov_base=...` | 锚定切换 |
+| `[quality] ... fitness_base=1.000 ... session_map=1 size=...` | 底图支撑/锚定状态/子图规模 |
+| `[submap_state] OPEN->BRIDGING / BRIDGING->OPEN cause=...` | 锚定切换 |
 | `[session_map] open (base anchored, building ahead)` | 子图开建 |
 | `[planar] why=... up_z=... nm_z=... rpy=(...) F=... dz=...` | 逐帧平面约束诊断 |
 | `[pose_cmp] match=(..) guess=(..) out=(..) / after_planar` | 位姿四点追踪（33° 定位用） |

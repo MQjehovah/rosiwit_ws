@@ -60,7 +60,7 @@ void Ros1SlamInterface::startPub() {
     if (scan_wanted) scheduleScanJob();
 
     // 1Hz 调试出口: 定位状态 JSON (独立于 session_map 订阅者; 有订阅就发)。
-    //   内容: 是否桥接(on_submap)、目标构成(target_source)、目标点数、cov_base、
+    //   内容: 是否桥接(on_submap)、目标构成(target_source)、目标点数、fitness_base、
     //   anchor 连续计数、当前匹配 fitness/可见/内点、session_map 大小、位姿。
     if (debug_publish_ && loc_stats_puber_.getNumSubscribers() > 0) {
         static ros::Time last_loc_stats_pub;

@@ -107,7 +107,7 @@ class Log(object):
         # 地图更新线程 (账本写入, 2026-11-27 起不在跟踪线程上): 任务耗时 / 丢弃的观测 / 排队
         rx_mupd = re.compile(r'mapupd_ms=' + NUM + r' mapupd_ema=' + NUM + r' mapupd_max=' + NUM +
                              r' mapupd_drop=(\d+) mapupd_fail=(\d+) mapupd_q=(\d+)')
-        rx_qual = re.compile(r'\[quality\].*?cov_base=' + NUM + r'.*?novel_votes=(\d+) novel_commits=(\d+)'
+        rx_qual = re.compile(r'\[quality\].*?fitness_base=' + NUM + r'.*?novel_votes=(\d+) novel_commits=(\d+)'
                              r'.*?anchor=(\w+) inl=(\d+) vis=(\d+)')
         rx_build = re.compile(r'\[LocProbe\] local_map_points=(\d+) pose=\(' + NUM + r',\s*' + NUM + r'\)')
         rx_tbuild = re.compile(r'\[TargetBuild\] pre=(\d+) removed=(\d+) pose=\(' + NUM + r',\s*' + NUM + r'\)')
@@ -144,7 +144,7 @@ class Log(object):
                     m = rx_qual.search(line)
                     if m:
                         mu = rx_mupd.search(line)
-                        self.quals.append(dict(t=t, cov=float(m.group(1)), nc=int(m.group(3)),
+                        self.quals.append(dict(t=t, fbase=float(m.group(1)), nc=int(m.group(3)),
                                                anchor=m.group(4), inl=int(m.group(5)), vis=int(m.group(6)),
                                                w=self.wr,
                                                mu=(float(mu.group(2)), float(mu.group(3)), int(mu.group(4)),
@@ -338,10 +338,10 @@ def report_fitness(log, ps, n_laps, opts):
     for r in log.quals:
         p = log.nearest_pose(r['t'])
         if p is not None and r['vis'] and r['w'] < 0.12 and p['v'] > 0.15:
-            items.append((p['lap'], p['v'], r['inl'] / r['vis'], r['cov'], r['nc'], r['anchor'] != 'OK'))
+            items.append((p['lap'], p['v'], r['inl'] / r['vis'], r['fbase'], r['nc'], r['anchor'] != 'OK'))
 
     def band_stats(a0, a1):
-        """速度段 [a0, a1) 内每趟的 (帧数, 平均速度, fitness, cov_base, 提交, anchor 弱帧数)。"""
+        """速度段 [a0, a1) 内每趟的 (帧数, 平均速度, fitness, fitness_base, 提交, anchor 弱帧数)。"""
         st = {}
         for k in range(n_laps):
             sel = [it for it in items if it[0] == k and a0 <= it[1] < a1]

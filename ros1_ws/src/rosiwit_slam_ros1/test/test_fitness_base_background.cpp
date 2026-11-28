@@ -1,10 +1,10 @@
-// test/test_cov_base_background.cpp
-// cov_base (扫描对工作图的覆盖率, 锚定判据) 在后台计算 (2026-11-28) 的契约。走真实管线:
-//   1. 注入执行器 (生产路径: 线程池的 "pool" 通道)   -> 喂 5 秒以上的帧之后, 调试 JSON 里的 cov_base 从 -1
-//      变成一个合理的覆盖率, 且是在**后台线程**上算的 (跟踪线程的帧里不再出现这笔耗时);
-//   2. 不注入执行器 (兼容路径: 后台诊断线程)          -> 同样的结果;
-//   3. 管线析构时在途/待处理的 cov_base 任务被安全收掉 (不挂、不崩);
-//   4. cov_base 的值与在同一份快照上同步算出来的覆盖率一致 (后台算的不是别的量)。
+// test/test_fitness_base_background.cpp
+// fitness_base (只对底图的支撑, 桥接退出/健康判据) 后台探测的契约 (2026-11-29):
+//   1. 注入执行器 (生产路径: 线程池的 "pool" 通道)   -> 进入 LOCALIZED 后 1Hz 投递,
+//      调试 JSON 里的 fitness_base 从 -1 变成合理值, 且是在**后台线程**上算的;
+//   2. 不注入执行器 (兼容路径: 后台线程)             -> 同样的结果;
+//   3. 管线析构时在途/待处理的探测被安全收掉 (不挂、不崩);
+//   4. 值是"对底图做一次 GICP 后的覆盖率", OPEN 态与 fitness 同参考, 应接近 1。
 #include <gtest/gtest.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/common/transforms.h>
@@ -78,19 +78,19 @@ CloudType::Ptr scanFromMap(const CloudType::Ptr& map, const PoseStamped& T_true)
 
 std::string makeTempDir()
 {
-    const std::string base = "/tmp/cov_base_test_XXXXXX";
+    const std::string base = "/tmp/fitness_base_test_XXXXXX";
     std::vector<char> buf(base.begin(), base.end());
     buf.push_back('\0');
     const char* d = ::mkdtemp(buf.data());
     return d ? std::string(d) : std::string("/tmp");
 }
 
-// 调试 JSON 里 "cov_base":<值> 的数值
-bool covBaseFromJson(const std::string& js, double& out)
+// 调试 JSON 里 "fitness_base":<值> 的数值
+bool fitnessBaseFromJson(const std::string& js, double& out)
 {
-    const size_t k = js.find("\"cov_base\":");
+    const size_t k = js.find("\"fitness_base\":");
     if (k == std::string::npos) return false;
-    out = std::atof(js.c_str() + k + 11);
+    out = std::atof(js.c_str() + k + 15);
     return true;
 }
 
@@ -153,11 +153,11 @@ void feed(LocalizationPipeline& lp, const Fixture& fx, int n, int* localized, do
     }
 }
 
-// 等后台把 cov_base 算出来 (最多 5s 墙钟)
-bool waitCovBase(LocalizationPipeline& lp, double& out)
+// 等后台把 fitness_base 算出来 (最多 5s 墙钟)
+bool waitFitnessBase(LocalizationPipeline& lp, double& out)
 {
     for (int i = 0; i < 250; ++i) {
-        if (covBaseFromJson(lp.debugStatsJson(), out) && out >= 0.0) return true;
+        if (fitnessBaseFromJson(lp.debugStatsJson(), out) && out >= 0.0) return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     return false;
@@ -165,7 +165,7 @@ bool waitCovBase(LocalizationPipeline& lp, double& out)
 
 }  // namespace
 
-TEST(CovBaseBackground, ComputedOnExecutorPool)
+TEST(FitnessBaseProbe, ComputedOnExecutorPool)
 {
     Fixture fx;
     rosiwit_common::ThreadPool pool({{"pool", 1, 16, rosiwit_common::LaneOverflow::kReject}});
@@ -177,16 +177,16 @@ TEST(CovBaseBackground, ComputedOnExecutorPool)
         lp.setExecutor(&pool);
         lp.setMap(fx.pcd);
         lp.setInitPose(mkPose(3.0, 3.0, 0.0));
-        feed(lp, fx, 80, &localized, nullptr);   // 8 秒: 第 5 秒投递一次
-        ASSERT_TRUE(waitCovBase(lp, cov)) << "8 秒后 cov_base 仍是 -1 (没有被算出来): " << lp.debugStatsJson();
+        feed(lp, fx, 80, &localized, nullptr);   // 8 秒: LOCALIZED 后每 1s 投递一次
+        ASSERT_TRUE(waitFitnessBase(lp, cov)) << "8 秒后 fitness_base 仍是 -1 (没有被算出来): " << lp.debugStatsJson();
     }
     pool.shutdown(true);
     EXPECT_GE(localized, 10) << "合成序列没有稳定进入 LOCALIZED";
     EXPECT_GE(cov, 0.9) << "在真值位姿上对工作图的覆盖率应接近 1, 实际 " << cov;
-    std::cout << "[cov_base] 执行器路径: cov_base=" << cov << std::endl;
+    std::cout << "[fitness_base] 执行器路径: fitness_base=" << cov << std::endl;
 }
 
-TEST(CovBaseBackground, ComputedOnCompatThreadWithoutExecutor)
+TEST(FitnessBaseProbe, ComputedOnCompatThreadWithoutExecutor)
 {
     Fixture fx;
     double cov = -1.0;
@@ -197,13 +197,13 @@ TEST(CovBaseBackground, ComputedOnCompatThreadWithoutExecutor)
         lp.setMap(fx.pcd);
         lp.setInitPose(mkPose(3.0, 3.0, 0.0));
         feed(lp, fx, 80, &localized, nullptr);
-        ASSERT_TRUE(waitCovBase(lp, cov)) << "8 秒后 cov_base 仍是 -1: " << lp.debugStatsJson();
+        ASSERT_TRUE(waitFitnessBase(lp, cov)) << "8 秒后 fitness_base 仍是 -1: " << lp.debugStatsJson();
     }
     EXPECT_GE(cov, 0.9) << "兼容路径: 覆盖率应接近 1, 实际 " << cov;
-    std::cout << "[cov_base] 兼容路径: cov_base=" << cov << std::endl;
+    std::cout << "[fitness_base] 兼容路径: fitness_base=" << cov << std::endl;
 }
 
-TEST(CovBaseBackground, DestructorIsSafeWhileJobInFlight)
+TEST(FitnessBaseProbe, DestructorIsSafeWhileJobInFlight)
 {
     Fixture fx;
     rosiwit_common::ThreadPool pool({{"pool", 1, 16, rosiwit_common::LaneOverflow::kReject}});
@@ -214,13 +214,13 @@ TEST(CovBaseBackground, DestructorIsSafeWhileJobInFlight)
         lp.setMap(fx.pcd);
         lp.setInitPose(mkPose(3.0, 3.0, 0.0));
         int localized = 0;
-        feed(lp, fx, 52, &localized, nullptr);   // 第 5 秒刚投递, 任务多半还在途 -> 立刻析构
-    }                                             // 析构: 等在途的 cov_base 结束 (挂住 / 崩掉 = 失败)
+        feed(lp, fx, 52, &localized, nullptr);   // 任务多半还在途 -> 立刻析构
+    }                                             // 析构: 等在途的 fitness_base 结束 (挂住 / 崩掉 = 失败)
     pool.shutdown(true);
-    SUCCEED() << "在途 cov_base 任务时析构正常";
+    SUCCEED() << "在途 fitness_base 任务时析构正常";
 }
 
-TEST(CovBaseBackground, NotComputedWhileNeverLocalized)
+TEST(FitnessBaseProbe, NotComputedWhileNeverLocalized)
 {
     Fixture fx;
     double cov = -2.0;
@@ -228,7 +228,7 @@ TEST(CovBaseBackground, NotComputedWhileNeverLocalized)
         LocalizationPipeline lp;
         ASSERT_TRUE(lp.init(fx.cfg));
         lp.setMap(fx.pcd);
-        // 不给初始位姿, 喂的是离地图很远的扫描: 永远不会 LOCALIZED -> 不应投递, cov_base 保持 -1
+        // 不给初始位姿, 喂的是离地图很远的扫描: 永远不会 LOCALIZED -> 不应投递, fitness_base 保持 -1
         for (int i = 0; i < 80; ++i) {
             LidarFrame f;
             f.cloud.reset(new CloudType());
@@ -239,9 +239,9 @@ TEST(CovBaseBackground, NotComputedWhileNeverLocalized)
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         cov = -2.0;
-        ASSERT_TRUE(covBaseFromJson(lp.debugStatsJson(), cov));
+        ASSERT_TRUE(fitnessBaseFromJson(lp.debugStatsJson(), cov));
     }
-    EXPECT_LT(cov, 0.0) << "从未定位时不该有 cov_base, 实际 " << cov;
+    EXPECT_LT(cov, 0.0) << "从未定位时不该有 fitness_base, 实际 " << cov;
 }
 
 int main(int argc, char** argv) {

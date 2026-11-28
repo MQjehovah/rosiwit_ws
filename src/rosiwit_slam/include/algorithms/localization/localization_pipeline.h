@@ -43,7 +43,7 @@ public:
     bool getMapCloud(PointVec& out) override;
     bool getOverlayCloud(PointVec& out) override;
     bool getSessionMapCloud(PointVec& out) override;
-    /// 1Hz 调试状态 JSON (是否桥接/目标构成/点数/cov_base/拒绝原因等)
+    /// 1Hz 调试状态 JSON (是否桥接/目标构成/点数/fitness_base/拒绝原因等)
     std::string debugStatsJson() override;
     bool getWorkingMapCloud(PointVec& out) override;
     uint64_t workingMapRevision() const override;
@@ -271,42 +271,48 @@ private:
     int    m_anchor_min_inliers = 50;     // 绝对下限(防 3 个点也当锚)
     double m_anchor_min_ratio = 0.5;      // 内点 / 匹配前可见点数
     double m_anchor_min_eig_ratio = 1e-3;
-    // 桥接状态机的迟滞参数 (2026-11-29 统一口径):
-    //   进入 = 对底图支撑 (fitness) < m_submap_enter_support 连续 m_anchor_patience 帧
-    //   退出 = 对底图支撑 (cov_base) >= credible_fitness 连续 m_anchor_patience 个 1Hz tick
-    //         或周期探测重锚成功 (对底图目标 fitness >= relocation_fitness)
+    // 桥接状态机 (2026-11-29 最终版):
+    //   进入 = 对底图支撑 (fitness) < monitor.degraded_fitness 连续 m_anchor_patience 个 1Hz tick
+    //   退出 = 后台探测重锚提案: 对底图目标 GICP 后的 fitness_base >= monitor.credible_fitness
+    //          (relocation_fitness <= fitness_base < credible 只做一次段级漂移修正, 保持桥接)
+    //   anchorOk 只用于写图门槛, 不再决定桥接。
     int    m_anchor_patience = 5;
     bool   m_ever_localized = false;      // 至少成功定位过一次 (之后才允许开会话地图/锚定)
-    // 先验图-only 匹配度(fitness_base)的状态; KD 树/目标云放在 .cpp 匿名命名空间(避免头文件引 pcl)
     bool   m_base_only_valid = false;
-    // ---- cov_base 后台计算 (2026-11-28) ----
-    // 扫描对工作图的覆盖率一次 ~100ms (底图 crop + KD 树 + 评估), 原来每 5 秒在跟踪线程
-    // post 阶段算一次, 是单帧 100ms 尖峰的来源。现在把 crop/树/评估整体投到执行器
-    // ("pool" lane) 或兼容后台线程; 跟踪线程只读上一次的结果 (本来就允许滞后)。
-    struct CovBaseJob {
+    // ---- fitness_base 后台探测 (2026-11-29) ----
+    // 每 1s 对底图目标做一次 GICP (专用 matcher, 后台执行器/兼容线程), 产出:
+    //   m_fitness_base      = 优化后位姿对底图的覆盖率 (诚实, 不含子图/不自证)
+    //   m_reanchor_* 提案   = 达到 relocation/credible 时的重锚位姿, 跟踪线程帧边界采纳
+    // 跟踪线程零开销; 原来 cov_base 每 5s 在 post 阶段算覆盖率, 已升级成探测重锚。
+    struct BaseProbeJob {
         CloudType::Ptr scan;
         PoseStamped pose;
         std::shared_ptr<const IMapMaintainer::DeadSet> dead;   // 判死体素快照 (后台过滤用)
         double voxel = 0.3;
-        double inlier_dist = 0.3;
         uint64_t generation = 0;
+        bool publish_reanchor = false;   // 投递时是否处于桥接 (只有桥接需要重锚提案)
     };
-    void submitCovBase(const CloudType::Ptr& scan, const PoseStamped& pose);
-    void runCovBaseJob(const CovBaseJob& job);
-    void covBaseWorker();
-    std::thread m_cov_thread;
-    std::mutex m_cov_mu;
-    std::condition_variable m_cov_cv;
-    bool m_cov_stop = false;
-    bool m_cov_req = false;
-    CovBaseJob m_cov_job;
-    std::atomic<bool> m_cov_busy{false};
-    std::mutex m_cov_done_mu;
-    std::condition_variable m_cov_done_cv;
-    std::atomic<double> m_cov_base{-1.0};   // 后台写, 跟踪线程读 (<0 = 未算)
-    int    m_cov_base_ok_streak = 0;      // cov_base 达标的连续帧数
-    int    m_cov_tick = 0;                // 1Hz 块计数 (每 5 秒投递一次 cov_base)
-    bool   m_prev_on_base = true;         // cov_base 跨阈值边沿检测
+    void submitBaseProbe(const CloudType::Ptr& scan, const PoseStamped& pose);
+    void runBaseProbeJob(const BaseProbeJob& job);
+    void baseProbeWorker();
+    std::thread m_probe_thread;
+    std::mutex m_probe_mu;
+    std::condition_variable m_probe_cv;
+    bool m_probe_stop = false;
+    bool m_probe_req = false;
+    BaseProbeJob m_probe_job;
+    std::atomic<bool> m_probe_busy{false};
+    std::mutex m_probe_done_mu;
+    std::condition_variable m_probe_done_cv;
+    std::unique_ptr<IScanMatcher> m_probe_matcher;   // 后台探测专用 (不与跟踪线程的 aux 共享)
+    std::atomic<double> m_fitness_base{-1.0};        // 后台写, 跟踪线程读 (<0 = 未算)
+    std::mutex m_reanchor_mu;                        // 重锚提案 (后台写/帧边界采纳)
+    MatchResult m_reanchor_result;                   // 探测的配准结果 (fitness/协方差)
+    PoseStamped m_reanchor_input;                    // 探测的输入位姿 (算世界系修正量)
+    uint64_t m_reanchor_gen = 0;
+    bool m_reanchor_valid = false;
+    bool m_reanchor_exit = false;        // true = 达到 credible, 采纳后退出桥接
+    std::atomic<bool> m_bridge_correction_done{false};  // 本次桥接已做过一次段级修正
     double m_last_status_log = -1.0;      // 1Hz 状态/log 块的上一次帧时间 (按实例, 不跨实例)
     // 锚定状态只有 m_on_submap 一个 (m_anchor_on_base 已合并, 见下)
     int    m_consistency_tick = 0;        // 子图↔先验一致性观测的节拍 (机器人侧新增)
@@ -336,12 +342,9 @@ private:
     int    m_low_evidence_frames = 0;
     int    m_min_evidence_points = 150;    // 可见点数低于此 -> 本帧中性(不累计不健康)
     int    m_low_evidence_limit = 300;     // 中性最多持续这么多帧(约30s), 超过仍判不健康
-    double m_submap_enter_support = 0.70; // 对底图支撑低于此值 -> 连续 patience 帧后桥接
     // ---- 子图桥接模式 ----
-    bool m_on_submap = false;             // true = 目标=子图, 边建图边定位
-    int  m_probe_countdown = 0;           // 距下一次 overlay 探测重锚的帧数
-    int  m_probe_period = 50;             // 探测周期 (帧, 5s @10Hz)
-    // 桥接支持的连续计数: weak = 底图支撑 < enter_support 的连续帧;
+    bool m_on_submap = false;             // true = 目标=工作图∪子图, 边建图边定位
+    // 桥接支持的连续计数: weak = 底图支撑 < monitor.degraded_fitness 的连续 1Hz tick;
     // ok = 支撑恢复的连续帧。名字沿用旧字段 (debugStatsJson 兼容), 语义已改为"底图支撑"。
     int    m_anchor_weak_streak = 0;
     int    m_anchor_ok_streak = 0;
@@ -361,11 +364,17 @@ private:
     int    m_session_map_min_kf_hits = 2;   // 子图动态点剔除: 体素至少被 N 个关键帧看到
     /// 服务/换图线程调用: 加锁清空子图, 并退出子图桥接模式
     void resetSessionMap() {
+        // 先作废重锚提案再拿子图锁: 采纳路径是 (m_reanchor_mu -> m_session_map_mu),
+        // 反过来锁会形成 ABBA 死锁。
+        {
+            std::lock_guard<std::mutex> rk(m_reanchor_mu);
+            m_reanchor_valid = false;   // 换图后旧提案作废
+        }
         std::lock_guard<std::mutex> lk(m_session_map_mu);
         m_session_map.deactivate();
         m_have_submap_anchor = false;   // 换图/重置后子图窗口锚必须重来
         m_on_submap = false;
-        m_probe_countdown = 0;
+        m_bridge_correction_done = false;
         m_escape_cnt = 0;               // 换图后逃逸候选作废
         m_escape_prev_valid = false;
     }

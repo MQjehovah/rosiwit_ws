@@ -410,6 +410,9 @@ struct MonitorConfig {
     bool   enabled = true;
     double credible_fitness = 0.75;  // >= 判 CREDIBLE
     double lost_fitness = 0.5;       // < 判 DEGRADED, 连续 patience 次判 LOST
+    // 2026-11-29: 定位降级线。对底图支撑 < degraded_fitness 连续 patience 个 1Hz tick
+    // -> 定位降级 -> 子图桥接(子图锚定)。阈值链: lost < degraded < credible。
+    double degraded_fitness = 0.70;
     // 状态机唯一使用的两个连续帧计数器：
     //   INIT -> LOCALIZED 需要连续 localized_patience 帧健康；
     //   INIT/LOCALIZED -> LOST 需要连续 lost_patience 帧不健康。
